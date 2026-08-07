@@ -56,7 +56,7 @@ final __credits__: str
 
 @type_check_only
 private protocol Pager:
-    def __call__(self, text: str, title: str = "") -> None
+    def __call__(self, text: str, title: str = "")
 
 def pathdirs() -> list[str]:
     """Convert sys.path into a list of absolute, existing, unique paths."""
@@ -445,16 +445,16 @@ if sys.version_info >= (3, 13):
     def get_pager() -> Pager:
         """Decide what method to use for paging through text."""
 
-    def pipe_pager(text: str, cmd: str, title: str = "") -> None:
+    def pipe_pager(text: str, cmd: str, title: str = ""):
         """Page through text by feeding it to another program."""
 
-    def tempfile_pager(text: str, cmd: str, title: str = "") -> None:
+    def tempfile_pager(text: str, cmd: str, title: str = ""):
         """Page through text by invoking a program on a temporary file."""
 
-    def tty_pager(text: str, title: str = "") -> None:
+    def tty_pager(text: str, title: str = ""):
         """Page through text on a text terminal."""
 
-    def plain_pager(text: str, title: str = "") -> None:
+    def plain_pager(text: str, title: str = ""):
         """Simply print unformatted text.  This is the ultimate fallback."""
 
     # For backwards compatibility.
@@ -467,16 +467,16 @@ else:
     def getpager() -> (str) -> None:
         """Decide what method to use for paging through text."""
 
-    def pipepager(text: str, cmd: str) -> None:
+    def pipepager(text: str, cmd: str):
         """Page through text by feeding it to another program."""
 
-    def tempfilepager(text: str, cmd: str) -> None:
+    def tempfilepager(text: str, cmd: str):
         """Page through text by invoking a program on a temporary file."""
 
-    def ttypager(text: str) -> None:
+    def ttypager(text: str):
         """Page through text on a text terminal."""
 
-    def plainpager(text: str) -> None:
+    def plainpager(text: str):
         """Simply print unformatted text.  This is the ultimate fallback."""
 
 text: TextDoc
@@ -509,10 +509,10 @@ else:
     ) -> None:
         """Display text documentation, given an object or a path to an object."""
 
-def writedoc(thing: str | object, forceload: bool = ...) -> None:
+def writedoc(thing: str | object, forceload: bool = ...):
     """Write HTML documentation to a file in the current directory."""
 
-def writedocs(dir: str, pkgpath: str = "", done: dynamic | None = None) -> None:
+def writedocs(dir: str, pkgpath: str = "", done: dynamic | None = None):
     """Write out HTML documentation for all modules in a directory tree."""
 
 class Helper:
@@ -522,8 +522,8 @@ class Helper:
     init(self, input: IO[str] | None = None, output: IO[str] | None = None)
     let input: IO[str]
     let output: IO[str]
-    def __call__(self, request: str | Helper | object = ...) -> None
-    def interact(self) -> None
+    def __call__(self, request: str | Helper | object = ...)
+    def interact(self)
     def getline(self, prompt: str) -> str:
         """Read one line, using input() when appropriate."""
 
@@ -532,14 +532,14 @@ class Helper:
     else:
         def help(self, request: dynamic) -> None
 
-    def intro(self) -> None
-    def list(self, items: _list[str], columns: int = 4, width: int = 80) -> None
-    def listkeywords(self) -> None
-    def listsymbols(self) -> None
-    def listtopics(self) -> None
-    def showtopic(self, topic: str, more_xrefs: str = "") -> None
-    def showsymbol(self, symbol: str) -> None
-    def listmodules(self, key: str = "") -> None
+    def intro(self)
+    def list(self, items: _list[str], columns: int = 4, width: int = 80)
+    def listkeywords(self)
+    def listsymbols(self)
+    def listtopics(self)
+    def showtopic(self, topic: str, more_xrefs: str = "")
+    def showsymbol(self, symbol: str)
+    def listmodules(self, key: str = "")
 
 help: Helper
 
@@ -553,11 +553,11 @@ class ModuleScanner:
         key: str | None = None,
         completer: (() -> object) | None = None,
         onerror: ((str) -> object) | None = None,
-    ) -> None
+    )
 
-def apropos(key: str) -> None:
+def apropos(key: str):
     """Print all the one-line module summaries that contain a substring."""
 
 def ispath(x: object) -> TypeGuard[str]
-def cli() -> None:
+def cli():
     """Command-line interface (looks at sys.argv to decide what to do)."""

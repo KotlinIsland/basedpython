@@ -40,14 +40,14 @@ class BaseFix:
             log: a list to append warnings and other messages to.
         """
 
-    def compile_pattern(self) -> None:
+    def compile_pattern(self):
         """Compiles self.PATTERN into self.pattern.
 
         Subclass may override if it doesn't want to use
         self.{pattern,PATTERN} in .match().
         """
 
-    def set_filename(self, filename: StrPath) -> None:
+    def set_filename(self, filename: StrPath):
         """Set the filename.
 
         The main refactoring tool should call this.
@@ -85,8 +85,8 @@ class BaseFix:
         """
 
     first_log: bool
-    def log_message(self, message: str) -> None
-    def cannot_convert(self, node: Base, reason: str | None = None) -> None:
+    def log_message(self, message: str)
+    def cannot_convert(self, node: Base, reason: str | None = None):
         """Warn the user that a given chunk of code is not valid Python 3,
         but that it cannot be converted automatically.
 
@@ -94,7 +94,7 @@ class BaseFix:
         Optional second argument is why it can't be converted.
         """
 
-    def warning(self, node: Base, reason: str) -> None:
+    def warning(self, node: Base, reason: str):
         """Used for warning the user about possible uncertainty in the
         translation.
 
@@ -102,7 +102,7 @@ class BaseFix:
         Optional second argument is why it can't be converted.
         """
 
-    def start_tree(self, tree: Node, filename: StrPath) -> None:
+    def start_tree(self, tree: Node, filename: StrPath):
         """Some fixers need to maintain tree-wide state.
         This method is called once, at the start of tree fix-up.
 
@@ -110,7 +110,7 @@ class BaseFix:
         filename - the name of the file the tree came from.
         """
 
-    def finish_tree(self, tree: Node, filename: StrPath) -> None:
+    def finish_tree(self, tree: Node, filename: StrPath):
         """Some fixers need to maintain tree-wide state.
         This method is called once, at the conclusion of tree fix-up.
 

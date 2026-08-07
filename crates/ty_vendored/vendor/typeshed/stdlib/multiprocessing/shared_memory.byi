@@ -41,12 +41,12 @@ class SharedMemory:
 
     let size: int
 
-    def close(self) -> None:
+    def close(self):
         """Closes access to the shared memory from this instance but does
         not destroy the shared memory block.
         """
 
-    def unlink(self) -> None:
+    def unlink(self):
         """Requests that the underlying shared memory block be destroyed.
 
         Unlink should be called once (and only once) across all handles
@@ -60,7 +60,7 @@ class SharedMemory:
         delete a shared memory block is to close all handles.
         """
 
-    def __del__(self) -> None
+    def __del__(self)
 
 class ShareableList[in out SLT: constraints (int, float, bool, str, bytes, None)]:
     """Pattern for a mutable list-like object shareable via a shared
@@ -79,7 +79,7 @@ class ShareableList[in out SLT: constraints (int, float, bool, str, bytes, None)
     init(self, sequence: Iterable[SLT], *, name: str | None = None)
 
     def __getitem__(self, position: int) -> SLT
-    def __setitem__(self, position: int, value: SLT) -> None
+    def __setitem__(self, position: int, value: SLT)
     override def __reduce__(self) -> (Self, (*: SLT))
     def __len__(self) -> int
     let format: str

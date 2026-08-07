@@ -24,7 +24,7 @@ class _ProactorBasePipeTransport(transports._FlowControlMixin, transports.BaseTr
         extra: Mapping[dynamic, dynamic] | None = None,
         server: events.AbstractServer | None = None,
     )
-    def __del__(self) -> None
+    def __del__(self)
 
 class _ProactorReadPipeTransport(_ProactorBasePipeTransport, transports.ReadTransport):
     """Transport for read pipes."""
@@ -61,7 +61,7 @@ class _ProactorSocketTransport(_ProactorReadPipeTransport, _ProactorBaseWritePip
         extra: Mapping[dynamic, dynamic] | None = None,
         server: events.AbstractServer | None = None,
     )
-    def _set_extra(self, sock: socket) -> None
+    def _set_extra(self, sock: socket)
     override def can_write_eof(self) -> True
 
 class BaseProactorEventLoop(base_events.BaseEventLoop):

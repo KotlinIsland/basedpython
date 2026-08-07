@@ -34,7 +34,7 @@ if sys.version_info >= (3, 14):
 
 private type FrameSummaryTuple = (str, int, str, str | None)
 
-def print_tb(tb: TracebackType | None, limit: int | None = None, file: SupportsWrite[str] | None = None) -> None:
+def print_tb(tb: TracebackType | None, limit: int | None = None, file: SupportsWrite[str] | None = None):
     """Print up to 'limit' stack trace entries from the traceback 'tb'.
 
     If 'limit' is omitted or None, all entries are printed.  If 'file'
@@ -84,13 +84,13 @@ def format_exception(
     """
 def format_exception(exc: BaseException, /, *, limit: int | None = None, chain: bool = True) -> list[str]
 
-def print_exc(limit: int | None = None, file: SupportsWrite[str] | None = None, chain: bool = True) -> None:
+def print_exc(limit: int | None = None, file: SupportsWrite[str] | None = None, chain: bool = True):
     """Shorthand for 'print_exception(sys.exception(), limit=limit, file=file, chain=chain)'."""
 
-def print_last(limit: int | None = None, file: SupportsWrite[str] | None = None, chain: bool = True) -> None:
+def print_last(limit: int | None = None, file: SupportsWrite[str] | None = None, chain: bool = True):
     """This is a shorthand for 'print_exception(sys.last_exc, limit=limit, file=file, chain=chain)'."""
 
-def print_stack(f: FrameType | None = None, limit: int | None = None, file: SupportsWrite[str] | None = None) -> None:
+def print_stack(f: FrameType | None = None, limit: int | None = None, file: SupportsWrite[str] | None = None):
     """Print a stack trace from its invocation point.
 
     The optional 'f' argument can be used to specify an alternate
@@ -134,7 +134,7 @@ def format_list(extracted_list: Iterable[FrameSummary | FrameSummaryTuple]) -> l
     whose source text line is not None.
     """
 
-def print_list(extracted_list: Iterable[FrameSummary | FrameSummaryTuple], file: SupportsWrite[str] | None = None) -> None:
+def print_list(extracted_list: Iterable[FrameSummary | FrameSummaryTuple], file: SupportsWrite[str] | None = None):
     """Print the list of tuples as returned by extract_tb() or
     extract_stack() as a formatted stack trace to the given file.
     """
@@ -179,7 +179,7 @@ def format_tb(tb: TracebackType | None, limit: int | None = None) -> list[str]:
 def format_stack(f: FrameType | None = None, limit: int | None = None) -> list[str]:
     """Shorthand for 'format_list(extract_stack(f, limit))'."""
 
-def clear_frames(tb: TracebackType | None) -> None:
+def clear_frames(tb: TracebackType | None):
     """Clear all references to local variables in the frames of a traceback."""
 
 def walk_stack(f: FrameType | None) -> Iterator[(FrameType, int)]:
@@ -402,7 +402,7 @@ class TracebackException:
             """
 
     if sys.version_info >= (3, 11):
-        def print(self, *, file: SupportsWrite[str] | None = None, chain: bool = True) -> None:
+        def print(self, *, file: SupportsWrite[str] | None = None, chain: bool = True):
             """Print the result of self.format(chain=chain) to 'file'."""
 
 class FrameSummary:

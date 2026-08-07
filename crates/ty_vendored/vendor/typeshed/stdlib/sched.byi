@@ -94,7 +94,7 @@ class scheduler:
 
         """
 
-    def cancel(self, event: Event) -> None:
+    def cancel(self, event: Event):
         """Remove an event from the queue.
 
         This must be presented the ID as returned by enter().

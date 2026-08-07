@@ -158,8 +158,8 @@ protocol SupportsContainsAndGetItem[in KT, out Value]:
 protocol SupportsItemAccess[in KT, in out Value]:
     def __contains__(self, x: dynamic, /) -> bool
     def __getitem__(self, key: KT, /) -> Value
-    def __setitem__(self, key: KT, value: Value, /) -> None
-    def __delitem__(self, key: KT, /) -> None
+    def __setitem__(self, key: KT, value: Value, /)
+    def __delitem__(self, key: KT, /)
 
 type StrPath = str | PathLike[str]  # stable
 type BytesPath = bytes | PathLike[bytes]  # stable

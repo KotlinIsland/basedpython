@@ -84,5 +84,5 @@ def active_children() -> list[dynamic]
 
 current_process = threading.current_thread
 
-def freeze_support() -> None
-def shutdown() -> None
+def freeze_support()
+def shutdown()

@@ -171,7 +171,7 @@ class SimpleXMLRPCDispatcher:  # undocumented
     encoding: str
     use_builtin_types: bool
     init(self, allow_none: bool = False, encoding: str | None = None, use_builtin_types: bool = False)
-    def register_instance(self, instance: dynamic, allow_dotted_names: bool = False) -> None:
+    def register_instance(self, instance: dynamic, allow_dotted_names: bool = False):
         """Registers an instance to respond to XML-RPC requests.
 
         Only one instance can be installed at a time.
@@ -211,14 +211,14 @@ class SimpleXMLRPCDispatcher:  # undocumented
         for the function.
         """
 
-    def register_introspection_functions(self) -> None:
+    def register_introspection_functions(self):
         """Registers the XML-RPC introspection methods in the system
         namespace.
 
         see http://xmlrpc.usefulinc.com/doc/reserved.html
         """
 
-    def register_multicall_functions(self) -> None:
+    def register_multicall_functions(self):
         """Registers the XML-RPC multicall method in the system
         namespace.
 
@@ -306,7 +306,7 @@ class SimpleXMLRPCRequestHandler(http.server.BaseHTTPRequestHandler):
     aepattern: Pattern[str]  # undocumented
     def accept_encodings(self) -> dict[str, float]
     def is_rpc_path_valid(self) -> bool
-    def do_POST(self) -> None:
+    def do_POST(self):
         """Handles the HTTP POST request.
 
         Attempts to interpret all HTTP POST requests as XML-RPC calls,
@@ -314,7 +314,7 @@ class SimpleXMLRPCRequestHandler(http.server.BaseHTTPRequestHandler):
         """
 
     def decode_request_content(self, data: bytes) -> bytes | None
-    def report_404(self) -> None
+    def report_404(self)
 
 class SimpleXMLRPCServer(socketserver.TCPServer, SimpleXMLRPCDispatcher):
     """Simple XML-RPC server.
@@ -365,17 +365,17 @@ class CGIXMLRPCRequestHandler(SimpleXMLRPCDispatcher):
     """Simple handler for XML-RPC data passed through CGI."""
 
     init(self, allow_none: bool = False, encoding: str | None = None, use_builtin_types: bool = False)
-    def handle_xmlrpc(self, request_text: str) -> None:
+    def handle_xmlrpc(self, request_text: str):
         """Handle a single XML-RPC request"""
 
-    def handle_get(self) -> None:
+    def handle_get(self):
         """Handle a single HTTP GET request.
 
         Default implementation indicates an error because
         XML-RPC uses the POST method.
         """
 
-    def handle_request(self, request_text: str | None = None) -> None:
+    def handle_request(self, request_text: str | None = None):
         """Handle a single XML-RPC request passed through a CGI post method.
 
         If no XML data is given then it is read from stdin. The resulting
@@ -411,13 +411,13 @@ class XMLRPCDocGenerator:  # undocumented
     server_name: str
     server_documentation: str
     server_title: str
-    def set_server_title(self, server_title: str) -> None:
+    def set_server_title(self, server_title: str):
         """Set the HTML title of the generated server documentation"""
 
-    def set_server_name(self, server_name: str) -> None:
+    def set_server_name(self, server_name: str):
         """Set the name of the generated HTML server documentation"""
 
-    def set_server_documentation(self, server_documentation: str) -> None:
+    def set_server_documentation(self, server_documentation: str):
         """Set the documentation string for the entire server."""
 
     def generate_html_documentation(self) -> str:
@@ -442,7 +442,7 @@ class DocXMLRPCRequestHandler(SimpleXMLRPCRequestHandler):
     for documentation.
     """
 
-    def do_GET(self) -> None:
+    def do_GET(self):
         """Handles the HTTP GET request.
 
         Interpret all HTTP GET requests as requests for server

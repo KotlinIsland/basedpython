@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable
 well_known_implementations: dict[str, str]
 registered: dict[str, () -> DOMImplementation]
 
-def registerDOMImplementation(name: str, factory: () -> DOMImplementation) -> None:
+def registerDOMImplementation(name: str, factory: () -> DOMImplementation):
     """registerDOMImplementation(name, factory)
 
     Register the factory function with the name. The factory function

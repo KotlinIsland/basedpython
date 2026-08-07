@@ -364,7 +364,7 @@ class Connection:
             uri: bool = False,
         ) -> None
 
-    def close(self) -> None:
+    def close(self):
         """Close the database connection.
 
         Any pending transaction is not committed implicitly.
@@ -386,7 +386,7 @@ class Connection:
               Database name.
             """
 
-    def commit(self) -> None:
+    def commit(self):
         """Commit any pending transaction to the database.
 
         If there is no open transaction, this method is a no-op.
@@ -431,7 +431,7 @@ class Connection:
             self, name: str, num_params: int, aggregate_class: (() -> WindowAggregateClass) | None, /
         ) -> None
 
-    def create_collation(self, name: str, callback: ((str, str) -> SupportsIndex) | None, /) -> None:
+    def create_collation(self, name: str, callback: ((str, str) -> SupportsIndex) | None, /):
         """Creates a collation function."""
 
     if sys.version_info >= (3, 15):
@@ -464,7 +464,7 @@ class Connection:
     def executescript(self, sql_script: str, /) -> Cursor:
         """Executes multiple SQL statements at once."""
 
-    def interrupt(self) -> None:
+    def interrupt(self):
         """Abort any pending database operation."""
 
     if sys.version_info >= (3, 13):
@@ -479,7 +479,7 @@ class Connection:
         def iterdump(self) -> Generator[str]:
             """Returns iterator to the dump of the database in an SQL text format."""
 
-    def rollback(self) -> None:
+    def rollback(self):
         """Roll back to the start of any pending transaction.
 
         If there is no open transaction, this method is a no-op.
@@ -549,7 +549,7 @@ class Connection:
 
     # enable_load_extension and load_extension is not available on python distributions compiled
     # without sqlite3 loadable extension support. see footnotes https://docs.python.org/3/library/sqlite3.html#f1
-    def enable_load_extension(self, enable: bool, /) -> None:
+    def enable_load_extension(self, enable: bool, /):
         """Enable dynamic loading of SQLite extension modules."""
 
     if sys.version_info >= (3, 12):
@@ -568,7 +568,7 @@ class Connection:
         progress: ((int, int, int) -> object) | None = None,
         name: str = "main",
         sleep: float = 0.25,
-    ) -> None:
+    ):
         """Makes a backup of the database."""
 
     if sys.version_info >= (3, 11):
@@ -605,7 +605,7 @@ class Connection:
             would be written to disk if that database were backed up to disk.
             """
 
-        def deserialize(self, data: ReadableBuffer, /, *, name: str = "main") -> None:
+        def deserialize(self, data: ReadableBuffer, /, *, name: str = "main"):
             """Load a serialized database.
 
               data
@@ -667,7 +667,7 @@ class Cursor:
     row_factory: RowFactoryOptions
     let rowcount: int
     init(self, cursor: Connection, /)
-    def close(self) -> None:
+    def close(self):
         """Closes the cursor."""
 
     def execute(self, sql: str, parameters: _Parameters = (), /) -> Self:
@@ -694,10 +694,10 @@ class Cursor:
     def fetchone(self) -> dynamic:
         """Fetches one row from the resultset."""
 
-    def setinputsizes(self, sizes: Unused, /) -> None:  # does nothing
+    def setinputsizes(self, sizes: Unused, /):  # does nothing
         """Required by DB-API. Does nothing in sqlite3."""
 
-    def setoutputsize(self, size: Unused, column: Unused = None, /) -> None:  # does nothing
+    def setoutputsize(self, size: Unused, column: Unused = None, /):  # does nothing
         """Required by DB-API. Does nothing in sqlite3."""
 
     def __iter__(self) -> Self:
@@ -742,7 +742,7 @@ final class _Statement
 
 if sys.version_info >= (3, 11):
     final class Blob:
-        def close(self) -> None:
+        def close(self):
             """Close the blob."""
 
         def read(self, length: int = -1, /) -> bytes:
@@ -756,7 +756,7 @@ if sys.version_info >= (3, 11):
             Blob.read() will read until the end of the blob.
             """
 
-        def write(self, data: ReadableBuffer, /) -> None:
+        def write(self, data: ReadableBuffer, /):
             """Write data at the current offset.
 
             This function cannot change the blob length.  Writing beyond the end
@@ -767,7 +767,7 @@ if sys.version_info >= (3, 11):
             """Return the current access position for the blob."""
 
         # whence must be one of os.SEEK_SET, os.SEEK_CUR, os.SEEK_END
-        def seek(self, offset: int, origin: int = 0, /) -> None:
+        def seek(self, offset: int, origin: int = 0, /):
             """Set the current access position to offset.
 
             The origin argument defaults to os.SEEK_SET (absolute blob
@@ -788,5 +788,5 @@ if sys.version_info >= (3, 11):
         def __getitem__(self, key: SupportsIndex | slice, /) -> int:
             """Return self[key]."""
 
-        def __setitem__(self, key: SupportsIndex | slice, value: int, /) -> None:
+        def __setitem__(self, key: SupportsIndex | slice, value: int, /):
             """Set self[key] to value."""

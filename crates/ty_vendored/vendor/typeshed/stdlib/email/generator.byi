@@ -59,8 +59,8 @@ class Generator[in out MessageT: Message[dynamic, dynamic] = dynamic]:
         policy: Policy[MessageT],
     )
 
-    def write(self, s: str) -> None
-    def flatten(self, msg: MessageT, unixfrom: bool = False, linesep: str | None = None) -> None:
+    def write(self, s: str)
+    def flatten(self, msg: MessageT, unixfrom: bool = False, linesep: str | None = None):
         """Print the message object tree rooted at msg to the output file
         specified when the Generator instance was created.
 

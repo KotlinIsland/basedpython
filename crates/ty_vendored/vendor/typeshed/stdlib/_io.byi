@@ -103,8 +103,8 @@ if sys.version_info >= (3, 12):
         def __enter__(self) -> Self
         def __exit__(
             self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-        ) -> None
-        def close(self) -> None:
+        )
+        def close(self):
             """Flush and close the IO object.
 
             This method has no effect if the file is already closed.
@@ -116,7 +116,7 @@ if sys.version_info >= (3, 12):
             Raise OSError if the IO object does not use a file descriptor.
             """
 
-        def flush(self) -> None:
+        def flush(self):
             """Flush write buffers, if applicable.
 
             This is not implemented for read-only and non-blocking streams.
@@ -187,7 +187,7 @@ if sys.version_info >= (3, 12):
             """
 
         write: (...) -> dynamic
-        def writelines(self, lines: Iterable[ReadableBuffer], /) -> None:
+        def writelines(self, lines: Iterable[ReadableBuffer], /):
             """Write a list of lines to stream.
 
             Line separators are not added, so it is usual for each of the
@@ -204,11 +204,11 @@ if sys.version_info >= (3, 12):
             terminator(s) recognized.
             """
 
-        def __del__(self) -> None:
+        def __del__(self):
             """Called when the instance is about to be destroyed."""
 
         let closed: bool
-        def _checkClosed(self) -> None  # undocumented
+        def _checkClosed(self)  # undocumented
 
 else:
     class _IOBase:
@@ -252,8 +252,8 @@ else:
         def __enter__(self) -> Self
         def __exit__(
             self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-        ) -> None
-        def close(self) -> None:
+        )
+        def close(self):
             """Flush and close the IO object.
 
             This method has no effect if the file is already closed.
@@ -265,7 +265,7 @@ else:
             OSError is raised if the IO object does not use a file descriptor.
             """
 
-        def flush(self) -> None:
+        def flush(self):
             """Flush write buffers, if applicable.
 
             This is not implemented for read-only and non-blocking streams.
@@ -334,7 +334,7 @@ else:
             """
 
         write: (...) -> dynamic
-        def writelines(self, lines: Iterable[ReadableBuffer], /) -> None:
+        def writelines(self, lines: Iterable[ReadableBuffer], /):
             """Write a list of lines to stream.
 
             Line separators are not added, so it is usual for each of the
@@ -351,9 +351,9 @@ else:
             terminator(s) recognized.
             """
 
-        def __del__(self) -> None
+        def __del__(self)
         let closed: bool
-        def _checkClosed(self) -> None  # undocumented
+        def _checkClosed(self)  # undocumented
 
 class _RawIOBase(_IOBase):
     """Base class for raw binary I/O."""
@@ -806,7 +806,7 @@ class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _T
         newline: str | None = None,
         line_buffering: bool | None = None,
         write_through: bool | None = None,
-    ) -> None:
+    ):
         """Reconfigure the text stream with new parameters.
 
         This also does an implicit stream flush.
@@ -892,8 +892,8 @@ class IncrementalNewlineDecoder:
     def decode(self, input: ReadableBuffer | str, final: bool = False) -> str
     let newlines: str | (*: str) | None
     def getstate(self) -> (bytes, int)
-    def reset(self) -> None
-    def setstate(self, state: (bytes, int), /) -> None
+    def reset(self)
+    def setstate(self, state: (bytes, int), /)
 
 def text_encoding(encoding: None, stacklevel: int = 2, /) -> "locale" | "utf-8":
     """A helper function to choose the text encoding.

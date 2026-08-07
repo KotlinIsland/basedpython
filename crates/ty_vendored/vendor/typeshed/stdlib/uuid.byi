@@ -278,5 +278,5 @@ final RESERVED_MICROSOFT: LiteralString
 final RESERVED_FUTURE: LiteralString
 
 if sys.version_info >= (3, 12):
-    def main() -> None:
+    def main():
         """Run the uuid command line interface."""

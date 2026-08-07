@@ -140,8 +140,8 @@ private protocol ZipReadableTellable(ZipReadable, ZipTellable)
 
 @type_check_only
 private protocol ZipWritable:
-    def flush(self) -> None
-    def close(self) -> None
+    def flush(self)
+    def close(self)
     def write(self, b: bytes, /) -> int
 
 class ZipFile:
@@ -282,8 +282,8 @@ class ZipFile:
     def __enter__(self) -> Self
     def __exit__(
         self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
-    ) -> None
-    def close(self) -> None:
+    )
+    def close(self):
         """Close the file, and for mode 'w', 'x' and 'a' write the ending
         records.
         """
@@ -328,7 +328,7 @@ class ZipFile:
 
     def extractall(
         self, path: StrPath | None = None, members: Iterable[str | ZipInfo] | None = None, pwd: bytes | None = None
-    ) -> None:
+    ):
         """Extract all members from the archive to the current working
         directory. 'path' specifies a different directory to extract to.
         'members' is optional and must be a subset of the list returned
@@ -336,10 +336,10 @@ class ZipFile:
         using 'pwd'.
         """
 
-    def printdir(self, file: Writer | None = None) -> None:
+    def printdir(self, file: Writer | None = None):
         """Print a table of contents for the zip file."""
 
-    def setpassword(self, pwd: bytes) -> None:
+    def setpassword(self, pwd: bytes):
         """Set default password for encrypted files."""
 
     def read(self, name: str | ZipInfo, pwd: bytes | None = None) -> bytes:
@@ -360,7 +360,7 @@ class ZipFile:
         arcname: StrPath | None = None,
         compress_type: int | None = None,
         compresslevel: int | None = None,
-    ) -> None:
+    ):
         """Put the bytes from filename into the archive under the name
         arcname.
         """
@@ -371,7 +371,7 @@ class ZipFile:
         data: SizedBuffer | str,
         compress_type: int | None = None,
         compresslevel: int | None = None,
-    ) -> None:
+    ):
         """Write a file into the archive.  The contents is 'data', which
         may be either a 'str' or a 'bytes' instance; if it is a 'str',
         it is encoded as UTF-8 first.
@@ -380,10 +380,10 @@ class ZipFile:
         """
 
     if sys.version_info >= (3, 11):
-        def mkdir(self, zinfo_or_directory_name: str | ZipInfo, mode: int = 0o777) -> None:
+        def mkdir(self, zinfo_or_directory_name: str | ZipInfo, mode: int = 0o777):
             """Creates a directory inside the zip archive."""
 
-    def __del__(self) -> None:
+    def __del__(self):
         """Call the "close()" method in case the user forgot."""
 
 class PyZipFile(ZipFile):
@@ -392,7 +392,7 @@ class PyZipFile(ZipFile):
     init(
         self, file: str | IO[bytes], mode: ZipFileMode = "r", compression: int = 0, allowZip64: bool = True, optimize: int = -1
     )
-    def writepy(self, pathname: str, basename: str = "", filterfunc: ((str) -> bool) | None = None) -> None:
+    def writepy(self, pathname: str, basename: str = "", filterfunc: ((str) -> bool) | None = None):
         """Add all files from "pathname" to the ZIP archive.
 
         If pathname is a package directory, search the directory and

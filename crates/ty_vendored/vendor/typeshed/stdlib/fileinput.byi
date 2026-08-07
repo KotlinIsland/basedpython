@@ -135,10 +135,10 @@ def input(
     errors: str | None = None,
 ) -> FileInput[dynamic]
 
-def close() -> None:
+def close():
     """Close the sequence."""
 
-def nextfile() -> None:
+def nextfile():
     """
     Close the current file so that the next iteration will read the first
     line from the next file (if any); lines not read from the file will
@@ -235,18 +235,18 @@ class FileInput(Generic[AnyStr]):
         errors: str | None = None,
     )
 
-    def __del__(self) -> None
-    def close(self) -> None
+    def __del__(self)
+    def close(self)
     def __enter__(self) -> Self
     def __exit__(
         self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
-    ) -> None
+    )
     def __iter__(self) -> Self
     def __next__(self) -> AnyStr
     if sys.version_info < (3, 11):
         def __getitem__(self, i: int) -> AnyStr
 
-    def nextfile(self) -> None
+    def nextfile(self)
     def readline(self) -> AnyStr
     def filename(self) -> str
     def lineno(self) -> int

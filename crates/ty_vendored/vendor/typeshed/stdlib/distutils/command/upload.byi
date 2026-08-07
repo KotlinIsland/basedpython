@@ -22,4 +22,4 @@ class upload(PyPIRCCommand):
     realm: Incomplete
     override def finalize_options(self) -> None
     override def run(self) -> None
-    def upload_file(self, command: str, pyversion: str, filename: str) -> None
+    def upload_file(self, command: str, pyversion: str, filename: str)

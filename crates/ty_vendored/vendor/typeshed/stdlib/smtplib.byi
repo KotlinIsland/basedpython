@@ -230,8 +230,8 @@ class SMTP:
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, tb: TracebackType | None
-    ) -> None
-    def set_debuglevel(self, debuglevel: int) -> None:
+    )
+    def set_debuglevel(self, debuglevel: int):
         """Set the debug output level.
 
         A non-false value results in debug messages for connection and for all
@@ -251,10 +251,10 @@ class SMTP:
 
         """
 
-    def send(self, s: ReadableBuffer | str) -> None:
+    def send(self, s: ReadableBuffer | str):
         """Send 's' to the server."""
 
-    def putcmd(self, cmd: str, args: str = "") -> None:
+    def putcmd(self, cmd: str, args: str = ""):
         """Send a command to the server."""
 
     def getreply(self) -> Reply:
@@ -331,7 +331,7 @@ class SMTP:
     def expn(self, address: str) -> Reply:
         """SMTP 'expn' command -- expands a mailing list."""
 
-    def ehlo_or_helo_if_needed(self) -> None:
+    def ehlo_or_helo_if_needed(self):
         """Call self.ehlo() and/or self.helo() if needed.
 
         If there has been no previous EHLO or HELO command this session, this
@@ -553,7 +553,7 @@ empty dictionary.
 
         """
 
-    def close(self) -> None:
+    def close(self):
         """Close the connection to the SMTP server."""
 
     def quit(self) -> Reply:

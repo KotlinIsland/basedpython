@@ -14,18 +14,18 @@ if sys.platform != "win32":
     # Actual typename dbm, not exposed by the implementation
     @type_check_only
     final class _dbm:
-        def close(self) -> None
+        def close(self)
         if sys.version_info >= (3, 13):
-            def clear(self) -> None
+            def clear(self)
 
         def __getitem__(self, item: _KeyType) -> bytes
-        def __setitem__(self, key: _KeyType, value: _ValueType) -> None
-        def __delitem__(self, key: _KeyType) -> None
+        def __setitem__(self, key: _KeyType, value: _ValueType)
+        def __delitem__(self, key: _KeyType)
         def __len__(self) -> int
         def __enter__(self) -> Self
         def __exit__(
             self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-        ) -> None
+        )
 
         def get(self, k: _KeyType, /) -> bytes | None
         def get[Element](self, k: _KeyType, default: Element, /) -> bytes | Element

@@ -198,7 +198,7 @@ if sys.platform != "win32":
     def ioctl(fd: FileDescriptorLike, request: int, arg: WriteableBuffer, mutate_flag: False, /) -> bytes
     def ioctl(fd: FileDescriptorLike, request: int, arg: Buffer, mutate_flag: bool = True, /) -> dynamic
 
-    def flock(fd: FileDescriptorLike, operation: int, /) -> None:
+    def flock(fd: FileDescriptorLike, operation: int, /):
         """Perform the lock operation on file descriptor fd.
 
         See the Unix manual page for flock(2) for details (On some systems, this

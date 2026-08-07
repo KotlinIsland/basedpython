@@ -99,6 +99,11 @@ pub fn all_post_patches(root: &Path) -> Vec<Box<dyn Patch>> {
         Box::new(patches::final_modifier::FinalModifier),
         Box::new(patches::final_annotation::FinalAnnotation),
         Box::new(patches::init_shorthand::InitShorthand),
+        // reads the same question `init_shorthand` answers for `__init__` — what a
+        // `def` returns with its `-> None` gone — for every other `def`. it has to
+        // see the overload groups `redundant_overloads` left and the accessors
+        // `property_to_let` took away, so it runs after both
+        Box::new(patches::redundant_none_return::RedundantNoneReturn),
         Box::new(patches::context_manager_abstract::ContextManagerAbstractEnter),
         Box::new(patches::arrow_callable::ArrowCallable),
         Box::new(patches::literal_unwrap::UnwrapLiteral),

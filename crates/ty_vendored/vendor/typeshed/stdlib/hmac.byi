@@ -61,7 +61,7 @@ class HMAC:
                    recommended, though not required for legacy API reasons.
         """
 
-    def update(self, msg: ReadableBuffer) -> None:
+    def update(self, msg: ReadableBuffer):
         """Feed data from msg into this hashing object."""
 
     def digest(self) -> bytes:

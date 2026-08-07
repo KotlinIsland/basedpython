@@ -276,7 +276,7 @@ class Style:
     def element_options(self, elementname: str) -> (*: str):
         """Return the list of elementname's options."""
 
-    def theme_create(self, themename: str, parent: str | None = None, settings: ThemeSettings | None = None) -> None:
+    def theme_create(self, themename: str, parent: str | None = None, settings: ThemeSettings | None = None):
         """Creates a new theme.
 
         It is an error if themename already exists. If parent is
@@ -285,7 +285,7 @@ class Style:
         they are expected to have the same syntax used for theme_settings.
         """
 
-    def theme_settings(self, themename: str, settings: ThemeSettings) -> None:
+    def theme_settings(self, themename: str, settings: ThemeSettings):
         """Temporarily sets the current theme to themename, apply specified
         settings and then restore the previous theme.
 
@@ -774,7 +774,7 @@ class Combobox(Entry):
         or -1 if the current value does not appear in the list.
         """
 
-    def set(self, value: dynamic) -> None:
+    def set(self, value: dynamic):
         """Sets the value of the combobox to value."""
 
 class Frame(Widget):
@@ -1156,7 +1156,7 @@ class Notebook(Widget):
         image=...,
         compound: "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         underline: int = ...,
-    ) -> None:
+    ):
         """Adds a new tab to the notebook.
 
         If window is currently managed by the notebook but hidden, it is
@@ -1168,7 +1168,7 @@ class Notebook(Widget):
         associated window.
         """
 
-    def hide(self, tab_id) -> None:
+    def hide(self, tab_id):
         """Hides the tab specified by tab_id.
 
         The tab will not be displayed, but the associated window remains
@@ -1186,7 +1186,7 @@ class Notebook(Widget):
         the total number of tabs if tab_id is the string "end".
         """
 
-    def insert(self, pos, child, **kw) -> None:
+    def insert(self, pos, child, **kw):
         """Inserts a pane at the specified position.
 
         pos is either the string end, an integer index, or the name of
@@ -1214,7 +1214,7 @@ class Notebook(Widget):
     def tabs(self):
         """Returns a list of windows managed by the notebook."""
 
-    def enable_traversal(self) -> None:
+    def enable_traversal(self):
         """Enable keyboard traversal for a toplevel window containing
         this notebook.
 
@@ -1329,7 +1329,7 @@ class Panedwindow(Widget, tkinter.PanedWindow):
     def config(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     forget = tkinter.PanedWindow.forget
-    def insert(self, pos, child, **kw) -> None:
+    def insert(self, pos, child, **kw):
         """Inserts a pane at the specified positions.
 
         pos is either the string end, and integer index, or the name
@@ -1424,20 +1424,20 @@ class Progressbar(Widget):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
-    def start(self, interval: "idle" | int | None = None) -> None:
+    def start(self, interval: "idle" | int | None = None):
         """Begin autoincrement mode: schedules a recurring timer event
         that calls method step every interval milliseconds.
 
         interval defaults to 50 milliseconds (20 steps/second) if omitted.
         """
 
-    def step(self, amount: float | None = None) -> None:
+    def step(self, amount: float | None = None):
         """Increments the value option by amount.
 
         amount defaults to 1.0 if omitted.
         """
 
-    def stop(self) -> None:
+    def stop(self):
         """Stop autoincrement mode: cancels any recurring timer event
         initiated by start.
         """
@@ -1885,7 +1885,7 @@ class Spinbox(Entry):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
-    def set(self, value: dynamic) -> None:
+    def set(self, value: dynamic):
         """Sets the value of the Spinbox to value."""
 
 @type_check_only
@@ -2016,7 +2016,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         If item is not specified, returns root children.
         """
 
-    def set_children(self, item: str | int, *newchildren: str | int) -> None:
+    def set_children(self, item: str | int, *newchildren: str | int):
         """Replaces item's child with newchildren.
 
         Children present in item that are not present in newchildren
@@ -2047,12 +2047,12 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         # id is read-only
     ) -> _TreeviewColumnDict | None
 
-    def delete(self, *items: str | int) -> None:
+    def delete(self, *items: str | int):
         """Delete all specified items and all their descendants. The root
         item may not be deleted.
         """
 
-    def detach(self, *items: str | int) -> None:
+    def detach(self, *items: str | int):
         """Unlinks all of the specified items from the tree.
 
         The items and all of their descendants are still present, and may
@@ -2200,7 +2200,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         tags: str | list[str] | (*: str) = ...,
     ) -> None
 
-    def move(self, item: str | int, parent: str, index: int | "end") -> None:
+    def move(self, item: str | int, parent: str, index: int | "end"):
         """Moves item to position index in parent's list of children.
 
         It is illegal to move an item under one of its descendants. If
@@ -2225,7 +2225,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         item is the first child of its parent.
         """
 
-    def see(self, item: str | int) -> None:
+    def see(self, item: str | int):
         """Ensure that item is visible.
 
         Sets all of item's ancestors open option to True, and scrolls
@@ -2415,7 +2415,7 @@ class OptionMenu(Menubutton):
 
     # configure, config, cget, destroy are inherited from Menubutton
     # destroy and __setitem__ are overridden, signature does not change
-    def set_menu(self, default: str | None = None, *values: str) -> None:
+    def set_menu(self, default: str | None = None, *values: str):
         """Build a new menu of radiobuttons with *values and optionally
         a default value.
         """

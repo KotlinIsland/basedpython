@@ -18,7 +18,7 @@ final version: str
 protocol _ErrorHandlerProtocol:  # noqa: Y046  # Protocol is not used
     def error(self, exception: BaseException) -> NoReturn
     def fatalError(self, exception: BaseException) -> NoReturn
-    def warning(self, exception: BaseException) -> None
+    def warning(self, exception: BaseException)
 
 class ErrorHandler:
     """Basic interface for SAX error handlers.
@@ -37,24 +37,24 @@ class ErrorHandler:
     def fatalError(self, exception: BaseException) -> NoReturn:
         """Handle a non-recoverable error."""
 
-    def warning(self, exception: BaseException) -> None:
+    def warning(self, exception: BaseException):
         """Handle a warning."""
 
 @type_check_only
 protocol _ContentHandlerProtocol:  # noqa: Y046  # Protocol is not used
-    def setDocumentLocator(self, locator: xmlreader.Locator) -> None
-    def startDocument(self) -> None
-    def endDocument(self) -> None
-    def startPrefixMapping(self, prefix: str | None, uri: str) -> None
-    def endPrefixMapping(self, prefix: str | None) -> None
-    def startElement(self, name: str, attrs: xmlreader.AttributesImpl) -> None
-    def endElement(self, name: str) -> None
-    def startElementNS(self, name: (str | None, str), qname: str | None, attrs: xmlreader.AttributesNSImpl) -> None
-    def endElementNS(self, name: (str | None, str), qname: str | None) -> None
-    def characters(self, content: str) -> None
-    def ignorableWhitespace(self, whitespace: str) -> None
-    def processingInstruction(self, target: str, data: str) -> None
-    def skippedEntity(self, name: str) -> None
+    def setDocumentLocator(self, locator: xmlreader.Locator)
+    def startDocument(self)
+    def endDocument(self)
+    def startPrefixMapping(self, prefix: str | None, uri: str)
+    def endPrefixMapping(self, prefix: str | None)
+    def startElement(self, name: str, attrs: xmlreader.AttributesImpl)
+    def endElement(self, name: str)
+    def startElementNS(self, name: (str | None, str), qname: str | None, attrs: xmlreader.AttributesNSImpl)
+    def endElementNS(self, name: (str | None, str), qname: str | None)
+    def characters(self, content: str)
+    def ignorableWhitespace(self, whitespace: str)
+    def processingInstruction(self, target: str, data: str)
+    def skippedEntity(self, name: str)
 
 class ContentHandler:
     """Interface for receiving logical document content events.
@@ -64,7 +64,7 @@ class ContentHandler:
     mirrors the order of the information in the document.
     """
 
-    def setDocumentLocator(self, locator: xmlreader.Locator) -> None:
+    def setDocumentLocator(self, locator: xmlreader.Locator):
         """Called by the parser to give the application a locator for
         locating the origin of document events.
 
@@ -87,7 +87,7 @@ class ContentHandler:
         application should not attempt to use it at any other time.
         """
 
-    def startDocument(self) -> None:
+    def startDocument(self):
         """Receive notification of the beginning of a document.
 
         The SAX parser will invoke this method only once, before any
@@ -95,7 +95,7 @@ class ContentHandler:
         setDocumentLocator).
         """
 
-    def endDocument(self) -> None:
+    def endDocument(self):
         """Receive notification of the end of a document.
 
         The SAX parser will invoke this method only once, and it will
@@ -105,7 +105,7 @@ class ContentHandler:
         input.
         """
 
-    def startPrefixMapping(self, prefix: str | None, uri: str) -> None:
+    def startPrefixMapping(self, prefix: str | None, uri: str):
         """Begin the scope of a prefix-URI Namespace mapping.
 
         The information from this event is not necessary for normal
@@ -129,7 +129,7 @@ class ContentHandler:
         not guaranteed.
         """
 
-    def endPrefixMapping(self, prefix: str | None) -> None:
+    def endPrefixMapping(self, prefix: str | None):
         """End the scope of a prefix-URI mapping.
 
         See startPrefixMapping for details. This event will always
@@ -137,7 +137,7 @@ class ContentHandler:
         of endPrefixMapping events is not otherwise guaranteed.
         """
 
-    def startElement(self, name: str, attrs: xmlreader.AttributesImpl) -> None:
+    def startElement(self, name: str, attrs: xmlreader.AttributesImpl):
         """Signals the start of an element in non-namespace mode.
 
         The name parameter contains the raw XML 1.0 name of the
@@ -146,14 +146,14 @@ class ContentHandler:
         the element.
         """
 
-    def endElement(self, name: str) -> None:
+    def endElement(self, name: str):
         """Signals the end of an element in non-namespace mode.
 
         The name parameter contains the name of the element type, just
         as with the startElement event.
         """
 
-    def startElementNS(self, name: (str | None, str), qname: str | None, attrs: xmlreader.AttributesNSImpl) -> None:
+    def startElementNS(self, name: (str | None, str), qname: str | None, attrs: xmlreader.AttributesNSImpl):
         """Signals the start of an element in namespace mode.
 
         The name parameter contains the name of the element type as a
@@ -166,14 +166,14 @@ class ContentHandler:
         no namespace.
         """
 
-    def endElementNS(self, name: (str | None, str), qname: str | None) -> None:
+    def endElementNS(self, name: (str | None, str), qname: str | None):
         """Signals the end of an element in namespace mode.
 
         The name parameter contains the name of the element type, just
         as with the startElementNS event.
         """
 
-    def characters(self, content: str) -> None:
+    def characters(self, content: str):
         """Receive notification of character data.
 
         The Parser will call this method to report each chunk of
@@ -184,7 +184,7 @@ class ContentHandler:
         Locator provides useful information.
         """
 
-    def ignorableWhitespace(self, whitespace: str) -> None:
+    def ignorableWhitespace(self, whitespace: str):
         """Receive notification of ignorable whitespace in element content.
 
         Validating Parsers must use this method to report each chunk
@@ -199,7 +199,7 @@ class ContentHandler:
         information.
         """
 
-    def processingInstruction(self, target: str, data: str) -> None:
+    def processingInstruction(self, target: str, data: str):
         """Receive notification of a processing instruction.
 
         The Parser will invoke this method once for each processing
@@ -211,7 +211,7 @@ class ContentHandler:
         using this method.
         """
 
-    def skippedEntity(self, name: str) -> None:
+    def skippedEntity(self, name: str):
         """Receive notification of a skipped entity.
 
         The Parser will invoke this method once for each entity
@@ -226,8 +226,8 @@ class ContentHandler:
 
 @type_check_only
 protocol _DTDHandlerProtocol:  # noqa: Y046  # Protocol is not used
-    def notationDecl(self, name: str, publicId: str | None, systemId: str) -> None
-    def unparsedEntityDecl(self, name: str, publicId: str | None, systemId: str, ndata: str) -> None
+    def notationDecl(self, name: str, publicId: str | None, systemId: str)
+    def unparsedEntityDecl(self, name: str, publicId: str | None, systemId: str, ndata: str)
 
 class DTDHandler:
     """Handle DTD events.
@@ -236,10 +236,10 @@ class DTDHandler:
     parsing (unparsed entities and attributes).
     """
 
-    def notationDecl(self, name: str, publicId: str | None, systemId: str) -> None:
+    def notationDecl(self, name: str, publicId: str | None, systemId: str):
         """Handle a notation declaration event."""
 
-    def unparsedEntityDecl(self, name: str, publicId: str | None, systemId: str, ndata: str) -> None:
+    def unparsedEntityDecl(self, name: str, publicId: str | None, systemId: str, ndata: str):
         """Handle an unparsed entity declaration event."""
 
 @type_check_only
@@ -289,14 +289,14 @@ class LexicalHandler:
     'http://xml.org/sax/properties/lexical-handler'.
     """
 
-    def comment(self, content: str) -> None:
+    def comment(self, content: str):
         """Reports a comment anywhere in the document (including the
         DTD and outside the document element).
 
         content is a string that holds the contents of the comment.
         """
 
-    def startDTD(self, name: str, public_id: str | None, system_id: str | None) -> None:
+    def startDTD(self, name: str, public_id: str | None, system_id: str | None):
         """Report the start of the DTD declarations, if the document
         has an associated DTD.
 
@@ -310,15 +310,15 @@ class LexicalHandler:
         None if none were supplied).
         """
 
-    def endDTD(self) -> None:
+    def endDTD(self):
         """Signals the end of DTD declarations."""
 
-    def startCDATA(self) -> None:
+    def startCDATA(self):
         """Reports the beginning of a CDATA marked section.
 
         The contents of the CDATA marked section will be reported
         through the characters event.
         """
 
-    def endCDATA(self) -> None:
+    def endCDATA(self):
         """Reports the end of a CDATA marked section."""

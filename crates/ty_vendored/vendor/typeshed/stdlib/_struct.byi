@@ -38,7 +38,7 @@ def pack(fmt: str | bytes, /, *v: dynamic) -> bytes:
     to the format string.  See help(struct) for more on format strings.
     """
 
-def pack_into(fmt: str | bytes, buffer: WriteableBuffer, offset: int, /, *v: dynamic) -> None:
+def pack_into(fmt: str | bytes, buffer: WriteableBuffer, offset: int, /, *v: dynamic):
     """Pack values and write the packed bytes into the buffer.
 
     Pack the provided values according to the format string and write the
@@ -93,7 +93,7 @@ class Struct:
         format strings.
         """
 
-    def pack_into(self, buffer: WriteableBuffer, offset: int, *v: dynamic) -> None:
+    def pack_into(self, buffer: WriteableBuffer, offset: int, *v: dynamic):
         """Pack values and write the packed bytes into the buffer.
 
         Pack the provided values according to the struct format string

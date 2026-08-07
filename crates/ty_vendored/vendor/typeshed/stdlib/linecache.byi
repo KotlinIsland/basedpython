@@ -22,7 +22,7 @@ def getline(filename: str, lineno: int, module_globals: _ModuleGlobals | None = 
     Update the cache if it doesn't contain an entry for this file already.
     """
 
-def clearcache() -> None:
+def clearcache():
     """Clear the cache entirely."""
 
 def getlines(filename: str, module_globals: _ModuleGlobals | None = None) -> list[str]:
@@ -30,7 +30,7 @@ def getlines(filename: str, module_globals: _ModuleGlobals | None = None) -> lis
     Update the cache if it doesn't contain an entry for this file already.
     """
 
-def checkcache(filename: str | None = None) -> None:
+def checkcache(filename: str | None = None):
     """Discard cache entries that are out of date.
     (This is not checked upon each call!)
     """

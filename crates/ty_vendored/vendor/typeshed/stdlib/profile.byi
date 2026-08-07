@@ -7,7 +7,7 @@ from typing_extensions import Self
 
 __all__ = ["run", "runctx", "Profile"]
 
-def run(statement: str, filename: str | None = None, sort: str | int = -1) -> None:
+def run(statement: str, filename: str | None = None, sort: str | int = -1):
     """Run statement under profiler optionally saving results in filename
 
     This function takes a single argument that can be passed to the
@@ -21,7 +21,7 @@ def run(statement: str, filename: str | None = None, sort: str | int = -1) -> No
 
 def runctx(
     statement: str, globals: dict[str, dynamic], locals: Mapping[str, dynamic], filename: str | None = None, sort: str | int = -1
-) -> None:
+):
     """Run statement under profiler, supplying your own globals and locals,
     optionally saving results in filename.
 
@@ -72,13 +72,13 @@ class Profile:
     bias: int
     stats: dict[Label, (int, int, int, int, dict[Label, (int, int, int, int)])]  # undocumented
     init(self, timer: (() -> float) | None = None, bias: int | None = None)
-    def set_cmd(self, cmd: str) -> None
-    def simulate_call(self, name: str) -> None
-    def simulate_cmd_complete(self) -> None
-    def print_stats(self, sort: str | int = -1) -> None
-    def dump_stats(self, file: StrOrBytesPath) -> None
-    def create_stats(self) -> None
-    def snapshot_stats(self) -> None
+    def set_cmd(self, cmd: str)
+    def simulate_call(self, name: str)
+    def simulate_cmd_complete(self)
+    def print_stats(self, sort: str | int = -1)
+    def dump_stats(self, file: StrOrBytesPath)
+    def create_stats(self)
+    def snapshot_stats(self)
     def run(self, cmd: str) -> Self
     def runctx(self, cmd: str, globals: dict[str, dynamic], locals: Mapping[str, dynamic]) -> Self
     def runcall[Parameters: (*: *, **: *), Element](self, func: (**Parameters) -> Element, /, *args: Parameters.args, **kw: Parameters.kwargs) -> Element

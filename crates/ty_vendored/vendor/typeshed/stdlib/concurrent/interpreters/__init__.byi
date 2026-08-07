@@ -75,13 +75,13 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
         def __new__(cls, id: int, /, _whence: _Whence | None = None, _ownsref: bool | None = None) -> Self
         def __reduce__(self) -> (type[Self], int)
         def __hash__(self) -> int
-        def __del__(self) -> None
+        def __del__(self)
         let id: int
         let whence: "unknown" | "runtime init" | "legacy C-API" | "C-API" | "cross-interpreter C-API" | "_interpreters module"
         def is_running(self) -> bool:
             """Return whether or not the identified interpreter is running."""
 
-        def close(self) -> None:
+        def close(self):
             """Finalize and destroy the interpreter.
 
             Attempting to destroy the current interpreter results
@@ -90,13 +90,13 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
 
         def prepare_main(
             self, ns: _SharedDict | None = None, /, **kwargs: dynamic
-        ) -> None:  # kwargs has same value restrictions as _SharedDict
+        ):  # kwargs has same value restrictions as _SharedDict
             """Bind the given values into the interpreter's __main__.
 
             The values must be shareable.
             """
 
-        def exec(self, code: str | types.CodeType | (() -> object), /) -> None:
+        def exec(self, code: str | types.CodeType | (() -> object), /):
             """Run the given source code in the interpreter.
 
             This is essentially the same as calling the builtin "exec"

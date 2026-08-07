@@ -37,7 +37,7 @@ if sys.platform != "win32":
 
 class Heap:
     init(self, size: int = ...)
-    def free(self, block: Block) -> None
+    def free(self, block: Block)
     def malloc(self, size: int) -> Block
 
 class BufferWrapper:

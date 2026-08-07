@@ -26,7 +26,7 @@ class ZoneInfo(tzinfo):
         class def from_file(cls, fobj: _IOBytes, /, key: str | None = None) -> Self:
             """Create a ZoneInfo file from a file object."""
 
-    class def clear_cache(cls, *, only_keys: Iterable[str] | None = None) -> None:
+    class def clear_cache(cls, *, only_keys: Iterable[str] | None = None):
         """Clear the ZoneInfo cache."""
 
     override def tzname(self, dt: datetime | None, /) -> str | None:

@@ -65,7 +65,8 @@ if [[ "$SKIP_PATCHES" -eq 0 ]]; then
     # that `TypeAliasStatements` writes), so the first pass leaves work for the
     # second
     for pass_no in 1 2 3 4; do
-        out="$("$PATCH" "$TYPESHED")"
+        # the binary reports on stderr, so the fixed-point check has to read it
+        out="$("$PATCH" "$TYPESHED" 2>&1)"
         echo "    pass $pass_no: $out"
         if [[ "$out" == *"patched 0"* ]]; then
             break
@@ -81,6 +82,13 @@ if [[ "$SKIP_PATCHES" -eq 0 ]]; then
     # shellcheck disable=SC2016
     echo '==> phase 3: mark overriding methods with `override`'
     "$OVERRIDE_PATCH" "$TYPESHED"
+
+    # `redundant_none_return` refuses an override, which on a fresh sync it can
+    # only see once phase 3 has written the markers. every post-patch is
+    # idempotent, so replaying them here costs nothing and is a no-op on a tree
+    # that already carries them
+    echo "==> phase 4: replay the ast patches over the marked overrides"
+    echo "    $("$PATCH" "$TYPESHED" 2>&1)"
 fi
 
 echo "==> done. review diff with: git diff -- $TYPESHED"

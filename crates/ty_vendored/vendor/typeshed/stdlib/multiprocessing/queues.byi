@@ -14,17 +14,17 @@ class Queue[in out Element]:
     # It's marked as such to be able to use the generic Queue in __init__.pyi.
     init(self, maxsize: int = 0, *, ctx: dynamic = ...)
     def __getstate__(self) -> _QueueState
-    def __setstate__(self, state: _QueueState) -> None
-    def put(self, obj: Element, block: bool = True, timeout: float | None = None) -> None
+    def __setstate__(self, state: _QueueState)
+    def put(self, obj: Element, block: bool = True, timeout: float | None = None)
     def get(self, block: bool = True, timeout: float | None = None) -> Element
     def qsize(self) -> int
     def empty(self) -> bool
     def full(self) -> bool
     def get_nowait(self) -> Element
-    def put_nowait(self, obj: Element) -> None
-    def close(self) -> None
-    def join_thread(self) -> None
-    def cancel_join_thread(self) -> None
+    def put_nowait(self, obj: Element)
+    def close(self)
+    def join_thread(self)
+    def cancel_join_thread(self)
     if sys.version_info >= (3, 12):
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
             """Represent a PEP 585 generic type
@@ -36,17 +36,17 @@ class Queue[in out Element]:
 class JoinableQueue[in out Element](Queue[Element]):
     override def __getstate__(self) -> _JoinableQueueState
     override def __setstate__(self, state: _JoinableQueueState) -> None
-    def task_done(self) -> None
-    def join(self) -> None
+    def task_done(self)
+    def join(self)
 
 class SimpleQueue[in out Element]:
     init(self, *, ctx: dynamic = ...)
-    def close(self) -> None
+    def close(self)
     def empty(self) -> bool
     def __getstate__(self) -> _SimpleQueueState
-    def __setstate__(self, state: _SimpleQueueState) -> None
+    def __setstate__(self, state: _SimpleQueueState)
     def get(self) -> Element
-    def put(self, obj: Element) -> None
+    def put(self, obj: Element)
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 

@@ -58,9 +58,9 @@ class TaskGroup:
             Similar to `asyncio.create_task`.
             """
 
-    def _on_task_done(self, task: Task[object]) -> None
+    def _on_task_done(self, task: Task[object])
     if sys.version_info >= (3, 15):
-        def cancel(self) -> None:
+        def cancel(self):
             """Cancel the task group
 
             `cancel()` will be called on any tasks in the group that aren't yet

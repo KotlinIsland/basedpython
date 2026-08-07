@@ -44,7 +44,7 @@ def shift_path_info(environ: WSGIEnvironment) -> str | None:
     '/x' and '/x/' when traversing to objects.
     """
 
-def setup_testing_defaults(environ: WSGIEnvironment) -> None:
+def setup_testing_defaults(environ: WSGIEnvironment):
     """Update 'environ' with trivial defaults for testing purposes
 
     This adds various parameters required for WSGI, including HTTP_HOST,

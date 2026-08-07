@@ -78,15 +78,15 @@ class RefactoringTool:
     def log_debug(self, msg: object) -> None
     def log_debug(self, msg: str, *args: object) -> None
 
-    def print_output(self, old_text: str, new_text: str, filename: StrPath, equal: bool) -> None:
+    def print_output(self, old_text: str, new_text: str, filename: StrPath, equal: bool):
         """Called with the old version, new version, and filename of a
         refactored file.
         """
 
-    def refactor(self, items: Iterable[str], write: bool = False, doctests_only: bool = False) -> None:
+    def refactor(self, items: Iterable[str], write: bool = False, doctests_only: bool = False):
         """Refactor a list of files and directories."""
 
-    def refactor_dir(self, dir_name: str, write: bool = False, doctests_only: bool = False) -> None:
+    def refactor_dir(self, dir_name: str, write: bool = False, doctests_only: bool = False):
         """Descends down a directory and refactor every Python file found.
 
         Python files are assumed to have a .py extension.
@@ -99,7 +99,7 @@ class RefactoringTool:
         Do our best to decode a Python source file correctly.
         """
 
-    def refactor_file(self, filename: StrPath, write: bool = False, doctests_only: bool = False) -> None:
+    def refactor_file(self, filename: StrPath, write: bool = False, doctests_only: bool = False):
         """Refactors a file."""
 
     def refactor_string(self, data: str, name: str) -> Node | None:
@@ -114,7 +114,7 @@ class RefactoringTool:
             there were errors during the parse.
         """
 
-    def refactor_stdin(self, doctests_only: bool = False) -> None
+    def refactor_stdin(self, doctests_only: bool = False)
     def refactor_tree(self, tree: Node, name: str) -> bool:
         """Refactors a parse tree (modifying the tree in place).
 
@@ -131,7 +131,7 @@ class RefactoringTool:
             True if the tree was modified, False otherwise.
         """
 
-    def traverse_by(self, fixers: SupportsGetItem[int, Iterable[BaseFix]] | None, traversal: Iterable[Node]) -> None:
+    def traverse_by(self, fixers: SupportsGetItem[int, Iterable[BaseFix]] | None, traversal: Iterable[Node]):
         """Traverse an AST, applying a set of fixers to each node.
 
         This is a helper method for refactor_tree().
@@ -146,12 +146,12 @@ class RefactoringTool:
 
     def processed_file(
         self, new_text: str, filename: StrPath, old_text: str | None = None, write: bool = False, encoding: str | None = None
-    ) -> None:
+    ):
         """
         Called when a file has been refactored and there may be changes.
         """
 
-    def write_file(self, new_text: str, filename: FileDescriptorOrPath, old_text: str, encoding: str | None = None) -> None:
+    def write_file(self, new_text: str, filename: FileDescriptorOrPath, old_text: str, encoding: str | None = None):
         """Writes a string to a file.
 
         It first shows a unified diff between the old text and the new text, and
@@ -183,7 +183,7 @@ class RefactoringTool:
 
         """
 
-    def summarize(self) -> None
+    def summarize(self)
     def parse_block(self, block: Iterable[str], lineno: int, indent: int) -> Node:
         """Parses a block into a tree.
 

@@ -46,10 +46,10 @@ class ExpatBuilder:
     def getParser(self) -> XMLParserType:
         """Return the parser object, creating a new one if needed."""
 
-    def reset(self) -> None:
+    def reset(self):
         """Free all data structures used during DOM construction."""
 
-    def install(self, parser: XMLParserType) -> None:
+    def install(self, parser: XMLParserType):
         """Install the callbacks needed to build the DOM into the parser."""
 
     def parseFile(self, file: SupportsRead[ReadableBuffer | str]) -> Document:
@@ -62,13 +62,13 @@ class ExpatBuilder:
 
     def start_doctype_decl_handler(
         self, doctypeName: str, systemId: str | None, publicId: str | None, has_internal_subset: bool
-    ) -> None
-    def end_doctype_decl_handler(self) -> None
-    def pi_handler(self, target: str, data: str) -> None
-    def character_data_handler_cdata(self, data: str) -> None
-    def character_data_handler(self, data: str) -> None
-    def start_cdata_section_handler(self) -> None
-    def end_cdata_section_handler(self) -> None
+    )
+    def end_doctype_decl_handler(self)
+    def pi_handler(self, target: str, data: str)
+    def character_data_handler_cdata(self, data: str)
+    def character_data_handler(self, data: str)
+    def start_cdata_section_handler(self)
+    def end_cdata_section_handler(self)
     def entity_decl_handler(
         self,
         entityName: str,
@@ -78,16 +78,16 @@ class ExpatBuilder:
         systemId: str,
         publicId: str | None,
         notationName: str | None,
-    ) -> None
-    def notation_decl_handler(self, notationName: str, base: str | None, systemId: str, publicId: str | None) -> None
-    def comment_handler(self, data: str) -> None
+    )
+    def notation_decl_handler(self, notationName: str, base: str | None, systemId: str, publicId: str | None)
+    def comment_handler(self, data: str)
     def external_entity_ref_handler(self, context: str, base: str | None, systemId: str | None, publicId: str | None) -> int
-    def first_element_handler(self, name: str, attributes: list[str]) -> None
-    def start_element_handler(self, name: str, attributes: list[str]) -> None
-    def end_element_handler(self, name: str) -> None
-    def element_decl_handler(self, name: str, model: Model) -> None
-    def attlist_decl_handler(self, elem: str, name: str, type: str, default: str | None, required: bool) -> None
-    def xml_decl_handler(self, version: str, encoding: str | None, standalone: int) -> None
+    def first_element_handler(self, name: str, attributes: list[str])
+    def start_element_handler(self, name: str, attributes: list[str])
+    def end_element_handler(self, name: str)
+    def element_decl_handler(self, name: str, model: Model)
+    def attlist_decl_handler(self, elem: str, name: str, type: str, default: str | None, required: bool)
+    def xml_decl_handler(self, version: str, encoding: str | None, standalone: int)
 
 class FilterVisibilityController:
     """Wrapper around a DOMBuilderFilter which implements the checks
@@ -106,13 +106,13 @@ class FilterCrutch:
 
 class Rejecter(FilterCrutch):
     __slots__ = ()
-    def start_element_handler(self, *args: dynamic) -> None
-    def end_element_handler(self, *args: dynamic) -> None
+    def start_element_handler(self, *args: dynamic)
+    def end_element_handler(self, *args: dynamic)
 
 class Skipper(FilterCrutch):
     __slots__ = ()
-    def start_element_handler(self, *args: dynamic) -> None
-    def end_element_handler(self, *args: dynamic) -> None
+    def start_element_handler(self, *args: dynamic)
+    def end_element_handler(self, *args: dynamic)
 
 class FragmentBuilder(ExpatBuilder):
     """Builder which constructs document fragments given XML source
@@ -146,14 +146,14 @@ class Namespaces:
     def createParser(self) -> XMLParserType:
         """Create a new namespace-handling parser."""
 
-    def install(self, parser: XMLParserType) -> None:
+    def install(self, parser: XMLParserType):
         """Insert the namespace-handlers onto the parser."""
 
-    def start_namespace_decl_handler(self, prefix: str | None, uri: str) -> None:
+    def start_namespace_decl_handler(self, prefix: str | None, uri: str):
         """Push this namespace declaration on our storage."""
 
-    def start_element_handler(self, name: str, attributes: list[str]) -> None
-    def end_element_handler(self, name: str) -> None  # only exists if __debug__
+    def start_element_handler(self, name: str, attributes: list[str])
+    def end_element_handler(self, name: str)  # only exists if __debug__
 
 class ExpatBuilderNS(Namespaces, ExpatBuilder):
     """Document builder that supports namespaces."""

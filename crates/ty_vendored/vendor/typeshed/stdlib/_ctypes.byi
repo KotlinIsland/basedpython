@@ -61,14 +61,14 @@ if sys.platform == "win32":
         Windows API.
         """
 
-    def FreeLibrary(handle: int, /) -> None:
+    def FreeLibrary(handle: int, /):
         """FreeLibrary(handle) -> void
 
         Free the handle of an executable previously loaded by LoadLibrary.
         """
 
 else:
-    def dlclose(handle: int, /) -> None:
+    def dlclose(handle: int, /):
         """dlclose a library"""
 
     # The default for flag is RTLD_GLOBAL|RTLD_LOCAL, which is platform dependent.
@@ -147,7 +147,7 @@ class _PyCPointerType(_CTypeBaseType):
     def from_buffer_copy(self: type[_typeshed.Self], buffer: ReadableBuffer, offset: int = 0, /) -> _typeshed.Self
     def from_param(self: type[_typeshed.Self], value: dynamic, /) -> _typeshed.Self | _CArgObject
     def in_dll(self: type[_typeshed.Self], dll: CDLL, name: str, /) -> _typeshed.Self
-    def set_type(self, type: _CTypeBaseType, /) -> None
+    def set_type(self, type: _CTypeBaseType, /)
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
         def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
@@ -167,7 +167,7 @@ class _Pointer[in out CT: _CData](_PointerLike, _CData, metaclass=_PyCPointerTyp
         """Return self[key]."""
     def __getitem__(self, key: slice[SupportsIndex | None], /) -> list[dynamic]
 
-    def __setitem__(self, key: int, value: dynamic, /) -> None:
+    def __setitem__(self, key: int, value: dynamic, /):
         """Set self[key] to value."""
 
 if sys.version_info < (3, 14):
@@ -287,7 +287,7 @@ if sys.version_info >= (3, 14):
             """Return an attribute of instance, which is of type owner."""
         def __get__(self, instance: dynamic, owner: builtins.type[dynamic] | None = None, /) -> GetT
 
-        def __set__(self, instance: dynamic, value: SetT, /) -> None:
+        def __set__(self, instance: dynamic, value: SetT, /):
             """Set an attribute of instance to value."""
 
     _CField = CField
@@ -301,7 +301,7 @@ else:
         def __get__(self, instance: None, owner: type[dynamic] | None = None, /) -> Self
         def __get__(self, instance: dynamic, owner: type[dynamic] | None = None, /) -> GetT
 
-        def __set__(self, instance: dynamic, value: SetT, /) -> None
+        def __set__(self, instance: dynamic, value: SetT, /)
 
 # This class is not exposed. It calls itself _ctypes.UnionType.
 @type_check_only
@@ -448,7 +448,7 @@ def alignment(obj_or_type: _CData | _CDataType | type[_CData | _CDataType], /) -
     """
 
 def get_errno() -> int
-def resize(obj: _CData | _CDataType, size: int, /) -> None:
+def resize(obj: _CData | _CDataType, size: int, /):
     """Resize the memory buffer of a ctypes instance"""
 
 def set_errno(value: int, /) -> int

@@ -101,7 +101,7 @@ class IMAP4:
     capabilities: (*: str)
     PROTOCOL_VERSION: str
     init(self, host: str = "", port: int = 143, timeout: float | None = None)
-    def open(self, host: str = "", port: int = 143, timeout: float | None = None) -> None:
+    def open(self, host: str = "", port: int = 143, timeout: float | None = None):
         """Setup connection to remote server on "host:port"
             (default: localhost:standard IMAP4 port).
         This connection will be used by the routines:
@@ -125,10 +125,10 @@ class IMAP4:
     def readline(self) -> bytes:
         """Read line from remote."""
 
-    def send(self, data: ReadableBuffer) -> None:
+    def send(self, data: ReadableBuffer):
         """Send data to remote."""
 
-    def shutdown(self) -> None:
+    def shutdown(self):
         """Close I/O established in "open"."""
 
     def socket(self) -> _socket:
@@ -233,7 +233,7 @@ class IMAP4:
         """
 
     def __enter__(self) -> Self
-    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None
+    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None)
     def expunge(self) -> CommandResults:
         """Permanently remove deleted items from selected mailbox.
 
@@ -477,7 +477,7 @@ class IMAP4:
         Returns response appropriate to extension command 'name'.
         """
 
-    def print_log(self) -> None
+    def print_log(self)
 
 if sys.version_info >= (3, 14):
     class Idler:

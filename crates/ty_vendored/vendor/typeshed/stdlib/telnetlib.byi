@@ -183,7 +183,7 @@ class Telnet:
         and timeout are optional.
         """
 
-    def open(self, host: str, port: int = 0, timeout: float = ...) -> None:
+    def open(self, host: str, port: int = 0, timeout: float = ...):
         """Connect to a host.
 
         The optional second argument is the port number, which
@@ -192,7 +192,7 @@ class Telnet:
         Don't try to reopen an already connected instance.
         """
 
-    def msg(self, msg: str, *args: dynamic) -> None:
+    def msg(self, msg: str, *args: dynamic):
         """Print a debug message, when the debug level is > 0.
 
         If extra arguments are present, they are substituted in the
@@ -200,14 +200,14 @@ class Telnet:
 
         """
 
-    def set_debuglevel(self, debuglevel: int) -> None:
+    def set_debuglevel(self, debuglevel: int):
         """Set the debug level.
 
         The higher it is, the more debug output you get (on sys.stdout).
 
         """
 
-    def close(self) -> None:
+    def close(self):
         """Close the connection."""
 
     def get_socket(self) -> socket.socket:
@@ -216,7 +216,7 @@ class Telnet:
     def fileno(self) -> int:
         """Return the fileno() of the socket object used internally."""
 
-    def write(self, buffer: bytes) -> None:
+    def write(self, buffer: bytes):
         """Write a string to the socket, doubling any IAC characters.
 
         Can block if the connection is blocked.  May raise
@@ -288,10 +288,10 @@ class Telnet:
 
         """
 
-    def set_option_negotiation_callback(self, callback: ((socket.socket, bytes, bytes) -> object) | None) -> None:
+    def set_option_negotiation_callback(self, callback: ((socket.socket, bytes, bytes) -> object) | None):
         """Provide a callback function called after each receipt of a telnet option."""
 
-    def process_rawq(self) -> None:
+    def process_rawq(self):
         """Transfer from raw queue to cooked queue.
 
         Set self.eof when connection is closed.  Don't block unless in
@@ -307,7 +307,7 @@ class Telnet:
 
         """
 
-    def fill_rawq(self) -> None:
+    def fill_rawq(self):
         """Fill raw queue from exactly one recv() system call.
 
         Block if no data is immediately available.  Set self.eof when
@@ -318,13 +318,13 @@ class Telnet:
     def sock_avail(self) -> bool:
         """Test whether data is available on the socket."""
 
-    def interact(self) -> None:
+    def interact(self):
         """Interaction function, emulates a very dumb telnet client."""
 
-    def mt_interact(self) -> None:
+    def mt_interact(self):
         """Multithreaded version of interact()."""
 
-    def listener(self) -> None:
+    def listener(self):
         """Helper for mt_interact() -- this executes in the other thread."""
 
     def expect(
@@ -355,6 +355,6 @@ class Telnet:
     def __enter__(self) -> Self
     def __exit__(
         self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
-    ) -> None
-    def __del__(self) -> None:
+    )
+    def __del__(self):
         """Destructor -- close the connection."""

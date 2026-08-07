@@ -140,5 +140,5 @@ class zipimporter(_LoaderBasics):
         Returns None if the module cannot be found.
         """
 
-    def invalidate_caches(self) -> None:
+    def invalidate_caches(self):
         """Invalidates the cache of file data of the archive path."""

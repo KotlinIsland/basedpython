@@ -109,7 +109,7 @@ class _PaddedFile:
     file: _ReadableFileobj
     init(self, f: _ReadableFileobj, prepend: bytes = b"")
     def read(self, size: int) -> bytes
-    def prepend(self, prepend: bytes = b"") -> None
+    def prepend(self, prepend: bytes = b"")
     def seek(self, off: int) -> int
     def seekable(self) -> bool
 
@@ -234,7 +234,7 @@ class GzipFile(BaseStream):
         doesn't support fileno().
         """
 
-    def rewind(self) -> None:
+    def rewind(self):
         """Return the uncompressed stream file position indicator to the
         beginning of the file
         """

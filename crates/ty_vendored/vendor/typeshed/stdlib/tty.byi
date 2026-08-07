@@ -30,8 +30,8 @@ if sys.platform != "win32":
         """Put terminal into cbreak mode."""
 
     if sys.version_info >= (3, 12):
-        def cfmakeraw(mode: termios._Attr) -> None:
+        def cfmakeraw(mode: termios._Attr):
             """Make termios mode raw."""
 
-        def cfmakecbreak(mode: termios._Attr) -> None:
+        def cfmakecbreak(mode: termios._Attr):
             """Make termios mode cbreak."""

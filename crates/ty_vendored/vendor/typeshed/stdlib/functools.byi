@@ -101,7 +101,7 @@ final class _lru_cache_wrapper[Fn: (...) -> object]:
     def cache_info(self) -> _CacheInfo:
         """Report cache statistics"""
 
-    def cache_clear(self) -> None:
+    def cache_clear(self):
         """Clear the cache and cache statistics"""
 
     def cache_parameters(self) -> _CacheParameters
@@ -346,7 +346,7 @@ class _SingleDispatchCallable[in out Element]:
     # fun.register(int, lambda x: x)
     def register(self, cls: _RegType, func: (...) -> Element) -> (...) -> Element
 
-    def _clear_cache(self) -> None
+    def _clear_cache(self)
     def __call__(self, /, *args: dynamic, **kwargs: dynamic) -> Element
 
 def singledispatch[Element](func: (...) -> Element) -> _SingleDispatchCallable[Element]:
@@ -389,9 +389,9 @@ class cached_property[out Element]:
     def __get__(self, instance: None, owner: type[dynamic] | None = None) -> Self
     def __get__(self, instance: object, owner: type[dynamic] | None = None) -> Element
 
-    def __set_name__(self, owner: type[dynamic], name: str) -> None
+    def __set_name__(self, owner: type[dynamic], name: str)
     # __set__ is not defined at runtime, but @cached_property is designed to be settable
-    def __set__(self, instance: object, value: Element) -> None
+    def __set__(self, instance: object, value: Element)
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 

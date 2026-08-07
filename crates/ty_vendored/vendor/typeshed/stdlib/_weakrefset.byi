@@ -14,7 +14,7 @@ class WeakSet[in out Element](MutableSet[Element]):
     override def discard(self, item: Element) -> None
     def copy(self) -> Self
     override def remove(self, item: Element) -> None
-    def update(self, other: Iterable[Element]) -> None
+    def update(self, other: Iterable[Element])
     __hash__: ClassVar[None]
     override def __contains__(self, item: object) -> bool
     override def __len__(self) -> int
@@ -22,11 +22,11 @@ class WeakSet[in out Element](MutableSet[Element]):
     override def __ior__(self, other: Iterable[Element]) -> Self
     def difference(self, other: Iterable[Element]) -> Self
     override def __sub__(self, other: Iterable[dynamic]) -> Self
-    def difference_update(self, other: Iterable[dynamic]) -> None
+    def difference_update(self, other: Iterable[dynamic])
     override def __isub__(self, other: Iterable[dynamic]) -> Self
     def intersection(self, other: Iterable[Element]) -> Self
     override def __and__(self, other: Iterable[dynamic]) -> Self
-    def intersection_update(self, other: Iterable[dynamic]) -> None
+    def intersection_update(self, other: Iterable[dynamic])
     override def __iand__(self, other: Iterable[dynamic]) -> Self
     def issubset(self, other: Iterable[Element]) -> bool
     override def __le__(self, other: Iterable[Element]) -> bool
@@ -37,7 +37,7 @@ class WeakSet[in out Element](MutableSet[Element]):
     override def __eq__(self, other: object) -> bool
     def symmetric_difference[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
     override def __xor__[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
-    def symmetric_difference_update(self, other: Iterable[Element]) -> None
+    def symmetric_difference_update(self, other: Iterable[Element])
     override def __ixor__(self, other: Iterable[Element]) -> Self
     def union[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
     override def __or__[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]

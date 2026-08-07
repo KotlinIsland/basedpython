@@ -14,7 +14,7 @@ def build_pattern() -> Generator[str]
 
 class FixUrllib(FixImports):
     override def build_pattern(self)
-    def transform_import(self, node, results) -> None:
+    def transform_import(self, node, results):
         """Transform for the basic import case. Replaces the old
         import name with a comma separated list of its
         replacements.
@@ -26,7 +26,7 @@ class FixUrllib(FixImports):
         module.
         """
 
-    def transform_dot(self, node, results) -> None:
+    def transform_dot(self, node, results):
         """Transform for calls to module members in code."""
 
     override def transform(self, node, results) -> None

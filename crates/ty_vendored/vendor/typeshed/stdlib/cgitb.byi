@@ -60,11 +60,11 @@ class Hook:  # undocumented
         file: IO[str] | None = None,
         format: str = "html",
     )
-    def __call__(self, etype: type[BaseException] | None, evalue: BaseException | None, etb: TracebackType | None) -> None
-    def handle(self, info: OptExcInfo | None = None) -> None
+    def __call__(self, etype: type[BaseException] | None, evalue: BaseException | None, etb: TracebackType | None)
+    def handle(self, info: OptExcInfo | None = None)
 
-def handler(info: OptExcInfo | None = None) -> None
-def enable(display: int = 1, logdir: StrOrBytesPath | None = None, context: int = 5, format: str = "html") -> None:
+def handler(info: OptExcInfo | None = None)
+def enable(display: int = 1, logdir: StrOrBytesPath | None = None, context: int = 5, format: str = "html"):
     """Install an exception handler that formats tracebacks as HTML.
 
     The optional argument 'display' can be set to 0 to suppress sending the

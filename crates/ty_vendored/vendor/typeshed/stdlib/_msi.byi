@@ -8,11 +8,11 @@ if sys.platform == "win32":
     # Actual typename View, not exposed by the implementation
     @type_check_only
     class _View:
-        def Execute(self, params: _Record | None = ...) -> None
+        def Execute(self, params: _Record | None = ...)
         def GetColumnInfo(self, kind: int) -> _Record
         def Fetch(self) -> _Record
-        def Modify(self, mode: int, record: _Record) -> None
-        def Close(self) -> None
+        def Modify(self, mode: int, record: _Record)
+        def Close(self)
         # Don't exist at runtime
         __new__: None
         __init__: None
@@ -22,8 +22,8 @@ if sys.platform == "win32":
     class _SummaryInformation:
         def GetProperty(self, field: int) -> int | bytes | None
         def GetPropertyCount(self) -> int
-        def SetProperty(self, field: int, value: int | str) -> None
-        def Persist(self) -> None
+        def SetProperty(self, field: int, value: int | str)
+        def Persist(self)
         # Don't exist at runtime
         __new__: None
         __init__: None
@@ -32,9 +32,9 @@ if sys.platform == "win32":
     @type_check_only
     class _Database:
         def OpenView(self, sql: str) -> _View
-        def Commit(self) -> None
+        def Commit(self)
         def GetSummaryInformation(self, updateCount: int) -> _SummaryInformation
-        def Close(self) -> None
+        def Close(self)
         # Don't exist at runtime
         __new__: None
         __init__: None
@@ -45,10 +45,10 @@ if sys.platform == "win32":
         def GetFieldCount(self) -> int
         def GetInteger(self, field: int) -> int
         def GetString(self, field: int) -> str
-        def SetString(self, field: int, str: str) -> None
-        def SetStream(self, field: int, stream: str) -> None
-        def SetInteger(self, field: int, int: int) -> None
-        def ClearData(self) -> None
+        def SetString(self, field: int, str: str)
+        def SetStream(self, field: int, stream: str)
+        def SetInteger(self, field: int, int: int)
+        def ClearData(self)
         # Don't exist at runtime
         __new__: None
         __init__: None
@@ -56,7 +56,7 @@ if sys.platform == "win32":
     def UuidCreate() -> str:
         """Return the string representation of a new unique identifier."""
 
-    def FCICreate(cabname: str, files: list[(str, str)], /) -> None:
+    def FCICreate(cabname: str, files: list[(str, str)], /):
         """Create a new CAB file.
 
         cabname

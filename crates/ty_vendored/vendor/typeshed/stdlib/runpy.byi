@@ -20,13 +20,13 @@ class _TempModule:
     module: ModuleType
     init(self, mod_name: str)
     def __enter__(self) -> Self
-    def __exit__(self, *args: Unused) -> None
+    def __exit__(self, *args: Unused)
 
 class _ModifiedArgv0:
     value: dynamic
     init(self, value: dynamic)
-    def __enter__(self) -> None
-    def __exit__(self, *args: Unused) -> None
+    def __enter__(self)
+    def __exit__(self, *args: Unused)
 
 def run_module(
     mod_name: str, init_globals: dict[str, dynamic] | None = None, run_name: str | None = None, alter_sys: bool = False

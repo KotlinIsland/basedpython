@@ -41,25 +41,25 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         stderr: _File,
         bufsize: int,
         **kwargs: dynamic,
-    ) -> None  # undocumented
+    )  # undocumented
     override def get_pid(self) -> int | None
     override def get_pipe_transport(self, fd: int) -> _File
-    def _check_proc(self) -> None  # undocumented
+    def _check_proc(self)  # undocumented
     override def send_signal(self, signal: int) -> None
     async def _connect_pipes(self, waiter: futures.Future[dynamic] | None) -> None  # undocumented
-    def _call(self, cb: (...) -> object, *data: dynamic) -> None  # undocumented
-    def _pipe_connection_lost(self, fd: int, exc: BaseException | None) -> None  # undocumented
-    def _pipe_data_received(self, fd: int, data: bytes) -> None  # undocumented
-    def _process_exited(self, returncode: int) -> None  # undocumented
+    def _call(self, cb: (...) -> object, *data: dynamic)  # undocumented
+    def _pipe_connection_lost(self, fd: int, exc: BaseException | None)  # undocumented
+    def _pipe_data_received(self, fd: int, data: bytes)  # undocumented
+    def _process_exited(self, returncode: int)  # undocumented
     async def _wait(self) -> int:  # undocumented
         """Wait until the process exit and return the process return code.
 
         This method is a coroutine.
         """
 
-    def _try_finish(self) -> None  # undocumented
-    def _call_connection_lost(self, exc: BaseException | None) -> None  # undocumented
-    def __del__(self) -> None
+    def _try_finish(self)  # undocumented
+    def _call_connection_lost(self, exc: BaseException | None)  # undocumented
+    def __del__(self)
 
 class WriteSubprocessPipeProto(protocols.BaseProtocol):  # undocumented
     init(self, proc: BaseSubprocessTransport, fd: int)

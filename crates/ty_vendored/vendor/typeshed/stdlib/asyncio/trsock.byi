@@ -30,7 +30,7 @@ class TransportSocket:
     def fileno(self) -> int
     def dup(self) -> socket.socket
     def get_inheritable(self) -> bool
-    def shutdown(self, how: int) -> None
+    def shutdown(self, how: int)
 
     def getsockopt(self, level: int, optname: int) -> int
     def getsockopt(self, level: int, optname: int, buflen: int) -> bytes
@@ -41,11 +41,11 @@ class TransportSocket:
     def getpeername(self) -> _RetAddress
     def getsockname(self) -> _RetAddress
     def getsockbyname(self) -> NoReturn  # This method doesn't exist on socket, yet is passed through?
-    def settimeout(self, value: float | None) -> None
+    def settimeout(self, value: float | None)
     def gettimeout(self) -> float | None
-    def setblocking(self, flag: bool) -> None
+    def setblocking(self, flag: bool)
     if sys.version_info < (3, 11):
-        def _na(self, what: str) -> None
+        def _na(self, what: str)
         @deprecated("Removed in Python 3.11")
         def accept(self) -> (socket.socket, _RetAddress)
         @deprecated("Removed in Python 3.11")

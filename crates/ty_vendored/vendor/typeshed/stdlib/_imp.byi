@@ -16,7 +16,7 @@ def create_builtin(spec: ModuleSpec, /) -> types.ModuleType:
 def create_dynamic(spec: ModuleSpec, file: dynamic = None, /) -> types.ModuleType:
     """Create an extension module."""
 
-def acquire_lock() -> None:
+def acquire_lock():
     """Acquires the interpreter's import lock for the current thread.
 
     This lock should be used by import hooks to ensure thread-safety when
@@ -51,7 +51,7 @@ def lock_held() -> bool:
     On platforms without threads, return False.
     """
 
-def release_lock() -> None:
+def release_lock():
     """Release the interpreter's import lock.
 
     On platforms without threads, this function does nothing.

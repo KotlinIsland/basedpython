@@ -43,14 +43,14 @@ class Dialog(Toplevel):
         by the __init__ method.
         """
 
-    def buttonbox(self) -> None:
+    def buttonbox(self):
         """add standard button box.
 
         override if you do not want the standard buttons
         """
 
-    def ok(self, event: Event[Misc] | None = None) -> None
-    def cancel(self, event: Event[Misc] | None = None) -> None
+    def ok(self, event: Event[Misc] | None = None)
+    def cancel(self, event: Event[Misc] | None = None)
     def validate(self) -> bool:
         """validate the data
 
@@ -58,7 +58,7 @@ class Dialog(Toplevel):
         dialog is destroyed. By default, it always validates OK.
         """
 
-    def apply(self) -> None:
+    def apply(self):
         """process the data
 
         This method is called automatically to process the data, *after*
@@ -77,9 +77,9 @@ class SimpleDialog:
         class_: str | None = None,
     )
     def go(self) -> int | None
-    def return_event(self, event: Event[Misc]) -> None
-    def wm_delete_window(self) -> None
-    def done(self, num: int) -> None
+    def return_event(self, event: Event[Misc])
+    def wm_delete_window(self)
+    def done(self, num: int)
 
 def askfloat(
     title: str | None,

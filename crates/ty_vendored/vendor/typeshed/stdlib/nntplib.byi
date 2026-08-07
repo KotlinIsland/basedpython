@@ -137,7 +137,7 @@ class NNTP:
         """
 
     def __enter__(self) -> Self
-    def __exit__(self, *args: Unused) -> None
+    def __exit__(self, *args: Unused)
     def getwelcome(self) -> str:
         """Get the welcome message from the server
         (this is read and squirreled away by __init__()).
@@ -151,14 +151,14 @@ class NNTP:
         returned.
         """
 
-    def set_debuglevel(self, level: int) -> None:
+    def set_debuglevel(self, level: int):
         """Set the debugging level.  Argument 'level' means:
         0: no debugging output (default)
         1: print commands and responses but not body text etc.
         2: also print raw lines read and sent before stripping CR/LF
         """
 
-    def debug(self, level: int) -> None:
+    def debug(self, level: int):
         """Set the debugging level.  Argument 'level' means:
         0: no debugging output (default)
         1: print commands and responses but not body text etc.
@@ -351,8 +351,8 @@ class NNTP:
         - resp: server response if successful
         """
 
-    def login(self, user: str | None = None, password: str | None = None, usenetrc: bool = True) -> None
-    def starttls(self, context: ssl.SSLContext | None = None) -> None:
+    def login(self, user: str | None = None, password: str | None = None, usenetrc: bool = True)
+    def starttls(self, context: ssl.SSLContext | None = None):
         """Process a STARTTLS command. Arguments:
         - context: SSL context to use for the encrypted connection
         """

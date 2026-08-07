@@ -78,5 +78,5 @@ def nsmallest[Other](n: int, iterable: Iterable[Other], key: (Other) -> Supports
     """
 def nsmallest(n: int, iterable: Iterable[_T], key: None = None) -> list[_T]
 
-def _heapify_max(heap: list[SupportsRichComparison], /) -> None:  # undocumented
+def _heapify_max(heap: list[SupportsRichComparison], /):  # undocumented
     """Maxheap variant of heapify."""

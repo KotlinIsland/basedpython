@@ -258,7 +258,7 @@ class suppress(AbstractContextManager[None, bool]):
 @type_check_only
 private protocol SupportsRedirect:
     def write(self, s: str, /) -> int
-    def flush(self) -> None
+    def flush(self)
 
 
 class _RedirectStream[in out SupportsRedirectT: SupportsRedirect | None](AbstractContextManager[SupportsRedirectT, None]):
@@ -330,7 +330,7 @@ class ExitStack[out ExitT: bool | None = bool | None](_BaseExitStackAbstract[Exi
             # in the list raise an exception.
     """
 
-    def close(self) -> None:
+    def close(self):
         """Immediately unwind the context stack."""
 
     def __enter__(self) -> Self
@@ -415,5 +415,5 @@ if sys.version_info >= (3, 11):
 
         path: T_fd_or_any_path
         init(self, path: T_fd_or_any_path)
-        def __enter__(self) -> None
-        def __exit__(self, *excinfo: Unused) -> None
+        def __enter__(self)
+        def __exit__(self, *excinfo: Unused)

@@ -44,12 +44,12 @@ class _AssertRaisesBaseContext(_BaseTestCaseContext):
         arguments.
         """
 
-def addModuleCleanup[Parameters: (*: *, **: *)](function: (**Parameters) -> object, /, *args: Parameters.args, **kwargs: Parameters.kwargs) -> None:
+def addModuleCleanup[Parameters: (*: *, **: *)](function: (**Parameters) -> object, /, *args: Parameters.args, **kwargs: Parameters.kwargs):
     """Same as addCleanup, except the cleanup items are called even if
     setUpModule fails (unlike tearDownModule).
     """
 
-def doModuleCleanups() -> None:
+def doModuleCleanups():
     """Execute all module cleanup functions. Normally called for you after
     tearDownModule.
     """
@@ -135,16 +135,16 @@ class TestCase:
 
     override def __eq__(self, other: object) -> bool
     override def __hash__(self) -> int
-    def setUp(self) -> None:
+    def setUp(self):
         """Hook method for setting up the test fixture before exercising it."""
 
-    def tearDown(self) -> None:
+    def tearDown(self):
         """Hook method for deconstructing the test fixture after testing it."""
 
-    class def setUpClass(cls) -> None:
+    class def setUpClass(cls):
         """Hook method for setting up class fixture before running tests in the class."""
 
-    class def tearDownClass(cls) -> None:
+    class def tearDownClass(cls):
         """Hook method for deconstructing the class fixture after running all tests in the class."""
 
     def run(self, result: unittest.result.TestResult | None = None) -> unittest.result.TestResult | None
@@ -160,52 +160,52 @@ class TestCase:
         block, allowing further test code to be executed.
         """
 
-    def debug(self) -> None:
+    def debug(self):
         """Run the test without collecting errors in a TestResult"""
 
     if sys.version_info < (3, 11):
-        def _addSkip(self, result: unittest.result.TestResult, test_case: TestCase, reason: str) -> None
+        def _addSkip(self, result: unittest.result.TestResult, test_case: TestCase, reason: str)
 
-    def assertEqual(self, first: dynamic, second: dynamic, msg: dynamic = None) -> None:
+    def assertEqual(self, first: dynamic, second: dynamic, msg: dynamic = None):
         """Fail if the two objects are unequal as determined by the '=='
         operator.
         """
 
-    def assertNotEqual(self, first: dynamic, second: dynamic, msg: dynamic = None) -> None:
+    def assertNotEqual(self, first: dynamic, second: dynamic, msg: dynamic = None):
         """Fail if the two objects are equal as determined by the '!='
         operator.
         """
 
-    def assertTrue(self, expr: dynamic, msg: dynamic = None) -> None:
+    def assertTrue(self, expr: dynamic, msg: dynamic = None):
         """Check that the expression is true."""
 
-    def assertFalse(self, expr: dynamic, msg: dynamic = None) -> None:
+    def assertFalse(self, expr: dynamic, msg: dynamic = None):
         """Check that the expression is false."""
 
-    def assertIs(self, expr1: object, expr2: object, msg: dynamic = None) -> None:
+    def assertIs(self, expr1: object, expr2: object, msg: dynamic = None):
         """Just like self.assertTrue(a is b), but with a nicer default message."""
 
-    def assertIsNot(self, expr1: object, expr2: object, msg: dynamic = None) -> None:
+    def assertIsNot(self, expr1: object, expr2: object, msg: dynamic = None):
         """Just like self.assertTrue(a is not b), but with a nicer default message."""
 
-    def assertIsNone(self, obj: object, msg: dynamic = None) -> None:
+    def assertIsNone(self, obj: object, msg: dynamic = None):
         """Same as self.assertTrue(obj is None), with a nicer default message."""
 
-    def assertIsNotNone(self, obj: object, msg: dynamic = None) -> None:
+    def assertIsNotNone(self, obj: object, msg: dynamic = None):
         """Included for symmetry with assertIsNone."""
 
-    def assertIn(self, member: dynamic, container: Iterable[dynamic] | Container[dynamic], msg: dynamic = None) -> None:
+    def assertIn(self, member: dynamic, container: Iterable[dynamic] | Container[dynamic], msg: dynamic = None):
         """Just like self.assertTrue(a in b), but with a nicer default message."""
 
-    def assertNotIn(self, member: dynamic, container: Iterable[dynamic] | Container[dynamic], msg: dynamic = None) -> None:
+    def assertNotIn(self, member: dynamic, container: Iterable[dynamic] | Container[dynamic], msg: dynamic = None):
         """Just like self.assertTrue(a not in b), but with a nicer default message."""
 
-    def assertIsInstance(self, obj: object, cls: _ClassInfo, msg: dynamic = None) -> None:
+    def assertIsInstance(self, obj: object, cls: _ClassInfo, msg: dynamic = None):
         """Same as self.assertTrue(isinstance(obj, cls)), with a nicer
         default message.
         """
 
-    def assertNotIsInstance(self, obj: object, cls: _ClassInfo, msg: dynamic = None) -> None:
+    def assertNotIsInstance(self, obj: object, cls: _ClassInfo, msg: dynamic = None):
         """Included for symmetry with assertIsInstance."""
 
     def assertGreater[Element](self, a: SupportsDunderGT[Element], b: Element, msg: dynamic = None) -> None:
@@ -476,13 +476,13 @@ class TestCase:
         delta: None = None,
     ) -> None
 
-    def assertRegex(self, text: AnyStr, expected_regex: AnyStr | Pattern[AnyStr], msg: dynamic = None) -> None:
+    def assertRegex(self, text: AnyStr, expected_regex: AnyStr | Pattern[AnyStr], msg: dynamic = None):
         """Fail the test unless the text matches the regular expression."""
 
-    def assertNotRegex(self, text: AnyStr, unexpected_regex: AnyStr | Pattern[AnyStr], msg: dynamic = None) -> None:
+    def assertNotRegex(self, text: AnyStr, unexpected_regex: AnyStr | Pattern[AnyStr], msg: dynamic = None):
         """Fail the test if the text matches the regular expression."""
 
-    def assertCountEqual(self, first: Iterable[dynamic], second: Iterable[dynamic], msg: dynamic = None) -> None:
+    def assertCountEqual(self, first: Iterable[dynamic], second: Iterable[dynamic], msg: dynamic = None):
         """Asserts that two iterables have the same elements, the same number of
         times, without regard to order.
 
@@ -495,7 +495,7 @@ class TestCase:
 
         """
 
-    def addTypeEqualityFunc(self, typeobj: type[dynamic], function: (...) -> None) -> None:
+    def addTypeEqualityFunc(self, typeobj: type[dynamic], function: (...) -> None):
         """Add a type specific assertEqual style function to compare a type.
 
         This method is for use by TestCase subclasses that need to register
@@ -509,12 +509,12 @@ class TestCase:
                     useful error message when the two arguments are not equal.
         """
 
-    def assertMultiLineEqual(self, first: str, second: str, msg: dynamic = None) -> None:
+    def assertMultiLineEqual(self, first: str, second: str, msg: dynamic = None):
         """Assert that two multi-line strings are equal."""
 
     def assertSequenceEqual(
         self, seq1: Sequence[dynamic], seq2: Sequence[dynamic], msg: dynamic = None, seq_type: type[Sequence[dynamic]] | None = None
-    ) -> None:
+    ):
         """An equality assertion for ordered sequences (like lists and tuples).
 
         For the purposes of this function, a valid ordered sequence type is one
@@ -529,7 +529,7 @@ class TestCase:
                     differences.
         """
 
-    def assertListEqual(self, list1: list[dynamic], list2: list[dynamic], msg: dynamic = None) -> None:
+    def assertListEqual(self, list1: list[dynamic], list2: list[dynamic], msg: dynamic = None):
         """A list-specific equality assertion.
 
         Args:
@@ -540,7 +540,7 @@ class TestCase:
 
         """
 
-    def assertTupleEqual(self, tuple1: (*: dynamic), tuple2: (*: dynamic), msg: dynamic = None) -> None:
+    def assertTupleEqual(self, tuple1: (*: dynamic), tuple2: (*: dynamic), msg: dynamic = None):
         """A tuple-specific equality assertion.
 
         Args:
@@ -550,7 +550,7 @@ class TestCase:
                     differences.
         """
 
-    def assertSetEqual(self, set1: AbstractSet[object], set2: AbstractSet[object], msg: dynamic = None) -> None:
+    def assertSetEqual(self, set1: AbstractSet[object], set2: AbstractSet[object], msg: dynamic = None):
         """A set-specific equality assertion.
 
         Args:
@@ -566,7 +566,7 @@ class TestCase:
 
     # assertDictEqual accepts only true dict instances. We can't use that here, since that would make
     # assertDictEqual incompatible with TypedDict.
-    def assertDictEqual(self, d1: Mapping[dynamic, object], d2: Mapping[dynamic, object], msg: dynamic = None) -> None
+    def assertDictEqual(self, d1: Mapping[dynamic, object], d2: Mapping[dynamic, object], msg: dynamic = None)
     def fail(self, msg: dynamic = None) -> NoReturn:
         """Fail immediately, with the given message."""
 
@@ -581,7 +581,7 @@ class TestCase:
         the specified test method's docstring.
         """
 
-    def addCleanup[Parameters: (*: *, **: *)](self, function: (**Parameters) -> object, /, *args: Parameters.args, **kwargs: Parameters.kwargs) -> None:
+    def addCleanup[Parameters: (*: *, **: *)](self, function: (**Parameters) -> object, /, *args: Parameters.args, **kwargs: Parameters.kwargs):
         """Add a function, with arguments, to be called when the test is
         completed. Functions added are called on a LIFO basis and are
         called after tearDown on test failure or success.
@@ -597,17 +597,17 @@ class TestCase:
             function and returns the result of the __enter__ method.
             """
 
-    def doCleanups(self) -> None:
+    def doCleanups(self):
         """Execute all cleanup functions. Normally called for you after
         tearDown.
         """
 
-    class def addClassCleanup[Parameters: (*: *, **: *)](cls, function: (**Parameters) -> object, /, *args: Parameters.args, **kwargs: Parameters.kwargs) -> None:
+    class def addClassCleanup[Parameters: (*: *, **: *)](cls, function: (**Parameters) -> object, /, *args: Parameters.args, **kwargs: Parameters.kwargs):
         """Same as addCleanup, except the cleanup items are called even if
         setUpClass fails (unlike tearDownClass).
         """
 
-    class def doClassCleanups(cls) -> None:
+    class def doClassCleanups(cls):
         """Execute all class cleanup functions. Normally called for you after
         tearDownClass.
         """
@@ -651,21 +651,21 @@ class TestCase:
         assertRegexpMatches = assertRegex
         assertNotRegexpMatches = assertNotRegex
         assertRaisesRegexp = assertRaisesRegex
-        def assertDictContainsSubset(self, subset: Mapping[dynamic, dynamic], dictionary: Mapping[dynamic, dynamic], msg: object = None) -> None:
+        def assertDictContainsSubset(self, subset: Mapping[dynamic, dynamic], dictionary: Mapping[dynamic, dynamic], msg: object = None):
             """Checks whether dictionary is a superset of subset."""
 
     # Runtime has *args, **kwargs, but will error if any are supplied
-    def __init_subclass__(cls, *args: Never, **kwargs: Never) -> None
+    def __init_subclass__(cls, *args: Never, **kwargs: Never)
 
     if sys.version_info >= (3, 14):
-        def assertIsSubclass(self, cls: type, superclass: type | (*: type), msg: dynamic = None) -> None
-        def assertNotIsSubclass(self, cls: type, superclass: type | (*: type), msg: dynamic = None) -> None
-        def assertHasAttr(self, obj: object, name: str, msg: dynamic = None) -> None
-        def assertNotHasAttr(self, obj: object, name: str, msg: dynamic = None) -> None
-        def assertStartsWith[SB: constraints (str, bytes, bytearray)](self, s: SB, prefix: SB | (*: SB), msg: dynamic = None) -> None
-        def assertNotStartsWith[SB: constraints (str, bytes, bytearray)](self, s: SB, prefix: SB | (*: SB), msg: dynamic = None) -> None
-        def assertEndsWith[SB: constraints (str, bytes, bytearray)](self, s: SB, suffix: SB | (*: SB), msg: dynamic = None) -> None
-        def assertNotEndsWith[SB: constraints (str, bytes, bytearray)](self, s: SB, suffix: SB | (*: SB), msg: dynamic = None) -> None
+        def assertIsSubclass(self, cls: type, superclass: type | (*: type), msg: dynamic = None)
+        def assertNotIsSubclass(self, cls: type, superclass: type | (*: type), msg: dynamic = None)
+        def assertHasAttr(self, obj: object, name: str, msg: dynamic = None)
+        def assertNotHasAttr(self, obj: object, name: str, msg: dynamic = None)
+        def assertStartsWith[SB: constraints (str, bytes, bytearray)](self, s: SB, prefix: SB | (*: SB), msg: dynamic = None)
+        def assertNotStartsWith[SB: constraints (str, bytes, bytearray)](self, s: SB, prefix: SB | (*: SB), msg: dynamic = None)
+        def assertEndsWith[SB: constraints (str, bytes, bytearray)](self, s: SB, suffix: SB | (*: SB), msg: dynamic = None)
+        def assertNotEndsWith[SB: constraints (str, bytes, bytearray)](self, s: SB, suffix: SB | (*: SB), msg: dynamic = None)
 
 class FunctionTestCase(TestCase):
     """A test case that wraps a test function.
@@ -683,7 +683,7 @@ class FunctionTestCase(TestCase):
         tearDown: (() -> object) | None = None,
         description: str | None = None,
     )
-    def runTest(self) -> None
+    def runTest(self)
     override def __hash__(self) -> int
     override def __eq__(self, other: object) -> bool
 
@@ -712,4 +712,4 @@ class _AssertWarnsContext(_AssertRaisesBaseContext):
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, tb: TracebackType | None
-    ) -> None
+    )

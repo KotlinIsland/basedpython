@@ -300,7 +300,7 @@ else:
         uri: bool = False,
     ) -> ConnectionT
 
-def enable_callback_tracebacks(enable: bool, /) -> None:
+def enable_callback_tracebacks(enable: bool, /):
     """Enable or disable callback functions throwing errors to stderr."""
 
 if sys.version_info < (3, 12):
@@ -318,8 +318,8 @@ if sys.version_info < (3, 12):
         the cache=shared query parameter.
         """
 
-def register_adapter[Element](type: type[Element], adapter: _Adapter[Element], /) -> None:
+def register_adapter[Element](type: type[Element], adapter: _Adapter[Element], /):
     """Register a function to adapt Python objects to SQLite values."""
 
-def register_converter(typename: str, converter: Converter, /) -> None:
+def register_converter(typename: str, converter: Converter, /):
     """Register a function to convert SQLite values to Python objects."""

@@ -162,7 +162,7 @@ class SequenceMatcher[in out Element]:
         autojunk: bool = True,
     )
 
-    def set_seqs(self, a: Sequence[Element], b: Sequence[Element]) -> None:
+    def set_seqs(self, a: Sequence[Element], b: Sequence[Element]):
         """Set the two sequences to be compared.
 
         >>> s = SequenceMatcher()
@@ -171,7 +171,7 @@ class SequenceMatcher[in out Element]:
         0.75
         """
 
-    def set_seq1(self, a: Sequence[Element]) -> None:
+    def set_seq1(self, a: Sequence[Element]):
         """Set the first sequence to be compared.
 
         The second sequence to be compared is not changed.
@@ -192,7 +192,7 @@ class SequenceMatcher[in out Element]:
         See also set_seqs() and set_seq2().
         """
 
-    def set_seq2(self, b: Sequence[Element]) -> None:
+    def set_seq2(self, b: Sequence[Element]):
         """Set the second sequence to be compared.
 
         The first sequence to be compared is not changed.

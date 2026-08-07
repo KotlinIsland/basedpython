@@ -16,34 +16,34 @@ class ParserGenerator:
     def make_grammar(self) -> PgenGrammar
     def make_first(self, c: PgenGrammar, name: str) -> dict[int, int]
     def make_label(self, c: PgenGrammar, label: str) -> int
-    def addfirstsets(self) -> None
-    def calcfirst(self, name: str) -> None
+    def addfirstsets(self)
+    def calcfirst(self, name: str)
     def parse(self) -> (dict[str, list[DFAState]], str)
     def make_dfa(self, start: NFAState, finish: NFAState) -> list[DFAState]
     def dump_nfa(self, name: str, start: NFAState, finish: NFAState) -> list[DFAState]
-    def dump_dfa(self, name: str, dfa: Iterable[DFAState]) -> None
-    def simplify_dfa(self, dfa: list[DFAState]) -> None
+    def dump_dfa(self, name: str, dfa: Iterable[DFAState])
+    def simplify_dfa(self, dfa: list[DFAState])
     def parse_rhs(self) -> (NFAState, NFAState)
     def parse_alt(self) -> (NFAState, NFAState)
     def parse_item(self) -> (NFAState, NFAState)
     def parse_atom(self) -> (NFAState, NFAState)
     def expect(self, type: int, value: str | None = None) -> str
-    def gettoken(self) -> None
+    def gettoken(self)
 
     def raise_error(self, msg: object) -> NoReturn
     def raise_error(self, msg: str, *args: object) -> NoReturn
 
 class NFAState:
     arcs: list[(str | None, NFAState)]
-    def addarc(self, next: NFAState, label: str | None = None) -> None
+    def addarc(self, next: NFAState, label: str | None = None)
 
 class DFAState:
     nfaset: dict[NFAState, Incomplete]
     isfinal: bool
     arcs: dict[str, DFAState]
     init(self, nfaset: dict[NFAState, Incomplete], final: NFAState)
-    def addarc(self, next: DFAState, label: str) -> None
-    def unifystate(self, old: DFAState, new: DFAState) -> None
+    def addarc(self, next: DFAState, label: str)
+    def unifystate(self, old: DFAState, new: DFAState)
     override def __eq__(self, other: DFAState) -> bool
     __hash__: ClassVar[None]
 

@@ -55,9 +55,9 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
     def is_multipart(self) -> bool:
         """Return True if the message consists of multiple parts."""
 
-    def set_unixfrom(self, unixfrom: str) -> None
+    def set_unixfrom(self, unixfrom: str)
     def get_unixfrom(self) -> str | None
-    def attach(self, payload: PayloadType) -> None:
+    def attach(self, payload: PayloadType):
         """Add the given payload to the current payload.
 
         The current payload will always be a list of objects after this method
@@ -107,7 +107,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         charset: Charset | str,
     ) -> None
 
-    def set_charset(self, charset: CharsetType) -> None:
+    def set_charset(self, charset: CharsetType):
         """Set the charset of the payload to a given character set.
 
         charset can be a Charset instance, a string naming a character set, or
@@ -144,14 +144,14 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         the values matching a header field name.
         """
 
-    def __setitem__(self, name: str, val: HeaderParamT) -> None:
+    def __setitem__(self, name: str, val: HeaderParamT):
         """Set the value of a header.
 
         Note: this does not overwrite an existing header with the same field
         name.  Use __delitem__() first to delete any existing headers.
         """
 
-    def __delitem__(self, name: str) -> None:
+    def __delitem__(self, name: str):
         """Delete all occurrences of a header, if present.
 
         Does not raise an exception if the header is missing.
@@ -203,7 +203,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         """
     def get_all[Element](self, name: str, failobj: Element) -> list[HeaderT] | Element
 
-    def add_header(self, _name: str, _value: str, **_params: _ParamsType) -> None:
+    def add_header(self, _name: str, _value: str, **_params: _ParamsType):
         """Extended header setting.
 
         name is the header field to add.  keyword arguments can be used to set
@@ -224,7 +224,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
                        filename='Fußballer.ppt'))
         """
 
-    def replace_header(self, _name: str, _value: HeaderParamT) -> None:
+    def replace_header(self, _name: str, _value: HeaderParamT):
         """Replace a header.
 
         Replace the first matching header found in the message, retaining
@@ -268,7 +268,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         subparts have a default content type of message/rfc822.
         """
 
-    def set_default_type(self, ctype: str) -> None:
+    def set_default_type(self, ctype: str):
         """Set the 'default' content type.
 
         ctype should be either "text/plain" or "message/rfc822", although this
@@ -320,7 +320,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         """
     def get_param[Element](self, param: str, failobj: Element, header: str = "content-type", unquote: bool = True) -> _ParamType | Element
 
-    def del_param(self, param: str, header: str = "content-type", requote: bool = True) -> None:
+    def del_param(self, param: str, header: str = "content-type", requote: bool = True):
         """Remove the given parameter completely from the Content-Type header.
 
         The header will be re-written in place without the parameter or its
@@ -329,7 +329,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         header.
         """
 
-    def set_type(self, type: str, header: str = "Content-Type", requote: bool = True) -> None:
+    def set_type(self, type: str, header: str = "Content-Type", requote: bool = True):
         """Set the main type and subtype for the Content-Type header.
 
         type must be a string in the form "maintype/subtype", otherwise a
@@ -363,7 +363,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         """
     def get_boundary[Element](self, failobj: Element) -> str | Element
 
-    def set_boundary(self, boundary: str) -> None:
+    def set_boundary(self, boundary: str):
         """Set the boundary parameter in Content-Type to 'boundary'.
 
         This is subtly different than deleting the Content-Type header and
@@ -451,7 +451,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         charset: str | None = None,
         language: str = "",
         replace: bool = False,
-    ) -> None:
+    ):
         """Set a parameter in the Content-Type header.
 
         If the parameter already exists in the header, its value will be
@@ -470,7 +470,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         """
 
     # The following two methods are undocumented, but a source code comment states that they are public API
-    def set_raw(self, name: str, value: HeaderParamT) -> None:
+    def set_raw(self, name: str, value: HeaderParamT):
         """Store name and value in the model without modification.
 
         This is an "internal" API, intended only for use by a parser.
@@ -527,15 +527,15 @@ class MIMEPart[out HeaderRegistryT = dynamic, in HeaderRegistryParamT = dynamic]
         """
 
     def get_content(self, *args: dynamic, content_manager: ContentManager | None = None, **kw: dynamic) -> dynamic
-    def set_content(self, *args: dynamic, content_manager: ContentManager | None = None, **kw: dynamic) -> None
-    def make_related(self, boundary: str | None = None) -> None
-    def make_alternative(self, boundary: str | None = None) -> None
-    def make_mixed(self, boundary: str | None = None) -> None
-    def add_related(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic) -> None
-    def add_alternative(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic) -> None
-    def add_attachment(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic) -> None
-    def clear(self) -> None
-    def clear_content(self) -> None
+    def set_content(self, *args: dynamic, content_manager: ContentManager | None = None, **kw: dynamic)
+    def make_related(self, boundary: str | None = None)
+    def make_alternative(self, boundary: str | None = None)
+    def make_mixed(self, boundary: str | None = None)
+    def add_related(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic)
+    def add_alternative(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic)
+    def add_attachment(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic)
+    def clear(self)
+    def clear_content(self)
     override def as_string(self, unixfrom: bool = False, maxheaderlen: int | None = None, policy: Policy[dynamic] | None = None) -> str:
         """Return the entire formatted message as a string.
 

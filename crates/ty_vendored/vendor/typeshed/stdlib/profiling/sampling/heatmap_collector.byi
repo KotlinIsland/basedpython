@@ -21,15 +21,15 @@ class HeatmapCollector(Collector):
 
     def collect(
         self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None
-    ) -> None
-    def export(self, output_path: StrOrBytesPath) -> None:
+    )
+    def export(self, output_path: StrOrBytesPath):
         """Export heatmap data as HTML files in a directory.
 
         Args:
             output_path: Path where to create the heatmap output directory
         """
 
-    def process_frames(self, frames: Sequence[_Frame], thread_id: int, weight: int = 1) -> None:
+    def process_frames(self, frames: Sequence[_Frame], thread_id: int, weight: int = 1):
         """Process stack frames and count samples per line.
 
         Args:
@@ -48,7 +48,7 @@ class HeatmapCollector(Collector):
         error_rate: float | None = None,
         missed_samples: float | None = None,
         **kwargs: object,
-    ) -> None:
+    ):
         """Set profiling statistics to include in heatmap output.
 
         Args:

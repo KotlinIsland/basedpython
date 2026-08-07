@@ -13,7 +13,7 @@ class FixXrange(fixer_base.BaseFix):
     override def start_tree(self, tree: Node, filename: StrPath) -> None
     override def finish_tree(self, tree: Node, filename: StrPath) -> None
     override def transform(self, node, results)
-    def transform_xrange(self, node, results) -> None
+    def transform_xrange(self, node, results)
     def transform_range(self, node, results)
     P1: ClassVar[str]
     p1: ClassVar[Incomplete]

@@ -92,7 +92,7 @@ class FTP:
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None
+    )
     source_address: (str, int) | None
     init(
         self,
@@ -125,7 +125,7 @@ class FTP:
         (this is read and squirreled away by connect())
         """
 
-    def set_debuglevel(self, level: int) -> None:
+    def set_debuglevel(self, level: int):
         """Set the debugging level.
         The required argument level means:
         0: no debugging output (default)
@@ -133,7 +133,7 @@ class FTP:
         2: also print raw lines read and sent before stripping CR/LF
         """
 
-    def debug(self, level: int) -> None:
+    def debug(self, level: int):
         """Set the debugging level.
         The required argument level means:
         0: no debugging output (default)
@@ -141,15 +141,15 @@ class FTP:
         2: also print raw lines read and sent before stripping CR/LF
         """
 
-    def set_pasv(self, val: bool | 0 | 1) -> None:
+    def set_pasv(self, val: bool | 0 | 1):
         """Use passive or active mode for data transfers.
         With a false argument, use the normal PORT mode,
         With a true argument, use the PASV command.
         """
 
     def sanitize(self, s: str) -> str
-    def putline(self, line: str) -> None
-    def putcmd(self, line: str) -> None
+    def putline(self, line: str)
+    def putcmd(self, line: str)
     def getline(self) -> str
     def getmultiline(self) -> str
     def getresp(self) -> str
@@ -279,7 +279,7 @@ class FTP:
         """Return a list of files in a given directory (default the current)."""
 
     # Technically only the last arg can be a Callable but ...
-    def dir(self, *args: str | ((str) -> object)) -> None:
+    def dir(self, *args: str | ((str) -> object)):
         """List a directory in long form.
         By default list current directory to stdout.
         Optional last argument is callback function; all
@@ -324,7 +324,7 @@ class FTP:
     def quit(self) -> str:
         """Quit, and close the connection."""
 
-    def close(self) -> None:
+    def close(self):
         """Close the connection without assuming anything about it."""
 
 class FTP_TLS(FTP):
@@ -449,5 +449,5 @@ def parse257(resp: str) -> str:  # undocumented
     Returns the directoryname in the 257 reply.
     """
 
-def ftpcp(source: FTP, sourcename: str, target: FTP, targetname: str = "", type: "A" | "I" = "I") -> None:  # undocumented
+def ftpcp(source: FTP, sourcename: str, target: FTP, targetname: str = "", type: "A" | "I" = "I"):  # undocumented
     """Copy file from one FTP-instance to another."""

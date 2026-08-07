@@ -67,7 +67,7 @@ def move_file[BytesPathT: BytesPath](
     src: BytesPath, dst: BytesPathT, verbose: bool | 0 | 1 = 1, dry_run: bool | 0 | 1 = 0
 ) -> BytesPathT | bytes
 
-def write_file(filename: StrOrBytesPath, contents: Iterable[str]) -> None:
+def write_file(filename: StrOrBytesPath, contents: Iterable[str]):
     """Create a file with the specified name and write 'contents' (a
     sequence of strings without line terminators) to it.
     """

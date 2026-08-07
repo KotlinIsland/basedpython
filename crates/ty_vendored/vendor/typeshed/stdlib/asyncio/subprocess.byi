@@ -33,9 +33,9 @@ class Process:
     async def wait(self) -> int:
         """Wait until the process exit and return the process return code."""
 
-    def send_signal(self, signal: int) -> None
-    def terminate(self) -> None
-    def kill(self) -> None
+    def send_signal(self, signal: int)
+    def terminate(self)
+    def kill(self)
     async def communicate(self, input: bytes | bytearray | memoryview | None = None) -> (bytes, bytes)
 
 if sys.version_info >= (3, 11):

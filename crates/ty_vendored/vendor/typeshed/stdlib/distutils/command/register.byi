@@ -17,16 +17,16 @@ class register(PyPIRCCommand):
     override def initialize_options(self) -> None
     override def finalize_options(self) -> None
     override def run(self) -> None
-    def check_metadata(self) -> None:
+    def check_metadata(self):
         """Deprecated API."""
 
-    def classifiers(self) -> None:
+    def classifiers(self):
         """Fetch the list of classifiers from the server."""
 
-    def verify_metadata(self) -> None:
+    def verify_metadata(self):
         """Send the metadata to the package index server to be checked."""
 
-    def send_metadata(self) -> None:
+    def send_metadata(self):
         """Send the metadata to the package index server.
 
         Well, do the following:

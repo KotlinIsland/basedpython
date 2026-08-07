@@ -63,7 +63,7 @@ class Future[in out Element]:
     def done(self) -> bool:
         """Return True if the future was cancelled or finished executing."""
 
-    def add_done_callback(self, fn: (Future[Element]) -> object) -> None:
+    def add_done_callback(self, fn: (Future[Element]) -> object):
         """Attaches a callable that will be called when the future finishes.
 
         Args:
@@ -120,7 +120,7 @@ class Future[in out Element]:
                 set_result() or set_exception() was called.
         """
 
-    def set_result(self, result: Element) -> None:
+    def set_result(self, result: Element):
         """Sets the return value of work associated with the future.
 
         Should only be used by Executor implementations and unit tests.
@@ -144,7 +144,7 @@ class Future[in out Element]:
                 given timeout.
         """
 
-    def set_exception(self, exception: BaseException | None) -> None:
+    def set_exception(self, exception: BaseException | None):
         """Sets the result of the future as being the given exception.
 
         Should only be used by Executor implementations and unit tests.
@@ -233,7 +233,7 @@ class Executor:
                 Exception: If fn(*args) raises for any values.
             """
 
-    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False):
         """Clean-up the resources associated with the Executor.
 
         It is safe to call this method several times. Otherwise, no other
@@ -321,9 +321,9 @@ class _Waiter:
 
     event: threading.Event
     finished_futures: list[Future[dynamic]]
-    def add_result(self, future: Future[dynamic]) -> None
-    def add_exception(self, future: Future[dynamic]) -> None
-    def add_cancelled(self, future: Future[dynamic]) -> None
+    def add_result(self, future: Future[dynamic])
+    def add_exception(self, future: Future[dynamic])
+    def add_cancelled(self, future: Future[dynamic])
 
 class _AsCompletedWaiter(_Waiter):
     """Used by as_completed()."""
@@ -346,5 +346,5 @@ class _AcquireFutures:
 
     futures: Iterable[Future[dynamic]]
     init(self, futures: Iterable[Future[dynamic]])
-    def __enter__(self) -> None
-    def __exit__(self, *args: Unused) -> None
+    def __enter__(self)
+    def __exit__(self, *args: Unused)

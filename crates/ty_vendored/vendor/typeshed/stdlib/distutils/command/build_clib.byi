@@ -11,7 +11,7 @@ from typing import ClassVar
 
 from ..cmd import Command
 
-def show_compilers() -> None
+def show_compilers()
 
 class build_clib(Command):
     description: str
@@ -30,7 +30,7 @@ class build_clib(Command):
     override def initialize_options(self) -> None
     override def finalize_options(self) -> None
     override def run(self) -> None
-    def check_library_list(self, libraries) -> None:
+    def check_library_list(self, libraries):
         """Ensure that the list of libraries is valid.
 
         `library` is presumably provided as a command option 'libraries'.
@@ -43,4 +43,4 @@ class build_clib(Command):
 
     def get_library_names(self)
     def get_source_files(self)
-    def build_libraries(self, libraries) -> None
+    def build_libraries(self, libraries)

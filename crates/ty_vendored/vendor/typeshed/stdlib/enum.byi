@@ -357,7 +357,7 @@ if sys.version_info >= (3, 11):
         a corresponding enum member.
         """
 
-        def __set_name__(self, ownerclass: type[Enum], name: str) -> None
+        def __set_name__(self, ownerclass: type[Enum], name: str)
         name: str
         clsname: str
         member: Enum | None
@@ -456,8 +456,8 @@ class Enum(metaclass=EnumMeta):
     if sys.version_info >= (3, 13):
         # Value may be any type, even in special enums. Enabling Enum parsing from
         # multiple value types
-        def _add_value_alias_(self, value: dynamic) -> None
-        def _add_alias_(self, name: str) -> None
+        def _add_value_alias_(self, value: dynamic)
+        def _add_alias_(self, name: str)
 
 if sys.version_info >= (3, 11):
     class ReprEnum(Enum):

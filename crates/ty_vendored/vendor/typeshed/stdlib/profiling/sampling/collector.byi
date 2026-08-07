@@ -36,7 +36,7 @@ def iter_async_frames(awaited_info_list: Sequence[AwaitedInfo]) -> object
 
 class Collector(ABC):
     aggregating: ClassVar[bool]  # undocumented
-    abstract def collect(self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None) -> None:
+    abstract def collect(self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None):
         """Collect profiling data from stack frames.
 
         Args:
@@ -48,8 +48,8 @@ class Collector(ABC):
                 together (same stack, different times).
         """
 
-    def collect_failed_sample(self) -> None:
+    def collect_failed_sample(self):
         """Collect data about a failed sample attempt."""
 
-    abstract def export(self, filename: StrOrBytesPath) -> None:
+    abstract def export(self, filename: StrOrBytesPath):
         """Export collected data to a file."""

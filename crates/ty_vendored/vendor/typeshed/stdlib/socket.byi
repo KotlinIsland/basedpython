@@ -1508,7 +1508,7 @@ class socket(_socket.socket):
         self, family: AddressFamily | int = -1, type: SocketKind | int = -1, proto: int = -1, fileno: int | None = None
     )
     def __enter__(self) -> Self
-    def __exit__(self, *args: Unused) -> None
+    def __exit__(self, *args: Unused)
     def dup(self) -> Self:
         """dup() -> socket object
 
@@ -1613,7 +1613,7 @@ class socket(_socket.socket):
     def get_inheritable(self) -> bool:
         """Get the inheritable flag of the socket"""
 
-    def set_inheritable(self, inheritable: bool) -> None:
+    def set_inheritable(self, inheritable: bool):
         """Set the inheritable flag of the socket"""
 
 def fromfd(fd: SupportsIndex, family: AddressFamily | int, type: SocketKind | int, proto: int = 0) -> socket:

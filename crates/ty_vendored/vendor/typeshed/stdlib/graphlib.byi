@@ -15,7 +15,7 @@ class TopologicalSorter[in out Element]:
     init(self, graph: None = None)
     init(self, graph: SupportsItems[Element, Iterable[Element]])
 
-    def add(self, node: Element, *predecessors: Element) -> None:
+    def add(self, node: Element, *predecessors: Element):
         """Add a new node and its predecessors to the graph.
 
         Both the *node* and all elements in *predecessors* must be hashable.
@@ -31,7 +31,7 @@ class TopologicalSorter[in out Element]:
         Raises ValueError if called after "prepare".
         """
 
-    def prepare(self) -> None:
+    def prepare(self):
         """Mark the graph as finished and check for cycles in the graph.
 
         If any cycle is detected, "CycleError" will be raised, but "get_ready" can
@@ -55,7 +55,7 @@ class TopologicalSorter[in out Element]:
         """
 
     def __bool__(self) -> bool
-    def done(self, *nodes: Element) -> None:
+    def done(self, *nodes: Element):
         """Marks a set of nodes returned by "get_ready" as processed.
 
         This method unblocks any successor of each node in *nodes* for being returned

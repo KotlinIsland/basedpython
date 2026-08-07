@@ -34,13 +34,13 @@ class BaseHandler:
     error_status: str
     error_headers: list[(str, str)]
     error_body: bytes
-    def run(self, application: WSGIApplication) -> None:
+    def run(self, application: WSGIApplication):
         """Invoke the application"""
 
-    def setup_environ(self) -> None:
+    def setup_environ(self):
         """Set up the environment for one request"""
 
-    def finish_response(self) -> None:
+    def finish_response(self):
         """Send any iterable data, then close self and the iterable
 
         Subclasses intended for use in asynchronous servers will
@@ -52,10 +52,10 @@ class BaseHandler:
     def get_scheme(self) -> str:
         """Return the URL scheme being used"""
 
-    def set_content_length(self) -> None:
+    def set_content_length(self):
         """Compute Content-Length or switch to chunked encoding if possible"""
 
-    def cleanup_headers(self) -> None:
+    def cleanup_headers(self):
         """Make any necessary header changes or defaults
 
         Subclasses can extend this to add other defaults.
@@ -66,10 +66,10 @@ class BaseHandler:
     ) -> (bytes) -> None:
         """'start_response()' callable as specified by PEP 3333"""
 
-    def send_preamble(self) -> None:
+    def send_preamble(self):
         """Transmit version/status/date/server, via self._write()"""
 
-    def write(self, data: bytes) -> None:
+    def write(self, data: bytes):
         """'write()' callable as specified by PEP 3333"""
 
     def sendfile(self) -> bool:
@@ -91,16 +91,16 @@ class BaseHandler:
         transmission of the file.
         """
 
-    def finish_content(self) -> None:
+    def finish_content(self):
         """Ensure headers and content have both been sent"""
 
-    def close(self) -> None:
+    def close(self):
         """Close the iterable (if needed) and reset all instance vars
 
         Subclasses may want to also drop the client connection.
         """
 
-    def send_headers(self) -> None:
+    def send_headers(self):
         """Transmit headers to the client, via self._write()"""
 
     def result_is_file(self) -> bool:
@@ -109,13 +109,13 @@ class BaseHandler:
     def client_is_modern(self) -> bool:
         """True if client can accept status and headers"""
 
-    def log_exception(self, exc_info: OptExcInfo) -> None:
+    def log_exception(self, exc_info: OptExcInfo):
         """Log the 'exc_info' tuple in the server log
 
         Subclasses may override to retarget the output or change its format.
         """
 
-    def handle_error(self) -> None:
+    def handle_error(self):
         """Log current error, and send error output to client if possible"""
 
     def error_output(self, environ: WSGIEnvironment, start_response: StartResponse) -> list[bytes]:
@@ -132,7 +132,7 @@ class BaseHandler:
         include any here!
         """
 
-    abstract def _write(self, data: bytes) -> None:
+    abstract def _write(self, data: bytes):
         """Override in subclass to buffer data for send to client
 
         It's okay if this method actually transmits the data; BaseHandler
@@ -140,7 +140,7 @@ class BaseHandler:
         when the underlying system actually has such a distinction.
         """
 
-    abstract def _flush(self) -> None:
+    abstract def _flush(self):
         """Override in subclass to force sending of recent '_write()' calls
 
         It's okay if this method is a no-op (i.e., if '_write()' actually
@@ -153,7 +153,7 @@ class BaseHandler:
     abstract def get_stderr(self) -> ErrorStream:
         """Override in subclass to return suitable 'wsgi.errors'"""
 
-    abstract def add_cgi_vars(self) -> None:
+    abstract def add_cgi_vars(self):
         """Override in subclass to insert CGI variables in 'self.environ'"""
 
 class SimpleHandler(BaseHandler):

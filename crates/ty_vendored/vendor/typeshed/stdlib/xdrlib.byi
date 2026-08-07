@@ -29,35 +29,35 @@ class ConversionError(Error)
 class Packer:
     """Pack various data representations into a buffer."""
 
-    def reset(self) -> None
+    def reset(self)
     def get_buffer(self) -> bytes
     def get_buf(self) -> bytes
-    def pack_uint(self, x: int) -> None
-    def pack_int(self, x: int) -> None
-    def pack_enum(self, x: int) -> None
-    def pack_bool(self, x: bool) -> None
-    def pack_uhyper(self, x: int) -> None
-    def pack_hyper(self, x: int) -> None
-    def pack_float(self, x: float) -> None
-    def pack_double(self, x: float) -> None
-    def pack_fstring(self, n: int, s: bytes) -> None
-    def pack_fopaque(self, n: int, s: bytes) -> None
-    def pack_string(self, s: bytes) -> None
-    def pack_opaque(self, s: bytes) -> None
-    def pack_bytes(self, s: bytes) -> None
-    def pack_list[Element](self, list: Sequence[Element], pack_item: (Element) -> object) -> None
-    def pack_farray[Element](self, n: int, list: Sequence[Element], pack_item: (Element) -> object) -> None
-    def pack_array[Element](self, list: Sequence[Element], pack_item: (Element) -> object) -> None
+    def pack_uint(self, x: int)
+    def pack_int(self, x: int)
+    def pack_enum(self, x: int)
+    def pack_bool(self, x: bool)
+    def pack_uhyper(self, x: int)
+    def pack_hyper(self, x: int)
+    def pack_float(self, x: float)
+    def pack_double(self, x: float)
+    def pack_fstring(self, n: int, s: bytes)
+    def pack_fopaque(self, n: int, s: bytes)
+    def pack_string(self, s: bytes)
+    def pack_opaque(self, s: bytes)
+    def pack_bytes(self, s: bytes)
+    def pack_list[Element](self, list: Sequence[Element], pack_item: (Element) -> object)
+    def pack_farray[Element](self, n: int, list: Sequence[Element], pack_item: (Element) -> object)
+    def pack_array[Element](self, list: Sequence[Element], pack_item: (Element) -> object)
 
 class Unpacker:
     """Unpacks various data representations from the given buffer."""
 
     init(self, data: bytes)
-    def reset(self, data: bytes) -> None
+    def reset(self, data: bytes)
     def get_position(self) -> int
-    def set_position(self, position: int) -> None
+    def set_position(self, position: int)
     def get_buffer(self) -> bytes
-    def done(self) -> None
+    def done(self)
     def unpack_uint(self) -> int
     def unpack_int(self) -> int
     def unpack_enum(self) -> int

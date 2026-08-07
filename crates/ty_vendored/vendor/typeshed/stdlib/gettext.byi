@@ -47,8 +47,8 @@ private protocol TranslationsReader:
 
 class NullTranslations:
     init(self, fp: TranslationsReader | None = None)
-    def _parse(self, fp: TranslationsReader) -> None
-    def add_fallback(self, fallback: NullTranslations) -> None
+    def _parse(self, fp: TranslationsReader)
+    def add_fallback(self, fallback: NullTranslations)
     def gettext(self, message: str) -> str
     def ngettext(self, msgid1: str, msgid2: str, n: int) -> str
     def pgettext(self, context: str, message: str) -> str
@@ -65,7 +65,7 @@ class NullTranslations:
         @deprecated("Deprecated since Python 3.8; removed in Python 3.11. Use `ngettext()` instead.")
         def lngettext(self, msgid1: str, msgid2: str, n: int) -> str
 
-    def install(self, names: Container[str] | None = None) -> None
+    def install(self, names: Container[str] | None = None)
 
 class GNUTranslations(NullTranslations):
     final LE_MAGIC: int

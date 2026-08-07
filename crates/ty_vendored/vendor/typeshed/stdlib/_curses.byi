@@ -277,13 +277,13 @@ final version: bytes
 def baudrate() -> int:
     """Return the output speed of the terminal in bits per second."""
 
-def beep() -> None:
+def beep():
     """Emit a short attention sound."""
 
 def can_change_color() -> bool:
     """Return True if the programmer can change the colors displayed by the terminal."""
 
-def cbreak(flag: bool = True, /) -> None:
+def cbreak(flag: bool = True, /):
     """Enter cbreak mode.
 
       flag
@@ -331,7 +331,7 @@ def curs_set(visibility: int, /) -> int:
     visible" mode is a block cursor.
     """
 
-def def_prog_mode() -> None:
+def def_prog_mode():
     """Save the current terminal mode as the "program" mode.
 
     The "program" mode is the mode when the running program is using curses.
@@ -339,7 +339,7 @@ def def_prog_mode() -> None:
     Subsequent calls to reset_prog_mode() will restore this mode.
     """
 
-def def_shell_mode() -> None:
+def def_shell_mode():
     """Save the current terminal mode as the "shell" mode.
 
     The "shell" mode is the mode when the running program is not using
@@ -348,17 +348,17 @@ def def_shell_mode() -> None:
     Subsequent calls to reset_shell_mode() will restore this mode.
     """
 
-def delay_output(ms: int, /) -> None:
+def delay_output(ms: int, /):
     """Insert a pause in output.
 
     ms
       Duration in milliseconds.
     """
 
-def doupdate() -> None:
+def doupdate():
     """Update the physical screen to match the virtual screen."""
 
-def echo(flag: bool = True, /) -> None:
+def echo(flag: bool = True, /):
     """Enter echo mode.
 
       flag
@@ -368,13 +368,13 @@ def echo(flag: bool = True, /) -> None:
     entered.
     """
 
-def endwin() -> None:
+def endwin():
     """De-initialize the library, and return terminal to normal status."""
 
 def erasechar() -> bytes:
     """Return the user's current erase character."""
 
-def filter() -> None:
+def filter():
     """Restrict screen updates to the current line.
 
     Must be called before initscr().  Afterwards curses confines the cursor
@@ -383,14 +383,14 @@ def filter() -> None:
     screen.
     """
 
-def flash() -> None:
+def flash():
     """Flash the screen.
 
     That is, change it to reverse-video and then change it back in a short
     interval.
     """
 
-def flushinp() -> None:
+def flushinp():
     """Flush all input buffers.
 
     This throws away any typeahead that has been typed by the user and has
@@ -432,7 +432,7 @@ def getwin(file: SupportsRead[bytes], /) -> window:
     returning the new window object.
     """
 
-def halfdelay(tenths: int, /) -> None:
+def halfdelay(tenths: int, /):
     """Enter half-delay mode.
 
       tenths
@@ -452,7 +452,7 @@ def has_extended_color_support() -> bool:
     """
 
 if sys.version_info >= (3, 14):
-    def assume_default_colors(fg: int, bg: int, /) -> None:
+    def assume_default_colors(fg: int, bg: int, /):
         """Allow use of default values for colors on terminals supporting this feature.
 
         Assign terminal default foreground/background colors to color number -1.
@@ -474,7 +474,7 @@ def has_key(key: int, /) -> bool:
       Key number.
     """
 
-def init_color(color_number: int, r: int, g: int, b: int, /) -> None:
+def init_color(color_number: int, r: int, g: int, b: int, /):
     """Change the definition of a color.
 
       color_number
@@ -491,7 +491,7 @@ def init_color(color_number: int, r: int, g: int, b: int, /) -> None:
     most terminals; it is active only if can_change_color() returns true.
     """
 
-def init_pair(pair_number: int, fg: int, bg: int, /) -> None:
+def init_pair(pair_number: int, fg: int, bg: int, /):
     """Change the definition of a color-pair.
 
       pair_number
@@ -512,7 +512,7 @@ def initscr() -> window:
     Return a WindowObject which represents the whole screen.
     """
 
-def intrflush(flag: bool, /) -> None:
+def intrflush(flag: bool, /):
     """Control flushing of the output buffer when an interrupt key is pressed.
 
     If flag is true, pressing an interrupt key (interrupt, break, or quit)
@@ -549,14 +549,14 @@ def longname() -> bytes:
     defined only after the call to initscr().
     """
 
-def meta(yes: bool, /) -> None:
+def meta(yes: bool, /):
     """Enable/disable meta keys.
 
     If yes is True, allow 8-bit characters to be input.  If yes is False,
     allow only 7-bit characters.
     """
 
-def mouseinterval(interval: int, /) -> None:
+def mouseinterval(interval: int, /):
     """Set and retrieve the maximum time between press and release in a click.
 
       interval
@@ -609,7 +609,7 @@ def newwin(nlines: int, ncols: int, begin_y: int = 0, begin_x: int = 0, /) -> wi
     lower right corner of the screen.
     """
 
-def nl(flag: bool = True, /) -> None:
+def nl(flag: bool = True, /):
     """Enter newline mode.
 
       flag
@@ -620,33 +620,33 @@ def nl(flag: bool = True, /) -> None:
     is initially on.
     """
 
-def nocbreak() -> None:
+def nocbreak():
     """Leave cbreak mode.
 
     Return to normal "cooked" mode with line buffering.
     """
 
-def noecho() -> None:
+def noecho():
     """Leave echo mode.
 
     Echoing of input characters is turned off.
     """
 
-def nonl() -> None:
+def nonl():
     """Leave newline mode.
 
     Disable translation of return into newline on input, and disable
     low-level translation of newline into newline/return on output.
     """
 
-def noqiflush() -> None:
+def noqiflush():
     """Disable queue flushing.
 
     When queue flushing is disabled, normal flush of input and output queues
     associated with the INTR, QUIT and SUSP characters will not be done.
     """
 
-def noraw() -> None:
+def noraw():
     """Leave raw mode.
 
     Return to normal "cooked" mode with line buffering.
@@ -665,13 +665,13 @@ def pair_number(attr: int, /) -> int:
     color_pair() is the counterpart to this function.
     """
 
-def putp(string: ReadOnlyBuffer, /) -> None:
+def putp(string: ReadOnlyBuffer, /):
     """Emit the value of a specified terminfo capability for the current terminal.
 
     Note that the output of putp() always goes to standard output.
     """
 
-def qiflush(flag: bool = True, /) -> None:
+def qiflush(flag: bool = True, /):
     """Enable queue flushing.
 
       flag
@@ -681,7 +681,7 @@ def qiflush(flag: bool = True, /) -> None:
     will be flushed when the INTR, QUIT and SUSP characters are read.
     """
 
-def raw(flag: bool = True, /) -> None:
+def raw(flag: bool = True, /):
     """Enter raw mode.
 
       flag
@@ -692,16 +692,16 @@ def raw(flag: bool = True, /) -> None:
     to curses input functions one by one.
     """
 
-def reset_prog_mode() -> None:
+def reset_prog_mode():
     """Restore the terminal to "program" mode, as previously saved by def_prog_mode()."""
 
-def reset_shell_mode() -> None:
+def reset_shell_mode():
     """Restore the terminal to "shell" mode, as previously saved by def_shell_mode()."""
 
-def resetty() -> None:
+def resetty():
     """Restore terminal mode."""
 
-def resize_term(nlines: int, ncols: int, /) -> None:
+def resize_term(nlines: int, ncols: int, /):
     """Backend function used by resizeterm(), performing most of the work.
 
       nlines
@@ -717,7 +717,7 @@ def resize_term(nlines: int, ncols: int, /) -> None:
     application.
     """
 
-def resizeterm(nlines: int, ncols: int, /) -> None:
+def resizeterm(nlines: int, ncols: int, /):
     """Resize the standard and current windows to the specified dimensions.
 
       nlines
@@ -729,10 +729,10 @@ def resizeterm(nlines: int, ncols: int, /) -> None:
     the window dimensions (in particular the SIGWINCH handler).
     """
 
-def savetty() -> None:
+def savetty():
     """Save terminal mode."""
 
-def set_escdelay(ms: int, /) -> None:
+def set_escdelay(ms: int, /):
     """Sets the curses ESCDELAY setting.
 
       ms
@@ -743,7 +743,7 @@ def set_escdelay(ms: int, /) -> None:
     on the keyboard from escape sequences sent by cursor and function keys.
     """
 
-def set_tabsize(size: int, /) -> None:
+def set_tabsize(size: int, /):
     """Sets the curses TABSIZE setting.
 
       size
@@ -753,7 +753,7 @@ def set_tabsize(size: int, /) -> None:
     a tab character to spaces as it adds the tab to a window.
     """
 
-def setsyx(y: int, x: int, /) -> None:
+def setsyx(y: int, x: int, /):
     """Set the virtual screen cursor.
 
       y
@@ -764,7 +764,7 @@ def setsyx(y: int, x: int, /) -> None:
     If y and x are both -1, then leaveok is set.
     """
 
-def setupterm(term: str | None = None, fd: int = -1) -> None:
+def setupterm(term: str | None = None, fd: int = -1):
     """Initialize the terminal.
 
     term
@@ -775,7 +775,7 @@ def setupterm(term: str | None = None, fd: int = -1) -> None:
       If not supplied, the file descriptor for sys.stdout will be used.
     """
 
-def start_color() -> None:
+def start_color():
     """Initializes eight basic colors and global variables COLORS and COLOR_PAIRS.
 
     Must be called if the programmer wants to use colors, and before any
@@ -841,7 +841,7 @@ def tparm(
       Parameterized byte string obtained from the terminfo database.
     """
 
-def typeahead(fd: int, /) -> None:
+def typeahead(fd: int, /):
     """Specify that the file descriptor fd be used for typeahead checking.
 
       fd
@@ -857,28 +857,28 @@ def unctrl(ch: ChType, /) -> bytes:
     for example as ^C.  Printing characters are left as they are.
     """
 
-def unget_wch(ch: int | str, /) -> None:
+def unget_wch(ch: int | str, /):
     """Push ch so the next get_wch() will return it."""
 
-def ungetch(ch: ChType, /) -> None:
+def ungetch(ch: ChType, /):
     """Push ch so the next getch() will return it."""
 
-def ungetmouse(id: int, x: int, y: int, z: int, bstate: int, /) -> None:
+def ungetmouse(id: int, x: int, y: int, z: int, bstate: int, /):
     """Push a KEY_MOUSE event onto the input queue.
 
     The following getmouse() will return the given state data.
     """
 
-def update_lines_cols() -> None:
+def update_lines_cols():
     """Update the LINES and COLS module variables.
 
     This is useful for detecting manual screen resize.
     """
 
-def use_default_colors() -> None:
+def use_default_colors():
     """Equivalent to assume_default_colors(-1, -1)."""
 
-def use_env(flag: bool, /) -> None:
+def use_env(flag: bool, /):
     """Use environment variables LINES and COLUMNS.
 
     If used, this function should be called before initscr() or newterm()
@@ -959,16 +959,16 @@ final class window:  # undocumented
         """
     def addstr(self, y: int, x: int, str: str, attr: int = ...) -> None
 
-    def attroff(self, attr: int, /) -> None:
+    def attroff(self, attr: int, /):
         """Remove attribute attr from the "background" set."""
 
-    def attron(self, attr: int, /) -> None:
+    def attron(self, attr: int, /):
         """Add attribute attr to the "background" set."""
 
-    def attrset(self, attr: int, /) -> None:
+    def attrset(self, attr: int, /):
         """Set the "background" set of attributes."""
 
-    def bkgd(self, ch: ChType, attr: int = 0, /) -> None:
+    def bkgd(self, ch: ChType, attr: int = 0, /):
         """Set the background property of the window.
 
         ch
@@ -977,7 +977,7 @@ final class window:  # undocumented
           Background attributes.
         """
 
-    def bkgdset(self, ch: ChType, attr: int = 0, /) -> None:
+    def bkgdset(self, ch: ChType, attr: int = 0, /):
         """Set the window's background.
 
         ch
@@ -996,7 +996,7 @@ final class window:  # undocumented
         tr: ChType = ...,
         bl: ChType = ...,
         br: ChType = ...,
-    ) -> None:
+    ):
         """Draw a border around the edges of the window.
 
           ls
@@ -1061,19 +1061,19 @@ final class window:  # undocumented
     def chgat(self, y: int, x: int, attr: int) -> None
     def chgat(self, y: int, x: int, num: int, attr: int) -> None
 
-    def clear(self) -> None:
+    def clear(self):
         """Clear the window and repaint it completely on the next refresh()."""
 
-    def clearok(self, flag: bool, /) -> None:
+    def clearok(self, flag: bool, /):
         """Clear the window on the next refresh() if flag is true."""
 
-    def clrtobot(self) -> None:
+    def clrtobot(self):
         """Erase from the cursor to the end of the window."""
 
-    def clrtoeol(self) -> None:
+    def clrtoeol(self):
         """Erase from the cursor to the end of the line."""
 
-    def cursyncup(self) -> None:
+    def cursyncup(self):
         """Update the cursor position of all ancestor windows to match."""
 
     def delch(self) -> None:
@@ -1090,7 +1090,7 @@ final class window:  # undocumented
         """
     def delch(self, y: int, x: int) -> None
 
-    def deleteln(self) -> None:
+    def deleteln(self):
         """Delete the line under the cursor; move following lines up by one."""
 
     def derwin(self, begin_y: int, begin_x: int) -> window:
@@ -1112,7 +1112,7 @@ final class window:  # undocumented
         """
     def derwin(self, nlines: int, ncols: int, begin_y: int, begin_x: int) -> window
 
-    def echochar(self, ch: ChType, attr: int = 0, /) -> None:
+    def echochar(self, ch: ChType, attr: int = 0, /):
         """Add character ch with attribute attr, and refresh.
 
         ch
@@ -1130,7 +1130,7 @@ final class window:  # undocumented
           X-coordinate.
         """
 
-    def erase(self) -> None:
+    def erase(self):
         """Clear the window."""
 
     def getbegyx(self) -> (int, int):
@@ -1226,13 +1226,13 @@ final class window:  # undocumented
         """
     def hline(self, y: int, x: int, ch: ChType, n: int) -> None
 
-    def idcok(self, flag: bool, /) -> None:
+    def idcok(self, flag: bool, /):
         """Enable or disable the hardware insert/delete character feature."""
 
-    def idlok(self, flag: bool, /) -> None:
+    def idlok(self, flag: bool, /):
         """Enable or disable the hardware insert/delete line feature."""
 
-    def immedok(self, flag: bool, /) -> None:
+    def immedok(self, flag: bool, /):
         """If flag is true, refresh the window on every change to it."""
 
     def inch(self) -> int:
@@ -1267,10 +1267,10 @@ final class window:  # undocumented
         """
     def insch(self, y: int, x: int, ch: ChType, attr: int = ...) -> None
 
-    def insdelln(self, nlines: int, /) -> None:
+    def insdelln(self, nlines: int, /):
         """Insert (nlines > 0) or delete (nlines < 0) lines above the cursor."""
 
-    def insertln(self) -> None:
+    def insertln(self):
         """Insert a blank line under the cursor; move following lines down."""
 
     def insnstr(self, str: str, n: int, attr: int = ...) -> None:
@@ -1351,25 +1351,25 @@ final class window:  # undocumented
     def is_wintouched(self) -> bool:
         """Return True if the window changed since the last refresh()."""
 
-    def keypad(self, flag: bool, /) -> None:
+    def keypad(self, flag: bool, /):
         """Interpret escape sequences for special keys if flag is true."""
 
-    def leaveok(self, flag: bool, /) -> None:
+    def leaveok(self, flag: bool, /):
         """If flag is true, leave the cursor where the update leaves it."""
 
-    def move(self, new_y: int, new_x: int, /) -> None:
+    def move(self, new_y: int, new_x: int, /):
         """Move the cursor to (new_y, new_x)."""
 
-    def mvderwin(self, y: int, x: int, /) -> None:
+    def mvderwin(self, y: int, x: int, /):
         """Move the window inside its parent window."""
 
-    def mvwin(self, new_y: int, new_x: int, /) -> None:
+    def mvwin(self, new_y: int, new_x: int, /):
         """Move the window so its upper-left corner is at (new_y, new_x)."""
 
-    def nodelay(self, flag: bool, /) -> None:
+    def nodelay(self, flag: bool, /):
         """If flag is true, getch() becomes non-blocking."""
 
-    def notimeout(self, flag: bool, /) -> None:
+    def notimeout(self, flag: bool, /):
         """If flag is true, do not time out escape sequences."""
 
     def noutrefresh(self) -> None:
@@ -1419,13 +1419,13 @@ final class window:  # undocumented
         self, destwin: window, sminrow: int, smincol: int, dminrow: int, dmincol: int, dmaxrow: int, dmaxcol: int
     ) -> None
 
-    def putwin(self, file: SupportsWrite[bytes], /) -> None:
+    def putwin(self, file: SupportsWrite[bytes], /):
         """Write all data associated with the window into the provided file object.
 
         This information can be later retrieved using the getwin() function.
         """
 
-    def redrawln(self, beg: int, num: int, /) -> None:
+    def redrawln(self, beg: int, num: int, /):
         """Mark the specified lines corrupted.
 
           beg
@@ -1436,7 +1436,7 @@ final class window:  # undocumented
         They should be completely redrawn on the next refresh() call.
         """
 
-    def redrawwin(self) -> None:
+    def redrawwin(self):
         """Mark the entire window for redraw on the next refresh()."""
 
     def refresh(self) -> None:
@@ -1458,10 +1458,10 @@ final class window:  # undocumented
         """
     def refresh(self, pminrow: int, pmincol: int, sminrow: int, smincol: int, smaxrow: int, smaxcol: int) -> None
 
-    def resize(self, nlines: int, ncols: int, /) -> None:
+    def resize(self, nlines: int, ncols: int, /):
         """Resize the window to nlines rows and ncols columns."""
 
-    def scroll(self, lines: int = 1) -> None:
+    def scroll(self, lines: int = 1):
         """scroll([lines=1])
         Scroll the screen or scrolling region.
 
@@ -1472,10 +1472,10 @@ final class window:  # undocumented
         negative.
         """
 
-    def scrollok(self, flag: bool, /) -> None:
+    def scrollok(self, flag: bool, /):
         """Control whether the window scrolls when the cursor moves off it."""
 
-    def setscrreg(self, top: int, bottom: int, /) -> None:
+    def setscrreg(self, top: int, bottom: int, /):
         """Define a software scrolling region.
 
           top
@@ -1486,10 +1486,10 @@ final class window:  # undocumented
         All scrolling actions will take place in this region.
         """
 
-    def standend(self) -> None:
+    def standend(self):
         """Turn off the standout attribute."""
 
-    def standout(self) -> None:
+    def standout(self):
         """Turn on the A_STANDOUT attribute."""
 
     def subpad(self, begin_y: int, begin_x: int) -> window:
@@ -1528,19 +1528,19 @@ final class window:  # undocumented
         """
     def subwin(self, nlines: int, ncols: int, begin_y: int, begin_x: int) -> window
 
-    def syncdown(self) -> None:
+    def syncdown(self):
         """Touch each location changed in any ancestor of the window."""
 
-    def syncok(self, flag: bool, /) -> None:
+    def syncok(self, flag: bool, /):
         """If flag is true, call syncup() on every change to the window."""
 
-    def syncup(self) -> None:
+    def syncup(self):
         """Touch locations in ancestors that changed in this window."""
 
-    def timeout(self, delay: int, /) -> None:
+    def timeout(self, delay: int, /):
         """Set blocking or non-blocking read behavior for the window."""
 
-    def touchline(self, start: int, count: int, changed: bool = True) -> None:
+    def touchline(self, start: int, count: int, changed: bool = True):
         """touchline(start, count, [changed=True])
         Pretend count lines have been changed, starting with line start.
 
@@ -1549,10 +1549,10 @@ final class window:  # undocumented
         (changed=False).
         """
 
-    def touchwin(self) -> None:
+    def touchwin(self):
         """Mark the whole window as changed."""
 
-    def untouchwin(self) -> None:
+    def untouchwin(self):
         """Mark all lines in the window as unchanged since last refresh()."""
 
     def vline(self, ch: ChType, n: int) -> None:

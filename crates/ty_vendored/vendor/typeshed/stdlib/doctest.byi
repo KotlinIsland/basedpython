@@ -423,24 +423,24 @@ class DocTestRunner:
         more information.
         """
 
-    def report_start(self, out: Out, test: DocTest, example: Example) -> None:
+    def report_start(self, out: Out, test: DocTest, example: Example):
         """
         Report that the test runner is about to process the given
         example.  (Only displays a message if verbose=True)
         """
 
-    def report_success(self, out: Out, test: DocTest, example: Example, got: str) -> None:
+    def report_success(self, out: Out, test: DocTest, example: Example, got: str):
         """
         Report that the given example ran successfully.  (Only
         displays a message if verbose=True)
         """
 
-    def report_failure(self, out: Out, test: DocTest, example: Example, got: str) -> None:
+    def report_failure(self, out: Out, test: DocTest, example: Example, got: str):
         """
         Report that the given example failed.
         """
 
-    def report_unexpected_exception(self, out: Out, test: DocTest, example: Example, exc_info: ExcInfo) -> None:
+    def report_unexpected_exception(self, out: Out, test: DocTest, example: Example, exc_info: ExcInfo):
         """
         Report that the given example raised an unexpected exception.
         """
@@ -478,7 +478,7 @@ class DocTestRunner:
         DocTestRunner's verbosity is used.
         """
 
-    def merge(self, other: DocTestRunner) -> None
+    def merge(self, other: DocTestRunner)
 
 class OutputChecker:
     """
@@ -808,7 +808,7 @@ def run_docstring_examples(
     name: str = "NoName",
     compileflags: int | None = None,
     optionflags: int = 0,
-) -> None:
+):
     """
     Test examples in the given object's docstring (`f`), using `globs`
     as globals.  Optional argument `name` is used in failure messages.
@@ -862,14 +862,14 @@ class DocTestCase(unittest.TestCase):
         tearDown: ((DocTest) -> object) | None = None,
         checker: OutputChecker | None = None,
     )
-    def runTest(self) -> None
+    def runTest(self)
     def format_failure(self, err: str) -> str
     override def __hash__(self) -> int
     override def __eq__(self, other: object) -> bool
 
 class SkipDocTestCase(DocTestCase):
     init(self, module: types.ModuleType)
-    def test_skip(self) -> None
+    def test_skip(self)
 
 class _DocTestSuite(unittest.TestSuite)
 
@@ -1050,13 +1050,13 @@ def testsource(module: None | str | types.ModuleType, name: str) -> str:
     with the doc string with tests to be debugged.
     """
 
-def debug_src(src: str, pm: bool = False, globs: dict[str, dynamic] | None = None) -> None:
+def debug_src(src: str, pm: bool = False, globs: dict[str, dynamic] | None = None):
     """Debug a single doctest docstring, in argument `src`"""
 
-def debug_script(src: str, pm: bool = False, globs: dict[str, dynamic] | None = None) -> None:
+def debug_script(src: str, pm: bool = False, globs: dict[str, dynamic] | None = None):
     """Debug a test script.  `src` is the script, as a string."""
 
-def debug(module: None | str | types.ModuleType, name: str, pm: bool = False) -> None:
+def debug(module: None | str | types.ModuleType, name: str, pm: bool = False):
     """Debug a single doctest docstring.
 
     Provide the module (or dotted name of the module) containing the

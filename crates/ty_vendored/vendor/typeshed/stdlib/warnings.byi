@@ -38,7 +38,7 @@ def showwarning(
     lineno: int,
     file: TextIO | None = None,
     line: str | None = None,
-) -> None:
+):
     """Hook to write a warning to a file; replace if you like."""
 
 def formatwarning(message: Warning | str, category: type[Warning], filename: str, lineno: int, line: str | None = None) -> str:
@@ -46,7 +46,7 @@ def formatwarning(message: Warning | str, category: type[Warning], filename: str
 
 def filterwarnings(
     action: _ActionKind, message: str = "", category: type[Warning] = ..., module: str = "", lineno: int = 0, append: bool = False
-) -> None:
+):
     """Insert an entry into the list of warnings filters (at the front).
 
     'action' -- one of "error", "ignore", "always", "all", "default", "module",
@@ -60,7 +60,7 @@ def filterwarnings(
 
 def simplefilter(
     action: _ActionKind, category: type[Warning] | (*: type[Warning]) = ..., lineno: int = 0, append: bool = False
-) -> None:
+):
     """Insert a simple entry into the list of warnings filters (at the front).
 
     A simple filter matches all modules and messages.
@@ -71,7 +71,7 @@ def simplefilter(
     'append' -- if true, append to the list of filters
     """
 
-def resetwarnings() -> None:
+def resetwarnings():
     """Clear the list of warning filters, so that no filters are active."""
 
 class _OptionError(Exception):
@@ -183,7 +183,7 @@ class catch_warnings[out W: list[WarningMessage] | None = list[WarningMessage] |
     def __enter__(self) -> W
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None
+    )
 
 if sys.version_info >= (3, 13):
     class deprecated:

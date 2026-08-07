@@ -15,14 +15,14 @@ __all__ = [
 final WINEXE: bool
 final WINSERVICE: bool
 
-def set_executable(exe: str) -> None
+def set_executable(exe: str)
 def get_executable() -> str
 def is_forking(argv: Sequence[str]) -> bool:
     """
     Return whether commandline indicates we are forking
     """
 
-def freeze_support() -> None:
+def freeze_support():
     """
     Run code for process object if this in not the main process
     """
@@ -32,7 +32,7 @@ def get_command_line(**kwds: dynamic) -> list[str]:
     Returns prefix of command line used for spawning a child process
     """
 
-def spawn_main(pipe_handle: int, parent_pid: int | None = None, tracker_fd: int | None = None) -> None:
+def spawn_main(pipe_handle: int, parent_pid: int | None = None, tracker_fd: int | None = None):
     """
     Run code specified by data received over pipe
     """
@@ -46,12 +46,12 @@ def get_preparation_data(name: str) -> dict[str, dynamic]:
 
 old_main_modules: list[ModuleType]
 
-def prepare(data: Mapping[str, dynamic]) -> None:
+def prepare(data: Mapping[str, dynamic]):
     """
     Try to get current process ready to unpickle process object
     """
 
-def import_main_path(main_path: str) -> None:
+def import_main_path(main_path: str):
     """
     Set sys.modules['__main__'] to module at main_path
     """

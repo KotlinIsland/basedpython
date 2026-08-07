@@ -29,23 +29,23 @@ if sys.platform == "win32":
         name: str
         fields: list[(int, str, int)]
         init(self, name: str)
-        def add_field(self, index: int, name: str, type: int) -> None
+        def add_field(self, index: int, name: str, type: int)
         def sql(self) -> str
-        def create(self, db: _Database) -> None
+        def create(self, db: _Database)
 
     class _Unspecified
 
     def change_sequence(
         seq: _SequenceType, action: str, seqno: int | type[_Unspecified] = ..., cond: str | type[_Unspecified] = ...
-    ) -> None:
+    ):
         """Change the sequence number of an action in a sequence list"""
 
-    def add_data(db: _Database, table: str, values: Iterable[(*: dynamic)]) -> None
-    def add_stream(db: _Database, name: str, path: str) -> None
+    def add_data(db: _Database, table: str, values: Iterable[(*: dynamic)])
+    def add_stream(db: _Database, name: str, path: str)
     def init_database(
         name: str, schema: ModuleType, ProductName: str, ProductCode: str, ProductVersion: str, Manufacturer: str
     ) -> _Database
-    def add_tables(db: _Database, module: ModuleType) -> None
+    def add_tables(db: _Database, module: ModuleType)
     def make_id(str: str) -> str
     def gen_uuid() -> str
 
@@ -57,7 +57,7 @@ if sys.platform == "win32":
         init(self, name: str)
         def gen_id(self, file: str) -> str
         def append(self, full: str, file: str, logical: str | None) -> (int, str) | MaybeNone
-        def commit(self, db: _Database) -> None
+        def commit(self, db: _Database)
 
     _directories: set[str]
 
@@ -100,7 +100,7 @@ if sys.platform == "win32":
             flags: int | None = None,
             keyfile: str | None = None,
             uuid: str | None = None,
-        ) -> None:
+        ):
             """Add an entry to the Component table, and make this component the current for this
             directory. If no component name is given, the directory name is used. If no feature
             is given, the current feature is used. If no flags are given, the directory's default
@@ -122,7 +122,7 @@ if sys.platform == "win32":
             glob pattern. Individual files can be excluded in the exclude list.
             """
 
-        def remove_pyc(self) -> None:
+        def remove_pyc(self):
             """Remove .pyc files on uninstall"""
 
     class Binary:
@@ -143,21 +143,21 @@ if sys.platform == "win32":
             directory: str | None = None,
             attributes: int = 0,
         )
-        def set_current(self) -> None
+        def set_current(self)
 
     class Control:
         dlg: Dialog
         name: str
         init(self, dlg: Dialog, name: str)
-        def event(self, event: str, argument: str, condition: str = "1", ordering: int | None = None) -> None
-        def mapping(self, event: str, attribute: str) -> None
-        def condition(self, action: str, condition: str) -> None
+        def event(self, event: str, argument: str, condition: str = "1", ordering: int | None = None)
+        def mapping(self, event: str, attribute: str)
+        def condition(self, action: str, condition: str)
 
     class RadioButtonGroup(Control):
         property: str
         index: int
         init(self, dlg: Dialog, name: str, property: str)
-        def add(self, name: str, x: int, y: int, w: int, h: int, text: str, value: str | None = None) -> None
+        def add(self, name: str, x: int, y: int, w: int, h: int, text: str, value: str | None = None)
 
     class Dialog:
         db: _Database

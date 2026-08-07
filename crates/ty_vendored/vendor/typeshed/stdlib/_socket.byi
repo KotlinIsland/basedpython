@@ -902,7 +902,7 @@ class socket:
     else:
         def __init__(self, family: int = ..., type: int = ..., proto: int = ..., fileno: SupportsIndex | None = None) -> None
 
-    def bind(self, address: _Address, /) -> None:
+    def bind(self, address: _Address, /):
         """bind(address)
 
         Bind the socket to a local address.  For IP sockets, the address is a
@@ -910,13 +910,13 @@ class socket:
         sockets the address is a tuple (ifname, proto [,pkttype [,hatype [,addr]]])
         """
 
-    def close(self) -> None:
+    def close(self):
         """close()
 
         Close the socket.  It cannot be used after this call.
         """
 
-    def connect(self, address: _Address, /) -> None:
+    def connect(self, address: _Address, /):
         """connect(address)
 
         Connect the socket to a remote address.  For IP sockets, the address
@@ -985,7 +985,7 @@ class socket:
         """
 
     if sys.platform == "win32":
-        def ioctl(self, control: int, option: int | (int, int, int) | bool, /) -> None:
+        def ioctl(self, control: int, option: int | (int, int, int) | bool, /):
             """ioctl(cmd, option) -> long
 
             Control the socket with WSAIoctl syscall. Currently supported 'cmd' values are
@@ -994,7 +994,7 @@ class socket:
             SIO_LOOPBACK_FAST_PATH: 'option' is a boolean value, and is disabled by default
             """
 
-    def listen(self, backlog: int = ..., /) -> None:
+    def listen(self, backlog: int = ..., /):
         """listen([backlog])
 
         Enable a server to accept connections.  If backlog is specified, it must be
@@ -1109,7 +1109,7 @@ class socket:
         the network is busy.
         """
 
-    def sendall(self, data: ReadableBuffer, flags: int = 0, /) -> None:
+    def sendall(self, data: ReadableBuffer, flags: int = 0, /):
         """Send a data string to the socket.
 
         For the optional flags argument, see the Unix manual.
@@ -1162,7 +1162,7 @@ class socket:
             operation socket.
             """
 
-    def setblocking(self, flag: bool, /) -> None:
+    def setblocking(self, flag: bool, /):
         """setblocking(flag)
 
         Set the socket to blocking (flag is true) or non-blocking (false).
@@ -1170,7 +1170,7 @@ class socket:
         setblocking(False) is equivalent to settimeout(0.0).
         """
 
-    def settimeout(self, value: float | None, /) -> None:
+    def settimeout(self, value: float | None, /):
         """settimeout(timeout)
 
         Set a timeout on socket operations.  'timeout' can be a float,
@@ -1200,7 +1200,7 @@ class socket:
             socket.fromshare().
             """
 
-    def shutdown(self, how: int, /) -> None:
+    def shutdown(self, how: int, /):
         """shutdown(flag)
 
         Shut down the reading side of the socket (flag == SHUT_RD), the writing side
@@ -1211,7 +1211,7 @@ SocketType = socket
 
 # ===== Functions =====
 
-def close(fd: SupportsIndex, /) -> None:
+def close(fd: SupportsIndex, /):
     """close(integer) -> None
 
     Close an integer socket file descriptor.  This is like os.close(), but for
@@ -1329,7 +1329,7 @@ def getdefaulttimeout() -> float | None:
     """
 
 # F811: "Redefinition of unused `timeout`"
-def setdefaulttimeout(timeout: float | None, /) -> None:
+def setdefaulttimeout(timeout: float | None, /):
     """setdefaulttimeout(timeout)
 
     Set the default timeout in seconds (real number) for new socket objects.
@@ -1338,7 +1338,7 @@ def setdefaulttimeout(timeout: float | None, /) -> None:
     """
 
 if sys.platform != "win32":
-    def sethostname(name: str, /) -> None:
+    def sethostname(name: str, /):
         """sethostname(name)
 
         Sets the hostname to name.

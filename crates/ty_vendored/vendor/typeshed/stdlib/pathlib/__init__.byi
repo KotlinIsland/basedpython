@@ -298,7 +298,7 @@ class Path(PurePath):
         os.stat() does.
         """
 
-    def chmod(self, mode: int, *, follow_symlinks: bool = True) -> None:
+    def chmod(self, mode: int, *, follow_symlinks: bool = True):
         """
         Change the permissions of the path, like os.chmod().
         """
@@ -325,7 +325,7 @@ class Path(PurePath):
 
     else:
         def __enter__(self) -> Self
-        def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None
+        def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None)
         def is_dir(self) -> bool:
             """
             Whether this path is a directory.
@@ -431,7 +431,7 @@ class Path(PurePath):
         special entries '.' and '..' are not included.
         """
 
-    def lchmod(self, mode: int) -> None:
+    def lchmod(self, mode: int):
         """
         Like chmod(), except if the path points to a symlink, the symlink's
         permissions are changed, rather than its target's.
@@ -637,30 +637,30 @@ class Path(PurePath):
         normalizing it.
         """
 
-    def rmdir(self) -> None:
+    def rmdir(self):
         """
         Remove this directory.  The directory must be empty.
         """
 
-    def symlink_to(self, target: StrOrBytesPath, target_is_directory: bool = False) -> None:
+    def symlink_to(self, target: StrOrBytesPath, target_is_directory: bool = False):
         """
         Make this path a symlink pointing to the target path.
         Note the order of arguments (link, target) is the reverse of os.symlink.
         """
 
-    def hardlink_to(self, target: StrOrBytesPath) -> None:
+    def hardlink_to(self, target: StrOrBytesPath):
         """
         Make this path a hard link pointing to the same file as *target*.
 
         Note the order of arguments (self, target) is the reverse of os.link's.
         """
 
-    def touch(self, mode: int = 0o666, exist_ok: bool = True) -> None:
+    def touch(self, mode: int = 0o666, exist_ok: bool = True):
         """
         Create this file with the given access mode, if it doesn't exist.
         """
 
-    def unlink(self, missing_ok: bool = False) -> None:
+    def unlink(self, missing_ok: bool = False):
         """
         Remove this file or link.
         If the path is a directory, use rmdir() instead.

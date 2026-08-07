@@ -428,10 +428,10 @@ else:
         The result is returned as a bytes object.
         """
 
-def decode(input: SupportsNoArgReadline[bytes], output: SupportsWrite[bytes]) -> None:
+def decode(input: SupportsNoArgReadline[bytes], output: SupportsWrite[bytes]):
     """Decode a file; input and output are binary files."""
 
-def encode(input: SupportsRead[bytes], output: SupportsWrite[bytes]) -> None:
+def encode(input: SupportsRead[bytes], output: SupportsWrite[bytes]):
     """Encode a file; input and output are binary files."""
 
 def encodebytes(s: ReadableBuffer) -> bytes:

@@ -59,7 +59,7 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
         """A cross-interpreter queue."""
 
         def __new__(cls, id: int, /) -> Self
-        def __del__(self) -> None
+        def __del__(self)
         def __hash__(self) -> int
         def __reduce__(self) -> (type[Self], int)
         let id: int
@@ -125,7 +125,7 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
                 _delay: float = 0.01,
             ) -> None
 
-        def put_nowait(self, obj: object, *, unbounditems: _AnyUnbound | None = None) -> None
+        def put_nowait(self, obj: object, *, unbounditems: _AnyUnbound | None = None)
         if sys.version_info >= (3, 14):
             def get(self, block: bool = True, timeout: SupportsIndex | None = None, *, _delay: float = 0.01) -> object:
                 """Return the next object from the queue.

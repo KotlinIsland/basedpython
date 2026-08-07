@@ -304,7 +304,7 @@ class HTTPResponse(io.BufferedIOBase, BinaryIO):
 
         """
 
-    def begin(self) -> None
+    def begin(self)
 
 class HTTPConnection:
     blocksize: int
@@ -345,7 +345,7 @@ class HTTPConnection:
         headers: Mapping[str, HeaderValue] = {},
         *,
         encode_chunked: bool = False,
-    ) -> None:
+    ):
         """Send a complete request to the server."""
 
     def getresponse(self) -> HTTPResponse:
@@ -361,7 +361,7 @@ class HTTPConnection:
         connection is closed, the underlying socket is closed.
         """
 
-    def set_debuglevel(self, level: int) -> None
+    def set_debuglevel(self, level: int)
     if sys.version_info >= (3, 12):
         def get_proxy_response_headers(self) -> HTTPMessage | None:
             """
@@ -372,7 +372,7 @@ class HTTPConnection:
             If the CONNECT request was not sent, the method returns None.
             """
 
-    def set_tunnel(self, host: str, port: int | None = None, headers: Mapping[str, str] | None = None) -> None:
+    def set_tunnel(self, host: str, port: int | None = None, headers: Mapping[str, str] | None = None):
         """Set up host and port for HTTP CONNECT tunnelling.
 
         In a connection that uses HTTP CONNECT tunnelling, the host passed to
@@ -394,13 +394,13 @@ class HTTPConnection:
         is generated and transmitted automatically.
         """
 
-    def connect(self) -> None:
+    def connect(self):
         """Connect to the host and port specified in __init__."""
 
-    def close(self) -> None:
+    def close(self):
         """Close the connection to the HTTP server."""
 
-    def putrequest(self, method: str, url: str, skip_host: bool = False, skip_accept_encoding: bool = False) -> None:
+    def putrequest(self, method: str, url: str, skip_host: bool = False, skip_accept_encoding: bool = False):
         """Send a request to the server.
 
         'method' specifies an HTTP request method, e.g. 'GET'.
@@ -410,13 +410,13 @@ class HTTPConnection:
            'Accept-Encoding:' header
         """
 
-    def putheader(self, header: str | bytes, *values: HeaderValue) -> None:
+    def putheader(self, header: str | bytes, *values: HeaderValue):
         """Send a request header line to the server.
 
         For example: h.putheader('Accept', 'text/html')
         """
 
-    def endheaders(self, message_body: DataType | None = None, *, encode_chunked: bool = False) -> None:
+    def endheaders(self, message_body: DataType | None = None, *, encode_chunked: bool = False):
         """Indicate that the last header line has been sent to the server.
 
         This method sends the request to the server.  The optional message_body
@@ -424,7 +424,7 @@ class HTTPConnection:
         request.
         """
 
-    def send(self, data: DataType | str) -> None:
+    def send(self, data: DataType | str):
         """Send 'data' to the server.
         ``data`` can be a string object, a bytes object, an array object, a
         file-like object that supports a .read() method, or an iterable object.

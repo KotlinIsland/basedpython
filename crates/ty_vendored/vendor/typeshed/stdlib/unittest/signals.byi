@@ -3,8 +3,8 @@ from collections.abc import Callable
 from typing import ParamSpec, TypeVar
 
 
-def installHandler() -> None
-def registerResult(result: unittest.result.TestResult) -> None
+def installHandler()
+def registerResult(result: unittest.result.TestResult)
 def removeResult(result: unittest.result.TestResult) -> bool
 
 def removeHandler(method: None = None) -> None

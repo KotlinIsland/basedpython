@@ -36,7 +36,7 @@ class FeedParser(Generic[_MessageT]):
         """
     init(self, _factory: () -> _MessageT, *, policy: Policy[_MessageT] = ...)
 
-    def feed(self, data: str) -> None:
+    def feed(self, data: str):
         """Push more data into the parser."""
 
     def close(self) -> _MessageT:
@@ -55,4 +55,4 @@ class BytesFeedParser(FeedParser[_MessageT]):
         """
     init(self, _factory: () -> _MessageT, *, policy: Policy[_MessageT] = ...)
 
-    def feed(self, data: bytes | bytearray) -> None
+    def feed(self, data: bytes | bytearray)

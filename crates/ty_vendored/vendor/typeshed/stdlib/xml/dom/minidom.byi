@@ -46,7 +46,7 @@ protocol _DOMErrorHandler:
 
 @type_check_only
 private protocol UserDataHandler:
-    def handle(self, operation: int, key: str, data: dynamic, src: Node, dst: Node) -> None
+    def handle(self, operation: int, key: str, data: dynamic, src: Node, dst: Node)
 
 def parse(
     file: str | SupportsRead[ReadableBuffer | str], parser: XMLReader | None = None, bufsize: int | None = None
@@ -140,16 +140,16 @@ class Node(xml.dom.Node):
     ) -> ChildNodeVar | None
 
     def removeChild[ChildNodeVar: NodesThatAreChildren](self: NodesWithChildren, oldChild: ChildNodeVar) -> ChildNodeVar
-    def normalize(self: NodesWithChildren) -> None
+    def normalize(self: NodesWithChildren)
     def cloneNode(self, deep: bool) -> Self | None
     def isSupported(self, feature: str, version: str | None) -> bool
     def isSameNode(self, other: Node) -> bool
     def getInterface(self, feature: str) -> Self | None
     def getUserData(self, key: str) -> dynamic | None
     def setUserData(self, key: str, data: dynamic, handler: UserDataHandler) -> dynamic
-    def unlink(self) -> None
+    def unlink(self)
     def __enter__(self) -> Self
-    def __exit__(self, et: type[BaseException] | None, ev: BaseException | None, tb: TracebackType | None) -> None
+    def __exit__(self, et: type[BaseException] | None, ev: BaseException | None, tb: TracebackType | None)
 
 
 class DocumentFragment(Node):
@@ -253,14 +253,14 @@ class NamedNodeMap:
     def __le__(self, other: NamedNodeMap) -> bool
     def __lt__(self, other: NamedNodeMap) -> bool
     def __getitem__(self, attname_or_tuple: NSName | str) -> Attr
-    def __setitem__(self, attname: str, value: Attr | str) -> None
+    def __setitem__(self, attname: str, value: Attr | str)
     def getNamedItem(self, name: str) -> Attr | None
     def getNamedItemNS(self, namespaceURI: str | None, localName: str) -> Attr | None
     def removeNamedItem(self, name: str) -> Attr
     def removeNamedItemNS(self, namespaceURI: str | None, localName: str) -> Attr
     def setNamedItem(self, node: Attr) -> Attr | None
     def setNamedItemNS(self, node: Attr) -> Attr | None
-    def __delitem__(self, attname_or_tuple: NSName | str) -> None
+    def __delitem__(self, attname_or_tuple: NSName | str)
 
 AttributeList = NamedNodeMap
 
@@ -321,14 +321,14 @@ class Element(Node):
         """
 
     def getAttributeNS(self, namespaceURI: str | None, localName: str) -> str
-    def setAttribute(self, attname: str, value: str) -> None
-    def setAttributeNS(self, namespaceURI: str | None, qualifiedName: str, value: str) -> None
+    def setAttribute(self, attname: str, value: str)
+    def setAttributeNS(self, namespaceURI: str | None, qualifiedName: str, value: str)
     def getAttributeNode(self, attrname: str) -> Attr | None
     def getAttributeNodeNS(self, namespaceURI: str | None, localName: str) -> Attr | None
     def setAttributeNode(self, attr: Attr) -> Attr | None
     setAttributeNodeNS = setAttributeNode
-    def removeAttribute(self, name: str) -> None
-    def removeAttributeNS(self, namespaceURI: str | None, localName: str) -> None
+    def removeAttribute(self, name: str)
+    def removeAttributeNS(self, namespaceURI: str | None, localName: str)
     def removeAttributeNode(self, node: Attr) -> Attr
     removeAttributeNodeNS = removeAttributeNode
     def hasAttribute(self, name: str) -> bool:
@@ -347,7 +347,7 @@ class Element(Node):
         """
 
     def getElementsByTagNameNS(self, namespaceURI: str | None, localName: str) -> NodeList[Element]
-    def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "") -> None:
+    def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = ""):
         """Write an XML element to a file-like object
 
         Write the element to the writer object that must provide
@@ -355,9 +355,9 @@ class Element(Node):
         """
 
     def hasAttributes(self) -> bool
-    def setIdAttribute(self, name: str) -> None
-    def setIdAttributeNS(self, namespaceURI: str | None, localName: str) -> None
-    def setIdAttributeNode(self, idAttr: Attr) -> None
+    def setIdAttribute(self, name: str)
+    def setIdAttributeNS(self, namespaceURI: str | None, localName: str)
+    def setIdAttributeNode(self, idAttr: Attr)
     override def insertBefore[ElementChildrenPlusFragment: ElementChildren | DocumentFragment](
         self, newChild: ElementChildrenPlusFragment, refChild: ElementChildren | None
     ) -> ElementChildrenPlusFragment
@@ -386,7 +386,7 @@ class Childless:
         self, newChild: NodesThatAreChildren | DocumentFragment, refChild: NodesThatAreChildren | None
     ) -> NoReturn
     def removeChild(self, oldChild: NodesThatAreChildren) -> NoReturn
-    def normalize(self) -> None
+    def normalize(self)
     def replaceChild(self, newChild: NodesThatAreChildren | DocumentFragment, oldChild: NodesThatAreChildren) -> NoReturn
 
 class ProcessingInstruction(Childless, Node):
@@ -411,7 +411,7 @@ class ProcessingInstruction(Childless, Node):
     data: str
 
     init(self, target: str, data: str)
-    def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "") -> None
+    def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "")
 
 class CharacterData(Childless, Node):
     __slots__ = ("_data", "ownerDocument", "parentNode", "previousSibling", "nextSibling")
@@ -432,10 +432,10 @@ class CharacterData(Childless, Node):
 
     def __len__(self) -> int
     def substringData(self, offset: int, count: int) -> str
-    def appendData(self, arg: str) -> None
-    def insertData(self, offset: int, arg: str) -> None
-    def deleteData(self, offset: int, count: int) -> None
-    def replaceData(self, offset: int, count: int, arg: str) -> None
+    def appendData(self, arg: str)
+    def insertData(self, offset: int, arg: str)
+    def deleteData(self, offset: int, count: int)
+    def replaceData(self, offset: int, count: int, arg: str)
 
 class Text(CharacterData):
     __slots__ = ()
@@ -457,7 +457,7 @@ class Text(CharacterData):
 
     data: str
     def splitText(self, offset: int) -> Self
-    def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "") -> None
+    def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "")
     def replaceWholeText(self, content: str) -> Self | None
     let isWhitespaceInElementContent: bool
 
@@ -481,7 +481,7 @@ class Comment(CharacterData):
     let localName: None
 
     init(self, data: str)
-    def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "") -> None
+    def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "")
 
 class CDATASection(Text):
     __slots__ = ()
@@ -541,7 +541,7 @@ class DocumentType(Identified, Childless, Node):
 
     init(self, qualifiedName: str | None)
     override def cloneNode(self, deep: bool) -> DocumentType | None
-    def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "") -> None
+    def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "")
 
 class Entity(Identified, Node):
     nodeType: ClassVar[6]
@@ -691,7 +691,7 @@ class Document(Node, DocumentLS):
         newl: str = "",
         encoding: str | None = None,
         standalone: bool | None = None,
-    ) -> None
+    )
 
     def renameNode(self, n: Element, namespaceURI: str, name: str) -> Element
     def renameNode(self, n: Attr, namespaceURI: str, name: str) -> Attr

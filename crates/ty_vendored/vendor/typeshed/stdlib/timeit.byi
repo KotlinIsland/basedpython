@@ -56,7 +56,7 @@ class Timer:
     ):
         """Constructor.  See class doc string."""
 
-    def print_exc(self, file: IO[str] | None = None) -> None:
+    def print_exc(self, file: IO[str] | None = None):
         """Helper to print a traceback from the timed code.
 
         Typical use:
@@ -157,7 +157,7 @@ def repeat(
 ) -> list[float]:
     """Convenience function to create Timer object and call repeat method."""
 
-def main(args: Sequence[str] | None = None, *, _wrap_timer: ((_Timer) -> _Timer) | None = None) -> None:
+def main(args: Sequence[str] | None = None, *, _wrap_timer: ((_Timer) -> _Timer) | None = None):
     """Main program, used when run as a script.
 
     The optional 'args' argument specifies the command line to be parsed,

@@ -9,10 +9,10 @@ if sys.platform != "win32":
     type _Completer = (str, int) -> (str | None)
     type _CompDisp = (str, Sequence[str], int) -> None
 
-    def parse_and_bind(string: str, /) -> None:
+    def parse_and_bind(string: str, /):
         """Execute the init line provided in the string argument."""
 
-    def read_init_file(filename: StrOrBytesPath | None = None, /) -> None:
+    def read_init_file(filename: StrOrBytesPath | None = None, /):
         """Execute a readline initialization file.
 
         The default filename is the last filename used.
@@ -21,25 +21,25 @@ if sys.platform != "win32":
     def get_line_buffer() -> str:
         """Return the current contents of the line buffer."""
 
-    def insert_text(string: str, /) -> None:
+    def insert_text(string: str, /):
         """Insert text into the line buffer at the cursor position."""
 
-    def redisplay() -> None:
+    def redisplay():
         """Change what's displayed on the screen to reflect contents of the line buffer."""
 
-    def read_history_file(filename: StrOrBytesPath | None = None, /) -> None:
+    def read_history_file(filename: StrOrBytesPath | None = None, /):
         """Load a readline history file.
 
         The default filename is ~/.history.
         """
 
-    def write_history_file(filename: StrOrBytesPath | None = None, /) -> None:
+    def write_history_file(filename: StrOrBytesPath | None = None, /):
         """Save a readline history file.
 
         The default filename is ~/.history.
         """
 
-    def append_history_file(nelements: int, filename: StrOrBytesPath | None = None, /) -> None:
+    def append_history_file(nelements: int, filename: StrOrBytesPath | None = None, /):
         """Append the last nelements items of the history list to file.
 
         The default filename is ~/.history.
@@ -48,13 +48,13 @@ if sys.platform != "win32":
     def get_history_length() -> int:
         """Return the maximum number of lines that will be written to the history file."""
 
-    def set_history_length(length: int, /) -> None:
+    def set_history_length(length: int, /):
         """Set the maximal number of lines which will be written to the history file.
 
         A negative length is used to inhibit history truncation.
         """
 
-    def clear_history() -> None:
+    def clear_history():
         """Clear the current readline history."""
 
     def get_current_history_length() -> int:
@@ -63,29 +63,29 @@ if sys.platform != "win32":
     def get_history_item(index: int, /) -> str:
         """Return the current contents of history item at one-based index."""
 
-    def remove_history_item(pos: int, /) -> None:
+    def remove_history_item(pos: int, /):
         """Remove history item given by its zero-based position."""
 
-    def replace_history_item(pos: int, line: str, /) -> None:
+    def replace_history_item(pos: int, line: str, /):
         """Replaces history item given by its position with contents of line.
 
         pos is zero-based.
         """
 
-    def add_history(string: str, /) -> None:
+    def add_history(string: str, /):
         """Add an item to the history buffer."""
 
-    def set_auto_history(enabled: bool, /) -> None:
+    def set_auto_history(enabled: bool, /):
         """Enables or disables automatic history."""
 
-    def set_startup_hook(function: (() -> object) | None = None, /) -> None:
+    def set_startup_hook(function: (() -> object) | None = None, /):
         """Set or remove the function invoked by the rl_startup_hook callback.
 
         The function is called with no arguments just
         before readline prints the first prompt.
         """
 
-    def set_pre_input_hook(function: (() -> object) | None = None, /) -> None:
+    def set_pre_input_hook(function: (() -> object) | None = None, /):
         """Set or remove the function invoked by the rl_pre_input_hook callback.
 
         The function is called with no arguments after the first prompt
@@ -93,7 +93,7 @@ if sys.platform != "win32":
         characters.
         """
 
-    def set_completer(function: _Completer | None = None, /) -> None:
+    def set_completer(function: _Completer | None = None, /):
         """Set or remove the completer function.
 
         The function is called as function(text, state),
@@ -113,13 +113,13 @@ if sys.platform != "win32":
     def get_endidx() -> int:
         """Get the ending index of the completion scope."""
 
-    def set_completer_delims(string: str, /) -> None:
+    def set_completer_delims(string: str, /):
         """Set the word delimiters for completion."""
 
     def get_completer_delims() -> str:
         """Get the word delimiters for completion."""
 
-    def set_completion_display_matches_hook(function: _CompDisp | None = None, /) -> None:
+    def set_completion_display_matches_hook(function: _CompDisp | None = None, /):
         """Set or remove the completion display function.
 
         The function is called as

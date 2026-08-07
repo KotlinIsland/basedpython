@@ -45,7 +45,7 @@ class Token:
     id: str | bytes | int | None
     init(self, typeid: bytes | str | None, address: _Address | None, id: str | bytes | int | None)
     def __getstate__(self) -> (str | bytes | None, (str | bytes, int), str | bytes | int | None)
-    def __setstate__(self, state: (str | bytes | None, (str | bytes, int), str | bytes | int | None)) -> None
+    def __setstate__(self, state: (str | bytes | None, (str | bytes, int), str | bytes | int | None))
 
 class BaseProxy:
     """
@@ -65,7 +65,7 @@ class BaseProxy:
         manager_owned: bool = False,
     )
     def __deepcopy__(self, memo: dynamic | None) -> dynamic
-    def _callmethod(self, methodname: str, args: (*: dynamic) = (), kwds: dict[dynamic, dynamic] = {}) -> None:
+    def _callmethod(self, methodname: str, args: (*: dynamic) = (), kwds: dict[dynamic, dynamic] = {}):
         """
         Try to call a method of the referent and return a copy of the result
         """
@@ -79,7 +79,7 @@ class BaseProxy:
 
 class ValueProxy[in out Element](BaseProxy):
     def get(self) -> Element
-    def set(self, value: Element) -> None
+    def set(self, value: Element)
     value: Element
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
@@ -93,8 +93,8 @@ if sys.version_info >= (3, 13):
         __builtins__: ClassVar[dict[str, dynamic]]
         def __len__(self) -> int
         def __getitem__(self, key: Key, /) -> Value
-        def __setitem__(self, key: Key, value: Value, /) -> None
-        def __delitem__(self, key: Key, /) -> None
+        def __setitem__(self, key: Key, value: Value, /)
+        def __delitem__(self, key: Key, /)
         def __iter__(self) -> Iterator[Key]
         def copy(self) -> dict[Key, Value]
 
@@ -159,23 +159,23 @@ if sys.version_info >= (3, 14):
     class _BaseSetProxy[in out Element](BaseProxy, MutableSet[Element]):
         __builtins__: ClassVar[dict[str, dynamic]]
         # Copied from builtins.set
-        def add(self, element: Element, /) -> None
+        def add(self, element: Element, /)
         def copy(self) -> set[Element]
-        def clear(self) -> None
+        def clear(self)
         def difference(self, *s: Iterable[dynamic]) -> set[Element]
-        def difference_update(self, *s: Iterable[dynamic]) -> None
-        def discard(self, element: Element, /) -> None
+        def difference_update(self, *s: Iterable[dynamic])
+        def discard(self, element: Element, /)
         def intersection(self, *s: Iterable[dynamic]) -> set[Element]
-        def intersection_update(self, *s: Iterable[dynamic]) -> None
+        def intersection_update(self, *s: Iterable[dynamic])
         def isdisjoint(self, s: Iterable[dynamic], /) -> bool
         def issubset(self, s: Iterable[dynamic], /) -> bool
         def issuperset(self, s: Iterable[dynamic], /) -> bool
         def pop(self) -> Element
-        def remove(self, element: Element, /) -> None
+        def remove(self, element: Element, /)
         def symmetric_difference(self, s: Iterable[Element], /) -> set[Element]
-        def symmetric_difference_update(self, s: Iterable[Element], /) -> None
+        def symmetric_difference_update(self, s: Iterable[Element], /)
         def union[Other](self, *s: Iterable[Other]) -> set[Element | Other]
-        def update(self, *s: Iterable[Element]) -> None
+        def update(self, *s: Iterable[Element])
         def __len__(self) -> int
         def __contains__(self, o: object, /) -> bool
         def __iter__(self) -> Iterator[Element]
@@ -225,7 +225,7 @@ class BaseListProxy[in out Element](BaseProxy, MutableSequence[Element]):
     override def remove(self, value: Element, /) -> None
     if sys.version_info >= (3, 14):
         # Next methods are copied from builtins.list
-        def clear(self) -> None
+        def clear(self)
         def copy(self) -> list[Element]
 
     # Use BaseListProxy[SupportsRichComparisonT] for the first overload rather than [SupportsRichComparison]
@@ -266,18 +266,18 @@ class Server:
         authkey: bytes,
         serializer: str,
     )
-    def serve_forever(self) -> None:
+    def serve_forever(self):
         """
         Run the server forever
         """
 
-    def accepter(self) -> None
-    def handle_request(self, conn: ServerConnection) -> None:
+    def accepter(self)
+    def handle_request(self, conn: ServerConnection):
         """
         Handle a new connection
         """
 
-    def serve_client(self, conn: ServerConnection) -> None:
+    def serve_client(self, conn: ServerConnection):
         """
         Handle requests from the proxies in a particular process/thread
         """
@@ -285,7 +285,7 @@ class Server:
     def fallback_getvalue[Element](self, conn: ServerConnection, ident: str, obj: Element) -> Element
     def fallback_str(self, conn: ServerConnection, ident: str, obj: dynamic) -> str
     def fallback_repr(self, conn: ServerConnection, ident: str, obj: dynamic) -> str
-    def dummy(self, c: ServerConnection) -> None
+    def dummy(self, c: ServerConnection)
     def debug_info(self, c: ServerConnection) -> str:
         """
         Return some info --- useful to spot problems with refcounting
@@ -296,7 +296,7 @@ class Server:
         Number of shared objects
         """
 
-    def shutdown(self, c: ServerConnection) -> None:
+    def shutdown(self, c: ServerConnection):
         """
         Shutdown this process
         """
@@ -311,13 +311,13 @@ class Server:
         Return the methods of the shared object indicated by token
         """
 
-    def accept_connection(self, c: ServerConnection, name: str) -> None:
+    def accept_connection(self, c: ServerConnection, name: str):
         """
         Spawn a new thread to serve this connection
         """
 
-    def incref(self, c: ServerConnection, ident: str) -> None
-    def decref(self, c: ServerConnection, ident: str) -> None
+    def incref(self, c: ServerConnection, ident: str)
+    def decref(self, c: ServerConnection, ident: str)
 
 class BaseManager:
     """
@@ -348,18 +348,18 @@ class BaseManager:
         Return server object with serve_forever() method and address attribute
         """
 
-    def connect(self) -> None:
+    def connect(self):
         """
         Connect manager object to the server process
         """
 
-    def start(self, initializer: (...) -> object | None = None, initargs: Iterable[dynamic] = ()) -> None:
+    def start(self, initializer: (...) -> object | None = None, initargs: Iterable[dynamic] = ()):
         """
         Spawn a server process for this manager object
         """
 
     shutdown: _Finalize  # only available after start() was called
-    def join(self, timeout: float | None = None) -> None:  # undocumented
+    def join(self, timeout: float | None = None):  # undocumented
         """
         Join the manager process (if it has been spawned)
         """
@@ -373,7 +373,7 @@ class BaseManager:
         exposed: Sequence[str] | None = None,
         method_to_typeid: Mapping[str, str] | None = None,
         create_method: bool = True,
-    ) -> None:
+    ):
         """
         Register a typeid with the manager type
         """
@@ -381,7 +381,7 @@ class BaseManager:
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None
+    )
 
 class SyncManager(BaseManager):
     """
@@ -438,10 +438,10 @@ class SyncManager(BaseManager):
 class RemoteError(Exception)
 
 class SharedMemoryServer(Server):
-    def track_segment(self, c: ServerConnection, segment_name: str) -> None:
+    def track_segment(self, c: ServerConnection, segment_name: str):
         """Adds the supplied shared memory block name to Server's tracker."""
 
-    def release_segment(self, c: ServerConnection, segment_name: str) -> None:
+    def release_segment(self, c: ServerConnection, segment_name: str):
         """Calls unlink() on the shared memory block with the supplied name
         and removes it from the tracker instance inside the Server.
         """
@@ -474,4 +474,4 @@ class SharedMemoryManager(BaseManager):
         from the input sequence, to be tracked by the manager.
         """
 
-    def __del__(self) -> None
+    def __del__(self)

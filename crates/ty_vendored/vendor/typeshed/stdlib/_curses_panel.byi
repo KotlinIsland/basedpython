@@ -13,35 +13,35 @@ final class panel:
     def below(self) -> panel:
         """Return the panel below the current panel."""
 
-    def bottom(self) -> None:
+    def bottom(self):
         """Push the panel to the bottom of the stack."""
 
     def hidden(self) -> bool:
         """Return True if the panel is hidden (not visible), False otherwise."""
 
-    def hide(self) -> None:
+    def hide(self):
         """Hide the panel.
 
         This does not delete the object, it just makes the window on screen
         invisible.
         """
 
-    def move(self, y: int, x: int, /) -> None:
+    def move(self, y: int, x: int, /):
         """Move the panel to the screen coordinates (y, x)."""
 
-    def replace(self, win: _window, /) -> None:
+    def replace(self, win: _window, /):
         """Change the window associated with the panel to the window win."""
 
-    def set_userptr(self, obj: object, /) -> None:
+    def set_userptr(self, obj: object, /):
         """Set the panel's user pointer to obj."""
 
-    def show(self) -> None:
+    def show(self):
         """Display the panel (which might have been hidden).
 
         The panel is placed on top of the panel stack.
         """
 
-    def top(self) -> None:
+    def top(self):
         """Push panel to the top of the stack."""
 
     def userptr(self) -> object:

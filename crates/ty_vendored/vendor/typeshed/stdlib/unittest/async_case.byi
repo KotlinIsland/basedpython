@@ -15,7 +15,7 @@ class IsolatedAsyncioTestCase(TestCase):
 
     async def asyncSetUp(self) -> None
     async def asyncTearDown(self) -> None
-    def addAsyncCleanup[Parameters: (*: *, **: *)](self, func: (**Parameters) -> Awaitable[object], /, *args: Parameters.args, **kwargs: Parameters.kwargs) -> None
+    def addAsyncCleanup[Parameters: (*: *, **: *)](self, func: (**Parameters) -> Awaitable[object], /, *args: Parameters.args, **kwargs: Parameters.kwargs)
     if sys.version_info >= (3, 11):
         async def enterAsyncContext[Element](self, cm: AbstractAsyncContextManager[Element]) -> Element:
             """Enters the supplied asynchronous context manager.
@@ -24,4 +24,4 @@ class IsolatedAsyncioTestCase(TestCase):
             function and returns the result of the __aenter__ method.
             """
 
-    def __del__(self) -> None
+    def __del__(self)

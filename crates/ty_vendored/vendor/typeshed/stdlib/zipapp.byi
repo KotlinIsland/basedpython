@@ -15,7 +15,7 @@ def create_archive(
     main: str | None = None,
     filter: ((Path) -> bool) | None = None,
     compressed: bool = False,
-) -> None:
+):
     """Create an application archive from SOURCE.
 
     The SOURCE can be the name of a directory, or a filename or a file-like

@@ -27,7 +27,7 @@ if sys.version_info >= (3, 12):
 
         init(self, *args: object, **kwargs: object)
         def __getstate__(self) -> (list[object], dict[object, object])
-        def __setstate__(self, state: Sequence[(list[object], dict[object, object])]) -> None
+        def __setstate__(self, state: Sequence[(list[object], dict[object, object])])
 
     class CompleteDirs(InitializedState, ZipFile):
         """

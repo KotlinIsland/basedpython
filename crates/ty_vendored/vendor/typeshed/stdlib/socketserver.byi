@@ -211,13 +211,13 @@ class BaseServer:
     ):
         """Constructor.  May be extended, do not override."""
 
-    def handle_request(self) -> None:
+    def handle_request(self):
         """Handle one request, possibly blocking.
 
         Respects self.timeout.
         """
 
-    def serve_forever(self, poll_interval: float = 0.5) -> None:
+    def serve_forever(self, poll_interval: float = 0.5):
         """Handle one request at a time until shutdown.
 
         Polls for shutdown every poll_interval seconds. Ignores
@@ -225,7 +225,7 @@ class BaseServer:
         another thread.
         """
 
-    def shutdown(self) -> None:
+    def shutdown(self):
         """Stops the serve_forever loop.
 
         Blocks until the loop has finished. This must be called while
@@ -233,38 +233,38 @@ class BaseServer:
         deadlock.
         """
 
-    def server_close(self) -> None:
+    def server_close(self):
         """Called to clean-up the server.
 
         May be overridden.
 
         """
 
-    def finish_request(self, request: _RequestType, client_address: _RetAddress) -> None:
+    def finish_request(self, request: _RequestType, client_address: _RetAddress):
         """Finish one request by instantiating RequestHandlerClass."""
 
     def get_request(self) -> (dynamic, dynamic)  # Not implemented here, but expected to exist on subclasses
-    def handle_error(self, request: _RequestType, client_address: _RetAddress) -> None:
+    def handle_error(self, request: _RequestType, client_address: _RetAddress):
         """Handle an error gracefully.  May be overridden.
 
         The default is to print a traceback and continue.
 
         """
 
-    def handle_timeout(self) -> None:
+    def handle_timeout(self):
         """Called if no new request arrives within self.timeout.
 
         Overridden by ForkingMixIn.
         """
 
-    def process_request(self, request: _RequestType, client_address: _RetAddress) -> None:
+    def process_request(self, request: _RequestType, client_address: _RetAddress):
         """Call finish_request.
 
         Overridden by ForkingMixIn and ThreadingMixIn.
 
         """
 
-    def server_activate(self) -> None:
+    def server_activate(self):
         """Called by constructor to activate the server.
 
         May be overridden.
@@ -281,18 +281,18 @@ class BaseServer:
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: types.TracebackType | None
-    ) -> None
-    def service_actions(self) -> None:
+    )
+    def service_actions(self):
         """Called by the serve_forever() loop.
 
         May be overridden by a subclass / Mixin to implement any code that
         needs to be run during the loop.
         """
 
-    def shutdown_request(self, request: _RequestType) -> None:  # undocumented
+    def shutdown_request(self, request: _RequestType):  # undocumented
         """Called to shutdown and close an individual request."""
 
-    def close_request(self, request: _RequestType) -> None:  # undocumented
+    def close_request(self, request: _RequestType):  # undocumented
         """Called to clean up an individual request."""
 
 class TCPServer(BaseServer):
@@ -372,7 +372,7 @@ class TCPServer(BaseServer):
 
         """
 
-    def server_bind(self) -> None:
+    def server_bind(self):
         """Called by constructor to bind the socket.
 
         May be overridden.
@@ -414,42 +414,42 @@ if sys.platform != "win32":
         active_children: set[int] | None  # undocumented
         max_children: int  # undocumented
         block_on_close: bool
-        def collect_children(self, *, blocking: bool = False) -> None:  # undocumented
+        def collect_children(self, *, blocking: bool = False):  # undocumented
             """Internal routine to wait for children that have exited."""
 
-        def handle_timeout(self) -> None:  # undocumented
+        def handle_timeout(self):  # undocumented
             """Wait for zombies after self.timeout seconds of inactivity.
 
             May be extended, do not override.
             """
 
-        def service_actions(self) -> None:  # undocumented
+        def service_actions(self):  # undocumented
             """Collect the zombie child processes regularly in the ForkingMixIn.
 
             service_actions is called in the BaseServer's serve_forever loop.
             """
 
-        def process_request(self, request: _RequestType, client_address: _RetAddress) -> None:
+        def process_request(self, request: _RequestType, client_address: _RetAddress):
             """Fork a new subprocess to process the request."""
 
-        def server_close(self) -> None
+        def server_close(self)
 
 class ThreadingMixIn:
     """Mix-in class to handle each request in a new thread."""
 
     daemon_threads: bool
     block_on_close: bool
-    def process_request_thread(self, request: _RequestType, client_address: _RetAddress) -> None:  # undocumented
+    def process_request_thread(self, request: _RequestType, client_address: _RetAddress):  # undocumented
         """Same as in BaseServer but as a thread.
 
         In addition, exception handling is done here.
 
         """
 
-    def process_request(self, request: _RequestType, client_address: _RetAddress) -> None:
+    def process_request(self, request: _RequestType, client_address: _RetAddress):
         """Start a new thread to process the request."""
 
-    def server_close(self) -> None
+    def server_close(self)
 
 if sys.platform != "win32":
     class ForkingTCPServer(ForkingMixIn, TCPServer)
@@ -492,9 +492,9 @@ class BaseRequestHandler:
     client_address: _RetAddress
     server: BaseServer
     init(self, request: _RequestType, client_address: _RetAddress, server: BaseServer)
-    def setup(self) -> None
-    def handle(self) -> None
-    def finish(self) -> None
+    def setup(self)
+    def handle(self)
+    def finish(self)
 
 class StreamRequestHandler(BaseRequestHandler):
     """Define self.rfile and self.wfile for stream sockets."""

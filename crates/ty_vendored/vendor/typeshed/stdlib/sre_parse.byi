@@ -40,9 +40,9 @@ class State:
     lookbehindgroups: int | None
     let groups: int
     def opengroup(self, name: str | None = None) -> int
-    def closegroup(self, gid: int, p: SubPattern) -> None
+    def closegroup(self, gid: int, p: SubPattern)
     def checkgroup(self, gid: int) -> bool
-    def checklookbehindgroup(self, gid: int, source: Tokenizer) -> None
+    def checklookbehindgroup(self, gid: int, source: Tokenizer)
 
 class SubPattern:
     data: list[CodeType]
@@ -50,13 +50,13 @@ class SubPattern:
     state: State
 
     init(self, state: State, data: list[CodeType] | None = None)
-    def dump(self, level: int = 0) -> None
+    def dump(self, level: int = 0)
     def __len__(self) -> int
-    def __delitem__(self, index: int | slice) -> None
+    def __delitem__(self, index: int | slice)
     def __getitem__(self, index: int | slice) -> SubPattern | CodeType
-    def __setitem__(self, index: int | slice, code: CodeType) -> None
-    def insert(self, index: int, code: CodeType) -> None
-    def append(self, code: CodeType) -> None
+    def __setitem__(self, index: int | slice, code: CodeType)
+    def insert(self, index: int, code: CodeType)
+    def append(self, code: CodeType)
     def getwidth(self) -> (int, int)
 
 class Tokenizer:
@@ -72,7 +72,7 @@ class Tokenizer:
     def getuntil(self, terminator: str, name: str) -> str
     let pos: int
     def tell(self) -> int
-    def seek(self, index: int) -> None
+    def seek(self, index: int)
     def error(self, msg: str, offset: int = 0) -> _Error
 
     if sys.version_info >= (3, 12):

@@ -311,7 +311,7 @@ if sys.platform != "win32":
         done using the symbolic constants defined in this module.
         """
 
-    def tcsetattr(fd: FileDescriptorLike, when: int, attributes: _Attr, /) -> None:
+    def tcsetattr(fd: FileDescriptorLike, when: int, attributes: _Attr, /):
         """Set the tty attributes for file descriptor fd.
 
         The attributes to be set are taken from the attributes argument, which
@@ -322,17 +322,17 @@ if sys.platform != "win32":
         queued output and discarding all queued input.
         """
 
-    def tcsendbreak(fd: FileDescriptorLike, duration: int, /) -> None:
+    def tcsendbreak(fd: FileDescriptorLike, duration: int, /):
         """Send a break on file descriptor fd.
 
         A zero duration sends a break for 0.25-0.5 seconds; a nonzero duration
         has a system dependent meaning.
         """
 
-    def tcdrain(fd: FileDescriptorLike, /) -> None:
+    def tcdrain(fd: FileDescriptorLike, /):
         """Wait until all output written to file descriptor fd has been transmitted."""
 
-    def tcflush(fd: FileDescriptorLike, queue: int, /) -> None:
+    def tcflush(fd: FileDescriptorLike, queue: int, /):
         """Discard queued data on file descriptor fd.
 
         The queue selector specifies which queue: termios.TCIFLUSH for the input
@@ -340,7 +340,7 @@ if sys.platform != "win32":
         both queues.
         """
 
-    def tcflow(fd: FileDescriptorLike, action: int, /) -> None:
+    def tcflow(fd: FileDescriptorLike, action: int, /):
         """Suspend or resume input or output on file descriptor fd.
 
         The action argument can be termios.TCOOFF to suspend output,
@@ -355,7 +355,7 @@ if sys.platform != "win32":
             Returns a tuple (ws_row, ws_col).
             """
 
-        def tcsetwinsize(fd: FileDescriptorLike, winsize: (int, int), /) -> None:
+        def tcsetwinsize(fd: FileDescriptorLike, winsize: (int, int), /):
             """Set the tty winsize for file descriptor fd.
 
             The winsize to be set is taken from the winsize argument, which

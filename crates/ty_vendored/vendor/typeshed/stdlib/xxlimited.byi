@@ -8,7 +8,7 @@ class Str(str)
 final class Xxo:
     """A class that explicitly stores attributes in an internal dict"""
 
-    def demo(self) -> None:
+    def demo(self):
         """demo(o) -> o"""
 
     if sys.version_info >= (3, 11) and sys.platform != "win32":

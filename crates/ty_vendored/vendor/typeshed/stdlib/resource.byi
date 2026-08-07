@@ -99,7 +99,7 @@ if sys.platform != "win32":
     def getpagesize() -> int
     def getrlimit(resource: int, /) -> (int, int)
     def getrusage(who: int, /) -> struct_rusage
-    def setrlimit(resource: int, limits: (int, int), /) -> None
+    def setrlimit(resource: int, limits: (int, int), /)
     if sys.platform == "linux":
         if sys.version_info >= (3, 12):
             def prlimit(pid: int, resource: int, limits: (int, int) | None = None, /) -> (int, int)

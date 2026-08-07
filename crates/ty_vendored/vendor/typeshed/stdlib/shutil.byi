@@ -68,7 +68,7 @@ class RegistryError(Exception):
     and unpacking registries fails
     """
 
-def copyfileobj(fsrc: SupportsRead[AnyStr], fdst: SupportsWrite[AnyStr], length: int = 0) -> None:
+def copyfileobj(fsrc: SupportsRead[AnyStr], fdst: SupportsWrite[AnyStr], length: int = 0):
     """copy data from file-like object fsrc to file-like object fdst"""
 
 def copyfile[StrOrBytesPathT: StrOrBytesPath](src: StrOrBytesPath, dst: StrOrBytesPathT, *, follow_symlinks: bool = True) -> StrOrBytesPathT:
@@ -79,7 +79,7 @@ def copyfile[StrOrBytesPathT: StrOrBytesPath](src: StrOrBytesPath, dst: StrOrByt
 
     """
 
-def copymode(src: StrOrBytesPath, dst: StrOrBytesPath, *, follow_symlinks: bool = True) -> None:
+def copymode(src: StrOrBytesPath, dst: StrOrBytesPath, *, follow_symlinks: bool = True):
     """Copy mode bits from src to dst.
 
     If follow_symlinks is not set, symlinks aren't followed if and only
@@ -88,7 +88,7 @@ def copymode(src: StrOrBytesPath, dst: StrOrBytesPath, *, follow_symlinks: bool 
 
     """
 
-def copystat(src: StrOrBytesPath, dst: StrOrBytesPath, *, follow_symlinks: bool = True) -> None:
+def copystat(src: StrOrBytesPath, dst: StrOrBytesPath, *, follow_symlinks: bool = True):
     """Copy file metadata
 
     Copy the permission bits, last access time, last modification time, and
@@ -427,10 +427,10 @@ def register_archive_format(
     name: str, function: (str, str) -> object, extra_args: None = None, description: str = ""
 ) -> None
 
-def unregister_archive_format(name: str) -> None
+def unregister_archive_format(name: str)
 def unpack_archive(
     filename: StrPath, extract_dir: StrPath | None = None, format: str | None = None, *, filter: _TarfileFilter | None = None
-) -> None:
+):
     """Unpack an archive.
 
     `filename` is the name of the archive.
@@ -475,7 +475,7 @@ def register_unpack_format(
     name: str, extensions: list[str], function: (str, str) -> object, extra_args: None = None, description: str = ""
 ) -> None
 
-def unregister_unpack_format(name: str) -> None:
+def unregister_unpack_format(name: str):
     """Removes the pack format from the registry."""
 
 def get_unpack_formats() -> list[(str, list[str], str)]:

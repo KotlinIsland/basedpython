@@ -107,7 +107,7 @@ type _TokenInfo = (int, str, Coord, Coord, str)
 class TokenError(Exception)
 class StopTokenizing(Exception)
 
-def tokenize(readline: () -> str, tokeneater: TokenEater = ...) -> None:
+def tokenize(readline: () -> str, tokeneater: TokenEater = ...):
     """
     The tokenize() function accepts two parameters: one representing the
     input stream, and one providing an output mechanism for tokenize().
@@ -125,9 +125,9 @@ class Untokenizer:
     tokens: list[str]
     prev_row: int
     prev_col: int
-    def add_whitespace(self, start: Coord) -> None
+    def add_whitespace(self, start: Coord)
     def untokenize(self, iterable: Iterable[_TokenInfo]) -> str
-    def compat(self, token: (int, str), iterable: Iterable[_TokenInfo]) -> None
+    def compat(self, token: (int, str), iterable: Iterable[_TokenInfo])
 
 def untokenize(iterable: Iterable[_TokenInfo]) -> str:
     """Transform tokens back into Python source code.

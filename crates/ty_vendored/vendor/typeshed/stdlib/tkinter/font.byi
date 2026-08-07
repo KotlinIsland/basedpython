@@ -80,7 +80,7 @@ class Font:
         overstrike: bool = ...,
     )
     __hash__: ClassVar[None]
-    def __setitem__(self, key: str, value: dynamic) -> None
+    def __setitem__(self, key: str, value: dynamic)
 
     def cget(self, option: "family") -> str:
         """Get font attribute"""
@@ -130,7 +130,7 @@ class Font:
         """Return text width"""
 
     override def __eq__(self, other: object) -> bool
-    def __del__(self) -> None
+    def __del__(self)
 
 def families(root: tkinter.Misc | None = None, displayof: tkinter.Misc | None = None) -> (*: str):
     """Get font families (as a tuple)"""

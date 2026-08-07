@@ -53,16 +53,16 @@ private type TkinterTraceFunc = ((*: str)) -> object
 # Tkapp_UnicodeResult, and it returns a string when it succeeds.
 final class TkappType:
     # Please keep in sync with tkinter.Tk
-    def adderrorinfo(self, msg: str, /) -> None
+    def adderrorinfo(self, msg: str, /)
     def call(self, command: dynamic, /, *args: dynamic) -> dynamic
     # TODO: Figure out what arguments the following `func` callbacks should accept
-    def createcommand(self, name: str, func: (...) -> object, /) -> None
+    def createcommand(self, name: str, func: (...) -> object, /)
     if sys.platform != "win32":
-        def createfilehandler(self, file: FileDescriptorLike, mask: int, func: (...) -> object, /) -> None
-        def deletefilehandler(self, file: FileDescriptorLike, /) -> None
+        def createfilehandler(self, file: FileDescriptorLike, mask: int, func: (...) -> object, /)
+        def deletefilehandler(self, file: FileDescriptorLike, /)
 
     def createtimerhandler(self, milliseconds: int, func: (...) -> object, /)
-    def deletecommand(self, name: str, /) -> None
+    def deletecommand(self, name: str, /)
     def dooneevent(self, flags: int = 0, /) -> int
     def eval(self, script: str, /) -> str
     def evalfile(self, fileName: str, /) -> str
@@ -78,9 +78,9 @@ final class TkappType:
     def globalsetvar(self, *args, **kwargs)
     def globalunsetvar(self, *args, **kwargs)
     def interpaddr(self) -> int
-    def loadtk(self) -> None
-    def mainloop(self, threshold: int = 0, /) -> None
-    def quit(self) -> None
+    def loadtk(self)
+    def mainloop(self, threshold: int = 0, /)
+    def quit(self)
     def record(self, script: str, /) -> str
     def setvar(self, *ags, **kwargs)
     if sys.version_info < (3, 11):
@@ -97,12 +97,12 @@ final class TkappType:
 
     def wantobjects(self, wantobjects: 0 | 1 | bool, /) -> None
 
-    def willdispatch(self) -> None
+    def willdispatch(self)
     if sys.version_info >= (3, 12):
         def gettrace(self, /) -> TkinterTraceFunc | None:
             """Get the tracing function."""
 
-        def settrace(self, func: TkinterTraceFunc | None, /) -> None:
+        def settrace(self, func: TkinterTraceFunc | None, /):
             """Set the tracing function."""
 
 # These should be kept in sync with tkinter.tix constants, except ALL_EVENTS which doesn't match TCL_ALL_EVENTS
@@ -121,7 +121,7 @@ final TCL_VERSION: str
 final TK_VERSION: str
 
 final class TkttType:
-    def deletetimerhandler(self) -> None
+    def deletetimerhandler(self)
 
 if sys.version_info >= (3, 13):
     def create(
@@ -170,7 +170,7 @@ else:
 def getbusywaitinterval() -> int:
     """Return the current busy-wait interval between successive calls to Tcl_DoOneEvent in a threaded Python interpreter."""
 
-def setbusywaitinterval(new_val: int, /) -> None:
+def setbusywaitinterval(new_val: int, /):
     """Set the busy-wait interval in milliseconds between successive calls to Tcl_DoOneEvent in a threaded Python interpreter.
 
     It should be set to a divisor of the maximum time between frames in

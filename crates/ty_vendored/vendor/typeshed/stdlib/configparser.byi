@@ -431,7 +431,7 @@ class RawConfigParser(_Parser):
     def sections(self) -> _SectionNameList:
         """Return a list of section names, excluding [DEFAULT]"""
 
-    def add_section(self, section: _SectionName) -> None:
+    def add_section(self, section: _SectionName):
         """Create a new section in the configuration.
 
         Raise DuplicateSectionError if a section by the specified name
@@ -469,7 +469,7 @@ class RawConfigParser(_Parser):
     def read(self, filenames: Iterable[BytesPath], encoding: str | None = None) -> list[bytes]
     def read(self, filenames: Iterable[StrOrBytesPath], encoding: str | None = None) -> list[str | bytes]
 
-    def read_file(self, f: Iterable[str], source: str | None = None) -> None:
+    def read_file(self, f: Iterable[str], source: str | None = None):
         """Like read() but the argument must be a file-like object.
 
         The `f` argument must be iterable, returning one line at a time.
@@ -478,10 +478,10 @@ class RawConfigParser(_Parser):
         `name` attribute, `<???>` is used.
         """
 
-    def read_string(self, string: str, source: str = "<string>") -> None:
+    def read_string(self, string: str, source: str = "<string>"):
         """Read configuration from a given string."""
 
-    def read_dict(self, dictionary: Mapping[str, Mapping[str, dynamic]], source: str = "<dict>") -> None:
+    def read_dict(self, dictionary: Mapping[str, Mapping[str, dynamic]], source: str = "<dict>"):
         """Read configuration from a dictionary.
 
         Keys are section names, values are dictionaries with keys and values
@@ -561,10 +561,10 @@ class RawConfigParser(_Parser):
         """
     def items(self, section: _SectionName, raw: bool = False, vars: _Section | None = None) -> list[(str, str)]
 
-    def set(self, section: _SectionName, option: str, value: str | None = None) -> None:
+    def set(self, section: _SectionName, option: str, value: str | None = None):
         """Set an option."""
 
-    def write(self, fp: SupportsWrite[str], space_around_delimiters: bool = True) -> None:
+    def write(self, fp: SupportsWrite[str], space_around_delimiters: bool = True):
         """Write an .ini-format representation of the configuration state.
 
         If `space_around_delimiters` is True (the default), delimiters
@@ -771,7 +771,7 @@ class ParsingError(Error):
         @deprecated("The `filename` parameter removed in Python 3.12. Use `source` instead.")
         def __init__(self, source: None = None, *, filename: str | None) -> None
 
-    def append(self, lineno: int, line: str) -> None
+    def append(self, lineno: int, line: str)
 
     if sys.version_info < (3, 12):
         @property

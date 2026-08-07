@@ -33,7 +33,7 @@ class build_py(Command):
     def find_data_files(self, package, src_dir):
         """Return filenames for package's data files in 'src_dir'"""
 
-    def build_package_data(self) -> None:
+    def build_package_data(self):
         """Copy data files into build directory"""
 
     def get_package_dir(self, package):
@@ -67,9 +67,9 @@ class build_py(Command):
     def get_module_outfile(self, build_dir, package, module)
     def get_outputs(self, include_bytecode: bool | 0 | 1 = 1) -> list[str]
     def build_module(self, module, module_file, package)
-    def build_modules(self) -> None
-    def build_packages(self) -> None
-    def byte_compile(self, files) -> None
+    def build_modules(self)
+    def build_packages(self)
+    def byte_compile(self, files)
 
 class build_py_2to3(build_py, Mixin2to3):
     updated_files: Incomplete

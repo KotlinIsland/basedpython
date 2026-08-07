@@ -135,7 +135,7 @@ class Charset:
 
 def add_charset(
     charset: str, header_enc: int | None = None, body_enc: int | None = None, output_charset: str | None = None
-) -> None:
+):
     """Add character set properties to the global registry.
 
     charset is the input character set, and must be the canonical name of a
@@ -159,14 +159,14 @@ def add_charset(
     documentation for more information.
     """
 
-def add_alias(alias: str, canonical: str) -> None:
+def add_alias(alias: str, canonical: str):
     """Add a character set alias.
 
     alias is the alias name, e.g. latin-1
     canonical is the character set's canonical name, e.g. iso-8859-1
     """
 
-def add_codec(charset: str, codecname: str) -> None:
+def add_codec(charset: str, codecname: str):
     """Add a codec that map characters in the given charset to/from Unicode.
 
     charset is the canonical name of a character set.  codecname is the name

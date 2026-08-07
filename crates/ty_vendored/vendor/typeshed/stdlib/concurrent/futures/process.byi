@@ -62,11 +62,11 @@ class _ThreadWakeup:
     # Any: Unused send and recv methods
     _reader: Connection[dynamic, dynamic]
     _writer: Connection[dynamic, dynamic]
-    def close(self) -> None
-    def wakeup(self) -> None
-    def clear(self) -> None
+    def close(self)
+    def wakeup(self)
+    def clear(self)
 
-def _python_exit() -> None
+def _python_exit()
 
 EXTRA_QUEUED_CALLS: Final = 1
 
@@ -137,7 +137,7 @@ class _SafeQueue(Queue[Future[dynamic]]):
             thread_wakeup: _ThreadWakeup,
         ) -> None
 
-    def _on_queue_feeder_error(self, e: Exception, obj: _CallItem) -> None
+    def _on_queue_feeder_error(self, e: Exception, obj: _CallItem)
 
 def _get_chunks(*iterables: dynamic, chunksize: int) -> Generator[(*: dynamic)]:
     """Iterates over zip()ed iterables in chunks."""
@@ -231,20 +231,20 @@ class _ExecutorManagerThread(Thread):
     pending_work_items: dict[int, _WorkItem[dynamic]]
     init(self, executor: ProcessPoolExecutor)
     override def run(self) -> None
-    def add_call_item_to_queue(self) -> None
+    def add_call_item_to_queue(self)
     def wait_result_broken_or_wakeup(self) -> (dynamic, bool, str)
-    def process_result_item(self, result_item: int | _ResultItem) -> None
+    def process_result_item(self, result_item: int | _ResultItem)
     def is_shutting_down(self) -> bool
-    def terminate_broken(self, cause: str) -> None
-    def flag_executor_shutting_down(self) -> None
-    def shutdown_workers(self) -> None
-    def join_executor_internals(self) -> None
+    def terminate_broken(self, cause: str)
+    def flag_executor_shutting_down(self)
+    def shutdown_workers(self)
+    def join_executor_internals(self)
     def get_n_children_alive(self) -> int
 
 _system_limits_checked: bool
 _system_limited: bool | None
 
-def _check_system_limits() -> None
+def _check_system_limits()
 def _chain_from_iterable_of_lists(iterable: Iterable[MutableSequence[dynamic]]) -> dynamic:
     """
     Specialized implementation of itertools.chain.from_iterable.
@@ -357,11 +357,11 @@ class ProcessPoolExecutor(Executor):
             initargs: (Unpack[Args],),
         ) -> None
 
-    def _start_executor_manager_thread(self) -> None
-    def _adjust_process_count(self) -> None
+    def _start_executor_manager_thread(self)
+    def _adjust_process_count(self)
 
     if sys.version_info >= (3, 14):
-        def kill_workers(self) -> None:
+        def kill_workers(self):
             """Attempts to kill the executor's workers.
             Iterates through all of the current worker processes and kills
             each one that is still alive.
@@ -371,7 +371,7 @@ class ProcessPoolExecutor(Executor):
             submitted).
             """
 
-        def terminate_workers(self) -> None:
+        def terminate_workers(self):
             """Attempts to terminate the executor's workers.
             Iterates through all of the current worker processes and terminates
             each one that is still alive.

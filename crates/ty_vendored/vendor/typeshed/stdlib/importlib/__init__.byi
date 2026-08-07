@@ -29,7 +29,7 @@ if sys.version_info < (3, 12):
 
         """
 
-def invalidate_caches() -> None:
+def invalidate_caches():
     """Call the invalidate_caches() method on all meta path finders stored in
     sys.meta_path (where implemented).
     """

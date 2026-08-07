@@ -23,7 +23,7 @@ final class Timeout:
     def when(self) -> float | None:
         """Return the current deadline."""
 
-    def reschedule(self, when: float | None) -> None:
+    def reschedule(self, when: float | None):
         """Reschedule the timeout."""
 
     def expired(self) -> bool:

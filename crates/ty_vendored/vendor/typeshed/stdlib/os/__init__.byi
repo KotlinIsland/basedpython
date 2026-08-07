@@ -807,10 +807,10 @@ if sys.platform != "win32":
     environb: _Environ[bytes]
 
 if sys.version_info >= (3, 14):
-    def reload_environ() -> None
+    def reload_environ()
 
 if sys.platform == "linux" and sys.version_info >= (3, 15):
-    def _clearenv() -> None
+    def _clearenv()
 
 if sys.version_info >= (3, 11) or sys.platform != "win32":
     final EX_OK: int
@@ -1167,7 +1167,7 @@ if sys.platform != "win32":
     def getgroups() -> list[int]:  # Unix only, behaves differently on Mac
         """Return list of supplemental group IDs for the process."""
 
-    def initgroups(username: str, gid: int, /) -> None:
+    def initgroups(username: str, gid: int, /):
         """Initialize the group access list.
 
         Call the system initgroups() to initialize the group access list with
@@ -1184,7 +1184,7 @@ if sys.platform != "win32":
     def getpriority(which: int, who: int) -> int:
         """Return program scheduling priority."""
 
-    def setpriority(which: int, who: int, priority: int) -> None:
+    def setpriority(which: int, who: int, priority: int):
         """Set program scheduling priority."""
 
     if sys.platform != "darwin":
@@ -1197,44 +1197,44 @@ if sys.platform != "win32":
     def getuid() -> int:
         """Return the current process's user id."""
 
-    def setegid(egid: int, /) -> None:
+    def setegid(egid: int, /):
         """Set the current process's effective group id."""
 
-    def seteuid(euid: int, /) -> None:
+    def seteuid(euid: int, /):
         """Set the current process's effective user id."""
 
-    def setgid(gid: int, /) -> None:
+    def setgid(gid: int, /):
         """Set the current process's group id."""
 
-    def setgroups(groups: Sequence[int], /) -> None:
+    def setgroups(groups: Sequence[int], /):
         """Set the groups of the current process to list."""
 
-    def setpgrp() -> None:
+    def setpgrp():
         """Make the current process the leader of its process group."""
 
-    def setpgid(pid: int, pgrp: int, /) -> None:
+    def setpgid(pid: int, pgrp: int, /):
         """Call the system call setpgid(pid, pgrp)."""
 
-    def setregid(rgid: int, egid: int, /) -> None:
+    def setregid(rgid: int, egid: int, /):
         """Set the current process's real and effective group ids."""
 
     if sys.platform != "darwin":
-        def setresgid(rgid: int, egid: int, sgid: int, /) -> None:
+        def setresgid(rgid: int, egid: int, sgid: int, /):
             """Set the current process's real, effective, and saved group ids."""
 
-        def setresuid(ruid: int, euid: int, suid: int, /) -> None:
+        def setresuid(ruid: int, euid: int, suid: int, /):
             """Set the current process's real, effective, and saved user ids."""
 
-    def setreuid(ruid: int, euid: int, /) -> None:
+    def setreuid(ruid: int, euid: int, /):
         """Set the current process's real and effective user ids."""
 
     def getsid(pid: int, /) -> int:
         """Call the system call getsid(pid) and return the result."""
 
-    def setsid() -> None:
+    def setsid():
         """Call the system call setsid()."""
 
-    def setuid(uid: int, /) -> None:
+    def setuid(uid: int, /):
         """Set the current process's user id."""
 
     def uname() -> uname_result:
@@ -1345,10 +1345,10 @@ def fdopen(
     opener: _Opener | None = None,
 ) -> IO[dynamic]
 
-def close(fd: int) -> None:
+def close(fd: int):
     """Close a file descriptor."""
 
-def closerange(fd_low: int, fd_high: int, /) -> None:
+def closerange(fd_low: int, fd_high: int, /):
     """Closes all file descriptors in [fd_low, fd_high), ignoring errors."""
 
 def device_encoding(fd: int) -> str | None:
@@ -1371,10 +1371,10 @@ def fstat(fd: int) -> stat_result:
     Equivalent to os.stat(fd).
     """
 
-def ftruncate(fd: int, length: int, /) -> None:
+def ftruncate(fd: int, length: int, /):
     """Truncate a file, specified by file descriptor, to a specific length."""
 
-def fsync(fd: FileDescriptorLike) -> None:
+def fsync(fd: FileDescriptorLike):
     """Force write of fd to disk."""
 
 def isatty(fd: int, /) -> bool:
@@ -1385,7 +1385,7 @@ def isatty(fd: int, /) -> bool:
     """
 
 if sys.platform != "win32" and sys.version_info >= (3, 11):
-    def login_tty(fd: int, /) -> None:
+    def login_tty(fd: int, /):
         """Prepare the tty of which fd is a file descriptor for a new login session.
 
         Make the calling process a session leader; make the tty the
@@ -1446,7 +1446,7 @@ if sys.version_info >= (3, 12) or sys.platform != "win32":
         Return False if the O_NONBLOCK flag is set, True if the flag is cleared.
         """
 
-    def set_blocking(fd: int, blocking: bool, /) -> None:
+    def set_blocking(fd: int, blocking: bool, /):
         """Set the blocking mode of the specified file descriptor.
 
         Set the O_NONBLOCK flag if blocking is False,
@@ -1454,7 +1454,7 @@ if sys.version_info >= (3, 12) or sys.platform != "win32":
         """
 
 if sys.platform != "win32":
-    def fchown(fd: int, uid: int, gid: int) -> None:
+    def fchown(fd: int, uid: int, gid: int):
         """Change the owner and group id of the file specified by file descriptor.
 
         Equivalent to os.chown(fd, uid, gid).
@@ -1472,7 +1472,7 @@ if sys.platform != "win32":
         Equivalent to statvfs(fd).
         """
 
-    def lockf(fd: int, command: int, length: int, /) -> None:
+    def lockf(fd: int, command: int, length: int, /):
         """Apply, test or remove a POSIX lock on an open file descriptor.
 
         fd
@@ -1491,7 +1491,7 @@ if sys.platform != "win32":
         """
 
     if sys.platform != "darwin":
-        def fdatasync(fd: FileDescriptorLike) -> None:
+        def fdatasync(fd: FileDescriptorLike):
             """Force write of fd to disk without forcing update of metadata."""
 
         def pipe2(flags: int, /) -> (int, int):  # some flavors of Unix
@@ -1504,7 +1504,7 @@ if sys.platform != "win32":
             O_NONBLOCK, O_CLOEXEC.
             """
 
-        def posix_fallocate(fd: int, offset: int, length: int, /) -> None:
+        def posix_fallocate(fd: int, offset: int, length: int, /):
             """Ensure a file has allocated at least a particular number of bytes on disk.
 
             Ensure that the file specified by fd encompasses a range of bytes
@@ -1512,7 +1512,7 @@ if sys.platform != "win32":
             bytes.
             """
 
-        def posix_fadvise(fd: int, offset: int, length: int, advice: int, /) -> None:
+        def posix_fadvise(fd: int, offset: int, length: int, advice: int, /):
             """Announce an intention to access data in a specific pattern.
 
             Announce an intention to access data in a specific pattern, thus
@@ -1668,14 +1668,14 @@ def get_terminal_size(fd: int = ..., /) -> terminal_size:
 def get_inheritable(fd: int, /) -> bool:
     """Get the close-on-exe flag of the specified file descriptor."""
 
-def set_inheritable(fd: int, inheritable: bool, /) -> None:
+def set_inheritable(fd: int, inheritable: bool, /):
     """Set the inheritable flag of the specified file descriptor."""
 
 if sys.platform == "win32":
     def get_handle_inheritable(handle: int, /) -> bool:
         """Get the close-on-exe flag of the specified file descriptor."""
 
-    def set_handle_inheritable(handle: int, inheritable: bool, /) -> None:
+    def set_handle_inheritable(handle: int, inheritable: bool, /):
         """Set the inheritable flag of the specified handle."""
 
 if sys.platform != "win32":
@@ -1683,7 +1683,7 @@ if sys.platform != "win32":
     def tcgetpgrp(fd: int, /) -> int:
         """Return the process group associated with the terminal specified by fd."""
 
-    def tcsetpgrp(fd: int, pgid: int, /) -> None:
+    def tcsetpgrp(fd: int, pgid: int, /):
         """Set the process group associated with the terminal specified by fd."""
 
     def ttyname(fd: int, /) -> str:
@@ -1727,7 +1727,7 @@ def access(
       user has the specified access to the path.
     """
 
-def chdir(path: FileDescriptorOrPath) -> None:
+def chdir(path: FileDescriptorOrPath):
     """Change the current working directory to the specified path.
 
     path may always be specified as a string.  On some platforms, path may
@@ -1736,7 +1736,7 @@ def chdir(path: FileDescriptorOrPath) -> None:
     """
 
 if sys.platform != "win32":
-    def fchdir(fd: FileDescriptorLike) -> None:
+    def fchdir(fd: FileDescriptorLike):
         """Change to the directory of the given file descriptor.
 
         fd must be opened on a directory, not a file.
@@ -1749,7 +1749,7 @@ def getcwd() -> str:
 def getcwdb() -> bytes:
     """Return a bytes string representing the current working directory."""
 
-def chmod(path: FileDescriptorOrPath, mode: int, *, dir_fd: int | None = None, follow_symlinks: bool = True) -> None:
+def chmod(path: FileDescriptorOrPath, mode: int, *, dir_fd: int | None = None, follow_symlinks: bool = True):
     """Change the access permissions of a file.
 
       path
@@ -1778,7 +1778,7 @@ def chmod(path: FileDescriptorOrPath, mode: int, *, dir_fd: int | None = None, f
     """
 
 if sys.platform != "win32" and sys.platform != "linux":
-    def chflags(path: StrOrBytesPath, flags: int, follow_symlinks: bool = True) -> None:  # some flavors of Unix
+    def chflags(path: StrOrBytesPath, flags: int, follow_symlinks: bool = True):  # some flavors of Unix
         """Set file flags.
 
         If follow_symlinks is False, and the last element of the path is
@@ -1788,7 +1788,7 @@ if sys.platform != "win32" and sys.platform != "linux":
         unavailable, using it will raise a NotImplementedError.
         """
 
-    def lchflags(path: StrOrBytesPath, flags: int) -> None:
+    def lchflags(path: StrOrBytesPath, flags: int):
         """Set file flags.
 
         This function will not follow symbolic links.
@@ -1796,10 +1796,10 @@ if sys.platform != "win32" and sys.platform != "linux":
         """
 
 if sys.platform != "win32":
-    def chroot(path: StrOrBytesPath) -> None:
+    def chroot(path: StrOrBytesPath):
         """Change root directory to path."""
 
-    def chown(path: FileDescriptorOrPath, uid: int, gid: int, *, dir_fd: int | None = None, follow_symlinks: bool = True) -> None:
+    def chown(path: FileDescriptorOrPath, uid: int, gid: int, *, dir_fd: int | None = None, follow_symlinks: bool = True):
         """Change the owner and group id of path to the numeric uid and gid.
 
           path
@@ -1829,7 +1829,7 @@ if sys.platform != "win32":
         they are unavailable, using them will raise a NotImplementedError.
         """
 
-    def lchown(path: StrOrBytesPath, uid: int, gid: int) -> None:
+    def lchown(path: StrOrBytesPath, uid: int, gid: int):
         """Change the owner and group id of path to the numeric uid and gid.
 
         This function will not follow symbolic links.
@@ -1843,7 +1843,7 @@ def link(
     src_dir_fd: int | None = None,
     dst_dir_fd: int | None = None,
     follow_symlinks: bool = True,
-) -> None:
+):
     """Create a hard link to a file.
 
     If either src_dir_fd or dst_dir_fd is not None, it should be a file
@@ -1865,7 +1865,7 @@ def lstat(path: StrOrBytesPath, *, dir_fd: int | None = None) -> stat_result:
     Equivalent to stat(path, follow_symlinks=False).
     """
 
-def mkdir(path: StrOrBytesPath, mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+def mkdir(path: StrOrBytesPath, mode: int = 0o777, *, dir_fd: int | None = None):
     """Create a directory.
 
     If dir_fd is not None, it should be a file descriptor open to
@@ -1879,7 +1879,7 @@ def mkdir(path: StrOrBytesPath, mode: int = 0o777, *, dir_fd: int | None = None)
     """
 
 if sys.platform != "win32":
-    def mkfifo(path: StrOrBytesPath, mode: int = 0o666, *, dir_fd: int | None = None) -> None:  # Unix only
+    def mkfifo(path: StrOrBytesPath, mode: int = 0o666, *, dir_fd: int | None = None):  # Unix only
         """Create a "fifo" (a POSIX named pipe).
 
         If dir_fd is not None, it should be a file descriptor open to
@@ -1917,7 +1917,7 @@ else:
         """
 
 if sys.platform != "win32":
-    def mknod(path: StrOrBytesPath, mode: int = 0o600, device: int = 0, *, dir_fd: int | None = None) -> None:
+    def mknod(path: StrOrBytesPath, mode: int = 0o600, device: int = 0, *, dir_fd: int | None = None):
         """Create a node in the file system.
 
         Create a node in the file system (file, device special file or named
@@ -1963,7 +1963,7 @@ def readlink(path: GenericPath[AnyStr], *, dir_fd: int | None = None) -> AnyStr:
     using it will raise a NotImplementedError.
     """
 
-def remove(path: StrOrBytesPath, *, dir_fd: int | None = None) -> None:
+def remove(path: StrOrBytesPath, *, dir_fd: int | None = None):
     """Remove a file (same as unlink()).
 
     If dir_fd is not None, it should be a file descriptor open to
@@ -1973,7 +1973,7 @@ def remove(path: StrOrBytesPath, *, dir_fd: int | None = None) -> None:
     If it is unavailable, using it will raise a NotImplementedError.
     """
 
-def removedirs(name: StrOrBytesPath) -> None:
+def removedirs(name: StrOrBytesPath):
     """removedirs(name)
 
     Super-rmdir; remove a leaf directory and all empty intermediate
@@ -1985,7 +1985,7 @@ def removedirs(name: StrOrBytesPath) -> None:
 
     """
 
-def rename(src: StrOrBytesPath, dst: StrOrBytesPath, *, src_dir_fd: int | None = None, dst_dir_fd: int | None = None) -> None:
+def rename(src: StrOrBytesPath, dst: StrOrBytesPath, *, src_dir_fd: int | None = None, dst_dir_fd: int | None = None):
     """Rename a file or directory.
 
     If either src_dir_fd or dst_dir_fd is not None, it should be a file
@@ -1996,7 +1996,7 @@ def rename(src: StrOrBytesPath, dst: StrOrBytesPath, *, src_dir_fd: int | None =
     If they are unavailable, using them will raise a NotImplementedError.
     """
 
-def renames(old: StrOrBytesPath, new: StrOrBytesPath) -> None:
+def renames(old: StrOrBytesPath, new: StrOrBytesPath):
     """renames(old, new)
 
     Super-rename; create directories as necessary and delete any left
@@ -2012,7 +2012,7 @@ def renames(old: StrOrBytesPath, new: StrOrBytesPath) -> None:
 
     """
 
-def replace(src: StrOrBytesPath, dst: StrOrBytesPath, *, src_dir_fd: int | None = None, dst_dir_fd: int | None = None) -> None:
+def replace(src: StrOrBytesPath, dst: StrOrBytesPath, *, src_dir_fd: int | None = None, dst_dir_fd: int | None = None):
     """Rename a file or directory, overwriting the destination.
 
     If either src_dir_fd or dst_dir_fd is not None, it should be a file
@@ -2023,7 +2023,7 @@ def replace(src: StrOrBytesPath, dst: StrOrBytesPath, *, src_dir_fd: int | None 
     If they are unavailable, using them will raise a NotImplementedError.
     """
 
-def rmdir(path: StrOrBytesPath, *, dir_fd: int | None = None) -> None:
+def rmdir(path: StrOrBytesPath, *, dir_fd: int | None = None):
     """Remove a directory.
 
     If dir_fd is not None, it should be a file descriptor open to
@@ -2035,12 +2035,12 @@ def rmdir(path: StrOrBytesPath, *, dir_fd: int | None = None) -> None:
 
 @type_check_only
 final class _ScandirIterator(Generic[AnyStr]):
-    def __del__(self) -> None
+    def __del__(self)
     def __iter__(self) -> Self
     def __next__(self) -> DirEntry[AnyStr]
     def __enter__(self) -> Self
-    def __exit__(self, *args: Unused) -> None
-    def close(self) -> None
+    def __exit__(self, *args: Unused)
+    def close(self)
 
 def scandir(path: None = None) -> _ScandirIterator[str]:
     """Return an iterator of DirEntry objects for given path.
@@ -2122,7 +2122,7 @@ if sys.platform == "linux" and sys.version_info >= (3, 15):
         path: FileDescriptorOrPath, mask: int, *, flags: int = 0, dir_fd: int | None = None, follow_symlinks: bool = True
     ) -> statx_result
 
-def symlink(src: StrOrBytesPath, dst: StrOrBytesPath, target_is_directory: bool = False, *, dir_fd: int | None = None) -> None:
+def symlink(src: StrOrBytesPath, dst: StrOrBytesPath, target_is_directory: bool = False, *, dir_fd: int | None = None):
     """Create a symbolic link pointing to src named dst.
 
     target_is_directory is required on Windows if the target is to be
@@ -2138,10 +2138,10 @@ def symlink(src: StrOrBytesPath, dst: StrOrBytesPath, target_is_directory: bool 
     """
 
 if sys.platform != "win32":
-    def sync() -> None:  # Unix only
+    def sync():  # Unix only
         """Force write of everything to disk."""
 
-def truncate(path: FileDescriptorOrPath, length: int) -> None:  # Unix only up to version 3.4
+def truncate(path: FileDescriptorOrPath, length: int):  # Unix only up to version 3.4
     """Truncate a file, specified by path, to a specific length.
 
     On some platforms, path may also be specified as an open file
@@ -2149,7 +2149,7 @@ def truncate(path: FileDescriptorOrPath, length: int) -> None:  # Unix only up t
     an exception.
     """
 
-def unlink(path: StrOrBytesPath, *, dir_fd: int | None = None) -> None:
+def unlink(path: StrOrBytesPath, *, dir_fd: int | None = None):
     """Remove a file (same as remove()).
 
     If dir_fd is not None, it should be a file descriptor open to
@@ -2166,7 +2166,7 @@ def utime(
     ns: (int, int) = ...,
     dir_fd: int | None = None,
     follow_symlinks: bool = True,
-) -> None:
+):
     """Set the access and modified time of path.
 
     path may always be specified as a string.  On some platforms, path may
@@ -2330,7 +2330,7 @@ if sys.platform != "win32":
             of the file the link points to.
             """
 
-        def removexattr(path: FileDescriptorOrPath, attribute: StrOrBytesPath, *, follow_symlinks: bool = True) -> None:
+        def removexattr(path: FileDescriptorOrPath, attribute: StrOrBytesPath, *, follow_symlinks: bool = True):
             """Remove extended attribute attribute on path.
 
             path may be either a string, a path-like object, or an open file
@@ -2347,7 +2347,7 @@ if sys.platform != "win32":
             flags: int = 0,
             *,
             follow_symlinks: bool = True,
-        ) -> None:
+        ):
             """Set extended attribute attribute on path to value.
 
             path may be either a string, a path-like object,  or an open file
@@ -2456,7 +2456,7 @@ def execvpe(file: StrOrBytesPath, args: ExecVArgs, env: ExecEnv) -> NoReturn:
 def _exit(status: int) -> NoReturn:
     """Exit to the system with specified status, without normal exit processing."""
 
-def kill(pid: int, signal: int, /) -> None:
+def kill(pid: int, signal: int, /):
     """Kill a process with a signal."""
 
 if sys.platform != "win32":
@@ -2477,14 +2477,14 @@ if sys.platform != "win32":
         The master_fd is non-inheritable.
         """
 
-    def killpg(pgid: int, signal: int, /) -> None:
+    def killpg(pgid: int, signal: int, /):
         """Kill a process group with a signal."""
 
     def nice(increment: int, /) -> int:
         """Add increment to the priority of process and return the new priority."""
 
     if sys.platform != "darwin" and sys.platform != "linux":
-        def plock(op: int, /) -> None
+        def plock(op: int, /)
 
 class _wrap_close:
     init(self, stream: TextIOWrapper, proc: Popen[str])
@@ -2492,7 +2492,7 @@ class _wrap_close:
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None
+    )
     def __iter__(self) -> Iterator[str]
     # Methods below here don't exist directly on the _wrap_close object, but
     # are copied from the wrapped TextIOWrapper object via __getattr__.
@@ -2504,7 +2504,7 @@ class _wrap_close:
     def readlines(self, hint: int = -1, /) -> list[str]
     def writable(self) -> bool
     def write(self, s: str, /) -> int
-    def writelines(self, lines: Iterable[str], /) -> None
+    def writelines(self, lines: Iterable[str], /)
 
 @deprecated("Soft deprecated. Use the subprocess module instead.")
 def popen(cmd: str, mode: str = "r", buffering: int = -1) -> _wrap_close
@@ -2624,7 +2624,7 @@ def waitpid(pid: int, options: int, /) -> (int, int):
 if sys.platform == "win32":
     def startfile(
         filepath: StrOrBytesPath, operation: str = ..., arguments: str = "", cwd: StrOrBytesPath | None = None, show_cmd: int = 1
-    ) -> None:
+    ):
         """Start a file with its associated application.
 
         When "operation" is not specified or "open", this acts like
@@ -3042,11 +3042,11 @@ if sys.platform != "win32":
     def sched_get_priority_max(policy: int) -> int:  # some flavors of Unix
         """Get the maximum scheduling priority for policy."""
 
-    def sched_yield() -> None:  # some flavors of Unix
+    def sched_yield():  # some flavors of Unix
         """Voluntarily relinquish the CPU."""
 
     if sys.platform != "darwin":
-        def sched_setscheduler(pid: int, policy: int, param: sched_param, /) -> None:  # some flavors of Unix
+        def sched_setscheduler(pid: int, policy: int, param: sched_param, /):  # some flavors of Unix
             """Set the scheduling policy for the process identified by pid.
 
             If pid is 0, the calling process is changed.
@@ -3065,7 +3065,7 @@ if sys.platform != "win32":
             Value returned is a float.
             """
 
-        def sched_setparam(pid: int, param: sched_param, /) -> None:  # some flavors of Unix
+        def sched_setparam(pid: int, param: sched_param, /):  # some flavors of Unix
             """Set scheduling parameters for the process identified by pid.
 
             If pid is 0, sets parameters for the calling process.
@@ -3079,7 +3079,7 @@ if sys.platform != "win32":
             Return value is an instance of sched_param.
             """
 
-        def sched_setaffinity(pid: int, mask: Iterable[int], /) -> None:  # some flavors of Unix
+        def sched_setaffinity(pid: int, mask: Iterable[int], /):  # some flavors of Unix
             """Set the CPU affinity of the process identified by pid to mask.
 
             mask should be an iterable of integers identifying CPUs.
@@ -3145,7 +3145,7 @@ if sys.platform != "win32":
         before: (...) -> dynamic | None = ...,
         after_in_parent: (...) -> dynamic | None = ...,
         after_in_child: (...) -> dynamic | None = ...,
-    ) -> None:
+    ):
         """Register callables to be called when forking a new process.
 
           before
@@ -3163,9 +3163,9 @@ if sys.platform == "win32":
     class _AddedDllDirectory:
         path: str | None
         def __init__[Element](self, path: str | None, cookie: Element, remove_dll_directory: (Element) -> object) -> None
-        def close(self) -> None
+        def close(self)
         def __enter__(self) -> Self
-        def __exit__(self, *args: Unused) -> None
+        def __exit__(self, *args: Unused)
 
     def add_dll_directory(path: str) -> _AddedDllDirectory:
         """Add a path to the DLL search path.
@@ -3274,7 +3274,7 @@ if sys.platform == "linux":
     def eventfd_read(fd: FileDescriptor) -> int:
         """Read eventfd value"""
 
-    def eventfd_write(fd: FileDescriptor, value: int) -> None:
+    def eventfd_write(fd: FileDescriptor, value: int):
         """Write eventfd value."""
 
     def splice(
@@ -3320,14 +3320,14 @@ if sys.version_info >= (3, 12) and sys.platform == "linux":
     final CLONE_SYSVSEM: int  # Linux 2.6.26+
     final CLONE_THREAD: int
     final CLONE_VM: int
-    def unshare(flags: int) -> None:
+    def unshare(flags: int):
         """Disassociate parts of a process (or thread) execution context.
 
         flags
           Namespaces to be unshared.
         """
 
-    def setns(fd: FileDescriptorLike, nstype: int = 0) -> None:
+    def setns(fd: FileDescriptorLike, nstype: int = 0):
         """Move the calling thread into different namespaces.
 
         fd
@@ -3345,7 +3345,7 @@ if sys.version_info >= (3, 13) and sys.platform != "win32":
         page of posix_openpt() of your system.
         """
 
-    def grantpt(fd: FileDescriptorLike, /) -> None:
+    def grantpt(fd: FileDescriptorLike, /):
         """Grant access to the slave pseudo-terminal device.
 
           fd
@@ -3354,7 +3354,7 @@ if sys.version_info >= (3, 13) and sys.platform != "win32":
         Performs a grantpt() C function call.
         """
 
-    def unlockpt(fd: FileDescriptorLike, /) -> None:
+    def unlockpt(fd: FileDescriptorLike, /):
         """Unlock a pseudo-terminal master/slave pair.
 
           fd
@@ -3444,7 +3444,7 @@ if sys.version_info >= (3, 13) and sys.platform == "linux":
 
 if sys.version_info >= (3, 13) or sys.platform != "win32":
     # Added to Windows in 3.13.
-    def fchmod(fd: int, mode: int) -> None:
+    def fchmod(fd: int, mode: int):
         """Change the access permissions of the file given by file descriptor fd.
 
           fd
@@ -3461,7 +3461,7 @@ if sys.version_info >= (3, 13) or sys.platform != "win32":
 if sys.platform != "linux":
     if sys.version_info >= (3, 13) or sys.platform != "win32":
         # Added to Windows in 3.13.
-        def lchmod(path: StrOrBytesPath, mode: int) -> None:
+        def lchmod(path: StrOrBytesPath, mode: int):
             """Change the access permissions of a file, without following symbolic links.
 
             If path is a symlink, this affects the link itself rather than the

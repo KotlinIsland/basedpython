@@ -61,7 +61,7 @@ if sys.version_info >= (3, 13):
             Perform the replacements for a match from :func:`separate`.
             """
 
-        def restrict_rglob(self, pattern: str) -> None:
+        def restrict_rglob(self, pattern: str):
             """
             Raise ValueError if ** appears in anything but a full path segment.
 

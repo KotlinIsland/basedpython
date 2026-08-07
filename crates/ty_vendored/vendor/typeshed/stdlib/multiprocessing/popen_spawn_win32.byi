@@ -27,8 +27,8 @@ if sys.platform == "win32":
         def duplicate_for_child(self, handle: int) -> int
         def wait(self, timeout: float | None = None) -> int | None
         def poll(self) -> int | None
-        def terminate(self) -> None
+        def terminate(self)
 
         kill = terminate
 
-        def close(self) -> None
+        def close(self)

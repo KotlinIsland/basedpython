@@ -314,5 +314,5 @@ if sys.version_info >= (3, 13):
         """
 
 if sys.version_info >= (3, 14):
-    def invalidate_caches() -> None:
+    def invalidate_caches():
         """Invalidate the cached results."""

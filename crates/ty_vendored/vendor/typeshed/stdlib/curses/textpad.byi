@@ -3,7 +3,7 @@
 from _curses import window
 from collections.abc import Callable
 
-def rectangle(win: window, uly: int, ulx: int, lry: int, lrx: int) -> None:
+def rectangle(win: window, uly: int, ulx: int, lry: int, lrx: int):
     """Draw a rectangle with corners at the provided upper-left
     and lower-right coordinates.
     """
@@ -41,7 +41,7 @@ class Textbox:
     def edit(self, validate: ((int) -> int) | None = None) -> str:
         """Edit in the widget window and collect the results."""
 
-    def do_command(self, ch: str | int) -> None:
+    def do_command(self, ch: str | int):
         """Process a single editing command."""
 
     def gather(self) -> str:

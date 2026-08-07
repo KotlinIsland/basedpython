@@ -24,12 +24,12 @@ class _Database(MutableMapping[bytes, bytes]):
     override def __setitem__(self, key: SqliteData, value: SqliteData) -> None
     override def __delitem__(self, key: SqliteData) -> None
     override def __iter__(self) -> Generator[bytes]
-    def close(self) -> None
+    def close(self)
     override def keys(self) -> list[bytes]
     def __enter__(self) -> Self
-    def __exit__(self, *args: Unused) -> None
+    def __exit__(self, *args: Unused)
     if sys.version_info >= (3, 15):
-        def reorganize(self) -> None
+        def reorganize(self)
 
 def open(filename: StrOrBytesPath, /, flag: "r" | "w" | "c" | "n" = "r", mode: int = 0o666) -> _Database:
     """Open a dbm.sqlite3 database and return the dbm object.

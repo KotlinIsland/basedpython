@@ -141,6 +141,10 @@ same meaning, written the way a `.by` file writes it
 - **`final` declarations** — `x: Final[T]` → `final x: T`
 - **`init` shorthand** — a plain `def __init__(self, ...) -> None` →
     [`init(self, ...)`](init-method.md)
+- **redundant `-> None`** — a return annotation that only repeats what a bare
+    `def` already means is dropped, since [`None` is what a stub with no
+    annotation returns](sound-types.md). one that would change the type if
+    deleted — an override, a generator — is kept
 - **read-only properties** — a non-computed `@property` → a valueless
     [`let NAME: T`](properties.md), which declares the same thing without the
     descriptor machinery

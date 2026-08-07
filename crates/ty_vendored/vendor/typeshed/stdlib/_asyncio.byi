@@ -38,14 +38,14 @@ class Future[in out Element](Awaitable[Element]):
 
     _asyncio_future_blocking: bool  # is a part of duck-typing contract for `Future`
     init(self, *, loop: AbstractEventLoop | None = None)
-    def __del__(self) -> None:
+    def __del__(self):
         """Called when the instance is about to be destroyed."""
 
     def get_loop(self) -> AbstractEventLoop:
         """Return the event loop the Future is bound to."""
 
     let _callbacks: list[((Self) -> dynamic, Context)]
-    def add_done_callback(self, fn: (Self) -> object, /, *, context: Context | None = None) -> None:
+    def add_done_callback(self, fn: (Self) -> object, /, *, context: Context | None = None):
         """Add a callback to be run when the future becomes done.
 
         The callback is called with a single argument - the future object.
@@ -95,14 +95,14 @@ class Future[in out Element](Awaitable[Element]):
         Returns the number of callbacks removed.
         """
 
-    def set_result(self, result: Element, /) -> None:
+    def set_result(self, result: Element, /):
         """Mark the future done and set its result.
 
         If the future is already done when this method is called, raises
         InvalidStateError.
         """
 
-    def set_exception(self, exception: type | BaseException, /) -> None:
+    def set_exception(self, exception: type | BaseException, /):
         """Mark the future done and set an exception.
 
         If the future is already done when this method is called, raises
@@ -162,7 +162,7 @@ class Task[out Element](Future[Element]):
         def get_coro(self) -> _TaskCompatibleCoro[Element]
 
     def get_name(self) -> str
-    def set_name(self, value: object, /) -> None
+    def set_name(self, value: object, /)
     if sys.version_info >= (3, 12):
         def get_context(self) -> Context
 
@@ -188,7 +188,7 @@ class Task[out Element](Future[Element]):
         returned for a suspended coroutine.
         """
 
-    def print_stack(self, *, limit: int | None = None, file: TextIO | None = None) -> None:
+    def print_stack(self, *, limit: int | None = None, file: TextIO | None = None):
         """Print the stack or traceback for this task's coroutine.
 
         This produces output similar to that of the traceback module,
@@ -235,7 +235,7 @@ def get_running_loop() -> AbstractEventLoop:
     This function is thread-specific.
     """
 
-def _set_running_loop(loop: AbstractEventLoop | None, /) -> None:
+def _set_running_loop(loop: AbstractEventLoop | None, /):
     """Set the running event loop.
 
     This is a low-level function intended to be used by event loops.
@@ -249,19 +249,19 @@ def _get_running_loop() -> AbstractEventLoop | None:
     This function is thread-specific.
     """
 
-def _register_task(task: Task[dynamic]) -> None:
+def _register_task(task: Task[dynamic]):
     """Register a new task in asyncio as executed by loop.
 
     Returns None.
     """
 
-def _unregister_task(task: Task[dynamic]) -> None:
+def _unregister_task(task: Task[dynamic]):
     """Unregister a task.
 
     Returns None.
     """
 
-def _enter_task(loop: AbstractEventLoop, task: Task[dynamic]) -> None:
+def _enter_task(loop: AbstractEventLoop, task: Task[dynamic]):
     """Enter into task execution or resume suspended task.
 
     Task belongs to loop.
@@ -269,7 +269,7 @@ def _enter_task(loop: AbstractEventLoop, task: Task[dynamic]) -> None:
     Returns None.
     """
 
-def _leave_task(loop: AbstractEventLoop, task: Task[dynamic]) -> None:
+def _leave_task(loop: AbstractEventLoop, task: Task[dynamic]):
     """Leave task execution or suspend a task.
 
     Task belongs to loop.
@@ -282,8 +282,8 @@ if sys.version_info >= (3, 12):
         """Return a currently executed task."""
 
 if sys.version_info >= (3, 14):
-    def future_discard_from_awaited_by(future: Future[dynamic], waiter: Future[dynamic], /) -> None
-    def future_add_to_awaited_by(future: Future[dynamic], waiter: Future[dynamic], /) -> None:
+    def future_discard_from_awaited_by(future: Future[dynamic], waiter: Future[dynamic], /)
+    def future_add_to_awaited_by(future: Future[dynamic], waiter: Future[dynamic], /):
         """Record that `fut` is awaited on by `waiter`."""
 
     def all_tasks(loop: AbstractEventLoop | None = None) -> set[Task[dynamic]]:

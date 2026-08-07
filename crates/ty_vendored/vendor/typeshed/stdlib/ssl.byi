@@ -445,7 +445,7 @@ class SSLSocket(socket.socket):
         number of bytes of DATA actually transmitted.
         """
 
-    def do_handshake(self, block: bool = False) -> None:  # block is undocumented
+    def do_handshake(self, block: bool = False):  # block is undocumented
         """Start the SSL/TLS handshake."""
 
     def getpeercert(self, binary_form: False = False) -> PeerCertRetDictType | None:
@@ -519,7 +519,7 @@ class SSLSocket(socket.socket):
     def pending(self) -> int:
         """Return the number of bytes that can be read immediately."""
 
-    def verify_client_post_handshake(self) -> None
+    def verify_client_post_handshake(self)
     # These methods always raise `NotImplementedError`:
     override def recvmsg(self, *args: Never, **kwargs: Never) -> Never
     override def recvmsg_into(self, *args: Never, **kwargs: Never) -> Never
@@ -635,7 +635,7 @@ class SSLContext(_SSLContext):
     @deprecated("Deprecated since Python 3.10. Use a specific version of the SSL protocol.")
     def __new__(cls, protocol: None = None, *args: dynamic, **kwargs: dynamic) -> Self
 
-    def load_default_certs(self, purpose: Purpose = Purpose.SERVER_AUTH) -> None
+    def load_default_certs(self, purpose: Purpose = Purpose.SERVER_AUTH)
     override def load_verify_locations(
         self,
         cafile: StrOrBytesPath | None = None,
@@ -657,18 +657,18 @@ class SSLContext(_SSLContext):
 
     override def get_ciphers(self) -> list[_Cipher]
     if sys.version_info >= (3, 15):
-        def set_ciphersuites(self, ciphersuites: str, /) -> None
+        def set_ciphersuites(self, ciphersuites: str, /)
         def get_groups(self, /, *, include_aliases: bool = False) -> list[str]
-        def set_groups(self, grouplist: str, /) -> None
-        def set_client_sigalgs(self, sigalgs: str, /) -> None
-        def set_server_sigalgs(self, sigalgs: str, /) -> None
+        def set_groups(self, grouplist: str, /)
+        def set_client_sigalgs(self, sigalgs: str, /)
+        def set_server_sigalgs(self, sigalgs: str, /)
 
     override def set_default_verify_paths(self) -> None
     override def set_ciphers(self, cipherlist: str, /) -> None
-    def set_alpn_protocols(self, alpn_protocols: Iterable[str]) -> None
+    def set_alpn_protocols(self, alpn_protocols: Iterable[str])
     @deprecated("Deprecated since Python 3.10. Use ALPN instead.")
     def set_npn_protocols(self, npn_protocols: Iterable[str]) -> None
-    def set_servername_callback(self, server_name_callback: SrvnmeCbType | None) -> None
+    def set_servername_callback(self, server_name_callback: SrvnmeCbType | None)
     override def load_dh_params(self, path: str, /) -> None
     override def set_ecdh_curve(self, name: str, /) -> None
     def wrap_socket(
@@ -819,10 +819,10 @@ class SSLObject:
     def pending(self) -> int:
         """Return the number of bytes that can be read immediately."""
 
-    def do_handshake(self) -> None:
+    def do_handshake(self):
         """Start the SSL/TLS handshake."""
 
-    def unwrap(self) -> None:
+    def unwrap(self):
         """Start the SSL shutdown handshake."""
 
     def version(self) -> str | None:
@@ -836,7 +836,7 @@ class SSLObject:
         or None if the data is not available (e.g. before the handshake).
         """
 
-    def verify_client_post_handshake(self) -> None
+    def verify_client_post_handshake(self)
     if sys.version_info >= (3, 13):
         def get_verified_chain(self) -> list[bytes]:
             """Returns verified certificate chain provided by the other

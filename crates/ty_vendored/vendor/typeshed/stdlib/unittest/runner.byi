@@ -18,7 +18,7 @@ private protocol SupportsWriteAndFlush(SupportsWrite[str], SupportsFlush)
 # All methods used by unittest.runner.TextTestResult's stream
 @type_check_only
 private protocol TextTestStream(SupportsWriteAndFlush):
-    def writeln(self, arg: str | None = None, /) -> None
+    def writeln(self, arg: str | None = None, /)
 
 # _WritelnDecorator should have all the same attrs as its stream param.
 # But that's not feasible to do Generically
@@ -27,7 +27,7 @@ class _WritelnDecorator:
     """Used to decorate file-like objects with a handy 'writeln' method"""
 
     init(self, stream: SupportsWriteAndFlush)
-    def writeln(self, arg: str | None = None) -> None
+    def writeln(self, arg: str | None = None)
     def __getattr__(self, attr: str) -> dynamic  # Any attribute from the stream type passed to __init__
     # These attributes are prevented by __getattr__
     stream: Never
@@ -62,7 +62,7 @@ class TextTestResult[in out StreamT: TextTestStream = _WritelnDecorator](unittes
         def __init__(self, stream: StreamT, descriptions: bool, verbosity: int) -> None
 
     def getDescription(self, test: unittest.case.TestCase) -> str
-    def printErrorList(self, flavour: str, errors: Iterable[(unittest.case.TestCase, str)]) -> None
+    def printErrorList(self, flavour: str, errors: Iterable[(unittest.case.TestCase, str)])
 
 class TextTestRunner:
     """A test runner class that displays results in textual form.

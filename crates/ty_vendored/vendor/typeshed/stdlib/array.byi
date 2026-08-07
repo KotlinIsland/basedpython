@@ -128,7 +128,7 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
         calculate the buffer length in bytes.
         """
 
-    def byteswap(self) -> None:
+    def byteswap(self):
         """Byteswap all items of the array.
 
         If the items in the array are not 1, 2, 4, 8 or 16 bytes in size,
@@ -142,16 +142,16 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
     override def extend(self, bb: Iterable[Element], /) -> None:
         """Append items to the end of the array."""
 
-    def frombytes(self, buffer: ReadableBuffer, /) -> None:
+    def frombytes(self, buffer: ReadableBuffer, /):
         """Appends items from the string, interpreting it as an array of machine values, as if it had been read from a file using the fromfile() method."""
 
-    def fromfile(self, f: SupportsRead[bytes], n: int, /) -> None:
+    def fromfile(self, f: SupportsRead[bytes], n: int, /):
         """Read n objects from the file object f and append them to the end of the array."""
 
-    def fromlist(self, list: list[Element], /) -> None:
+    def fromlist(self, list: list[Element], /):
         """Append items to array from list."""
 
-    def fromunicode(self, ustr: str, /) -> None:
+    def fromunicode(self, ustr: str, /):
         """Extends this array with data from the unicode string ustr.
 
         The array must be a unicode type array; otherwise a ValueError is
@@ -180,7 +180,7 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
     def tobytes(self) -> bytes:
         """Convert the array to an array of machine values and return the bytes representation."""
 
-    def tofile(self, f: SupportsWrite[bytes], /) -> None:
+    def tofile(self, f: SupportsWrite[bytes], /):
         """Write all items (as machine values) to the file object f."""
 
     def tolist(self) -> list[Element]:
@@ -242,7 +242,7 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
     def __buffer__(self, flags: int, /) -> memoryview:
         """Return a buffer object that exposes the underlying memory of the object."""
 
-    def __release_buffer__(self, buffer: memoryview, /) -> None:
+    def __release_buffer__(self, buffer: memoryview, /):
         """Release the buffer object that exposes the underlying memory of the object."""
 
     if sys.version_info >= (3, 12):

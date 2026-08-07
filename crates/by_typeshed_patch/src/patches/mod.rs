@@ -24,6 +24,7 @@ pub mod private_type_aliases;
 pub mod property_to_let;
 pub mod protocol_keyword;
 pub mod re_optional_groups;
+pub mod redundant_none_return;
 pub mod redundant_overloads;
 pub mod stray_comments;
 pub mod strip_typing_imports;

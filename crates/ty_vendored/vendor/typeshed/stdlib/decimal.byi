@@ -147,7 +147,7 @@ private type TrapType = type[DecimalException]
 final class _ContextManager:
     init(self, new_context: Context)
     def __enter__(self) -> Context
-    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None
+    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None)
 
 class DecimalTuple(NamedTuple):
     """DecimalTuple(sign, digits, exponent)"""
@@ -748,10 +748,10 @@ class Context:
         traps: dict[TrapType, bool] | Container[TrapType] | None = None,
     )
     override def __reduce__(self) -> (type[Self], (*: dynamic))
-    def clear_flags(self) -> None:
+    def clear_flags(self):
         """Reset all flags to False."""
 
-    def clear_traps(self) -> None:
+    def clear_traps(self):
         """Set all traps to False."""
 
     def copy(self) -> Context:

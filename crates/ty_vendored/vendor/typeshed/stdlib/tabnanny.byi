@@ -29,7 +29,7 @@ class NannyNag(Exception):
     def get_msg(self) -> str
     def get_line(self) -> str
 
-def check(file: StrOrBytesPath) -> None:
+def check(file: StrOrBytesPath):
     """check(file_or_dir)
 
     If file_or_dir is a directory and not a symbolic link, then recursively
@@ -39,4 +39,4 @@ def check(file: StrOrBytesPath) -> None:
     written to standard output using the print statement.
     """
 
-def process_tokens(tokens: Iterable[(int, str, (int, int), (int, int), str)]) -> None
+def process_tokens(tokens: Iterable[(int, str, (int, int), (int, int), str)])

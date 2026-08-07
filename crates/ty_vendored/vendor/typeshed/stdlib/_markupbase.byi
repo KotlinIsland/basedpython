@@ -10,11 +10,11 @@ class ParserBase:
     by the SGML/HTML and XHTML parsers.
     """
 
-    def reset(self) -> None
+    def reset(self)
     def getpos(self) -> (int, int):
         """Return current line number and offset."""
 
-    def unknown_decl(self, data: str) -> None
+    def unknown_decl(self, data: str)
     def parse_comment(self, i: int, report: bool = True) -> int  # undocumented
     def parse_declaration(self, i: int) -> int  # undocumented
     def parse_marked_section(self, i: int, report: bool = True) -> int  # undocumented
