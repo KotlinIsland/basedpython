@@ -64,10 +64,11 @@ pub enum DeferredOperation {
     Unary(ast::UnaryOp),
     /// `left op right`; operands are `[left, right]`.
     Compare(ast::CmpOp),
-    /// basedpython: `receiver.name` in a type expression — an *attribute type*;
-    /// operands are `[receiver]`. Unlike the arithmetic kinds this one is only ever
-    /// built for a type-parameter receiver, because that is the only receiver whose
-    /// members cannot be resolved at definition time.
+    /// basedpython: `receiver.name` — an *attribute type*; operands are `[receiver]`.
+    /// Unlike the arithmetic kinds this one is only ever built for a symbolic receiver,
+    /// because that is the only receiver whose members cannot be resolved at definition
+    /// time. It is what a type expression names as `T.a`, and also what a method member
+    /// of a structural protocol reads back as, so that a call on it keeps its receiver.
     Attribute(Name),
     /// `callee(arg0, arg1, ...)`; operands are `[callee, arg0, arg1, ...]`. Covers
     /// method calls too — the callee is the (typevar-receiver) bound method.
@@ -209,6 +210,28 @@ impl<'db> DeferredType<'db> {
             .iter()
             .map(|operand| operand.reduce_deferred(db))
             .collect();
+
+        // an attribute type is the one operation whose receiver has to be substituted rather
+        // than merely reduced: looking the member up on the type parameter itself is what
+        // *produces* this very deferral for a structural bound, so the reduction would answer
+        // with the question. the bound is what the parameter stands for before specialization
+        if let DeferredOperation::Attribute(name) = self.operation(db) {
+            let [receiver] = &*operands else {
+                return Type::unknown();
+            };
+            let receiver = match receiver.as_typevar() {
+                Some(bound_typevar) => bound_typevar
+                    .typevar(db)
+                    .require_bound_or_constraints(db)
+                    .as_type(db),
+                None => *receiver,
+            };
+            return receiver
+                .member(db, name)
+                .ignore_possibly_undefined()
+                .unwrap_or_else(Type::unknown);
+        }
+
         evaluate(db, self.operation(db), &operands).unwrap_or_else(Type::unknown)
     }
 

@@ -31,6 +31,29 @@ an inline protocol is structural and has no identity of its own, so two
 occurrences of the same members are the same type wherever they are written,
 and any class with matching members satisfies it without inheriting anything
 
+## a call on a type parameter
+
+a method member binds its receiver away, but it still names *that* receiver's
+method, so a call on a type parameter is the [symbolic](symbolic-type-ops.md)
+`T.m()` rather than the return type the protocol declares. specializing the
+parameter re-resolves the call against whatever it was specialized to:
+
+```by
+class B: ...
+
+class X:
+    def foo(self) -> B:
+        return B()
+
+def f[T: protocol(def foo(self) -> B)](t: T):
+    return t.foo()
+
+reveal_type(f(X()))  # B
+```
+
+a `Protocol` class bound answers the same way, so the two spellings of an
+interface agree
+
 ## across several lines
 
 members may be spread over several lines, with an optional trailing `;`:

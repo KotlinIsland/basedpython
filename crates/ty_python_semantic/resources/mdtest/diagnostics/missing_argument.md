@@ -63,8 +63,8 @@ error[missing-argument]: No argument provided for required parameter `a` of func
 12 | h(b=56)
    | ^^^^^^^
    |
-info: Union variant `def f(a, b=42) -> Unknown` is incompatible with this call site
-info: Attempted to call union type `(def f(a, b=42) -> Unknown) | (def g(a, b) -> Unknown)`
+info: Union variant `def f(a, b: some int = 42)` is incompatible with this call site
+info: Attempted to call union type `(def f(a, b: some int = 42)) | (def g(a, b))`
 
 
 error[missing-argument]: No argument provided for required parameter `a` of function `g`
@@ -73,8 +73,8 @@ error[missing-argument]: No argument provided for required parameter `a` of func
 12 | h(b=56)
    | ^^^^^^^
    |
-info: Union variant `def g(a, b) -> Unknown` is incompatible with this call site
-info: Attempted to call union type `(def f(a, b=42) -> Unknown) | (def g(a, b) -> Unknown)`
+info: Union variant `def g(a, b)` is incompatible with this call site
+info: Attempted to call union type `(def f(a, b: some int = 42)) | (def g(a, b))`
 
 
 error[missing-argument]: No argument provided for required parameter `a` of bound method `Foo.method`

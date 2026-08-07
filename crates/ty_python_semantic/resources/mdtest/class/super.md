@@ -54,8 +54,8 @@ super(A, C()).a  # error: [unresolved-attribute]
 super(A, C()).b  # error: [unresolved-attribute]
 super(A, C()).c  # error: [unresolved-attribute]
 
-reveal_type(super(C, C()).a)  # revealed: bound method C.a() -> Unknown
-reveal_type(super(C, C()).b)  # revealed: bound method C.b() -> Unknown
+reveal_type(super(C, C()).a)  # revealed: bound method C.a()
+reveal_type(super(C, C()).b)  # revealed: bound method C.b()
 reveal_type(super(C, C()).aa)  # revealed: int
 reveal_type(super(C, C()).bb)  # revealed: int
 ```
@@ -405,7 +405,7 @@ class A:
     a: int = 1
 
 def f(x):
-    reveal_type(x)  # revealed: Unknown
+    reveal_type(x)  # revealed: x@f
 
     reveal_type(super(x, x))  # revealed: <super: Unknown, Unknown>
     reveal_type(super(A, x))  # revealed: <super: <class 'A'>, Unknown>
@@ -478,14 +478,14 @@ class A:
 class B(A): ...
 
 # A.__dict__["a1"].__get__(B(), B)
-reveal_type(super(B, B()).a1)  # revealed: bound method B.a1() -> Unknown
+reveal_type(super(B, B()).a1)  # revealed: bound method B.a1()
 # A.__dict__["a2"].__get__(B(), B)
-reveal_type(super(B, B()).a2)  # revealed: bound method type[B].a2() -> Unknown
+reveal_type(super(B, B()).a2)  # revealed: bound method type[B].a2()
 
 # A.__dict__["a1"].__get__(None, B)
-reveal_type(super(B, B).a1)  # revealed: def a1(self) -> Unknown
+reveal_type(super(B, B).a1)  # revealed: def a1(self)
 # A.__dict__["a2"].__get__(None, B)
-reveal_type(super(B, B).a2)  # revealed: bound method <class 'B'>.a2() -> Unknown
+reveal_type(super(B, B).a2)  # revealed: bound method <class 'B'>.a2()
 ```
 
 ## Union of Supers

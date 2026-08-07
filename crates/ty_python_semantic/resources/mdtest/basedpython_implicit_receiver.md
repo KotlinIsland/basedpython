@@ -224,7 +224,7 @@ def method_member(p: protocol(def f(self, cb: int.() -> str) -> None)) -> None:
     reveal_type(p.f)  # revealed: (cb: (int, /) -> str) -> None
 
 def receiver_of_protocol(fn: protocol(a: int).() -> None) -> None:
-    reveal_type(fn)  # revealed: (<Protocol with members 'a'>, /) -> None
+    reveal_type(fn)  # revealed: (protocol(a: int), /) -> None
 ```
 
 ## `.py` files reject the syntax

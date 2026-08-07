@@ -545,10 +545,10 @@ def foo():
         if flag():
             x = 3
             # The public type of `x` is shadowed here...
-            reveal_type(x)  # revealed: Literal[3]
+            reveal_type(x)  # revealed: Never
 
         # ...but still visible here.
-        reveal_type(x)  # revealed: Literal[3, 1, 2]
+        reveal_type(x)  # revealed: Literal[1, 2]
 ```
 
 ## Parameter defaults are evaluated before a function's body

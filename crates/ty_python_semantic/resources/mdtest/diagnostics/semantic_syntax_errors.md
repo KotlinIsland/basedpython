@@ -443,13 +443,16 @@ async def elements(n):
     yield n
 
 def _():
+    # `elements` is recovered as the async generator it is, which is not awaitable
     # error: [invalid-syntax] "`await` outside of an asynchronous function"
+    # error: [invalid-await]
     await elements(1)
 
     # error: [invalid-syntax] "`async for` outside of an asynchronous function"
     async for _ in elements(1):
         pass
     # error: [invalid-syntax] "`async with` outside of an asynchronous function"
+    # error: [invalid-context-manager]
     async with elements(1) as x:
         pass
     # error: [invalid-syntax] "asynchronous comprehension outside of an asynchronous function"

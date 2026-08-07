@@ -290,6 +290,14 @@ static_assert(
 
 There are multiple cases when two callable types are not equivalent which are enumerated below.
 
+these turn on the gradual reading of a missing annotation, which is what tells an unannotated `def`
+apart from one that wrote its type down
+
+```toml
+[analysis]
+infer-unannotated-signatures = false
+```
+
 ```py
 from ty_extensions import static_assert
 from ty_extensions._internal import RegularCallableTypeOf, is_equivalent_to
@@ -369,6 +377,11 @@ static_assert(not is_equivalent_to(RegularCallableTypeOf[f13], RegularCallableTy
 
 Two unions containing different `Callable` types are equivalent even if the unions are differently
 ordered:
+
+```toml
+[analysis]
+infer-unannotated-signatures = false
+```
 
 ```py
 from ty_extensions import Unknown, static_assert
@@ -487,6 +500,13 @@ static_assert(is_equivalent_to(X, X))
 The examples provided below are only a subset of the possible cases and only include the ones with
 gradual types. The cases with fully static types and using different combinations of parameter kinds
 are covered above.
+
+these turn on the gradual reading of a missing annotation, which is what they are about
+
+```toml
+[analysis]
+infer-unannotated-signatures = false
+```
 
 ```py
 from ty_extensions import Unknown, static_assert

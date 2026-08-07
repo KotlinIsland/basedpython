@@ -97,7 +97,11 @@ pub(crate) fn check_type_guard_definition<'db>(
 
     // For `TypeIs`, check that the narrowed type is assignable to the parameter type.
     if let Some(narrowed_ty) = narrowed_type {
+        // basedpython: an unannotated parameter declares nothing, so its hole is the gradual
+        // type it replaced and every narrowing fits it
         let param_ty = narrowed_param.annotated_type();
+        let param_ty =
+            crate::types::inferred_signature::gradual_hole(db, param_ty).unwrap_or(param_ty);
         if !narrowed_ty.is_assignable_to(db, param_ty)
             && let Some(builder) = context.report_lint(&INVALID_TYPE_GUARD_DEFINITION, returns_expr)
         {

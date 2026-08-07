@@ -55,8 +55,8 @@ error[too-many-positional-arguments]: Too many positional arguments to function 
 12 | h(1, 2, 3)
    |         ^
    |
-info: Union variant `def f(a, b=42) -> Unknown` is incompatible with this call site
-info: Attempted to call union type `(def f(a, b=42) -> Unknown) | (def g(a, b) -> Unknown)`
+info: Union variant `def f(a, b: some int = 42)` is incompatible with this call site
+info: Attempted to call union type `(def f(a, b: some int = 42)) | (def g(a, b))`
 
 
 error[too-many-positional-arguments]: Too many positional arguments to function `g`: expected 2, got 3
@@ -65,8 +65,8 @@ error[too-many-positional-arguments]: Too many positional arguments to function 
 12 | h(1, 2, 3)
    |         ^
    |
-info: Union variant `def g(a, b) -> Unknown` is incompatible with this call site
-info: Attempted to call union type `(def f(a, b=42) -> Unknown) | (def g(a, b) -> Unknown)`
+info: Union variant `def g(a, b)` is incompatible with this call site
+info: Attempted to call union type `(def f(a, b: some int = 42)) | (def g(a, b))`
 
 
 error[too-many-positional-arguments]: Too many positional arguments to bound method `Foo.method`: expected 1, got 2

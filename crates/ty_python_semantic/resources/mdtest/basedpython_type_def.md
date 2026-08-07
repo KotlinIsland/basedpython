@@ -77,7 +77,7 @@ def f(a: Hashed[str]):
 
 # error: [invalid-type-form] "a list is not hashable"
 def g(a: Hashed[list[int]]):
-    reveal_type(a)  # revealed: Unknown
+    reveal_type(a)  # revealed: final TypeError | type[X@Hashed]
 ```
 
 ## a crash in the body is reported as a failure, not a wrong type
@@ -88,7 +88,7 @@ type def Boom[X]:
 
 # error: [invalid-type-form] "could not be evaluated"
 def f(a: Boom[int]):
-    reveal_type(a)  # revealed: Unknown
+    reveal_type(a)  # revealed: Never
 ```
 
 ## the body may do anything a python function may do
@@ -198,7 +198,7 @@ type def G[X]:
     return int
 
 def unreduced[T](x: G[T]):
-    reveal_type(x)  # revealed: Unknown
+    reveal_type(x)  # revealed: <class 'int'>
 ```
 
 ## a bound is a precondition, checked before the body runs

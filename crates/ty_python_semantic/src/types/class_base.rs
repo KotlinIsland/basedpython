@@ -131,6 +131,11 @@ impl<'db> ClassBase<'db> {
         ty: Type<'db>,
         subclass: Option<ClassLiteral<'db>>,
     ) -> Option<Self> {
+        // basedpython: a hole nothing bounded is the gradual type it replaced, and a gradual base
+        // is a base
+        if let Some(gradual) = crate::types::inferred_signature::gradual_hole(db, ty) {
+            return Self::try_from_type(db, gradual, subclass);
+        }
         match ty {
             // parameter-only marker; behaves as the type a body sees (bound of `Key`)
             Type::Overlapping(overlapping) => {

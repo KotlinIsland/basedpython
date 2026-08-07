@@ -104,7 +104,7 @@ else:
 from b import f
 
 # TODO: We should disambiguate in such cases between `b.f` and `c.f`.
-reveal_type(f)  # revealed: (def f() -> Unknown) | (def f() -> Unknown)
+reveal_type(f)  # revealed: (def f()) | (def f())
 ```
 
 ## Reimport with stub declaration

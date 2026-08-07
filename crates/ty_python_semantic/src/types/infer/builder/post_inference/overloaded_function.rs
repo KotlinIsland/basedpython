@@ -285,24 +285,33 @@ fn check_non_generic_overload_implementation_consistency<'db>(
     }
 
     let db = context.db();
-    let implementation_signature = implementation.signature(db);
 
     // TODO: Remove this temporary non-generic restriction once overload implementation consistency
     // handles type-variable domains.
-    if !implementation_signature.is_non_generic() {
+    //
+    // basedpython: an unannotated parameter's hole is erased first — it makes the signature
+    // generic without there being any type-variable domain to reason about, and skipping on it
+    // would silently retire this check for every unannotated implementation
+    let Some(implementation_signature) = implementation
+        .signature(db)
+        .without_inferred_parameter_holes(db)
+    else {
         return;
-    }
+    };
 
-    let overload_signatures = overloads
+    let Some(overload_signatures) = overloads
         .iter()
-        .map(|overload| (overload, overload.signature(db)));
-
-    if overload_signatures
-        .clone()
-        .any(|(_, signature)| !signature.is_non_generic())
-    {
+        .map(|overload| {
+            overload
+                .signature(db)
+                .without_inferred_parameter_holes(db)
+                .map(|signature| (overload, signature))
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
         return;
-    }
+    };
+    let overload_signatures = overload_signatures.into_iter();
 
     for (overload, overload_signature) in overload_signatures {
         let function_node = overload.node(db, context.file(), context.module());

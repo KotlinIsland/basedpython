@@ -221,6 +221,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&REDUNDANT_BOOLEAN_COMPARISON);
     registry.register_lint(&INVALID_FORMAT_SPEC);
     registry.register_lint(&IMPLICIT_OBJECT_REPR);
+    registry.register_lint(&REDUNDANT_RETURN_ANNOTATION);
 
     // String annotations
     registry.register_lint(&ESCAPE_CHARACTER_IN_FORWARD_ANNOTATION);
@@ -2797,6 +2798,54 @@ declare_lint! {
     }
 }
 
+declare_lint! {
+    /// ## What it does
+    /// Checks for an explicit `-> None` return annotation that leaves the function's
+    /// type exactly where deleting it would.
+    ///
+    /// ## Why is this bad?
+    /// Once unannotated signatures are recovered, `None` is what a `def` already
+    /// means when it says nothing about its return type, so writing it out adds a
+    /// word without adding information. Leaving it off is also how the type reads
+    /// back: `reveal_type` of such a function shows `def f()`, not `def f() -> None`.
+    ///
+    /// Nothing is reported when neither option below is on — there `-> None` is
+    /// load-bearing, since removing it makes the function return `Unknown`.
+    ///
+    /// Where the type would come from instead does not matter, only whether it is
+    /// still `None`. A `def` that would return something else keeps its annotation: a
+    /// body that always raises returns `Never`, a generator returns a generator, and
+    /// an override or an overload implementation returns whatever it inherits.
+    ///
+    /// ## Examples
+    /// ```python
+    /// def f() -> None:  # warning: redundant `-> None`
+    ///     print("hi")
+    ///
+    /// def g():  # ok — says the same thing
+    ///     print("hi")
+    ///
+    /// def h() -> None:  # ok — the body returns `Never`, not `None`
+    ///     raise ValueError
+    ///
+    /// class Base:
+    ///     def m(self) -> int | None: ...
+    ///
+    /// class Sub(Base):
+    ///     def m(self) -> None:  # ok — without it, `m` would return `int | None`
+    ///         print("hi")
+    /// ```
+    ///
+    /// ## Options
+    /// - `analysis.infer-unannotated-signatures`
+    /// - `analysis.sound-types`
+    pub(crate) static REDUNDANT_RETURN_ANNOTATION = {
+        summary: "detects an explicit `-> None` that is already the default",
+        status: LintStatus::stable("0.0.62"),
+        default_level: Level::Warn,
+    }
+}
+
 /// A collection of type check diagnostics.
 #[derive(Default, Eq, PartialEq, get_size2::GetSize)]
 pub struct TypeCheckDiagnostics {
@@ -5365,7 +5414,8 @@ pub(crate) fn report_shadowed_type_variable<'db>(
         TypeVarKind::LegacyTypeVar
         | TypeVarKind::Pep695TypeVar
         | TypeVarKind::TypingSelf
-        | TypeVarKind::Pep613Alias => "type variable",
+        | TypeVarKind::Pep613Alias
+        | TypeVarKind::InferredParameter => "type variable",
         TypeVarKind::LegacyParamSpec | TypeVarKind::Pep695ParamSpec => "ParamSpec",
         TypeVarKind::Pep695KeywordVariadic => "keyword-variadic pack",
         TypeVarKind::LegacyTypeVarTuple | TypeVarKind::Pep695TypeVarTuple => "TypeVarTuple",

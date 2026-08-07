@@ -11,7 +11,7 @@ from __future__ import annotations
 def f(x: f):
     pass
 
-reveal_type(f)  # revealed: def f(x: Unknown) -> Unknown
+reveal_type(f)  # revealed: def f(x: Unknown)
 ```
 
 ## Unpacking
@@ -196,25 +196,25 @@ class C:
         def inner_a(positional=self.a):
             return
         self.a = inner_a
-        # revealed: def inner_a(positional=...) -> Unknown
+        # revealed: def inner_a(positional = ...)
         reveal_type(inner_a)
 
         def inner_b(*, kw_only=self.b):
             return
         self.b = inner_b
-        # revealed: def inner_b(*, kw_only=...) -> Unknown
+        # revealed: def inner_b(*, kw_only = ...)
         reveal_type(inner_b)
 
         def inner_c(positional_only=self.c, /):
             return
         self.c = inner_c
-        # revealed: def inner_c(positional_only=..., /) -> Unknown
+        # revealed: def inner_c(positional_only = ..., /)
         reveal_type(inner_c)
 
         def inner_d(*, kw_only=self.d):
             return
         self.d = inner_d
-        # revealed: def inner_d(*, kw_only=...) -> Unknown
+        # revealed: def inner_d(*, kw_only = ...)
         reveal_type(inner_d)
 ```
 
@@ -223,7 +223,7 @@ We do, however, still check assignability of the default value to the parameter 
 ```py
 class D:
     def f(self: "D"):
-        # error: [invalid-parameter-default] "Default value of type `(a: int = ...) -> Unknown` is not assignable to annotated parameter type `int`"
+        # error: [invalid-parameter-default] "Default value of type `(a: int = ...) -> None` is not assignable to annotated parameter type `int`"
         def inner_a(a: int = self.a): ...
         self.a = inner_a
 ```
@@ -238,16 +238,16 @@ class C:
         self.c = lambda positional_only=self.c, /: positional_only
         self.d = lambda *, kw_only=self.d: kw_only
 
-        # revealed: (positional: Unknown = ...) -> Unknown | ((positional=...) -> Divergent)
+        # revealed: (positional: Divergent = ...) -> Divergent
         reveal_type(self.a)
 
-        # revealed: (*, kw_only=...) -> Unknown | ((*, kw_only=...) -> Divergent)
+        # revealed: (*, kw_only: (*, kw_only: Divergent = ...) -> Divergent = ...) -> Divergent
         reveal_type(self.b)
 
-        # revealed: (positional_only: Unknown = ..., /) -> Unknown | ((positional_only=..., /) -> Divergent)
+        # revealed: (positional_only: Divergent = ..., /) -> Divergent
         reveal_type(self.c)
 
-        # revealed: (*, kw_only=...) -> Unknown | ((*, kw_only=...) -> Divergent)
+        # revealed: (*, kw_only: (*, kw_only: Divergent = ...) -> Divergent = ...) -> Divergent
         reveal_type(self.d)
 ```
 
@@ -289,7 +289,7 @@ class Recursive:
         self.callback = c.method if flag else other.callback
 
 def check(value: Recursive):
-    reveal_type(value.callback)  # revealed: bound method C[Any].method(*args: Any, **kwargs: Any) -> None
+    reveal_type(value.callback)  # revealed: bound method C[Any].method(*args: Any, **kwargs: Any)
     static_assert(is_subtype_of(TypeOf[value.callback], Callable[[], None]))
 ```
 

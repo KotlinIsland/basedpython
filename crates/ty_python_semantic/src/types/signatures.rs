@@ -31,13 +31,14 @@ use crate::types::generics::{
     walk_generic_context,
 };
 use crate::types::infer::{TypeExpressionFlags, infer_deferred_types};
+use crate::types::inferred_signature::inferred_parameter_type;
 use crate::types::instance::ProtocolInstanceType;
 use crate::types::relation::{
     HasRelationToVisitor, IsDisjointVisitor, TypeRelation, TypeRelationChecker, TypeVarEvaluation,
 };
 use crate::types::tuple::{Tuple, TupleType, VariableSegment};
 use crate::types::typed_dict::extract_unpacked_typed_dict_keys_from_kwargs_annotation;
-use crate::types::typevar::max_typevar_freshness_matching_generic_context;
+use crate::types::typevar::{TypeVarKind, max_typevar_freshness_matching_generic_context};
 use crate::types::{
     ApplyTypeMappingVisitor, BindingContext, BoundTypeVarIdentity, BoundTypeVarInstance,
     CallableType, ErrorContext, ErrorContextTree, FindLegacyTypeVarsVisitor, KnownClass,
@@ -1215,6 +1216,61 @@ impl<'db> Signature<'db> {
         }
     }
 
+    /// basedpython: under `sound-types`, open an anonymous type parameter for every parameter
+    /// still without a type of its own.
+    ///
+    /// Runs after every other source of a parameter type — an explicit annotation, the implicit
+    /// `self`, a sibling overload, an overridden base method — so it only ever fills what nothing
+    /// else could. A `*args` or `**kwargs` stands for a run of arguments rather than one, so a
+    /// single hole cannot name it and it is left gradual.
+    ///
+    /// `binds_receiver` says the first parameter is bound by the receiver rather than supplied
+    /// as an argument, so nothing a call site writes lands there and it is not a hole either.
+    ///
+    /// See [`inferred_parameter_type`].
+    pub(crate) fn open_unannotated_parameter_holes(
+        &mut self,
+        db: &'db dyn Db,
+        function: Definition<'db>,
+        binds_receiver: bool,
+    ) {
+        let mut holes = Vec::new();
+        for (index, parameter) in Arc::make_mut(&mut self.parameters.data)
+            .value
+            .iter_mut()
+            .enumerate()
+        {
+            if !parameter.inferred_annotation
+                || !parameter.annotated_type.is_unknown()
+                || parameter.is_variadic()
+                || parameter.is_keyword_variadic()
+                || (binds_receiver && index == 0)
+            {
+                continue;
+            }
+            let (Some(name), Some(definition)) = (parameter.name(), parameter.definition) else {
+                continue;
+            };
+            let hole = inferred_parameter_type(db, name, definition, function);
+            if let Type::TypeVar(bound_typevar) = hole {
+                holes.push(bound_typevar);
+            }
+            parameter.annotated_type = hole;
+            parameter.inferred_annotation = false;
+        }
+
+        if holes.is_empty() {
+            return;
+        }
+        self.generic_context = Some(match self.generic_context {
+            Some(generic_context) => GenericContext::from_typevar_instances(
+                db,
+                generic_context.variables(db).chain(holes),
+            ),
+            None => GenericContext::from_typevar_instances(db, holes),
+        });
+    }
+
     /// Return the definition associated with this signature, if any.
     pub(crate) fn definition(&self) -> Option<Definition<'db>> {
         self.definition
@@ -1712,6 +1768,52 @@ impl<'db> Signature<'db> {
 
     pub(crate) fn is_non_generic(&self) -> bool {
         self.generic_context.is_none()
+    }
+
+    /// basedpython: this signature as it read before an unannotated parameter opened a hole, or
+    /// `None` when it is generic for some other reason.
+    ///
+    /// A hole is an unannotated parameter wearing a name, and opening one makes the signature
+    /// generic. A check that deliberately handles only non-generic signatures would otherwise stop
+    /// looking at every unannotated `def` the moment signature recovery is turned on — not because
+    /// there is a type-variable domain to reason about, but because recovery put one there.
+    ///
+    /// Each hole goes back to the gradual type it stands in for rather than to whatever bounds it,
+    /// so such a check keeps exactly the reach it had and gains no new reports of its own — a
+    /// bound is recovered information, and deciding what to do with it is the business of a check
+    /// written for it.
+    pub(crate) fn without_inferred_parameter_holes(&self, db: &'db dyn Db) -> Option<Self> {
+        let is_hole = |ty: Type<'db>| {
+            matches!(ty, Type::TypeVar(bound_typevar)
+                if bound_typevar.typevar(db).kind(db) == TypeVarKind::InferredParameter)
+        };
+
+        // an overload implementation takes its parameter types from the overloads, so it can carry
+        // their holes while having no generic context of its own — the erasure below still has to
+        // run, and only a variable that is *not* a hole means there is a real domain to skip for
+        if let Some(generic_context) = self.generic_context
+            && !generic_context
+                .variables(db)
+                .all(|variable| variable.typevar(db).kind(db) == TypeVarKind::InferredParameter)
+        {
+            return None;
+        }
+
+        let erase = |ty: Type<'db>| if is_hole(ty) { Type::unknown() } else { ty };
+
+        let mut erased = self.clone();
+        for parameter in &mut Arc::make_mut(&mut erased.parameters.data).value {
+            if !is_hole(parameter.annotated_type) {
+                continue;
+            }
+            parameter.annotated_type = Type::unknown();
+            // opening the hole is what cleared this; a parameter nobody annotated reads as one
+            // again, which is what tells a relation the position is gradual rather than declared
+            parameter.inferred_annotation = true;
+        }
+        erased.return_ty = erase(erased.return_ty);
+        erased.generic_context = None;
+        Some(erased)
     }
 
     /// Return whether this non-generic implementation accepts the arguments of a non-generic
@@ -5211,20 +5313,6 @@ impl<'db> Parameter<'db> {
                     function_signature_type_expression_flags(db, function_definition, annotation),
                     annotation.is_starred_expr(),
                 )
-            } else if let Some(default_type) = kind.default_type()
-                && db
-                    .analysis_settings(function_definition.file(db))
-                    .sound_types
-            {
-                // basedpython: an unannotated parameter with a default is declared with the
-                // default's promoted type, so call sites are checked against it. deliberately
-                // breaks the gradual guarantee
-                (
-                    default_type.promote(db),
-                    false,
-                    TypeExpressionFlags::empty(),
-                    false,
-                )
             } else {
                 (Type::unknown(), true, TypeExpressionFlags::empty(), false)
             };
@@ -5647,7 +5735,7 @@ mod tests {
 
     #[test]
     fn empty() {
-        let mut db = setup_db();
+        let mut db = setup_db().without_inferred_signatures();
         db.write_dedented("/src/a.py", "def f(): ...").unwrap();
         let func = get_function_f(&db, "/src/a.py")
             .literal(&db)
@@ -5662,7 +5750,7 @@ mod tests {
     #[test]
     #[allow(clippy::many_single_char_names)]
     fn full() {
-        let mut db = setup_db();
+        let mut db = setup_db().without_inferred_signatures();
         db.write_dedented(
             "/src/a.py",
             "

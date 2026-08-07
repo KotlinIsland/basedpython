@@ -217,6 +217,11 @@ fn sound_types_is_per_module() -> anyhow::Result<()> {
             [tool.ty.environment]
             python-version = "3.13"
 
+            # a gradual module has to opt out of signature recovery too, or its own unannotated
+            # parameters would be precise whatever `sound-types` says
+            [tool.ty.analysis]
+            infer-unannotated-signatures = false
+
             [[tool.ty.overrides]]
             include = ["sound/**"]
 
@@ -225,9 +230,11 @@ fn sound_types_is_per_module() -> anyhow::Result<()> {
             "#,
         ),
         (
+            // no `-> None`: a sound module already returns `None` without it, and writing it
+            // would draw `redundant-return-annotation` into a snapshot about parameters
             "sound/lib.py",
             r#"
-            def f(a=1) -> None: ...
+            def f(a=1): ...
             "#,
         ),
         (
@@ -264,13 +271,13 @@ fn sound_types_is_per_module() -> anyhow::Result<()> {
      --> gradual/main.py:5:3
       |
     5 | f("wrong")
-      |   ^^^^^^^ Expected `int`, found `Literal["wrong"]`
+      |   ^^^^^^^ Argument type `Literal["wrong"]` does not satisfy `int`, inferred for parameter `a`
       |
-    info: Function defined here
-     --> sound/lib.py:2:5
+    info: Parameter declared here
+     --> sound/lib.py:2:7
       |
-    2 | def f(a=1) -> None: ...
-      |     ^ --- Parameter declared here
+    2 | def f(a=1): ...
+      |       ^
       |
 
     Found 1 diagnostic
@@ -575,9 +582,11 @@ fn implicit_object_repr_exempt_types_silences_a_default() -> anyhow::Result<()> 
             "#,
         ),
         (
+            // no `-> None`: a bodyless `def` already returns `None` without it, and writing it
+            // would draw `redundant-return-annotation` into a snapshot about rendering
             "test.py",
             r#"
-            def f() -> None: ...
+            def f(): ...
 
             print(f)
             print(int)
@@ -598,6 +607,85 @@ fn implicit_object_repr_exempt_types_silences_a_default() -> anyhow::Result<()> 
     info: nothing in its hierarchy defines one, so the output is the interpreter's default, which identifies the class rather than the value
 
     Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+/// `redundant-return-annotation` is on by default, but only reports where dropping the annotation
+/// would have left the return type alone.
+#[test]
+fn redundant_return_annotation_is_gated_on_infer_unannotated_signatures() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.ty.environment]
+            python-version = "3.13"
+
+            # recovery is on by default, so the gradual half has to say it is off
+            [tool.ty.analysis]
+            infer-unannotated-signatures = false
+
+            [[tool.ty.overrides]]
+            include = ["inferred/**"]
+
+            [tool.ty.overrides.analysis]
+            infer-unannotated-signatures = true
+            "#,
+        ),
+        (
+            "inferred/lib.py",
+            r#"
+            def f() -> None:
+                print("hi")
+
+            def raises() -> None:
+                raise ValueError
+            "#,
+        ),
+        // a first-party stub in a module that recovers signatures is reported too: a bodyless
+        // `def` would return `None` on its own
+        (
+            "inferred/stub.pyi",
+            r#"
+            def s() -> None: ...
+            "#,
+        ),
+        (
+            "gradual/lib.py",
+            r#"
+            def g() -> None:
+                print("hi")
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[redundant-return-annotation]: Redundant `-> None` return annotation
+     --> inferred/lib.py:2:12
+      |
+    2 | def f() -> None:
+      |            ^^^^
+      |
+    info: a `def` that leaves out its return type already returns `None`
+    help: Remove the annotation
+
+    warning[redundant-return-annotation]: Redundant `-> None` return annotation
+     --> inferred/stub.pyi:2:12
+      |
+    2 | def s() -> None: ...
+      |            ^^^^
+      |
+    info: a `def` that leaves out its return type already returns `None`
+    help: Remove the annotation
+
+    Found 2 diagnostics
 
     ----- stderr -----
     ");

@@ -130,8 +130,131 @@ class A[T]:
         raise NotImplementedError
 
 def f(x: A[int]) -> None:
-    reveal_type(x.get())  # revealed: <Protocol with members 'a'>
+    reveal_type(x.get())  # revealed: protocol(a: int)
     reveal_type(x.get().a)  # revealed: int
+```
+
+## A method member keeps its receiver
+
+### A call on a type parameter bounded by an inline protocol stays symbolic
+
+A method member's receiver binds away, but the member still names *that* receiver's method, so a
+call on a type parameter is the symbolic `T.m()` rather than the return type the protocol declares.
+Specializing the parameter re-resolves the call against whatever it was specialized to.
+
+```by
+class B:
+    def foo(self) -> int:
+        return 1
+
+class X:
+    def foo(self) -> B:
+        return B()
+
+def f[T: protocol(def foo(self) -> B)](t: T):
+    return t.foo()
+
+reveal_type(f)  # revealed: def f[T](t: T) -> T.foo()
+reveal_type(f(X()))  # revealed: B
+```
+
+### A class-based protocol bound answers the same way
+
+The two spellings of the same interface have to agree: `Protocol` class or `protocol(...)`, a call
+on the parameter names the same operation.
+
+```by
+from typing import Protocol
+
+class B:
+    def foo(self) -> int:
+        return 1
+
+class HasFoo(Protocol):
+    def foo(self) -> B: ...
+
+class X:
+    def foo(self) -> B:
+        return B()
+
+def f[T: HasFoo](t: T):
+    return t.foo()
+
+reveal_type(f)  # revealed: def f[T](t: T) -> T.foo()
+reveal_type(f(X()))  # revealed: B
+```
+
+### A chain of calls composes
+
+Each link is a call on the value the one before it produced, so the whole chain stays one symbolic
+expression until the parameter is specialized.
+
+```by
+class B:
+    def foo(self) -> int:
+        return 1
+
+class A:
+    def foo(self) -> B:
+        return B()
+
+class X:
+    def foo(self) -> A:
+        return A()
+
+def f[T: protocol(def foo(self) -> protocol(def foo(self) -> B))](t: T):
+    return t.foo().foo()
+
+reveal_type(f)  # revealed: def f[T](t: T) -> T.foo().foo()
+reveal_type(f(X()))  # revealed: B
+```
+
+### A chain composes through a local too
+
+A local the chain was stepped through holds the same symbolic value the expression had, so writing
+the links out one at a time reaches the same place.
+
+```by
+class B:
+    def foo(self) -> int:
+        return 1
+
+class A:
+    def foo(self) -> B:
+        return B()
+
+class X:
+    def foo(self) -> A:
+        return A()
+
+def f[T: protocol(def foo(self) -> protocol(def foo(self) -> B))](t: T):
+    a = t.foo()
+    return a.foo()
+
+reveal_type(f)  # revealed: def f[T](t: T) -> T.foo().foo()
+reveal_type(f(X()))  # revealed: B
+```
+
+### An attribute member reads as its declared type
+
+Only a method needs its receiver kept. A data member — and the read-only member an inferred protocol
+asks for — reads back as its declared type through a `Protocol` class too, so both spellings already
+agree about it.
+
+```by
+from typing import Protocol
+
+class HasA(Protocol):
+    a: int
+
+def inline[T: protocol(a: int)](t: T):
+    return t.a
+
+def klass[T: HasA](t: T):
+    return t.a
+
+reveal_type(inline)  # revealed: def inline[T](t: T) -> int
+reveal_type(klass)  # revealed: def klass[T](t: T) -> int
 ```
 
 ## Keyword unpacks
@@ -173,7 +296,7 @@ class A[**Kwargs]:
     def get(self) -> protocol(**Kwargs): ...
 
     def use(self) -> None:
-        reveal_type(self.get())  # revealed: <Protocol with members **Kwargs@A>
+        reveal_type(self.get())  # revealed: protocol(**Kwargs@A)
 ```
 
 ### An unspecialized pack declares no members yet
@@ -209,7 +332,7 @@ A synthesized protocol reads back as the members it declares.
 
 ```by
 def f(x: protocol(a: int; def m(self) -> str)) -> None:
-    reveal_type(x)  # revealed: <Protocol with members 'a', 'm'>
+    reveal_type(x)  # revealed: protocol(a: int; def m(self) -> str)
 ```
 
 ## `protocol` is a soft keyword

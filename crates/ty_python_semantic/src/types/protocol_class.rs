@@ -12,6 +12,8 @@ use crate::types::attribute_write::{
     ProtocolMemberWriteRequirement, attribute_write_requirement,
 };
 use crate::types::call::{CallArguments, CallDunderError};
+use crate::types::deferred::is_symbolic_operand;
+use crate::types::instance::Protocol;
 use crate::types::relation::{DisjointnessChecker, TypeRelationChecker};
 use crate::types::visitor::any_over_type;
 use crate::types::{TypeContext, UpcastPolicy};
@@ -23,11 +25,12 @@ use crate::{
     },
     types::{
         ApplyTypeMappingVisitor, BindingContext, BoundTypeVarIdentity, BoundTypeVarInstance,
-        CallableType, ClassBase, ClassType, ErrorContext, FindLegacyTypeVarsVisitor,
-        GenericContext, InstanceFallbackShadowsNonDataDescriptor, IntersectionType, KnownFunction,
-        MemberLookupKey, MemberLookupPolicy, Parameter, PropertyInstanceType, ProtocolInstanceType,
-        SelfBinding, Signature, StaticClassLiteral, Type, TypeMapping, TypeQualifiers,
-        TypeVarBoundOrConstraints, TypeVarVariance, UnionType, VarianceInferable,
+        CallableType, ClassBase, ClassType, DeferredOperation, DeferredType, ErrorContext,
+        FindLegacyTypeVarsVisitor, GenericContext, InstanceFallbackShadowsNonDataDescriptor,
+        IntersectionType, KnownFunction, MemberLookupKey, MemberLookupPolicy, Parameter,
+        PropertyInstanceType, ProtocolInstanceType, SelfBinding, Signature, StaticClassLiteral,
+        Type, TypeMapping, TypeQualifiers, TypeVarBoundOrConstraints, TypeVarVariance, UnionType,
+        VarianceInferable,
         constraints::{ConstraintSet, IteratorConstraintsExtension, OptionConstraintsExtension},
         context::InferContext,
         diagnostic::report_undeclared_protocol_member,
@@ -313,6 +316,71 @@ pub(super) enum InlineProtocolMember<'db> {
     Attribute(Type<'db>),
     /// A method member `def f(self) -> int`, whose receiver is bound away on access.
     Method(CallableType<'db>),
+    /// basedpython: a member that is only ever read, as a `get`-only property is.
+    ///
+    /// This is what an inferred protocol asks for when it saw `x.a` and nothing wrote to it:
+    /// requiring a *mutable* attribute would make the member invariant and demand that the
+    /// argument's own attribute be typed exactly the same.
+    ReadOnlyAttribute(Type<'db>),
+}
+
+/// basedpython: the [attribute type](crate::types::deferred) a method member of a structural
+/// protocol reads back as when it is accessed on a symbolic receiver.
+///
+/// A class-defined protocol's method keeps the receiver it was accessed on: the function
+/// descriptor binds it into a [`Type::BoundMethod`]. A structural protocol has no function to
+/// bind, so its method would arrive with `self` already bound away, and a call on it would
+/// answer with the protocol's own declared return instead of re-resolving against whatever the
+/// receiver is specialized to. `T.name` names the member without resolving it, which is the same
+/// thing the bound method does and the same thing a type expression writes.
+///
+/// Only a method member needs this. An attribute member — including the read-only one an
+/// inferred protocol asks for — reads back as its declared type through a class-defined protocol
+/// too, so both kinds of protocol already agree about it.
+pub(super) fn symbolic_method_member<'db>(
+    db: &'db dyn Db,
+    ty: Type<'db>,
+    name: &Name,
+    receiver: Option<Type<'db>>,
+) -> Option<Type<'db>> {
+    let receiver = receiver.unwrap_or(ty);
+    if !is_symbolic_operand(receiver) {
+        return None;
+    }
+    structural_interface(db, ty)?
+        .is_instance_method_member(db, name)
+        .then(|| {
+            DeferredType::build(
+                db,
+                &DeferredOperation::Attribute(name.clone()),
+                Box::from([receiver]),
+            )
+        })
+}
+
+/// The interface of `ty` when it is a structural protocol, looking through a type parameter to
+/// the bound that says what its members are.
+fn structural_interface<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<ProtocolInterface<'db>> {
+    match ty {
+        Type::ProtocolInstance(ProtocolInstanceType {
+            inner: Protocol::Synthesized(protocol),
+            ..
+        }) => Some(protocol.interface()),
+        Type::TypeVar(bound_typevar) => {
+            structural_interface(db, bound_typevar.typevar(db).upper_bound(db)?)
+        }
+        _ => None,
+    }
+}
+
+/// basedpython: how one member of a protocol reads back as the inline `protocol(...)` syntax
+/// that would declare it.
+#[derive(Copy, Clone)]
+pub(super) enum InlineProtocolMemberForm<'db> {
+    /// `def name(self) -> R`
+    Method(Type<'db>),
+    /// `name: T`
+    Attribute(Type<'db>),
 }
 
 impl get_size2::GetSize for ProtocolInterface<'_> {}
@@ -529,6 +597,13 @@ impl<'db> ProtocolInterface<'db> {
 
     pub(super) fn includes_member(self, db: &'db dyn Db, name: &str) -> bool {
         self.inner(db).contains_key(name)
+    }
+
+    /// basedpython: whether `name` is an ordinary method member, the one kind whose access
+    /// binds a receiver away.
+    pub(super) fn is_instance_method_member(self, db: &'db dyn Db, name: &str) -> bool {
+        self.member_by_name(db, name)
+            .is_some_and(|member| member.is_instance_method())
     }
 
     /// Returns whether `name` has an instance-write requirement of `type[T]`, where `T` belongs
@@ -1178,6 +1253,9 @@ impl<'db> ProtocolMemberData<'db> {
                 Self::attribute(ty, TypeQualifiers::default(), None)
             }
             InlineProtocolMember::Method(callable) => Self::method(db, callable, None),
+            InlineProtocolMember::ReadOnlyAttribute(ty) => {
+                Self::property(Some(ProtocolMemberType::new(ty)), None, None)
+            }
         }
     }
 
@@ -1526,6 +1604,30 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
 
     pub(super) fn is_method(&self) -> bool {
         matches!(self.data.kind, ProtocolMemberKind::Method(..))
+    }
+
+    /// basedpython: how this member reads back as inline `protocol(...)` syntax.
+    ///
+    /// A member with nothing readable — a set-only property — has no such form, and the
+    /// protocol falls back to being described rather than spelled.
+    pub(super) fn inline_form(&self) -> Option<InlineProtocolMemberForm<'db>> {
+        match self.data.kind {
+            ProtocolMemberKind::Method(member, ProtocolMethodKind::Instance) => {
+                Some(InlineProtocolMemberForm::Method(member.ty()))
+            }
+            ProtocolMemberKind::Attribute(member) => {
+                Some(InlineProtocolMemberForm::Attribute(member.ty()))
+            }
+            ProtocolMemberKind::Property {
+                read: Some(read), ..
+            } => Some(InlineProtocolMemberForm::Attribute(read.ty())),
+            // a `classmethod` / `staticmethod` member has no inline spelling
+            ProtocolMemberKind::Method(
+                _,
+                ProtocolMethodKind::Class | ProtocolMethodKind::Static,
+            )
+            | ProtocolMemberKind::Property { read: None, .. } => None,
+        }
     }
 
     /// Returns the priority for structurally comparing this member.

@@ -127,7 +127,7 @@ not just `Unknown`:
 async def f():
     pass
 
-reveal_type(f())  # revealed: CoroutineType[Any, Any, Unknown]
+reveal_type(f())  # revealed: CoroutineType[Any, Any, None]
 ```
 
 ## Awaiting intersection types (3.13+)

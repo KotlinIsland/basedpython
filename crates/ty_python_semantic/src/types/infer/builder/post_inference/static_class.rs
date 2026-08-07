@@ -51,7 +51,7 @@ use crate::{
         mro::StaticMroErrorKind,
         overrides,
         tuple::Tuple,
-        typevar::TypeVarInstance,
+        typevar::{TypeVarInstance, TypeVarKind},
         variance::VarianceInferable,
         visitor::find_over_type,
     },
@@ -942,6 +942,11 @@ pub(crate) fn check_static_class_definitions<'db>(
             // variables from enclosing scopes (by identity).
             for base_typevar in class.typevars_referenced_in_bases(db) {
                 let typevar = base_typevar.typevar(db);
+                // basedpython: an unannotated parameter's hole is not a type parameter anyone
+                // wrote, so there is no name to rename and nothing to report shadowing of
+                if typevar.kind(db) == TypeVarKind::InferredParameter {
+                    continue;
+                }
                 for enclosing in enclosing_generic_contexts(db, index, parent) {
                     if let Some(other_typevar) = enclosing.binds_typevar(db, typevar) {
                         report_shadowed_type_variable(

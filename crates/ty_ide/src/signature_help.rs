@@ -541,7 +541,7 @@ def ab(a: str): ...
         assert_snapshot!(test.signature_help_render(), @"
 
         ============== active signature =============
-        (a: int) -> Unknown
+        (a: int) -> None
         ---------------------------------------------
         the int overload
 
@@ -550,7 +550,7 @@ def ab(a: str): ...
         ---------------------------------------------
 
         =============== other signature =============
-        (a: str) -> Unknown
+        (a: str) -> None
         ---------------------------------------------
         the real implementation!
 
@@ -597,7 +597,7 @@ def ab(a: str):
         assert_snapshot!(test.signature_help_render(), @"
 
         ============== active signature =============
-        (a: int) -> Unknown
+        (a: int) -> None
         ---------------------------------------------
         the int overload
 
@@ -606,7 +606,7 @@ def ab(a: str):
         ---------------------------------------------
 
         =============== other signature =============
-        (a: str) -> Unknown
+        (a: str) -> None
         ---------------------------------------------
         the str overload
 
@@ -653,7 +653,7 @@ def ab(a: int):
         assert_snapshot!(test.signature_help_render(), @"
 
         ============== active signature =============
-        (a: int, b: int) -> Unknown
+        (a: int, b: int) -> None
         ---------------------------------------------
         the two arg overload
 
@@ -662,7 +662,7 @@ def ab(a: int):
         ---------------------------------------------
 
         =============== other signature =============
-        (a: int) -> Unknown
+        (a: int) -> None
         ---------------------------------------------
         the one arg overload
 
@@ -707,7 +707,7 @@ def ab(a: int):
         assert_snapshot!(test.signature_help_render(), @"
 
         ============== active signature =============
-        (a: int, b: int) -> Unknown
+        (a: int, b: int) -> None
         ---------------------------------------------
         the two arg overload
 
@@ -716,7 +716,7 @@ def ab(a: int):
         ---------------------------------------------
 
         =============== other signature =============
-        (a: int) -> Unknown
+        (a: int) -> None
         ---------------------------------------------
         the one arg overload
 
@@ -767,7 +767,7 @@ def ab(a: int, *, c: int):
         assert_snapshot!(test.signature_help_render(), @"
 
         ============== active signature =============
-        (a: int, *, b: int) -> Unknown
+        (a: int, *, b: int) -> None
         ---------------------------------------------
         b overload
 
@@ -776,13 +776,13 @@ def ab(a: int, *, c: int):
         ---------------------------------------------
 
         =============== other signature =============
-        (a: int) -> Unknown
+        (a: int) -> None
         ---------------------------------------------
         keywordless overload
 
         (no active parameter specified)
         =============== other signature =============
-        (a: int, *, c: int) -> Unknown
+        (a: int, *, c: int) -> None
         ---------------------------------------------
         c overload
 
@@ -833,7 +833,7 @@ def ab(a: int, *, c: int):
         assert_snapshot!(test.signature_help_render(), @"
 
         ============== active signature =============
-        (a: int, *, c: int) -> Unknown
+        (a: int, *, c: int) -> None
         ---------------------------------------------
         c overload
 
@@ -842,13 +842,13 @@ def ab(a: int, *, c: int):
         ---------------------------------------------
 
         =============== other signature =============
-        (a: int) -> Unknown
+        (a: int) -> None
         ---------------------------------------------
         keywordless overload
 
         (no active parameter specified)
         =============== other signature =============
-        (a: int, *, b: int) -> Unknown
+        (a: int, *, b: int) -> None
         ---------------------------------------------
         b overload
 

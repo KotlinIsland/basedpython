@@ -764,7 +764,7 @@ We do not raise a diagnostic for dynamic types:
 
 ```py
 def _(val, UnknownSymbol):
-    reveal_type(UnknownSymbol)  # revealed: Unknown
+    reveal_type(UnknownSymbol)  # revealed: UnknownSymbol@_
 
     match val:
         case UnknownSymbol(): ...

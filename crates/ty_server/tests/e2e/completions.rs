@@ -105,7 +105,7 @@ complete_parenth
       {
         "label": "complete_parentheses",
         "kind": 3,
-        "detail": "def complete_parentheses() -> None",
+        "detail": "def complete_parentheses()",
         "sortText": "0"
       }
     ]
@@ -142,7 +142,7 @@ complete_parenth
       {
         "label": "complete_parentheses",
         "kind": 3,
-        "detail": "def complete_parentheses() -> None",
+        "detail": "def complete_parentheses()",
         "sortText": "0",
         "insertText": "complete_parentheses($0)",
         "insertTextFormat": 2
@@ -180,7 +180,7 @@ complete_parenth
       {
         "label": "complete_parentheses",
         "kind": 3,
-        "detail": "def complete_parentheses() -> None",
+        "detail": "def complete_parentheses()",
         "sortText": "0",
         "insertText": "complete_parentheses()"
       }

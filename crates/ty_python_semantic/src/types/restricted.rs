@@ -166,8 +166,11 @@ pub(crate) fn restriction_admits<'db>(
     source: Type<'db>,
 ) -> bool {
     // a gradual or empty source is admissible against every restriction, the
-    // same way it is assignable to every type
-    if matches!(source, Type::Dynamic(_) | Type::Divergent(_) | Type::Never) {
+    // same way it is assignable to every type. an unannotated parameter's hole
+    // that nothing bounded is one of those wearing a name
+    if matches!(source, Type::Dynamic(_) | Type::Divergent(_) | Type::Never)
+        || crate::types::inferred_signature::gradual_hole(db, source).is_some()
+    {
         return true;
     }
 

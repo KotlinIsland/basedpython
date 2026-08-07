@@ -278,7 +278,7 @@ def type(x):
 
 def _(x: A | B):
     if type(x) is A:
-        reveal_type(x)  # revealed: A | B
+        reveal_type(x)  # revealed: Never
     else:
         reveal_type(x)  # revealed: A | B
 ```
@@ -357,7 +357,7 @@ An early version of <https://github.com/astral-sh/ruff/pull/19920> caused us to 
 ```py
 def _(val):
     if type(val) is tuple:
-        reveal_type(val)  # revealed: Unknown & tuple[object, ...]
+        reveal_type(val)  # revealed: val@_ & tuple[object, ...]
 ```
 
 ## Limitations

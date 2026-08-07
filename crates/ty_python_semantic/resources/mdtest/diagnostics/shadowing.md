@@ -32,13 +32,13 @@ f = 1  # snapshot: invalid-assignment
 ```
 
 ```snapshot
-error[invalid-assignment]: Object of type `Literal[1]` is not assignable to `def f() -> Unknown`
+error[invalid-assignment]: Object of type `Literal[1]` is not assignable to `def f()`
  --> src/mdtest_snippet.py:3:1
   |
 3 | f = 1  # snapshot: invalid-assignment
   | -   ^ Incompatible value of type `Literal[1]`
   | |
-  | Declared type `def f() -> Unknown`
+  | Declared type `def f()`
   |
 info: Implicit shadowing of function `f`. Add an annotation to make it explicit if this is intentional
 ```

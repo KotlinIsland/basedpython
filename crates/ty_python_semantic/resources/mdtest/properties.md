@@ -274,7 +274,7 @@ class C:
     @property
     def attr(self) -> int:
         return 1
-    # error: [invalid-argument-type] "Argument to bound method `property.setter` is incorrect: Expected `(Any, Any, /) -> None`, found `def attr(self) -> None`"
+    # error: [invalid-argument-type] "Argument to bound method `property.setter` is incorrect: Expected `(Any, Any, /) -> None`, found `def attr(self)`"
     @attr.setter
     def attr(self) -> None:
         pass
@@ -472,7 +472,7 @@ and setter functions, respectively.
 reveal_type(attr_property.fget)  # revealed: def attr(self) -> int
 reveal_type(attr_property.fget(c))  # revealed: int
 
-reveal_type(attr_property.fset)  # revealed: def attr(self, value: str) -> None
+reveal_type(attr_property.fset)  # revealed: def attr(self, value: str)
 reveal_type(attr_property.fset(c, "a"))  # revealed: None
 
 # error: [invalid-argument-type]

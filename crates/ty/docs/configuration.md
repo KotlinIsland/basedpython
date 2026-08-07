@@ -240,6 +240,56 @@ spelled bare (`int`).
 
 ---
 
+### `infer-unannotated-signatures`
+
+Whether a function with no annotations is given the signature its body determines. This is
+a basedpython feature.
+
+Python's gradual guarantee makes an unannotated `def` say nothing: its parameters accept
+anything and it returns `Unknown`. That is the largest remaining source of `Unknown` in an
+otherwise typed project, and it silently swallows real mistakes. With this enabled, the
+missing half of the signature is recovered from what the function itself already determines:
+
+- **Each unannotated parameter** opens an anonymous type parameter named after it — the same
+  hole `some` spells by hand — bounded by everything the function requires of it: the
+  promoted type of its default, the members its body reads and calls, the parameters it is
+  forwarded into, and any `assert` at the top of the body. Naming the hole is what keeps
+  what a call passes in connected to what it gets back, so `def ident(x): return x` is
+  inferred as the identity function.
+- **A missing return type** is the union of what the body returns, plus `None` when control
+  can also fall off the end. An empty body returns `None`, a body that always raises returns
+  `Never`, and a generator returns a generator.
+
+Nothing is invented from a use this analysis cannot read, so such a parameter stays gradual
+and its body keeps type-checking exactly as it did. An explicit annotation always wins, and
+so does anything an overload group or an overridden base method already supplies.
+
+Defaults to `true`.
+
+**Default value**: `true`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Leave an unannotated function gradual
+    infer-unannotated-signatures = false
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Leave an unannotated function gradual
+    infer-unannotated-signatures = false
+    ```
+
+---
+
 ### `overlapping-condition-assume-truthy-instances`
 
 Whether an instance with no `__bool__` and no `__len__` counts as always truthy when
@@ -453,8 +503,15 @@ project that is pure boilerplate: it forces an annotation to be written for some
 checker already knows. When set to `true`, this option deliberately breaks the gradual
 guarantee and uses the precise type instead. It affects:
 
-- **Unannotated parameters with a default**: `def f(a=1)` declares `a` as `int`, so passing
-  a `str` at a call site is an error. This applies to lambdas too (`lambda a=1: ...`).
+- **Unannotated parameters**: each one opens an anonymous type parameter named after it,
+  bounded by everything the function requires of it — the promoted type of its default, the
+  members its body reads and calls, the parameters it is forwarded into, and any `assert` at
+  the top of the body. So `def f(a=1)` rejects a `str` at a call site, and
+  `def ident(x): return x` is inferred as the identity function. A lambda parameter with a
+  default takes that default's promoted type directly.
+- **Unannotated return types**: the union of what the body returns, plus `None` when control
+  can fall off the end. An empty body returns `None` and a body that always raises returns
+  `Never`; a generator returns a generator.
 - **Unannotated methods that override a base method**: the parameter and return types are
   inherited from the overridden method, including from `Protocol` members and
   `abstractmethod` declarations.
@@ -1171,6 +1228,56 @@ spelled bare (`int`).
 
 ---
 
+#### `infer-unannotated-signatures`
+
+Whether a function with no annotations is given the signature its body determines. This is
+a basedpython feature.
+
+Python's gradual guarantee makes an unannotated `def` say nothing: its parameters accept
+anything and it returns `Unknown`. That is the largest remaining source of `Unknown` in an
+otherwise typed project, and it silently swallows real mistakes. With this enabled, the
+missing half of the signature is recovered from what the function itself already determines:
+
+- **Each unannotated parameter** opens an anonymous type parameter named after it — the same
+  hole `some` spells by hand — bounded by everything the function requires of it: the
+  promoted type of its default, the members its body reads and calls, the parameters it is
+  forwarded into, and any `assert` at the top of the body. Naming the hole is what keeps
+  what a call passes in connected to what it gets back, so `def ident(x): return x` is
+  inferred as the identity function.
+- **A missing return type** is the union of what the body returns, plus `None` when control
+  can also fall off the end. An empty body returns `None`, a body that always raises returns
+  `Never`, and a generator returns a generator.
+
+Nothing is invented from a use this analysis cannot read, so such a parameter stays gradual
+and its body keeps type-checking exactly as it did. An explicit annotation always wins, and
+so does anything an overload group or an overridden base method already supplies.
+
+Defaults to `true`.
+
+**Default value**: `true`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # Leave an unannotated function gradual
+    infer-unannotated-signatures = false
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # Leave an unannotated function gradual
+    infer-unannotated-signatures = false
+    ```
+
+---
+
 #### `overlapping-condition-assume-truthy-instances`
 
 Whether an instance with no `__bool__` and no `__len__` counts as always truthy when
@@ -1384,8 +1491,15 @@ project that is pure boilerplate: it forces an annotation to be written for some
 checker already knows. When set to `true`, this option deliberately breaks the gradual
 guarantee and uses the precise type instead. It affects:
 
-- **Unannotated parameters with a default**: `def f(a=1)` declares `a` as `int`, so passing
-  a `str` at a call site is an error. This applies to lambdas too (`lambda a=1: ...`).
+- **Unannotated parameters**: each one opens an anonymous type parameter named after it,
+  bounded by everything the function requires of it — the promoted type of its default, the
+  members its body reads and calls, the parameters it is forwarded into, and any `assert` at
+  the top of the body. So `def f(a=1)` rejects a `str` at a call site, and
+  `def ident(x): return x` is inferred as the identity function. A lambda parameter with a
+  default takes that default's promoted type directly.
+- **Unannotated return types**: the union of what the body returns, plus `None` when control
+  can fall off the end. An empty body returns `None` and a body that always raises returns
+  `Never`; a generator returns a generator.
 - **Unannotated methods that override a base method**: the parameter and return types are
   inherited from the overridden method, including from `Protocol` members and
   `abstractmethod` declarations.

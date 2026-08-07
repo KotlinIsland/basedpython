@@ -141,5 +141,7 @@ def value() -> int:
 
 @pytest.mark.parametrize("value", ["a", "b"])
 def test_it(value) -> None:
-    reveal_type(value)  # revealed: Unknown
+    # not `int`: the marker's name is an argument, so it is an ordinary unannotated
+    # parameter and opens its own hole rather than taking the fixture's type
+    reveal_type(value)  # revealed: value@test_it
 ```

@@ -989,7 +989,7 @@ mod tests {
                     return {"home_assistant": {"entities": [{"entity_id": "sensor.test"}]}}
 
 
-                def f() -> None:
+                def f():
                     diag = get_data()
                     diag["home_assistant"]["entities"] = sorted(
                         diag["home_assistant"]["entities"], key=lambda ent: ent["entity_id"]
@@ -1011,7 +1011,7 @@ mod tests {
             return {"home_assistant": {"entities": [{"entity_id": "sensor.test"}]}}
 
 
-        def f() -> None:
+        def f():
             diag = get_data()
             diag["home_assistant"]["entities"] = sorted(  # ty:ignore[invalid-assignment]
                 diag["home_assistant"]["entities"], key=lambda ent: ent["entity_id"]  # ty:ignore[invalid-argument-type, not-subscriptable]
@@ -1033,7 +1033,7 @@ mod tests {
                     return {"home_assistant": {"entities": [{"entity_id": "sensor.test"}]}}
 
 
-                def f() -> None:
+                def f():
                     diag = get_data()
                     diag["home_assistant"]["entities"] = sorted(
                         diag["home_assistant"]["entities"], key=lambda ent: ent["entity_id"]
@@ -1054,7 +1054,7 @@ mod tests {
             return {"home_assistant": {"entities": [{"entity_id": "sensor.test"}]}}
 
 
-        def f() -> None:
+        def f():
             diag = get_data()
             diag["home_assistant"]["entities"] = sorted(  # ty:ignore[invalid-assignment]
                 diag["home_assistant"]["entities"], key=lambda ent: ent["entity_id"]  # ty:ignore[invalid-argument-type, not-subscriptable]
@@ -1331,7 +1331,7 @@ class B(A):
     fn add_ignore_groups_suppression_matched_at_start_and_end() {
         assert_snapshot!(
             suppress_all_in(r#"
-                def f(a: int, b: int, c: int) -> None: ...
+                def f(a: int, b: int, c: int): ...
 
                 f(
                     "a" +
@@ -1345,7 +1345,7 @@ class B(A):
         ## Fixed source
 
         ```py
-        def f(a: int, b: int, c: int) -> None: ...
+        def f(a: int, b: int, c: int): ...
 
         f(
             "a" +
@@ -1455,7 +1455,7 @@ class B(A):
     fn add_ignore_keeps_disjoint_start_suppression_used() {
         assert_snapshot!(
             suppress_all_in(r#"
-                def f(a: int, b: int) -> None: pass
+                def f(a: int, b: int): pass
                 def g(a: int, b: int) -> int: return 0
 
                 f(  # ty: ignore[missing-argument]
@@ -1467,7 +1467,7 @@ class B(A):
         ## Fixed source
 
         ```py
-        def f(a: int, b: int) -> None: pass
+        def f(a: int, b: int): pass
         def g(a: int, b: int) -> int: return 0
 
         f(  # ty: ignore[missing-argument]
@@ -1481,7 +1481,7 @@ class B(A):
     fn add_ignore_reconciles_nested_same_code_edits() {
         assert_snapshot!(
             suppress_all_in(r#"
-                def f(a: int, b: int, c: int) -> None: pass
+                def f(a: int, b: int, c: int): pass
                 def g(a: int, b: int) -> int: return 0
 
                 seen_code = True
@@ -1496,7 +1496,7 @@ class B(A):
         ## Fixed source
 
         ```py
-        def f(a: int, b: int, c: int) -> None: pass
+        def f(a: int, b: int, c: int): pass
         def g(a: int, b: int) -> int: return 0
 
         seen_code = True

@@ -404,7 +404,9 @@ fn pep695_type_params_based() {
 /// reachability-constraint checks in that scope.
 #[test]
 fn unbound_symbol_no_reachability_constraint_check() {
-    let mut db = setup_db();
+    // recovering `f`'s return type reads its body, which is a cycle of its own and not the one
+    // this is about
+    let mut db = setup_db().without_inferred_signatures();
 
     // First, type-check a random other file so that we cache a result for the `module_type_symbols`
     // query (which often encounters cycles due to `types.pyi` importing `typing_extensions` and

@@ -42,8 +42,8 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/class/super.md
  27 | super(A, C()).b  # error: [unresolved-attribute]
  28 | super(A, C()).c  # error: [unresolved-attribute]
  29 | 
- 30 | reveal_type(super(C, C()).a)  # revealed: bound method C.a() -> Unknown
- 31 | reveal_type(super(C, C()).b)  # revealed: bound method C.b() -> Unknown
+ 30 | reveal_type(super(C, C()).a)  # revealed: bound method C.a()
+ 31 | reveal_type(super(C, C()).b)  # revealed: bound method C.b()
  32 | reveal_type(super(C, C()).aa)  # revealed: int
  33 | reveal_type(super(C, C()).bb)  # revealed: int
  34 | import types

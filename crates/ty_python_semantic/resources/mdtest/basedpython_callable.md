@@ -234,7 +234,7 @@ from typing import Unpack
 
 def f(fn: (Unpack[tuple[int, str]]) -> object): ...
 
-reveal_type(f)  # revealed: def f(fn: (*(int, str)) -> object) -> Unknown
+reveal_type(f)  # revealed: def f(fn: (*(int, str)) -> object)
 ```
 
 ## an unpacked `TypeVarTuple` in a stub
@@ -263,5 +263,5 @@ fixed tuple
 ```by
 def f(fn: (*: tuple[int, str]) -> object): ...
 
-reveal_type(f)  # revealed: def f(fn: (*args: (int, str)) -> object) -> Unknown
+reveal_type(f)  # revealed: def f(fn: (*args: (int, str)) -> object)
 ```

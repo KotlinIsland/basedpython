@@ -489,6 +489,16 @@ impl<'db> BoundSuperType<'db> {
         pivot_class_type: Type<'db>,
         owner_type: Type<'db>,
     ) -> Result<Type<'db>, BoundSuperError<'db>> {
+        // basedpython: a hole nothing bounded is the gradual type it replaced, and `super()`
+        // skips its checks entirely when an argument is gradual
+        if let Some(gradual) = crate::types::inferred_signature::gradual_hole(db, pivot_class_type)
+        {
+            return BoundSuperType::build(db, gradual, owner_type);
+        }
+        if let Some(gradual) = crate::types::inferred_signature::gradual_hole(db, owner_type) {
+            return BoundSuperType::build(db, pivot_class_type, gradual);
+        }
+
         let delegate_to =
             |type_to_delegate_to| BoundSuperType::build(db, pivot_class_type, type_to_delegate_to);
 

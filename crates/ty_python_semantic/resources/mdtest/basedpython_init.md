@@ -22,7 +22,7 @@ from m import C
 c = C(1, "a")
 reveal_type(c)  # revealed: final C
 
-reveal_type(C.__init__)  # revealed: def __init__(self, x: int, name: str) -> None
+reveal_type(C.__init__)  # revealed: def __init__(self, x: int, name: str)
 
 # too few arguments
 C(1)  # error: [missing-argument]

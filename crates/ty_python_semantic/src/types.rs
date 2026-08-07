@@ -180,6 +180,7 @@ mod generics;
 pub mod ide_support;
 pub(crate) mod implementations;
 mod infer;
+pub(crate) mod inferred_signature;
 mod instance;
 mod iteration;
 mod known_instance;
@@ -4282,9 +4283,17 @@ impl<'db> Type<'db> {
                 Type::Restricted(restricted) => restricted
                     .value_type(db)
                     .member_lookup_with_policy_and_receiver(db, name_str, policy, receiver),
-                Type::Deferred(deferred) => deferred
-                    .reduced(db)
-                    .member_lookup_with_policy_and_receiver(db, name_str, policy, receiver),
+                // basedpython: the deferral stands for the value, so it is the receiver the
+                // lookup binds — the same way a type parameter is, rather than the bound it
+                // resolves through. that is what lets `x.foo().foo()` stay one symbolic chain
+                Type::Deferred(deferred) => {
+                    deferred.reduced(db).member_lookup_with_policy_and_receiver(
+                        db,
+                        name_str,
+                        policy,
+                        Some(receiver.unwrap_or(this)),
+                    )
+                }
                 Type::Union(union) => union.map_with_boundness_and_qualifiers(db, |elem| {
                     elem.member_lookup_with_policy_and_receiver(db, name_str, policy, receiver)
                 }),
@@ -4594,6 +4603,16 @@ impl<'db> Type<'db> {
                     && !protocol.interface().includes_member(db, name_str) =>
                 {
                     Place::Undefined.into()
+                }
+
+                // basedpython: a method member of a structural protocol keeps the receiver it
+                // was accessed on, the way a class-defined protocol's method does through its
+                // bound method — see `protocol_class::symbolic_method_member`
+                Type::ProtocolInstance(_) | Type::TypeVar(_)
+                    if let Some(member) =
+                        protocol_class::symbolic_method_member(db, this, name, receiver) =>
+                {
+                    Place::bound(member).into()
                 }
 
                 // This case needs to come before the `no_instance_fallback` catch-all, so that we

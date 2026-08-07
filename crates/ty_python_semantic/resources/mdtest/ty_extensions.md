@@ -500,7 +500,7 @@ overflow:
 from ty_extensions._internal import TypeOf
 
 def foo(x: "TypeOf[foo]"):
-    reveal_type(x)  # revealed: def foo(x: def foo(...)) -> Unknown
+    reveal_type(x)  # revealed: def foo(x: def foo(...))
 ```
 
 A direct self-reference in a variable annotation is resolved from the later assignment:
@@ -750,7 +750,7 @@ def _(
     c7: CallableTypeOf[Foo.class_method],
     c8: CallableTypeOf[Foo(42)],
 ) -> None:
-    reveal_type(c1)  # revealed: () -> Unknown
+    reveal_type(c1)  # revealed: () -> None
     reveal_type(c2)  # revealed: () -> int
     reveal_type(c3)  # revealed: (x: int, y: str) -> None
     reveal_type(c4)  # revealed: (x: int) -> Foo

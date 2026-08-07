@@ -1215,7 +1215,7 @@ reveal_type(foo)
 
 def foo(): ...
 
-# revealed: def foo() -> Unknown
+# revealed: def foo()
 reveal_type(foo)
 
 bar = module.g
@@ -1226,7 +1226,7 @@ reveal_type(bar)
 @staticmethod
 def bar(): ...
 
-# revealed: def bar() -> Unknown
+# revealed: def bar()
 reveal_type(bar)
 ```
 
@@ -1263,7 +1263,7 @@ if flag():
 else:
     a = f
 
-reveal_type(a)  # revealed: (def a() -> Unknown) | (Overload[(x: int) -> int, (x: str) -> str])
+reveal_type(a)  # revealed: (def a()) | (Overload[(x: int) -> int, (x: str) -> str])
 ```
 
 ### Conditional overloaded value and fallback implementation

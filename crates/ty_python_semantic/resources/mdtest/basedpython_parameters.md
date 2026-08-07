@@ -79,5 +79,5 @@ def f4(g: Callable[(*args: int, **kwargs: str), None]) -> None: ...
 reveal_type(f1)  # revealed: def f1(g: (int, str, /) -> bool) -> bool
 reveal_type(f2)  # revealed: def f2(g: (*args: int) -> int) -> int
 reveal_type(f3)  # revealed: def f3(g: (int, /, name: str) -> bool) -> bool
-reveal_type(f4)  # revealed: def f4(g: (*args: int, **kwargs: str) -> None) -> None
+reveal_type(f4)  # revealed: def f4(g: (*args: int, **kwargs: str) -> None)
 ```

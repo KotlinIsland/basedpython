@@ -175,7 +175,7 @@ def renamed(a: int) -> int: ...  # error: [invalid-overload]
 @overload
 def renamed(b: str) -> str: ...  # error: [invalid-overload]
 def renamed(z):
-    reveal_type(z)  # revealed: Unknown
+    reveal_type(z)  # revealed: z@renamed
     return 0
 ```
 

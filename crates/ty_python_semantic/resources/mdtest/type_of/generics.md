@@ -22,7 +22,7 @@ def _[T](x: T):
 def unbounded[T](x: type[T]) -> T:
     reveal_type(x)  # revealed: type[T@unbounded]
     reveal_type(x.__repr__)  # revealed: def __repr__(self) -> str
-    reveal_type(x.__init__)  # revealed: def __init__(self) -> None
+    reveal_type(x.__init__)  # revealed: def __init__(self)
     reveal_type(x.__qualname__)  # revealed: str
     reveal_type(x())  # revealed: T@unbounded
 
