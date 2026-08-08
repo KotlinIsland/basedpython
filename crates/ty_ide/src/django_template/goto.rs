@@ -165,12 +165,10 @@ impl Site<'_> {
         match self.tag {
             // `{% load static %}` points at the module the library lives in
             "load" => Some(
-                project::registrations(db, db.project())
+                project::tag_libraries(db, db.project())
                     .iter()
-                    .filter(|registration| registration.library == text)
-                    .map(|registration| {
-                        NavigationTarget::new(registration.file, TextRange::default())
-                    })
+                    .filter(|library| library.name == text)
+                    .map(|library| NavigationTarget::new(library.file, TextRange::default()))
                     .collect(),
             ),
             // `{% partial card %}` points at the `{% partialdef card %}`, which
@@ -435,6 +433,65 @@ mod tests {
     fn load_navigates_to_the_library_module() {
         let definitions = project("{% load blog_ex<CURSOR>tras %}").definitions();
         assert_eq!(definitions, ["/blog/templatetags/blog_extras.py:"]);
+    }
+
+    /// the same, with a mock `django.contrib.humanize` installed beside the project
+    fn with_humanize(template: &str) -> TemplateTest {
+        TemplateTest::with_site_packages(
+            &[
+                (
+                    "manage.py",
+                    "
+                    import os
+
+                    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')
+                    ",
+                ),
+                ("project/__init__.py", ""),
+                (
+                    "project/settings.py",
+                    "INSTALLED_APPS = ['django.contrib.humanize']\n",
+                ),
+                ("blog/templates/blog/post.html", template),
+            ],
+            &[
+                ("django/__init__.py", ""),
+                ("django/contrib/__init__.py", ""),
+                ("django/contrib/humanize/__init__.py", ""),
+                ("django/contrib/humanize/templatetags/__init__.py", ""),
+                (
+                    "django/contrib/humanize/templatetags/humanize.py",
+                    "
+                    from django.template import Library
+
+                    register = Library()
+
+                    @register.filter
+                    def intcomma(value):
+                        return value
+                    ",
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn an_installed_apps_filter_navigates_into_the_app_that_registers_it() {
+        let definitions =
+            with_humanize("{% load humanize %}{{ x|intc<CURSOR>omma }}").definitions();
+        assert_eq!(
+            definitions,
+            ["/site-packages/django/contrib/humanize/templatetags/humanize.py:intcomma"]
+        );
+    }
+
+    #[test]
+    fn load_navigates_to_an_installed_apps_library_too() {
+        let definitions = with_humanize("{% load huma<CURSOR>nize %}").definitions();
+        assert_eq!(
+            definitions,
+            ["/site-packages/django/contrib/humanize/templatetags/humanize.py:"]
+        );
     }
 
     #[test]

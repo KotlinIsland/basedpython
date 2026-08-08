@@ -97,6 +97,7 @@ pub fn django_template_semantic_tokens(
 ) -> SemanticTokens {
     let source = source_text(db, file);
     SemanticTokens::new(semantic_tokens::semantic_tokens(
+        db,
         template_index(db, file),
         source.as_str(),
         range,
@@ -180,12 +181,17 @@ pub fn django_template_completions(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use ruff_db::files::{File, system_path_to_file};
-    use ruff_db::system::{DbWithWritableSystem, SystemPath, SystemPathBuf};
+    use ruff_db::Db as _;
+    use ruff_db::files::{File, FileRootKind, system_path_to_file};
+    use ruff_db::system::{DbWithTestSystem, DbWithWritableSystem, SystemPath, SystemPathBuf};
     use ruff_python_ast::PythonVersion;
     use ruff_python_trivia::textwrap::dedent;
     use ruff_text_size::TextSize;
+    use ty_module_resolver::SearchPathSettings;
     use ty_project::{ProjectMetadata, TestDb};
+    use ty_python_core::platform::PythonPlatform;
+    use ty_python_core::program::{FallibleStrategy, Program, ProgramSettings};
+    use ty_python_semantic::PythonVersionWithSource;
 
     use crate::MarkupKind;
 
@@ -206,11 +212,63 @@ pub(crate) mod tests {
     impl TemplateTest {
         /// build a project from `(path, contents)` pairs
         pub(crate) fn new(sources: &[(&str, &str)]) -> Self {
-            const MARKER: &str = "<CURSOR>";
-
             let mut db = TestDb::new(ProjectMetadata::new("test", SystemPathBuf::from("/")));
             db.init_program_with_python_version(PythonVersion::latest_ty())
                 .unwrap();
+
+            Self::write(db, SystemPath::new("/"), sources)
+        }
+
+        /// the same, with `installed` written to a site-packages directory
+        ///
+        /// site-packages sits *outside* the project root, which is what makes
+        /// what is written there third-party rather than the project's own —
+        /// under the root it would be found by the first-party scans instead.
+        pub(crate) fn with_site_packages(
+            sources: &[(&str, &str)],
+            installed: &[(&str, &str)],
+        ) -> Self {
+            let root = SystemPathBuf::from("/src");
+            let site_packages = SystemPathBuf::from("/site-packages");
+
+            let mut db = TestDb::new(ProjectMetadata::new("test", root.clone()));
+
+            for (path, contents) in installed {
+                db.write_file(site_packages.join(path), dedent(contents).as_ref())
+                    .unwrap();
+            }
+            db.memory_file_system().create_directory_all(&root).unwrap();
+            db.memory_file_system()
+                .create_directory_all(&site_packages)
+                .unwrap();
+
+            let search_paths = SearchPathSettings {
+                src_roots: vec![root.clone()],
+                site_packages_paths: vec![site_packages.clone()],
+                ..SearchPathSettings::empty()
+            }
+            .to_search_paths(db.system(), db.vendored(), &FallibleStrategy)
+            .expect("valid search paths");
+
+            Program::from_settings(
+                &db,
+                ProgramSettings {
+                    python_version: PythonVersionWithSource::default(),
+                    python_platform: PythonPlatform::default(),
+                    search_paths,
+                },
+            );
+
+            db.files().try_add_root(&db, &root, FileRootKind::Project);
+            db.files()
+                .try_add_root(&db, &site_packages, FileRootKind::SearchPath);
+
+            Self::write(db, &root, sources)
+        }
+
+        /// write every source under `root`, taking the one `<CURSOR>` marker out
+        fn write(mut db: TestDb, root: &SystemPath, sources: &[(&str, &str)]) -> Self {
+            const MARKER: &str = "<CURSOR>";
 
             let mut cursor = None;
 
@@ -226,8 +284,9 @@ pub(crate) mod tests {
                     None => (contents, None),
                 };
 
-                db.write_file(path, &contents).unwrap();
-                let file = system_path_to_file(&db, path).unwrap();
+                let path = root.join(path);
+                db.write_file(&path, &contents).unwrap();
+                let file = system_path_to_file(&db, &path).unwrap();
 
                 if let Some(offset) = offset {
                     assert!(cursor.is_none(), "more than one `<CURSOR>` marker");

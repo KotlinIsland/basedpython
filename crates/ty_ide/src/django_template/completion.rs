@@ -23,7 +23,7 @@ use crate::completion::CompletionKind;
 use super::builtins;
 use super::index::{Block, TemplateIndex};
 use super::lexer::{Construct, ConstructKind, Token, TokenKind, string_contents};
-use super::project::{self, RegistrationKind};
+use super::project::{self, LibrarySource, Registration, RegistrationKind};
 use super::resolve;
 
 /// an edit a completion carries alongside the text it inserts
@@ -384,22 +384,27 @@ fn tag_names(
         }
     }
 
-    let loaded = loaded_libraries(index);
+    let loaded = loaded_libraries(db, index);
     let load_edit = |library: Option<&str>| load_edit_for(index, &loaded, library);
+    let registrations = project::registrations(db, db.project());
 
     for tag in builtins::TAGS {
+        let library = djangos_library(registrations, tag.name, false).or(tag.library);
+
         let mut completion =
             TemplateCompletion::new(tag.name, CompletionKind::Keyword, cursor.range)
                 .documentation(tag.documentation);
-        if let Some(library) = tag.library {
+        if let Some(library) = library {
             completion = completion.detail(format!("{{% load {library} %}}"));
         }
-        completion.additional_edit = load_edit(tag.library);
+        completion.additional_edit = load_edit(library);
         completions.push(completion);
     }
 
-    for registration in project::registrations(db, db.project()) {
-        if registration.kind == RegistrationKind::Filter {
+    for registration in registrations {
+        if registration.kind == RegistrationKind::Filter
+            || offered_by_the_table(registration, false)
+        {
             continue;
         }
 
@@ -425,27 +430,66 @@ fn opening_tag(source: &str, block: &Block) -> String {
     source[block.open_range].trim().to_string()
 }
 
+/// the library the project's own django registers `name` under, when it does
+///
+/// the builtin table was written against one version of django, and a name can
+/// move between libraries or arrive in one from release to release. where the
+/// project's own django can be read, it is that django which decides. a tag the
+/// *project* happens to name after a builtin is not django's and says nothing.
+fn djangos_library<'a>(
+    registrations: &'a [Registration],
+    name: &str,
+    filter: bool,
+) -> Option<&'a str> {
+    registrations
+        .iter()
+        .find(|registration| {
+            registration.django
+                && registration.name == name
+                && (registration.kind == RegistrationKind::Filter) == filter
+        })
+        .map(|registration| registration.library.as_str())
+}
+
+/// whether the builtin table already offers this registration
+///
+/// django's own libraries are discovered *and* tabulated, and the table's entry
+/// is the richer of the two — it carries the documentation, and for a tag the
+/// block structure as well — so it is the one offered.
+fn offered_by_the_table(registration: &Registration, filter: bool) -> bool {
+    registration.django
+        && if filter {
+            builtins::filter(&registration.name).is_some()
+        } else {
+            builtins::tag(&registration.name).is_some()
+        }
+}
+
 fn filter_names(
     db: &dyn Db,
     index: &TemplateIndex,
     cursor: &Cursor<'_>,
 ) -> Vec<TemplateCompletion> {
-    let loaded = loaded_libraries(index);
+    let loaded = loaded_libraries(db, index);
     let mut completions = Vec::new();
+    let registrations = project::registrations(db, db.project());
 
     for filter in builtins::FILTERS {
+        let library = djangos_library(registrations, filter.name, true).or(filter.library);
+
         let mut completion =
             TemplateCompletion::new(filter.name, CompletionKind::Function, cursor.range)
                 .documentation(filter.documentation);
-        if let Some(library) = filter.library {
+        if let Some(library) = library {
             completion = completion.detail(format!("{{% load {library} %}}"));
         }
-        completion.additional_edit = load_edit_for(index, &loaded, filter.library);
+        completion.additional_edit = load_edit_for(index, &loaded, library);
         completions.push(completion);
     }
 
-    for registration in project::registrations(db, db.project()) {
-        if registration.kind != RegistrationKind::Filter {
+    for registration in registrations {
+        if registration.kind != RegistrationKind::Filter || offered_by_the_table(registration, true)
+        {
             continue;
         }
 
@@ -578,7 +622,7 @@ fn url_names(db: &dyn Db, cursor: &Cursor<'_>) -> Vec<TemplateCompletion> {
 }
 
 fn libraries(db: &dyn Db, index: &TemplateIndex, cursor: &Cursor<'_>) -> Vec<TemplateCompletion> {
-    let loaded = loaded_libraries(index);
+    let loaded = loaded_libraries(db, index);
     let mut completions = Vec::new();
     let mut seen = FxHashSet::default();
 
@@ -593,17 +637,17 @@ fn libraries(db: &dyn Db, index: &TemplateIndex, cursor: &Cursor<'_>) -> Vec<Tem
         );
     }
 
-    for registration in project::registrations(db, db.project()) {
-        if loaded.contains(&registration.library) || !seen.insert(registration.library.clone()) {
+    for library in project::tag_libraries(db, db.project()) {
+        if loaded.contains(&library.name) || !seen.insert(library.name.clone()) {
             continue;
         }
         completions.push(
-            TemplateCompletion::new(
-                registration.library.as_str(),
-                CompletionKind::Module,
-                cursor.range,
-            )
-            .detail("this project"),
+            TemplateCompletion::new(library.name.as_str(), CompletionKind::Module, cursor.range)
+                .detail(match library.source {
+                    LibrarySource::Django => "django",
+                    LibrarySource::Project => "this project",
+                    LibrarySource::Installed => "installed",
+                }),
         );
     }
 
@@ -685,12 +729,22 @@ fn inherited(
         .collect()
 }
 
-/// the libraries the template has already `{% load %}`ed
-fn loaded_libraries(index: &TemplateIndex) -> FxHashSet<CompactString> {
+/// the libraries the template does not have to `{% load %}`
+///
+/// the ones it has loaded already, and the ones the settings load into every
+/// template — a `{% load %}` for one of those is not wrong, but it is noise, so
+/// neither is one suggested.
+fn loaded_libraries(db: &dyn Db, index: &TemplateIndex) -> FxHashSet<CompactString> {
     index
         .loads()
         .iter()
         .map(|load| load.library.clone())
+        .chain(
+            project::tag_libraries(db, db.project())
+                .iter()
+                .filter(|library| library.always_loaded)
+                .map(|library| library.name.clone()),
+        )
         .collect()
 }
 
@@ -809,6 +863,70 @@ mod tests {
             ("blog/static/blog/app.css", "body {}"),
             ("blog/templates/blog/post.html", template),
         ])
+    }
+
+    /// the same project with a mock django installed beside it, the `humanize`
+    /// contrib app among its `INSTALLED_APPS`
+    ///
+    /// `options` goes into the one template engine, which is how a project asks
+    /// for a library to be loaded into every template.
+    fn with_humanize(template: &str, options: &str) -> TemplateTest {
+        let settings = format!(
+            "
+            INSTALLED_APPS = ['django.contrib.humanize', 'blog']
+
+            TEMPLATES = [{{'APP_DIRS': True, 'OPTIONS': {{{options}}}}}]
+            "
+        );
+
+        TemplateTest::with_site_packages(
+            &[
+                (
+                    "manage.py",
+                    "
+                    import os
+
+                    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')
+                    ",
+                ),
+                ("project/__init__.py", ""),
+                ("project/settings.py", &settings),
+                ("blog/__init__.py", ""),
+                ("blog/templatetags/__init__.py", ""),
+                (
+                    "blog/templatetags/blog_extras.py",
+                    "
+                    from django import template
+
+                    register = template.Library()
+
+                    @register.filter
+                    def shout(value):
+                        return value
+                    ",
+                ),
+                ("blog/templates/blog/post.html", template),
+            ],
+            &[
+                ("django/__init__.py", ""),
+                ("django/contrib/__init__.py", ""),
+                ("django/contrib/humanize/__init__.py", ""),
+                ("django/contrib/humanize/templatetags/__init__.py", ""),
+                (
+                    "django/contrib/humanize/templatetags/humanize.py",
+                    "
+                    from django.template import Library
+
+                    register = Library()
+
+                    @register.filter
+                    def intcomma(value):
+                        '''adds thousand separators.'''
+                        return value
+                    ",
+                ),
+            ],
+        )
     }
 
     #[test]
@@ -1047,6 +1165,7 @@ mod tests {
         assert_eq!(
             test.detailed(),
             [
+                "api-root",
                 "book-list — books",
                 "book-detail — books",
                 "book-mark-read — books"
@@ -1072,6 +1191,65 @@ mod tests {
     fn load_does_not_offer_a_library_already_loaded() {
         let completions = project("{% load i18n %}{% load <CURSOR> %}").completions();
         assert!(!completions.contains(&"i18n".to_string()));
+    }
+
+    #[test]
+    fn load_offers_an_installed_apps_library() {
+        let completions = with_humanize("{% load <CURSOR> %}", "").detailed();
+
+        assert!(completions.contains(&"humanize — django".to_string()));
+        assert!(completions.contains(&"blog_extras — this project".to_string()));
+    }
+
+    #[test]
+    fn a_filter_from_an_installed_apps_library_is_offered_with_the_load_it_needs() {
+        let test = with_humanize("{% load humanize %}{{ x|<CURSOR> }}", "");
+
+        assert!(
+            test.detailed()
+                .contains(&"intcomma — {% load humanize %}".to_string()),
+            "django's own `humanize` filter is as available as the table's are"
+        );
+
+        let edit = django_template_completions(&test.db, test.file, test.offset)
+            .into_iter()
+            .find(|completion| completion.label == "intcomma")
+            .and_then(|completion| completion.additional_edit);
+        assert!(
+            edit.is_none(),
+            "the template loaded it already, so no second `{{% load %}}` is written"
+        );
+    }
+
+    #[test]
+    fn a_filter_from_an_unloaded_installed_library_brings_its_load_with_it() {
+        let test = with_humanize("{{ x|<CURSOR> }}", "");
+
+        let edit = django_template_completions(&test.db, test.file, test.offset)
+            .into_iter()
+            .find(|completion| completion.label == "intcomma")
+            .and_then(|completion| completion.additional_edit)
+            .expect("`intcomma` to come with the load it needs");
+        assert_eq!(edit.text, "{% load humanize %}\n");
+    }
+
+    #[test]
+    fn a_library_loaded_into_every_template_is_neither_offered_nor_loaded() {
+        let options = "'builtins': ['django.contrib.humanize.templatetags.humanize']";
+
+        assert!(
+            !with_humanize("{% load <CURSOR> %}", options)
+                .completions()
+                .contains(&"humanize".to_string()),
+            "every template has it already, so a `{{% load %}}` for it is noise"
+        );
+
+        let test = with_humanize("{{ x|<CURSOR> }}", options);
+        let intcomma = django_template_completions(&test.db, test.file, test.offset)
+            .into_iter()
+            .find(|completion| completion.label == "intcomma")
+            .expect("the filter to be offered without a `{% load %}`");
+        assert!(intcomma.additional_edit.is_none());
     }
 
     #[test]

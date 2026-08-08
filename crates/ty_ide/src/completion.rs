@@ -8523,6 +8523,7 @@ def show(request):
         );
 
         assert_snapshot!(builder.build().snapshot(), @"
+        blog:api-root
         blog:book-detail
         blog:book-list
         blog:detail
@@ -8539,6 +8540,7 @@ url = urls.reverse_lazy("<CURSOR>")
         );
 
         assert_snapshot!(builder.build().snapshot(), @"
+        blog:api-root
         blog:book-detail
         blog:book-list
         blog:detail
@@ -8556,6 +8558,7 @@ def show(request):
         );
 
         assert_snapshot!(builder.build().snapshot(), @"
+        blog:api-root
         blog:book-detail
         blog:book-list
         blog:detail

@@ -16,9 +16,9 @@ what is offered depends on where the caret is.
 | `{{ book.‸ }}`      | the attributes of `book`'s type — for a django model its own fields lead, ahead of what `models.Model` brings         |
 | `{% extends '‸' %}` | the project's template paths                                                                                          |
 | `{% include '‸' %}` | the project's template paths                                                                                          |
-| `{% url '‸' %}`     | the project's route names, namespaced by `app_name`                                                                   |
+| `{% url '‸' %}`     | the project's route names, under the namespaces its `include()`s put them in                                          |
 | `{% static '‸' %}`  | the files under the project's `static` directories                                                                    |
-| `{% load ‸ %}`      | the libraries not yet loaded, django's and the project's                                                              |
+| `{% load ‸ %}`      | the libraries not yet loaded: django's, the installed apps', and the project's                                        |
 | `{% block ‸ %}`     | the blocks the parent template defines and this one hasn't overridden yet                                             |
 | `{% partial ‸ %}`   | the fragments `{% partialdef %}` declares                                                                             |
 
@@ -136,9 +136,29 @@ template directories, static directories and tag libraries are found by their co
 - `**/static/**` — static files, named by their path below `static/`
 - `**/templatetags/*.py` — tag libraries, named by their module
 
-## limitations
+## how the settings are read
 
-**a `TEMPLATES` setting is not read.** template directories are found by name rather than from `settings.py`, so a `DIRS` entry pointing somewhere else is not picked up.
+the module `manage.py` points `DJANGO_SETTINGS_MODULE` at is read as well, and what it says is added to what the convention already found. a settings module that can't be found, or a value in one that can't be worked out, costs only itself.
+
+| setting                               | what it adds                                                            |
+| ------------------------------------- | ----------------------------------------------------------------------- |
+| `TEMPLATES[*]["DIRS"]`                | template directories that need not be called `templates`                |
+| `TEMPLATES[*]["APP_DIRS"]`            | which of two same-named templates django's loader reaches first         |
+| `TEMPLATES[*]["OPTIONS"]["builtins"]` | libraries every template has loaded already                             |
+| `STATICFILES_DIRS`                    | static directories that need not be called `static`                     |
+| `INSTALLED_APPS`                      | the apps searched, in the order they are searched — and their libraries |
+
+### tag libraries from the installed apps
+
+each installed app's `templatetags` package is scanned the way django's own `get_installed_libraries` walks them, so `{% load humanize %}` completes and `|intcomma` is offered once `django.contrib.humanize` is installed. django's own `django.templatetags` is always a candidate alongside them.
+
+only the apps `INSTALLED_APPS` names are looked at — site-packages at large is never searched, so an app that isn't installed contributes nothing, exactly as at render time.
+
+a library in `TEMPLATES[*]["OPTIONS"]["builtins"]` is available in every template without a `{% load %}`, so none is suggested for it and none is written.
+
+a project whose settings cannot be read still has its own `templatetags` modules and django's builtin tables, and behaves exactly as it did before.
+
+## limitations
 
 **the context has to be written where it is passed.** the names are read out of the dict literal in the `render()` call or the view class, so a context built somewhere else and passed by name — `return render(request, "…", context)` — contributes nothing.
 
@@ -146,9 +166,9 @@ template directories, static directories and tag libraries are found by their co
 
 **dictionary lookups don't resolve.** django tries a subscript before an attribute, so `{{ mapping.key }}` works at runtime, but a mapping's keys are values rather than types and completions can only offer attributes.
 
-**`{% url %}` namespaces come from `app_name`.** a namespace given at the `include()` instead is not applied.
+**route names are read by walking the url tree from `ROOT_URLCONF`.** that is where the namespaces come from — the `namespace=` an `include()` gives, or the included module's own `app_name` — and it is what reaches an installed package's urlconf, so `include('rest_framework.urls')` contributes `rest_framework:login` like any route of the project's own. a project whose settings don't say where the tree starts falls back to reading each of its modules on its own: an include's namespace is unknown then, and nothing outside the project is reached.
 
-**a route is named by a `path()` or by a rest framework router.** `router.register('books', BookViewSet, basename='book')` names `book-list` and `book-detail`, and each `@action` on the viewset names one more. a registration whose basename cannot be worked out — no `basename=` and no resolvable `queryset` — names nothing rather than guessing.
+**a route is named by a `path()` or by a rest framework router.** `router.register('books', BookViewSet, basename='book')` names `book-list` and `book-detail`, and each `@action` on the viewset names one more. a `DefaultRouter` names `api-root` besides, where a `SimpleRouter` names none. a registration whose basename cannot be worked out — no `basename=` and no resolvable `queryset` — names nothing rather than guessing.
 
 **a name written in python has to be a literal.** the string in a `render()` or a `reverse()` is read as it is written, so a name built from an f-string, or held in a variable, is just a string.
 
