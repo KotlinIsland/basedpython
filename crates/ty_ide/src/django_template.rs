@@ -754,6 +754,15 @@ pub(crate) mod tests {
                 .collect()
         }
 
+        /// the labels of the completions at the cursor django will not render
+        pub(crate) fn unusable(&self) -> Vec<String> {
+            django_template_completions(&self.db, self.file, self.offset)
+                .into_iter()
+                .filter(|completion| completion.unusable)
+                .map(|completion| completion.label)
+                .collect()
+        }
+
         /// the completions at the cursor, rendered as `label — detail`
         pub(crate) fn detailed(&self) -> Vec<String> {
             django_template_completions(&self.db, self.file, self.offset)

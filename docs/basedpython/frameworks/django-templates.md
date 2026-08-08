@@ -154,6 +154,17 @@ a lookup that lands on something callable is called, exactly as django calls it,
 
 a method that needs an argument is not called — django renders nothing for it, and neither does the server offer anything past it.
 
+django refuses outright to call a method marked `alters_data`, and renders nothing instead of writing to the database from a template. those resolve to nothing too, and are reported:
+
+```django
+{{ book.save }}                {# warning: django will not call `save` from a template #}
+{{ book.author.book_set.create }}
+```
+
+the ones it marks are `save`, `delete` and their `async` twins on a model, and the `create`/`update`/`bulk_*` family on a queryset, a manager and the manager behind a relation. overriding one keeps the mark, so an override is reported too.
+
+going the other way, a member marked `do_not_call_in_templates` is used as it is rather than called — django's `Choices` classes carry it, so `{{ Color.RED }}` is the member and not whatever calling it would give.
+
 the same works through the template's own bindings:
 
 ```django
@@ -221,7 +232,9 @@ a project whose settings cannot be read, or whose django cannot be resolved at a
 
 **the context has to be written where it is passed.** the names are read out of the dict literal in the `render()` call or the view class, so a context built somewhere else and passed by name — `return render(request, "…", context)` — contributes nothing.
 
-**a member django refuses to call is still offered.** django won't call `save()` or `delete()` from a template — they carry `alters_data` — but `django-stubs` doesn't record that, so there is nothing to read it from. they appear in the list, below the model's own fields.
+**a member django refuses to call is still offered, struck through.** it is genuinely there, and someone reading `{{ book.save }}` is better served by being told what it is than by being shown nothing, so it is marked and sorted below every member django will render rather than hidden.
+
+**`alters_data` is django's own set rather than something read off the code.** django writes the mark on the function object, which no stub can express and `django-stubs` declares nowhere — grepping the package finds nothing. so the names come from django's source, and only apply to django's own classes: a class of the project's own with a `save` method is not reported, and neither is a method a model adds that django has no equivalent of.
 
 **dictionary lookups don't resolve.** django tries a subscript before an attribute, so `{{ mapping.key }}` works at runtime, but a mapping's keys are values rather than types and completions can only offer attributes.
 

@@ -27,6 +27,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_ROUTE_ARGUMENTS);
     registry.register_lint(&UNKNOWN_TEMPLATE_BLOCK);
     registry.register_lint(&TEMPLATE_MEMBER_NEEDS_ARGUMENTS);
+    registry.register_lint(&TEMPLATE_MEMBER_ALTERS_DATA);
     registry.register_lint(&INVALID_ROUTE_HANDLER);
     registry.register_lint(&INVALID_ROUTE_PARAMETER_TYPE);
 }
@@ -315,6 +316,35 @@ declare_lint! {
     /// ```
     pub static TEMPLATE_MEMBER_NEEDS_ARGUMENTS = {
         summary: "detects a template lookup landing on a method that needs arguments",
+        status: LintStatus::stable("0.0.69"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a `{{ }}` lookup landing on a method django refuses to call
+    /// from a template.
+    ///
+    /// ## Why is this bad?
+    /// Django calls whatever a lookup lands on, except a method marked
+    /// `alters_data = True` — a template is not allowed to write to the
+    /// database. Rather than call it, django renders `string_if_invalid` — the
+    /// empty string by default — silently, with no error and no output.
+    ///
+    /// The methods django marks are the ones that write: `save`, `delete` and
+    /// their `async` twins on a model, and the `create`/`update`/`bulk_*`
+    /// family on a queryset, a manager and the manager behind a relation.
+    /// Overriding one keeps the mark, so an override is reported too, exactly
+    /// as django's own `AltersData` propagates it at runtime.
+    ///
+    /// ## Examples
+    /// ```django
+    /// {{ book.save }}     {# warning: renders nothing #}
+    /// {{ book.title }}    {# ok #}
+    /// ```
+    pub static TEMPLATE_MEMBER_ALTERS_DATA = {
+        summary: "detects a template lookup landing on a method django refuses to call",
         status: LintStatus::stable("0.0.69"),
         default_level: Level::Warn,
     }

@@ -283,6 +283,12 @@ fn django_template_completions(
                     .as_ref()
                     .and_then(to_edit)
                     .map(|edit| vec![edit]),
+                // a member django will not render is struck through rather than
+                // dropped: it is really there, and hiding it would leave someone
+                // typing `book.sa` with no answer at all
+                tags: completion
+                    .unusable
+                    .then(|| vec![lsp_types::CompletionItemTag::Deprecated]),
                 ..Default::default()
             }
         })
