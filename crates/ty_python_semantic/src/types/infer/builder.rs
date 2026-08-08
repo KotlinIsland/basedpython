@@ -57,7 +57,7 @@ use crate::types::callable::{CallableFunctionProvenance, CallableTypeKind};
 use crate::types::class::{
     ClassLiteral, CodeGeneratorKind, DynamicNamedTupleAnchor, DynamicNamedTupleLiteral,
     DynamicTypedDictAnchor, DynamicTypedDictLiteral, MethodDecorator, NamedTupleField,
-    NamedTupleSpec,
+    NamedTupleSpec, StaticClassLiteral,
 };
 use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
@@ -3746,6 +3746,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         self.store_expression_type(target, target_ty);
         add.insert(self, target_ty);
         self.check_unannotated_model_field(target, assignment.value(self.module()));
+        self.check_django_field_name_list(target, assignment.value(self.module()));
     }
 
     /// Pydantic requires every field to be annotated. An unannotated class-body
@@ -3790,6 +3791,89 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 "Field `{}` needs a type annotation to become a pydantic model field",
                 name.id
             ));
+        }
+    }
+
+    /// The class whose body `scope` is, or `None` when `scope` is not a class body.
+    fn class_of_body_scope(&self, scope: FileScopeId) -> Option<StaticClassLiteral<'db>> {
+        let class_node = self.index.scope(scope).node().as_class()?;
+        let definition = self.index.expect_single_definition(class_node);
+        original_class_type(self.db(), definition)?.as_static()
+    }
+
+    /// The class lexically enclosing the class whose body `scope` is — for a
+    /// nested `Meta`, the model / serializer / form that declares it. A generic
+    /// outer class interposes its type-parameter scope, so skip that hop.
+    fn class_enclosing_body_scope(&self, scope: FileScopeId) -> Option<StaticClassLiteral<'db>> {
+        let mut parent = self.index.parent_scope_id(scope)?;
+        if self.index.scope(parent).kind() == ScopeKind::TypeParams {
+            parent = self.index.parent_scope_id(parent)?;
+        }
+        self.class_of_body_scope(parent)
+    }
+
+    /// Validate a class-body assignment of a list of django model field paths:
+    /// a model's `Meta.ordering`, and a drf view's `ordering_fields`,
+    /// `filterset_fields` and `search_fields`.
+    ///
+    /// Every one of these is a list of strings the stubs type as plain `str`,
+    /// so a typo is invisible until django resolves it — at import time for
+    /// `Meta.ordering` (`models.E015`), and only once a request asks for that
+    /// ordering / search / filter for the view attributes.
+    ///
+    /// Reporting requires the model to be resolved for certain. A class body
+    /// that names no model, a `queryset` that doesn't trace to one, and a
+    /// non-literal element are all left alone rather than guessed at.
+    fn check_django_field_name_list(&mut self, target: &ast::Expr, value: &ast::Expr) {
+        let ast::Expr::Name(name) = target else {
+            return;
+        };
+        let db = self.db();
+        let scope = self.scope().file_scope_id(db);
+        let name = name.id.as_str();
+
+        // `fields` / `exclude` / `ordering` all sit in a nested `Meta`; the
+        // drf view attributes sit in the view's own body
+        let meta = self
+            .class_of_body_scope(scope)
+            .filter(|meta| meta.name(db) == "Meta");
+        let declaring = meta.and_then(|_| self.class_enclosing_body_scope(scope));
+
+        let resolved = if name == "ordering" {
+            // a model's `Meta.ordering`: the model is the class declaring `Meta`
+            declaring
+                .filter(|model| django::is_model(db, *model))
+                .map(|model| (model, django::FieldListKind::Ordering))
+        } else if let Some((meta, declaring)) = meta.zip(declaring)
+            && let Some(declarer) = django::meta_fields_declarer(db, declaring)
+            && declarer.checks(name)
+        {
+            // a serializer's / form's `Meta.fields`: the model is `Meta.model`
+            django::meta_model(db, meta)
+                .map(|model| (model, django::FieldListKind::MetaFields { declaring }))
+        } else {
+            django::view_field_list_kind(name).and_then(|kind| {
+                let view = self.class_of_body_scope(scope)?;
+                Some((django::drf_view_model(db, view)?, kind))
+            })
+        };
+        let Some((model, kind)) = resolved else {
+            return;
+        };
+
+        // a list this can't read exhaustively is left alone entirely
+        let Some(entries) = django::literal_field_list_entries(value) else {
+            return;
+        };
+        for (entry, range) in entries {
+            if let django::FieldResolution::Unknown { model, segment } =
+                kind.resolve(db, model, entry)
+                && let Some(builder) = self.context.report_lint(&INVALID_FIELD_LOOKUP, range)
+            {
+                builder.into_diagnostic(format_args!(
+                    "Model `{model}` has no field `{segment}` (in `{name}`)"
+                ));
+            }
         }
     }
 
@@ -4416,6 +4500,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     }
 
     fn infer_annotated_assignment_statement(&mut self, assignment: &ast::StmtAnnAssign) {
+        // an annotation changes nothing about what the entries mean
+        // (`search_fields: list[str] = [...]`), so check the same sites here
+        if let Some(value) = &assignment.value {
+            self.check_django_field_name_list(&assignment.target, value);
+        }
         if assignment.target.is_name_expr() {
             self.infer_definition(assignment);
         } else {
@@ -10206,6 +10295,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         continue; // `**kwargs` unpacking — can't check statically
                     };
                     let key = arg.as_str();
+                    if django::is_method_own_keyword(method_name.as_str(), key) {
+                        continue;
+                    }
                     let resolution = if is_create {
                         django::resolve_create_kwarg(db, model, key)
                     } else {

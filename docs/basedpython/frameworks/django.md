@@ -25,6 +25,18 @@ basedpython supports django models. the type checker understands django's unanno
 - lookup kwargs are validated: `filter(name__startswith="x")` checks that `name` is a field and `startswith` is a valid lookup for strings
 - relation traversal in lookups: `filter(author__birthday__lt=date(2000, 1, 1))` follows foreign keys and checks field types
 
+### class-body field-name lists
+
+several django and drf constructs spell model field paths as a class-body list of plain strings, which the stubs type as `list[str]`. each literal entry is resolved against the model the declaring class names:
+
+- a model's `Meta.ordering` — `order_by` syntax, so a leading `-` and `?` are legal. django reports a bad entry itself, as `models.E015`
+- a drf `ModelSerializer`'s / a `ModelForm`'s `Meta.fields` and `Meta.exclude`, against `Meta.model`. drf builds a read-only property field for a non-field attribute, so a model method, a property, `pk` and an `<fk>_id` attname are all legal, as is a field the serializer declares itself. `"__all__"` is a sentinel
+- a drf view's `ordering_fields`, `search_fields` and `filterset_fields`, against the model its own `queryset` is a queryset of. a `search_fields` entry may carry one of `SearchFilter`'s `^`, `=`, `@`, `$` prefixes
+
+nothing is reported unless the model is certain. a serializer without a `Meta.model`, a view that builds its queryset in `get_queryset`, and a list holding any non-literal element are all left alone
+
+`source="author.name"` on a serializer field is deliberately **not** checked: drf resolves it with `getattr` at serialization time against whatever object it is handed, which is routinely an annotated row or a dict rather than an instance of `Meta.model`
+
 ### transpilation compatibility
 
 - `optional?.chaining` works across nullable relations: `author?.birthday?.year`
