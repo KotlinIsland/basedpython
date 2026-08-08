@@ -21,6 +21,7 @@ use ruff_source_file::OneIndexed;
 use ruff_text_size::{TextRange, TextSize};
 use rustc_hash::FxHashSet;
 use ty_project::Db;
+use ty_python_semantic::UNUSED_IGNORE_COMMENT;
 use ty_python_semantic::django_template::{
     INVALID_ROUTE_ARGUMENTS, TEMPLATE_MEMBER_ALTERS_DATA, TEMPLATE_MEMBER_NEEDS_ARGUMENTS,
     UNCLOSED_TEMPLATE_BLOCK, UNKNOWN_TEMPLATE_BLOCK, UNKNOWN_TEMPLATE_FILTER,
@@ -64,9 +65,38 @@ pub(crate) struct Checker<'a> {
     /// tags and filters cannot be enumerated, whatever the project-wide index
     /// says, so this is per template rather than per project.
     libraries_known: bool,
+    /// whether the settings index answers for the whole project
+    ///
+    /// every check reads something the settings decide, so nothing at all is
+    /// decided about this file without them
+    settings_known: bool,
     suppressions: Suppressions,
+    /// the rules whose check reached a conclusion for this file
+    ///
+    /// see [`Checker::decides`]
+    decided: Vec<LintId>,
     found: Vec<Diagnostic>,
 }
+
+/// every rule a template can report
+///
+/// a blanket `{# ty: ignore #}` covers all of them at once, so it is only ever
+/// unused when every one of them was decided.
+const TEMPLATE_LINTS: &[&LintMetadata] = &[
+    &UNCLOSED_TEMPLATE_BLOCK,
+    &UNMATCHED_TEMPLATE_CLOSE,
+    &UNKNOWN_TEMPLATE_LIBRARY,
+    &UNKNOWN_TEMPLATE_TAG,
+    &UNKNOWN_TEMPLATE_FILTER,
+    &UNLOADED_TEMPLATE_LIBRARY,
+    &UNRESOLVED_TEMPLATE,
+    &UNRESOLVED_STATIC_FILE,
+    &UNRESOLVED_ROUTE,
+    &INVALID_ROUTE_ARGUMENTS,
+    &UNKNOWN_TEMPLATE_BLOCK,
+    &TEMPLATE_MEMBER_NEEDS_ARGUMENTS,
+    &TEMPLATE_MEMBER_ALTERS_DATA,
+];
 
 /// everything wrong with `file`, read as a django template
 pub(crate) fn diagnostics(
@@ -78,7 +108,8 @@ pub(crate) fn diagnostics(
     let project = db.project();
     let loaded = loaded_libraries(db, index);
 
-    let libraries_known = project::settings_are_authoritative(db, project)
+    let settings_known = project::settings_are_authoritative(db, project);
+    let libraries_known = settings_known
         && index.loads().iter().all(|load| {
             project::tag_libraries(db, project)
                 .iter()
@@ -92,7 +123,9 @@ pub(crate) fn diagnostics(
         source,
         loaded,
         libraries_known,
+        settings_known,
         suppressions: Suppressions::of(index, source),
+        decided: Vec::new(),
         found: Vec::new(),
     };
 
@@ -105,6 +138,8 @@ pub(crate) fn diagnostics(
     checker.routes();
     checker.unknown_blocks();
     checker.members_needing_arguments();
+    // last, since it answers for what every check above did or did not silence
+    checker.unused_suppressions();
 
     checker.found.sort_by_key(|diagnostic| {
         diagnostic
@@ -132,10 +167,8 @@ impl Checker<'_> {
             .rule_selection(self.file)
             .severity(LintId::of(lint))?;
 
-        if self
-            .suppressions
-            .covers(lint, line_of(self.source, range.start()))
-        {
+        let line = line_of(self.source, range.start());
+        if self.suppressions.silences(lint, line) {
             return None;
         }
 
@@ -144,6 +177,20 @@ impl Checker<'_> {
 
         self.found.push(diagnostic);
         self.found.last_mut()
+    }
+
+    /// record that the check for each of `lints` reached a conclusion
+    ///
+    /// this is what an unused suppression is answered from. a check that bailed —
+    /// because the settings, the tag libraries or the url tree could not be read —
+    /// has decided nothing about the file, and a comment silencing its rule is
+    /// doing a job the moment those can be read, so it is not one to call unused.
+    fn decides(&mut self, lints: &[&'static LintMetadata]) {
+        if !self.settings_known {
+            return;
+        }
+
+        self.decided.extend(lints.iter().copied().map(LintId::of));
     }
 
     fn text(&self, range: TextRange) -> &str {
@@ -158,6 +205,8 @@ impl Checker<'_> {
     /// open one because the file happens to hold a matching `{% end… %}`
     /// elsewhere is a guess, and a guess is not something to report.
     fn unclosed_blocks(&mut self) {
+        self.decides(&[&UNCLOSED_TEMPLATE_BLOCK]);
+
         let unclosed: Vec<_> = self
             .index
             .spans()
@@ -185,6 +234,8 @@ impl Checker<'_> {
     /// `{% endmodal %}` belonging to a project's own block tag is left alone,
     /// since nothing here knows whether `{% modal %}` opens a block at all.
     fn unmatched_closes(&mut self) {
+        self.decides(&[&UNMATCHED_TEMPLATE_CLOSE]);
+
         let strays: Vec<_> = self
             .index
             .strays()
@@ -214,6 +265,7 @@ impl Checker<'_> {
         if !project::settings_are_authoritative(self.db, self.db.project()) {
             return;
         }
+        self.decides(&[&UNKNOWN_TEMPLATE_LIBRARY]);
 
         let unknown: Vec<_> = self
             .index
@@ -242,6 +294,11 @@ impl Checker<'_> {
         if !self.libraries_known {
             return;
         }
+        self.decides(&[
+            &UNKNOWN_TEMPLATE_TAG,
+            &UNKNOWN_TEMPLATE_FILTER,
+            &UNLOADED_TEMPLATE_LIBRARY,
+        ]);
 
         let mut checked: Vec<(bool, CompactString, TextRange)> = Vec::new();
 
@@ -372,6 +429,7 @@ impl Checker<'_> {
         if !project::settings_are_authoritative(self.db, self.db.project()) {
             return;
         }
+        self.decides(&[&UNRESOLVED_TEMPLATE]);
 
         let missing: Vec<_> = self
             .index
@@ -399,6 +457,7 @@ impl Checker<'_> {
         if !project::settings_are_authoritative(self.db, self.db.project()) {
             return;
         }
+        self.decides(&[&UNRESOLVED_STATIC_FILE]);
 
         let files = project::static_files(self.db, self.db.project());
         let named: Vec<_> = self
@@ -438,6 +497,7 @@ impl Checker<'_> {
         if !project::routes_are_authoritative(self.db, self.db.project()) {
             return;
         }
+        self.decides(&[&UNRESOLVED_ROUTE, &INVALID_ROUTE_ARGUMENTS]);
 
         let mut unresolved = Vec::new();
         let mut invalid = Vec::new();
@@ -593,6 +653,9 @@ impl Checker<'_> {
 
     fn unknown_blocks(&mut self) {
         if self.index.extends().is_none() {
+            // a template that overrides nothing has no block that could be
+            // unknown, which is a conclusion rather than a bail-out
+            self.decides(&[&UNKNOWN_TEMPLATE_BLOCK]);
             return;
         }
 
@@ -605,6 +668,7 @@ impl Checker<'_> {
         if !complete {
             return;
         }
+        self.decides(&[&UNKNOWN_TEMPLATE_BLOCK]);
 
         let declared: FxHashSet<CompactString> = chain
             .iter()
@@ -654,6 +718,11 @@ impl Checker<'_> {
     /// `alters_data` before it attempts the call, so a write method that also
     /// needs arguments is refused rather than uncallable.
     fn members_needing_arguments(&mut self) {
+        self.decides(&[
+            &TEMPLATE_MEMBER_NEEDS_ARGUMENTS,
+            &TEMPLATE_MEMBER_ALTERS_DATA,
+        ]);
+
         let mut found = Vec::new();
         let mut refused = Vec::new();
 
@@ -713,6 +782,146 @@ impl Checker<'_> {
                 diagnostic.help("`alters_data` marks it, so django renders nothing instead");
             }
         }
+    }
+
+    // ---- 13. a suppression comment that silenced nothing --------------------
+
+    /// a `{# ty: ignore #}` that turned out to be doing nothing
+    ///
+    /// this is `unused-ignore-comment` as a python file reports it — a comment
+    /// that silenced nothing is a comment whose removal changes nothing, and
+    /// leaving it there hides the day the rule starts firing again. the semantics
+    /// are the python ones down to a rule that configuration has turned off: the
+    /// check never runs, so the comment never silences anything, so it is unused.
+    ///
+    /// what a template adds is that a check can decline to answer at all — see
+    /// [`Checker::decides`] — and a rule that was never decided is left alone.
+    fn unused_suppressions(&mut self) {
+        let Some(severity) = self
+            .db
+            .rule_selection(self.file)
+            .severity(LintId::of(&UNUSED_IGNORE_COMMENT))
+        else {
+            return;
+        };
+
+        // the checks are all done with it, and reporting needs to mark codes used
+        // as it goes
+        let mut suppressions = std::mem::take(&mut self.suppressions);
+
+        let blanket_answerable = TEMPLATE_LINTS
+            .iter()
+            .all(|lint| self.decided.contains(&LintId::of(lint)));
+
+        // one candidate per code rather than per comment, so that a code can
+        // silence a sibling's report the way it does in a python file
+        let mut candidates = Vec::new();
+        for (entry, suppression) in suppressions.entries.iter().enumerate() {
+            if suppression.rules.is_empty() {
+                if !suppression.used && blanket_answerable {
+                    candidates.push(Reported { entry, code: None });
+                }
+                continue;
+            }
+
+            candidates.extend(
+                suppression
+                    .rules
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, rule)| !rule.used && self.answers_for(&rule.name))
+                    .map(|(code, _)| Reported {
+                        entry,
+                        code: Some(code),
+                    }),
+            );
+        }
+
+        // a comment naming `unused-ignore-comment` silences these, and the code
+        // being reported cannot silence itself
+        let mut reported = Vec::new();
+        for candidate in candidates {
+            let line = suppressions.entries[candidate.entry].line;
+            match suppressions.unused_silencer(line, candidate) {
+                Some(silencer) => suppressions.mark_used(silencer),
+                None => reported.push(candidate),
+            }
+        }
+
+        // a code that went on to silence one of these is no longer unused
+        reported.retain(|candidate| !suppressions.is_used(*candidate));
+
+        // a comment every one of whose codes went unused is reported whole, since
+        // the whole comment is then what there is to take out
+        let whole_comments: Vec<usize> = suppressions
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(entry, suppression)| {
+                !suppression.rules.is_empty()
+                    && reported
+                        .iter()
+                        .filter(|candidate| candidate.entry == *entry)
+                        .count()
+                        == suppression.rules.len()
+            })
+            .map(|(entry, _)| entry)
+            .collect();
+        reported.retain(|candidate| {
+            !whole_comments.contains(&candidate.entry) || candidate.code == Some(0)
+        });
+
+        for candidate in &reported {
+            let suppression = &suppressions.entries[candidate.entry];
+            let whole = whole_comments.contains(&candidate.entry);
+
+            let (range, message) = match candidate.code.filter(|_| !whole) {
+                Some(code) => (
+                    suppression.rules[code].range,
+                    format!(
+                        "unused `ty: ignore` directive: `{}`",
+                        suppression.rules[code].name
+                    ),
+                ),
+                None if suppression.rules.is_empty() => (
+                    suppression.range,
+                    "unused blanket `ty: ignore` directive".to_string(),
+                ),
+                None => (
+                    suppression.range,
+                    "unused `ty: ignore` directive".to_string(),
+                ),
+            };
+
+            let mut diagnostic = Diagnostic::new(
+                DiagnosticId::Lint(UNUSED_IGNORE_COMMENT.name()),
+                severity,
+                message,
+            );
+            diagnostic.annotate(Annotation::primary(Span::from(self.file).with_range(range)));
+            diagnostic.help("remove the unused suppression");
+            diagnostic.set_fix(match candidate.code.filter(|_| !whole) {
+                Some(code) => remove_code_fix(self.source, suppression, code),
+                None => remove_comment_fix(self.source, suppression),
+            });
+            self.found.push(diagnostic);
+        }
+    }
+
+    /// whether an unused suppression naming `rule` is one to report
+    ///
+    /// a code naming a rule no template check produces — a python one, or a
+    /// misspelling — is left alone: nothing here has looked for it, so nothing
+    /// here can say it went unused.
+    fn answers_for(&self, rule: &str) -> bool {
+        if rule == &*UNUSED_IGNORE_COMMENT.name() {
+            return true;
+        }
+
+        TEMPLATE_LINTS
+            .iter()
+            .filter(|lint| rule == &*lint.name())
+            .any(|lint| self.decided.contains(&LintId::of(lint)))
     }
 
     // ---- reading a construct's arguments -----------------------------------
@@ -979,8 +1188,25 @@ struct Suppression {
     line: OneIndexed,
     /// whether the comment stands alone, and so covers the line below it too
     alone: bool,
+    /// the whole comment, `{#` and `#}` included
+    range: TextRange,
     /// the rules it names, or nothing for a blanket one
-    rules: Vec<CompactString>,
+    rules: Vec<Rule>,
+    /// whether a blanket comment silenced anything
+    ///
+    /// a comment naming rules answers for each of them separately, so this stays
+    /// false there.
+    used: bool,
+}
+
+/// one rule code written inside a suppression comment
+#[derive(Debug)]
+struct Rule {
+    name: CompactString,
+    /// the range of the code itself, brackets and commas excluded
+    range: TextRange,
+    /// whether this code silenced a diagnostic
+    used: bool,
 }
 
 /// what a suppression comment is written with
@@ -995,7 +1221,8 @@ impl Suppressions {
                 continue;
             }
 
-            let body = source[construct.range]
+            let comment = &source[construct.range];
+            let body = comment
                 .trim_start_matches("{#")
                 .trim_end_matches("#}")
                 .trim();
@@ -1005,17 +1232,17 @@ impl Suppressions {
             let rules = match rules.trim() {
                 "" => Vec::new(),
                 rules => {
-                    let Some(named) = rules
-                        .strip_prefix('[')
-                        .and_then(|rules| rules.strip_suffix(']'))
-                    else {
+                    if !rules.starts_with('[') || !rules.ends_with(']') {
+                        continue;
+                    }
+                    // the codes are read off the comment rather than off the
+                    // trimmed body, so that each one keeps the range it was
+                    // written at — which is what a diagnostic about a single
+                    // code has to point at
+                    let (Some(open), Some(close)) = (comment.find('['), comment.rfind(']')) else {
                         continue;
                     };
-                    named
-                        .split(',')
-                        .map(|rule| rule.trim().to_compact_string())
-                        .filter(|rule| !rule.is_empty())
-                        .collect()
+                    codes(comment, open, close, construct.range.start())
                 }
             };
 
@@ -1038,26 +1265,196 @@ impl Suppressions {
             entries.push(Suppression {
                 line: line_of(source, construct.range.start()),
                 alone,
+                range: construct.range,
                 rules,
+                used: false,
             });
         }
 
         Self { entries }
     }
 
-    fn covers(&self, lint: &'static LintMetadata, line: OneIndexed) -> bool {
-        self.entries.iter().any(|suppression| {
-            let covered = suppression.line == line
-                || (suppression.alone && suppression.line.saturating_add(1) == line);
+    /// whether a comment silences `lint` on `line`, counting every one that does
+    /// as used
+    ///
+    /// every covering comment is counted rather than only the innermost: with two
+    /// of them silencing the same rule on the same line there is no saying which
+    /// one the writer meant to keep, and calling either unused would be a guess.
+    fn silences(&mut self, lint: &'static LintMetadata, line: OneIndexed) -> bool {
+        let mut silenced = false;
 
-            covered
-                && (suppression.rules.is_empty()
-                    || suppression
-                        .rules
-                        .iter()
-                        .any(|rule| rule.as_str() == &*lint.name()))
-        })
+        for suppression in &mut self.entries {
+            if !suppression.covers(line) {
+                continue;
+            }
+
+            if suppression.rules.is_empty() {
+                suppression.used = true;
+                silenced = true;
+                continue;
+            }
+
+            for rule in &mut suppression.rules {
+                if rule.name.as_str() == &*lint.name() {
+                    rule.used = true;
+                    silenced = true;
+                }
+            }
+        }
+
+        silenced
     }
+
+    /// the code that would silence an `unused-ignore-comment` reported on `line`
+    ///
+    /// only a code counts, never a blanket comment: a blanket `{# ty: ignore #}`
+    /// silencing its own unused report would silence every one of these. `naming`
+    /// is the code being reported, which cannot silence itself.
+    fn unused_silencer(&self, line: OneIndexed, reported: Reported) -> Option<Reported> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, suppression)| suppression.covers(line))
+            .flat_map(|(entry, suppression)| {
+                suppression
+                    .rules
+                    .iter()
+                    .enumerate()
+                    .map(move |(code, rule)| {
+                        (
+                            Reported {
+                                entry,
+                                code: Some(code),
+                            },
+                            rule,
+                        )
+                    })
+            })
+            .find(|(candidate, rule)| {
+                rule.name.as_str() == &*UNUSED_IGNORE_COMMENT.name() && *candidate != reported
+            })
+            .map(|(candidate, _)| candidate)
+    }
+
+    /// whether the code `reported` names was counted used
+    fn is_used(&self, reported: Reported) -> bool {
+        let suppression = &self.entries[reported.entry];
+        match reported.code {
+            Some(code) => suppression.rules[code].used,
+            None => suppression.used,
+        }
+    }
+
+    fn mark_used(&mut self, reported: Reported) {
+        let suppression = &mut self.entries[reported.entry];
+        match reported.code {
+            Some(code) => suppression.rules[code].used = true,
+            None => suppression.used = true,
+        }
+    }
+}
+
+impl Suppression {
+    /// whether this comment applies to `line`
+    fn covers(&self, line: OneIndexed) -> bool {
+        self.line == line || (self.alone && self.line.saturating_add(1) == line)
+    }
+}
+
+/// what an `unused-ignore-comment` diagnostic is about: a whole comment, or one
+/// code inside it
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Reported {
+    entry: usize,
+    code: Option<usize>,
+}
+
+/// the codes written between `open` and `close` in `comment`, which starts at
+/// `start` in the source
+fn codes(comment: &str, open: usize, close: usize, start: TextSize) -> Vec<Rule> {
+    let mut rules = Vec::new();
+    let mut offset = open + 1;
+
+    for piece in comment[open + 1..close].split(',') {
+        let leading = piece.len() - piece.trim_start().len();
+        let name = piece.trim();
+
+        if !name.is_empty()
+            && let Ok(at) = TextSize::try_from(offset + leading)
+        {
+            rules.push(Rule {
+                name: name.to_compact_string(),
+                range: TextRange::at(start + at, TextSize::of(name)),
+                used: false,
+            });
+        }
+
+        offset += piece.len() + 1;
+    }
+
+    rules
+}
+
+/// take a whole suppression comment out
+///
+/// a comment with nothing else on its line takes the line with it, so that
+/// removing it doesn't leave a blank one behind.
+fn remove_comment_fix(source: &str, suppression: &Suppression) -> Fix {
+    let start = usize::from(suppression.range.start());
+    let end = usize::from(suppression.range.end());
+
+    let (start, end) = if suppression.alone {
+        let start = source[..start].rfind('\n').map_or(0, |index| index + 1);
+        let end = source[end..]
+            .find('\n')
+            .map_or(source.len(), |index| end + index + 1);
+        (start, end)
+    } else {
+        // the whitespace that separated the comment from what precedes it goes
+        // with it, so that no trailing space is left behind
+        (source[..start].trim_end().len(), end)
+    };
+
+    Fix::safe_edit(Edit::range_deletion(range_of(start, end)))
+}
+
+/// take one code out of a suppression comment, with the comma that separated it
+fn remove_code_fix(source: &str, suppression: &Suppression, code: usize) -> Fix {
+    let range = suppression.rules[code].range;
+    let limit = usize::from(suppression.range.end());
+    let start = usize::from(range.start());
+    let mut end = usize::from(range.end());
+
+    let trailing = source[end..limit]
+        .find(|character: char| !character.is_whitespace())
+        .unwrap_or(0);
+    if source[end + trailing..].starts_with(',') {
+        // the comma and the space after it go with the code, so that the codes
+        // left behind read as they were written
+        end += trailing + 1;
+        end += source[end..limit]
+            .find(|character: char| !character.is_whitespace())
+            .unwrap_or(0);
+        return Fix::safe_edit(Edit::range_deletion(range_of(start, end)));
+    }
+
+    // the last code carries the comma before it instead
+    let kept = source[..start].trim_end();
+    let start = kept.strip_suffix(',').map_or(start, |before| {
+        before
+            .trim_end_matches(|character: char| character.is_whitespace())
+            .len()
+    });
+
+    Fix::safe_edit(Edit::range_deletion(range_of(start, end)))
+}
+
+/// the range from `start` to `end`, which are byte offsets into a source
+fn range_of(start: usize, end: usize) -> TextRange {
+    let start = TextSize::try_from(start).unwrap_or_default();
+    let end = TextSize::try_from(end).unwrap_or_default();
+
+    TextRange::new(start.min(end), end)
 }
 
 /// the one-indexed line `offset` is on
@@ -1069,6 +1466,8 @@ fn line_of(source: &str, offset: TextSize) -> OneIndexed {
 mod tests {
     use ruff_text_size::Ranged;
 
+    use ty_python_semantic::lint::Level;
+
     use crate::django_template::tests::{DJANGO_BUILTINS, TemplateTest};
 
     /// a whole django project: a settings module the convention finds, an app
@@ -1078,7 +1477,12 @@ mod tests {
     /// `{% load static %}` and `{% load humanize %}` resolve — and what makes the
     /// indexes authoritative, which every check below depends on.
     fn project(template: &str) -> TemplateTest {
-        TemplateTest::with_site_packages(
+        project_with_rules(template, &[])
+    }
+
+    /// the same project, with some rules set to a level of their own
+    fn project_with_rules(template: &str, rules: &[(&str, Level)]) -> TemplateTest {
+        TemplateTest::with_rules(
             &[
                 (
                     "manage.py",
@@ -1256,6 +1660,7 @@ mod tests {
                     ",
                 ),
             ],
+            rules,
         )
     }
 
@@ -1868,8 +2273,11 @@ mod tests {
     fn a_suppression_naming_rules_silences_only_those() {
         assert_eq!(
             project("{# ty: ignore[unknown-template-filter] #}\n{% iff book %}\n").diagnostics(),
-            ["unknown-template-tag Error: no template tag named `iff` [iff]"],
-            "a rule the comment doesn't name is still reported"
+            [
+                "unused-ignore-comment Warning: unused `ty: ignore` directive [{# ty: ignore[unknown-template-filter] #}]",
+                "unknown-template-tag Error: no template tag named `iff` [iff]"
+            ],
+            "a rule the comment doesn't name is still reported, and the one it does name went unused"
         );
         assert!(
             project("{# ty: ignore[unknown-template-tag] #}\n{% iff book %}\n")
@@ -1882,8 +2290,194 @@ mod tests {
     fn a_suppression_with_something_beside_it_covers_only_its_own_line() {
         assert_eq!(
             project("a {# ty: ignore #}\n{% iff book %}\n").diagnostics(),
-            ["unknown-template-tag Error: no template tag named `iff` [iff]"]
+            [
+                "unused-ignore-comment Warning: unused blanket `ty: ignore` directive [{# ty: ignore #}]",
+                "unknown-template-tag Error: no template tag named `iff` [iff]"
+            ]
         );
+    }
+
+    #[test]
+    fn a_suppression_that_silences_nothing_is_reported() {
+        assert_eq!(
+            project("{# ty: ignore[unknown-template-tag] #}\n<p>hello</p>\n").diagnostics(),
+            [
+                "unused-ignore-comment Warning: unused `ty: ignore` directive [{# ty: ignore[unknown-template-tag] #}]"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_blanket_suppression_that_silences_nothing_is_reported() {
+        assert_eq!(
+            project("{# ty: ignore #}\n<p>hello</p>\n").diagnostics(),
+            [
+                "unused-ignore-comment Warning: unused blanket `ty: ignore` directive [{# ty: ignore #}]"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_suppression_that_silences_something_is_not_reported() {
+        assert!(
+            project("{% iff book %} {# ty: ignore[unknown-template-tag] #}\n")
+                .diagnostics()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn only_the_codes_of_a_suppression_that_went_unused_are_reported() {
+        assert_eq!(
+            project("{% iff book %} {# ty: ignore[unknown-template-tag, unresolved-route] #}\n")
+                .diagnostics(),
+            [
+                "unused-ignore-comment Warning: unused `ty: ignore` directive: `unresolved-route` [unresolved-route]"
+            ],
+            "the code that did the silencing is left alone"
+        );
+    }
+
+    #[test]
+    fn a_suppression_naming_a_rule_no_template_check_produces_is_left_alone() {
+        // nothing here looked for `division-by-zero`, so nothing here can say the
+        // comment went unused
+        assert!(
+            project("{# ty: ignore[division-by-zero] #}\n<p>hello</p>\n")
+                .diagnostics()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_unused_suppression_is_itself_suppressible() {
+        assert!(
+            project(
+                "<p>hello</p> {# ty: ignore[unknown-template-tag] #} {# ty: ignore[unused-ignore-comment] #}\n"
+            )
+            .diagnostics()
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_suppression_for_the_unused_rule_cannot_silence_its_own_report() {
+        assert_eq!(
+            project("<p>hello</p> {# ty: ignore[unused-ignore-comment] #}\n").diagnostics(),
+            [
+                "unused-ignore-comment Warning: unused `ty: ignore` directive [{# ty: ignore[unused-ignore-comment] #}]"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_blanket_suppression_does_not_silence_its_own_unused_report() {
+        assert_eq!(
+            project("<p>hello</p> {# ty: ignore #}\n").diagnostics(),
+            [
+                "unused-ignore-comment Warning: unused blanket `ty: ignore` directive [{# ty: ignore #}]"
+            ]
+        );
+    }
+
+    /// the template as every reported fix would leave it
+    fn fixed(template: &str) -> String {
+        let test = project(template);
+        let source = ruff_db::source::source_text(&test.db, test.file);
+        let mut fixed = source.to_string();
+
+        let diagnostics = crate::django_template::django_template_diagnostics(&test.db, test.file);
+        let mut edits: Vec<_> = diagnostics
+            .iter()
+            .filter_map(ruff_db::diagnostic::Diagnostic::fix)
+            .flat_map(ruff_diagnostics::Fix::edits)
+            .collect();
+        // back to front, so that an earlier edit's offsets still hold
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.start()));
+
+        for edit in edits {
+            fixed.replace_range(
+                usize::from(edit.start())..usize::from(edit.end()),
+                edit.content().unwrap_or_default(),
+            );
+        }
+
+        fixed
+    }
+
+    #[test]
+    fn the_fix_takes_out_what_went_unused() {
+        assert_eq!(
+            fixed("{# ty: ignore[unknown-template-tag] #}\n<p>hello</p>\n"),
+            "<p>hello</p>\n",
+            "a comment with nothing else on its line takes the line with it"
+        );
+        assert_eq!(fixed("<p>hello</p> {# ty: ignore #}\n"), "<p>hello</p>\n");
+        assert_eq!(
+            fixed("{{ x|nope }} {# ty: ignore[unresolved-route, unknown-template-filter] #}\n"),
+            "{{ x|nope }} {# ty: ignore[unknown-template-filter] #}\n",
+            "only the code that went unused, and the comma after it"
+        );
+        assert_eq!(
+            fixed("{{ x|nope }} {# ty: ignore[unknown-template-filter, unresolved-route] #}\n"),
+            "{{ x|nope }} {# ty: ignore[unknown-template-filter] #}\n",
+            "the last code carries the comma before it instead"
+        );
+    }
+
+    #[test]
+    fn a_code_beside_the_unused_rule_silences_the_whole_comment() {
+        // what a python file does for `# ty: ignore[division-by-zero,
+        // unused-ignore-comment]`: the second code silences the first's report,
+        // and is used up doing it
+        assert!(
+            project("<p>hello</p> {# ty: ignore[unknown-template-tag, unused-ignore-comment] #}\n")
+                .diagnostics()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_suppression_for_a_rule_configuration_turned_off_is_reported() {
+        // the same as a python file: the check never runs, so the comment never
+        // silences anything, so it is unused. see the `ty: ignore` suppression
+        // tests under `crates/ty_python_semantic/resources/mdtest/suppressions`
+        let test = project_with_rules(
+            "{% iff book %} {# ty: ignore[unknown-template-tag] #}\n",
+            &[("unknown-template-tag", Level::Ignore)],
+        );
+
+        assert_eq!(
+            test.diagnostics(),
+            [
+                "unused-ignore-comment Warning: unused `ty: ignore` directive [{# ty: ignore[unknown-template-tag] #}]"
+            ]
+        );
+    }
+
+    #[test]
+    fn nothing_is_reported_where_the_unused_rule_is_turned_off() {
+        let test = project_with_rules(
+            "<p>hello</p> {# ty: ignore[unknown-template-tag] #}\n",
+            &[("unused-ignore-comment", Level::Ignore)],
+        );
+
+        assert!(test.diagnostics().is_empty());
+    }
+
+    #[test]
+    fn a_suppression_is_not_reported_unused_where_a_check_could_not_answer() {
+        // no `manage.py`, so no check decided anything about this file — see
+        // `a_project_whose_settings_cannot_be_read_reports_nothing_it_would_have_to_guess`
+        let test = TemplateTest::new(&[
+            ("blog/__init__.py", ""),
+            (
+                "blog/templates/blog/post.html",
+                "{# ty: ignore[unknown-template-tag] #}\n{# ty: ignore #}\n",
+            ),
+        ]);
+
+        assert!(test.diagnostics().is_empty());
     }
 
     #[test]
