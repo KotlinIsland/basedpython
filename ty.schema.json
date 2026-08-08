@@ -1880,6 +1880,16 @@
             }
           ]
         },
+        "template-member-alters-data": {
+          "title": "detects a template lookup landing on a method django refuses to call",
+          "description": "## What it does\nChecks for a `{{ }}` lookup landing on a method django refuses to call\nfrom a template.\n\n## Why is this bad?\nDjango calls whatever a lookup lands on, except a method marked\n`alters_data = True` — a template is not allowed to write to the\ndatabase. Rather than call it, django renders `string_if_invalid` — the\nempty string by default — silently, with no error and no output.\n\nThe methods django marks are the ones that write: `save`, `delete` and\ntheir `async` twins on a model, and the `create`/`update`/`bulk_*`\nfamily on a queryset, a manager and the manager behind a relation.\nOverriding one keeps the mark, so an override is reported too, exactly\nas django's own `AltersData` propagates it at runtime.\n\n## Examples\n```django\n{{ book.save }}     {# warning: renders nothing #}\n{{ book.title }}    {# ok #}\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "template-member-needs-arguments": {
           "title": "detects a template lookup landing on a method that needs arguments",
           "description": "## What it does\nChecks for a `{{ }}` lookup landing on a method that cannot be called\nwithout arguments.\n\n## Why is this bad?\nDjango calls whatever a lookup lands on. A method that needs an argument\ncannot be called, so django renders `string_if_invalid` — the empty string\nby default — silently, with no error and no output.\n\n## Examples\n```python\nclass Book:\n    def headline(self, length: int) -> str: ...\n    def title(self) -> str: ...\n```\n\n```django\n{{ book.headline }}    {# warning: renders nothing #}\n{{ book.title }}       {# ok #}\n```",

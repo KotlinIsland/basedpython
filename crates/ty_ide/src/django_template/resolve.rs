@@ -14,7 +14,8 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_project::Db;
 use ty_python_semantic::types::Type;
 use ty_python_semantic::types::ide_support::{
-    iterable_element_type, no_argument_call_return_type, own_class_member_names,
+    TemplateLookup, iterable_element_type, no_argument_call_return_type, own_class_member_names,
+    template_lookup,
 };
 use ty_python_semantic::types::list_members::{Member, all_members};
 use ty_python_semantic::{HasType, SemanticModel};
@@ -207,7 +208,17 @@ pub(crate) fn path_segments<'src>(
 ///
 /// [resolved]: https://docs.djangoproject.com/en/stable/ref/templates/language/#variables
 pub(crate) fn member_type<'db>(db: &'db dyn Db, ty: Type<'db>, name: &str) -> Option<Type<'db>> {
-    Some(resolved(db, uncalled_member_type(db, ty, name)?))
+    let member = uncalled_member_type(db, ty, name)?;
+
+    match template_lookup(db, ty, name, member) {
+        TemplateLookup::Calls => Some(resolved(db, member)),
+        TemplateLookup::UsesUncalled => Some(member),
+        // django renders `string_if_invalid` here, which is configurable and by
+        // default the empty string. nothing useful can be said about a path
+        // continuing through it, and saying `str` would offer `upper` on what a
+        // template cannot read at all
+        TemplateLookup::Refuses => None,
+    }
 }
 
 /// the type of `name` accessed on `ty`, before the template engine calls it

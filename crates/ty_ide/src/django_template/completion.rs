@@ -17,6 +17,7 @@ use ruff_db::files::File;
 use ruff_text_size::{TextRange, TextSize};
 use rustc_hash::FxHashSet;
 use ty_project::Db;
+use ty_python_semantic::types::ide_support::{TemplateLookup, template_lookup};
 
 use crate::completion::CompletionKind;
 
@@ -53,6 +54,12 @@ pub struct TemplateCompletion {
     pub range: TextRange,
     /// the `{% load %}` the suggestion needs, when its library isn't loaded yet
     pub additional_edit: Option<TemplateEdit>,
+    /// whether the member is one django will not render
+    ///
+    /// it is still offered, because it is genuinely there and a template author
+    /// reading `{{ book.save }}` deserves to be told what it is rather than
+    /// shown nothing. the client strikes it through.
+    pub unusable: bool,
 }
 
 impl TemplateCompletion {
@@ -65,7 +72,14 @@ impl TemplateCompletion {
             insert: None,
             range,
             additional_edit: None,
+            unusable: false,
         }
+    }
+
+    #[must_use]
+    fn unusable(mut self, unusable: bool) -> Self {
+        self.unusable = unusable;
+        self
     }
 
     #[must_use]
@@ -606,13 +620,22 @@ fn members(
         return Vec::new();
     };
 
-    resolve::members(db, ty)
+    let mut members: Vec<_> = resolve::members(db, ty)
         .into_iter()
         .map(|member| {
+            let refused =
+                template_lookup(db, ty, &member.name, member.ty) == TemplateLookup::Refuses;
+
             TemplateCompletion::new(member.name.as_str(), CompletionKind::Field, cursor.range)
                 .detail(member.ty.display(db).to_string())
+                .unusable(refused)
         })
-        .collect()
+        .collect();
+
+    // a member django will not render belongs below every member it will,
+    // whichever class declared it
+    members.sort_by_key(|member| member.unusable);
+    members
 }
 
 fn variables(
@@ -1844,6 +1867,145 @@ mod tests {
             project("{{ x|<CURSOR> }}")
                 .completions()
                 .contains(&"slugify".to_string())
+        );
+    }
+
+    /// a project whose model really is a `django.db.models.Model`, so that the
+    /// members django marks `alters_data` are the ones django marks
+    fn with_a_real_model(template: &str) -> TemplateTest {
+        TemplateTest::with_site_packages(
+            &[
+                (
+                    "manage.py",
+                    "
+                    import os
+
+                    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')
+                    ",
+                ),
+                ("project/__init__.py", ""),
+                (
+                    "project/settings.py",
+                    "
+                    INSTALLED_APPS = ['blog']
+
+                    TEMPLATES = [{'APP_DIRS': True, 'OPTIONS': {}}]
+                    ",
+                ),
+                ("blog/__init__.py", ""),
+                (
+                    "blog/models.py",
+                    "
+                    from typing import Literal
+
+                    from django.db.models import Model
+
+
+                    class Section:
+                        heading: str
+
+
+                    class Sections:
+                        # django reads this off the member and uses it as it is
+                        do_not_call_in_templates: Literal[True]
+
+                        def __call__(self) -> Section: ...
+
+                        def first(self) -> Section: ...
+
+
+                    class Page(Model):
+                        number: int
+                        sections: Sections
+                    ",
+                ),
+                (
+                    "blog/views.py",
+                    "
+                    from blog.models import Page
+
+
+                    def post(request):
+                        return render(request, 'blog/post.html', {'page': Page()})
+                    ",
+                ),
+                ("blog/templates/blog/post.html", template),
+            ],
+            &[
+                ("django/__init__.py", ""),
+                ("django/db/__init__.py", ""),
+                (
+                    "django/db/models/__init__.py",
+                    "from django.db.models.base import Model",
+                ),
+                (
+                    "django/db/models/utils.py",
+                    "
+                    class AltersData:
+                        def __init_subclass__(cls, **kwargs) -> None: ...
+                    ",
+                ),
+                (
+                    "django/db/models/base.py",
+                    "
+                    from django.db.models.utils import AltersData
+
+
+                    class Model(AltersData):
+                        pk: int
+
+                        def save(self) -> None: ...
+
+                        def delete(self) -> None: ...
+
+                        def refresh_from_db(self) -> None: ...
+                    ",
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_member_django_will_not_render_is_marked_rather_than_hidden() {
+        let completions = with_a_real_model("{{ page.<CURSOR> }}");
+
+        assert_eq!(completions.unusable(), ["delete", "save"]);
+        assert!(completions.completions().contains(&"save".to_string()));
+    }
+
+    #[test]
+    fn a_member_django_will_not_render_sorts_below_every_member_it_will() {
+        let completions = with_a_real_model("{{ page.<CURSOR> }}").completions();
+        let usable = completions.len() - 2;
+
+        assert_eq!(&completions[usable..], ["delete", "save"]);
+    }
+
+    #[test]
+    fn nothing_is_offered_past_a_member_django_refuses_to_call() {
+        assert!(
+            with_a_real_model("{{ page.save.<CURSOR> }}")
+                .completions()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_member_marked_do_not_call_in_templates_keeps_its_own_members() {
+        // calling it would give a `Section`, and `heading` with it. django does
+        // not call it, so `first` is what the template can reach
+        let completions = with_a_real_model("{{ page.sections.<CURSOR> }}").completions();
+
+        assert!(completions.contains(&"first".to_string()));
+        assert!(!completions.contains(&"heading".to_string()));
+    }
+
+    #[test]
+    fn a_member_django_renders_is_not_marked() {
+        assert!(
+            !with_a_real_model("{{ page.<CURSOR> }}")
+                .unusable()
+                .contains(&"refresh_from_db".to_string())
         );
     }
 }

@@ -22,13 +22,15 @@ use ruff_text_size::{TextRange, TextSize};
 use rustc_hash::FxHashSet;
 use ty_project::Db;
 use ty_python_semantic::django_template::{
-    INVALID_ROUTE_ARGUMENTS, TEMPLATE_MEMBER_NEEDS_ARGUMENTS, UNCLOSED_TEMPLATE_BLOCK,
-    UNKNOWN_TEMPLATE_BLOCK, UNKNOWN_TEMPLATE_FILTER, UNKNOWN_TEMPLATE_LIBRARY,
-    UNKNOWN_TEMPLATE_TAG, UNLOADED_TEMPLATE_LIBRARY, UNMATCHED_TEMPLATE_CLOSE, UNRESOLVED_ROUTE,
-    UNRESOLVED_STATIC_FILE, UNRESOLVED_TEMPLATE,
+    INVALID_ROUTE_ARGUMENTS, TEMPLATE_MEMBER_ALTERS_DATA, TEMPLATE_MEMBER_NEEDS_ARGUMENTS,
+    UNCLOSED_TEMPLATE_BLOCK, UNKNOWN_TEMPLATE_BLOCK, UNKNOWN_TEMPLATE_FILTER,
+    UNKNOWN_TEMPLATE_LIBRARY, UNKNOWN_TEMPLATE_TAG, UNLOADED_TEMPLATE_LIBRARY,
+    UNMATCHED_TEMPLATE_CLOSE, UNRESOLVED_ROUTE, UNRESOLVED_STATIC_FILE, UNRESOLVED_TEMPLATE,
 };
 use ty_python_semantic::lint::{LintId, LintMetadata};
-use ty_python_semantic::types::ide_support::callable_needs_arguments;
+use ty_python_semantic::types::ide_support::{
+    TemplateLookup, callable_needs_arguments, template_lookup,
+};
 
 use crate::code_action::QuickFix;
 
@@ -641,10 +643,19 @@ impl Checker<'_> {
         })
     }
 
-    // ---- 12. a lookup landing on a method that needs arguments -------------
+    // ---- 12. a lookup landing on a member django will not call -------------
 
+    /// the two ways a `{{ }}` lookup can land on a method and render nothing:
+    /// django refuses to call it, or django tries and cannot
+    ///
+    /// both are read off the same walk because both end the path — once a
+    /// segment renders nothing, the segments after it have nothing to resolve
+    /// against — and because they are checked in django's own order: it consults
+    /// `alters_data` before it attempts the call, so a write method that also
+    /// needs arguments is refused rather than uncallable.
     fn members_needing_arguments(&mut self) {
         let mut found = Vec::new();
+        let mut refused = Vec::new();
 
         for construct in self.index.lexed().constructs() {
             if construct.kind != ConstructKind::Variable {
@@ -665,13 +676,18 @@ impl Checker<'_> {
                     ) else {
                         break;
                     };
-                    let Some(member) = resolve::uncalled_member_type(self.db, ty, segments[length])
-                    else {
+                    let name = segments[length];
+                    let Some(member) = resolve::uncalled_member_type(self.db, ty, name) else {
                         break;
                     };
 
+                    if template_lookup(self.db, ty, name, member) == TemplateLookup::Refuses {
+                        refused.push((name.to_compact_string(), path[length].range));
+                        break;
+                    }
+
                     if callable_needs_arguments(self.db, member) {
-                        found.push((segments[length].to_compact_string(), path[length].range));
+                        found.push((name.to_compact_string(), path[length].range));
                         break;
                     }
                 }
@@ -685,6 +701,16 @@ impl Checker<'_> {
                 format_args!("`{name}` needs arguments"),
             ) {
                 diagnostic.help("django renders nothing for a member it cannot call");
+            }
+        }
+
+        for (name, range) in refused {
+            if let Some(diagnostic) = self.report(
+                &TEMPLATE_MEMBER_ALTERS_DATA,
+                range,
+                format_args!("django will not call `{name}` from a template"),
+            ) {
+                diagnostic.help("`alters_data` marks it, so django renders nothing instead");
             }
         }
     }
@@ -1085,6 +1111,9 @@ mod tests {
                 (
                     "blog/models.py",
                     "
+                    from django.db.models import Model
+
+
                     class Book:
                         pk: int
                         title: str
@@ -1094,16 +1123,32 @@ mod tests {
 
                         def excerpt(self, length: int) -> str:
                             return self.title[:length]
+
+                        def save(self) -> None:
+                            return None
+
+
+                    class Page(Model):
+                        number: int
+
+                        # a name of django's own, overridden. django's own
+                        # `AltersData` copies the mark onto an override
+                        def delete(self) -> None:
+                            return None
+
+                        # a name django marks on a queryset but not on a model
+                        def update(self) -> str:
+                            return ''
                     ",
                 ),
                 (
                     "blog/views.py",
                     "
-                    from blog.models import Book
+                    from blog.models import Book, Page
 
 
                     def post(request):
-                        return render(request, 'blog/post.html', {'book': Book()})
+                        return render(request, 'blog/post.html', {'book': Book(), 'page': Page()})
                     ",
                 ),
                 (
@@ -1154,6 +1199,34 @@ mod tests {
             ],
             &[
                 ("django/__init__.py", ""),
+                ("django/db/__init__.py", ""),
+                (
+                    "django/db/models/__init__.py",
+                    "from django.db.models.base import Model",
+                ),
+                (
+                    "django/db/models/utils.py",
+                    "
+                    class AltersData:
+                        def __init_subclass__(cls, **kwargs) -> None: ...
+                    ",
+                ),
+                (
+                    "django/db/models/base.py",
+                    "
+                    from django.db.models.utils import AltersData
+
+
+                    class Model(AltersData):
+                        pk: int
+
+                        def save(self) -> None: ...
+
+                        def delete(self) -> None: ...
+
+                        def refresh_from_db(self) -> None: ...
+                    ",
+                ),
                 ("django/templatetags/__init__.py", ""),
                 (
                     "django/templatetags/static.py",
@@ -1721,6 +1794,55 @@ mod tests {
             project("{{ book.summary }}{{ book.title }}\n")
                 .diagnostics()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_member_django_refuses_to_call_is_reported() {
+        assert_eq!(
+            project("{{ page.save }}\n").diagnostics(),
+            [
+                "template-member-alters-data Warning: django will not call `save` from a template [save]"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_override_of_a_member_django_refuses_to_call_is_reported() {
+        assert_eq!(
+            project("{{ page.delete }}\n").diagnostics(),
+            [
+                "template-member-alters-data Warning: django will not call `delete` from a template [delete]"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_member_of_the_projects_own_class_is_not_reported() {
+        assert!(project("{{ book.save }}\n").diagnostics().is_empty());
+    }
+
+    #[test]
+    fn a_model_method_django_has_no_equivalent_of_is_not_reported() {
+        assert!(project("{{ page.update }}\n").diagnostics().is_empty());
+    }
+
+    #[test]
+    fn a_model_member_django_calls_is_not_reported() {
+        assert!(
+            project("{{ page.number }}{{ page.refresh_from_db }}\n")
+                .diagnostics()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_path_continuing_through_a_refused_member_is_reported_once() {
+        assert_eq!(
+            project("{{ page.save.anything }}\n").diagnostics(),
+            [
+                "template-member-alters-data Warning: django will not call `save` from a template [save]"
+            ]
         );
     }
 

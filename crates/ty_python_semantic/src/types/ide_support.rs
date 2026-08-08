@@ -7,6 +7,7 @@ use crate::types::call::bind::CheckTypesMode;
 use crate::types::call::{CallArguments, CallError, MatchedArgument};
 use crate::types::class::{DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTupleAnchor};
 use crate::types::constraints::ConstraintSetBuilder;
+use crate::types::dedicated::django;
 use crate::types::function::FunctionDecorators;
 use crate::types::generics::GenericContext;
 use crate::types::list_members::all_end_of_scope_members;
@@ -2573,6 +2574,62 @@ pub fn instance_of_class<'db>(db: &'db dyn Db, module: &str, name: &str) -> Opti
 pub fn callable_needs_arguments<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
     matches!(ty, Type::FunctionLiteral(_) | Type::BoundMethod(_))
         && no_argument_call_return_type(db, ty).is_none()
+}
+
+/// What django's template variable resolution does with the member a lookup
+/// found.
+///
+/// Django calls whatever a lookup lands on, but two attributes it reads off the
+/// member itself say otherwise, and `Variable._resolve_lookup` reads them in the
+/// order these variants are written in:
+///
+/// ```python
+/// if callable(current):
+///     if getattr(current, "do_not_call_in_templates", False):
+///         pass
+///     elif getattr(current, "alters_data", False):
+///         current = context.template.engine.string_if_invalid
+///     else:
+///         current = current()
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateLookup {
+    /// Django calls it, so the lookup contributes what the call returns.
+    Calls,
+    /// `do_not_call_in_templates`: django uses the member itself, uncalled.
+    /// Django's `Choices` classes carry it, as do the managers behind a
+    /// relation, so that `{{ author.book_set }}` names the manager rather than
+    /// whatever calling it would give.
+    UsesUncalled,
+    /// `alters_data`: django refuses, and renders `string_if_invalid` — the
+    /// empty string by default.
+    Refuses,
+}
+
+/// What django's template variable resolution does with `name` on `receiver`.
+///
+/// `member` is the type of `name` on `receiver` before django has done anything
+/// with it — [`TemplateLookup::Calls`] is the only answer under which the lookup
+/// contributes a return type rather than the member itself.
+pub fn template_lookup<'db>(
+    db: &'db dyn Db,
+    receiver: Type<'db>,
+    name: &str,
+    member: Type<'db>,
+) -> TemplateLookup {
+    let declares_do_not_call = member
+        .member(db, "do_not_call_in_templates")
+        .place
+        .ignore_possibly_undefined()
+        .is_some_and(|flag| flag.bool(db).is_always_true());
+
+    if declares_do_not_call {
+        TemplateLookup::UsesUncalled
+    } else if django::refuses_template_call(db, receiver, name, member) {
+        TemplateLookup::Refuses
+    } else {
+        TemplateLookup::Calls
+    }
 }
 
 /// The names `ty`'s own class declares, as opposed to the ones it inherits.

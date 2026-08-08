@@ -21,6 +21,7 @@ use ty_python_core::{global_scope, place_table, use_def_map};
 
 use crate::place::{Place, known_module_symbol};
 use crate::types::class::{CodeGeneratorKind, Field, FieldKind};
+use crate::types::list_members::all_end_of_scope_members;
 use crate::types::member::class_member;
 use crate::types::signatures::{Parameter, Parameters, Signature};
 use crate::types::{
@@ -1269,4 +1270,123 @@ pub(in crate::types) fn with_queryset_row<'db>(
             generic_context.specialize(db, Cow::Owned(vec![model_arg, row]))
         });
     Some(Type::instance(db, class_type))
+}
+
+/// the methods django marks `alters_data = True`
+///
+/// django's template variable resolution refuses to call one of these and
+/// renders `string_if_invalid` instead, so a template that names one silently
+/// renders nothing.
+///
+/// the mark is written on the function object (`save.alters_data = True`,
+/// `django/db/models/base.py`), which is a form no stub can express and
+/// `django-stubs` declares nowhere — grepping the package for `alters_data`
+/// finds nothing. so unlike the rest of this module, which re-derives what it
+/// needs from what the stubs declare, these names are django's own, read off
+/// django's source. [`refuses_template_call`] is what keeps them from matching
+/// anything but django's own methods.
+///
+/// django's underscore-prefixed marks (`_insert`, `_update`, `_raw_delete`,
+/// `_clear`) are left out: a template cannot write a name beginning with `_`.
+/// sorted, for [`slice::binary_search`]
+const ALTERS_DATA_METHODS: &[&str] = &[
+    "aadd",
+    "abulk_create",
+    "abulk_update",
+    "aclear",
+    "acreate",
+    "acreate_superuser",
+    "acreate_user",
+    "add",
+    "adelete",
+    "aget_or_create",
+    "aremove",
+    "asave",
+    "aset",
+    "aupdate",
+    "aupdate_or_create",
+    "bulk_create",
+    "bulk_update",
+    "clear",
+    "create",
+    "create_superuser",
+    "create_user",
+    "delete",
+    "get_or_create",
+    "open",
+    "remove",
+    "save",
+    "save_base",
+    "set",
+    "update",
+    "update_or_create",
+];
+
+/// whether django's template variable resolution refuses to call `name` on
+/// `receiver`
+///
+/// three things have to hold, and each rules out a different way the name could
+/// belong to something other than django:
+///
+/// - `receiver` is one of django's classes whose methods carry the mark: one
+///   deriving `AltersData`, the base django gives exactly those, or a manager or
+///   queryset. the managers derive it at runtime too, but `django-stubs`
+///   declares `BaseManager` without it, so they are recognized the way the rest
+///   of this module recognizes them. a plain class of the project's own with a
+///   `save` method is neither
+/// - one of django's own classes in the mro declares `name`. a model may add a
+///   method django has no equivalent of, and django does not mark that one — the
+///   propagation in `AltersData.__init_subclass__` only copies a mark a base
+///   already has. an *override* of django's method is still reported, which is
+///   what that propagation does at runtime
+/// - the member is a method rather than a value. a model is free to call a field
+///   `update`, and django renders a field
+pub(in crate::types) fn refuses_template_call<'db>(
+    db: &'db dyn Db,
+    receiver: Type<'db>,
+    name: &str,
+    member: Type<'db>,
+) -> bool {
+    if ALTERS_DATA_METHODS.binary_search(&name).is_err() {
+        return false;
+    }
+    if !matches!(member, Type::FunctionLiteral(_) | Type::BoundMethod(_)) {
+        return false;
+    }
+    let Some(class) = instance_static_class(db, receiver) else {
+        return false;
+    };
+
+    let marks_its_methods = has_base_named(db, class, "django.db.models.utils", "AltersData")
+        || has_base(db, class, KnownClass::DjangoManager)
+        || has_base(db, class, KnownClass::DjangoQuerySet);
+
+    marks_its_methods && declared_by_django(db, class, name)
+}
+
+/// whether a class of django's own in `class`'s mro declares `name` itself
+fn declared_by_django<'db>(db: &'db dyn Db, class: StaticClassLiteral<'db>, name: &str) -> bool {
+    class
+        .iter_mro(db, None)
+        .filter_map(ClassBase::into_class)
+        .filter_map(|candidate| candidate.class_literal(db).as_static())
+        .filter(|candidate| {
+            file_to_module(db, candidate.file(db))
+                .is_some_and(|module| module.name(db).as_str().starts_with("django."))
+        })
+        .any(|candidate| {
+            all_end_of_scope_members(db, candidate.body_scope(db))
+                .any(|member| member.member.name == name)
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ALTERS_DATA_METHODS;
+
+    #[test]
+    fn the_marked_methods_are_sorted() {
+        // `refuses_template_call` binary-searches them
+        assert!(ALTERS_DATA_METHODS.windows(2).all(|pair| pair[0] < pair[1]));
+    }
 }
