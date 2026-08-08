@@ -17,6 +17,11 @@
 //!   name — resolves to nothing rather than picking one
 //! - a name the scope binds *anywhere* is left alone, even where the binding is
 //!   not yet in flow, because the transpiler cannot see flow
+//!
+//! that last rule is [`claimed_by_lexical_scope`], the narrower of the two shared
+//! [name-fallback](crate::types::name_fallback) gates: this rule runs at the very
+//! end of ty's name-resolution chain, so every name resolved without a binding
+//! has already claimed itself before it is reached
 
 use std::ops::ControlFlow;
 
@@ -26,10 +31,11 @@ use ty_python_core::scope::ScopeId;
 use ty_python_core::{place_table, semantic_index};
 
 use crate::Db;
-use crate::place::{ConsideredDefinitions, builtins_symbol, symbol};
+use crate::place::{ConsideredDefinitions, symbol};
 use crate::types::class::{ClassLiteral, ClassType, based_enum_of_variant};
 use crate::types::class_base::ClassBase;
 use crate::types::literal::EnumLiteralType;
+use crate::types::name_fallback::claimed_by_lexical_scope;
 use crate::types::receivers;
 use crate::types::{Type, TypeContext};
 
@@ -96,7 +102,7 @@ pub(crate) fn resolve_in_context<'db>(
     // scope binds at all — so a name the scope binds anywhere keeps its ordinary
     // meaning here too, or `a: Color = Red` followed by `Red = 1` would check
     // clean and `NameError` at runtime
-    if is_bound_anywhere(db, file, scope, name) {
+    if claimed_by_lexical_scope(db, file, scope, name) {
         return None;
     }
     let Search::Found(member) = search(db, target, name) else {
@@ -129,7 +135,7 @@ pub(crate) fn explain_miss<'db>(
     let target = tcx.context_sensitive_target()?;
     match search(db, target, name) {
         Search::Ambiguous(first, second) => Some(Miss::Ambiguous(first, second)),
-        Search::Found(member) if is_bound_anywhere(db, file, scope, name) => {
+        Search::Found(member) if claimed_by_lexical_scope(db, file, scope, name) => {
             Some(Miss::Shadowed(member.enum_class))
         }
         Search::Found(member) if !is_nameable(db, file, scope, member.enum_class) => {
@@ -256,7 +262,7 @@ pub(crate) fn qualifier_for_unbound_name<'db>(
     // a builtin, keeps its ordinary spelling. checked before the name's type is
     // asked for, so a file that uses no context-sensitive name is never inferred
     // on its account
-    if is_bound_anywhere(db, file, scope, name) {
+    if claimed_by_lexical_scope(db, file, scope, name) {
         return None;
     }
     // a trailing lambda block's receiver member answers *before* this fallback
@@ -297,24 +303,4 @@ fn declares_member<'db>(db: &'db dyn Db, enum_class: ClassLiteral<'db>, name: &s
         .own_class_member(db, None, name)
         .ignore_possibly_undefined()
         .is_some_and(|ty| is_variant_class(db, ty))
-}
-
-/// whether the name is one an ordinary lookup owns — bound or declared somewhere
-/// in the lexical chain, or a builtin
-///
-/// this is the predicate *both* halves gate on, and it is deliberately coarser
-/// than the flow-sensitive lookup that reaches the fallback: the transpiler has
-/// no flow information, so a scope that binds the name anywhere takes it back
-/// from context-sensitive resolution everywhere
-fn is_bound_anywhere<'db>(db: &'db dyn Db, file: File, scope: ScopeId<'db>, name: &str) -> bool {
-    let index = semantic_index(db, file);
-    for (ancestor_id, _) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
-        let ancestor_scope = ancestor_id.to_scope_id(db, file);
-        if let Some(place) = place_table(db, ancestor_scope).symbol_by_name(name)
-            && (place.is_bound() || place.is_declared())
-        {
-            return true;
-        }
-    }
-    !builtins_symbol(db, name).place.is_undefined()
 }

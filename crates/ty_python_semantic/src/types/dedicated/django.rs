@@ -15,9 +15,10 @@ use ruff_db::files::File;
 use ruff_db::parsed::ParsedModuleRef;
 use ruff_python_ast as ast;
 use ruff_python_ast::name::Name;
-use ruff_text_size::TextRange;
+use ruff_text_size::{Ranged, TextRange};
 use ty_module_resolver::{KnownModule, file_to_module};
 use ty_python_core::definition::{Definition, DefinitionKind, DefinitionState};
+use ty_python_core::scope::ScopeId;
 use ty_python_core::{global_scope, place_table, use_def_map};
 
 use crate::place::{Place, known_module_symbol};
@@ -25,6 +26,7 @@ use crate::types::class::{CodeGeneratorKind, Field, FieldKind};
 use crate::types::function::FunctionType;
 use crate::types::list_members::all_end_of_scope_members;
 use crate::types::member::class_member;
+use crate::types::name_fallback::claimed_by_name_resolution;
 use crate::types::signatures::{Parameter, Parameters, Signature};
 use crate::types::{
     ClassBase, ClassLiteral, ClassType, KnownClass, StaticClassLiteral, Type, UnionType,
@@ -290,8 +292,27 @@ pub(in crate::types) fn is_many_to_many_instance(db: &dyn Db, ty: Type<'_>) -> b
         .is_some_and(|class| has_base(db, class, KnownClass::DjangoManyToManyField))
 }
 
+/// `ty` is an instance of `JSONField` — the one built-in field whose `__`
+/// segments are arbitrary object keys and array indices rather than a closed set
+/// of lookups
+fn is_json_field_instance(db: &dyn Db, ty: Type<'_>) -> bool {
+    instance_static_class(db, ty)
+        .is_some_and(|class| has_base_named(db, class, "django.db.models.fields.json", "JSONField"))
+}
+
+/// the nominal class of an instance type, with a basedpython use-site modifier
+/// erased first
+///
+/// every question in this module is about the class a value is an instance of,
+/// and a constructor call in a `.by` file infers as `final CharField[…]` — a
+/// restricted type, whose nominal class is nothing at all. reading through the
+/// modifier is what keeps a model's fields visible there
+fn nominal_class<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<ClassType<'db>> {
+    ty.erase_restriction(db).nominal_class(db)
+}
+
 fn instance_static_class<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<StaticClassLiteral<'db>> {
-    ty.nominal_class(db)?.class_literal(db).as_static()
+    nominal_class(db, ty)?.class_literal(db).as_static()
 }
 
 /// the per-field facts read from a field constructor call in a class-body
@@ -360,7 +381,7 @@ pub(in crate::types) fn is_abstract_model<'db>(
 
 /// the `_GT` (instance read) side of a pinned field instance type
 fn field_get_type<'db>(db: &'db dyn Db, field_ty: Type<'db>) -> Option<Type<'db>> {
-    let ClassType::Generic(alias) = field_ty.nominal_class(db)? else {
+    let ClassType::Generic(alias) = nominal_class(db, field_ty)? else {
         return None;
     };
     let [_, get_ty] = alias.specialization(db).types(db) else {
@@ -372,7 +393,7 @@ fn field_get_type<'db>(db: &'db dyn Db, field_ty: Type<'db>) -> Option<Type<'db>
 /// the `_ST` (assignment/lookup) side of a pinned field instance type — the
 /// type django accepts when writing the field or filtering on it exactly
 fn field_set_type<'db>(db: &'db dyn Db, field_ty: Type<'db>) -> Option<Type<'db>> {
-    let ClassType::Generic(alias) = field_ty.nominal_class(db)? else {
+    let ClassType::Generic(alias) = nominal_class(db, field_ty)? else {
         return None;
     };
     let [set_ty, _] = alias.specialization(db).types(db) else {
@@ -592,7 +613,7 @@ fn m2m_target_and_through<'db>(
     db: &'db dyn Db,
     field_ty: Type<'db>,
 ) -> Option<(Type<'db>, Type<'db>)> {
-    let ClassType::Generic(alias) = field_ty.nominal_class(db)? else {
+    let ClassType::Generic(alias) = nominal_class(db, field_ty)? else {
         return None;
     };
     let [target, through] = alias.specialization(db).types(db) else {
@@ -726,7 +747,7 @@ pub(in crate::types) fn queryset_or_manager_model<'db>(
     db: &'db dyn Db,
     self_instance: Type<'db>,
 ) -> Option<StaticClassLiteral<'db>> {
-    let class = self_instance.nominal_class(db)?;
+    let class = nominal_class(db, self_instance)?;
     let is_qs_or_manager = class.class_literal(db).as_static().is_some_and(|literal| {
         has_base(db, literal, KnownClass::DjangoManager)
             || has_base(db, literal, KnownClass::DjangoQuerySet)
@@ -795,6 +816,10 @@ struct FieldRef<'db> {
     /// the type read back from a `values()`/`values_list()` row — the field's
     /// `_GT` for a concrete field, the target pk for a bare relation
     value_type: Type<'db>,
+    /// the field descriptor's own declared type (`CharField[str, str]`), for the
+    /// questions only the field *class* answers. `None` for a name the model
+    /// declares no field for — `pk`, and the synthesized `<fk>_id` attnames
+    declared_type: Option<Type<'db>>,
 }
 
 /// resolve `name` (a real field, `pk`, `id`, or an `<fk>_id` attname) on
@@ -813,6 +838,7 @@ fn field_ref<'db>(
             is_relation: false,
             set_type: pk,
             value_type: pk,
+            declared_type: None,
         });
     }
 
@@ -832,6 +858,7 @@ fn field_ref<'db>(
                 is_relation: true,
                 set_type: Type::unknown(),
                 value_type,
+                declared_type: Some(field.declared_ty),
             });
         }
         return Some(FieldRef {
@@ -839,6 +866,7 @@ fn field_ref<'db>(
             is_relation: false,
             set_type: field_set_type(db, field.declared_ty).unwrap_or_else(Type::unknown),
             value_type: field_get_type(db, field.declared_ty).unwrap_or_else(Type::unknown),
+            declared_type: Some(field.declared_ty),
         });
     }
 
@@ -849,6 +877,7 @@ fn field_ref<'db>(
             is_relation: false,
             set_type: synthesized,
             value_type: synthesized,
+            declared_type: None,
         });
     }
 
@@ -951,6 +980,392 @@ pub(in crate::types) fn resolve_lookup<'db>(
         let operand = concrete_lookup_operand(db, field.set_type, &segments[index + 1..]);
         return FieldResolution::Resolved { operand };
     }
+}
+
+// ---------------------------------------------------------------------------
+// lookup expressions
+//
+// basedpython writes django's `__` lookup DSL as ordinary expressions:
+// `filter(author.name == "x")` for `filter(author__name="x")`. the names in such
+// an expression are field paths rather than values, so what counts as one is
+// decided here, once — the checker types the path from this answer and the
+// transpiler lowers it from the same one, so the two can't disagree about which
+// query a call describes
+// ---------------------------------------------------------------------------
+
+/// the `__` lookup suffix a comparison operator spells, empty for the implicit
+/// `exact`
+///
+/// `!=` is deliberately absent: django spells it as `.exclude(a=1)` or `~Q(a=1)`,
+/// both of which change the queryset method being called, and a lowering that
+/// silently swapped `filter` for `exclude` would rewrite the query rather than
+/// spell it
+fn lookup_suffix(op: ast::CmpOp) -> Option<&'static str> {
+    match op {
+        ast::CmpOp::Eq => Some(""),
+        ast::CmpOp::Gt => Some("gt"),
+        ast::CmpOp::GtE => Some("gte"),
+        ast::CmpOp::Lt => Some("lt"),
+        ast::CmpOp::LtE => Some("lte"),
+        ast::CmpOp::In => Some("in"),
+        _ => None,
+    }
+}
+
+/// whether `method` accepts a lookup written as a positional expression
+///
+/// only the methods whose stub declares `*args` do. the `*_or_create` family is
+/// a lookup method too, but its first positional parameter is `defaults`, so an
+/// expression there would bind to that rather than to the keywords it lowers to
+pub(crate) fn accepts_lookup_expressions(method: &str) -> bool {
+    matches!(method, "filter" | "exclude" | "get" | "aget")
+}
+
+/// django's lookups on a `JSONField`, which decide when a `__` segment on one is
+/// read as a lookup rather than as an object key
+///
+/// django resolves the *final* segment of a key as a lookup when the field has
+/// one by that name, and as a key otherwise, with nothing reported either way. a
+/// subscript says "key" outright, so a key that collides with one of these has no
+/// `__` spelling at all and is refused — emitting `data__gt=1` for `data["gt"]`
+/// would silently ask for `data > 1` instead
+///
+/// this is the set `JSONField.get_lookups()` answers with, measured against
+/// django 6.0. a project that registers a lookup of its own on `JSONField` widens
+/// it, which is not visible from here
+const JSON_FIELD_LOOKUPS: &[&str] = &[
+    "contained_by",
+    "contains",
+    "endswith",
+    "exact",
+    "gt",
+    "gte",
+    "has_any_keys",
+    "has_key",
+    "has_keys",
+    "icontains",
+    "iendswith",
+    "iexact",
+    "in",
+    "iregex",
+    "isnull",
+    "istartswith",
+    "lt",
+    "lte",
+    "range",
+    "regex",
+    "startswith",
+];
+
+/// one positional argument that spells a field lookup as an expression
+pub(crate) struct LookupExpression<'a, 'db> {
+    /// the whole argument — the comparison the keyword replaces
+    pub(crate) argument: &'a ast::Expr,
+    /// the field path's nodes, root first: a `Name`, then its `Attribute`s and
+    /// `Subscript`s
+    pub(crate) path: Vec<&'a ast::Expr>,
+    /// the type the root name takes — a relation's target model instance, so
+    /// the rest of the path is ordinary member access
+    pub(crate) root_type: Type<'db>,
+    /// the value the field is compared against
+    pub(crate) value: &'a ast::Expr,
+    /// the keyword this lowers to (`author__name`, `published__gt`)
+    pub(crate) key: String,
+}
+
+/// the field path `expr` spells, as its nodes root first. `None` for anything
+/// that is not a plain `a.b["c"]` of loads — a call, an optional-chain link, an
+/// arithmetic operand
+fn field_path(expr: &ast::Expr) -> Option<Vec<&ast::Expr>> {
+    let mut path = Vec::new();
+    let mut current = expr;
+    loop {
+        match current {
+            ast::Expr::Name(name) if name.ctx.is_load() => {
+                path.push(current);
+                path.reverse();
+                return Some(path);
+            }
+            ast::Expr::Attribute(attribute) if attribute.ctx.is_load() && !attribute.optional => {
+                path.push(current);
+                current = &attribute.value;
+            }
+            // `typeof X` wears a subscript's shape without being one
+            ast::Expr::Subscript(subscript) if subscript.ctx.is_load() && !subscript.is_typeof => {
+                path.push(current);
+                current = &subscript.value;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// the `__` segment a subscript spells on a json field: an object key or an array
+/// index. `None` for every subscript django's transforms cannot spell
+///
+/// django builds its json path by trying `int()` on each segment, so a segment
+/// that reads as an integer is an *index* and anything else is a key. that leaves
+/// the string `"0"` with no spelling of its own — `data__0` is the index — and a
+/// negative index with none either, since `data__-1` is not a keyword name
+fn subscript_segment(subscript: &ast::ExprSubscript) -> Option<Cow<'_, str>> {
+    match &*subscript.slice {
+        ast::Expr::NumberLiteral(number) => {
+            let ast::Number::Int(index) = &number.value else {
+                return None;
+            };
+            Some(Cow::Owned(index.as_u64()?.to_string()))
+        }
+        ast::Expr::StringLiteral(literal) => {
+            let key = literal.value.to_str();
+            // the key rides in a keyword's name, so it has to be spellable as
+            // one. this also settles the numeric keys: no identifier reads as an
+            // integer, so `data["0"]` is refused while `data[0]` is the index
+            if !ruff_python_stdlib::identifiers::is_identifier(key) {
+                return None;
+            }
+            if JSON_FIELD_LOOKUPS.contains(&key) {
+                return None;
+            }
+            Some(Cow::Borrowed(key))
+        }
+        // a variable key can't be read here, and a slice is postgres' `ArrayField`
+        // spelling, which reads as an index on a json field
+        _ => None,
+    }
+}
+
+/// the `__` key `segments` spell, or `None` when django would read the joined
+/// text back as a different list than the one that went in
+///
+/// django splits a keyword on `__` and nothing escapes it, so a segment holding
+/// `__` (a json key), one ending in `_` ahead of another (`data["a_"] > 1`) and a
+/// dunder attribute all mean something other than the path they came from
+fn assemble_key(segments: &[Cow<'_, str>]) -> Option<String> {
+    let key = segments.join("__");
+    key.split("__")
+        .eq(segments.iter().map(Cow::as_ref))
+        .then_some(key)
+}
+
+/// the field the plain-name segments `names` reach from `model`, traversing
+/// relations. `None` unless every leading segment is a relation and the last is a
+/// field the model declares
+fn path_field<'db>(
+    db: &'db dyn Db,
+    model: StaticClassLiteral<'db>,
+    names: &[&str],
+) -> Option<FieldRef<'db>> {
+    let (&last, leading) = names.split_last()?;
+    let mut model = model;
+    for name in leading {
+        let field = field_ref(db, model, name)?;
+        if !field.is_relation {
+            return None;
+        }
+        model = field.relation_model?;
+    }
+    field_ref(db, model, last)
+}
+
+/// the type the leading name of a lookup path takes: the target model's instance
+/// for a relation, so the segments after it are ordinary member accesses on the
+/// model they traverse into; the field's own read type otherwise
+fn lookup_root_type<'db>(
+    db: &'db dyn Db,
+    model: StaticClassLiteral<'db>,
+    name: &str,
+) -> Option<Type<'db>> {
+    // a many-to-many field's `_GT` is its *through* model, not its target
+    if let Some(field) = model.fields(db, None, CodeGeneratorKind::Django).get(name)
+        && is_many_to_many_instance(db, field.declared_ty)
+    {
+        return m2m_target_and_through(db, field.declared_ty).map(|(target, _)| target);
+    }
+    let field = field_ref(db, model, name)?;
+    if field.is_relation {
+        // an unresolved relation target leaves nothing to traverse into
+        let target = field.relation_model?;
+        return Some(Type::instance(db, target.default_specialization(db)));
+    }
+    Some(field.value_type)
+}
+
+/// the positional arguments of a lookup-method call that spell a lookup as an
+/// expression, in source order
+///
+/// every gate here is a refusal: an argument this declines to classify keeps the
+/// meaning it has today, and the transpiler leaves it exactly as written
+pub(crate) fn lookup_expressions<'a, 'db>(
+    db: &'db dyn Db,
+    file: File,
+    scope: ScopeId<'db>,
+    model: StaticClassLiteral<'db>,
+    arguments: &'a ast::Arguments,
+) -> Vec<LookupExpression<'a, 'db>> {
+    let mut classified: Vec<Option<LookupExpression<'a, 'db>>> = arguments
+        .args
+        .iter()
+        .map(|argument| lookup_expression(db, file, scope, model, argument))
+        .collect();
+
+    // a lookup lowers to a keyword argument, which python requires after every
+    // positional one, so only the trailing run of classified arguments can be
+    // lowered — one followed by an argument that stays positional keeps its own
+    // meaning too
+    let trailing_run = classified
+        .iter()
+        .rposition(Option::is_none)
+        .map_or(0, |last| last + 1);
+    classified.drain(..trailing_run);
+
+    // a key written twice is a duplicate keyword argument, which is a syntax
+    // error rather than a query; a key an explicit keyword already spells is the
+    // same collision
+    let mut seen: Vec<&str> = arguments
+        .keywords
+        .iter()
+        .filter_map(|keyword| keyword.arg.as_ref())
+        .map(ast::Identifier::as_str)
+        .collect();
+    let mut duplicated = Vec::new();
+    for lookup in classified.iter().flatten() {
+        if seen.contains(&lookup.key.as_str()) {
+            duplicated.push(lookup.key.clone());
+        }
+        seen.push(&lookup.key);
+    }
+
+    classified
+        .into_iter()
+        .flatten()
+        .filter(|lookup| !duplicated.contains(&lookup.key))
+        .collect()
+}
+
+/// the model a call spells lookups against, when its callee is a queryset /
+/// manager method that takes them as positional expressions
+pub(crate) fn lookup_call_model<'db>(
+    db: &'db dyn Db,
+    callee: Type<'db>,
+) -> Option<StaticClassLiteral<'db>> {
+    let Type::BoundMethod(bound_method) = callee else {
+        return None;
+    };
+    let name = bound_method.function(db).name(db);
+    if queryset_method_kind(name.as_str()) != Some(QuerysetMethodKind::Lookup)
+        || !accepts_lookup_expressions(name.as_str())
+    {
+        return None;
+    }
+    queryset_or_manager_model(db, bound_method.self_instance(db))
+}
+
+/// the keyword a lookup expression lowers to, as source ranges — the whole
+/// argument is replaced by `<key>=<value>`
+pub(crate) struct LookupLowering {
+    /// the argument to replace
+    pub(crate) argument: TextRange,
+    /// the keyword's name
+    pub(crate) key: String,
+    /// the value, re-emitted from source so lowerings inside it still apply
+    pub(crate) value: TextRange,
+}
+
+/// how each lookup expression in `call` lowers, when `callee` is a lookup method
+/// on a resolved model
+///
+/// a path that doesn't resolve against the model is left out: the checker
+/// reports it, and lowering it would emit a keyword django itself rejects
+pub(crate) fn lookup_call_lowering<'db>(
+    db: &'db dyn Db,
+    file: File,
+    scope: ScopeId<'db>,
+    callee: Type<'db>,
+    call: &ast::ExprCall,
+) -> Vec<LookupLowering> {
+    let Some(model) = lookup_call_model(db, callee) else {
+        return Vec::new();
+    };
+    lookup_expressions(db, file, scope, model, &call.arguments)
+        .into_iter()
+        .filter(|lookup| {
+            matches!(
+                resolve_lookup(db, model, &lookup.key),
+                FieldResolution::Resolved { .. }
+            )
+        })
+        .map(|lookup| LookupLowering {
+            argument: lookup.argument.range(),
+            key: lookup.key,
+            value: lookup.value.range(),
+        })
+        .collect()
+}
+
+fn lookup_expression<'a, 'db>(
+    db: &'db dyn Db,
+    file: File,
+    scope: ScopeId<'db>,
+    model: StaticClassLiteral<'db>,
+    argument: &'a ast::Expr,
+) -> Option<LookupExpression<'a, 'db>> {
+    let ast::Expr::Compare(compare) = argument else {
+        return None;
+    };
+    // a chained comparison names no single lookup
+    let ([op], [value]) = (&*compare.ops, &*compare.comparators) else {
+        return None;
+    };
+    let suffix = lookup_suffix(*op)?;
+    let path = field_path(&compare.left)?;
+    let root = path.first()?.as_name_expr()?;
+
+    // anything that already claims the name wins, exactly as it does for an
+    // implicit receiver: this is asked of a raw name by the transpiler too, so it
+    // takes the wider of the two name-fallback gates
+    if claimed_by_name_resolution(db, file, scope, root.id.as_str()) {
+        return None;
+    }
+    let root_type = lookup_root_type(db, model, root.id.as_str())?;
+
+    // the dotted part of the path names the field; the subscripts after it index
+    // into it, so a dot *after* a subscript names nothing django can spell
+    let mut names = vec![root.id.as_str()];
+    let mut keys = Vec::new();
+    for node in &path[1..] {
+        match node {
+            ast::Expr::Attribute(attribute) if keys.is_empty() => {
+                names.push(attribute.attr.as_str());
+            }
+            ast::Expr::Subscript(subscript) => keys.push(subscript_segment(subscript)?),
+            _ => return None,
+        }
+    }
+
+    if !keys.is_empty() {
+        // only a json field carries the key and index transforms a subscript
+        // spells. on anything else django rejects the keyword at runtime, so a
+        // subscript there is left as written
+        let field = path_field(db, model, &names)?;
+        if !is_json_field_instance(db, field.declared_type?) {
+            return None;
+        }
+    }
+
+    let mut segments: Vec<Cow<'_, str>> = names.into_iter().map(Cow::Borrowed).collect();
+    segments.extend(keys);
+    if !suffix.is_empty() {
+        segments.push(Cow::Borrowed(suffix));
+    }
+    let key = assemble_key(&segments)?;
+
+    Some(LookupExpression {
+        argument,
+        path,
+        root_type,
+        value,
+        key,
+    })
 }
 
 /// resolve a `create()` keyword: the field's assignable type, or `Unknown`
@@ -1257,7 +1672,7 @@ pub(in crate::types) fn with_queryset_row<'db>(
     queryset_ty: Type<'db>,
     row: Type<'db>,
 ) -> Option<Type<'db>> {
-    let ClassType::Generic(alias) = queryset_ty.nominal_class(db)? else {
+    let ClassType::Generic(alias) = nominal_class(db, queryset_ty)? else {
         return None;
     };
     let [model_arg, _] = alias.specialization(db).types(db) else {
@@ -1371,7 +1786,7 @@ fn substitute_model<'db>(
     if declared_return.is_dynamic() {
         return Some(model_instance);
     }
-    let ClassType::Generic(alias) = declared_return.nominal_class(db)? else {
+    let ClassType::Generic(alias) = nominal_class(db, declared_return)? else {
         return None;
     };
     let arity = alias.specialization(db).types(db).len();
@@ -1569,11 +1984,171 @@ fn declared_by_django<'db>(db: &'db dyn Db, class: StaticClassLiteral<'db>, name
 
 #[cfg(test)]
 mod tests {
-    use super::ALTERS_DATA_METHODS;
+    use std::borrow::Cow;
+
+    use ruff_python_ast as ast;
+    use ruff_python_parser::{Mode, ParseOptions, parse};
+
+    use super::{
+        ALTERS_DATA_METHODS, JSON_FIELD_LOOKUPS, assemble_key, field_path, lookup_suffix,
+        subscript_segment,
+    };
 
     #[test]
     fn the_marked_methods_are_sorted() {
         // `refuses_template_call` binary-searches them
         assert!(ALTERS_DATA_METHODS.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn only_the_operators_django_spells_map_to_a_suffix() {
+        for (op, expected) in [
+            (ast::CmpOp::Eq, Some("")),
+            (ast::CmpOp::Gt, Some("gt")),
+            (ast::CmpOp::GtE, Some("gte")),
+            (ast::CmpOp::Lt, Some("lt")),
+            (ast::CmpOp::LtE, Some("lte")),
+            (ast::CmpOp::In, Some("in")),
+            (ast::CmpOp::NotEq, None),
+            (ast::CmpOp::NotIn, None),
+            (ast::CmpOp::Is, None),
+            (ast::CmpOp::IsNot, None),
+        ] {
+            assert_eq!(lookup_suffix(op), expected, "for {op:?}");
+        }
+    }
+
+    fn expression_of(source: &str) -> ast::Expr {
+        let options = ParseOptions::from(Mode::Expression).with_basedpython(true);
+        let parsed = parse(source, options).expect("valid expression");
+        parsed
+            .into_syntax()
+            .as_expression()
+            .expect("expression mode parses to an expression")
+            .body
+            .as_ref()
+            .clone()
+    }
+
+    fn path_of(source: &str) -> Option<Vec<String>> {
+        field_path(&expression_of(source)).map(|path| {
+            path.iter()
+                .map(|node| match node {
+                    ast::Expr::Name(name) => name.id.to_string(),
+                    ast::Expr::Attribute(attribute) => attribute.attr.to_string(),
+                    ast::Expr::Subscript(subscript) => subscript_segment(subscript)
+                        .map_or_else(|| "[?]".to_owned(), |segment| format!("[{segment}]")),
+                    _ => unreachable!("a field path is names, attributes and subscripts"),
+                })
+                .collect()
+        })
+    }
+
+    #[test]
+    fn a_field_path_is_a_dotted_name_with_subscripts() {
+        assert_eq!(path_of("author"), Some(vec!["author".to_owned()]));
+        assert_eq!(
+            path_of("author.name"),
+            Some(vec!["author".to_owned(), "name".to_owned()])
+        );
+        assert_eq!(
+            path_of("data[\"k\"]"),
+            Some(vec!["data".to_owned(), "[k]".to_owned()])
+        );
+        assert_eq!(
+            path_of("author.data[\"k\"][0]"),
+            Some(vec![
+                "author".to_owned(),
+                "data".to_owned(),
+                "[k]".to_owned(),
+                "[0]".to_owned(),
+            ])
+        );
+        // anything else is not a path django could spell with `__`
+        for source in ["f()", "a.b()", "a[0]()", "a().b", "(a + b).c", "typeof a"] {
+            assert_eq!(path_of(source), None, "for `{source}`");
+        }
+    }
+
+    fn segment_of(source: &str) -> Option<String> {
+        let expression = expression_of(source);
+        let subscript = expression
+            .as_subscript_expr()
+            .expect("the source is a subscript");
+        subscript_segment(subscript).map(Cow::into_owned)
+    }
+
+    #[test]
+    fn a_subscript_segment_is_a_literal_key_or_a_non_negative_index() {
+        assert_eq!(segment_of("d[\"key\"]").as_deref(), Some("key"));
+        assert_eq!(segment_of("d[\"_key\"]").as_deref(), Some("_key"));
+        assert_eq!(segment_of("d[0]").as_deref(), Some("0"));
+        assert_eq!(segment_of("d[12]").as_deref(), Some("12"));
+
+        for source in [
+            // a key django reads back as an index
+            "d[\"0\"]",
+            "d[\"1_2\"]",
+            // a key that is not spellable as part of a keyword's name
+            "d[\"a b\"]",
+            "d[\"a.b\"]",
+            "d[\"a-b\"]",
+            "d[\"\"]",
+            // `data__-1` is not a keyword name, so a negative index has no form
+            "d[-1]",
+            // django reads a lookup name as the lookup, not as the key
+            "d[\"gt\"]",
+            "d[\"exact\"]",
+            "d[\"contains\"]",
+            // nothing statically readable
+            "d[k]",
+            "d[1:2]",
+            "d[1.5]",
+            "d[True]",
+            "d[f(1)]",
+            "d[\"a\" + \"b\"]",
+        ] {
+            assert_eq!(segment_of(source), None, "for `{source}`");
+        }
+    }
+
+    fn key_of(segments: &[&str]) -> Option<String> {
+        let segments: Vec<Cow<'_, str>> = segments.iter().copied().map(Cow::Borrowed).collect();
+        assemble_key(&segments)
+    }
+
+    #[test]
+    fn a_key_that_does_not_split_back_into_its_segments_is_refused() {
+        assert_eq!(key_of(&["title"]).as_deref(), Some("title"));
+        assert_eq!(key_of(&["author", "name"]).as_deref(), Some("author__name"));
+        assert_eq!(
+            key_of(&["data", "key", "gt"]).as_deref(),
+            Some("data__key__gt")
+        );
+        assert_eq!(key_of(&["data", "_key"]).as_deref(), Some("data___key"));
+
+        // `data__a___gt` reads back as the key `a` and the lookup `_gt`
+        assert_eq!(key_of(&["data", "a_", "gt"]), None);
+        // a segment holding the separator is two segments to django
+        assert_eq!(key_of(&["data", "a__b"]), None);
+        assert_eq!(key_of(&["published", "__class__"]), None);
+    }
+
+    #[test]
+    fn the_json_lookup_names_are_the_ones_django_registers() {
+        // measured with `JSONField.get_lookups()` against django 6.0; the whole
+        // point of the list is to refuse a key it holds, so a stale *extra* entry
+        // is safe and a missing one is not
+        assert_eq!(JSON_FIELD_LOOKUPS.len(), 21);
+        assert!(
+            JSON_FIELD_LOOKUPS.windows(2).all(|pair| pair[0] < pair[1]),
+            "kept sorted so a diff against django's own list reads"
+        );
+        for spelled in ["exact", "gt", "gte", "lt", "lte", "in"] {
+            assert!(
+                JSON_FIELD_LOOKUPS.contains(&spelled),
+                "the operators the dsl spells must all be refused as keys: {spelled}"
+            );
+        }
     }
 }

@@ -1,4 +1,4 @@
-pub(super) mod django;
+pub(crate) mod django;
 pub(super) mod pydantic;
 pub(super) mod pytest;
 pub(super) mod role;

@@ -12,9 +12,12 @@
 //!   receiver's members are in scope unqualified (`imag` for an `int` receiver)
 //!   and the receiver itself is spelled `self`
 //!
-//! both are *last* fallbacks: a declared member, and any name bound anywhere in
-//! the lexical chain, keeps its ordinary meaning. that is what makes the forms
-//! purely additive — nothing that resolves today changes meaning
+//! both are *last* fallbacks: a declared member, and any name something else
+//! already claims, keeps its ordinary meaning. that is what makes the forms
+//! purely additive — nothing that resolves today changes meaning. the block form
+//! gates on [`claimed_by_name_resolution`], the wider of the two shared
+//! [name-fallback](crate::types::name_fallback) gates, because the transpiler
+//! asks it about a raw name with no fallback chain behind it
 //!
 //! [trailing lambda]: crate::types::trailing_lambda
 
@@ -24,10 +27,8 @@ use ty_python_core::scope::{ScopeId, ScopeKind};
 use ty_python_core::{place_table, semantic_index};
 
 use crate::Db;
-use crate::place::{
-    ConsideredDefinitions, builtins_symbol, is_basedpython_implicit_typing_name,
-    module_type_implicit_global_symbol, symbol,
-};
+use crate::place::{ConsideredDefinitions, symbol};
+use crate::types::name_fallback::claimed_by_name_resolution;
 use crate::types::signatures::{Parameters, Signature};
 use crate::types::{Type, TypeContext, infer_expression_types};
 
@@ -147,7 +148,7 @@ pub(crate) fn implicit_receiver_name<'db>(
     name: &str,
 ) -> Option<ImplicitReceiverName<'db>> {
     let receiver = trailing_lambda_scope_receiver(db, file, scope)?;
-    if resolves_elsewhere(db, file, scope, name) {
+    if claimed_by_name_resolution(db, file, scope, name) {
         return None;
     }
     if name == "self" {
@@ -188,32 +189,4 @@ fn trailing_lambda_scope_receiver<'db>(
         return crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee_ty);
     }
     None
-}
-
-/// whether `name` resolves to anything other than a receiver member at `scope`.
-///
-/// This mirrors the fallback chain of an ordinary name load, deliberately erring
-/// towards "yes": a name this misses would resolve as something else while the
-/// transpiler — which re-derives the rewrite from this same answer — lowered it
-/// as a receiver member. The scope walk follows python's own rules (class scopes
-/// are not visible from a nested scope), matching the free-variable walk of a
-/// name load.
-fn resolves_elsewhere(db: &dyn Db, file: File, scope: ScopeId<'_>, name: &str) -> bool {
-    let index = semantic_index(db, file);
-    for (ancestor_id, _) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
-        let ancestor_scope = ancestor_id.to_scope_id(db, file);
-        if place_table(db, ancestor_scope)
-            .symbol_by_name(name)
-            .is_some_and(|symbol| symbol.is_bound() || symbol.is_declared())
-        {
-            return true;
-        }
-    }
-    !builtins_symbol(db, name).place.is_undefined()
-        || !module_type_implicit_global_symbol(db, file, name)
-            .place
-            .is_undefined()
-        || is_basedpython_implicit_typing_name(name)
-        // the implicit basedpython names that have no stub to resolve through
-        || matches!(name, "Character" | "Some")
 }

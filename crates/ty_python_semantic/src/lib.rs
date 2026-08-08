@@ -20,8 +20,9 @@ use ruff_db::parsed::parsed_module;
 use ruff_db::source::{SourceTextError, source_text};
 use rustc_hash::FxHasher;
 pub use semantic_model::{
-    Completion, ExpectedStringLiteralCompletion, HasDefinition, HasOptionalDefinition, HasType,
-    ImplicitReceiverReference, MemberDefinition, NameKind, SemanticModel,
+    Completion, DjangoLookupArgument, ExpectedStringLiteralCompletion, HasDefinition,
+    HasOptionalDefinition, HasType, ImplicitReceiverReference, MemberDefinition, NameKind,
+    SemanticModel,
 };
 use std::hash::BuildHasherDefault;
 pub use suppression::{

@@ -609,3 +609,367 @@ reveal_type(settings.DEBUG)  # revealed: bool
 reveal_type(settings.ROOT_URLCONF)  # revealed: str
 reveal_type(settings.SECRET_KEY)  # revealed: str
 ```
+
+## Model fields in a `.by` file
+
+A constructor call infers as `final CharField[…]` in basedpython, so everything a model's fields
+drive has to read through the use-site modifier to see the class the call constructs.
+
+```by
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+author = Author.objects.get(pk=1)
+reveal_type(author.name)  # revealed: str
+Author.objects.filter(name="x")
+
+# error: [invalid-field-lookup] "Model `Author` has no field `nam`"
+Author.objects.filter(nam="x")
+```
+
+## Lookups written as expressions
+
+basedpython spells the `__` lookup DSL as ordinary expressions. A name in the leading position of a
+comparison that resolves nowhere in the lexical chain, and names a field of the model the queryset
+is over, is a field path — `author.name` traverses the relation exactly as `author__name` does.
+
+```by
+from datetime import date
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+    age = models.IntegerField()
+
+class Book(models.Model):
+    title = models.CharField(max_length=100)
+    published = models.DateField()
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+
+reveal_type(Book.objects.filter(title == "x"))  # revealed: QuerySet[Book, Book]
+Book.objects.filter(published > date(1970, 1, 1))
+Book.objects.filter(published >= date(1970, 1, 1))
+Book.objects.filter(published < date(1970, 1, 1))
+Book.objects.filter(published <= date(1970, 1, 1))
+Book.objects.filter(title in ["a", "b"])
+Book.objects.filter(author.name == "x")
+Book.objects.filter(author.age > 3)
+Book.objects.filter(pk == 1)
+Book.objects.exclude(title == "x")
+Book.objects.get(pk == 1)
+```
+
+## A lookup path types as the fields it names
+
+The leading name is the field, and a relation traverses into the model it targets, so the segments
+after it are ordinary member accesses — including the ones django reads as transforms.
+
+```by
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+class Book(models.Model):
+    title = models.CharField(max_length=100)
+    published = models.DateField()
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+
+Book.objects.filter(author.name == "x")
+Book.objects.filter(published.year == 1970)
+
+# a segment after a concrete field is a lookup or a transform, and an unrecognized one is left
+# alone rather than reported — exactly as `filter(published__nonmember=1970)` is today, since
+# django lets a project register lookups of its own
+Book.objects.filter(published.nonmember == 1970)
+```
+
+## An unknown segment is reported
+
+```by
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+class Book(models.Model):
+    title = models.CharField(max_length=100)
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+
+# error: [invalid-field-lookup] "Model `Author` has no field `nonfield` (in lookup `author__nonfield`)"
+Book.objects.filter(author.nonfield == "x")
+```
+
+## A value the field cannot hold is reported
+
+```by
+from django.db import models
+
+class Author(models.Model):
+    age = models.IntegerField()
+
+# error: [invalid-field-lookup] "Value for `age__gt` has type `b"x"`, but `Author` expects `int | float | str | Combinable | None`"
+Author.objects.filter(age > b"x")
+```
+
+## Lexical scope wins
+
+A name bound anywhere in the chain keeps its ordinary meaning, so nothing that resolves today
+changes: the comparison is an ordinary `bool` the queryset method takes positionally.
+
+```by
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+def search(name: str) -> None:
+    # `name` is the parameter, not the field
+    reveal_type(Author.objects.filter(name == "x"))  # revealed: QuerySet[Author, Author]
+```
+
+## A builtin is a lexical binding too
+
+`id` names the builtin, so it is never read as the model's primary key. `pk` is the spelling that
+resolves.
+
+```by
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+# no lookup here — `id` is the builtin function
+Author.objects.filter(id == 1)
+Author.objects.filter(pk == 1)
+```
+
+## Operators with no lookup spelling
+
+`!=` has no `__` form — django writes it as `.exclude(...)` or `~Q(...)`, both of which change the
+method being called — so it stays an ordinary comparison and its name stays unresolved.
+
+```by
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+# error: [unresolved-reference] "Name `name` used when not defined"
+Author.objects.filter(name != "x")
+```
+
+## Ordinary arguments pass through
+
+```by
+from django.db import models
+from django.db.models import Q
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+    age = models.IntegerField()
+
+def build(kwargs: dict[str, str], q: Q) -> None:
+    Author.objects.filter(Q(name="a") | Q(name="b"))
+    Author.objects.filter(q)
+    Author.objects.filter(**kwargs)
+    Author.objects.filter(name__startswith="x")
+    Author.objects.filter(q, age > 3)
+```
+
+## A json key is a subscript
+
+A `JSONField` holds arbitrary json, so its `__` segments are object keys rather than a closed set of
+lookups. A subscript spells one: `data["key"]` is `data__key`, and what it reads back is json.
+
+```by
+from django.db import models
+
+class Doc(models.Model):
+    data = models.JSONField()
+
+Doc.objects.filter(data["key"] == 1)
+Doc.objects.filter(data["key"] == "x")
+reveal_type(Doc.objects.filter(data["key"] == 1))  # revealed: QuerySet[Doc, Doc]
+```
+
+## Json keys nest, and the operators still apply
+
+```by
+from django.db import models
+
+class Doc(models.Model):
+    data = models.JSONField()
+
+# data__a__b=1
+Doc.objects.filter(data["a"]["b"] == 1)
+# data__key__gt=1
+Doc.objects.filter(data["key"] > 1)
+Doc.objects.filter(data["key"] >= 1)
+Doc.objects.filter(data["key"] < 1)
+Doc.objects.filter(data["key"] <= 1)
+Doc.objects.filter(data["key"] in [1, 2])
+```
+
+## An integer subscript is a json array index
+
+```by
+from django.db import models
+
+class Doc(models.Model):
+    data = models.JSONField()
+
+# data__0=1
+Doc.objects.filter(data[0] == 1)
+# data__0__1=1
+Doc.objects.filter(data[0][1] == 1)
+# data__a__0__gt=1
+Doc.objects.filter(data["a"][0] > 1)
+```
+
+## A json key on a relation's field
+
+```by
+from django.db import models
+
+class Author(models.Model):
+    data = models.JSONField()
+
+class Book(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+
+# author__data__key=1
+Book.objects.filter(author.data["key"] == 1)
+```
+
+## An arbitrary json key is not an unknown field
+
+Every string is a legal key, so nothing is reported for one — exactly as nothing is reported for the
+keyword form's `filter(data__anything=1)`.
+
+```by
+from django.db import models
+
+class Doc(models.Model):
+    data = models.JSONField()
+
+Doc.objects.filter(data["not_a_field"] == 1)
+Doc.objects.filter(data__not_a_field=1)
+```
+
+## A subscript on a field with no key transform is left alone
+
+`data["k"]` on a `CharField` is nonsense — django raises `FieldError` for `title__k`. The argument
+keeps the meaning it has today, which leaves its leading name unresolved.
+
+```by
+from django.db import models
+
+class Book(models.Model):
+    title = models.CharField(max_length=100)
+
+# error: [unresolved-reference] "Name `title` used when not defined"
+Book.objects.filter(title["k"] == 1)
+```
+
+## A subscript on a relation is left alone
+
+```by
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+class Book(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+
+# error: [unresolved-reference] "Name `author` used when not defined"
+Book.objects.filter(author["k"] == 1)
+```
+
+## A json key django reads as a lookup is left alone
+
+Django resolves the last segment of a keyword as a lookup when the field has one by that name, so
+`data__gt=1` asks for `data > 1` rather than for the key `"gt"`. There is no keyword that spells
+that key, so the subscript is refused rather than lowered to a different query.
+
+```by
+from django.db import models
+
+class Doc(models.Model):
+    data = models.JSONField()
+
+# error: [unresolved-reference] "Name `data` used when not defined"
+Doc.objects.filter(data["gt"] == 1)
+```
+
+## A json key with no keyword spelling is left alone
+
+Django reads a segment that parses as an integer as an array index, so the string key `"0"` has no
+`__` form of its own. Nor does a key that is not spellable inside an identifier, one holding the
+`__` separator, or a negative index.
+
+```by
+from django.db import models
+
+class Doc(models.Model):
+    data = models.JSONField()
+
+def refusals() -> None:
+    # error: [unresolved-reference] "Name `data` used when not defined"
+    Doc.objects.filter(data["0"] == 1)
+    # error: [unresolved-reference] "Name `data` used when not defined"
+    Doc.objects.filter(data["a b"] == 1)
+    # error: [unresolved-reference] "Name `data` used when not defined"
+    Doc.objects.filter(data["a__b"] == 1)
+    # error: [unresolved-reference] "Name `data` used when not defined"
+    Doc.objects.filter(data[-1] == 1)
+```
+
+## A subscript that is not a literal is left alone
+
+A key held in a variable cannot be read here, and a slice is `ArrayField`'s spelling, which a json
+field reads as an index.
+
+```by
+from django.db import models
+
+class Doc(models.Model):
+    data = models.JSONField()
+
+def refusals(key: str) -> None:
+    # error: [unresolved-reference] "Name `data` used when not defined"
+    Doc.objects.filter(data[key] == 1)
+    # error: [unresolved-reference] "Name `data` used when not defined"
+    Doc.objects.filter(data[1:2] == 1)
+```
+
+## A dot after a json key is left alone
+
+The dotted part of a path names the field; a dot after a subscript names nothing django spells.
+
+```by
+from django.db import models
+
+class Doc(models.Model):
+    data = models.JSONField()
+
+# error: [unresolved-reference] "Name `data` used when not defined"
+Doc.objects.filter(data["a"].b == 1)
+```
+
+## A path segment django would read back as two is left alone
+
+Nothing escapes the `__` separator, so a dunder attribute spells more segments than the path has.
+
+```by
+from django.db import models
+
+class Book(models.Model):
+    published = models.DateField()
+
+# error: [unresolved-reference] "Name `published` used when not defined"
+Book.objects.filter(published.__class__ == 1)
+```

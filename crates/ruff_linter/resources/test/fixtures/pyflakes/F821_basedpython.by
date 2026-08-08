@@ -192,3 +192,25 @@ print(ImplementedAsInterface(Implemented()))
 # check` reports it as an unresolved type
 implementation UndefinedInterface for UndefinedImplemented:  # F821
     pass
+
+
+# a django lookup expression: the transpiler lowers the field path to the
+# keyword it spells (`filter(author.name == "x")` -> `filter(author__name="x")`),
+# so the path is never evaluated and none of these names is undefined
+class Model:
+    objects: object
+
+
+Book = Model()
+Book.objects.filter(author.name == "Ursula")
+Book.objects.filter(published > 1)
+Book.objects.filter(data["key"] == 1)
+Book.objects.exclude(title == "x", author.pk >= 3)
+Book.objects.filter(pk in [1, 2, 3])
+Book.objects.get(pk == 1)
+
+# but the suppression is only for that shape, so each of these is still reported
+Book.objects.filter(bare_name)  # F821
+Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
+Book.objects.filter(data[undefined_index] == 1)  # F821
+Book.objects.filter(no_lookup_for_ne != 1)  # F821

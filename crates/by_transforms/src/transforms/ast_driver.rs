@@ -36,16 +36,16 @@ use ruff_text_size::{Ranged, TextRange};
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
     coalesce_chain, compat, context_params, conversion, decl_site_variance, decorator_keyword,
-    dedent_string, destructure, dynamic_keyword, empty_declarations, export_import, extension,
-    float_const, force_unwrap, frameworks, generic_call, generics, grapheme_string, identity_swap,
-    if_let, implementation, implicit_receiver, implicit_typing, inferred_annotation, init_method,
-    just_float, kw_subscript, literal_string, literal_types, local_once, main_function, match_type,
-    modifiers, mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await,
-    propagate, properties, protocol_type, raises_clause, reified_generic, repeated_underscore,
-    sentinel, some_ctor, soundness, statement_expression, string_tag, super_keyword,
-    symbolic_type_op, top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification,
-    typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings, unpack,
-    use_site_variance,
+    dedent_string, destructure, django_lookup, dynamic_keyword, empty_declarations, export_import,
+    extension, float_const, force_unwrap, frameworks, generic_call, generics, grapheme_string,
+    identity_swap, if_let, implementation, implicit_receiver, implicit_typing, inferred_annotation,
+    init_method, just_float, kw_subscript, literal_string, literal_types, local_once,
+    main_function, match_type, modifiers, mutable_defaults, none_chain, optional_type, overload,
+    parametric_is, postfix_await, propagate, properties, protocol_type, raises_clause,
+    reified_generic, repeated_underscore, sentinel, some_ctor, soundness, statement_expression,
+    string_tag, super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_fn,
+    type_is, type_reification, typed_dict_literal, typed_lambda, typeof_keyword,
+    unique_loop_bindings, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -555,6 +555,7 @@ pub(crate) fn run_against_source<'a>(
     let implementation_block_pass = implementation::ImplementationBlockPass::new(source_ref);
     let conversion_pass = conversion::ConversionPass::new(source_ref);
     let implicit_receiver_pass = implicit_receiver::ImplicitReceiverPass;
+    let django_lookup_pass = django_lookup::DjangoLookupPass;
     let frameworks_pass = frameworks::FrameworksPass::new(source_ref);
     let variance_pass = decl_site_variance::VarianceStripPass::new(source_ref);
     let anon_named_tuple_pass =
@@ -698,6 +699,11 @@ pub(crate) fn run_against_source<'a>(
         // members → its receiver parameter. same shape as the extension rewrite
         // above, which wins when both could apply
         &implicit_receiver_pass,
+        // django lookups written as expressions (`filter(author.name == "x")`)
+        // become keyword arguments. the argument is replaced whole, with the
+        // value passing through as `Src`, so lowerings inside it still compose;
+        // disjoint from the call rewrites above, which target the callee
+        &django_lookup_pass,
         &dynamic_keyword_pass,
         // import-only companion to the ty-side implicit `Character` resolution;
         // emits no text edits, so ordering among the type passes is free

@@ -10253,6 +10253,64 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         Some(Type::float_literal(value))
     }
 
+    /// basedpython: infer the positional arguments of a django lookup method
+    /// that spell a `__` lookup as an expression (`filter(author.name == "x")`),
+    /// reporting whether any did.
+    ///
+    /// The names in such an argument are field paths, not values, so they are
+    /// inferred here rather than through the ordinary load path — the leading
+    /// name takes the field's type (a relation's target model instance), and the
+    /// segments after it are ordinary member accesses on it. The comparison
+    /// itself is a `bool`, exactly as the source spells it; whether the value
+    /// suits the field is [`check_django_queryset_call`]'s question, since the
+    /// keyword form asks it there too.
+    ///
+    /// [`check_django_queryset_call`]: Self::check_django_queryset_call
+    fn prepare_django_lookup_expressions(
+        &mut self,
+        callable_type: Type<'db>,
+        arguments: &ast::Arguments,
+    ) -> bool {
+        if !self.is_basedpython_file() {
+            return false;
+        }
+        let db = self.db();
+        let Some(model) = django::lookup_call_model(db, callable_type) else {
+            return false;
+        };
+        let lookups = django::lookup_expressions(db, self.file(), self.scope(), model, arguments);
+        if lookups.is_empty() {
+            return false;
+        }
+        for lookup in lookups {
+            let mut ty = lookup.root_type;
+            for (index, node) in lookup.path.iter().enumerate() {
+                match node {
+                    ast::Expr::Attribute(attribute) if index > 0 => {
+                        ty = ty
+                            .member(db, attribute.attr.as_str())
+                            .place
+                            .ignore_possibly_undefined()
+                            .unwrap_or_else(Type::unknown);
+                    }
+                    ast::Expr::Subscript(subscript) => {
+                        // the key is part of the keyword's name rather than a
+                        // value, but it is still source that wants a type
+                        self.infer_expression(&subscript.slice, TypeContext::default());
+                        // a json key reads back arbitrary json, which is what the
+                        // stubs say the field itself reads back too
+                        ty = Type::any();
+                    }
+                    _ => {}
+                }
+                self.store_expression_type(node, ty);
+            }
+            self.infer_maybe_standalone_expression(lookup.value, TypeContext::default());
+            self.store_expression_type(lookup.argument, KnownClass::Bool.to_instance(db));
+        }
+        true
+    }
+
     /// Validate a django `Manager`/`QuerySet` method call against the bound
     /// model's fields: lookup kwargs (`filter`, `get`, …), `create()` kwargs,
     /// and literal field-name arguments (`order_by`, `only`, …). No-op for any
@@ -10333,6 +10391,44 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             }
                         }
                         django::FieldResolution::Resolved { operand: None } => {}
+                    }
+                }
+
+                // basedpython: the same checks against the lookups the call's
+                // positional arguments spell as expressions
+                if !is_create && self.is_basedpython_file() {
+                    for lookup in django::lookup_expressions(
+                        db,
+                        self.file(),
+                        self.scope(),
+                        model,
+                        &call_expression.arguments,
+                    ) {
+                        let range = lookup.argument.range();
+                        match django::resolve_lookup(db, model, &lookup.key) {
+                            django::FieldResolution::Unknown { model, segment } => {
+                                report_unknown(range, &model, &segment, &lookup.key);
+                            }
+                            django::FieldResolution::Resolved {
+                                operand: Some(operand),
+                            } => {
+                                let operand =
+                                    UnionType::from_two_elements(db, operand, Type::none(db));
+                                let value_ty = self.expression_type(lookup.value);
+                                if !value_ty.is_assignable_to(db, operand)
+                                    && let Some(builder) =
+                                        self.context.report_lint(&INVALID_FIELD_LOOKUP, range)
+                                {
+                                    builder.into_diagnostic(format_args!(
+                                        "Value for `{}` has type `{}`, but `{model_name}` expects `{}`",
+                                        lookup.key,
+                                        value_ty.display(db),
+                                        operand.display(db),
+                                    ));
+                                }
+                            }
+                            django::FieldResolution::Resolved { operand: None } => {}
+                        }
                     }
                 }
             }
@@ -10768,6 +10864,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             })
             .is_some();
 
+        // basedpython: a django lookup written as an expression names fields
+        // rather than values, so its own inference has to happen before the
+        // arguments are inferred as ordinary expressions
+        let has_django_lookup_expressions =
+            self.prepare_django_lookup_expressions(callable_type, arguments);
+
         // We don't call `Type::try_call`, because we want to perform type inference on the
         // arguments after matching them to parameters, but before checking that the argument types
         // are assignable to any parameter annotations.
@@ -11107,7 +11209,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     Some(groups) => tcx.map(|ty| regex::attach_groups(builder.db(), ty, groups)),
                     None => tcx,
                 };
-                if has_prepared_typed_dict_constructor {
+                if has_prepared_typed_dict_constructor || has_django_lookup_expressions {
                     builder.get_or_infer_expression(expr, tcx)
                 } else {
                     builder.infer_expression(expr, tcx)
