@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 
+use ruff_db::files::File;
 use ruff_db::parsed::ParsedModuleRef;
 use ruff_python_ast as ast;
 use ruff_python_ast::name::Name;
@@ -21,6 +22,7 @@ use ty_python_core::{global_scope, place_table, use_def_map};
 
 use crate::place::{Place, known_module_symbol};
 use crate::types::class::{CodeGeneratorKind, Field, FieldKind};
+use crate::types::function::FunctionType;
 use crate::types::list_members::all_end_of_scope_members;
 use crate::types::member::class_member;
 use crate::types::signatures::{Parameter, Parameters, Signature};
@@ -83,6 +85,35 @@ fn is_drf_generic_view(db: &dyn Db, class: StaticClassLiteral<'_>) -> bool {
     has_base_named(db, class, "rest_framework.generics", "GenericAPIView")
 }
 
+/// the single type `class`'s own body binds `name` to
+///
+/// the binding is read out of the place table rather than by member lookup,
+/// deliberately: resolving it as a member would infer the very scope these
+/// queries run from. `None` when the body doesn't bind `name`, or binds it
+/// more than one way
+fn own_body_binding<'db>(
+    db: &'db dyn Db,
+    class: StaticClassLiteral<'db>,
+    name: &str,
+) -> Option<Type<'db>> {
+    let body_scope = class.body_scope(db);
+    let symbol = place_table(db, body_scope).symbol_id(name)?;
+    let use_def = use_def_map(db, body_scope);
+    let mut bound = None;
+    for binding in use_def.end_of_scope_symbol_bindings(symbol) {
+        let DefinitionState::Defined(definition) = binding.binding else {
+            continue;
+        };
+        let candidate = binding_type(db, definition);
+        // more than one binding only agrees if they say the same thing
+        if bound.is_some_and(|bound| bound != candidate) {
+            return None;
+        }
+        bound = Some(candidate);
+    }
+    bound
+}
+
 /// the model a drf view's filter-backend field lists resolve against: the
 /// model its own `queryset` is a queryset of. `None` for anything else —
 /// a view that builds its queryset in `get_queryset`, or inherits it, leaves
@@ -96,24 +127,7 @@ pub(in crate::types) fn drf_view_model<'db>(
     if !is_drf_generic_view(db, class) {
         return None;
     }
-    // read the sibling `queryset` binding straight out of the class body:
-    // resolving it as a member would infer the very scope this runs from
-    let body_scope = class.body_scope(db);
-    let symbol = place_table(db, body_scope).symbol_id("queryset")?;
-    let use_def = use_def_map(db, body_scope);
-    let mut model = None;
-    for binding in use_def.end_of_scope_symbol_bindings(symbol) {
-        let DefinitionState::Defined(definition) = binding.binding else {
-            continue;
-        };
-        let candidate = queryset_or_manager_model(db, binding_type(db, definition))?;
-        // more than one binding only agrees if they name the same model
-        if model.is_some_and(|model| model != candidate) {
-            return None;
-        }
-        model = Some(candidate);
-    }
-    model
+    queryset_or_manager_model(db, own_body_binding(db, class, "queryset")?)
 }
 
 /// the specialized instance type constructed by a django field constructor
@@ -1060,24 +1074,10 @@ pub(in crate::types) fn meta_model<'db>(
     db: &'db dyn Db,
     meta: StaticClassLiteral<'db>,
 ) -> Option<StaticClassLiteral<'db>> {
-    let body_scope = meta.body_scope(db);
-    let symbol = place_table(db, body_scope).symbol_id("model")?;
-    let use_def = use_def_map(db, body_scope);
-    let mut model = None;
-    for binding in use_def.end_of_scope_symbol_bindings(symbol) {
-        let DefinitionState::Defined(definition) = binding.binding else {
-            continue;
-        };
-        let candidate = binding_type(db, definition)
-            .as_class_literal()
-            .and_then(ClassLiteral::as_static)
-            .filter(|candidate| is_model(db, *candidate))?;
-        if model.is_some_and(|model| model != candidate) {
-            return None;
-        }
-        model = Some(candidate);
-    }
-    model
+    own_body_binding(db, meta, "model")?
+        .as_class_literal()
+        .and_then(ClassLiteral::as_static)
+        .filter(|candidate| is_model(db, *candidate))
 }
 
 /// a class-body attribute whose value is a list of model field paths
@@ -1270,6 +1270,193 @@ pub(in crate::types) fn with_queryset_row<'db>(
             generic_context.specialize(db, Cow::Owned(vec![model_arg, row]))
         });
     Some(Type::instance(db, class_type))
+}
+
+// ---------------------------------------------------------------------------
+// drf view / serializer specialization
+//
+// `djangorestframework-stubs` declares the drf bases generic over the model
+// (`GenericAPIView[_MT_co]`, `ModelSerializer[_MT]`), but real drf code never
+// writes that type argument: the class body names the model instead, in
+// `queryset` or `Meta.model`, and drf's own machinery reads it from there. an
+// unparameterized base leaves every one of those type parameters `Unknown`, so
+// `get_queryset()` is a `QuerySet[Unknown, Unknown]` and `save()` is `Unknown`
+// however plainly the body says otherwise. this substitutes the model the body
+// names back into exactly those positions, which is what writing the type
+// argument by hand already achieves today
+// ---------------------------------------------------------------------------
+
+/// whether `file` belongs to the `rest_framework` package
+fn is_drf_module(db: &dyn Db, file: File) -> bool {
+    file_to_module(db, file).is_some_and(|module| {
+        let name = module.name(db).as_str();
+        name == "rest_framework" || name.starts_with("rest_framework.")
+    })
+}
+
+/// the model a drf `ModelSerializer` serializes: the one its nested `Meta`
+/// names. the `Meta` is the first on the mro, drf's own `ModelSerializer.Meta`
+/// included — reaching that one means the serializer declares none of its own,
+/// and it declares `model` as an annotation with no value, so it resolves to
+/// nothing
+#[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
+fn drf_serializer_model<'db>(
+    db: &'db dyn Db,
+    class: StaticClassLiteral<'db>,
+) -> Option<StaticClassLiteral<'db>> {
+    if !has_base_named(db, class, "rest_framework.serializers", "ModelSerializer") {
+        return None;
+    }
+    let meta = class
+        .iter_mro(db, None)
+        .filter_map(ClassBase::into_class)
+        .filter_map(|base| base.class_literal(db).as_static())
+        .find_map(|base| own_body_binding(db, base, "Meta"))?
+        .as_class_literal()
+        .and_then(ClassLiteral::as_static)?;
+    meta_model(db, meta)
+}
+
+/// the serializer class a drf view's own `serializer_class` names. `None` when
+/// there is none, or it doesn't resolve to a serializer
+#[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
+fn drf_view_serializer<'db>(
+    db: &'db dyn Db,
+    class: StaticClassLiteral<'db>,
+) -> Option<StaticClassLiteral<'db>> {
+    if !is_drf_generic_view(db, class) {
+        return None;
+    }
+    own_body_binding(db, class, "serializer_class")?
+        .as_class_literal()
+        .and_then(ClassLiteral::as_static)
+        .filter(|candidate| {
+            has_base_named(
+                db,
+                *candidate,
+                "rest_framework.serializers",
+                "BaseSerializer",
+            )
+        })
+}
+
+/// whether a class outside drf in `class`'s mro declares `name` itself — a
+/// project's own override of a method drf's own machinery dispatches through
+fn declares_outside_drf<'db>(db: &'db dyn Db, class: StaticClassLiteral<'db>, name: &str) -> bool {
+    class
+        .iter_mro(db, None)
+        .filter_map(ClassBase::into_class)
+        .filter_map(|candidate| candidate.class_literal(db).as_static())
+        .filter(|candidate| !is_drf_module(db, candidate.file(db)))
+        .any(|candidate| {
+            place_table(db, candidate.body_scope(db))
+                .symbol_id(name)
+                .is_some()
+        })
+}
+
+/// substitute `model`'s instance type for the `Unknown` an unparameterized drf
+/// base left in `declared_return`: either the type parameter itself (`_MT`) or
+/// a generic alias every argument of which is one (`QuerySet[_MT_co, _Row]`,
+/// whose `_Row` defaults to `_MT_co`)
+///
+/// requiring *every* argument to be dynamic is what keeps this monotonic: it
+/// fires only where today's answer carries no information at all
+fn substitute_model<'db>(
+    db: &'db dyn Db,
+    declared_return: Type<'db>,
+    model: StaticClassLiteral<'db>,
+) -> Option<Type<'db>> {
+    let model_instance = Type::instance(db, model.default_specialization(db));
+    if declared_return.is_dynamic() {
+        return Some(model_instance);
+    }
+    let ClassType::Generic(alias) = declared_return.nominal_class(db)? else {
+        return None;
+    };
+    let arity = alias.specialization(db).types(db).len();
+    if !alias
+        .specialization(db)
+        .types(db)
+        .iter()
+        .all(Type::is_dynamic)
+    {
+        return None;
+    }
+    let class_type = alias
+        .origin(db)
+        .apply_specialization(db, |generic_context| {
+            generic_context.specialize(db, Cow::Owned(vec![model_instance; arity]))
+        });
+    Some(Type::instance(db, class_type))
+}
+
+/// the more precise return type a drf method has once the receiver's class
+/// body is read, or `None` to keep the stub's own
+///
+/// `many_argument` reports a call that may be routing through drf's
+/// `ListSerializer` — `many=` names it, and a `**kwargs` splat may hide it.
+/// the result is then a list serializer rather than the serializer class
+pub(in crate::types) fn drf_method_return_type<'db>(
+    db: &'db dyn Db,
+    method: FunctionType<'db>,
+    self_instance: Type<'db>,
+    declared_return: Type<'db>,
+    many_argument: bool,
+) -> Option<Type<'db>> {
+    // only drf's own declarations: a project's override of `get_queryset` is
+    // its own function returning whatever its own body returns, and drf reads
+    // nothing from the class body to produce it
+    if !is_drf_module(db, method.file(db)) {
+        return None;
+    }
+    let class = instance_static_class(db, self_instance)?;
+    let name = method.name(db).as_str();
+    let refined = match name {
+        "get_queryset" | "get_object" => {
+            substitute_model(db, declared_return, drf_view_model(db, class)?)?
+        }
+        "get_serializer" | "get_serializer_class" => {
+            // `get_serializer` builds its result by calling
+            // `get_serializer_class()`, so an override of that is free to
+            // ignore `serializer_class` entirely
+            if many_argument || declares_outside_drf(db, class, "get_serializer_class") {
+                return None;
+            }
+            let serializer = Type::instance(
+                db,
+                drf_view_serializer(db, class)?.default_specialization(db),
+            );
+            if name == "get_serializer" {
+                serializer
+            } else {
+                serializer.to_meta_type(db)
+            }
+        }
+        "save" | "create" | "update" => {
+            substitute_model(db, declared_return, drf_serializer_model(db, class)?)?
+        }
+        _ => return None,
+    };
+    // never contradict a view or serializer that *did* write its type argument
+    refined
+        .is_assignable_to(db, declared_return)
+        .then_some(refined)
+}
+
+/// the drf methods [`drf_method_return_type`] can refine, for the call site to
+/// reject the overwhelming majority of calls before asking
+pub(in crate::types) fn is_drf_specialized_method(name: &str) -> bool {
+    matches!(
+        name,
+        "get_queryset"
+            | "get_object"
+            | "get_serializer"
+            | "get_serializer_class"
+            | "save"
+            | "create"
+            | "update"
+    )
 }
 
 /// the methods django marks `alters_data = True`
