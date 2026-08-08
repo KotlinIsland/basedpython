@@ -3,7 +3,10 @@ use std::borrow::Cow;
 use lsp_types::DocumentSymbolRequest;
 use lsp_types::{DocumentSymbol, DocumentSymbolParams, Uri};
 use ruff_db::files::File;
-use ty_ide::{HierarchicalSymbols, SymbolId, SymbolInfo, document_symbols};
+use ty_ide::{
+    HierarchicalSymbols, SymbolId, SymbolInfo, TemplateSymbol, django_template_document_symbols,
+    document_symbols,
+};
 use ty_project::ProjectDatabase;
 
 use crate::Db;
@@ -48,6 +51,15 @@ impl BackgroundDocumentRequestHandler for DocumentSymbolRequestHandler {
             .resolved_client_capabilities()
             .supports_hierarchical_document_symbols();
 
+        if snapshot.is_django_template() {
+            return Ok(template_symbols(
+                db,
+                file,
+                supports_hierarchical,
+                snapshot.encoding(),
+            ));
+        }
+
         let symbols = document_symbols(db, file);
         if symbols.is_empty() {
             return Ok(None);
@@ -89,6 +101,84 @@ impl BackgroundDocumentRequestHandler for DocumentSymbolRequestHandler {
 }
 
 impl RetriableRequestHandler for DocumentSymbolRequestHandler {}
+
+/// the outline of a django template, in whichever shape the client understands
+fn template_symbols(
+    db: &ProjectDatabase,
+    file: File,
+    supports_hierarchical: bool,
+    encoding: PositionEncoding,
+) -> Option<lsp_types::DocumentSymbolResponse> {
+    let symbols = django_template_document_symbols(db, file);
+    if symbols.is_empty() {
+        return None;
+    }
+
+    if supports_hierarchical {
+        let lsp_symbols = symbols
+            .iter()
+            .filter_map(|symbol| convert_template_symbol(db, file, symbol, encoding))
+            .collect();
+
+        return Some(lsp_types::DocumentSymbolResponse::DocumentSymbolList(
+            lsp_symbols,
+        ));
+    }
+
+    let mut flattened = Vec::new();
+    flatten_template_symbols(&symbols, &mut flattened);
+
+    let lsp_symbols = flattened
+        .into_iter()
+        .filter_map(|symbol| convert_to_lsp_symbol_information(db, file, symbol, encoding))
+        .collect();
+
+    Some(lsp_types::DocumentSymbolResponse::SymbolInformationList(
+        lsp_symbols,
+    ))
+}
+
+fn convert_template_symbol(
+    db: &dyn Db,
+    file: File,
+    symbol: &TemplateSymbol,
+    encoding: PositionEncoding,
+) -> Option<DocumentSymbol> {
+    Some(DocumentSymbol {
+        name: symbol.name.clone(),
+        detail: None,
+        kind: convert_symbol_kind(symbol.kind),
+        tags: None,
+        #[allow(deprecated)]
+        deprecated: None,
+        range: symbol
+            .full_range
+            .to_lsp_range(db, file, encoding)?
+            .local_range(),
+        selection_range: symbol
+            .name_range
+            .to_lsp_range(db, file, encoding)?
+            .local_range(),
+        children: Some(
+            symbol
+                .children
+                .iter()
+                .filter_map(|child| convert_template_symbol(db, file, child, encoding))
+                .collect(),
+        ),
+    })
+}
+
+/// every symbol of the outline, each parent before what it encloses
+fn flatten_template_symbols<'a>(
+    symbols: &'a [TemplateSymbol],
+    flattened: &mut Vec<SymbolInfo<'a>>,
+) {
+    for symbol in symbols {
+        flattened.push(symbol.symbol_info());
+        flatten_template_symbols(&symbol.children, flattened);
+    }
+}
 
 fn convert_to_lsp_document_symbol(
     db: &dyn Db,

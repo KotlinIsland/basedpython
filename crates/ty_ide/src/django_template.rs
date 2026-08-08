@@ -8,17 +8,30 @@
 //! `templatetags` modules. so this module owns a small template front end of its
 //! own ([`lexer`], [`index`]) and spends the rest of its effort joining it to the
 //! python side ([`project`]).
+//!
+//! the join runs both ways. [`python`] is the other direction: the template name
+//! a view renders and the route name a view reverses are plain strings to python,
+//! and it is what lets the python services see them for what they are.
 
 mod builtins;
 mod completion;
+mod folding;
 mod goto;
+mod hover;
 mod index;
 mod lexer;
 mod project;
+mod python;
 mod resolve;
 mod semantic_tokens;
+mod symbols;
 
 pub use completion::{TemplateCompletion, TemplateEdit};
+pub use hover::{DisplayTemplateHover, TemplateHover};
+pub(crate) use python::{
+    string_completions as django_string_completions, string_definition as django_string_definition,
+};
+pub use symbols::TemplateSymbol;
 
 use ruff_db::files::File;
 use ruff_db::source::source_text;
@@ -27,7 +40,7 @@ use ruff_text_size::{TextRange, TextSize};
 use ty_project::Db;
 
 use crate::semantic_tokens::SemanticTokens;
-use crate::{NavigationTargets, RangedValue};
+use crate::{FoldingRange, NavigationTargets, RangedValue};
 
 use index::TemplateIndex;
 
@@ -100,6 +113,27 @@ pub fn django_template_goto_definition(
     goto::goto_definition(db, file, template_index(db, file), source.as_str(), offset)
 }
 
+/// what the thing at `offset` of `file` is, read as a django template
+pub fn django_template_hover(
+    db: &dyn Db,
+    file: File,
+    offset: TextSize,
+) -> Option<RangedValue<TemplateHover>> {
+    let source = source_text(db, file);
+    hover::hover(db, file, template_index(db, file), source.as_str(), offset)
+}
+
+/// the outline of `file`, read as a django template
+pub fn django_template_document_symbols(db: &dyn Db, file: File) -> Vec<TemplateSymbol> {
+    symbols::document_symbols(template_index(db, file))
+}
+
+/// the foldable ranges of `file`, read as a django template
+pub fn django_template_folding_ranges(db: &dyn Db, file: File) -> Vec<FoldingRange> {
+    let source = source_text(db, file);
+    folding::folding_ranges(template_index(db, file), source.as_str())
+}
+
 /// the templates `index` extends, nearest ancestor first
 ///
 /// a template whose parent chain has a cycle in it would not render, but the
@@ -153,8 +187,12 @@ pub(crate) mod tests {
     use ruff_text_size::TextSize;
     use ty_project::{ProjectMetadata, TestDb};
 
+    use crate::MarkupKind;
+
     use super::{
-        django_template_completions, django_template_goto_definition, is_django_template_path,
+        TemplateSymbol, django_template_completions, django_template_document_symbols,
+        django_template_folding_ranges, django_template_goto_definition, django_template_hover,
+        is_django_template_path,
     };
 
     /// a project whose files are written out, with the cursor marked by
@@ -237,6 +275,52 @@ pub(crate) mod tests {
                         target.file().path(&self.db).to_string().replace('\\', "/"),
                         &source[target.focus_range()]
                     )
+                })
+                .collect()
+        }
+
+        /// the hover at the cursor, as markdown, or `""` where there is none
+        pub(crate) fn hover(&self) -> String {
+            django_template_hover(&self.db, self.file, self.offset)
+                .map(|hover| hover.display(MarkupKind::Markdown).to_string())
+                .unwrap_or_default()
+        }
+
+        /// the template's outline, one line per symbol, nesting indented
+        pub(crate) fn symbols(&self) -> Vec<String> {
+            fn render(symbols: &[TemplateSymbol], depth: usize, lines: &mut Vec<String>) {
+                for symbol in symbols {
+                    lines.push(format!(
+                        "{:indent$}{:?} {}",
+                        "",
+                        symbol.kind,
+                        symbol.name,
+                        indent = depth * 2
+                    ));
+                    render(&symbol.children, depth + 1, lines);
+                }
+            }
+
+            let mut lines = Vec::new();
+            render(
+                &django_template_document_symbols(&self.db, self.file),
+                0,
+                &mut lines,
+            );
+            lines
+        }
+
+        /// each foldable range, as the tags that open and close it
+        pub(crate) fn folds(&self) -> Vec<String> {
+            let source = ruff_db::source::source_text(&self.db, self.file);
+
+            django_template_folding_ranges(&self.db, self.file)
+                .into_iter()
+                .map(|fold| {
+                    let text = &source[fold.range];
+                    let first = text.lines().next().unwrap_or_default().trim();
+                    let last = text.lines().next_back().unwrap_or_default().trim();
+                    format!("{first} … {last}")
                 })
                 .collect()
         }

@@ -52,6 +52,30 @@ the editor's own html grammar keeps the markup; the server adds what a grammar c
 - `{% block %}` and `{% partialdef %}` names read as the fragments they name, not as variables
 - `{% comment %}` bodies and `{# … #}` are comments; `{% verbatim %}` bodies are plain text
 
+### hover and outline
+
+hovering says what the thing under the caret is: a variable or a path segment as its type, a tag or a filter as its documentation and the `{% load %}` it needs, a `{% block %}` as the block it overrides, an `{% extends %}` as the file it resolves to, a `{% url %}` as its route pattern.
+
+a template's `{% block %}`s and `{% partialdef %}`s are its outline, nested as they nest, and every block tag folds.
+
+**no diagnostics.** templates are never type-checked — an unknown variable or a misspelled filter is not reported, it just doesn't complete.
+
+## the same names, written in python
+
+a template name in a `render()` and a route name in a `reverse()` are plain strings as far as python is concerned. the editor reads them as the names they are, so the same completions and the same navigation are there from the python side.
+
+| position                              | what is offered              | goes to                  |
+| ------------------------------------- | ---------------------------- | ------------------------ |
+| `render(request, '‸')`                | the project's template paths | that template            |
+| `TemplateResponse(request, '‸')`      | the project's template paths | that template            |
+| `template_name = '‸'` in a view class | the project's template paths | that template            |
+| `reverse('‸')`, `reverse_lazy('‸')`   | the project's route names    | whatever names the route |
+| `redirect('‸')`                       | the project's route names    | whatever names the route |
+
+the function is matched by its last segment, so `shortcuts.render` and `render` are one, and `render()` accepts its template by keyword as `template_name=` too.
+
+`redirect()` takes a url or a model as readily as a route name, so a string with a `/` in it is left alone entirely and a name the url configuration doesn't have leads nowhere.
+
 ## how a template's variables are found
 
 the chain runs from the template back to the type checker:
@@ -114,8 +138,6 @@ template directories, static directories and tag libraries are found by their co
 
 ## limitations
 
-**no diagnostics.** templates are never type-checked. an unknown variable or a misspelled filter is not reported — it just doesn't complete.
-
 **a `TEMPLATES` setting is not read.** template directories are found by name rather than from `settings.py`, so a `DIRS` entry pointing somewhere else is not picked up.
 
 **the context has to be written where it is passed.** the names are read out of the dict literal in the `render()` call or the view class, so a context built somewhere else and passed by name — `return render(request, "…", context)` — contributes nothing.
@@ -125,6 +147,10 @@ template directories, static directories and tag libraries are found by their co
 **dictionary lookups don't resolve.** django tries a subscript before an attribute, so `{{ mapping.key }}` works at runtime, but a mapping's keys are values rather than types and completions can only offer attributes.
 
 **`{% url %}` namespaces come from `app_name`.** a namespace given at the `include()` instead is not applied.
+
+**a route is named by a `path()` or by a rest framework router.** `router.register('books', BookViewSet, basename='book')` names `book-list` and `book-detail`, and each `@action` on the viewset names one more. a registration whose basename cannot be worked out — no `basename=` and no resolvable `queryset` — names nothing rather than guessing.
+
+**a name written in python has to be a literal.** the string in a `render()` or a `reverse()` is read as it is written, so a name built from an f-string, or held in a variable, is just a string.
 
 ## see also
 

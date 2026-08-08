@@ -66,12 +66,13 @@ use lsp_types::{
     DidChangeWorkspaceFoldersParams, DidCloseTextDocumentNotification, DidCloseTextDocumentParams,
     DidOpenTextDocumentNotification, DidOpenTextDocumentParams, DidSaveTextDocumentNotification,
     DidSaveTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
-    DocumentDiagnosticRequest, ExitNotification, FileEvent, FoldingRange, FoldingRangeParams,
-    Hover, HoverParams, HoverRequest, InitializeParams, InitializeRequest, InitializeResult,
-    InitializedNotification, InitializedParams, InlayHint, InlayHintClientCapabilities,
-    InlayHintParams, InlayHintRequest, LanguageKind, Notification, PartialResultParams, Position,
-    PrepareRenameRequest, PreviousResultId, PublishDiagnosticsClientCapabilities, Range, Request,
-    SemanticTokens, ShutdownRequest, SignatureHelp, SignatureHelpParams, SignatureHelpRequest,
+    DocumentDiagnosticRequest, DocumentSymbolParams, DocumentSymbolResponse, ExitNotification,
+    FileEvent, FoldingRange, FoldingRangeParams, Hover, HoverParams, HoverRequest,
+    InitializeParams, InitializeRequest, InitializeResult, InitializedNotification,
+    InitializedParams, InlayHint, InlayHintClientCapabilities, InlayHintParams, InlayHintRequest,
+    LanguageKind, Notification, PartialResultParams, Position, PrepareRenameRequest,
+    PreviousResultId, PublishDiagnosticsClientCapabilities, Range, Request, SemanticTokens,
+    ShutdownRequest, SignatureHelp, SignatureHelpParams, SignatureHelpRequest,
     SignatureHelpTriggerKind, TextDocumentClientCapabilities, TextDocumentContentChangeEvent,
     TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, Uri,
     VersionedTextDocumentIdentifier, WorkDoneProgressParams, WorkspaceClientCapabilities,
@@ -1058,6 +1059,15 @@ impl TestServer {
                 partial_result_params: PartialResultParams::default(),
             },
         )
+    }
+
+    /// Sends a `textDocument/documentSymbol` request for the document at the given URI.
+    pub(crate) fn document_symbol_request(&mut self, uri: &Uri) -> Option<DocumentSymbolResponse> {
+        self.send_request_await::<lsp_types::DocumentSymbolRequest>(DocumentSymbolParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
     }
 
     pub(crate) fn folding_range_request(&mut self, uri: &Uri) -> Option<Vec<FoldingRange>> {

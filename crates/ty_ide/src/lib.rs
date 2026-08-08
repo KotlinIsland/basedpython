@@ -41,8 +41,10 @@ pub use completion::{
     CompletionSettings, completion,
 };
 pub use django_template::{
-    TemplateCompletion, TemplateEdit, django_template_completions, django_template_goto_definition,
-    django_template_semantic_tokens, is_django_template_path,
+    DisplayTemplateHover, TemplateCompletion, TemplateEdit, TemplateHover, TemplateSymbol,
+    django_template_completions, django_template_document_symbols, django_template_folding_ranges,
+    django_template_goto_definition, django_template_hover, django_template_semantic_tokens,
+    is_django_template_path,
 };
 pub use doc_highlights::document_highlights;
 pub use document_symbols::document_symbols;

@@ -145,6 +145,18 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
                     CompletionInsertTextFormat::PlainText => None,
                     CompletionInsertTextFormat::Snippet => Some(InsertTextFormat::Snippet),
                 };
+                // A completion that says what it replaces is one the client's own
+                // idea of the word under the cursor would get wrong, so the range
+                // is spelled out as an edit rather than left to be guessed.
+                let text_edit = comp.replace.and_then(|replace| {
+                    let range = replace
+                        .to_lsp_range(db, file, snapshot.encoding())?
+                        .local_range();
+                    Some(lsp_types::CompletionItemTextEdit::TextEdit(TextEdit {
+                        range,
+                        new_text: insert_text.clone().unwrap_or_else(|| label.clone()),
+                    }))
+                });
 
                 CompletionItem {
                     label,
@@ -154,6 +166,7 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
                     label_details,
                     insert_text,
                     insert_text_format,
+                    text_edit,
                     additional_text_edits: import_edit.map(|edit| vec![edit]),
                     documentation,
                     ..Default::default()

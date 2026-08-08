@@ -179,6 +179,73 @@ fn a_template_navigates_to_the_template_it_extends() -> Result<()> {
 }
 
 #[test]
+fn a_template_hovers_a_context_variables_attribute_as_its_type() -> Result<()> {
+    let mut server = server("<p>{{ book.title }}</p>\n")?;
+
+    let hover = server
+        .hover_request(
+            SystemPath::new("src/blog/templates/blog/post.html"),
+            Position::new(0, 13),
+        )
+        .expect("a hover response");
+
+    let rendered = format!("{:?}", hover.contents);
+    assert!(rendered.contains("title: str"), "got {rendered}");
+
+    Ok(())
+}
+
+#[test]
+fn a_template_hovers_a_filter_as_its_documentation() -> Result<()> {
+    let mut server = server("<p>{{ book.title|upper }}</p>\n")?;
+
+    let hover = server
+        .hover_request(
+            SystemPath::new("src/blog/templates/blog/post.html"),
+            Position::new(0, 19),
+        )
+        .expect("a hover response");
+
+    let rendered = format!("{:?}", hover.contents);
+    assert!(rendered.contains("|upper"), "got {rendered}");
+
+    Ok(())
+}
+
+#[test]
+fn a_template_outlines_its_blocks() -> Result<()> {
+    let mut server =
+        server("{% block content %}\n{% block inner %}\na\n{% endblock %}\n{% endblock %}\n")?;
+    let uri = template_uri(&server);
+
+    let response = server
+        .document_symbol_request(&uri)
+        .expect("a document symbol response");
+
+    let rendered = format!("{response:?}");
+    assert!(rendered.contains("content"), "got {rendered}");
+    assert!(rendered.contains("inner"), "got {rendered}");
+
+    Ok(())
+}
+
+#[test]
+fn a_template_folds_its_block_tags() -> Result<()> {
+    let mut server = server("{% for book in books %}\n<p>{{ book.title }}</p>\n{% endfor %}\n")?;
+    let uri = template_uri(&server);
+
+    let ranges = server
+        .folding_range_request(&uri)
+        .expect("a folding range response");
+
+    assert_eq!(ranges.len(), 1, "got {ranges:?}");
+    assert_eq!(ranges[0].start_line, 0);
+    assert_eq!(ranges[0].end_line, 2);
+
+    Ok(())
+}
+
+#[test]
 fn a_template_created_during_the_session_is_offered_to_an_extends() -> Result<()> {
     // discovering templates means walking the file system, which salsa cannot
     // see into: without something to invalidate the walk the server would go on

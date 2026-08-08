@@ -21,9 +21,13 @@ use ruff_db::source::source_text;
 use ruff_db::system::walk_directory::WalkState;
 use ruff_db::system::{FileType, SystemPath, SystemPathBuf};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{self as ast, Expr, Stmt};
+use ruff_python_ast::{self as ast, AnyNodeRef, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 use ty_project::{Db, Project};
+use ty_python_semantic::SemanticModel;
+use ty_python_semantic::types::ide_support::{
+    ImportAliasResolution, definitions_for_attribute, definitions_for_name,
+};
 
 /// the directory name django's app-directories template loader looks in
 const TEMPLATE_DIRECTORY: &str = "templates";
@@ -35,16 +39,46 @@ const STATIC_DIRECTORY: &str = "static";
 const TEMPLATETAGS_PACKAGE: &str = "templatetags";
 
 /// the functions that render a named template with a context
-const CONTEXT_CALLEES: &[&str] = &["render", "TemplateResponse"];
+pub(crate) const CONTEXT_CALLEES: &[&str] = &["render", "TemplateResponse"];
 
 /// the class attribute a generic view names its template with
-const TEMPLATE_NAME_ATTRIBUTE: &str = "template_name";
+pub(crate) const TEMPLATE_NAME_ATTRIBUTE: &str = "template_name";
+
+/// the functions that resolve a route to its url by name
+pub(crate) const REVERSE_CALLEES: &[&str] = &["reverse", "reverse_lazy"];
+
+/// the function that redirects to a route named the same way
+///
+/// it is kept apart from [`REVERSE_CALLEES`] because it accepts a model or a url
+/// path just as happily as a route name, and so cannot be read as one on sight.
+pub(crate) const REDIRECT_CALLEE: &str = "redirect";
 
 /// the functions that give a route a reversible name
 const URL_CALLEES: &[&str] = &["path", "re_path", "url"];
 
 /// the keyword those functions take the name by
 const URL_NAME_KEYWORD: &str = "name";
+
+/// the method a rest framework router routes a viewset with
+const ROUTER_REGISTER_METHOD: &str = "register";
+
+/// the keyword a registration names its generated routes by
+const ROUTER_BASENAME_KEYWORD: &str = "basename";
+
+/// the routes a router gives every registered viewset
+const ROUTER_ROUTE_SUFFIXES: &[&str] = &["list", "detail"];
+
+/// the decorator that gives one viewset method a route of its own
+const ACTION_DECORATOR: &str = "action";
+
+/// the keyword an action names its route by
+const ACTION_URL_NAME_KEYWORD: &str = "url_name";
+
+/// the attribute a viewset's fallback basename is derived from
+const VIEWSET_QUERYSET_ATTRIBUTE: &str = "queryset";
+
+/// the manager attribute a queryset reaches its model through
+const MODEL_MANAGER_ATTRIBUTE: &str = "objects";
 
 /// how deep below the project root a `templates`/`static` directory is looked for
 ///
@@ -472,8 +506,12 @@ fn mentions(db: &dyn Db, file: File, names: &[&str]) -> bool {
 /// the url names one module defines
 #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
 fn url_names_in_file(db: &dyn Db, file: File) -> Box<[UrlName]> {
-    // a named route is a `path()`-like call carrying a `name=` keyword
-    if !mentions(db, file, URL_CALLEES) || !mentions(db, file, &[URL_NAME_KEYWORD]) {
+    // a named route is a `path()`-like call carrying a `name=` keyword, or a
+    // rest framework router registration. the viewset a registration names is
+    // read through its definition rather than out of this file, so only the
+    // `register` call itself has to be spelled here for the scan to find one
+    let names_a_route = mentions(db, file, URL_CALLEES) && mentions(db, file, &[URL_NAME_KEYWORD]);
+    if !names_a_route && !mentions(db, file, &[ROUTER_REGISTER_METHOD]) {
         return Box::default();
     }
 
@@ -491,6 +529,7 @@ fn url_names_in_file(db: &dyn Db, file: File) -> Box<[UrlName]> {
     });
 
     let mut visitor = UrlVisitor {
+        db,
         file,
         namespace,
         found: Vec::new(),
@@ -500,35 +539,246 @@ fn url_names_in_file(db: &dyn Db, file: File) -> Box<[UrlName]> {
     visitor.found.into_boxed_slice()
 }
 
-struct UrlVisitor {
+struct UrlVisitor<'db> {
+    db: &'db dyn Db,
     file: File,
     namespace: Option<CompactString>,
     found: Vec<UrlName>,
 }
 
-impl<'ast> Visitor<'ast> for UrlVisitor {
-    fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Expr::Call(call) = expr
-            && callee_name(&call.func).is_some_and(|callee| URL_CALLEES.contains(&callee.as_str()))
-            && let Some(keyword) = call.arguments.find_keyword(URL_NAME_KEYWORD)
-            && let Some(name) = string_literal(&keyword.value)
-        {
-            let name = match &self.namespace {
-                Some(namespace) => format!("{namespace}:{name}").to_compact_string(),
-                None => name,
-            };
+impl UrlVisitor<'_> {
+    /// record `name`, under the module's `app_name` if it has one
+    fn record(&mut self, name: &str, file: File, range: TextRange, route: Option<&str>) {
+        let name = match &self.namespace {
+            Some(namespace) => format!("{namespace}:{name}").to_compact_string(),
+            None => name.to_compact_string(),
+        };
 
-            self.found.push(UrlName {
-                name,
-                file: self.file,
-                range: keyword.value.range(),
-                route: call
-                    .arguments
-                    .args
-                    .first()
-                    .and_then(string_literal)
-                    .map(|route| Box::from(route.as_str())),
-            });
+        self.found.push(UrlName {
+            name,
+            file,
+            range,
+            route: route.map(Box::from),
+        });
+    }
+
+    /// the name a `path()`-like call gives its route
+    fn path_call(&mut self, call: &ast::ExprCall) {
+        if !callee_name(&call.func).is_some_and(|callee| URL_CALLEES.contains(&callee.as_str())) {
+            return;
+        }
+        let Some(keyword) = call.arguments.find_keyword(URL_NAME_KEYWORD) else {
+            return;
+        };
+        let Some(name) = string_literal(&keyword.value) else {
+            return;
+        };
+
+        let route = call.arguments.args.first().and_then(string_literal);
+        self.record(&name, self.file, keyword.value.range(), route.as_deref());
+    }
+
+    /// the names a rest framework router's registration makes reversible
+    ///
+    /// `router.register(prefix, viewset, basename=…)` routes a whole viewset the
+    /// way `path()` routes one view, and django resolves the routes it generates
+    /// by name like any other. the router's class is deliberately not checked,
+    /// since a project's own `SimpleRouter` subclass registers identically; what
+    /// identifies a registration is the method name and the shape of its
+    /// arguments, a string prefix followed by the viewset.
+    fn router_registration(&mut self, call: &ast::ExprCall) {
+        let Expr::Attribute(method) = &*call.func else {
+            return;
+        };
+        if method.attr.as_str() != ROUTER_REGISTER_METHOD {
+            return;
+        }
+        let Some(prefix) = call.arguments.find_argument_value("prefix", 0) else {
+            return;
+        };
+        let Some(prefix) = string_literal(prefix) else {
+            return;
+        };
+        // the viewset is named either directly or through the module it lives in
+        let Some(viewset @ (Expr::Name(_) | Expr::Attribute(_))) =
+            call.arguments.find_argument_value("viewset", 1)
+        else {
+            return;
+        };
+
+        let given = call
+            .arguments
+            .find_argument_value(ROUTER_BASENAME_KEYWORD, 2)
+            .and_then(|given| Some((string_literal(given)?, given.range())));
+
+        // the viewset's own file answers both what the routes are called when the
+        // registration doesn't say and which actions add routes of their own. it
+        // is read as best it can be: a viewset out of reach costs the actions,
+        // never the names the registration already gives on its own
+        let described = self.viewset(viewset);
+
+        let (basename, anchor) = match given {
+            Some(given) => given,
+            // a registration whose basename can't be worked out names nothing:
+            // django would reverse something, but a wrong name is worse than a
+            // missing one
+            None => match described
+                .as_ref()
+                .and_then(|described| described.basename.clone())
+            {
+                Some(basename) => (basename, viewset.range()),
+                None => return,
+            },
+        };
+
+        for suffix in ROUTER_ROUTE_SUFFIXES {
+            self.record(
+                &format!("{basename}-{suffix}"),
+                self.file,
+                anchor,
+                Some(prefix.as_str()),
+            );
+        }
+
+        for action in described.iter().flat_map(|described| &described.actions) {
+            // an action's route is that method's, so that is where it leads
+            self.record(
+                &format!("{basename}-{}", action.url_name),
+                action.file,
+                action.range,
+                Some(prefix.as_str()),
+            );
+        }
+    }
+
+    /// what a registered viewset says about the routes it is given
+    ///
+    /// following the name to its class reads another module's ast from this
+    /// module's query, and that cross-file dependency is deliberate: it is what
+    /// makes an `@action` added to a viewset appear in a template's completions
+    /// without the url configuration being touched. it costs one file per
+    /// registration, which is why it is affordable.
+    fn viewset(&self, viewset: &Expr) -> Option<ViewSet> {
+        let db = self.db;
+        let model = SemanticModel::new(db, self.file);
+
+        let definitions = match viewset {
+            Expr::Name(name) => definitions_for_name(
+                &model,
+                name.id.as_str(),
+                AnyNodeRef::from(name),
+                ImportAliasResolution::ResolveAliases,
+            ),
+            Expr::Attribute(attribute) => definitions_for_attribute(&model, attribute),
+            _ => return None,
+        };
+
+        definitions.into_iter().find_map(|resolved| {
+            let definition = resolved.definition()?;
+            let file = definition.file(db);
+            let parsed = parsed_module(db, file).load(db);
+            let class = definition.kind(db).as_class()?.node(&parsed);
+
+            Some(ViewSet {
+                basename: default_basename(class),
+                actions: actions(class, file),
+            })
+        })
+    }
+}
+
+/// what a viewset class contributes to the routes registering it generates
+struct ViewSet {
+    /// the basename a registration that doesn't give one falls back to
+    basename: Option<CompactString>,
+    actions: Vec<Action>,
+}
+
+/// one `@action`-decorated method of a viewset
+struct Action {
+    url_name: CompactString,
+    file: File,
+    /// the decorated method's name, for navigation
+    range: TextRange,
+}
+
+/// the basename a viewset that isn't registered under one falls back to
+///
+/// the router takes it from `queryset.model`, lower-cased, and the model of a
+/// queryset is the class its manager is reached through. a queryset built any
+/// other way — from `get_queryset`, or through a manager under some other name —
+/// leaves the basename unknown, and an unknown basename names no route at all.
+fn default_basename(class: &ast::StmtClassDef) -> Option<CompactString> {
+    let (queryset, _) = class
+        .body
+        .iter()
+        .find_map(|statement| class_attribute(statement, VIEWSET_QUERYSET_ATTRIBUTE))?;
+
+    Some(managed_model(queryset)?.to_lowercase().to_compact_string())
+}
+
+/// the class a manager expression hangs off, so that `models.Book.objects.all()`
+/// is a `Book`
+fn managed_model(expr: &Expr) -> Option<CompactString> {
+    let mut current = expr;
+
+    loop {
+        match current {
+            Expr::Call(call) => current = &call.func,
+            Expr::Attribute(attribute) => {
+                if attribute.attr.as_str() == MODEL_MANAGER_ATTRIBUTE {
+                    return match &*attribute.value {
+                        Expr::Name(name) => Some(name.id.to_compact_string()),
+                        Expr::Attribute(owner) => Some(owner.attr.id.to_compact_string()),
+                        _ => None,
+                    };
+                }
+                current = &attribute.value;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// the extra routes a viewset's `@action` methods are given
+///
+/// an action that doesn't name its route takes the method's own name with its
+/// underscores turned into dashes, which is what django will have to reverse.
+fn actions(class: &ast::StmtClassDef, file: File) -> Vec<Action> {
+    class
+        .body
+        .iter()
+        .filter_map(|statement| {
+            let Stmt::FunctionDef(function) = statement else {
+                return None;
+            };
+            let decorator = function.decorator_list.iter().find_map(|decorator| {
+                let Expr::Call(call) = &decorator.expression else {
+                    return None;
+                };
+                (callee_name(&call.func)? == ACTION_DECORATOR).then_some(call)
+            })?;
+
+            let url_name = decorator
+                .arguments
+                .find_keyword(ACTION_URL_NAME_KEYWORD)
+                .and_then(|keyword| string_literal(&keyword.value))
+                .unwrap_or_else(|| function.name.as_str().replace('_', "-").to_compact_string());
+
+            Some(Action {
+                url_name,
+                file,
+                range: function.name.range(),
+            })
+        })
+        .collect()
+}
+
+impl<'ast> Visitor<'ast> for UrlVisitor<'_> {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if let Expr::Call(call) = expr {
+            self.path_call(call);
+            self.router_registration(call);
         }
 
         walk_expr(self, expr);
@@ -717,7 +967,7 @@ impl<'ast> Visitor<'ast> for ContextAssignmentVisitor<'_> {
 }
 
 /// the value and name range of a class-body assignment to `attribute`
-fn class_attribute<'ast>(
+pub(crate) fn class_attribute<'ast>(
     statement: &'ast Stmt,
     attribute: &str,
 ) -> Option<(&'ast Expr, TextRange)> {
@@ -740,7 +990,7 @@ fn class_attribute<'ast>(
 }
 
 /// the final segment of a callee, so that `render` and `shortcuts.render` are one
-fn callee_name(func: &Expr) -> Option<CompactString> {
+pub(crate) fn callee_name(func: &Expr) -> Option<CompactString> {
     match func {
         Expr::Name(name) => Some(name.id.to_compact_string()),
         Expr::Attribute(attribute) => Some(attribute.attr.id.to_compact_string()),
@@ -790,6 +1040,14 @@ mod tests {
         let mut all = sources.to_vec();
         all.push(("app/templates/app/page.html", "<CURSOR>"));
         TemplateTest::new(&all)
+    }
+
+    /// the names the project's url configuration defines, in the order found
+    fn names(test: &TemplateTest) -> Vec<String> {
+        url_names(&test.db, test.db.project())
+            .iter()
+            .map(|url| url.name.to_string())
+            .collect()
     }
 
     /// the names a view puts in `template`'s context, in the order offered
@@ -912,6 +1170,242 @@ mod tests {
             .map(|url| url.name.as_str())
             .collect();
         assert_eq!(names, ["legacy", "index"]);
+    }
+
+    #[test]
+    fn a_router_registration_names_a_list_and_a_detail_route() {
+        let test = project(&[(
+            "app/urls.py",
+            "
+            class BookViewSet: ...
+
+            router = DefaultRouter()
+            router.register('books', BookViewSet, basename='book')
+
+            urlpatterns = router.urls
+            ",
+        )]);
+
+        assert_eq!(names(&test), ["book-list", "book-detail"]);
+    }
+
+    #[test]
+    fn an_action_that_does_not_name_its_route_takes_the_methods_own_name() {
+        let test = project(&[(
+            "app/urls.py",
+            "
+            class BookViewSet:
+                @action(detail=True)
+                def mark_read(self, request, pk=None): ...
+
+            router = DefaultRouter()
+            router.register('books', BookViewSet, basename='book')
+            ",
+        )]);
+
+        assert_eq!(
+            names(&test),
+            ["book-list", "book-detail", "book-mark-read"],
+            "an underscore of the method's name is a dash of the route's"
+        );
+    }
+
+    #[test]
+    fn an_action_may_name_its_route_itself() {
+        let test = project(&[(
+            "app/urls.py",
+            "
+            class BookViewSet:
+                @action(detail=True, url_name='read')
+                def mark_read(self, request, pk=None): ...
+
+            router = DefaultRouter()
+            router.register('books', BookViewSet, basename='book')
+            ",
+        )]);
+
+        assert_eq!(names(&test), ["book-list", "book-detail", "book-read"]);
+    }
+
+    #[test]
+    fn a_registration_without_a_basename_takes_the_viewsets_model() {
+        // the viewset is a module away, as a real project's is
+        let test = project(&[
+            (
+                "app/views.py",
+                "
+                from app.models import Book
+
+                class BookViewSet:
+                    queryset = Book.objects.all()
+                ",
+            ),
+            (
+                "app/urls.py",
+                "
+                from app.views import BookViewSet
+
+                router = DefaultRouter()
+                router.register('books', BookViewSet)
+                ",
+            ),
+        ]);
+
+        assert_eq!(names(&test), ["book-list", "book-detail"]);
+    }
+
+    #[test]
+    fn a_viewset_may_be_named_through_the_module_it_lives_in() {
+        let test = project(&[
+            (
+                "app/views.py",
+                "
+                class BookViewSet:
+                    @action(detail=True)
+                    def mark_read(self, request, pk=None): ...
+                ",
+            ),
+            (
+                "app/urls.py",
+                "
+                from app import views
+
+                router = DefaultRouter()
+                router.register('books', views.BookViewSet, basename='book')
+                ",
+            ),
+        ]);
+
+        assert_eq!(names(&test), ["book-list", "book-detail", "book-mark-read"]);
+    }
+
+    #[test]
+    fn a_viewset_named_through_its_module_still_answers_for_its_basename() {
+        let test = project(&[
+            (
+                "app/views.py",
+                "
+                class BookViewSet:
+                    queryset = Book.objects.all()
+                ",
+            ),
+            (
+                "app/urls.py",
+                "
+                from app import views
+
+                router = DefaultRouter()
+                router.register('books', views.BookViewSet)
+                ",
+            ),
+        ]);
+
+        assert_eq!(names(&test), ["book-list", "book-detail"]);
+    }
+
+    #[test]
+    fn a_basename_the_registration_gives_stands_without_the_viewset() {
+        // only the actions need the class; the registration names the rest by
+        // itself, and refusing them because a viewset is out of reach would lose
+        // routes django reverses perfectly well
+        let test = project(&[(
+            "app/urls.py",
+            "
+            from third_party import views
+
+            router = DefaultRouter()
+            router.register('books', views.BookViewSet, basename='book')
+            ",
+        )]);
+
+        assert_eq!(names(&test), ["book-list", "book-detail"]);
+    }
+
+    #[test]
+    fn a_registration_whose_basename_cannot_be_worked_out_names_nothing() {
+        let test = project(&[(
+            "app/urls.py",
+            "
+            class BookViewSet:
+                def get_queryset(self): ...
+
+            router = DefaultRouter()
+            router.register('books', BookViewSet)
+            ",
+        )]);
+
+        assert!(
+            names(&test).is_empty(),
+            "django reverses a name here, but guessing which is worse than offering none"
+        );
+    }
+
+    #[test]
+    fn a_router_registrations_names_are_namespaced_like_any_others() {
+        let test = project(&[(
+            "app/urls.py",
+            "
+            app_name = 'api'
+
+            class BookViewSet: ...
+
+            router = DefaultRouter()
+            router.register('books', BookViewSet, basename='book')
+            ",
+        )]);
+
+        assert_eq!(names(&test), ["api:book-list", "api:book-detail"]);
+    }
+
+    #[test]
+    fn registering_a_model_with_the_admin_is_not_a_route() {
+        // it is a `register` call on an object taking a class, and the only thing
+        // telling it apart from a router's is that its first argument is no prefix
+        let test = project(&[(
+            "app/admin.py",
+            "
+            class BookAdmin:
+                queryset = Book.objects.all()
+
+            admin.site.register(Book, BookAdmin)
+            ",
+        )]);
+
+        assert!(names(&test).is_empty());
+    }
+
+    #[test]
+    fn an_actions_name_leads_to_the_method_that_serves_it() {
+        let test = project(&[
+            (
+                "app/views.py",
+                "
+                class BookViewSet:
+                    @action(detail=True)
+                    def mark_read(self, request, pk=None): ...
+                ",
+            ),
+            (
+                "app/urls.py",
+                "
+                from app.views import BookViewSet
+
+                router = DefaultRouter()
+                router.register('books', BookViewSet, basename='book')
+                ",
+            ),
+        ]);
+
+        let action = url_names(&test.db, test.db.project())
+            .iter()
+            .find(|url| url.name == "book-mark-read")
+            .expect("the action's route to be named");
+
+        assert_eq!(action.file.path(&test.db).to_string(), "/app/views.py");
+        assert_eq!(
+            &ruff_db::source::source_text(&test.db, action.file)[action.range],
+            "mark_read"
+        );
     }
 
     #[test]
