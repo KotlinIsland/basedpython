@@ -4,7 +4,7 @@ use lsp_types::FoldingRangeRequest;
 use lsp_types::{FoldingRange, FoldingRangeKind, FoldingRangeParams, Uri};
 use ruff_db::source::source_text;
 use ruff_text_size::TextRange;
-use ty_ide::folding_ranges;
+use ty_ide::{django_template_folding_ranges, folding_ranges};
 use ty_project::ProjectDatabase;
 
 use crate::db::Db;
@@ -56,7 +56,13 @@ impl BackgroundDocumentRequestHandler for FoldingRangeRequestHandler {
             cell_range = cell_index.and_then(|index| notebook.cell_range(index));
         }
 
-        let results: Vec<_> = folding_ranges(db, file, cell_range)
+        let ranges = if snapshot.is_django_template() {
+            django_template_folding_ranges(db, file)
+        } else {
+            folding_ranges(db, file, cell_range)
+        };
+
+        let results: Vec<_> = ranges
             .into_iter()
             .filter_map(|folding_range| {
                 let lsp_range = folding_range

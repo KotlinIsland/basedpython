@@ -27,6 +27,7 @@ use ty_python_semantic::{
     types::{CycleDetector, KnownClass, Type},
 };
 
+use crate::django_template::django_string_completions;
 use crate::docstring::Docstring;
 use crate::goto::Definitions;
 use crate::importer::{ImportRequest, Importer};
@@ -62,6 +63,7 @@ pub fn completion<'db>(
         let mut completions =
             Completions::new(db, CollectionContext::none(), UserQuery::fuzzy(None));
 
+        add_django_name_completions(db, &context.cursor, &mut completions);
         add_string_literal_completions(
             &model,
             string_expr,
@@ -311,6 +313,12 @@ pub struct Completion<'db> {
     pub insert: Option<CompactString>,
     /// The format of [`Self::insert`].
     pub insert_text_format: CompletionInsertTextFormat,
+    /// The range that [`Self::insert`] replaces.
+    ///
+    /// This is only set when the client's own idea of the word under the
+    /// cursor would be wrong, as it is for a django template path or a
+    /// namespaced url name.
+    pub replace: Option<TextRange>,
     /// The type of this completion, if available.
     ///
     /// Generally speaking, this is always available
@@ -391,6 +399,7 @@ struct CompletionBuilder<'db> {
     name: CompactString,
     qualified: Option<CompactString>,
     insert: Option<CompactString>,
+    replace: Option<TextRange>,
     ty: Option<Type<'db>>,
     kind: Option<CompletionKind>,
     module_name: Option<&'db ModuleName>,
@@ -415,6 +424,7 @@ impl<'db> CompletionBuilder<'db> {
             name: name.into(),
             qualified: None,
             insert: None,
+            replace: None,
             ty: None,
             kind: None,
             module_name: None,
@@ -533,6 +543,7 @@ impl<'db> CompletionBuilder<'db> {
             qualified: self.qualified,
             insert,
             insert_text_format,
+            replace: self.replace,
             ty: self.ty,
             kind,
             module_name: self.module_name,
@@ -554,6 +565,11 @@ impl<'db> CompletionBuilder<'db> {
 
     fn insert(mut self, insert: impl Into<CompactString>) -> CompletionBuilder<'db> {
         self.insert = Some(insert.into());
+        self
+    }
+
+    fn replace(mut self, range: TextRange) -> CompletionBuilder<'db> {
+        self.replace = Some(range);
         self
     }
 
@@ -2274,6 +2290,26 @@ fn position_of(component: FormatSpecComponent) -> usize {
         .into_iter()
         .position(|candidate| candidate == component)
         .unwrap_or(0)
+}
+
+/// Adds the django names the string literal under the cursor could be spelling.
+///
+/// A template name and a url name are ordinary strings to python, so only the
+/// literal's position tells them apart from any other. Nothing is looked up
+/// unless that position is one django reads a name from.
+fn add_django_name_completions<'db>(
+    db: &'db dyn Db,
+    cursor: &ContextCursor<'_>,
+    completions: &mut Completions<'db>,
+) {
+    for candidate in django_string_completions(db, cursor.covering_node.ancestors()) {
+        completions.add_skip_query(
+            Completion::builder(candidate.name)
+                .kind(candidate.kind)
+                .replace(candidate.range)
+                .context_specific(true),
+        );
+    }
 }
 
 fn add_string_literal_completions<'db>(
@@ -8379,6 +8415,190 @@ x = y = func(lambda: "<CURSOR>")
         yes :: Literal["yes"]
         "#,
         );
+    }
+
+    /// A django project whose `blog/views.py` carries the cursor.
+    fn django_test_builder(views: &str) -> CompletionTestBuilder {
+        CursorTest::builder()
+            .source("blog/templates/blog/post.html", "<h1></h1>")
+            .source("blog/templates/blog/list.html", "<ul></ul>")
+            .source(
+                "blog/urls.py",
+                r#"
+app_name = "blog"
+
+class BookViewSet: ...
+
+router = DefaultRouter()
+router.register("books", BookViewSet, basename="book")
+
+urlpatterns = [
+    path("<int:pk>/", detail, name="detail"),
+    path("", index, name="index"),
+]
+"#,
+            )
+            .source("blog/views.py", views)
+            .completion_test_builder()
+    }
+
+    #[test]
+    fn django_render_offers_the_projects_templates() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return render(request, "<CURSOR>")
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"
+        blog/list.html
+        blog/post.html
+        ");
+    }
+
+    #[test]
+    fn django_render_offers_templates_for_the_keyword_form_too() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return shortcuts.render(request, template_name="<CURSOR>")
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"
+        blog/list.html
+        blog/post.html
+        ");
+    }
+
+    #[test]
+    fn django_template_response_names_a_template_just_as_render_does() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return TemplateResponse(request, "<CURSOR>")
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"
+        blog/list.html
+        blog/post.html
+        ");
+    }
+
+    #[test]
+    fn django_a_view_classs_template_name_names_a_template() {
+        let builder = django_test_builder(
+            r#"
+class PostDetail(DetailView):
+    template_name = "<CURSOR>"
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"
+        blog/list.html
+        blog/post.html
+        ");
+    }
+
+    #[test]
+    fn django_a_template_name_outside_a_class_names_nothing() {
+        let builder = django_test_builder(
+            r#"
+template_name = "<CURSOR>"
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found>");
+    }
+
+    #[test]
+    fn django_reverse_offers_the_projects_url_names() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return reverse("<CURSOR>")
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"
+        blog:book-detail
+        blog:book-list
+        blog:detail
+        blog:index
+        ");
+    }
+
+    #[test]
+    fn django_reverse_lazy_offers_url_names_too() {
+        let builder = django_test_builder(
+            r#"
+url = urls.reverse_lazy("<CURSOR>")
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"
+        blog:book-detail
+        blog:book-list
+        blog:detail
+        blog:index
+        ");
+    }
+
+    #[test]
+    fn django_redirect_offers_url_names() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return redirect("<CURSOR>")
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"
+        blog:book-detail
+        blog:book-list
+        blog:detail
+        blog:index
+        ");
+    }
+
+    #[test]
+    fn django_redirect_offers_nothing_for_a_url_path() {
+        // a redirect takes a path as readily as a route name, and a path is the
+        // one thing a route name never is
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return redirect("/blog/<CURSOR>")
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found>");
+    }
+
+    #[test]
+    fn django_a_string_in_no_recognised_position_offers_nothing() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return render(request, "blog/post.html", {"title": "<CURSOR>"})
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found>");
+    }
+
+    #[test]
+    fn django_the_wrong_argument_of_a_render_offers_nothing() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return render("<CURSOR>", "blog/post.html")
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found>");
     }
 
     #[test]

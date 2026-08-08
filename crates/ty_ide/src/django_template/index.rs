@@ -163,6 +163,11 @@ impl TemplateIndex {
             .last()
     }
 
+    /// every block a pair of tags spans, in source order
+    pub(crate) fn spans(&self) -> &[Block] {
+        &self.spans
+    }
+
     /// the block tags still open at `offset`, innermost first
     ///
     /// this is what tells a completion inside `{% for %}…{% |` that the tag it

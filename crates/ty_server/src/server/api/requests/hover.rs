@@ -8,7 +8,7 @@ use crate::session::DocumentSnapshot;
 use crate::session::client::Client;
 use lsp_types::HoverRequest;
 use lsp_types::{HoverParams, MarkupContent, Uri};
-use ty_ide::{MarkupKind, hover};
+use ty_ide::{MarkupKind, django_template_hover, hover};
 use ty_project::ProjectDatabase;
 
 pub(crate) struct HoverRequestHandler;
@@ -48,10 +48,6 @@ impl BackgroundDocumentRequestHandler for HoverRequestHandler {
             return Ok(None);
         };
 
-        let Some(range_info) = hover(db, file, offset) else {
-            return Ok(None);
-        };
-
         let (markup_kind, lsp_markup_kind) = if snapshot
             .resolved_client_capabilities()
             .prefers_markdown_in_hover()
@@ -61,7 +57,25 @@ impl BackgroundDocumentRequestHandler for HoverRequestHandler {
             (MarkupKind::PlainText, lsp_types::MarkupKind::PlainText)
         };
 
-        let contents = range_info.display(db, markup_kind).to_string();
+        let hovered = if snapshot.is_django_template() {
+            django_template_hover(db, file, offset).map(|range_info| {
+                (
+                    range_info.display(markup_kind).to_string(),
+                    range_info.range,
+                )
+            })
+        } else {
+            hover(db, file, offset).map(|range_info| {
+                (
+                    range_info.display(db, markup_kind).to_string(),
+                    range_info.range,
+                )
+            })
+        };
+
+        let Some((contents, range)) = hovered else {
+            return Ok(None);
+        };
 
         Ok(Some(lsp_types::Hover {
             contents: MarkupContent {
@@ -69,8 +83,7 @@ impl BackgroundDocumentRequestHandler for HoverRequestHandler {
                 value: contents,
             }
             .into(),
-            range: range_info
-                .file_range()
+            range: range
                 .to_lsp_range(db, snapshot.encoding())
                 .map(|lsp_range| lsp_range.local_range()),
         }))

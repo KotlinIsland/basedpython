@@ -242,7 +242,7 @@ fn definition_in_chain(
 ///
 /// `inclusive` keeps `token` itself, for a name whose own type is wanted; leaving
 /// it out gives the type the name is an attribute *of*.
-fn path_up_to<'src>(
+pub(super) fn path_up_to<'src>(
     source: &'src str,
     tokens: &[Token],
     token: Token,

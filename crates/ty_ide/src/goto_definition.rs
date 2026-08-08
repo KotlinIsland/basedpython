@@ -1,3 +1,4 @@
+use crate::django_template::django_string_definition;
 use crate::goto::find_goto_target;
 use crate::{Db, NavigationTargets, RangedValue};
 use ruff_db::files::{File, FileRange};
@@ -17,6 +18,13 @@ pub fn goto_definition(
     offset: TextSize,
 ) -> Option<RangedValue<NavigationTargets>> {
     let module = parsed_module(db, file).load(db);
+
+    // a template name and a url name are plain strings, so python's own answer
+    // for one is whatever `str` is — which is never where the user wanted to go
+    if let Some(named) = django_string_definition(db, file, &module, offset) {
+        return Some(named);
+    }
+
     let model = SemanticModel::new(db, file);
     let goto_target = find_goto_target(&model, &module, offset)?;
     let definition_targets = goto_target
@@ -2544,6 +2552,176 @@ class GenericFoo[T](Base):
           |         --------
           |
         ");
+    }
+
+    /// A django project whose `blog/views.py` carries the cursor.
+    fn django_test(views: &str) -> CursorTest {
+        CursorTest::builder()
+            .source("blog/templates/blog/post.html", "<h1>{{ post.title }}</h1>")
+            .source("blog/templates/blog/list.html", "<ul></ul>")
+            .source(
+                "blog/urls.py",
+                r#"
+app_name = "blog"
+
+urlpatterns = [
+    path("<int:pk>/", detail, name="detail"),
+]
+"#,
+            )
+            .source("blog/views.py", views)
+            .build()
+    }
+
+    #[test]
+    fn goto_definition_django_rendered_template() {
+        let test = django_test(
+            r#"
+def show(request):
+    return render(request, "blog/po<CURSOR>st.html")
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @r#"
+        info[goto-definition]: Go to definition
+         --> blog/views.py:3:29
+          |
+        3 |     return render(request, "blog/post.html")
+          |                             ^^^^^^^^^^^^^^ Clicking here
+          |
+        info: Found 1 definition
+         --> blog/templates/blog/post.html:1:1
+          |
+        1 | <h1>{{ post.title }}</h1>
+          | -
+          |
+        "#);
+    }
+
+    #[test]
+    fn goto_definition_django_template_of_a_template_response() {
+        let test = django_test(
+            r#"
+def show(request):
+    return TemplateResponse(request, "blog/li<CURSOR>st.html")
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @r#"
+        info[goto-definition]: Go to definition
+         --> blog/views.py:3:39
+          |
+        3 |     return TemplateResponse(request, "blog/list.html")
+          |                                       ^^^^^^^^^^^^^^ Clicking here
+          |
+        info: Found 1 definition
+         --> blog/templates/blog/list.html:1:1
+          |
+        1 | <ul></ul>
+          | -
+          |
+        "#);
+    }
+
+    #[test]
+    fn goto_definition_django_template_name_of_a_view_class() {
+        let test = django_test(
+            r#"
+class PostDetail(DetailView):
+    template_name = "blog/po<CURSOR>st.html"
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @r#"
+        info[goto-definition]: Go to definition
+         --> blog/views.py:3:22
+          |
+        3 |     template_name = "blog/post.html"
+          |                      ^^^^^^^^^^^^^^ Clicking here
+          |
+        info: Found 1 definition
+         --> blog/templates/blog/post.html:1:1
+          |
+        1 | <h1>{{ post.title }}</h1>
+          | -
+          |
+        "#);
+    }
+
+    #[test]
+    fn goto_definition_django_reversed_route() {
+        let test = django_test(
+            r#"
+def show(request):
+    return redirect(reverse("blog:de<CURSOR>tail"))
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @r#"
+        info[goto-definition]: Go to definition
+         --> blog/views.py:3:30
+          |
+        3 |     return redirect(reverse("blog:detail"))
+          |                              ^^^^^^^^^^^ Clicking here
+          |
+        info: Found 1 definition
+         --> blog/urls.py:5:36
+          |
+        5 |     path("<int:pk>/", detail, name="detail"),
+          |                                    --------
+          |
+        "#);
+    }
+
+    #[test]
+    fn goto_definition_django_redirected_route() {
+        let test = django_test(
+            r#"
+def show(request):
+    return redirect("blog:de<CURSOR>tail")
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @r#"
+        info[goto-definition]: Go to definition
+         --> blog/views.py:3:22
+          |
+        3 |     return redirect("blog:detail")
+          |                      ^^^^^^^^^^^ Clicking here
+          |
+        info: Found 1 definition
+         --> blog/urls.py:5:36
+          |
+        5 |     path("<int:pk>/", detail, name="detail"),
+          |                                    --------
+          |
+        "#);
+    }
+
+    #[test]
+    fn goto_definition_django_redirected_url_path() {
+        // a path is not a route name, and a redirect is the one call that takes
+        // both — so it leads nowhere django knows
+        let test = django_test(
+            r#"
+def show(request):
+    return redirect("/blog/<CURSOR>1/")
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @"No goto target found");
+    }
+
+    #[test]
+    fn goto_definition_django_template_that_is_not_there() {
+        let test = django_test(
+            r#"
+def show(request):
+    return render(request, "blog/mis<CURSOR>sing.html")
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @"No goto target found");
     }
 
     impl CursorTest {

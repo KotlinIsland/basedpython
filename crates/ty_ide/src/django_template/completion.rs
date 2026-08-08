@@ -1018,6 +1018,43 @@ mod tests {
     }
 
     #[test]
+    fn url_offers_the_routes_a_rest_framework_router_generates() {
+        let test = TemplateTest::new(&[
+            (
+                "api/views.py",
+                "
+                class BookViewSet:
+                    queryset = Book.objects.all()
+
+                    @action(detail=True)
+                    def mark_read(self, request, pk=None): ...
+                ",
+            ),
+            (
+                "api/urls.py",
+                "
+                from api.views import BookViewSet
+
+                router = DefaultRouter()
+                router.register('books', BookViewSet)
+
+                urlpatterns = router.urls
+                ",
+            ),
+            ("blog/templates/blog/post.html", "{% url '<CURSOR>' %}"),
+        ]);
+
+        assert_eq!(
+            test.detailed(),
+            [
+                "book-list — books",
+                "book-detail — books",
+                "book-mark-read — books"
+            ]
+        );
+    }
+
+    #[test]
     fn static_offers_the_projects_assets() {
         let completions = project("{% load static %}{% static '<CURSOR>' %}").completions();
         assert_eq!(completions, ["blog/app.css"]);
