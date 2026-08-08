@@ -277,6 +277,115 @@ Author.objects.order_by("bogus")
 Book.objects.filter(author__nonfield="x")
 ```
 
+## The `*_or_create` family's own keywords
+
+`defaults` and `create_defaults` carry the values to apply on create; they are django's own
+keywords, not lookups, so they name no field and are not resolved as one.
+
+```py
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+    age = models.IntegerField()
+
+Author.objects.get_or_create(name="x", defaults={"age": 3})
+Author.objects.update_or_create(name="x", defaults={"age": 3})
+Author.objects.update_or_create(name="x", create_defaults={"age": 3}, defaults={})
+
+async def create_one() -> None:
+    await Author.objects.aget_or_create(name="x", defaults={"age": 3})
+
+# the lookup keys beside them are still checked
+# error: [invalid-field-lookup] "Model `Author` has no field `nam`"
+Author.objects.get_or_create(nam="x", defaults={"age": 3})
+
+# and `defaults` is not a keyword of the plain lookup methods
+# error: [invalid-field-lookup] "Model `Author` has no field `defaults`"
+Author.objects.filter(defaults={"age": 3})
+```
+
+## Model `Meta.ordering`
+
+`Meta.ordering` holds `order_by` syntax — a leading `-` and the `?` sentinel are both legal. Django
+resolves it at import time and reports a bad entry as `models.E015`; the stubs type it as plain
+`list[str]`, so ty resolves each literal entry against the model declaring the `Meta`.
+
+```py
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+class Book(models.Model):
+    title = models.CharField(max_length=100)
+    published = models.DateField()
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+
+    class Meta:
+        ordering = ["-published", "title", "pk", "?", "author__name", "author_id", "author"]
+
+class Bad(models.Model):
+    title = models.CharField(max_length=100)
+
+    class Meta:
+        ordering = [
+            "title",
+            # error: [invalid-field-lookup] "Model `Bad` has no field `nope` (in `ordering`)"
+            "nope",
+            # error: [invalid-field-lookup] "Model `Bad` has no field `alsonope` (in `ordering`)"
+            "-alsonope",
+        ]
+```
+
+## `Meta.ordering` refusals
+
+Nothing is reported when the list cannot be read exhaustively, when the `Meta` belongs to something
+that is not a model, or when `ordering` is written outside a `Meta`.
+
+```py
+from django.db import models
+
+NAMES = ["nope"]
+
+class Book(models.Model):
+    title = models.CharField(max_length=100)
+
+    class Meta:
+        # a name, not a literal list — its elements are unknown here
+        ordering = NAMES
+
+class Dynamic(models.Model):
+    title = models.CharField(max_length=100)
+
+    class Meta:
+        # one non-literal element makes the whole list unverifiable
+        ordering = ["nope", *NAMES]
+
+class Annotated(models.Model):
+    title = models.CharField(max_length=100)
+
+    class Meta:
+        # an annotation changes nothing about the entries
+        # error: [invalid-field-lookup] "Model `Annotated` has no field `nope` (in `ordering`)"
+        ordering: list[str] = ["title", "nope"]
+
+class NotAMeta(models.Model):
+    title = models.CharField(max_length=100)
+
+    class Config:
+        ordering = ["nope"]
+
+class Plain:
+    class Meta:
+        ordering = ["nope"]
+
+class AlsoNotChecked(models.Model):
+    title = models.CharField(max_length=100)
+    # `ordering` on the model itself is not django's `Meta.ordering`
+    ordering = ["nope"]
+```
+
 ## get_FOO_display for choice fields
 
 A field declared with `choices=` gets a synthesized `get_<field>_display()` method; a field without
