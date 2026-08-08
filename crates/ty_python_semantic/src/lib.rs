@@ -7,7 +7,7 @@ use crate::suppression::{
     BLANKET_IGNORE_COMMENT, IGNORE_COMMENT_UNKNOWN_RULE, INVALID_IGNORE_COMMENT,
     UNUSED_TYPE_IGNORE_COMMENT,
 };
-use crate::types::check_types;
+use crate::types::check_types_with;
 pub use db::Db;
 pub use diagnostic::{
     add_inferred_python_version_hint_to_diagnostic, inferred_python_version_source_annotation,
@@ -326,7 +326,23 @@ pub fn check_file_unwrap(db: &dyn Db, file: File) -> Vec<Diagnostic> {
 }
 
 pub fn check_file(db: &dyn Db, file: File) -> Result<Box<[Diagnostic]>, Diagnostic> {
-    with_display_for_file(db, file, || check_file_inner(db, file))
+    check_file_with(db, file, Vec::new())
+}
+
+/// [`check_file`], with lint diagnostics worked out elsewhere folded in.
+///
+/// `external` are diagnostics about `file` that this crate cannot compute — the
+/// django route checks read the project's whole url tree, which is not something
+/// a pass over one file can see. They arrive with the file's suppression comments
+/// *not* applied, so that applying them happens here alongside the type checker's
+/// own: one `ty: ignore` then silences either kind of diagnostic, and counts as
+/// used either way.
+pub fn check_file_with(
+    db: &dyn Db,
+    file: File,
+    external: Vec<Diagnostic>,
+) -> Result<Box<[Diagnostic]>, Diagnostic> {
+    with_display_for_file(db, file, || check_file_inner(db, file, external))
 }
 
 /// Run `body` with the type display `file` is written in: basedpython surface
@@ -344,7 +360,11 @@ pub fn with_display_for_file<R>(db: &dyn Db, file: File, body: impl FnOnce() -> 
     }
 }
 
-fn check_file_inner(db: &dyn Db, file: File) -> Result<Box<[Diagnostic]>, Diagnostic> {
+fn check_file_inner(
+    db: &dyn Db,
+    file: File,
+    external: Vec<Diagnostic>,
+) -> Result<Box<[Diagnostic]>, Diagnostic> {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
     // Abort checking if there are IO errors.
@@ -374,7 +394,7 @@ fn check_file_inner(db: &dyn Db, file: File) -> Result<Box<[Diagnostic]>, Diagno
         error
     }));
 
-    diagnostics.extend(check_types(db, file));
+    diagnostics.extend(check_types_with(db, file, external));
 
     diagnostics.sort_unstable_by(|a, b| a.rendering_sort_key(db).cmp(&b.rendering_sort_key(db)));
 

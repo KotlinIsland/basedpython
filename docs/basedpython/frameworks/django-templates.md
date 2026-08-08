@@ -76,6 +76,8 @@ a `{% for book in shelf %}` shows the element type it binds, which is what says 
 
 **diagnostics.** a template reports twelve rules — an unclosed block, an unknown tag or filter, a tag used without its `{% load %}`, a missing template or static file, an unknown route or the wrong arguments to one, a block no ancestor declares, and a member django cannot call. each is silent unless the index behind it is authoritative, so a project whose settings cannot be read reports nothing rather than guessing. silence one with `{# ty: ignore #}` or `{# ty: ignore[rule-name] #}`, or configure it under `[tool.ty.rules]` like any other.
 
+`by check` reports them too. a template is not in the project's python file set and is never read as python — it is checked as the template it is — but it is part of the project, so the command line and the editor say the same thing about the same file. only the project's own templates are checked; an installed app's are a dependency's source, and a project with no django has no django templates.
+
 an unknown *variable* is still not reported: a context can come from places a scan cannot see, so absence is not evidence.
 
 ### the project's django structure
@@ -99,6 +101,29 @@ a template name in a `render()` and a route name in a `reverse()` are plain stri
 the function is matched by its last segment, so `shortcuts.render` and `render` are one, and `render()` accepts its template by keyword as `template_name=` too.
 
 `redirect()` takes a url or a model as readily as a route name, so a string with a `/` in it is left alone entirely and a name the url configuration doesn't have leads nowhere.
+
+### a route and the view it names
+
+a route pattern names its arguments and django hands each of them to the view by keyword. the two are checked against each other:
+
+```py
+path("books/<int:pk>/", views.detail, name="detail")
+
+def detail(request, pk: int): ...   # correct
+def detail(request, id: int): ...   # invalid-route-handler: the route names `pk`
+def detail(request): ...            # invalid-route-handler: `pk` has nowhere to go
+def detail(request, pk: str): ...   # invalid-route-parameter-type: the converter gives an `int`
+```
+
+the first two are a `TypeError` when the url is requested; the last is a value that arrives with a type its annotation denies.
+
+what a route gives its view includes what every pattern it is mounted behind names, so an `include('blog.urls')` written under `books/<int:pk>/` puts `pk` in front of every view below it. the check therefore runs only where the url tree could be walked in full.
+
+nothing is reported for a view that could accept more than it appears to: one taking `*args` or `**kwargs`, one reached through a decorator the type checker cannot see through, one nothing can resolve to a definition, or a route passing extra arguments of its own through `path()`'s third argument. an argument matched by a `re_path()` group goes through no converter, so its name is checked and its type never is.
+
+a class-based view is reached through `as_view()`, which django calls rather than the class — so what has to take the route's arguments is `get`, `post`, `dispatch` and the rest. only the ones the class declares itself are checked: every handler django ships takes `**kwargs`, so an inherited one accepts anything.
+
+these two read the whole url tree rather than the one file, which is not something the type checker's own pass can do, but they arrive with what it found: `by check` and the editor both report them, and a `# ty: ignore[invalid-route-handler]` on the route silences one and counts as used, exactly as it would for a type error.
 
 ## how a template's variables are found
 
@@ -205,6 +230,10 @@ a project whose settings cannot be read, or whose django cannot be resolved at a
 **a route is named by a `path()` or by a rest framework router.** `router.register('books', BookViewSet, basename='book')` names `book-list` and `book-detail`, and each `@action` on the viewset names one more. a `DefaultRouter` names `api-root` besides, where a `SimpleRouter` names none. a registration whose basename cannot be worked out — no `basename=` and no resolvable `queryset` — names nothing rather than guessing.
 
 **a name written in python has to be a literal.** the string in a `render()` or a `reverse()` is read as it is written, so a name built from an f-string, or held in a variable, is just a string.
+
+**only a route the configuration names is paired with its view.** the route index is built out of the names a `{% url %}` reverses, so a `path("books/<int:pk>/", views.detail)` written without a `name=` is not checked against `views.detail`.
+
+**neither `--fix` nor `--add-ignore` touches a template.** both rewrite a file through its python tokens, and a template has none. a template diagnostic is reported unchanged by either, and a `{# ty: ignore #}` has to be written by hand — or taken from the quick fix the editor offers.
 
 ## see also
 

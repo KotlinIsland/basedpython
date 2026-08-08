@@ -185,7 +185,7 @@ pub(crate) fn workspace_symbols(db: &dyn Db, query: &QueryPattern) -> Vec<Django
             ));
         }
 
-        if let Some(view) = &route.view
+        if let Some(view) = route.view.as_ref().map(|view| &view.target)
             && query.is_match_symbol_name(&view.name)
             && seen.insert((view.file, view.range))
         {

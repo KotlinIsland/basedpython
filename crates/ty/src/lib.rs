@@ -8,7 +8,7 @@ mod version;
 
 use std::io::{BufWriter, Write};
 use std::process::{ExitCode, Termination};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use anyhow::{Context, anyhow};
@@ -18,7 +18,7 @@ use crossbeam::channel as crossbeam_channel;
 use rayon::ThreadPoolBuilder;
 use ruff_db::cancellation::{Canceled, CancellationToken, CancellationTokenSource};
 use ruff_db::diagnostic::{
-    Diagnostic, DiagnosticId, DisplayDiagnosticConfig, DisplayDiagnostics, Severity,
+    Diagnostic, DiagnosticId, DisplayDiagnosticConfig, DisplayDiagnostics, Severity, UnifiedFile,
 };
 use ruff_db::files::File;
 use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
@@ -290,6 +290,13 @@ fn run_check(args: CheckCommand) -> anyhow::Result<ExitStatus> {
     project_metadata.apply_override_options(args.into_options());
 
     let mut db = ProjectDatabase::fallible(project_metadata, system)?;
+
+    // the project's django, which the type checker does not read: its templates are
+    // checked alongside the python files, and what its routes get wrong is folded
+    // into the python files' own diagnostics. a project without django registers a
+    // checker that answers with nothing, and pays nothing
+    db.set_checker(Arc::new(ty_ide::DjangoChecker));
+
     let project = db.project();
 
     project.set_verbose(&mut db, verbosity >= VerbosityLevel::Verbose);
@@ -524,6 +531,11 @@ impl MainLoop {
                             }
                         }
                         MainLoopMode::Fix(mode) => {
+                            // both of these rewrite a file through its python tokens, so a
+                            // diagnostic on a file that is not python is reported unchanged
+                            // rather than fixed
+                            let (result, other_language) = split_other_language(db, result);
+
                             let result = match mode {
                                 FixMode::AddIgnore => {
                                     suppress_all_diagnostics(db, result, &self.cancellation_token)
@@ -536,7 +548,12 @@ impl MainLoop {
                                 ),
                             };
 
-                            if let Ok(result) = result {
+                            if let Ok(mut result) = result {
+                                result.diagnostics.extend(other_language);
+                                result.diagnostics.sort_by(|left, right| {
+                                    left.rendering_sort_key(db)
+                                        .cmp(&right.rendering_sort_key(db))
+                                });
                                 let fixed_diagnostics = match mode {
                                     FixMode::AddIgnore => None,
                                     FixMode::ApplyFixes => Some(result.count),
@@ -690,6 +707,32 @@ enum MainLoopMode {
 enum FixMode {
     AddIgnore,
     ApplyFixes,
+}
+
+/// Split `diagnostics` into the python ones and the ones a registered
+/// [`ty_project::ProjectChecker`] owns the file of.
+///
+/// Everything that rewrites a file — applying a fix, adding an ignore comment —
+/// works through the file's python tokens, and the second group has none.
+fn split_other_language(
+    db: &ProjectDatabase,
+    diagnostics: Vec<Diagnostic>,
+) -> (Vec<Diagnostic>, Vec<Diagnostic>) {
+    let Some(checker) = db.project_checker() else {
+        return (diagnostics, Vec::new());
+    };
+
+    diagnostics.into_iter().partition(|diagnostic| {
+        let owned = diagnostic
+            .primary_span_ref()
+            .and_then(|span| match span.file() {
+                UnifiedFile::Ty(file) => file.path(db).as_system_path(),
+                UnifiedFile::Ruff(_) => None,
+            })
+            .is_some_and(|path| checker.owns(db, path));
+
+        !owned
+    })
 }
 
 fn exit_status_from_diagnostics(

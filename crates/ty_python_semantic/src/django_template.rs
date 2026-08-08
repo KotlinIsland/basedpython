@@ -1,10 +1,14 @@
-//! the lints a django template can report
+//! the lints django support can report
 //!
-//! a template is not python, so nothing here checks anything: the checks live in
-//! `ty_ide`'s template front end, which is the only place that can read a
-//! template at all. what has to live here is the *declaration* of each rule,
-//! because the lint registry — and with it `[tool.ty.rules]`, the generated
-//! schema and the generated documentation — is this crate's.
+//! nothing here checks anything: the checks live in `ty_ide`'s django front end,
+//! which is the only place that has read the project's templates and its url
+//! tree. what has to live here is the *declaration* of each rule, because the
+//! lint registry — and with it `[tool.ty.rules]`, the generated schema and the
+//! generated documentation — is this crate's.
+//!
+//! most of them are a template's, and the last two are the python side of the
+//! same join: a route pattern names the arguments django will hand the view, and
+//! the view has to be able to take them.
 
 use crate::declare_lint;
 use crate::lint::{Level, LintRegistryBuilder, LintStatus};
@@ -23,6 +27,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_ROUTE_ARGUMENTS);
     registry.register_lint(&UNKNOWN_TEMPLATE_BLOCK);
     registry.register_lint(&TEMPLATE_MEMBER_NEEDS_ARGUMENTS);
+    registry.register_lint(&INVALID_ROUTE_HANDLER);
+    registry.register_lint(&INVALID_ROUTE_PARAMETER_TYPE);
 }
 
 declare_lint! {
@@ -309,6 +315,75 @@ declare_lint! {
     /// ```
     pub static TEMPLATE_MEMBER_NEEDS_ARGUMENTS = {
         summary: "detects a template lookup landing on a method that needs arguments",
+        status: LintStatus::stable("0.0.69"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks that the view a route names can take the arguments the route's
+    /// pattern gives it.
+    ///
+    /// ## Why is this bad?
+    /// A route pattern names its arguments, and django hands each of them to the
+    /// view as a keyword argument. A view that names them differently, or does
+    /// not take them at all, raises `TypeError` when the url is requested — a
+    /// failure nothing reports until the page 500s.
+    ///
+    /// Only a project whose url tree could be walked in full is checked, since a
+    /// route's arguments include the ones the patterns it is mounted behind
+    /// contribute. A view taking `*args` or `**kwargs` accepts anything and is
+    /// never reported, nor is one reached through a decorator the type checker
+    /// cannot see through. A class-based view is checked through the handler
+    /// methods it declares itself: what it inherits from django takes `**kwargs`.
+    ///
+    /// ## Examples
+    /// ```python
+    /// path("books/<int:pk>/", views.detail, name="detail")
+    /// ```
+    ///
+    /// ```python
+    /// def detail(request, id): ...     # error: the route names `pk`
+    /// def detail(request): ...         # error: `pk` has nowhere to go
+    /// def detail(request, pk): ...     # ok
+    /// ```
+    pub static INVALID_ROUTE_HANDLER = {
+        summary: "detects a view that cannot take the arguments its route gives it",
+        status: LintStatus::stable("0.0.69"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks the type a view declares for a route argument against the type the
+    /// route's converter produces.
+    ///
+    /// ## Why is this bad?
+    /// A path converter parses the url before django calls the view:
+    /// `<int:pk>` hands the view an `int` and `<uuid:key>` a `uuid.UUID`. A view
+    /// declaring something else is annotated with a type its argument never has,
+    /// so everything written against the annotation is written against a value
+    /// that is not there.
+    ///
+    /// Unlike `invalid-route-handler` this does not stop the request: django
+    /// calls the view and the wrong value arrives silently.
+    /// An unannotated parameter declares nothing and is never reported,
+    /// and neither is one matched by a regular expression, which goes through no
+    /// converter at all.
+    ///
+    /// ## Examples
+    /// ```python
+    /// path("books/<int:pk>/", views.detail, name="detail")
+    /// ```
+    ///
+    /// ```python
+    /// def detail(request, pk: str): ...    # warning: the converter gives an `int`
+    /// def detail(request, pk: int): ...    # ok
+    /// ```
+    pub static INVALID_ROUTE_PARAMETER_TYPE = {
+        summary: "detects a view declaring a type its route's converter does not produce",
         status: LintStatus::stable("0.0.69"),
         default_level: Level::Warn,
     }

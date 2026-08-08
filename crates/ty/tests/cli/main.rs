@@ -1,6 +1,7 @@
 mod analysis_options;
 mod api_lockfile;
 mod config_option;
+mod django;
 mod exit_code;
 mod file_selection;
 mod fixes;

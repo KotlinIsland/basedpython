@@ -28,6 +28,7 @@ mod python;
 mod references;
 mod rename;
 mod resolve;
+mod routes;
 mod semantic_tokens;
 mod signature_help;
 mod symbols;
@@ -45,11 +46,12 @@ pub use signature_help::TemplateSignature;
 pub use symbols::{DjangoSymbol, TemplateSymbol};
 
 use ruff_db::diagnostic::Diagnostic;
-use ruff_db::files::File;
+use ruff_db::files::{File, system_path_to_file};
 use ruff_db::source::source_text;
 use ruff_db::system::SystemPath;
 use ruff_text_size::{TextRange, TextSize};
 use ty_project::Db;
+use ty_project::glob::IncludeResult;
 
 use ty_python_semantic::lint::LintId;
 
@@ -203,8 +205,70 @@ fn ancestors<'db>(
 /// the type checker never sees a template — it is not python — so this is the
 /// whole of what a template document can report.
 pub fn django_template_diagnostics(db: &dyn Db, file: File) -> Vec<Diagnostic> {
+    if !project::has_django(db, db.project()) {
+        return Vec::new();
+    }
+
     let source = source_text(db, file);
     diagnostics::diagnostics(db, file, template_index(db, file), source.as_str())
+}
+
+/// everything wrong with the django a python file writes
+///
+/// this is what the type checker's own pass over the file cannot say: whether a
+/// route's view can take the arguments the route gives it is a question about the
+/// project's whole url tree, which is read here rather than there.
+///
+/// the file's suppression comments are deliberately *not* applied: these are
+/// folded into the type checker's own diagnostics, which is where a `ty: ignore`
+/// is honoured and counted used — see [`ty_python_semantic::check_file_with`].
+pub fn django_python_diagnostics(db: &dyn Db, file: File) -> Vec<Diagnostic> {
+    routes::diagnostics(db, file)
+}
+
+/// django's checks, as something [`ty_project::Project::check`] can run
+///
+/// registering this is what makes the command line and an editor report the same
+/// rules in the same places: both reach the two functions above, and both reach
+/// them through the same suppression and configuration.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DjangoChecker;
+
+impl ty_project::ProjectChecker for DjangoChecker {
+    fn owns(&self, db: &dyn Db, path: &SystemPath) -> bool {
+        is_django_template_path(path) && project::has_django(db, db.project())
+    }
+
+    fn files(&self, db: &dyn Db) -> Vec<File> {
+        let project = db.project();
+        if !project::has_django(db, project) {
+            return Vec::new();
+        }
+
+        project::template_files(db, project)
+            .iter()
+            // an installed app's templates are django's or a dependency's, and a
+            // project is no more answerable for those than for the python beside them
+            .filter(|discovered| discovered.own)
+            // the same include, exclude and `ty check <paths>` filtering the python
+            // files of the project go through
+            .filter(|discovered| {
+                matches!(
+                    project.is_file_included(db, &discovered.path),
+                    IncludeResult::Included { .. }
+                )
+            })
+            .filter_map(|discovered| system_path_to_file(db, &discovered.path).ok())
+            .collect()
+    }
+
+    fn check_file(&self, db: &dyn Db, file: File) -> Vec<Diagnostic> {
+        django_template_diagnostics(db, file)
+    }
+
+    fn check_python_file(&self, db: &dyn Db, file: File) -> Vec<Diagnostic> {
+        django_python_diagnostics(db, file)
+    }
 }
 
 /// the quick fixes offered for a template diagnostic at `range`
@@ -352,11 +416,11 @@ pub(crate) mod tests {
 
     use super::{
         DjangoLensAction, PreparedTemplateRename, TemplateRenameOutcome, TemplateSymbol,
-        django_prepare_rename, django_python_code_lenses, django_references, django_rename,
-        django_template_code_lenses, django_template_completions, django_template_diagnostics,
-        django_template_document_symbols, django_template_folding_ranges,
-        django_template_goto_definition, django_template_hover, django_template_inlay_hints,
-        django_template_signature_help, is_django_template_path,
+        django_prepare_rename, django_python_code_lenses, django_python_diagnostics,
+        django_references, django_rename, django_template_code_lenses, django_template_completions,
+        django_template_diagnostics, django_template_document_symbols,
+        django_template_folding_ranges, django_template_goto_definition, django_template_hover,
+        django_template_inlay_hints, django_template_signature_help, is_django_template_path,
     };
 
     /// a mock django whose implicit builtins are there to be read
@@ -459,6 +523,9 @@ pub(crate) mod tests {
         pub(crate) db: TestDb,
         pub(crate) file: File,
         pub(crate) offset: TextSize,
+        /// the project root the sources were written under, for a test that
+        /// names a second file of its own
+        root: SystemPathBuf,
     }
 
     impl TemplateTest {
@@ -550,7 +617,86 @@ pub(crate) mod tests {
 
             let (file, offset) = cursor
                 .unwrap_or_else(|| (last.expect("a source to be written"), TextSize::default()));
-            Self { db, file, offset }
+            Self {
+                db,
+                file,
+                offset,
+                root: root.to_path_buf(),
+            }
+        }
+
+        /// rewrite one of the project's files
+        ///
+        /// this is for a test that varies a source the fixture already wrote —
+        /// the url configuration a route is mounted from, most often.
+        pub(crate) fn rewrite(&mut self, path: &str, contents: &str) {
+            self.db
+                .write_file(self.root.join(path), dedent(contents).as_ref())
+                .unwrap();
+        }
+
+        /// every django diagnostic of the python file at `path`, rendered as
+        /// `rule severity: message [text]`
+        ///
+        /// what the type checker itself reports about the file is deliberately
+        /// left out: this is the django join, and mixing the two would make every
+        /// test below depend on how a mock django happens to be annotated.
+        pub(crate) fn python_diagnostics(&self, path: &str) -> Vec<String> {
+            let file = system_path_to_file(&self.db, self.root.join(path))
+                .expect("the file to have been written");
+            let source = ruff_db::source::source_text(&self.db, file);
+
+            django_python_diagnostics(&self.db, file)
+                .into_iter()
+                .map(|diagnostic| {
+                    let range = diagnostic
+                        .primary_span()
+                        .and_then(|span| span.range())
+                        .unwrap_or_default();
+
+                    format!(
+                        "{} {:?}: {} [{}]",
+                        diagnostic.id(),
+                        diagnostic.severity(),
+                        diagnostic.primary_message(),
+                        &source[range]
+                    )
+                })
+                .collect()
+        }
+
+        /// the same, as the project check reports it
+        ///
+        /// [`python_diagnostics`](Self::python_diagnostics) is the raw scan, which
+        /// answers before any `ty: ignore` is read. this is that scan folded into
+        /// the type checker's own pass, which is where a suppression comment is
+        /// honoured and counted used — so it is also what says whether
+        /// `unused-ignore-comment` then fires on the comment that did the silencing.
+        pub(crate) fn checked_python_diagnostics(&self, path: &str) -> Vec<String> {
+            const REPORTED: &[&str] = &[
+                "invalid-route-handler",
+                "invalid-route-parameter-type",
+                "unused-ignore-comment",
+            ];
+
+            let file = system_path_to_file(&self.db, self.root.join(path))
+                .expect("the file to have been written");
+            let external = django_python_diagnostics(&self.db, file);
+
+            ty_python_semantic::check_file_with(&self.db, file, external)
+                .expect("the file to be readable")
+                .iter()
+                // the mock django the fixtures install is annotated no further than
+                // each test needs, so what the type checker itself says about a view
+                // is no business of a test about the django join
+                .filter(|diagnostic| {
+                    diagnostic
+                        .id()
+                        .as_lint()
+                        .is_some_and(|name| REPORTED.contains(&name.as_str()))
+                })
+                .map(|diagnostic| format!("{}: {}", diagnostic.id(), diagnostic.primary_message()))
+                .collect()
         }
 
         /// every diagnostic of the file under test, rendered as

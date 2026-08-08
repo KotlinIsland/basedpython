@@ -6,7 +6,7 @@ use std::{cmp, fmt};
 pub use self::changes::ChangeResult;
 use crate::CollectReporter;
 use crate::metadata::settings::file_settings;
-use crate::{ProgressReporter, Project, ProjectMetadata};
+use crate::{ProgressReporter, Project, ProjectChecker, ProjectMetadata};
 use get_size2::StandardTracker;
 use ruff_db::Db as SourceDb;
 use ruff_db::diagnostic::Diagnostic;
@@ -28,6 +28,12 @@ pub trait Db: SemanticDb {
     fn project(&self) -> Project;
 
     fn dyn_clone(&self) -> Box<dyn Db>;
+
+    /// The checker for the part of the project that is not Python, if one is
+    /// registered. See [`ProjectChecker`].
+    fn project_checker(&self) -> Option<&dyn ProjectChecker> {
+        None
+    }
 }
 
 /// Tracked so that a change to the open-file set only invalidates queries
@@ -55,6 +61,11 @@ pub struct ProjectDatabase {
     // IMPORTANT: Never return clones of `system` outside `ProjectDatabase` (only return references)
     // or the "trick" to get a mutable `Arc` in `Self::system_mut` is no longer guaranteed to work.
     system: Arc<dyn System + Send + Sync + RefUnwindSafe>,
+
+    // Deliberately not a Salsa input: it is set once before the first check and never
+    // changes, so nothing that reads it can go stale, and every handle the parallel
+    // check clones keeps it.
+    checker: Option<Arc<dyn ProjectChecker>>,
 
     // IMPORTANT: This field must be the last because we use `trigger_cancellation` (drops all other storage references)
     // to drop all other references to the database, which gives us exclusive access to other `Arc`s stored on this db.
@@ -127,6 +138,7 @@ impl ProjectDatabase {
             }),
             files: Files::default(),
             system: Arc::new(system),
+            checker: None,
         };
 
         // TODO: Use the `program_settings` to compute the key for the database's persistent
@@ -188,6 +200,14 @@ impl ProjectDatabase {
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn check_file(&self, file: File) -> Vec<Diagnostic> {
         crate::check_file(self, file)
+    }
+
+    /// Registers the checker for the part of the project that is not Python.
+    ///
+    /// Must be called before the first check: it is not a Salsa input, so a checker
+    /// registered later does not invalidate anything already computed.
+    pub fn set_checker(&mut self, checker: Arc<dyn ProjectChecker>) {
+        self.checker = Some(checker);
     }
 
     /// Set the check mode for the project.
@@ -616,6 +636,10 @@ impl Db for ProjectDatabase {
 
     fn dyn_clone(&self) -> Box<dyn Db> {
         Box::new(self.clone())
+    }
+
+    fn project_checker(&self) -> Option<&dyn ProjectChecker> {
+        self.checker.as_deref()
     }
 }
 
