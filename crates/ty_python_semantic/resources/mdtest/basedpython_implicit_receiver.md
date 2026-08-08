@@ -227,6 +227,28 @@ def receiver_of_protocol(fn: protocol(a: int).() -> None) -> None:
     reveal_type(fn)  # revealed: (protocol(a: int), /) -> None
 ```
 
+## names that resolve with no binding behind them
+
+the transpiler asks this rule about a raw name, with none of ty's name-resolution chain behind it,
+so the gate is the *wider* of the two shared name-fallback gates: it claims every name ty resolves
+without a binding, not just the ones the lexical chain owns. `Character` is the witness — implicitly
+available only *in* a type expression, so nothing else claims it in a value position, and the block
+must still not capture it as a receiver member
+
+### a receiver member named `Character` is not captured
+
+```by
+class Lexer:
+    Character: int = 1
+    digit: str = "0"
+
+def apply(fn: Lexer.() -> None) -> None: ...
+
+apply:
+    reveal_type(digit)  # revealed: str
+    Character  # error: [unresolved-reference]
+```
+
 ## `.py` files reject the syntax
 
 ```py

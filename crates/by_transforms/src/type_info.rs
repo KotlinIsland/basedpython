@@ -181,6 +181,16 @@ pub(crate) trait TypeInfo {
     /// it used unqualified. both lower to the block's receiver parameter
     fn implicit_receiver_name(&self, name: &ExprName) -> Option<ImplicitReceiverReference>;
 
+    /// how each positional argument of a django lookup method that spells a
+    /// `__` lookup as an expression lowers to a keyword —
+    /// `filter(author.name == "x")` → `filter(author__name="x")`. empty for
+    /// every other call, and for any argument the checker did not read as a
+    /// lookup, which must then be left exactly as written
+    fn django_lookup_arguments(
+        &self,
+        call: &ruff_python_ast::ExprCall,
+    ) -> Vec<ty_python_semantic::DjangoLookupArgument>;
+
     /// the enum a *context-sensitively* resolved name must be qualified with —
     /// `Red` in a `Color` context lowers to `Color.Red`. `None` for every name
     /// that resolves the ordinary way
@@ -585,6 +595,13 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn implicit_receiver_name(&self, name: &ExprName) -> Option<ImplicitReceiverReference> {
         SemanticModel::implicit_receiver_name(self, name)
+    }
+
+    fn django_lookup_arguments(
+        &self,
+        call: &ruff_python_ast::ExprCall,
+    ) -> Vec<ty_python_semantic::DjangoLookupArgument> {
+        SemanticModel::django_lookup_arguments(self, call)
     }
 
     fn context_sensitive_qualifier(&self, name: &ExprName) -> Option<String> {

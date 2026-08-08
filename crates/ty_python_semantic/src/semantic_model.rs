@@ -7,7 +7,7 @@ use ruff_python_ast::{self as ast, ExprStringLiteral, ModExpression};
 use ruff_python_ast::{Expr, ExprRef, name::Name};
 use ruff_python_parser::Parsed;
 use ruff_source_file::LineIndex;
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{
     KnownModule, Module, ModuleName, list_modules, resolve_module, resolve_real_shadowable_module,
@@ -439,6 +439,35 @@ impl<'db> SemanticModel<'db> {
                 ImplicitReceiverReference::Member
             }
         })
+    }
+
+    /// basedpython: how each positional argument of a django lookup method that
+    /// spells a `__` lookup as an expression lowers to a keyword —
+    /// `filter(author.name == "x")` → `filter(author__name="x")`. Empty for
+    /// every other call, and for any argument the checker did not read as a
+    /// lookup, which the transpiler must then leave exactly as written
+    pub fn django_lookup_arguments(&self, call: &ast::ExprCall) -> Vec<DjangoLookupArgument> {
+        let db = self.db;
+        let Some(callee) = call.func.inferred_type(self) else {
+            return Vec::new();
+        };
+        let Some(scope) = self.scope(ast::AnyNodeRef::from(call)) else {
+            return Vec::new();
+        };
+        crate::types::dedicated::django::lookup_call_lowering(
+            db,
+            self.file,
+            scope.to_scope_id(db, self.file),
+            callee,
+            call,
+        )
+        .into_iter()
+        .map(|lowering| DjangoLookupArgument {
+            argument: lowering.argument,
+            key: lowering.key,
+            value: lowering.value,
+        })
+        .collect()
     }
 
     /// basedpython: the enum a *context-sensitively* resolved name must be
@@ -1139,6 +1168,18 @@ fn strip_none<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
 pub struct MemberDefinition<'db> {
     pub ty: Type<'db>,
     pub first_reachable_definition: Definition<'db>,
+}
+
+/// basedpython: one positional argument of a django lookup method that spells a
+/// `__` lookup as an expression, and the keyword it lowers to
+#[derive(Clone, Debug)]
+pub struct DjangoLookupArgument {
+    /// the argument to replace
+    pub argument: TextRange,
+    /// the keyword's name (`author__name`, `published__gt`)
+    pub key: String,
+    /// the value, re-emitted from source so lowerings inside it still apply
+    pub value: TextRange,
 }
 
 /// basedpython: what a bare name inside a trailing lambda block resolves to

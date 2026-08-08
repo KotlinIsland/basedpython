@@ -785,6 +785,7 @@ impl<'a> SemanticModel<'a> {
         } else if self.is_basedpython_class_base_self_ref(name)
             || self.is_basedpython_transpile_resolved_name(name)
             || self.is_basedpython_type_is_lhs(name)
+            || self.is_basedpython_django_lookup_path(name)
         {
             // basedpython resolves these forms at transpile time, so the name is
             // not actually undefined at runtime
@@ -894,6 +895,71 @@ impl<'a> SemanticModel<'a> {
             return false;
         }
         matches!(compare.left.as_ref(), Expr::Name(left) if left.range == name.range)
+    }
+
+    /// True if `name` leads the field path of a django lookup expression —
+    /// `filter(author.name == "x")`, which the transpiler lowers to the keyword
+    /// `author__name="x"`, so the path is never evaluated at runtime.
+    ///
+    /// This is deliberately syntactic, and deliberately broader than the
+    /// transpiler's own rule: whether the leading segment really names a field
+    /// of the model is a question only the type checker can answer, and it does
+    /// answer it. Reporting an unresolvable path there rather than here keeps
+    /// one answer to it instead of two that can disagree.
+    fn is_basedpython_django_lookup_path(&self, name: &ast::ExprName) -> bool {
+        if !self.in_basedpython_file() {
+            return false;
+        }
+        let mut ancestors = self.current_expressions().skip(1);
+
+        // climb the attribute / subscript chain the name leads. the name has to
+        // *lead* it — in `data[key]`, `key` is the index, not the path
+        let mut path = name.range;
+        let mut parent = ancestors.next();
+        while let Some(expr) = parent {
+            let value = match expr {
+                Expr::Attribute(attribute) => attribute.value.range(),
+                Expr::Subscript(subscript) => subscript.value.range(),
+                _ => break,
+            };
+            if value != path {
+                break;
+            }
+            path = expr.range();
+            parent = ancestors.next();
+        }
+
+        // the path must be the left operand of one comparison django can spell
+        let Some(Expr::Compare(compare)) = parent else {
+            return false;
+        };
+        if compare.left.range() != path
+            || !matches!(
+                compare.ops.as_ref(),
+                [ast::CmpOp::Eq
+                    | ast::CmpOp::Gt
+                    | ast::CmpOp::GtE
+                    | ast::CmpOp::Lt
+                    | ast::CmpOp::LtE
+                    | ast::CmpOp::In]
+            )
+        {
+            return false;
+        }
+
+        // and that comparison must be a positional argument of a lookup method
+        let Some(Expr::Call(call)) = ancestors.next() else {
+            return false;
+        };
+        let Expr::Attribute(func) = call.func.as_ref() else {
+            return false;
+        };
+        matches!(func.attr.as_str(), "filter" | "exclude" | "get" | "aget")
+            && call
+                .arguments
+                .args
+                .iter()
+                .any(|argument| argument.range() == compare.range())
     }
 
     /// True if `name` is a forward self-reference that the basedpython

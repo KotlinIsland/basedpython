@@ -25,6 +25,69 @@ basedpython supports django models. the type checker understands django's unanno
 - lookup kwargs are validated: `filter(name__startswith="x")` checks that `name` is a field and `startswith` is a valid lookup for strings
 - relation traversal in lookups: `filter(author__birthday__lt=date(2000, 1, 1))` follows foreign keys and checks field types
 
+### lookups written as expressions
+
+django's `__` lookups can be written as ordinary expressions:
+
+```by
+Book.objects.filter(author.name == "Ursula", published > date(1970, 1, 1))
+```
+
+→
+
+```python
+Book.objects.filter(author__name="Ursula", published__gt=date(1970, 1, 1))
+```
+
+`filter`, `exclude`, `get` and `aget` take them. a path joins with `__`, so `author.name` traverses the relation and `published.year` is django's date transform, and each operator spells its lookup:
+
+| expression | keyword    |
+| ---------- | ---------- |
+| `a == v`   | `a=v`      |
+| `a > v`    | `a__gt=v`  |
+| `a >= v`   | `a__gte=v` |
+| `a < v`    | `a__lt=v`  |
+| `a <= v`   | `a__lte=v` |
+| `a in v`   | `a__in=v`  |
+
+the leading name is a field, so it is checked and it has a type: `author` is an `Author`, `published` is a `date`, and a segment that names no field is reported exactly as the keyword form's is. the value is checked against the field the same way too.
+
+a `JSONField` holds arbitrary json rather than fields, so a subscript indexes into one — django's key and index transforms:
+
+```by
+Doc.objects.filter(data["key"] == 1, data["a"]["b"] > 2, data[0] == 3)
+```
+
+→
+
+```python
+Doc.objects.filter(data__key=1, data__a__b__gt=2, data__0=3)
+```
+
+a string subscript is an object key, an integer one is an array index, and the operators apply on top of either. every key is legal json, so nothing is reported for one — just as nothing is reported for the keyword form's `filter(data__anything=1)`
+
+resolution is a *last* fallback, so nothing that resolves today changes meaning. a name bound anywhere in the lexical chain — a local, a parameter, a module global, a builtin — keeps it, and the comparison stays an ordinary one the method takes positionally:
+
+```by
+def search(title: str):
+    Book.objects.filter(title == title)   # the parameter, compared to itself
+    Book.objects.filter(id == 1)          # `id` is the builtin — write `pk == 1`
+```
+
+everything else passes through untouched: `filter(Q(a=1) | Q(b=2))`, `filter(**kwargs)`, and an already-written `filter(author__name="x")` all mean what they always did.
+
+an expression that cannot be read as a lookup is left exactly as written, which leaves its leading name an `unresolved-reference` — the feature never quietly changes a query. these are the refusals:
+
+- `!=`. django has no `__` spelling for it: it writes `.exclude(a=1)` or `~Q(a=1)`, both of which change the method being called
+- a chained comparison (`1 < a < 5`), a reversed one (`"x" == title`), or a call on the left (`title.upper() == "X"`)
+- a lookup before an argument that stays positional, and two lookups that would spell the same keyword — python rejects both
+- the `*_or_create` family, whose first positional parameter is `defaults`
+- a subscript on anything but a `JSONField` — `title["k"]` on a `CharField` is a `FieldError` at runtime. `ArrayField` and `HStoreField` carry key and index transforms too, but they are postgres-only and are not read here yet
+- a subscript django cannot be handed as a keyword: a key held in a variable, a slice, a negative index, a key that is not spellable inside an identifier (`data["a b"]`), and one holding the `__` separator
+- a numeric *string* key. django tries `int()` on every segment, so `data__0` is the index — `data[0]` asks for it, and `data["0"]` has no spelling of its own
+- a key that collides with one of django's lookups on `JSONField`: `exact`, `in`, `isnull`, `range`, the comparisons, the string lookups, and the `has_key` family. django reads the last segment of a keyword as a lookup when the field has one by that name, so `data__gt=1` asks for `data > 1` rather than for the key `"gt"`
+- a dot after a subscript (`data["a"].b`). the dotted part of a path names the field; the subscripts index into it
+
 ### class-body field-name lists
 
 several django and drf constructs spell model field paths as a class-body list of plain strings, which the stubs type as `list[str]`. each literal entry is resolved against the model the declaring class names:

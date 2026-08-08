@@ -176,3 +176,43 @@ F821 Undefined name `UndefinedInterface`
     |                ^^^^^^^^^^^^^^^^^^
 194 |     pass
     |
+
+F821 Undefined name `bare_name`
+   --> F821_basedpython.by:213:21
+    |
+212 | # but the suppression is only for that shape, so each of these is still reported
+213 | Book.objects.filter(bare_name)  # F821
+    |                     ^^^^^^^^^
+214 | Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
+215 | Book.objects.filter(data[undefined_index] == 1)  # F821
+    |
+
+F821 Undefined name `not_a_lookup_method`
+   --> F821_basedpython.by:214:23
+    |
+212 | # but the suppression is only for that shape, so each of these is still reported
+213 | Book.objects.filter(bare_name)  # F821
+214 | Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
+    |                       ^^^^^^^^^^^^^^^^^^^
+215 | Book.objects.filter(data[undefined_index] == 1)  # F821
+216 | Book.objects.filter(no_lookup_for_ne != 1)  # F821
+    |
+
+F821 Undefined name `undefined_index`
+   --> F821_basedpython.by:215:26
+    |
+213 | Book.objects.filter(bare_name)  # F821
+214 | Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
+215 | Book.objects.filter(data[undefined_index] == 1)  # F821
+    |                          ^^^^^^^^^^^^^^^
+216 | Book.objects.filter(no_lookup_for_ne != 1)  # F821
+    |
+
+F821 Undefined name `no_lookup_for_ne`
+   --> F821_basedpython.by:216:21
+    |
+214 | Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
+215 | Book.objects.filter(data[undefined_index] == 1)  # F821
+216 | Book.objects.filter(no_lookup_for_ne != 1)  # F821
+    |                     ^^^^^^^^^^^^^^^^
+    |

@@ -321,3 +321,45 @@ def favourite() -> Color:
 enum class Color:
     case Red, Green
 ```
+
+## names that resolve with no binding behind them
+
+this fallback runs at the very *end* of ty's name-resolution chain, so it gates only on the lexical
+scope: anything an earlier entry in that chain resolves has already claimed the name before the enum
+member is ever looked for. that is why it uses the narrower of the two shared name-fallback gates —
+the wider one, which the implicit-receiver and django-lookup rules need, would take these names back
+from the enum for a second time and take one more with them
+
+### an implicit `typing` name keeps its meaning
+
+```by
+enum class Filter:
+    case Any, All
+
+# error: [invalid-assignment] "Object of type `<special-form 'typing.Any'>` is not assignable to `Filter`"
+a: Filter = Any
+```
+
+### `Some` keeps its meaning
+
+```by
+enum class Option:
+    case Some, Nothing
+
+# error: [invalid-assignment] "Object of type `[_SomeT](value: _SomeT, /) -> _SomeT?` is not assignable to `Option`"
+a: Option = Some
+```
+
+### `Character` outside a type expression does not
+
+`Character` is implicitly available only *in* a type expression, so in a value position no earlier
+entry claims it and the enum member answers. this is the one name the two gates observably disagree
+about
+
+```by
+enum class Token:
+    case Character, Digit
+
+a: Token = Character
+reveal_type(a)  # revealed: Token.Character
+```
