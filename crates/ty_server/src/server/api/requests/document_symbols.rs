@@ -89,7 +89,7 @@ impl BackgroundDocumentRequestHandler for DocumentSymbolRequestHandler {
             let lsp_symbols = symbols
                 .iter()
                 .filter_map(|(_, symbol)| {
-                    convert_to_lsp_symbol_information(db, file, symbol, snapshot.encoding())
+                    convert_to_lsp_symbol_information(db, file, symbol, None, snapshot.encoding())
                 })
                 .collect();
 
@@ -130,7 +130,7 @@ fn template_symbols(
 
     let lsp_symbols = flattened
         .into_iter()
-        .filter_map(|symbol| convert_to_lsp_symbol_information(db, file, symbol, encoding))
+        .filter_map(|symbol| convert_to_lsp_symbol_information(db, file, symbol, None, encoding))
         .collect();
 
     Some(lsp_types::DocumentSymbolResponse::SymbolInformationList(

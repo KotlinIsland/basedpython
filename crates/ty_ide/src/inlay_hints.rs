@@ -675,6 +675,22 @@ pub struct InlayHintSettings {
     /// f("a=b")
     /// ```
     pub implicit_arguments: bool,
+
+    /// django templates: whether to show the element type a `{% for %}` binding
+    /// takes.
+    ///
+    /// ```django-html
+    /// {% for book": Book" in shelf %}
+    /// ```
+    pub template_binding_types: bool,
+
+    /// django templates: whether to show the file an `{% extends %}` or an
+    /// `{% include %}` name resolves to.
+    ///
+    /// ```django-html
+    /// {% include "card.html"" → blog/templates/blog/card.html" %}
+    /// ```
+    pub resolved_templates: bool,
     // Add any new setting that enables additional inlays to `any_enabled`.
 }
 
@@ -695,6 +711,8 @@ impl InlayHintSettings {
             implicit_parameters: false,
             lambda_parameter_types: false,
             implicit_arguments: false,
+            template_binding_types: false,
+            resolved_templates: false,
         }
     }
 
@@ -713,6 +731,8 @@ impl InlayHintSettings {
             implicit_parameters,
             lambda_parameter_types,
             implicit_arguments,
+            template_binding_types,
+            resolved_templates,
         } = *self;
 
         variable_types
@@ -728,6 +748,8 @@ impl InlayHintSettings {
             || implicit_parameters
             || lambda_parameter_types
             || implicit_arguments
+            || template_binding_types
+            || resolved_templates
     }
 }
 
@@ -747,6 +769,8 @@ impl Default for InlayHintSettings {
             implicit_parameters: true,
             lambda_parameter_types: true,
             implicit_arguments: true,
+            template_binding_types: true,
+            resolved_templates: true,
         }
     }
 }

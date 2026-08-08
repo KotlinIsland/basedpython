@@ -11,7 +11,7 @@ use lsp_types::{
     Documentation, ParameterInformation, ParameterInformationLabel, SignatureHelp,
     SignatureHelpParams, SignatureInformation, Uri,
 };
-use ty_ide::signature_help;
+use ty_ide::{TemplateSignature, django_template_signature_help, signature_help};
 use ty_project::ProjectDatabase;
 
 pub(crate) struct SignatureHelpRequestHandler;
@@ -50,6 +50,19 @@ impl BackgroundDocumentRequestHandler for SignatureHelpRequestHandler {
         ) else {
             return Ok(None);
         };
+
+        if snapshot.is_django_template() {
+            return Ok(django_template_signature_help(db, file, offset).map(template_signature));
+        }
+
+        if triggered_by_a_template_character(&params) {
+            // `:` is registered as a trigger character for the sake of django
+            // templates, and LSP has no way to register it for one language
+            // only. python gets the requests too, and a popup the moment the
+            // user annotates a parameter or opens a slice is not what they
+            // asked for.
+            return Ok(None);
+        }
 
         // Extract signature help capabilities from the client
         let resolved_capabilities = snapshot.resolved_client_capabilities();
@@ -151,3 +164,44 @@ impl BackgroundDocumentRequestHandler for SignatureHelpRequestHandler {
 }
 
 impl RetriableRequestHandler for SignatureHelpRequestHandler {}
+
+/// The trigger character registered for django templates alone, listed in
+/// `capabilities`, where the reason it is registered at all is spelled out.
+const TEMPLATE_TRIGGER_CHARACTER: &str = ":";
+
+/// Whether this request was triggered by typing a character that opens no
+/// argument outside a django template.
+fn triggered_by_a_template_character(params: &SignatureHelpParams) -> bool {
+    params.context.as_ref().is_some_and(|context| {
+        context.trigger_kind == lsp_types::SignatureHelpTriggerKind::TriggerCharacter
+            && context.trigger_character.as_deref() == Some(TEMPLATE_TRIGGER_CHARACTER)
+    })
+}
+
+/// a django filter's argument, as the one signature the client is offered
+///
+/// the parameter is written as a plain string rather than as an offset into the
+/// label: a template's signature is short enough that a client can find it, and a
+/// label offset would have to be re-encoded for the client's position encoding.
+fn template_signature(signature: TemplateSignature) -> SignatureHelp {
+    let parameters: Vec<_> = signature
+        .parameter
+        .into_iter()
+        .map(|parameter| ParameterInformation {
+            label: ParameterInformationLabel::String(parameter),
+            documentation: None,
+        })
+        .collect();
+    let active_parameter = (!parameters.is_empty()).then_some(ActiveParameter::Int(0));
+
+    SignatureHelp {
+        signatures: vec![SignatureInformation {
+            label: signature.label,
+            documentation: signature.documentation.map(Documentation::String),
+            parameters: Some(parameters),
+            active_parameter,
+        }],
+        active_signature: Some(0),
+        active_parameter,
+    }
+}

@@ -30,6 +30,8 @@ Settings: WorkspaceSettings {
         implicit_parameters: true,
         lambda_parameter_types: true,
         implicit_arguments: true,
+        template_binding_types: true,
+        resolved_templates: true,
     },
     completions: CompletionSettings {
         auto_import: true,

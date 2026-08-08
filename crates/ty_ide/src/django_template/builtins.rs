@@ -4,10 +4,22 @@
 //! and the libraries shipped in `django.templatetags` register. a project's own
 //! tags and filters are discovered from its source instead — see [`super::project`].
 //!
-//! the tables carry the block structure (which tag closes which, and which tags
-//! may appear in between) because the completions and the index both need it: a
-//! `{% for %}` without the knowledge that `{% empty %}` belongs inside it would
-//! either close the block early or never offer `{% empty %}` at all.
+//! the tables are a *fallback*, not an authority. django's own tags and filters
+//! are discovered from the installed django like anything else, and where that
+//! discovery succeeds it decides which names exist and which library each comes
+//! from — see [`provided_by_django`]. a table written by hand drifts as django
+//! moves, and has: `{% partialdef %}` was third-party until django 6.0 made it a
+//! builtin, and the table said the wrong thing for a while.
+//!
+//! what the tables carry that discovery cannot is the block structure (which tag
+//! closes which, and which tags may appear in between) and the documentation.
+//! both are needed: a `{% for %}` without the knowledge that `{% empty %}`
+//! belongs inside it would either close the block early or never offer
+//! `{% empty %}` at all.
+
+use ty_project::Db;
+
+use super::project::{self, RegistrationKind};
 
 /// a builtin template tag
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,10 +61,76 @@ pub(crate) fn end_tag_for(name: &str) -> Option<&'static str> {
     tag(name).and_then(|tag| tag.closed_by)
 }
 
+/// how django's own build hands a name to a template
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Provided<'a> {
+    /// every template has it, with no `{% load %}` written
+    Always,
+    /// the library that has to be loaded before it can be used
+    By(&'a str),
+}
+
+impl<'a> Provided<'a> {
+    /// the library a template has to load first, where there is one
+    pub(crate) fn library(self) -> Option<&'a str> {
+        match self {
+            Self::Always => None,
+            Self::By(library) => Some(library),
+        }
+    }
+}
+
+/// how django provides the tag or filter `name`, or `None` where it does not
+/// provide it at all
+///
+/// where the project's own django can be read, it is that django which decides
+/// both whether a name exists and which library it comes from; the tables above
+/// then only supply what discovery has no way to see. where it cannot be read —
+/// no settings module, no resolvable django — the tables are all there is, and
+/// answer on their own exactly as they did before.
+pub(crate) fn provided_by_django<'db>(
+    db: &'db dyn Db,
+    name: &str,
+    is_filter: bool,
+) -> Option<Provided<'db>> {
+    let registered = project::registrations(db, db.project())
+        .iter()
+        .find(|registration| {
+            registration.django
+                && registration.name == name
+                && (registration.kind == RegistrationKind::Filter) == is_filter
+        })
+        .map(|registration| {
+            if registration.always_loaded {
+                Provided::Always
+            } else {
+                Provided::By(registration.library.as_str())
+            }
+        });
+
+    // a django that was read and does not register the name is a django the name
+    // is not in, and its silence is as much an answer as its registrations are
+    if registered.is_some() || project::django_is_authoritative(db, db.project()) {
+        return registered;
+    }
+
+    let library = if is_filter {
+        filter(name).map(|filter| filter.library)
+    } else {
+        tag(name).map(|tag| tag.library)
+    }?;
+
+    Some(match library {
+        None => Provided::Always,
+        Some(library) => Provided::By(library),
+    })
+}
+
 /// the libraries a `{% load %}` can name
 ///
 /// every one of them ships with django. a tag or filter the project registers is
-/// discovered from its source instead, and named by its module.
+/// discovered from its source instead, and named by its module — as are django's
+/// own, wherever django itself can be read.
 pub(crate) const LIBRARIES: &[&str] = &["cache", "i18n", "l10n", "static", "tz"];
 
 pub(crate) const TAGS: &[Tag] = &[

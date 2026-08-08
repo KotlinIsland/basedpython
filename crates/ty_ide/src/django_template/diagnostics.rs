@@ -36,15 +36,13 @@ use super::TEMPLATE_DIRECTORY;
 use super::completion::{load_edit_for, loaded_libraries};
 use super::index::{END_TAG_PREFIX, TemplateIndex};
 use super::lexer::{Construct, ConstructKind, Token, TokenKind, string_contents};
-use super::project::{self, RegistrationKind, UrlName};
+use super::project::{self, Parameter, RegistrationKind, UrlName};
 use super::resolve;
+use super::uses::URL_TAG;
 use super::{ancestors, builtins};
 
 /// the tag that names a static file
 const STATIC_TAG: &str = "static";
-
-/// the tag that reverses a route
-const URL_TAG: &str = "url";
 
 /// what everything a template says is checked against
 ///
@@ -337,27 +335,10 @@ impl Checker<'_> {
 
     /// where a tag or filter comes from, as far as this template is concerned
     fn provider(&self, name: &str, filter: bool) -> Provider {
-        let registrations = project::registrations(self.db, self.db.project());
-
-        let table = if filter {
-            builtins::filter(name).map(|filter| filter.library)
-        } else {
-            builtins::tag(name).map(|tag| tag.library)
-        };
-
-        // the table's own answer is a fallback: which library django's own build
-        // registers a name in is read from the installed django where there is one
-        let django = registrations
-            .iter()
-            .find(|registration| {
-                registration.django
-                    && registration.name == name
-                    && (registration.kind == RegistrationKind::Filter) == filter
-            })
-            .map(|registration| Some(registration.library.as_str()));
-
-        if let Some(library) = django.or(table) {
-            return match library {
+        // what django provides is the installed django's to say where it can be
+        // read, and the builtin table's only where it cannot
+        if let Some(provided) = builtins::provided_by_django(self.db, name, filter) {
+            return match provided.library() {
                 None => Provider::Loaded,
                 Some(library) if self.loaded.contains(&library.to_compact_string()) => {
                     Provider::Loaded
@@ -366,6 +347,7 @@ impl Checker<'_> {
             };
         }
 
+        let registrations = project::registrations(self.db, self.db.project());
         let mut unloaded = None;
         for registration in registrations.iter().filter(|registration| {
             registration.name == name && (registration.kind == RegistrationKind::Filter) == filter
@@ -953,129 +935,6 @@ fn closes_a_block(db: &dyn Db, name: &str) -> bool {
         .is_some_and(|opening| opens_a_block(db, opening))
 }
 
-/// one argument a route pattern takes
-struct Parameter {
-    name: CompactString,
-    /// the converter django puts the argument through, where it is one of its own
-    converter: Option<Converter>,
-}
-
-/// the path converters django ships
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Converter {
-    Str,
-    Int,
-    Slug,
-    Uuid,
-    Path,
-}
-
-impl Converter {
-    fn of(name: &str) -> Option<Self> {
-        match name {
-            "str" => Some(Self::Str),
-            "int" => Some(Self::Int),
-            "slug" => Some(Self::Slug),
-            "uuid" => Some(Self::Uuid),
-            "path" => Some(Self::Path),
-            _ => None,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Str => "str",
-            Self::Int => "int",
-            Self::Slug => "slug",
-            Self::Uuid => "uuid",
-            Self::Path => "path",
-        }
-    }
-
-    /// whether a value written out in the template is one this would match
-    fn matches(self, value: &str) -> bool {
-        match self {
-            Self::Str => !value.is_empty() && !value.contains('/'),
-            Self::Int => !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()),
-            Self::Slug => {
-                !value.is_empty()
-                    && value
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-            }
-            Self::Uuid => {
-                let groups: Vec<&str> = value.split('-').collect();
-                groups.len() == 5
-                    && [8, 4, 4, 4, 12]
-                        == *groups.iter().map(|group| group.len()).collect::<Vec<_>>()
-                    && value
-                        .bytes()
-                        .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
-            }
-            Self::Path => !value.is_empty(),
-        }
-    }
-}
-
-impl UrlName {
-    /// the arguments this route takes, or `None` where they cannot be read
-    fn parameters(&self) -> Option<Vec<Parameter>> {
-        self.exact
-            .then_some(self.route.as_deref()?)
-            .and_then(parameters_of)
-    }
-}
-
-/// the arguments a route pattern names
-///
-/// django writes them two ways: `path()` takes `<converter:name>` and
-/// `re_path()` takes a named group. a pattern with an *unnamed* group takes
-/// arguments nothing can name, so it answers nothing rather than too few.
-fn parameters_of(pattern: &str) -> Option<Vec<Parameter>> {
-    let mut parameters = Vec::new();
-    let mut rest = pattern;
-
-    while let Some(index) = rest.find(['<', '(']) {
-        let after = &rest[index..];
-
-        if let Some(after) = after.strip_prefix('<') {
-            let (declaration, tail) = after.split_once('>')?;
-            let (converter, name) = match declaration.split_once(':') {
-                Some((converter, name)) => (Converter::of(converter), name),
-                None => (Some(Converter::Str), declaration),
-            };
-            parameters.push(Parameter {
-                name: name.to_compact_string(),
-                converter,
-            });
-            rest = tail;
-            continue;
-        }
-
-        let after = after.strip_prefix('(').unwrap_or(after);
-        if let Some(after) = after.strip_prefix("?P<") {
-            let (name, tail) = after.split_once('>')?;
-            parameters.push(Parameter {
-                name: name.to_compact_string(),
-                // what a regex group matches is not one of django's converters,
-                // so a literal written against it is not checked
-                converter: None,
-            });
-            rest = tail;
-            continue;
-        }
-
-        // a group that captures without naming takes a positional argument this
-        // has no name for, so the pattern is one to say nothing about
-        if !after.starts_with("?:") && !after.starts_with("?=") && !after.starts_with("?!") {
-            return None;
-        }
-        rest = after;
-    }
-
-    Some(parameters)
-}
-
 /// the `{# ty: ignore #}` comments a template writes
 ///
 /// a template has no `# type: ignore` to borrow, and its comment syntax is the
@@ -1184,7 +1043,7 @@ fn line_of(source: &str, offset: TextSize) -> OneIndexed {
 mod tests {
     use ruff_text_size::Ranged;
 
-    use crate::django_template::tests::TemplateTest;
+    use crate::django_template::tests::{DJANGO_BUILTINS, TemplateTest};
 
     /// a whole django project: a settings module the convention finds, an app
     /// with a tag library, models, a view, a url tree and a base template
@@ -1227,6 +1086,7 @@ mod tests {
                     "blog/models.py",
                     "
                     class Book:
+                        pk: int
                         title: str
 
                         def summary(self) -> str:
@@ -1257,6 +1117,10 @@ mod tests {
                         path('', index, name='index'),
                         path('<int:pk>/', detail, name='detail'),
                         path('<slug:slug>/<int:page>/', paged, name='paged'),
+                        path('<str:title>/', titled, name='titled'),
+                        path('<uuid:key>/', keyed, name='keyed'),
+                        path('<path:rest>/edit/', edit, name='edit'),
+                        re_path(r'^archive/(?P<year>[0-9]{4})/$', archive, name='archive'),
                     ]
                     ",
                 ),
@@ -1681,6 +1545,127 @@ mod tests {
         );
     }
 
+    /// the message every converter gives a literal it would refuse
+    ///
+    /// django's converters are regexes, and `reverse()` raises `NoReverseMatch`
+    /// for an argument that does not match one, so each of these is wrong before
+    /// the template is ever rendered.
+    #[test]
+    fn a_literal_no_converter_would_match_is_reported() {
+        let rejected = [
+            (
+                "blog:detail",
+                "pk='abc'",
+                "`pk` through `int`, which `abc` is not",
+            ),
+            (
+                "blog:detail",
+                "pk='-1'",
+                "`pk` through `int`, which `-1` is not",
+            ),
+            (
+                "blog:titled",
+                "title='a/b'",
+                "`title` through `str`, which `a/b` is not",
+            ),
+            (
+                "blog:paged",
+                "slug='a b' page=2",
+                "`slug` through `slug`, which `a b` is not",
+            ),
+            (
+                "blog:keyed",
+                "key='nope'",
+                "`key` through `uuid`, which `nope` is not",
+            ),
+            (
+                "blog:keyed",
+                "key='123E4567-E89B-12D3-A456-426614174000'",
+                "`key` through `uuid`, which `123E4567-E89B-12D3-A456-426614174000` is not",
+            ),
+            (
+                "blog:edit",
+                "rest=''",
+                "`rest` through `path`, which `` is not",
+            ),
+        ];
+
+        for (route, arguments, complaint) in rejected {
+            let template = format!("{{% url '{route}' {arguments} %}}\n");
+            assert_eq!(
+                project(&template).diagnostics(),
+                [format!(
+                    "invalid-route-arguments Error: `{route}` takes {complaint} \
+                     [{}]",
+                    template.trim_end()
+                )],
+                "{template}"
+            );
+        }
+    }
+
+    /// the same converters given a literal they do match
+    #[test]
+    fn a_literal_its_converter_matches_is_not_reported() {
+        let accepted = [
+            ("blog:detail", "pk=12"),
+            ("blog:detail", "pk='12'"),
+            ("blog:titled", "title='a b'"),
+            ("blog:paged", "slug='a-b_1' page=2"),
+            ("blog:keyed", "key='123e4567-e89b-12d3-a456-426614174000'"),
+            ("blog:edit", "rest='a/b/c'"),
+        ];
+
+        for (route, arguments) in accepted {
+            let template = format!("{{% url '{route}' {arguments} %}}\n");
+            assert_eq!(
+                project(&template).diagnostics(),
+                Vec::<String>::new(),
+                "{template}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_literal_written_against_a_regex_group_is_not_reported() {
+        // a `re_path()` names its arguments but puts them through a pattern
+        // rather than a converter, so there is nothing here to hold one against
+        assert!(
+            project("{% url 'blog:archive' year='not a year' %}\n")
+                .diagnostics()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_variable_argument_of_an_unknown_type_is_not_reported() {
+        assert!(
+            project("{% url 'blog:detail' pk=whatever %}\n")
+                .diagnostics()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_variable_argument_of_a_type_the_converter_takes_is_not_reported() {
+        assert!(
+            project("{% url 'blog:detail' pk=book.pk %}{% url 'blog:detail' book.pk %}\n")
+                .diagnostics()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_variable_argument_of_a_type_the_converter_would_not_take_is_not_reported() {
+        // django stringifies before it matches, so a `str` may still be all
+        // digits — a type alone is never enough to call an argument wrong
+        assert!(
+            project("{% url 'blog:detail' pk=book.title %}\n")
+                .diagnostics()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn a_block_no_ancestor_declares_is_reported() {
         assert_eq!(
@@ -1831,5 +1816,68 @@ mod tests {
         ]);
 
         assert!(test.diagnostics().is_empty());
+    }
+
+    /// a project whose django can be read all the way down to its implicit
+    /// builtins
+    ///
+    /// what that django registers is deliberately not what the builtin table
+    /// says — see [`DJANGO_BUILTINS`] — which is the whole point: the table is a
+    /// fallback for a django nothing can read, not a claim about this one.
+    fn with_djangos_own_builtins(template: &str) -> TemplateTest {
+        TemplateTest::with_site_packages(
+            &[
+                (
+                    "manage.py",
+                    "
+                    import os
+
+                    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')
+                    ",
+                ),
+                ("project/__init__.py", ""),
+                (
+                    "project/settings.py",
+                    "
+                    INSTALLED_APPS = []
+
+                    TEMPLATES = [{'DIRS': [], 'APP_DIRS': True, 'OPTIONS': {}}]
+                    ",
+                ),
+                ("app/templates/app/page.html", template),
+            ],
+            DJANGO_BUILTINS,
+        )
+    }
+
+    #[test]
+    fn a_tag_this_django_registers_that_the_table_never_heard_of_is_not_reported() {
+        assert_eq!(
+            with_djangos_own_builtins("{% squish %}{{ x|shorten:2 }}").diagnostics(),
+            Vec::<String>::new(),
+            "django registers them, so they are there whatever the table knows"
+        );
+    }
+
+    #[test]
+    fn a_name_the_table_has_that_this_django_does_not_register_is_reported() {
+        assert_eq!(
+            with_djangos_own_builtins("{% lorem %}").diagnostics(),
+            ["unknown-template-tag Error: no template tag named `lorem` [lorem]"]
+        );
+        assert_eq!(
+            with_djangos_own_builtins("{{ x|slugify }}").diagnostics(),
+            ["unknown-template-filter Error: no template filter named `slugify` [slugify]"]
+        );
+    }
+
+    #[test]
+    fn the_table_answers_in_full_where_django_cannot_be_read() {
+        // this project's mock django stops at `django.templatetags`, so nothing of
+        // what django itself registers was read and the table is all there is
+        assert_eq!(
+            project("{% lorem %}{{ book.title|slugify }}").diagnostics(),
+            Vec::<String>::new()
+        );
     }
 }

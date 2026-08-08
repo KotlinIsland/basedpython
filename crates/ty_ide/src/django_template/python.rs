@@ -21,8 +21,8 @@ use crate::completion::CompletionKind;
 use crate::{NavigationTarget, NavigationTargets, RangedValue};
 
 use super::project::{
-    self, CONTEXT_CALLEES, REDIRECT_CALLEE, REVERSE_CALLEES, TEMPLATE_NAME_ATTRIBUTE, callee_name,
-    class_attribute,
+    self, CONTEXT_CALLEES, REDIRECT_CALLEE, REVERSE_ARGUMENTS_KEYWORD, REVERSE_CALLEES,
+    REVERSE_NAME_KEYWORD, TEMPLATE_NAME_ATTRIBUTE, callee_name, class_attribute,
 };
 
 /// what a string literal in a python module names
@@ -53,7 +53,13 @@ pub(crate) fn string_completions<'a>(
     db: &dyn Db,
     ancestors: impl Iterator<Item = AnyNodeRef<'a>>,
 ) -> Vec<StringCompletion> {
-    let Some((string, names)) = named(ancestors) else {
+    let ancestors: Vec<AnyNodeRef<'a>> = ancestors.collect();
+
+    if let Some(completions) = route_arguments(db, &ancestors) {
+        return completions;
+    }
+
+    let Some((string, names)) = named(ancestors.iter().copied()) else {
         return Vec::new();
     };
     let Some(range) = contents(string) else {
@@ -181,6 +187,82 @@ fn named<'a>(
     };
 
     Some((string, names))
+}
+
+/// the arguments the route a `reverse()` names still takes, where the literal
+/// among `ancestors` is one of their names
+///
+/// `reverse("blog:detail", kwargs={"pk": 1})` names the route's arguments in the
+/// keys of that dict, exactly as a `{% url 'blog:detail' pk=1 %}` names them —
+/// and a key the user is still typing is a set as far as the parser is
+/// concerned, so both spellings are read.
+///
+/// `None` where the position is not one of those keys, which is the difference
+/// between a route that takes nothing more and a literal that names no argument
+/// at all.
+fn route_arguments(db: &dyn Db, ancestors: &[AnyNodeRef<'_>]) -> Option<Vec<StringCompletion>> {
+    let (index, string) = ancestors
+        .iter()
+        .enumerate()
+        .find_map(|(index, node)| match node {
+            AnyNodeRef::ExprStringLiteral(string) => Some((index, *string)),
+            _ => None,
+        })?;
+    let range = contents(string)?;
+
+    let mut enclosing = ancestors[index + 1..].iter();
+    let keys: Vec<&ast::Expr> = match enclosing.next()? {
+        // a literal in a value position names an argument's value, not its name
+        AnyNodeRef::ExprDict(dict) => dict
+            .items
+            .iter()
+            .filter_map(|item| item.key.as_ref())
+            .collect(),
+        AnyNodeRef::ExprSet(set) => set.elts.iter().collect(),
+        _ => return None,
+    };
+    if !keys.iter().any(|key| key.range() == string.range()) {
+        return None;
+    }
+
+    let AnyNodeRef::Keyword(keyword) = enclosing.next()? else {
+        return None;
+    };
+    if keyword.arg.as_ref().map(ast::Identifier::as_str) != Some(REVERSE_ARGUMENTS_KEYWORD) {
+        return None;
+    }
+
+    let AnyNodeRef::ExprCall(call) =
+        enclosing.find(|node| !matches!(node, AnyNodeRef::Arguments(_)))?
+    else {
+        return None;
+    };
+    if !REVERSE_CALLEES.contains(&callee_name(&call.func)?.as_str()) {
+        return None;
+    }
+
+    let route = call
+        .arguments
+        .find_argument_value(REVERSE_NAME_KEYWORD, 0)?
+        .as_string_literal_expr()?;
+
+    let given: FxHashSet<&str> = keys
+        .iter()
+        .filter(|key| key.range() != string.range())
+        .filter_map(|key| Some(key.as_string_literal_expr()?.value.to_str()))
+        .collect();
+
+    Some(
+        project::route_parameters(db, route.value.to_str())
+            .into_iter()
+            .filter(|parameter| !given.contains(parameter.name.as_str()))
+            .map(|parameter| StringCompletion {
+                name: parameter.name,
+                kind: CompletionKind::Field,
+                range,
+            })
+            .collect(),
+    )
 }
 
 /// what the argument `string` of `call` names

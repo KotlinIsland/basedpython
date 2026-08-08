@@ -14,12 +14,14 @@
 //! and it is what lets the python services see them for what they are.
 
 mod builtins;
+mod code_lens;
 mod completion;
 mod diagnostics;
 mod folding;
 mod goto;
 mod hover;
 mod index;
+mod inlay_hints;
 mod lexer;
 mod project;
 mod python;
@@ -27,16 +29,20 @@ mod references;
 mod rename;
 mod resolve;
 mod semantic_tokens;
+mod signature_help;
 mod symbols;
 mod uses;
 
+pub use code_lens::{DjangoCodeLens, DjangoLensAction, DjangoLensTarget};
 pub use completion::{TemplateCompletion, TemplateEdit};
 pub use hover::{DisplayTemplateHover, TemplateHover};
+pub use inlay_hints::{TemplateInlayHint, TemplateInlayHintKind};
 pub(crate) use python::{
     string_completions as django_string_completions, string_definition as django_string_definition,
 };
 pub use rename::{PreparedTemplateRename, TemplateRename, TemplateRenameOutcome};
-pub use symbols::TemplateSymbol;
+pub use signature_help::TemplateSignature;
+pub use symbols::{DjangoSymbol, TemplateSymbol};
 
 use ruff_db::diagnostic::Diagnostic;
 use ruff_db::files::File;
@@ -49,7 +55,7 @@ use ty_python_semantic::lint::LintId;
 
 use crate::code_action::QuickFix;
 use crate::semantic_tokens::SemanticTokens;
-use crate::{FoldingRange, NavigationTargets, RangedValue, ReferenceTarget};
+use crate::{FoldingRange, InlayHintSettings, NavigationTargets, RangedValue, ReferenceTarget};
 
 use index::TemplateIndex;
 
@@ -62,7 +68,13 @@ const MAX_INHERITANCE_DEPTH: usize = 16;
 /// whatever path it is given — so this list only decides what the server will
 /// *offer* template support for when the editor hasn't already told it the file
 /// is a template.
-const TEMPLATE_EXTENSIONS: &[&str] = &["html", "htm", "txt", "xml", "django", "dj", "jinja"];
+///
+/// `.jinja` is deliberately not here. jinja is a different language that reads
+/// alike, and everything in this module answers as django: a `{% set %}`, a
+/// `{% macro %}` or a `|default("x")` is correct jinja that django's tag and
+/// filter tables know nothing about, so claiming a jinja file means reporting
+/// correct code as wrong. we do not support jinja, so we do not claim its files.
+const TEMPLATE_EXTENSIONS: &[&str] = &["html", "htm", "txt", "xml", "django", "dj"];
 
 /// the directory name django's app-directories loader looks in
 const TEMPLATE_DIRECTORY: &str = "templates";
@@ -136,6 +148,14 @@ pub fn django_template_hover(
 /// the outline of `file`, read as a django template
 pub fn django_template_document_symbols(db: &dyn Db, file: File) -> Vec<TemplateSymbol> {
     symbols::document_symbols(template_index(db, file))
+}
+
+/// every django thing of the project whose name matches `query`
+pub(crate) fn django_workspace_symbols(
+    db: &dyn Db,
+    query: &crate::symbols::QueryPattern,
+) -> Vec<DjangoSymbol> {
+    symbols::workspace_symbols(db, query)
 }
 
 /// the foldable ranges of `file`, read as a django template
@@ -247,6 +267,60 @@ pub fn django_references(
     references::references(db, file, offset, include_declaration, template)
 }
 
+/// what the filter argument at `offset` of `file` takes, read as a django
+/// template
+pub fn django_template_signature_help(
+    db: &dyn Db,
+    file: File,
+    offset: TextSize,
+) -> Option<TemplateSignature> {
+    let source = source_text(db, file);
+    signature_help::signature_help(db, template_index(db, file), source.as_str(), offset)
+}
+
+/// the hints `range` of `file` shows, read as a django template
+pub fn django_template_inlay_hints(
+    db: &dyn Db,
+    file: File,
+    range: TextRange,
+    settings: &InlayHintSettings,
+) -> Vec<TemplateInlayHint> {
+    let source = source_text(db, file);
+    inlay_hints::inlay_hints(
+        db,
+        file,
+        template_index(db, file),
+        source.as_str(),
+        range,
+        settings,
+    )
+}
+
+/// the project's `manage.py`, django's own entry point
+///
+/// the lenses above say what to run through it; this is what a caller that has to
+/// actually run one needs, and a project without one is a project none of them
+/// apply to.
+pub fn django_manage_script(db: &dyn Db) -> Option<File> {
+    *project::manage_file(db, db.project())
+}
+
+/// the lenses `file` shows, read as a django template
+///
+/// this is the view side of the join: a template is told what renders it, which
+/// is the one thing about itself it cannot say.
+pub fn django_template_code_lenses(db: &dyn Db, file: File) -> Vec<DjangoCodeLens> {
+    code_lens::template_code_lenses(db, file)
+}
+
+/// the lenses `file` shows, read as one of the project's python modules
+///
+/// these are the `manage.py` invocations that apply to the file, and a module
+/// django gives no role to has none of them.
+pub fn django_python_code_lenses(db: &dyn Db, file: File) -> Vec<DjangoCodeLens> {
+    code_lens::python_code_lenses(db, file)
+}
+
 /// the completions for `offset` in `file`, read as a django template
 pub fn django_template_completions(
     db: &dyn Db,
@@ -264,7 +338,8 @@ pub(crate) mod tests {
     use ruff_db::system::{DbWithTestSystem, DbWithWritableSystem, SystemPath, SystemPathBuf};
     use ruff_python_ast::PythonVersion;
     use ruff_python_trivia::textwrap::dedent;
-    use ruff_text_size::{Ranged, TextSize};
+    use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
+    use std::ops::Range;
     use ty_module_resolver::SearchPathSettings;
     use ty_project::{ProjectMetadata, TestDb};
     use ty_python_core::platform::PythonPlatform;
@@ -273,12 +348,106 @@ pub(crate) mod tests {
 
     use crate::MarkupKind;
 
+    use crate::InlayHintSettings;
+
     use super::{
-        PreparedTemplateRename, TemplateRenameOutcome, TemplateSymbol, django_prepare_rename,
-        django_references, django_rename, django_template_completions, django_template_diagnostics,
+        DjangoLensAction, PreparedTemplateRename, TemplateRenameOutcome, TemplateSymbol,
+        django_prepare_rename, django_python_code_lenses, django_references, django_rename,
+        django_template_code_lenses, django_template_completions, django_template_diagnostics,
         django_template_document_symbols, django_template_folding_ranges,
-        django_template_goto_definition, django_template_hover, is_django_template_path,
+        django_template_goto_definition, django_template_hover, django_template_inlay_hints,
+        django_template_signature_help, is_django_template_path,
     };
+
+    /// a mock django whose implicit builtins are there to be read
+    ///
+    /// what it registers differs from the builtin table deliberately, and in both
+    /// directions: it has a `{% squish %}` and a `|shorten` the table has never
+    /// heard of, and it has no `{% lorem %}` or `|slugify` though the table does.
+    /// that is what makes it stand in for a django the table has drifted from.
+    pub(crate) const DJANGO_BUILTINS: &[(&str, &str)] = &[
+        ("django/__init__.py", ""),
+        ("django/template/__init__.py", ""),
+        (
+            "django/template/defaulttags.py",
+            "
+            from django.template import Library
+
+            register = Library()
+
+            @register.tag('for')
+            def do_for(parser, token): ...
+
+            @register.tag('if')
+            def do_if(parser, token): ...
+
+            @register.tag
+            def squish(parser, token):
+                '''squishes its body.'''
+            ",
+        ),
+        (
+            "django/template/defaultfilters.py",
+            "
+            from django.template import Library
+
+            register = Library()
+
+            @register.filter(is_safe=True)
+            def upper(value): ...
+
+            @register.filter
+            def shorten(value, arg): ...
+            ",
+        ),
+        (
+            "django/template/loader_tags.py",
+            "
+            from django.template import Library
+
+            register = Library()
+
+            @register.tag('block')
+            def do_block(parser, token): ...
+
+            @register.tag('extends')
+            def do_extends(parser, token): ...
+
+            @register.tag('include')
+            def do_include(parser, token): ...
+            ",
+        ),
+    ];
+
+    /// a mock django whose model base and admin machinery are there to be
+    /// resolved
+    ///
+    /// what matters about it is where the classes are *declared*: a `Model` or a
+    /// `ModelAdmin` counts as django's own because the module it comes from is
+    /// django's, never because of the name written at the point of use.
+    pub(crate) const DJANGO_ADMIN: &[(&str, &str)] = &[
+        ("django/__init__.py", ""),
+        ("django/db/__init__.py", ""),
+        ("django/db/models/__init__.py", "class Model: ...\n"),
+        ("django/contrib/__init__.py", ""),
+        (
+            "django/contrib/admin/__init__.py",
+            "
+            class AdminSite:
+                def register(self, model_or_iterable, admin_class=None, **options): ...
+
+            class ModelAdmin: ...
+
+            class InlineModelAdmin: ...
+
+            class TabularInline(InlineModelAdmin): ...
+
+            site = AdminSite()
+
+            def register(*models, site=None): ...
+            ",
+        ),
+    ];
 
     /// a project whose files are written out, with the cursor marked by
     /// `<CURSOR>` in at most one of them
@@ -408,6 +577,29 @@ pub(crate) mod tests {
                 .collect()
         }
 
+        /// the workspace symbols matching `query`, as `container name [path]`
+        ///
+        /// what python contributes is rendered under `python`, so that a test
+        /// says both what django added and what it left alone. the order is the
+        /// order the files were walked in, which is no order at all, so it is
+        /// sorted here rather than asserted on.
+        pub(crate) fn workspace_symbols(&self, query: &str) -> Vec<String> {
+            let mut found: Vec<String> = crate::workspace_symbols(&self.db, query)
+                .into_iter()
+                .map(|found| {
+                    format!(
+                        "{} {} [{}]",
+                        found.container.unwrap_or("python"),
+                        found.symbol.name,
+                        // the memory file system reports the host's separator
+                        found.file.path(&self.db).to_string().replace('\\', "/"),
+                    )
+                })
+                .collect();
+            found.sort();
+            found
+        }
+
         /// the labels of the completions at the cursor, in the order offered
         pub(crate) fn completions(&self) -> Vec<String> {
             django_template_completions(&self.db, self.file, self.offset)
@@ -453,6 +645,74 @@ pub(crate) mod tests {
             django_template_hover(&self.db, self.file, self.offset)
                 .map(|hover| hover.display(MarkupKind::Markdown).to_string())
                 .unwrap_or_default()
+        }
+
+        /// the signature help at the cursor, as
+        /// `label [parameter] — documentation`
+        pub(crate) fn signature(&self) -> String {
+            let Some(signature) = django_template_signature_help(&self.db, self.file, self.offset)
+            else {
+                return "no signature".to_string();
+            };
+
+            let parameter = signature
+                .parameter
+                .map(|parameter| format!(" [{parameter}]"))
+                .unwrap_or_default();
+            let documentation = signature
+                .documentation
+                .map(|documentation| format!(" — {documentation}"))
+                .unwrap_or_default();
+
+            format!("{}{parameter}{documentation}", signature.label)
+        }
+
+        /// every hint of the whole template, as ``kind at `text`: `label` ``
+        pub(crate) fn hints(&self) -> Vec<String> {
+            let source = ruff_db::source::source_text(&self.db, self.file);
+            self.rendered_hints(
+                TextRange::up_to(source.text_len()),
+                &InlayHintSettings::default(),
+            )
+        }
+
+        /// the same, restricted to a byte range of the template
+        pub(crate) fn hints_in(&self, range: Range<u32>) -> Vec<String> {
+            self.rendered_hints(
+                TextRange::new(range.start.into(), range.end.into()),
+                &InlayHintSettings::default(),
+            )
+        }
+
+        /// the same, with only the settings `enable` turns on
+        pub(crate) fn hints_with(
+            &self,
+            enable: impl FnOnce(&mut InlayHintSettings),
+        ) -> Vec<String> {
+            let mut settings = InlayHintSettings::none();
+            enable(&mut settings);
+
+            let source = ruff_db::source::source_text(&self.db, self.file);
+            self.rendered_hints(TextRange::up_to(source.text_len()), &settings)
+        }
+
+        fn rendered_hints(&self, range: TextRange, settings: &InlayHintSettings) -> Vec<String> {
+            let source = ruff_db::source::source_text(&self.db, self.file);
+
+            django_template_inlay_hints(&self.db, self.file, range, settings)
+                .into_iter()
+                .map(|hint| {
+                    let line_start = source.as_str()[..usize::from(hint.position)]
+                        .rfind('\n')
+                        .map_or(0, |index| index + 1);
+                    let anchored = source.as_str()[line_start..usize::from(hint.position)]
+                        .rsplit([' ', '{', '%'])
+                        .next()
+                        .unwrap_or_default();
+
+                    format!("{:?} at `{anchored}`: `{}`", hint.kind, hint.label)
+                })
+                .collect()
         }
 
         /// the template's outline, one line per symbol, nesting indented
@@ -596,6 +856,44 @@ pub(crate) mod tests {
                 .collect()
         }
 
+        /// every lens of the file under test, as `title -> what it does`
+        ///
+        /// which of the two implementations answers is the same question the
+        /// server asks, so the harness asks it the same way.
+        pub(crate) fn lenses(&self) -> Vec<String> {
+            let lenses = if self.is_template() {
+                django_template_code_lenses(&self.db, self.file)
+            } else {
+                django_python_code_lenses(&self.db, self.file)
+            };
+
+            lenses
+                .into_iter()
+                .map(|lens| {
+                    let action = match lens.action {
+                        DjangoLensAction::Run(arguments) => {
+                            format!("manage.py {}", arguments.join(" "))
+                        }
+                        DjangoLensAction::Navigate(targets) => targets
+                            .iter()
+                            .map(|target| {
+                                let source = ruff_db::source::source_text(&self.db, target.file);
+                                format!(
+                                    "{}:{}",
+                                    // the memory file system reports the host's separator
+                                    target.file.path(&self.db).to_string().replace('\\', "/"),
+                                    &source[target.range],
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    };
+
+                    format!("{} -> {action}", lens.title)
+                })
+                .collect()
+        }
+
         /// each foldable range, as the tags that open and close it
         pub(crate) fn folds(&self) -> Vec<String> {
             let source = ruff_db::source::source_text(&self.db, self.file);
@@ -634,6 +932,18 @@ pub(crate) mod tests {
     fn a_python_file_is_never_a_template() {
         assert!(!is_django_template_path(SystemPath::new(
             "/app/templates/views.py"
+        )));
+    }
+
+    #[test]
+    fn a_jinja_file_is_not_claimed_as_a_django_template() {
+        // see `TEMPLATE_EXTENSIONS`: answering a jinja file as django reports its
+        // correct code as wrong
+        assert!(!is_django_template_path(SystemPath::new(
+            "/app/templates/page.jinja"
+        )));
+        assert!(!is_django_template_path(SystemPath::new(
+            "/app/templates/page.html.jinja"
         )));
     }
 }

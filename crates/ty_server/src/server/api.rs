@@ -100,6 +100,9 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::FoldingRangeRequestHandler::METHOD => background_document_request_task::<
             requests::FoldingRangeRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        requests::CodeLensRequestHandler::METHOD => background_document_request_task::<
+            requests::CodeLensRequestHandler,
+        >(req, BackgroundSchedule::Worker),
         requests::DocumentSymbolRequestHandler::METHOD => background_document_request_task::<
             requests::DocumentSymbolRequestHandler,
         >(req, BackgroundSchedule::Worker),

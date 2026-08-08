@@ -770,6 +770,18 @@ impl SearchPaths {
         }
     }
 
+    /// Returns the `site-packages` directories of the environment ty resolved.
+    ///
+    /// These are the one link back from the settings to the Python installation
+    /// they were discovered from, which is what lets a caller that has to *run*
+    /// something — rather than only resolve it — find the interpreter whose
+    /// packages ty is reading.
+    pub fn site_packages_paths(&self) -> impl Iterator<Item = &SystemPath> {
+        self.site_packages
+            .iter()
+            .filter_map(|path| path.as_system_path())
+    }
+
     /// Registers file roots for all non-dynamically discovered search paths.
     pub fn try_register_static_roots(&self, db: &dyn Db) {
         let files = db.files();

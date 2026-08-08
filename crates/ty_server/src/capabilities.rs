@@ -52,19 +52,22 @@ impl std::fmt::Display for ResolvedClientCapabilities {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum SupportedCommand {
     Debug,
+    /// Run the project's `manage.py` with the given arguments.
+    RunManage,
 }
 
 impl SupportedCommand {
     /// Returns the identifier of the command.
-    const fn identifier(self) -> &'static str {
+    pub(crate) const fn identifier(self) -> &'static str {
         match self {
             SupportedCommand::Debug => "ty.printDebugInformation",
+            SupportedCommand::RunManage => "ty.runManageCommand",
         }
     }
 
     /// Returns all the commands that the server currently supports.
-    const fn all() -> [SupportedCommand; 1] {
-        [SupportedCommand::Debug]
+    const fn all() -> [SupportedCommand; 2] {
+        [SupportedCommand::Debug, SupportedCommand::RunManage]
     }
 }
 
@@ -74,6 +77,7 @@ impl FromStr for SupportedCommand {
     fn from_str(name: &str) -> anyhow::Result<Self, Self::Err> {
         Ok(match name {
             "ty.printDebugInformation" => Self::Debug,
+            "ty.runManageCommand" => Self::RunManage,
             _ => return Err(anyhow::anyhow!("Invalid command `{name}`")),
         })
     }
@@ -448,7 +452,12 @@ pub(crate) fn server_capabilities(
         document_highlight_provider: Some(true.into()),
         hover_provider: Some(true.into()),
         signature_help_provider: Some(SignatureHelpOptions {
-            trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+            // `:` is here for django templates, where a filter's argument is
+            // written after one and nothing else opens an argument. LSP has no
+            // way to vary these per language, so python documents see the
+            // requests too — and turn them away, see
+            // `triggered_by_a_template_character`.
+            trigger_characters: Some(vec!["(".to_string(), ",".to_string(), ":".to_string()]),
             retrigger_characters: Some(vec![")".to_string()]),
             work_done_progress_options: WorkDoneProgressOptions::default(),
         }),
@@ -487,6 +496,14 @@ pub(crate) fn server_capabilities(
                 '|'.to_string(),
             ]),
             ..Default::default()
+        }),
+        // every lens the server produces already carries its command: deciding
+        // that a lens exists at all is the same walk that works out what it would
+        // run, so there is nothing left for a `codeLens/resolve` to fill in and it
+        // is deliberately not offered
+        code_lens_provider: Some(types::CodeLensOptions {
+            resolve_provider: Some(false),
+            work_done_progress_options: WorkDoneProgressOptions::default(),
         }),
         selection_range_provider: Some(true.into()),
         folding_range_provider: Some(true.into()),
