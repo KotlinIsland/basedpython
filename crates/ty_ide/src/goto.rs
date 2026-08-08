@@ -414,6 +414,10 @@ impl<'db> Definitions<'db> {
     pub(crate) fn iter(&self) -> std::slice::Iter<'_, ResolvedDefinition<'db>> {
         self.0.iter()
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl<'a, 'db> IntoIterator for &'a Definitions<'db> {
@@ -1322,6 +1326,32 @@ fn definitions_for_expression<'db>(
         )),
         _ => None,
     }
+}
+
+/// basedpython: the definitions of the model field a django lookup expression's
+/// leading name names — `author` in `Book.objects.filter(author.name == "x")`
+///
+/// that name resolves through the lookup DSL rather than through the scope, so
+/// there is no binding for the ordinary resolution to answer with. `None` for
+/// every other target, and for a name in an argument the lookup classifier
+/// refuses, which still means whatever it meant without the DSL
+pub(crate) fn django_lookup_definitions<'db>(
+    model: &SemanticModel<'db>,
+    parsed: &ParsedModuleRef,
+    goto_target: &GotoTarget<'_>,
+) -> Option<Definitions<'db>> {
+    if !matches!(goto_target, GotoTarget::Expression(ExprRef::Name(_))) {
+        return None;
+    }
+    let name = goto_target.range();
+    let covering = covering_node(parsed.syntax().into(), name);
+    // the leading name sits inside the arguments of the call that spells the query
+    let call = covering.ancestors().find_map(|node| match node {
+        AnyNodeRef::ExprCall(call) => Some(call),
+        _ => None,
+    })?;
+    let definitions = ty_python_semantic::definitions_for_django_lookup_root(model, call, name);
+    (!definitions.is_empty()).then(|| Definitions::new(definitions))
 }
 
 fn definitions_for_callable<'db>(

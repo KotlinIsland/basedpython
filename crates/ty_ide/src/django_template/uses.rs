@@ -197,7 +197,16 @@ fn at_template(
             Some((Named::Route(source[range].to_compact_string()), range))
         }
         tag if TEMPLATE_TAGS.contains(&tag) => {
-            let range = strip_fragment(source, first_string(source, arguments, token)?);
+            let contents = first_string(source, arguments, token)?;
+            let range = strip_fragment(source, contents);
+            // the part after the `#` addresses a partial rather than naming the
+            // template, and a partial's name is none of the names renamed here.
+            // answering with the template's range anyway would hand the editor a
+            // range the caret is not in, and rename — and move — the whole file
+            // for a caret that asked about a fragment
+            if range != contents && offset >= range.end() {
+                return None;
+            }
             Some((Named::Template(source[range].to_compact_string()), range))
         }
         _ => None,

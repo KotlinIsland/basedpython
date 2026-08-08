@@ -2,6 +2,7 @@ use lsp_types::{
     LanguageKind, TextDocumentContentChangeEvent, TextDocumentContentChangePartial,
     TextDocumentContentChangeWholeDocument, Uri,
 };
+use ruff_python_ast::PySourceType;
 use ruff_source_file::LineIndex;
 
 use crate::PositionEncoding;
@@ -60,13 +61,23 @@ impl LanguageId {
     /// no template services at all — is the honest answer. It is answered
     /// outright, ahead of the path fallback, because a client that says `jinja`
     /// has settled the question that fallback exists to guess at.
+    ///
+    /// Editors disagree about what to call python too — `python3`, `py` and
+    /// `basedpython` are all in use — and [`Self::Other`] is a document the
+    /// server never adds to the project, so an id we do not know would leave a
+    /// `.py` file with no diagnostics and every service reading the file as last
+    /// saved rather than as the client has it. So a path python owns is python,
+    /// exactly as a path django owns is a template.
     pub(crate) fn new(language_id: &LanguageKind, path: &AnySystemPath) -> Self {
         match language_id.as_str() {
-            "python" | "by" => Self::Python,
+            "python" | "by" | "basedpython" => Self::Python,
             "django-html" | "django-txt" | "htmldjango" | "django" => Self::DjangoTemplate,
             "jinja" | "jinja-html" | "jinja2" => Self::Other,
             _ => match path.as_system() {
                 Some(path) if ty_ide::is_django_template_path(path) => Self::DjangoTemplate,
+                Some(path) if PySourceType::try_from_path(path.as_std_path()).is_some() => {
+                    Self::Python
+                }
                 _ => Self::Other,
             },
         }
@@ -234,6 +245,41 @@ mod tests {
 
         assert_eq!(
             opened("file:///app/templates/page.jinja", "plaintext"),
+            LanguageId::Other
+        );
+    }
+
+    #[test]
+    fn the_editors_python_language_ids_are_python() {
+        for id in ["python", "by", "basedpython"] {
+            assert_eq!(
+                opened("file:///app/mod.by", id),
+                LanguageId::Python,
+                "`{id}` is python"
+            );
+        }
+    }
+
+    #[test]
+    fn a_python_path_is_python_whatever_the_client_calls_it() {
+        // an id we do not know would otherwise leave the file out of the project
+        // entirely: no diagnostics, and every service reading it as last saved
+        for (uri, id) in [
+            ("file:///app/mod.py", "python3"),
+            ("file:///app/mod.py", "py"),
+            ("file:///app/mod.by", "basedpython-lang"),
+            ("file:///app/mod.pyi", ""),
+            ("file:///app/mod.byi", "plaintext"),
+        ] {
+            assert_eq!(
+                opened(uri, id),
+                LanguageId::Python,
+                "`{uri}` called `{id}` is python"
+            );
+        }
+
+        assert_eq!(
+            opened("file:///app/notes.txt", "plaintext"),
             LanguageId::Other
         );
     }

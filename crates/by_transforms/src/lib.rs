@@ -1265,6 +1265,69 @@ mod cross_file {
         );
     }
 
+    /// the same call, in a file that also declares an `enum class`. the enum
+    /// lowering rewrites the source before phase 0, and phase 0 then drops the
+    /// project db because the working source no longer matches the file
+    /// (`transpile_typed_with_map`'s `source_changed` → `project = None`) — so
+    /// every type-aware pass loses cross-module *and* project resolution, and
+    /// this call is left as the broken `f[int](1)`. an unrelated declaration
+    /// elsewhere in the file must not change what a call lowers to.
+    ///
+    /// reordering cannot fix it: phase 0 depends on running against the
+    /// enum-lowered source (`inferred_annotation` skips the `__slots__ = ()`
+    /// the enum lowering re-feeds through the pipeline). the fix is to give
+    /// phase 0 a db that keeps the project's metadata and system while serving
+    /// the rewritten source for this one file — a `System` wrapper passed to
+    /// `ProjectDatabase::fallible`, which needs a capability threaded in from
+    /// the caller that owns the real db
+    #[test]
+    #[ignore = "known defect: a pre-pass rewrite drops the project db for phase 0"]
+    fn cross_module_resolution_survives_an_enum_in_the_same_file() {
+        let db = project_db(&[
+            ("/mod_a.by", "def f[T](t: T) -> T: ...\n"),
+            (
+                "/mod_b.by",
+                "from mod_a import f\n\nenum class Colour:\n    case Red\n\nresult = f[int](1)\n",
+            ),
+        ]);
+        let out = transpile_file(&db, "/mod_b.by", &Config::test_default());
+        assert!(
+            out.contains("result = f(1)"),
+            "an enum elsewhere in the file must not blind cross-module resolution, got:\n{out}"
+        );
+    }
+
+    /// the same defect reached by *qualification* rather than by an enum
+    /// declaration, which is the likelier trigger and the wider one: one
+    /// unqualified member of an enum imported from elsewhere — `return Red`,
+    /// the headline example of context-sensitive resolution — is enough, since
+    /// `qualified_changed` sets `source_changed` on its own
+    ///
+    /// so composing two shipped basedpython features in one file silently
+    /// breaks the second, with a clean `by check` and valid emitted python
+    #[test]
+    #[ignore = "known defect: a pre-pass rewrite drops the project db for phase 0"]
+    fn cross_module_resolution_survives_a_qualified_name_in_the_same_file() {
+        let db = project_db(&[
+            ("/mod_a.by", "def f[T](t: T) -> T: ...\n"),
+            ("/colours.by", "enum class Colour:\n    case Red, Green\n"),
+            (
+                "/mod_b.by",
+                "from mod_a import f\nfrom colours import Colour\n\ndef pick() -> Colour:\n    return Red\n\nresult = f[int](1)\n",
+            ),
+        ]);
+        let out = transpile_file(&db, "/mod_b.by", &Config::test_default());
+        assert!(
+            out.contains("Colour.Red"),
+            "the qualification itself should still happen, got:\n{out}"
+        );
+        assert!(
+            out.contains("result = f(1)"),
+            "a qualified name elsewhere in the file must not blind cross-module \
+             resolution, got:\n{out}"
+        );
+    }
+
     /// an imported *reified* generic function keeps its `[int]` specialization
     /// — the `@generic` wrapper routes it through `__getitem__`. only the
     /// cross-module type tells us `f` reifies `T` (value-position use), so the

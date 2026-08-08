@@ -1,4 +1,4 @@
-use crate::goto::find_goto_target;
+use crate::goto::{django_lookup_definitions, find_goto_target};
 use crate::{Db, NavigationTargets, RangedValue};
 use ruff_db::files::{File, FileRange};
 use ruff_db::parsed::parsed_module;
@@ -20,7 +20,11 @@ pub fn goto_declaration(
     let goto_target = find_goto_target(&model, &module, offset)?;
 
     let declaration_targets = goto_target
-        .definitions(&model, ImportAliasResolution::ResolveAliases)?
+        .definitions(&model, ImportAliasResolution::ResolveAliases)
+        .filter(|definitions| !definitions.is_empty())
+        // basedpython: a django lookup path's leading name declares no binding, so
+        // the field it names is the only declaration there is
+        .or_else(|| django_lookup_definitions(&model, &module, &goto_target))?
         .goto_declaration(&model, &goto_target)?
         .into_navigation_targets(model.db());
 
@@ -2918,6 +2922,35 @@ def ab(a: int, *, c: int): ...
         8 | a: bool = True
           | -
           |
+        "#);
+    }
+
+    #[test]
+    fn goto_declaration_django_lookup_relation() {
+        // a lookup path's leading name binds nothing, so the field it names is
+        // both its definition and its declaration — the two must agree
+        let test = crate::goto_definition::test::django_lookup_test(
+            r#"
+from blog.models import Book
+
+def q():
+    return Book.objects.filter(auth<CURSOR>or.name == "x")
+"#,
+        );
+
+        assert_snapshot!(test.goto_declaration(), @r#"
+        info[goto-declaration]: Go to declaration
+         --> src/blog/queries.by:5:32
+          |
+        5 |     return Book.objects.filter(author.name == "x")
+          |                                ^^^^^^ Clicking here
+          |
+        info: Found 1 declaration
+          --> src/blog/models.py:10:5
+           |
+        10 |     author = models.ForeignKey(Author, on_delete=models.CASCADE)
+           |     ------
+           |
         "#);
     }
 

@@ -1,5 +1,5 @@
 use crate::django_template::django_string_definition;
-use crate::goto::find_goto_target;
+use crate::goto::{django_lookup_definitions, find_goto_target};
 use crate::{Db, NavigationTargets, RangedValue};
 use ruff_db::files::{File, FileRange};
 use ruff_db::parsed::parsed_module;
@@ -28,7 +28,9 @@ pub fn goto_definition(
     let model = SemanticModel::new(db, file);
     let goto_target = find_goto_target(&model, &module, offset)?;
     let definition_targets = goto_target
-        .definitions(&model, ImportAliasResolution::ResolveAliases)?
+        .definitions(&model, ImportAliasResolution::ResolveAliases)
+        .filter(|definitions| !definitions.is_empty())
+        .or_else(|| django_lookup_definitions(&model, &module, &goto_target))?
         .goto_definition(&model, &goto_target)?
         .into_navigation_targets(model.db());
 
@@ -2720,6 +2722,381 @@ def show(request):
     return render(request, "blog/mis<CURSOR>sing.html")
 "#,
         );
+
+        assert_snapshot!(test.goto_definition(), @"No goto target found");
+    }
+
+    /// a django whose model, field and manager classes ty recognizes: the
+    /// `KnownClass` names are only read off a third-party search path, so they
+    /// live in site-packages, and the field classes carry the same
+    /// `_pyi_private_*_type` markers the real stubs pin their specializations
+    /// with
+    ///
+    /// `queries` is written as `blog/queries.by`, since a lookup written as an
+    /// expression is basedpython syntax
+    pub(crate) fn django_lookup_test(queries: &str) -> CursorTest {
+        CursorTest::builder()
+            .with_site_packages()
+            .site_packages("django/__init__.pyi", "")
+            .site_packages("django/db/__init__.pyi", "from django.db import models as models")
+            .site_packages(
+                "django/db/models/__init__.pyi",
+                "from django.db.models.base import Model as Model\n\
+                 from django.db.models.fields import CharField as CharField, DateField as DateField\n\
+                 from django.db.models.fields.json import JSONField as JSONField\n\
+                 from django.db.models.fields.related import CASCADE as CASCADE, ForeignKey as ForeignKey\n\
+                 from django.db.models.manager import Manager as Manager\n\
+                 from django.db.models.query import QuerySet as QuerySet",
+            )
+            .site_packages(
+                "django/db/models/base.pyi",
+                "from typing import Any, ClassVar\n\
+                 from typing_extensions import Self\n\
+                 from django.db.models.manager import Manager\n\
+                 \n\
+                 class Model:\n\
+                 \x20   objects: ClassVar[Manager[Self]]\n\
+                 \x20   pk: Any",
+            )
+            .site_packages(
+                "django/db/models/manager.pyi",
+                "from typing import Any, Generic, TypeVar\n\
+                 from django.db.models.query import QuerySet\n\
+                 \n\
+                 _M = TypeVar(\"_M\")\n\
+                 \n\
+                 class Manager(Generic[_M]):\n\
+                 \x20   def filter(self, *args: Any, **kwargs: Any) -> QuerySet[_M, _M]: ...\n\
+                 \x20   def exclude(self, *args: Any, **kwargs: Any) -> QuerySet[_M, _M]: ...\n\
+                 \x20   def get(self, *args: Any, **kwargs: Any) -> _M: ...\n\
+                 \x20   async def aget(self, *args: Any, **kwargs: Any) -> _M: ...",
+            )
+            .site_packages(
+                "django/db/models/query.pyi",
+                "from typing import Generic, TypeVar\n\
+                 \n\
+                 _M = TypeVar(\"_M\")\n\
+                 _Row = TypeVar(\"_Row\")\n\
+                 \n\
+                 class QuerySet(Generic[_M, _Row]): ...",
+            )
+            .site_packages(
+                "django/db/models/fields/__init__.pyi",
+                "from datetime import date\n\
+                 from typing import Any, Generic, TypeVar\n\
+                 \n\
+                 _ST = TypeVar(\"_ST\")\n\
+                 _GT = TypeVar(\"_GT\")\n\
+                 \n\
+                 class Field(Generic[_ST, _GT]):\n\
+                 \x20   _pyi_private_set_type: Any\n\
+                 \x20   _pyi_private_get_type: Any\n\
+                 \x20   def __init__(self, **kwargs: Any) -> None: ...\n\
+                 \x20   def __get__(self, instance: Any, owner: Any = None) -> _GT: ...\n\
+                 \x20   def __set__(self, instance: Any, value: _ST) -> None: ...\n\
+                 \n\
+                 class CharField(Field[_ST, _GT]):\n\
+                 \x20   _pyi_private_set_type: str\n\
+                 \x20   _pyi_private_get_type: str\n\
+                 \n\
+                 class DateField(Field[_ST, _GT]):\n\
+                 \x20   _pyi_private_set_type: date\n\
+                 \x20   _pyi_private_get_type: date",
+            )
+            .site_packages(
+                "django/db/models/fields/json.pyi",
+                "from typing import Any, TypeVar\n\
+                 from django.db.models.fields import Field\n\
+                 \n\
+                 _ST = TypeVar(\"_ST\")\n\
+                 _GT = TypeVar(\"_GT\")\n\
+                 \n\
+                 class JSONField(Field[_ST, _GT]):\n\
+                 \x20   _pyi_private_set_type: Any\n\
+                 \x20   _pyi_private_get_type: Any",
+            )
+            .site_packages(
+                "django/db/models/fields/related.pyi",
+                "from typing import Any, TypeVar\n\
+                 from django.db.models.fields import Field\n\
+                 \n\
+                 _ST = TypeVar(\"_ST\")\n\
+                 _GT = TypeVar(\"_GT\")\n\
+                 \n\
+                 CASCADE: Any\n\
+                 \n\
+                 class ForeignKey(Field[_ST, _GT]):\n\
+                 \x20   _pyi_private_set_type: Any\n\
+                 \x20   _pyi_private_get_type: Any\n\
+                 \x20   def __init__(self, to: Any, on_delete: Any = ..., **kwargs: Any) -> None: ...",
+            )
+            .source(
+                "blog/models.py",
+                r#"
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+class Book(models.Model):
+    title = models.CharField(max_length=200)
+    published = models.DateField()
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+
+class Doc(models.Model):
+    data = models.JSONField()
+"#,
+            )
+            .source("blog/queries.by", queries)
+            .build()
+    }
+
+    #[test]
+    fn goto_definition_django_lookup_relation() {
+        let test = django_lookup_test(
+            r#"
+from blog.models import Book
+
+def q():
+    return Book.objects.filter(auth<CURSOR>or.name == "x")
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @r#"
+        info[goto-definition]: Go to definition
+         --> src/blog/queries.by:5:32
+          |
+        5 |     return Book.objects.filter(author.name == "x")
+          |                                ^^^^^^ Clicking here
+          |
+        info: Found 1 definition
+          --> src/blog/models.py:10:5
+           |
+        10 |     author = models.ForeignKey(Author, on_delete=models.CASCADE)
+           |     ------
+           |
+        "#);
+    }
+
+    #[test]
+    fn goto_definition_django_lookup_segment_after_a_relation() {
+        // the segment after a relation hop resolves against the model the path
+        // traverses into, which the ordinary member resolution already answers
+        let test = django_lookup_test(
+            r#"
+from blog.models import Book
+
+def q():
+    return Book.objects.filter(author.na<CURSOR>me == "x")
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @r#"
+        info[goto-definition]: Go to definition
+         --> src/blog/queries.by:5:39
+          |
+        5 |     return Book.objects.filter(author.name == "x")
+          |                                       ^^^^ Clicking here
+          |
+        info: Found 1 definition
+         --> src/blog/models.py:5:5
+          |
+        5 |     name = models.CharField(max_length=100)
+          |     ----
+          |
+        "#);
+    }
+
+    #[test]
+    fn goto_definition_django_lookup_with_an_operator() {
+        let test = django_lookup_test(
+            r#"
+from blog.models import Book
+
+def q():
+    return Book.objects.filter(publ<CURSOR>ished > 1)
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> src/blog/queries.by:5:32
+          |
+        5 |     return Book.objects.filter(published > 1)
+          |                                ^^^^^^^^^ Clicking here
+          |
+        info: Found 1 definition
+         --> src/blog/models.py:9:5
+          |
+        9 |     published = models.DateField()
+          |     ---------
+          |
+        ");
+    }
+
+    #[test]
+    fn goto_definition_django_lookup_on_exclude() {
+        let test = django_lookup_test(
+            r#"
+from blog.models import Book
+
+def q():
+    return Book.objects.exclude(ti<CURSOR>tle == "x")
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @r#"
+        info[goto-definition]: Go to definition
+         --> src/blog/queries.by:5:33
+          |
+        5 |     return Book.objects.exclude(title == "x")
+          |                                 ^^^^^ Clicking here
+          |
+        info: Found 1 definition
+         --> src/blog/models.py:8:5
+          |
+        8 |     title = models.CharField(max_length=200)
+          |     -----
+          |
+        "#);
+    }
+
+    #[test]
+    fn goto_definition_django_lookup_json_field() {
+        let test = django_lookup_test(
+            r#"
+from blog.models import Doc
+
+def q():
+    return Doc.objects.get(da<CURSOR>ta["key"] == 1)
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @r#"
+        info[goto-definition]: Go to definition
+         --> src/blog/queries.by:5:28
+          |
+        5 |     return Doc.objects.get(data["key"] == 1)
+          |                            ^^^^ Clicking here
+          |
+        info: Found 1 definition
+          --> src/blog/models.py:13:5
+           |
+        13 |     data = models.JSONField()
+           |     ----
+           |
+        "#);
+    }
+
+    #[test]
+    fn goto_definition_django_lookup_json_key() {
+        // a json key is an arbitrary string that nothing declares
+        let test = django_lookup_test(
+            r#"
+from blog.models import Doc
+
+def q():
+    return Doc.objects.filter(data["k<CURSOR>ey"] == 1)
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @"No goto target found");
+    }
+
+    #[test]
+    fn goto_definition_django_lookup_pk() {
+        // `pk` names no field of the model — django declares it on `Model`, and
+        // that declaration is the only one there is. it is deliberately not
+        // resolved to whichever field the primary key happens to be: that field
+        // is synthesized when the model declares none, and guessing at it would
+        // send the editor somewhere the source never says
+        let test = django_lookup_test(
+            r#"
+from blog.models import Book
+
+def q():
+    return Book.objects.filter(p<CURSOR>k == 1)
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> src/blog/queries.by:5:32
+          |
+        5 |     return Book.objects.filter(pk == 1)
+          |                                ^^ Clicking here
+          |
+        info: Found 1 definition
+         --> site-packages/django/db/models/base.pyi:7:5
+          |
+        7 |     pk: Any
+          |     --
+          |
+        ");
+    }
+
+    #[test]
+    fn goto_definition_django_lookup_refused_operator() {
+        // `!=` spells no lookup, so the name is not a field path and means
+        // whatever it meant without the DSL — here, nothing
+        let test = django_lookup_test(
+            r#"
+from blog.models import Book
+
+def q():
+    return Book.objects.filter(ti<CURSOR>tle != "x")
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @"No goto target found");
+    }
+
+    #[test]
+    fn goto_definition_django_lookup_shadowed_by_a_local() {
+        // a name something else already claims is not a lookup path at all
+        let test = django_lookup_test(
+            r#"
+from blog.models import Book
+
+def q():
+    title = "x"
+    return Book.objects.filter(ti<CURSOR>tle == "x")
+"#,
+        );
+
+        assert_snapshot!(test.goto_definition(), @r#"
+        info[goto-definition]: Go to definition
+         --> src/blog/queries.by:6:32
+          |
+        6 |     return Book.objects.filter(title == "x")
+          |                                ^^^^^ Clicking here
+          |
+        info: Found 1 definition
+         --> src/blog/queries.by:5:5
+          |
+        5 |     title = "x"
+          |     -----
+          |
+        "#);
+    }
+
+    #[test]
+    fn goto_definition_django_lookup_in_a_python_file() {
+        // the DSL is basedpython's; in a python file the comparison is an
+        // ordinary one against an undefined name
+        let test = CursorTest::builder()
+            .with_site_packages()
+            .site_packages("django/__init__.pyi", "")
+            .source(
+                "main.py",
+                r#"
+class Book: ...
+
+def q():
+    return Book.objects.filter(auth<CURSOR>or.name == "x")
+"#,
+            )
+            .build();
 
         assert_snapshot!(test.goto_definition(), @"No goto target found");
     }

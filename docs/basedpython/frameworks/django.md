@@ -52,6 +52,8 @@ Book.objects.filter(author__name="Ursula", published__gt=date(1970, 1, 1))
 
 the leading name is a field, so it is checked and it has a type: `author` is an `Author`, `published` is a `date`, and a segment that names no field is reported exactly as the keyword form's is. the value is checked against the field the same way too.
 
+an editor reads a path as fields too: going to a segment's definition or declaration opens the field it names, so `author` opens `Book.author` and `name` opens `Author.name`. `pk` opens django's own `pk` on `Model` — the only declaration of that name — rather than whichever field the primary key turns out to be, which the model may not declare at all. a json key is an arbitrary string that nothing declares, and a refused expression keeps whatever its name meant without the DSL, so neither leads anywhere
+
 a `JSONField` holds arbitrary json rather than fields, so a subscript indexes into one — django's key and index transforms:
 
 ```by

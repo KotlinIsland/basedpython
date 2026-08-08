@@ -330,6 +330,58 @@ pub fn definitions_for_attribute<'db>(
     resolved
 }
 
+/// basedpython: the declarations of the model field the leading name of a django
+/// lookup expression names — `author` in `Book.objects.filter(author.name == "x")`
+///
+/// that name is a field path rather than a value, so nothing in the enclosing
+/// scope binds it and the ordinary resolution has nothing to answer with. every
+/// segment after it is a member access on the model the path traverses into, and
+/// resolves the ordinary way already
+///
+/// empty unless `name` is the range of the leading name of an argument the lookup
+/// classifier accepted: an argument it refuses keeps whatever it meant without
+/// the DSL, and a field the model declares nowhere — `pk`, an `<fk>_id` attname —
+/// has no declaration to navigate to
+pub fn definitions_for_django_lookup_root<'db>(
+    model: &SemanticModel<'db>,
+    call: &ast::ExprCall,
+    name: TextRange,
+) -> Vec<ResolvedDefinition<'db>> {
+    let db = model.db();
+    let file = model.file();
+    if !file.source_type(db).is_basedpython() {
+        return Vec::new();
+    }
+    let Some(callee) = call.func.inferred_type(model) else {
+        return Vec::new();
+    };
+    let Some(queried) = django::lookup_call_model(db, callee) else {
+        return Vec::new();
+    };
+    let Some(scope) = model.scope(AnyNodeRef::from(call)) else {
+        return Vec::new();
+    };
+    let lookups = django::lookup_expressions(
+        db,
+        file,
+        scope.to_scope_id(db, file),
+        queried,
+        &call.arguments,
+    );
+    let Some(root) = lookups
+        .iter()
+        .filter_map(|lookup| lookup.path.first()?.as_name_expr())
+        .find(|root| root.range() == name)
+    else {
+        return Vec::new();
+    };
+    definitions_for_attribute_in_class_hierarchy(
+        &ClassLiteral::Static(queried),
+        model,
+        root.id.as_str(),
+    )
+}
+
 /// Returns the descriptor object type for an attribute expression `x.y`, without invoking the
 /// descriptor protocol. This corresponds to `inspect.getattr_static(x, "y")` at the type level.
 pub fn static_member_type_for_attribute<'db>(
