@@ -59,6 +59,28 @@ a view or serializer that *does* write its type argument keeps it — the substi
 
 `.data` and `.validated_data` stay `Any` on purpose — see below
 
+### settings
+
+`django.conf.settings` answers every name through `__getattr__`, so the stubs can only say `Any`. your settings module is ordinary python sitting in your project, and `manage.py` says which module it is, so a setting the module assigns is read off it:
+
+```by
+from django.conf import settings
+
+settings.ROOT_URLCONF   # str
+settings.DEBUG          # bool
+settings.MY_OWN         # whatever your settings module assigns it
+```
+
+the module comes from the `DJANGO_SETTINGS_MODULE` your own scripts assign — `manage.py` first, then `wsgi.py` or `asgi.py`. nothing is guessed: a project that configures settings with `settings.configure()`, or names the module only in its environment, gets today's `Any` for every setting
+
+a split-settings layout is read through its star import, so `from .base import *` in the module `manage.py` names brings `base`'s settings along
+
+these stay `Any` on purpose:
+
+- a setting whose value is a container. `DATABASES = {"default": {...}}` infers `dict[str, dict[str, str]]` from what one deployment happens to hold, and django's contract is that anything may read and write keys the literal never mentions — `settings.DATABASES[alias]["TEST"]["USER"]` is django's own code
+- a setting your module does not assign, even one `django.conf.global_settings` gives a default for. django's own code is written to survive a settings module putting anything in them, and typing them turns that defensive code into errors
+- writing a setting. `settings.DEBUG = 1` is what `override_settings` does, and it is checked no more strictly than before
+
 ### transpilation compatibility
 
 - `optional?.chaining` works across nullable relations: `author?.birthday?.year`

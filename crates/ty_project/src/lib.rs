@@ -174,6 +174,17 @@ pub trait ProjectChecker: Send + Sync + std::panic::RefUnwindSafe {
     /// [`ty_python_semantic::check_file_with`]), so that one `ty: ignore`
     /// silences either kind of diagnostic and counts as used either way.
     fn check_python_file(&self, db: &dyn Db, file: File) -> Vec<Diagnostic>;
+
+    /// The module the project points `DJANGO_SETTINGS_MODULE` at, if it names one.
+    ///
+    /// The type checker types `settings.NAME` off that module, and it is worked
+    /// out from the project's files — which is why the answer comes from here
+    /// rather than from the type checker itself. See
+    /// [`ty_python_semantic::django_settings`].
+    ///
+    /// Must be answered by a Salsa query, or an edit to the script that names the
+    /// module leaves every type inferred from it stale.
+    fn django_settings_file(&self, db: &dyn Db) -> Option<File>;
 }
 
 /// A progress reporter.

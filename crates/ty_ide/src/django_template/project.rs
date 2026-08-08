@@ -25,11 +25,11 @@ use ruff_python_ast::{self as ast, AnyNodeRef, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{
-    Module, ModuleName, file_to_module, resolve_module, resolve_module_confident,
-    resolve_real_module,
+    Module, ModuleName, file_to_module, resolve_module_confident, resolve_real_module,
 };
 use ty_project::{Db, Project};
 use ty_python_semantic::SemanticModel;
+use ty_python_semantic::django_settings::{self as settings_source, SettingsNaming};
 use ty_python_semantic::types::ide_support::{
     ImportAliasResolution, ResolvedDefinition, definitions_for_attribute, definitions_for_name,
     instance_of_class,
@@ -44,12 +44,6 @@ const STATIC_DIRECTORY: &str = "static";
 
 /// the package name a project's template tag libraries live in
 const TEMPLATETAGS_PACKAGE: &str = "templatetags";
-
-/// the environment variable a project names its settings module with
-const SETTINGS_MODULE_VARIABLE: &str = "DJANGO_SETTINGS_MODULE";
-
-/// the file stem of the script whose `DJANGO_SETTINGS_MODULE` is the one that counts
-const SETTINGS_ENTRY_POINT: &str = "manage";
 
 /// the package that declares the base every test case descends from
 const UNITTEST_PACKAGE: &str = "unittest";
@@ -2072,15 +2066,8 @@ fn django_settings(db: &dyn Db, project: Project) -> DjangoSettings {
 /// `asgi.py`. where they disagree it is `manage.py` that decides, since that is
 /// the one a developer runs.
 #[salsa::tracked]
-fn settings_file(db: &dyn Db, project: Project) -> Option<File> {
-    let naming = settings_naming(db, project);
-
-    let naming = naming
-        .iter()
-        .find(|naming| is_entry_point(db, naming.file))
-        .or_else(|| naming.first())?;
-
-    resolve_module(db, naming.file, &ModuleName::new(&naming.module)?)?.file(db)
+pub(crate) fn settings_file(db: &dyn Db, project: Project) -> Option<File> {
+    settings_source::settings_file(db, settings_naming(db, project))
 }
 
 /// the project's `manage.py`, django's own entry point
@@ -2092,25 +2079,7 @@ fn settings_file(db: &dyn Db, project: Project) -> Option<File> {
 /// point whatever it happens to be called.
 #[salsa::tracked]
 pub(crate) fn manage_file(db: &dyn Db, project: Project) -> Option<File> {
-    settings_naming(db, project)
-        .iter()
-        .find(|naming| is_entry_point(db, naming.file))
-        .map(|naming| naming.file)
-}
-
-/// whether `file` is the script django's own `startproject` writes
-fn is_entry_point(db: &dyn Db, file: File) -> bool {
-    file.path(db)
-        .as_system_path()
-        .and_then(SystemPath::file_stem)
-        == Some(SETTINGS_ENTRY_POINT)
-}
-
-/// a file that points `DJANGO_SETTINGS_MODULE` somewhere, and where at
-#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
-struct SettingsNaming {
-    file: File,
-    module: CompactString,
+    settings_source::entry_point_file(db, settings_naming(db, project))
 }
 
 /// every file of the project that names its settings module, in path order
@@ -2119,79 +2088,7 @@ struct SettingsNaming {
 /// have to land on the same file twice running.
 #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
 fn settings_naming(db: &dyn Db, project: Project) -> Box<[SettingsNaming]> {
-    let mut naming: Vec<SettingsNaming> = Vec::new();
-
-    for file in &project.files(db) {
-        // a stub sets no environment variable
-        if is_stub(db, file) {
-            continue;
-        }
-        if let Some(module) = settings_module_in_file(db, file) {
-            naming.push(SettingsNaming {
-                file,
-                module: module.clone(),
-            });
-        }
-    }
-
-    naming.sort_by(|left, right| {
-        left.file
-            .path(db)
-            .as_str()
-            .cmp(right.file.path(db).as_str())
-    });
-
-    naming.into_boxed_slice()
-}
-
-/// the settings module `file` points `DJANGO_SETTINGS_MODULE` at
-#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
-fn settings_module_in_file(db: &dyn Db, file: File) -> Option<CompactString> {
-    if !mentions(db, file, &[SETTINGS_MODULE_VARIABLE]) {
-        return None;
-    }
-
-    let parsed = parsed_module(db, file).load(db);
-    let mut visitor = SettingsModuleVisitor { found: None };
-    visitor.visit_body(parsed.suite());
-
-    visitor.found
-}
-
-/// finds the one string that names the settings module
-struct SettingsModuleVisitor {
-    found: Option<CompactString>,
-}
-
-impl<'ast> Visitor<'ast> for SettingsModuleVisitor {
-    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        // `os.environ["DJANGO_SETTINGS_MODULE"] = "project.settings"`
-        if self.found.is_none()
-            && let Stmt::Assign(assign) = stmt
-            && let [Expr::Subscript(subscript)] = assign.targets.as_slice()
-            && string_literal(&subscript.slice).as_deref() == Some(SETTINGS_MODULE_VARIABLE)
-        {
-            self.found = string_literal(&assign.value);
-            return;
-        }
-
-        walk_stmt(self, stmt);
-    }
-
-    fn visit_expr(&mut self, expr: &'ast Expr) {
-        // `os.environ.setdefault("DJANGO_SETTINGS_MODULE", "project.settings")`,
-        // and every other two-string call that sets the variable the same way
-        if self.found.is_none()
-            && let Expr::Call(call) = expr
-            && let [variable, module] = call.arguments.args.as_ref()
-            && string_literal(variable).as_deref() == Some(SETTINGS_MODULE_VARIABLE)
-        {
-            self.found = string_literal(module);
-            return;
-        }
-
-        walk_expr(self, expr);
-    }
+    settings_source::settings_namings(db, &project.files(db)).into_boxed_slice()
 }
 
 /// reads a settings module's assignments into the settings that matter here

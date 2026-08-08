@@ -57,6 +57,7 @@ pub use types::{DisplaySettings, TypeQualifiers};
 
 pub mod api_lockfile;
 mod db;
+pub mod django_settings;
 pub mod django_template;
 mod dunder_all;
 mod fixes;

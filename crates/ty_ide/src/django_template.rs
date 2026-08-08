@@ -269,6 +269,10 @@ impl ty_project::ProjectChecker for DjangoChecker {
     fn check_python_file(&self, db: &dyn Db, file: File) -> Vec<Diagnostic> {
         django_python_diagnostics(db, file)
     }
+
+    fn django_settings_file(&self, db: &dyn Db) -> Option<File> {
+        *project::settings_file(db, db.project())
+    }
 }
 
 /// the quick fixes offered for a template diagnostic at `range`

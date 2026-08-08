@@ -57,6 +57,7 @@ pub(crate) use self::signatures::Signature;
 pub(crate) use self::subclass_of::{SubclassOfInner, SubclassOfType};
 pub(crate) use self::type_expansion::expand_type;
 pub use crate::diagnostic::add_inferred_python_version_hint_to_diagnostic;
+use crate::django_settings;
 use crate::place::{
     DefinedPlace, Definedness, Place, PlaceAndQualifiers, Provenance, TypeOrigin,
     builtins_module_scope, imported_symbol, known_module_symbol, place_from_bindings,
@@ -6205,6 +6206,16 @@ impl<'db> Type<'db> {
         let custom_getattr_result = || {
             if policy.no_getattr_lookup() {
                 return Place::Undefined.into();
+            }
+
+            // `django.conf.settings` answers every name through `__getattr__`, but a
+            // project that names its settings module says there what each of them
+            // is. that reading comes first, and anything it cannot answer falls
+            // through to the `Any` the stubs declare
+            if django_settings::is_settings_instance(db, self)
+                && let Some(setting) = django_settings::settings_member(db, name)
+            {
+                return Place::bound(setting).into();
             }
 
             self.try_call_dunder(
