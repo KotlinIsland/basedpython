@@ -1424,6 +1424,110 @@ mod tests {
         );
     }
 
+    /// an `{% include 'a.html#frag' %}` writes two names in one string, and only
+    /// the first is one this renames. a caret in the fragment used to be answered
+    /// with the *template's* range — a range the caret is not even in — so F2 on
+    /// a fragment renamed the file and moved it
+    #[test]
+    fn a_caret_in_an_includes_fragment_renames_nothing() {
+        let fragment = blog(&[
+            (
+                "blog/templates/blog/list.html",
+                "{% include 'blog/post.html#ca<CURSOR>rd' %}",
+            ),
+            (
+                "blog/templates/blog/post.html",
+                "{% partialdef card %}x{% endpartialdef %}",
+            ),
+        ]);
+
+        assert_eq!(fragment.prepare_rename(), "no rename");
+        assert_eq!(fragment.rename("tile"), ["no rename"]);
+
+        // the path in the same string still renames the template
+        let path = blog(&[
+            (
+                "blog/templates/blog/list.html",
+                "{% include 'blog/po<CURSOR>st.html#card' %}",
+            ),
+            (
+                "blog/templates/blog/post.html",
+                "{% partialdef card %}x{% endpartialdef %}",
+            ),
+        ]);
+
+        assert_eq!(
+            path.prepare_rename(),
+            "rename `blog/post.html`, replacing `blog/post.html`"
+        );
+    }
+
+    /// a callee is matched by its last segment, so a helper of the project's own
+    /// called `render` matched it too — and one of those with a non-literal
+    /// second argument refused every template rename in the project, naming a
+    /// line that has nothing to do with django
+    #[test]
+    fn a_local_function_called_render_does_not_refuse_a_template_rename() {
+        let test = blog(&[
+            ("django/__init__.py", ""),
+            (
+                "django/shortcuts.py",
+                "def render(request, template_name, context=None): ...\n",
+            ),
+            (
+                "blog/edits.py",
+                "
+                def render(target, edit):
+                    return (target, edit)
+
+
+                def apply(changes):
+                    return [render(path, edit) for path, edit in changes]
+                ",
+            ),
+            (
+                "blog/templates/blog/child.html",
+                "{% extends 'blog/p<CURSOR>ost.html' %}",
+            ),
+            ("blog/templates/blog/post.html", "x"),
+        ]);
+
+        assert_eq!(
+            test.prepare_rename(),
+            "rename `blog/post.html`, replacing `blog/post.html`"
+        );
+
+        // django's own still refuses, which is what the exclusion must not cost
+        let refusing = blog(&[
+            ("django/__init__.py", ""),
+            (
+                "django/shortcuts.py",
+                "def render(request, template_name, context=None): ...\n",
+            ),
+            (
+                "blog/views.py",
+                "
+                from django.shortcuts import render
+
+
+                def post(request, chosen):
+                    return render(request, chosen, {})
+                ",
+            ),
+            (
+                "blog/templates/blog/child.html",
+                "{% extends 'blog/p<CURSOR>ost.html' %}",
+            ),
+            ("blog/templates/blog/post.html", "x"),
+        ]);
+
+        assert!(
+            refusing.prepare_rename().contains("worked out at run time"),
+            "got {}",
+            refusing.prepare_rename()
+        );
+    }
+
     #[test]
     fn a_constant_holding_the_template_name_refuses_the_rename() {
         let test = blog(&[

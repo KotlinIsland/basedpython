@@ -28,6 +28,7 @@ use ty_module_resolver::{
     Module, ModuleName, file_to_module, resolve_module_confident, resolve_real_module,
 };
 use ty_project::{Db, Project};
+use ty_python_core::definition::DefinitionKind;
 use ty_python_semantic::SemanticModel;
 use ty_python_semantic::django_settings::{self as settings_source, SettingsNaming};
 use ty_python_semantic::types::ide_support::{
@@ -1309,6 +1310,7 @@ fn template_uses_in_file(db: &dyn Db, file: File) -> Box<[NameUse]> {
 
     let parsed = parsed_module(db, file).load(db);
     let mut visitor = TemplateUseVisitor {
+        db,
         file,
         found: Vec::new(),
     };
@@ -1317,12 +1319,46 @@ fn template_uses_in_file(db: &dyn Db, file: File) -> Box<[NameUse]> {
     visitor.found.into_boxed_slice()
 }
 
-struct TemplateUseVisitor {
+/// whether `func` names something that is definitely not django's
+///
+/// a callee is matched by its last segment, so `shortcuts.render` and `render` are
+/// one — and so is a local helper that happens to be called `render`. recording a
+/// use for one of those is worse than missing a real one: a use whose name is not
+/// a literal refuses the whole rename and names the offending line, so one
+/// `def render(target, edit)` anywhere in a project takes template renaming away
+/// from all of it.
+///
+/// so a callee whose definition is positively somewhere other than django is not
+/// one of these functions. anything short of that — a name nothing binds, or an
+/// import whose module could not be resolved, which lands back on the `import`
+/// statement rather than on what it names — leaves the callee as the name says.
+/// refusing a rename is the safe direction; silently rewriting half a project is
+/// not, so only a *positive* answer excludes.
+fn resolves_outside_django(db: &dyn Db, file: File, func: &Expr) -> bool {
+    let definitions = definitions_of(db, file, func);
+    !definitions.is_empty()
+        && definitions.iter().all(|resolved| {
+            resolved.definition().is_some_and(|definition| {
+                // an import that is still an import is one nothing followed
+                !matches!(
+                    definition.kind(db),
+                    DefinitionKind::Import(_)
+                        | DefinitionKind::ImportFrom(_)
+                        | DefinitionKind::ImportFromSubmodule(_)
+                        | DefinitionKind::StarImport(_)
+                ) && file_to_module(db, definition.file(db))
+                    .is_none_or(|module| !is_djangos(db, module))
+            })
+        })
+}
+
+struct TemplateUseVisitor<'db> {
+    db: &'db dyn Db,
     file: File,
     found: Vec<NameUse>,
 }
 
-impl<'ast> Visitor<'ast> for TemplateUseVisitor {
+impl<'ast> Visitor<'ast> for TemplateUseVisitor<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         // `template_name = "…"` names a template where django reads one, which is
         // the body of a view class
@@ -1346,6 +1382,7 @@ impl<'ast> Visitor<'ast> for TemplateUseVisitor {
             && let Some(template) = call
                 .arguments
                 .find_argument_value(TEMPLATE_NAME_ATTRIBUTE, 1)
+            && !resolves_outside_django(self.db, self.file, &call.func)
         {
             self.found.push(NameUse::of(self.file, template));
         }
@@ -1365,6 +1402,7 @@ fn route_uses_in_file(db: &dyn Db, file: File) -> Box<[NameUse]> {
 
     let parsed = parsed_module(db, file).load(db);
     let mut visitor = RouteUseVisitor {
+        db,
         file,
         found: Vec::new(),
     };
@@ -1373,15 +1411,17 @@ fn route_uses_in_file(db: &dyn Db, file: File) -> Box<[NameUse]> {
     visitor.found.into_boxed_slice()
 }
 
-struct RouteUseVisitor {
+struct RouteUseVisitor<'db> {
+    db: &'db dyn Db,
     file: File,
     found: Vec<NameUse>,
 }
 
-impl<'ast> Visitor<'ast> for RouteUseVisitor {
+impl<'ast> Visitor<'ast> for RouteUseVisitor<'_> {
     fn visit_expr(&mut self, expr: &'ast Expr) {
         if let Expr::Call(call) = expr
             && let Some(callee) = callee_name(&call.func)
+            && !resolves_outside_django(self.db, self.file, &call.func)
         {
             if REVERSE_CALLEES.contains(&callee.as_str())
                 && let Some(argument) = call.arguments.find_argument_value(REVERSE_NAME_KEYWORD, 0)
