@@ -256,6 +256,18 @@ impl ProjectFilesWalker {
                                 }
                             }
 
+                            // A file another language owns is never handed to the type checker,
+                            // not even when it was named on the command line — the branch above
+                            // takes an explicitly passed path to be something ty can analyze,
+                            // and a Django template read as Python is a page of syntax errors.
+                            // It is still checked, by the checker that owns it.
+                            if db
+                                .project_checker()
+                                .is_some_and(|checker| checker.owns(&*db, entry.path()))
+                            {
+                                return WalkState::Skip;
+                            }
+
                             // If this returns `Err`, then the file was deleted between now and when the walk callback was called.
                             // We can ignore this.
                             if let Ok(file) = system_path_to_file(&*db, entry.path()) {

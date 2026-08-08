@@ -29,6 +29,7 @@ by_transforms = { workspace = true }
 ruff_ranged_value = { workspace = true }
 ty_combine = { workspace = true }
 ty_module_resolver = { workspace = true }
+ty_ide = { workspace = true }
 ty_project = { workspace = true, features = ["zstd", "junit"] }
 ty_python_semantic = { workspace = true, features = ["serde"] }
 ty_server = { workspace = true }

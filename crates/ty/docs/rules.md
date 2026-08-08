@@ -3426,7 +3426,7 @@ def func() -> int:
 Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
 Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22invalid-route-arguments%22" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L235" target="_blank">View source</a>
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L241" target="_blank">View source</a>
 </small>
 
 
@@ -3451,6 +3451,87 @@ routes share is reported only when none of them accepts the arguments.
 {% url 'detail' %}          {# error: `pk` is missing #}
 {% url 'detail' pk='x' %}   {# error: `pk` goes through `int` #}
 {% url 'detail' pk=1 %}     {# ok #}
+```
+
+## `invalid-route-handler`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22invalid-route-handler%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L323" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks that the view a route names can take the arguments the route's
+pattern gives it.
+
+**Why is this bad?**
+
+A route pattern names its arguments, and django hands each of them to the
+view as a keyword argument. A view that names them differently, or does
+not take them at all, raises `TypeError` when the url is requested — a
+failure nothing reports until the page 500s.
+
+Only a project whose url tree could be walked in full is checked, since a
+route's arguments include the ones the patterns it is mounted behind
+contribute. A view taking `*args` or `**kwargs` accepts anything and is
+never reported, nor is one reached through a decorator the type checker
+cannot see through. A class-based view is checked through the handler
+methods it declares itself: what it inherits from django takes `**kwargs`.
+
+**Examples**
+
+```python
+path("books/<int:pk>/", views.detail, name="detail")
+```
+
+```python
+def detail(request, id): ...     # error: the route names `pk`
+def detail(request): ...         # error: `pk` has nowhere to go
+def detail(request, pk): ...     # ok
+```
+
+## `invalid-route-parameter-type`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'warn'."><code>warn</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22invalid-route-parameter-type%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L358" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks the type a view declares for a route argument against the type the
+route's converter produces.
+
+**Why is this bad?**
+
+A path converter parses the url before django calls the view:
+`<int:pk>` hands the view an `int` and `<uuid:key>` a `uuid.UUID`. A view
+declaring something else is annotated with a type its argument never has,
+so everything written against the annotation is written against a value
+that is not there.
+
+Unlike [`invalid-route-handler`](#invalid-route-handler) this does not stop the request: django
+calls the view and the wrong value arrives silently.
+An unannotated parameter declares nothing and is never reported,
+and neither is one matched by a regular expression, which goes through no
+converter at all.
+
+**Examples**
+
+```python
+path("books/<int:pk>/", views.detail, name="detail")
+```
+
+```python
+def detail(request, pk: str): ...    # warning: the converter gives an `int`
+def detail(request, pk: int): ...    # ok
 ```
 
 ## `invalid-super-argument`
@@ -6049,7 +6130,7 @@ class F(NamedTuple):
 Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'warn'."><code>warn</code></a> ·
 Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22template-member-needs-arguments%22" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L289" target="_blank">View source</a>
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L295" target="_blank">View source</a>
 </small>
 
 
@@ -6393,7 +6474,7 @@ class C(Generic[T]):
 Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
 Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unclosed-template-block%22" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L28" target="_blank">View source</a>
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L34" target="_blank">View source</a>
 </small>
 
 
@@ -6577,7 +6658,7 @@ def test_thing(no_such_fixture) -> None:  # requests an unknown fixture
 Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'warn'."><code>warn</code></a> ·
 Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unknown-template-block%22" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L262" target="_blank">View source</a>
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L268" target="_blank">View source</a>
 </small>
 
 
@@ -6610,7 +6691,7 @@ part of its enclosing block and needs no declaration above it.
 Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
 Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unknown-template-filter%22" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L119" target="_blank">View source</a>
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L125" target="_blank">View source</a>
 </small>
 
 
@@ -6638,7 +6719,7 @@ A filter whose library the template has simply not loaded is reported as
 Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
 Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unknown-template-library%22" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L73" target="_blank">View source</a>
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L79" target="_blank">View source</a>
 </small>
 
 
@@ -6668,7 +6749,7 @@ reached is not a library that is missing.
 Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
 Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unknown-template-tag%22" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L97" target="_blank">View source</a>
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L103" target="_blank">View source</a>
 </small>
 
 
@@ -6696,7 +6777,7 @@ A tag whose library the template has simply not loaded is reported as
 Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
 Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unloaded-template-library%22" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L141" target="_blank">View source</a>
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L147" target="_blank">View source</a>
 </small>
 
 
@@ -6724,7 +6805,7 @@ every template already and is never reported.
 Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
 Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unmatched-template-close%22" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L51" target="_blank">View source</a>
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L57" target="_blank">View source</a>
 </small>
 
 
@@ -6947,7 +7028,7 @@ print(x)  # error
 Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
 Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unresolved-route%22" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L211" target="_blank">View source</a>
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L217" target="_blank">View source</a>
 </small>
 
 
@@ -6977,7 +7058,7 @@ walked in full, reports nothing.
 Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'warn'."><code>warn</code></a> ·
 Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unresolved-static-file%22" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L187" target="_blank">View source</a>
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L193" target="_blank">View source</a>
 </small>
 
 
@@ -7007,7 +7088,7 @@ not something the source tree can answer.
 Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
 Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unresolved-template%22" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L163" target="_blank">View source</a>
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L169" target="_blank">View source</a>
 </small>
 
 

@@ -62,7 +62,7 @@ use crate::place::{
     builtins_module_scope, imported_symbol, known_module_symbol, place_from_bindings,
 };
 use crate::semantic_model::NameKind;
-use crate::suppression::check_suppressions;
+use crate::suppression::{check_suppressions, suppressions};
 use crate::types::bound_super::BoundSuperType;
 use crate::types::call::bind::ConstructorCallableKind;
 use crate::types::call::{Binding, Bindings, CallArguments, CallableBinding};
@@ -233,6 +233,18 @@ mod property_tests;
 mod subscript;
 
 pub fn check_types(db: &dyn Db, file: File) -> Vec<Diagnostic> {
+    check_types_with(db, file, Vec::new())
+}
+
+/// [`check_types`], with lint diagnostics worked out elsewhere folded in.
+///
+/// See [`crate::check_file_with`] for what `external` is and why its suppressions
+/// are applied here rather than where it was computed.
+pub(crate) fn check_types_with(
+    db: &dyn Db,
+    file: File,
+    external: Vec<Diagnostic>,
+) -> Vec<Diagnostic> {
     let _span = tracing::trace_span!("check_types", ?file).entered();
     tracing::debug!("Checking file '{path}'", path = file.path(db));
 
@@ -262,6 +274,8 @@ pub fn check_types(db: &dyn Db, file: File) -> Vec<Diagnostic> {
             .map(|error| Diagnostic::invalid_syntax(file, error, error)),
     );
 
+    report_external(db, file, external, &mut diagnostics);
+
     let diagnostics = check_suppressions(db, file, diagnostics);
 
     let elapsed = start.elapsed();
@@ -273,6 +287,39 @@ pub fn check_types(db: &dyn Db, file: File) -> Vec<Diagnostic> {
     }
 
     diagnostics
+}
+
+/// Apply `file`'s suppression comments to diagnostics computed outside this crate.
+///
+/// A suppressed one is dropped and the comment that silenced it marked used, both
+/// exactly as for a diagnostic the type checker raised itself. The marking is the
+/// point: without it `unused-ignore-comment` reports the very comment that did the
+/// silencing.
+fn report_external(
+    db: &dyn Db,
+    file: File,
+    external: Vec<Diagnostic>,
+    diagnostics: &mut TypeCheckDiagnostics,
+) {
+    if external.is_empty() {
+        return;
+    }
+
+    let suppressions = suppressions(db, file);
+
+    for diagnostic in external {
+        let suppression = diagnostic
+            .id()
+            .as_lint()
+            .and_then(|name| db.lint_registry().get(name.as_str()).ok())
+            .zip(diagnostic.primary_span().and_then(|span| span.range()))
+            .and_then(|(lint, range)| suppressions.find_suppression(range, lint));
+
+        match suppression {
+            Some(suppression) => diagnostics.mark_used(suppression.id()),
+            None => diagnostics.push(diagnostic),
+        }
+    }
 }
 
 /// Infer the type of a binding.

@@ -1220,6 +1220,26 @@
             }
           ]
         },
+        "invalid-route-handler": {
+          "title": "detects a view that cannot take the arguments its route gives it",
+          "description": "## What it does\nChecks that the view a route names can take the arguments the route's\npattern gives it.\n\n## Why is this bad?\nA route pattern names its arguments, and django hands each of them to the\nview as a keyword argument. A view that names them differently, or does\nnot take them at all, raises `TypeError` when the url is requested — a\nfailure nothing reports until the page 500s.\n\nOnly a project whose url tree could be walked in full is checked, since a\nroute's arguments include the ones the patterns it is mounted behind\ncontribute. A view taking `*args` or `**kwargs` accepts anything and is\nnever reported, nor is one reached through a decorator the type checker\ncannot see through. A class-based view is checked through the handler\nmethods it declares itself: what it inherits from django takes `**kwargs`.\n\n## Examples\n```python\npath(\"books/<int:pk>/\", views.detail, name=\"detail\")\n```\n\n```python\ndef detail(request, id): ...     # error: the route names `pk`\ndef detail(request): ...         # error: `pk` has nowhere to go\ndef detail(request, pk): ...     # ok\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "invalid-route-parameter-type": {
+          "title": "detects a view declaring a type its route's converter does not produce",
+          "description": "## What it does\nChecks the type a view declares for a route argument against the type the\nroute's converter produces.\n\n## Why is this bad?\nA path converter parses the url before django calls the view:\n`<int:pk>` hands the view an `int` and `<uuid:key>` a `uuid.UUID`. A view\ndeclaring something else is annotated with a type its argument never has,\nso everything written against the annotation is written against a value\nthat is not there.\n\nUnlike `invalid-route-handler` this does not stop the request: django\ncalls the view and the wrong value arrives silently.\nAn unannotated parameter declares nothing and is never reported,\nand neither is one matched by a regular expression, which goes through no\nconverter at all.\n\n## Examples\n```python\npath(\"books/<int:pk>/\", views.detail, name=\"detail\")\n```\n\n```python\ndef detail(request, pk: str): ...    # warning: the converter gives an `int`\ndef detail(request, pk: int): ...    # ok\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-super-argument": {
           "title": "detects invalid arguments for `super()`",
           "description": "## What it does\n\nDetects `super()` calls where:\n\n- the first argument is not a valid class literal, or\n- the second argument is not an instance or subclass of the first argument.\n\n## Why is this bad?\n\n`super(type, obj)` expects:\n\n- the first argument to be a class,\n- and the second argument to satisfy one of the following:\n    - `isinstance(obj, type)` is `True`\n    - `issubclass(obj, type)` is `True`\n\nViolating this relationship will raise a `TypeError` at runtime.\n\n## Examples\n\n```python\nclass A: ...\n\n\nclass B(A): ...\n\n\nsuper(A, B())  # it's okay! `A` satisfies `isinstance(B(), A)`\n\n# `A()` is not a class\nsuper(A(), B())  # error\n\n# `A()` does not satisfy `isinstance(A(), B)`\nsuper(B, A())  # error\n# `A` does not satisfy `issubclass(A, B)`\nsuper(B, A)  # error\n```\n\n## References\n\n- [Python documentation: super()](https://docs.python.org/3/library/functions.html#super)",

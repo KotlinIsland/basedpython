@@ -134,6 +134,48 @@ pub struct Project {
     pub file_system_revision: u64,
 }
 
+/// A checker for the part of a project the type checker does not read.
+///
+/// The type checker reads Python. A project can hold files of another language
+/// that are still part of it — a Django template is compiled and rendered rather
+/// than typed — and what such a file gets wrong is worked out somewhere that has
+/// read the whole project rather than the file on its own.
+///
+/// Registering one of these with [`ProjectDatabase::set_checker`] joins it to
+/// [`Project::check`], which stays the single place that knows how to check a
+/// project: the extra files go through the same parallel loop, the same
+/// [`ProgressReporter`], and the same output formats and exit codes, and an editor
+/// registering the same checker reports exactly what the command line does.
+///
+/// A project the checker has nothing to say about must answer `files` with an
+/// empty set: nothing else is called for such a project, so it pays nothing.
+pub trait ProjectChecker: Send + Sync + std::panic::RefUnwindSafe {
+    /// Whether `path` is this checker's rather than the type checker's.
+    ///
+    /// A file this answers `true` for is kept out of the project's file set even
+    /// when it was named on the command line, which is otherwise taken to mean
+    /// "analyze this whatever its extension is". Reading a Django template as
+    /// Python produces a page of syntax errors about a file that is not Python.
+    fn owns(&self, db: &dyn Db, path: &SystemPath) -> bool;
+
+    /// The project's files this checker answers for.
+    ///
+    /// None of them is in the project's file set — the type checker must never be
+    /// handed one — so this is the only thing that says they exist.
+    fn files(&self, db: &dyn Db) -> Vec<File>;
+
+    /// Everything wrong with `file`, which is one of [`Self::files`].
+    fn check_file(&self, db: &dyn Db, file: File) -> Vec<Diagnostic>;
+
+    /// What this checker has to say about a Python file of the project.
+    ///
+    /// Returned with the file's suppression comments *not* applied: they are
+    /// applied where the type checker applies its own (see
+    /// [`ty_python_semantic::check_file_with`]), so that one `ty: ignore`
+    /// silences either kind of diagnostic and counts as used either way.
+    fn check_python_file(&self, db: &dyn Db, file: File) -> Vec<Diagnostic>;
+}
+
 /// A progress reporter.
 pub trait ProgressReporter: Send + Sync {
     /// Initialize the reporter with the number of files.
@@ -385,7 +427,15 @@ impl Project {
             .collect();
 
         let files = ProjectFiles::new(db, self);
-        reporter.set_files(files.len());
+
+        // the project's files that are not python. a django template is never handed
+        // to the type checker — it is not in the file set above and is never parsed as
+        // python — but it is part of the project, so it is checked here
+        let checker = db.project_checker();
+        let other_language: Vec<File> =
+            checker.map(|checker| checker.files(db)).unwrap_or_default();
+
+        reporter.set_files(files.len() + other_language.len());
 
         diagnostics.extend_from_slice(files.diagnostics());
 
@@ -427,6 +477,20 @@ impl Project {
                     }
                 }
             });
+
+        if let Some(checker) = checker {
+            other_language
+                .into_par_iter()
+                .for_each_with_project_db(db, |db, file| {
+                    db.unwind_if_revision_cancelled();
+
+                    let check_file_span =
+                        tracing::debug_span!(parent: &project_span, "check_file", ?file);
+                    let _entered = check_file_span.entered();
+
+                    reporter.report_checked_file(db, file, &checker.check_file(db, file));
+                });
+        }
 
         tracing::debug!(
             "Checking all files took {:.3}s",
@@ -754,7 +818,17 @@ pub enum ProjectReloadResult {
 pub(crate) fn check_file_impl(db: &dyn Db, file: File) -> Result<Box<[Diagnostic]>, Diagnostic> {
     {
         let db = AssertUnwindSafe(db);
-        match catch(&**db, file, || ty_python_semantic::check_file(*db, file)) {
+        match catch(&**db, file, || {
+            // what a registered checker has to say about a python file is folded into
+            // the type checker's own pass rather than reported beside it, so that the
+            // file's suppression comments apply to both alike
+            let external = db
+                .project_checker()
+                .map(|checker| checker.check_python_file(*db, file))
+                .unwrap_or_default();
+
+            ty_python_semantic::check_file_with(*db, file, external)
+        }) {
             Ok(result) => result,
             Err(diagnostic) => Ok(Box::new([diagnostic])),
         }

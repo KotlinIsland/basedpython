@@ -24,12 +24,17 @@ use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, AnyNodeRef, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::{FxHashMap, FxHashSet};
-use ty_module_resolver::{Module, ModuleName, file_to_module, resolve_module, resolve_real_module};
+use ty_module_resolver::{
+    Module, ModuleName, file_to_module, resolve_module, resolve_module_confident,
+    resolve_real_module,
+};
 use ty_project::{Db, Project};
 use ty_python_semantic::SemanticModel;
 use ty_python_semantic::types::ide_support::{
     ImportAliasResolution, ResolvedDefinition, definitions_for_attribute, definitions_for_name,
+    instance_of_class,
 };
+use ty_python_semantic::types::{KnownClass, Type};
 
 /// the directory name django's app-directories template loader looks in
 const TEMPLATE_DIRECTORY: &str = "templates";
@@ -344,7 +349,28 @@ pub(crate) struct UrlName {
     /// writing them out, so what one of them takes cannot be read off `route`.
     pub(crate) exact: bool,
     /// the view the route hands the request to, where it names one this can read
-    pub(crate) view: Option<Target>,
+    pub(crate) view: Option<RouteView>,
+    /// whether the route hands the view arguments its pattern does not name
+    ///
+    /// `path()` takes a dict of extra keyword arguments django passes on top of
+    /// whatever the pattern captured, so a view with a parameter the pattern says
+    /// nothing about may still be called with one.
+    pub(crate) extra_arguments: bool,
+}
+
+/// the view a route hands the request to
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub(crate) struct RouteView {
+    /// where the view is declared
+    pub(crate) target: Target,
+    /// where the route names it, for a diagnostic about the pairing to point at
+    pub(crate) range: TextRange,
+    /// whether the route reaches it through `as_view()`
+    ///
+    /// django calls what `as_view()` returns rather than the class itself, so a
+    /// class reached that way serves the request through its handler methods
+    /// rather than through anything the class declares directly.
+    pub(crate) class_based: bool,
 }
 
 /// what a python definition a django construct names is
@@ -371,15 +397,58 @@ impl UrlName {
     pub(crate) fn parameters(&self) -> Option<Vec<Parameter>> {
         self.exact
             .then_some(self.route.as_deref()?)
-            .and_then(parameters_of)
+            .and_then(|route| parameters_of(route, DJANGO_SYNTAX))
     }
 }
+
+/// how a framework delimits the parameters it writes into a route pattern
+///
+/// django writes `<int:pk>`; the brace form fastapi, starlette and django-bolt
+/// share writes `{pk}` or `{pk:int}`, the name and the converter the other way
+/// round. beyond the delimiters and that order, reading a pattern is the same
+/// work either way, so this is all a framework has to say about its spelling —
+/// what its converter names mean is [`Converter`]'s to say.
+#[derive(Debug, Clone, Copy)]
+struct ParameterSyntax {
+    /// what opens a parameter
+    open: char,
+    /// what closes it
+    close: char,
+    /// whether the converter is written before the name, as django writes it
+    converter_first: bool,
+    /// whether a regular expression's named groups name parameters too
+    ///
+    /// django's `re_path()` takes a regular expression rather than a pattern of
+    /// its own, and a named group in one is an argument like any other — put
+    /// through no converter, so nothing is known about its type.
+    named_groups: bool,
+}
+
+/// how django's `path()` and `re_path()` write their parameters
+const DJANGO_SYNTAX: ParameterSyntax = ParameterSyntax {
+    open: '<',
+    close: '>',
+    converter_first: true,
+    named_groups: true,
+};
 
 /// one argument a route pattern takes
 pub(crate) struct Parameter {
     pub(crate) name: CompactString,
     /// the converter django puts the argument through, where it is one of its own
     pub(crate) converter: Option<Converter>,
+}
+
+impl Parameter {
+    /// the python value the framework hands the view for this argument
+    ///
+    /// `None` where nothing here says: an argument matched by a regular
+    /// expression goes through no converter at all, and one whose converter the
+    /// project registered itself yields whatever that converter's `to_python`
+    /// returns.
+    pub(crate) fn value_type<'db>(&self, db: &'db dyn Db) -> Option<Type<'db>> {
+        self.converter?.value_type(db)
+    }
 }
 
 /// the path converters django ships
@@ -414,6 +483,20 @@ impl Converter {
         }
     }
 
+    /// the python value the view is handed for an argument this matched
+    ///
+    /// this is the other half of what a converter is: [`Self::matches`] says what
+    /// the url may hold, and this says what comes out of `to_python` on the other
+    /// side.
+    fn value_type(self, db: &dyn Db) -> Option<Type<'_>> {
+        match self {
+            // three of django's five converters differ only in what they match
+            Self::Str | Self::Slug | Self::Path => Some(KnownClass::Str.to_instance(db)),
+            Self::Int => Some(KnownClass::Int.to_instance(db)),
+            Self::Uuid => instance_of_class(db, "uuid", "UUID"),
+        }
+    }
+
     /// whether a value written out in the template is one this would match
     pub(crate) fn matches(self, value: &str) -> bool {
         match self {
@@ -441,22 +524,33 @@ impl Converter {
     }
 }
 
-/// the arguments a route pattern names
+/// the arguments a route pattern names, read in the spelling `syntax` describes
 ///
 /// django writes them two ways: `path()` takes `<converter:name>` and
 /// `re_path()` takes a named group. a pattern with an *unnamed* group takes
 /// arguments nothing can name, so it answers nothing rather than too few.
-fn parameters_of(pattern: &str) -> Option<Vec<Parameter>> {
+fn parameters_of(pattern: &str, syntax: ParameterSyntax) -> Option<Vec<Parameter>> {
     let mut parameters = Vec::new();
     let mut rest = pattern;
 
-    while let Some(index) = rest.find(['<', '(']) {
+    let opener: &[char] = if syntax.named_groups {
+        &[syntax.open, '(']
+    } else {
+        std::slice::from_ref(&syntax.open)
+    };
+
+    while let Some(index) = rest.find(opener) {
         let after = &rest[index..];
 
-        if let Some(after) = after.strip_prefix('<') {
-            let (declaration, tail) = after.split_once('>')?;
+        if let Some(after) = after.strip_prefix(syntax.open) {
+            let (declaration, tail) = after.split_once(syntax.close)?;
             let (converter, name) = match declaration.split_once(':') {
-                Some((converter, name)) => (Converter::of(converter), name),
+                Some((converter, name)) if syntax.converter_first => {
+                    (Converter::of(converter), name)
+                }
+                Some((name, converter)) => (Converter::of(converter), name),
+                // a parameter written without a converter goes through the one
+                // that matches any single path segment
                 None => (Some(Converter::Str), declaration),
             };
             parameters.push(Parameter {
@@ -605,6 +699,20 @@ impl DiscoveredFile {
             .ancestors()
             .nth(self.name.matches('/').count() + 1)
     }
+}
+
+/// whether the project has django at all
+///
+/// a project without it has no django templates: an `.html` file under a
+/// `templates` directory of a flask or a jinja project is not one, and every
+/// check reads something — the tag libraries, the template directories, the url
+/// tree — that django is what defines. asking first is also what keeps a project
+/// with no django from paying for the file-system walks the discovery does.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn has_django(db: &dyn Db, _project: Project) -> bool {
+    ModuleName::new_static(DJANGO_PACKAGE)
+        .and_then(|name| resolve_module_confident(db, &name))
+        .is_some()
 }
 
 /// every file under a `templates` directory of the project, or one its settings name
@@ -2506,6 +2614,7 @@ impl UrlVisitor<'_> {
                 route: None,
                 exact: false,
                 view: None,
+                extra_arguments: false,
             },
         );
     }
@@ -2526,11 +2635,20 @@ impl UrlVisitor<'_> {
         };
 
         let route = join_routes(self.prefix.as_deref(), route_of(call).as_deref());
-        let view = call
-            .arguments
-            .args
-            .get(1)
-            .and_then(|view| resolved_target(self.db, self.file, view_callable(view)));
+        let view = call.arguments.args.get(1).and_then(|argument| {
+            let (callable, class_based) = view_callable(argument);
+
+            Some(RouteView {
+                target: resolved_target(self.db, self.file, callable)?,
+                range: callable.range(),
+                class_based,
+            })
+        });
+        // `path(route, view, kwargs, name)`: whatever the third argument holds is
+        // passed to the view alongside what the pattern captured
+        let extra_arguments =
+            call.arguments.args.len() > 2 || call.arguments.find_keyword("kwargs").is_some();
+
         self.record(
             self.binding.clone(),
             UrlName {
@@ -2540,6 +2658,7 @@ impl UrlVisitor<'_> {
                 route: route.map(|route| route.as_str().into()),
                 exact: true,
                 view,
+                extra_arguments,
             },
         );
     }
@@ -2612,7 +2731,13 @@ impl UrlVisitor<'_> {
         // a router writes its own patterns from the prefix rather than taking
         // them, so the prefix is what a route reads as but not what it takes
         let route = join_routes(self.prefix.as_deref(), Some(prefix.as_str()));
-        let view = resolved_target(self.db, self.file, viewset);
+        // a router hands each generated route `viewset.as_view({…})`, so what
+        // serves the request is one of the viewset's own methods
+        let view = resolved_target(self.db, self.file, viewset).map(|target| RouteView {
+            target,
+            range: viewset.range(),
+            class_based: true,
+        });
         let generated = |name: String, file: File, range: TextRange| UrlName {
             name: name.to_compact_string(),
             file,
@@ -2621,6 +2746,7 @@ impl UrlVisitor<'_> {
             // a router writes its own patterns rather than taking them
             exact: false,
             view: view.clone(),
+            extra_arguments: false,
         };
 
         for suffix in ROUTER_ROUTE_SUFFIXES {
@@ -2659,7 +2785,7 @@ impl UrlVisitor<'_> {
 /// makes an `@action` added to a viewset appear in a template's completions
 /// without the url configuration being touched. it costs one file per name
 /// followed, which is why it is affordable.
-fn resolved_class<T>(
+pub(crate) fn resolved_class<T>(
     db: &dyn Db,
     file: File,
     expr: &Expr,
@@ -2723,19 +2849,22 @@ fn resolved_target(db: &dyn Db, file: File, expr: &Expr) -> Option<Target> {
         })
 }
 
-/// what a route's view argument points at
+/// what a route's view argument points at, and whether it was reached through
+/// `as_view()`
 ///
 /// a class-based view is written into a route through `as_view()`, and what the
-/// route reaches is the class that method belongs to.
-fn view_callable(expr: &Expr) -> &Expr {
+/// route reaches is the class that method belongs to. that a class was reached
+/// that way is worth keeping: it is the difference between a class django calls
+/// through its handler methods and one a route hands the request to directly.
+fn view_callable(expr: &Expr) -> (&Expr, bool) {
     match expr {
         Expr::Call(call) => match &*call.func {
             Expr::Attribute(attribute) if attribute.attr.as_str() == AS_VIEW_METHOD => {
-                &attribute.value
+                (&attribute.value, true)
             }
-            _ => expr,
+            _ => (expr, false),
         },
-        _ => expr,
+        _ => (expr, false),
     }
 }
 

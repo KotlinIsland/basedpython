@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::FxIndexSet;
-use crate::place::builtins_module_scope;
+use crate::place::{builtins_module_scope, imported_symbol};
 use crate::reachability::is_range_reachable;
 use crate::types::call::bind::CheckTypesMode;
 use crate::types::call::{CallArguments, CallError, MatchedArgument};
@@ -11,7 +11,7 @@ use crate::types::function::FunctionDecorators;
 use crate::types::generics::GenericContext;
 use crate::types::list_members::all_end_of_scope_members;
 use crate::types::overrides::is_constructor_like_method;
-use crate::types::signatures::{ParametersKind, Signature};
+use crate::types::signatures::{ParameterKind, ParametersKind, Signature};
 use crate::types::{
     CallDunderError, CallableTypes, ClassBase, ClassLiteral, ClassType, KnownClass, KnownFunction,
     KnownUnion, SubclassOfInner, Type, TypeContext, TypeVarVariance, binding_type,
@@ -25,7 +25,7 @@ use ruff_python_ast::{self as ast, AnyNodeRef, name::Name};
 use ruff_python_stdlib::identifiers::is_mangled_private;
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::FxHashSet;
-use ty_module_resolver::Module;
+use ty_module_resolver::{Module, ModuleName, resolve_module_confident};
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::{attribute_scopes, global_scope, semantic_index, use_def_map};
 
@@ -2461,6 +2461,106 @@ pub fn no_argument_call_return_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Opti
     ty.try_call(db, &CallArguments::none())
         .ok()
         .map(|bindings| bindings.return_type(db))
+}
+
+/// How a callable takes one of its parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallableParameterKind {
+    /// `def f(x, /)`
+    PositionalOnly,
+    /// `def f(x)`
+    PositionalOrKeyword,
+    /// `def f(*args)`
+    Variadic,
+    /// `def f(*, x)`
+    KeywordOnly,
+    /// `def f(**kwargs)`
+    KeywordVariadic,
+}
+
+/// One parameter of a callable, read the way a caller reasoning about a call
+/// site written elsewhere has to read it.
+#[derive(Debug, Clone)]
+pub struct CallableParameter<'db> {
+    pub name: Option<Name>,
+    pub kind: CallableParameterKind,
+    /// The type the parameter is declared with, or `None` where nothing declares
+    /// one — an unannotated parameter accepts whatever it is given.
+    pub declared_type: Option<Type<'db>>,
+    /// Whether a call may leave the parameter out.
+    pub has_default: bool,
+}
+
+/// The parameters `ty` takes, for a callable that takes one fixed list of them.
+///
+/// Returns `None` for everything else: a type that is not callable at all, an
+/// overloaded one, a union of callables, and one whose parameters are gradual
+/// (`Callable[..., T]`, which is what an undecipherable decorator leaves behind).
+/// None of those has a single parameter list to answer with, and a caller
+/// checking a call site written in another language has to be able to tell "this
+/// callable does not take that" from "there is no saying what this takes".
+///
+/// Written for the web frameworks, whose routes name the arguments a request
+/// hands the view. The signature this returns is the one the framework will call,
+/// decorators applied — a decorator the type checker can see through keeps the
+/// view's own parameters, and one it cannot leaves parameters this refuses to
+/// answer for.
+pub fn callable_parameters<'db>(
+    db: &'db dyn Db,
+    ty: Type<'db>,
+) -> Option<Vec<CallableParameter<'db>>> {
+    let callable = ty
+        .try_upcast_to_callable(db)
+        .and_then(CallableTypes::exactly_one)?;
+    let signatures = callable.signatures(db);
+    let [signature] = signatures.overloads.as_slice() else {
+        return None;
+    };
+
+    let parameters = signature.parameters();
+    if !matches!(parameters.kind(), ParametersKind::Standard) {
+        return None;
+    }
+
+    Some(
+        parameters
+            .iter()
+            .map(|parameter| CallableParameter {
+                name: parameter.name().cloned(),
+                kind: match parameter.kind() {
+                    ParameterKind::PositionalOnly { .. } => CallableParameterKind::PositionalOnly,
+                    ParameterKind::PositionalOrKeyword { .. } => {
+                        CallableParameterKind::PositionalOrKeyword
+                    }
+                    ParameterKind::Variadic { .. } => CallableParameterKind::Variadic,
+                    ParameterKind::KeywordOnly { .. } => CallableParameterKind::KeywordOnly,
+                    ParameterKind::KeywordVariadic { .. } => CallableParameterKind::KeywordVariadic,
+                },
+                // an annotation the type checker inferred rather than read is no
+                // declaration: the parameter was written bare, and a bare
+                // parameter accepts whatever the caller passes
+                declared_type: (parameter.should_annotation_be_displayed()
+                    && !parameter.annotated_type().is_unknown())
+                .then(|| parameter.annotated_type()),
+                has_default: parameter.default_type().is_some(),
+            })
+            .collect(),
+    )
+}
+
+/// The instance type of the class `name` of the module `module`, where the
+/// environment has it.
+///
+/// Written for the web frameworks, which say what a route hands a view by naming
+/// the class — django's `<uuid:key>` is a `uuid.UUID` — rather than by writing a
+/// type expression anywhere the type checker would evaluate one.
+pub fn instance_of_class<'db>(db: &'db dyn Db, module: &str, name: &str) -> Option<Type<'db>> {
+    let module = resolve_module_confident(db, &ModuleName::new(module)?)?;
+
+    imported_symbol(db, module.file(db), name, None)
+        .place
+        .ignore_possibly_undefined()?
+        .to_instance_approximation(db)
 }
 
 /// Whether `ty` is a function django would try to call and could not.

@@ -611,7 +611,7 @@ impl Session {
                 ProjectDatabase::fallible(metadata, system.clone())
             });
 
-        let (root, db) = match project {
+        let (root, mut db) = match project {
             Ok(db) => (root, db),
             Err(err) => {
                 tracing::error!(
@@ -639,6 +639,11 @@ impl Session {
                 (default_root, db_with_default_settings)
             }
         };
+
+        // the same checker `by check` registers, so that a python file's django
+        // diagnostics reach the editor through `check_file` — one set of rules, one
+        // set of suppressions
+        db.set_checker(Arc::new(ty_ide::DjangoChecker));
 
         // Carry forward diagnostic state if any exists
         let previous = self.projects.remove(&root);

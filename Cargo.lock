@@ -4702,6 +4702,7 @@ dependencies = [
  "tracing-flame",
  "tracing-subscriber",
  "ty_combine",
+ "ty_ide",
  "ty_module_resolver",
  "ty_project",
  "ty_python_core",

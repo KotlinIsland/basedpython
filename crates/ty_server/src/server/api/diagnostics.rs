@@ -412,7 +412,12 @@ pub(super) fn compute_diagnostics(
         });
     }
 
+    // what django's routes and views get wrong is read from the project's url tree
+    // rather than from this file alone, so it is not part of the type checker's own
+    // pass. it arrives here through the checker the session registers, which is the
+    // one `by check` registers too
     let diagnostics = db.check_file(file);
+
     let unnecessary_hints = hints(db, file);
 
     Some(Diagnostics {
