@@ -15,7 +15,7 @@ use compact_str::{CompactString, ToCompactString};
 use ruff_text_size::{TextRange, TextSize};
 
 use super::builtins;
-use super::lexer::{Construct, ConstructKind, Lexed, Token, TokenKind, lex};
+use super::lexer::{Construct, ConstructKind, Lexed, Token, TokenKind, lex, string_contents};
 
 /// a name a template defines: a `{% block %}` or a `{% partialdef %}`
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
@@ -92,16 +92,20 @@ pub(crate) struct Block {
 }
 
 /// a template, lexed and indexed
+///
+/// every collection is boxed: the index is a salsa-cached value, and a `Vec`
+/// built by pushing would hold on to as much as half again its length in spare
+/// capacity for as long as the file stays open.
 #[derive(Debug, PartialEq, Eq, get_size2::GetSize)]
 pub(crate) struct TemplateIndex {
     lexed: Lexed,
     extends: Option<TemplateReference>,
-    includes: Vec<TemplateReference>,
-    blocks: Vec<Definition>,
-    partials: Vec<Definition>,
-    loads: Vec<Load>,
-    bindings: Vec<Binding>,
-    spans: Vec<Block>,
+    includes: Box<[TemplateReference]>,
+    blocks: Box<[Definition]>,
+    partials: Box<[Definition]>,
+    loads: Box<[Load]>,
+    bindings: Box<[Binding]>,
+    spans: Box<[Block]>,
 }
 
 impl TemplateIndex {
@@ -303,12 +307,12 @@ impl<'src> Builder<'src> {
         TemplateIndex {
             lexed: self.lexed,
             extends,
-            includes,
-            blocks,
-            partials,
-            loads,
-            bindings,
-            spans,
+            includes: includes.into_boxed_slice(),
+            blocks: blocks.into_boxed_slice(),
+            partials: partials.into_boxed_slice(),
+            loads: loads.into_boxed_slice(),
+            bindings: bindings.into_boxed_slice(),
+            spans: spans.into_boxed_slice(),
         }
     }
 
@@ -329,24 +333,13 @@ impl<'src> Builder<'src> {
 
     /// a construct's tokens with its delimiters and its tag name dropped
     fn arguments(&self, construct: &Construct) -> &[Token] {
-        let tokens = self.lexed.construct_tokens(construct);
+        let tokens = self.lexed.inner_tokens(construct);
 
-        let start = match tokens
-            .iter()
-            .position(|token| token.kind == TokenKind::TagName)
-        {
-            Some(index) => index + 1,
-            None => tokens
-                .iter()
-                .position(|token| token.kind != TokenKind::Delimiter)
-                .unwrap_or(tokens.len()),
-        };
-        let end = tokens
-            .iter()
-            .rposition(|token| token.kind != TokenKind::Delimiter)
-            .map_or(start, |index| index + 1);
-
-        tokens.get(start..end.max(start)).unwrap_or_default()
+        // the tag name is always the first token inside the delimiters
+        match tokens.split_first() {
+            Some((first, rest)) if first.kind == TokenKind::TagName => rest,
+            _ => tokens,
+        }
     }
 
     /// the block or partial `construct` defines
@@ -545,22 +538,8 @@ impl<'src> Builder<'src> {
             return None;
         }
 
-        let text = &self.source[token.range];
-        let quote = text.chars().next()?;
-        if !matches!(quote, '"' | '\'') {
-            return None;
-        }
-
-        let start = token.range.start() + TextSize::from(1);
-        // an unterminated literal still names a template: the user is mid-typing
-        let end = if text.len() > 1 && text.ends_with(quote) {
-            token.range.end() - TextSize::from(1)
-        } else {
-            token.range.end()
-        };
-
-        let range = TextRange::new(start, end.max(start));
-        Some((&self.source[range], range))
+        let range = string_contents(self.source, token.range);
+        (range != token.range).then(|| (&self.source[range], range))
     }
 }
 

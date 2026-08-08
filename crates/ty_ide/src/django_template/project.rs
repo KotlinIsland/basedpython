@@ -17,6 +17,7 @@ use std::sync::Mutex;
 use compact_str::{CompactString, ToCompactString};
 use ruff_db::files::{File, FilePath, system_path_to_file};
 use ruff_db::parsed::parsed_module;
+use ruff_db::source::source_text;
 use ruff_db::system::walk_directory::WalkState;
 use ruff_db::system::{FileType, SystemPath, SystemPathBuf};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
@@ -32,6 +33,18 @@ const STATIC_DIRECTORY: &str = "static";
 
 /// the package name a project's template tag libraries live in
 const TEMPLATETAGS_PACKAGE: &str = "templatetags";
+
+/// the functions that render a named template with a context
+const CONTEXT_CALLEES: &[&str] = &["render", "TemplateResponse"];
+
+/// the class attribute a generic view names its template with
+const TEMPLATE_NAME_ATTRIBUTE: &str = "template_name";
+
+/// the functions that give a route a reversible name
+const URL_CALLEES: &[&str] = &["path", "re_path", "url"];
+
+/// the keyword those functions take the name by
+const URL_NAME_KEYWORD: &str = "name";
 
 /// how deep below the project root a `templates`/`static` directory is looked for
 ///
@@ -209,6 +222,11 @@ where
 /// the walk is bounded (see [`DISCOVERY_DEPTH`]) and respects the project's
 /// ignore-file settings, so a repository's dependencies are not crawled.
 fn discover(db: &dyn Db, project: Project, directory: &str) -> Box<[DiscoveredFile]> {
+    // walking the file system is invisible to salsa, so the callers' queries would
+    // hand back their first answer forever. reading the revision the project bumps
+    // on every create and delete is what makes a template added mid-session show up
+    let _ = project.file_system_revision(db);
+
     let root = project.root(db);
     let found = Mutex::new(Vec::new());
 
@@ -440,9 +458,25 @@ fn registered_name(
     function.id.to_compact_string()
 }
 
+/// whether `file`'s source spells any of `names` somewhere
+///
+/// every name the scans below match is compared against an identifier that has
+/// to be written out in the source, so a file whose text doesn't contain it
+/// cannot produce a result and doesn't need parsing. skipping those is what
+/// keeps one template's completions from parsing a project's every file.
+fn mentions(db: &dyn Db, file: File, names: &[&str]) -> bool {
+    let source = source_text(db, file);
+    names.iter().any(|name| source.contains(name))
+}
+
 /// the url names one module defines
 #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
 fn url_names_in_file(db: &dyn Db, file: File) -> Box<[UrlName]> {
+    // a named route is a `path()`-like call carrying a `name=` keyword
+    if !mentions(db, file, URL_CALLEES) || !mentions(db, file, &[URL_NAME_KEYWORD]) {
+        return Box::default();
+    }
+
     let parsed = parsed_module(db, file).load(db);
 
     // django namespaces an included module's names under its `app_name`
@@ -475,11 +509,8 @@ struct UrlVisitor {
 impl<'ast> Visitor<'ast> for UrlVisitor {
     fn visit_expr(&mut self, expr: &'ast Expr) {
         if let Expr::Call(call) = expr
-            && matches!(
-                callee_name(&call.func).as_deref(),
-                Some("path" | "re_path" | "url")
-            )
-            && let Some(keyword) = call.arguments.find_keyword("name")
+            && callee_name(&call.func).is_some_and(|callee| URL_CALLEES.contains(&callee.as_str()))
+            && let Some(keyword) = call.arguments.find_keyword(URL_NAME_KEYWORD)
             && let Some(name) = string_literal(&keyword.value)
         {
             let name = match &self.namespace {
@@ -507,6 +538,11 @@ impl<'ast> Visitor<'ast> for UrlVisitor {
 /// the template contexts one module builds
 #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
 fn template_contexts_in_file(db: &dyn Db, file: File) -> Box<[TemplateContext]> {
+    // a context comes from a render call or from a view class naming its template
+    if !mentions(db, file, CONTEXT_CALLEES) && !mentions(db, file, &[TEMPLATE_NAME_ATTRIBUTE]) {
+        return Box::default();
+    }
+
     let parsed = parsed_module(db, file).load(db);
 
     let mut visitor = ContextVisitor {
@@ -530,14 +566,15 @@ impl ContextVisitor {
     /// and both accept those last two by keyword as well.
     fn render_call(&self, call: &ast::ExprCall) -> Option<TemplateContext> {
         let callee = callee_name(&call.func)?;
-        let (template_index, context_index) = match callee.as_str() {
-            "render" | "TemplateResponse" => (1, 2),
-            _ => return None,
-        };
+        if !CONTEXT_CALLEES.contains(&callee.as_str()) {
+            return None;
+        }
+        // both take the request first, the template second and the context third
+        let (template_index, context_index) = (1, 2);
 
         let template = call
             .arguments
-            .find_keyword("template_name")
+            .find_keyword(TEMPLATE_NAME_ATTRIBUTE)
             .map(|keyword| &keyword.value)
             .or_else(|| call.arguments.args.get(template_index))
             .and_then(string_literal)?;
@@ -585,7 +622,7 @@ impl ContextVisitor {
         let template = class
             .body
             .iter()
-            .find_map(|statement| class_attribute(statement, "template_name"))
+            .find_map(|statement| class_attribute(statement, TEMPLATE_NAME_ATTRIBUTE))
             .and_then(|(value, _)| string_literal(value))?;
 
         let mut variables = Vec::new();
@@ -737,4 +774,235 @@ fn docstring_summary(body: &[Stmt]) -> Option<Box<str>> {
         .join(" ");
 
     (!summary.is_empty()).then(|| Box::from(summary.as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use ty_project::Db;
+
+    use crate::django_template::tests::TemplateTest;
+
+    use super::{RegistrationKind, context_for_template, registrations, url_names};
+
+    /// a project of python sources, with a throwaway template to anchor the
+    /// harness' cursor
+    fn project(sources: &[(&str, &str)]) -> TemplateTest {
+        let mut all = sources.to_vec();
+        all.push(("app/templates/app/page.html", "<CURSOR>"));
+        TemplateTest::new(&all)
+    }
+
+    /// the names a view puts in `template`'s context, in the order offered
+    fn context(test: &TemplateTest, template: &str) -> Vec<String> {
+        context_for_template(&test.db, template)
+            .into_iter()
+            .map(|variable| variable.name.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_class_based_view_contributes_every_name_it_declares() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            class BookDetail:
+                template_name = 'app/detail.html'
+                context_object_name = 'book'
+                extra_context = {'title': 'a book'}
+
+                def get_context_data(self, **kwargs):
+                    context = super().get_context_data(**kwargs)
+                    context['related'] = []
+                    return context
+            ",
+        )]);
+
+        assert_eq!(
+            context(&test, "app/detail.html"),
+            ["book", "title", "related"]
+        );
+    }
+
+    #[test]
+    fn a_class_based_view_without_a_template_name_names_no_template() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            class Base:
+                context_object_name = 'book'
+            ",
+        )]);
+
+        assert!(context(&test, "app/detail.html").is_empty());
+    }
+
+    #[test]
+    fn a_template_response_builds_a_context_just_as_render_does() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            def show(request):
+                return TemplateResponse(request, 'app/page.html', {'book': 1})
+            ",
+        )]);
+
+        assert_eq!(context(&test, "app/page.html"), ["book"]);
+    }
+
+    #[test]
+    fn a_render_call_may_pass_the_template_and_context_by_keyword() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            def show(request):
+                return render(request, template_name='app/page.html', context={'book': 1})
+            ",
+        )]);
+
+        assert_eq!(context(&test, "app/page.html"), ["book"]);
+    }
+
+    #[test]
+    fn two_views_of_one_template_both_contribute_and_a_shared_name_appears_once() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            def one(request):
+                return render(request, 'app/page.html', {'book': 1, 'shelf': 2})
+
+            def two(request):
+                return render(request, 'app/page.html', {'book': 3, 'author': 4})
+            ",
+        )]);
+
+        assert_eq!(context(&test, "app/page.html"), ["book", "shelf", "author"]);
+    }
+
+    #[test]
+    fn a_view_module_that_renders_nothing_is_not_parsed_for_contexts() {
+        // the gate that skips it must not skip a file that does render
+        let test = project(&[
+            ("app/models.py", "class Book:\n    title: str\n"),
+            (
+                "app/views.py",
+                "
+                def show(request):
+                    return render(request, 'app/page.html', {'book': 1})
+                ",
+            ),
+        ]);
+
+        assert_eq!(context(&test, "app/page.html"), ["book"]);
+    }
+
+    #[test]
+    fn re_path_names_routes_too() {
+        let test = project(&[(
+            "app/urls.py",
+            "
+            urlpatterns = [
+                re_path(r'^books/$', index, name='legacy'),
+                path('books/', index, name='index'),
+            ]
+            ",
+        )]);
+
+        let names: Vec<_> = url_names(&test.db, test.db.project())
+            .iter()
+            .map(|url| url.name.as_str())
+            .collect();
+        assert_eq!(names, ["legacy", "index"]);
+    }
+
+    #[test]
+    fn an_inclusion_tags_first_argument_is_a_template_rather_than_a_name() {
+        let test = project(&[(
+            "app/templatetags/app_extras.py",
+            "
+            from django import template
+
+            register = template.Library()
+
+            @register.inclusion_tag('app/card.html')
+            def show_card():
+                '''renders one card.'''
+                return {}
+
+            @register.simple_tag('renamed')
+            def original():
+                return 0
+            ",
+        )]);
+
+        let found: Vec<_> = registrations(&test.db, test.db.project())
+            .iter()
+            .map(|registration| registration.name.as_str())
+            .collect();
+        assert_eq!(found, ["show_card", "renamed"]);
+    }
+
+    #[test]
+    fn a_registered_function_carries_its_docstring() {
+        let test = project(&[(
+            "app/templatetags/app_extras.py",
+            "
+            from django import template
+
+            register = template.Library()
+
+            @register.filter
+            def shout(value):
+                '''upper-cases it.
+
+                and the rest of the docstring is not the summary.
+                '''
+                return value
+            ",
+        )]);
+
+        let documentation = registrations(&test.db, test.db.project())[0]
+            .documentation
+            .clone();
+        assert_eq!(documentation.as_deref(), Some("upper-cases it."));
+    }
+
+    #[test]
+    fn a_library_bound_to_a_name_of_its_own_still_registers() {
+        let test = project(&[(
+            "app/templatetags/app_extras.py",
+            "
+            from django import template
+
+            library = template.Library()
+
+            @library.filter_function
+            def shout(value):
+                return value
+            ",
+        )]);
+
+        let found: Vec<_> = registrations(&test.db, test.db.project())
+            .iter()
+            .map(|registration| (registration.name.as_str(), registration.kind))
+            .collect();
+        assert_eq!(found, [("shout", RegistrationKind::Filter)]);
+    }
+
+    #[test]
+    fn a_module_outside_a_templatetags_package_registers_nothing() {
+        let test = project(&[(
+            "app/extras.py",
+            "
+            from django import template
+
+            register = template.Library()
+
+            @register.filter
+            def shout(value):
+                return value
+            ",
+        )]);
+
+        assert!(registrations(&test.db, test.db.project()).is_empty());
+    }
 }

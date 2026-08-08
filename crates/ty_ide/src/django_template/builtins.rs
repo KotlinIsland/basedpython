@@ -50,6 +50,9 @@ pub(crate) fn end_tag_for(name: &str) -> Option<&'static str> {
 }
 
 /// the libraries a `{% load %}` can name
+///
+/// every one of them ships with django. a tag or filter the project registers is
+/// discovered from its source instead, and named by its module.
 pub(crate) const LIBRARIES: &[&str] = &["cache", "i18n", "l10n", "static", "tz"];
 
 pub(crate) const TAGS: &[Tag] = &[
@@ -708,7 +711,7 @@ pub(crate) const FILTERS: &[Filter] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::{FILTERS, TAGS, end_tag_for, filter, tag};
+    use super::{FILTERS, LIBRARIES, TAGS, end_tag_for, filter, tag};
 
     #[test]
     fn tag_names_are_unique() {
@@ -753,6 +756,21 @@ mod tests {
     }
 
     #[test]
+    fn every_library_a_tag_or_filter_names_is_listed() {
+        let libraries = TAGS
+            .iter()
+            .filter_map(|tag| tag.library)
+            .chain(FILTERS.iter().filter_map(|filter| filter.library));
+
+        for library in libraries {
+            assert!(
+                LIBRARIES.contains(&library),
+                "`{library}` is never offered to a `{{% load %}}`"
+            );
+        }
+    }
+
+    #[test]
     fn lookup() {
         assert_eq!(end_tag_for("for"), Some("endfor"));
         assert_eq!(end_tag_for("include"), None);
@@ -765,5 +783,8 @@ mod tests {
         assert_eq!(tag("partial").and_then(|tag| tag.closed_by), None);
         assert_eq!(filter("upper").map(|filter| filter.library), Some(None));
         assert_eq!(tag("static").map(|tag| tag.library), Some(Some("static")));
+        // django 6.0 ships the partial tags; before that they came from
+        // django-template-partials and needed `{% load partials %}`
+        assert_eq!(tag("partialdef").map(|tag| tag.library), Some(None));
     }
 }

@@ -476,9 +476,8 @@ pub(crate) fn server_capabilities(
             // positions in a template are right after `{%`, `{{` and `|`, and
             // none of them is a word character the client would trigger on by
             // itself. LSP has no way to vary these per language, so python
-            // documents see them too — harmlessly, since a completion request
-            // there is answered from the cursor's position rather than from
-            // whichever character triggered it.
+            // documents see the requests too — and turn them away, see
+            // `triggered_by_a_template_character`.
             trigger_characters: Some(vec![
                 '.'.to_string(),
                 '"'.to_string(),

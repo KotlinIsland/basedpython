@@ -9,6 +9,7 @@ use crate::types::class::{DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTup
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::function::FunctionDecorators;
 use crate::types::generics::GenericContext;
+use crate::types::list_members::all_end_of_scope_members;
 use crate::types::overrides::is_constructor_like_method;
 use crate::types::signatures::{ParametersKind, Signature};
 use crate::types::{
@@ -2446,6 +2447,39 @@ pub fn type_parameter_names<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Vec<N
 /// so the element type has to be derived from the iterable's type directly.
 pub fn iterable_element_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Type<'db>> {
     Some(ty.try_iterate(db).ok()?.homogeneous_element_type(db))
+}
+
+/// What calling `ty` with no arguments gives, or `None` when it can't be called
+/// that way.
+///
+/// Written for django templates, whose variable resolution calls whatever a
+/// lookup lands on: `{{ author.get_full_name }}` renders the name rather than
+/// the method, and `{% for book in author.book_set.all %}` iterates the queryset
+/// rather than the manager's method. Attribute access alone stops at the method
+/// and every one of those traversals dead-ends.
+pub fn no_argument_call_return_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Type<'db>> {
+    ty.try_call(db, &CallArguments::none())
+        .ok()
+        .map(|bindings| bindings.return_type(db))
+}
+
+/// The names `ty`'s own class declares, as opposed to the ones it inherits.
+///
+/// Written for django templates, where a model's own fields have to be told
+/// apart from the several dozen members `models.Model` brings with it. The
+/// fields are what the template was written against; sorting them in among the
+/// framework's machinery is nearly the same as not offering them.
+pub fn own_class_member_names<'db>(db: &'db dyn Db, ty: Type<'db>) -> FxIndexSet<Name> {
+    let Type::NominalInstance(instance) = ty else {
+        return FxIndexSet::default();
+    };
+    let Some((class, _)) = instance.class(db).static_class_literal(db) else {
+        return FxIndexSet::default();
+    };
+
+    all_end_of_scope_members(db, class.body_scope(db))
+        .map(|member| member.member.name)
+        .collect()
 }
 
 /// The extra arms the typing spec's numeric promotion adds to a type expression

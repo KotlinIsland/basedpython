@@ -13,7 +13,9 @@ use ruff_python_ast::find_node::covering_node;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_project::Db;
 use ty_python_semantic::types::Type;
-use ty_python_semantic::types::ide_support::iterable_element_type;
+use ty_python_semantic::types::ide_support::{
+    iterable_element_type, no_argument_call_return_type, own_class_member_names,
+};
 use ty_python_semantic::types::list_members::{Member, all_members};
 use ty_python_semantic::{HasType, SemanticModel};
 
@@ -181,20 +183,41 @@ pub(crate) fn path_segments<'src>(
         .collect()
 }
 
-/// the type of `name` accessed on `ty`
+/// the type of `name` accessed on `ty`, as the template engine will see it
 ///
 /// django's variable lookup tries a dictionary subscript before an attribute, but
 /// a mapping's keys are values rather than types, so an attribute is all a static
 /// answer can cover.
+///
+/// what it *does* also do is [call what the lookup lands on][resolved], which is
+/// the difference between `author.book_set.all` naming a queryset and naming a
+/// method.
+///
+/// [resolved]: https://docs.djangoproject.com/en/stable/ref/templates/language/#variables
 pub(crate) fn member_type<'db>(db: &'db dyn Db, ty: Type<'db>, name: &str) -> Option<Type<'db>> {
-    members(db, ty)
+    let member = members(db, ty)
         .into_iter()
-        .find(|member| member.name == name)
-        .map(|member| member.ty)
+        .find(|member| member.name == name)?;
+
+    Some(resolved(db, member.ty))
 }
 
-/// every attribute a value of type `ty` has, in name order
+/// what the template engine ends up with once it has resolved a lookup
+///
+/// django calls whatever the lookup found if it is callable, so a member that
+/// takes no arguments contributes its return type rather than its own.
+fn resolved<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
+    no_argument_call_return_type(db, ty).unwrap_or(ty)
+}
+
+/// every attribute a value of type `ty` has
+///
+/// the type's own class comes first and the rest follows, each alphabetically. a
+/// django model inherits several dozen members from `models.Model`, and sorting
+/// its fields in among them puts `title` below `save_base`.
 pub(crate) fn members<'db>(db: &'db dyn Db, ty: Type<'db>) -> Vec<Member<'db>> {
+    let own = own_class_member_names(db, ty);
+
     let mut members: Vec<_> = all_members(db, ty)
         .into_iter()
         // a template can only write a `\w+` name after a dot, so a dunder is both
@@ -202,7 +225,11 @@ pub(crate) fn members<'db>(db: &'db dyn Db, ty: Type<'db>) -> Vec<Member<'db>> {
         .filter(|member| !member.name.starts_with('_'))
         .collect();
 
-    members.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+    members.sort_unstable_by(|left, right| {
+        own.contains(&right.name)
+            .cmp(&own.contains(&left.name))
+            .then_with(|| left.name.cmp(&right.name))
+    });
     members
 }
 

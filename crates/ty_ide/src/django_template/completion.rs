@@ -22,12 +22,9 @@ use crate::completion::CompletionKind;
 
 use super::builtins;
 use super::index::{Block, TemplateIndex};
-use super::lexer::{Construct, ConstructKind, Token, TokenKind};
+use super::lexer::{Construct, ConstructKind, Token, TokenKind, string_contents};
 use super::project::{self, RegistrationKind};
 use super::resolve;
-
-/// how many `{% extends %}` hops the parent chain is followed
-const MAX_INHERITANCE_DEPTH: u32 = 16;
 
 /// an edit a completion carries alongside the text it inserts
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,8 +106,8 @@ pub(crate) fn completions(
         Context::StaticPath => static_paths(db, &cursor),
         Context::UrlName => url_names(db, &cursor),
         Context::Library => libraries(db, index, &cursor),
-        Context::BlockName => block_names(db, index, &cursor),
-        Context::PartialName => partial_names(db, index, &cursor),
+        Context::BlockName => block_names(db, file, index, &cursor),
+        Context::PartialName => partial_names(db, file, index, &cursor),
     }
 }
 
@@ -161,16 +158,7 @@ impl<'a> Cursor<'a> {
         construct: &'a Construct,
         offset: TextSize,
     ) -> Self {
-        let all = index.lexed().construct_tokens(construct);
-        let start = usize::from(
-            all.first()
-                .is_some_and(|token| token.kind == TokenKind::Delimiter),
-        );
-        let end = all
-            .iter()
-            .rposition(|token| token.kind != TokenKind::Delimiter)
-            .map_or(start, |index| index + 1);
-        let tokens = all.get(start..end.max(start)).unwrap_or_default();
+        let tokens = index.lexed().inner_tokens(construct);
 
         // only a token the user could still be *typing* counts as the one under
         // the cursor. a cursor at the end of a `.` or a `|` is not editing that
@@ -200,6 +188,17 @@ impl<'a> Cursor<'a> {
 
     fn tag(&self) -> &'a str {
         self.construct.name.map_or("", |range| &self.source[range])
+    }
+
+    /// whether the cursor is inside a string literal
+    ///
+    /// the argument naming a template, a route or an asset has to be quoted, so
+    /// a suggestion offered where there is no literal yet has to bring the quotes
+    /// along with it.
+    fn in_string(&self) -> bool {
+        self.current
+            .and_then(|index| self.tokens.get(index))
+            .is_some_and(|token| token.kind == TokenKind::String)
     }
 
     /// the token before the cursor, skipping the one being typed
@@ -337,24 +336,14 @@ fn is_word(kind: TokenKind) -> bool {
     )
 }
 
-/// the contents of a string literal, its quotes excluded
-fn string_contents(source: &str, range: TextRange) -> TextRange {
-    let text = &source[range];
-    let Some(quote) = text.chars().next() else {
-        return range;
-    };
-    if !matches!(quote, '"' | '\'') {
-        return range;
-    }
-
-    let start = range.start() + TextSize::from(1);
-    let end = if text.len() > 1 && text.ends_with(quote) {
-        range.end() - TextSize::from(1)
-    } else {
-        range.end()
-    };
-
-    TextRange::new(start, end.max(start))
+/// the text a suggestion for a quoted argument inserts, when it differs from
+/// the label
+///
+/// `{% extends '<CURSOR>' %}` needs the name alone; `{% extends <CURSOR> %}`
+/// needs it quoted, or accepting the suggestion writes something django reads as
+/// a variable.
+fn quoted_insert(label: &str, cursor: &Cursor<'_>) -> Option<String> {
+    (!cursor.in_string()).then(|| format!("'{label}'"))
 }
 
 fn tag_names(
@@ -566,8 +555,11 @@ fn discovered(files: &[project::DiscoveredFile], cursor: &Cursor<'_>) -> Vec<Tem
         .iter()
         .filter(|file| seen.insert(file.name.clone()))
         .map(|file| {
-            TemplateCompletion::new(file.name.as_str(), CompletionKind::File, cursor.range)
-                .detail(file.path.as_str())
+            let mut completion =
+                TemplateCompletion::new(file.name.as_str(), CompletionKind::File, cursor.range)
+                    .detail(file.path.as_str());
+            completion.insert = quoted_insert(&file.name, cursor);
+            completion
         })
         .collect()
 }
@@ -579,6 +571,7 @@ fn url_names(db: &dyn Db, cursor: &Cursor<'_>) -> Vec<TemplateCompletion> {
             let mut completion =
                 TemplateCompletion::new(url.name.as_str(), CompletionKind::Reference, cursor.range);
             completion.detail = url.route.as_deref().map(ToString::to_string);
+            completion.insert = quoted_insert(&url.name, cursor);
             completion
         })
         .collect()
@@ -617,7 +610,12 @@ fn libraries(db: &dyn Db, index: &TemplateIndex, cursor: &Cursor<'_>) -> Vec<Tem
     completions
 }
 
-fn block_names(db: &dyn Db, index: &TemplateIndex, cursor: &Cursor<'_>) -> Vec<TemplateCompletion> {
+fn block_names(
+    db: &dyn Db,
+    file: File,
+    index: &TemplateIndex,
+    cursor: &Cursor<'_>,
+) -> Vec<TemplateCompletion> {
     // a `{% block %}` in a child template is only useful when it overrides one of
     // the parent's, so those are exactly what is offered
     let defined: FxHashSet<_> = index
@@ -626,7 +624,7 @@ fn block_names(db: &dyn Db, index: &TemplateIndex, cursor: &Cursor<'_>) -> Vec<T
         .map(|block| block.name.clone())
         .collect();
 
-    inherited(db, index, |parent| {
+    inherited(db, file, index, |parent| {
         parent
             .blocks()
             .iter()
@@ -644,6 +642,7 @@ fn block_names(db: &dyn Db, index: &TemplateIndex, cursor: &Cursor<'_>) -> Vec<T
 
 fn partial_names(
     db: &dyn Db,
+    file: File,
     index: &TemplateIndex,
     cursor: &Cursor<'_>,
 ) -> Vec<TemplateCompletion> {
@@ -654,7 +653,7 @@ fn partial_names(
         .collect();
 
     // a partial defined by a template this one extends is in scope here too
-    names.extend(inherited(db, index, |parent| {
+    names.extend(inherited(db, file, index, |parent| {
         parent
             .partials()
             .iter()
@@ -676,32 +675,14 @@ fn partial_names(
 /// collect `names` from every template up the `{% extends %}` chain
 fn inherited(
     db: &dyn Db,
+    file: File,
     index: &TemplateIndex,
     names: impl Fn(&TemplateIndex) -> Vec<CompactString>,
 ) -> Vec<CompactString> {
-    let mut collected = Vec::new();
-    let mut seen = FxHashSet::default();
-    let mut parent = index.extends().map(|reference| reference.name.clone());
-
-    for _ in 0..MAX_INHERITANCE_DEPTH {
-        let Some(name) = parent.take() else { break };
-        let Some(file) = project::resolve_template(db, &name) else {
-            break;
-        };
-        if !seen.insert(file) {
-            // a cycle in the inheritance chain; django would fail to render it,
-            // but the editor must not hang on it
-            break;
-        }
-
-        let parent_index = super::template_index(db, file);
-        collected.extend(names(parent_index));
-        parent = parent_index
-            .extends()
-            .map(|reference| reference.name.clone());
-    }
-
-    collected
+    super::ancestors(db, file, index)
+        .into_iter()
+        .flat_map(|(_, parent)| names(parent))
+        .collect()
 }
 
 /// the libraries the template has already `{% load %}`ed
@@ -765,16 +746,32 @@ mod tests {
                 class Book:
                     title: str
                     author: Author
+
+                class Chapter:
+                    title: str
+                    number: int
+
+                # stands in for `models.Model`: a framework base that brings a
+                # pile of machinery with it
+                class Model:
+                    def save(self) -> None: ...
+                    def delete(self) -> None: ...
+
+                class Novel(Model):
+                    title: str
+
+                    def chapters(self) -> list[Chapter]: ...
+                    def rename(self, title: str) -> str: ...
                 ",
             ),
             (
                 "blog/views.py",
                 "
-                from blog.models import Book
+                from blog.models import Book, Novel
 
                 def post(request):
                     book = Book()
-                    return render(request, 'blog/post.html', {'book': book, 'shelf': [book]})
+                    return render(request, 'blog/post.html', {'book': book, 'shelf': [book], 'novel': Novel()})
                 ",
             ),
             (
@@ -981,6 +978,37 @@ mod tests {
     }
 
     #[test]
+    fn a_template_path_offered_outside_a_literal_brings_its_quotes() {
+        let test = project("{% extends <CURSOR> %}");
+        let completions = django_template_completions(&test.db, test.file, test.offset);
+
+        let first = completions.first().expect("a template to be offered");
+        assert_eq!(first.label, "blog/base.html");
+        assert_eq!(
+            first.insert.as_deref(),
+            Some("'blog/base.html'"),
+            "an unquoted path would be read as a variable"
+        );
+    }
+
+    #[test]
+    fn a_template_path_offered_inside_a_literal_does_not() {
+        let test = project("{% extends '<CURSOR>' %}");
+        let completions = django_template_completions(&test.db, test.file, test.offset);
+
+        assert_eq!(completions[0].insert, None);
+    }
+
+    #[test]
+    fn a_url_name_offered_outside_a_literal_brings_its_quotes() {
+        let test = project("{% url <CURSOR> %}");
+        let completions = django_template_completions(&test.db, test.file, test.offset);
+
+        let first = completions.first().expect("a route to be offered");
+        assert_eq!(first.insert.as_deref(), Some("'blog:detail'"));
+    }
+
+    #[test]
     fn url_offers_the_projects_route_names_namespaced() {
         let completions = project("{% url '<CURSOR>' %}").detailed();
         assert_eq!(
@@ -1012,14 +1040,14 @@ mod tests {
     #[test]
     fn a_bare_name_offers_the_views_context() {
         let completions = project("{{ <CURSOR> }}").completions();
-        assert_eq!(completions, ["book", "shelf"]);
+        assert_eq!(completions, ["book", "shelf", "novel"]);
     }
 
     #[test]
     fn a_bare_name_offers_the_templates_own_bindings_first() {
         let completions =
             project("{% for book in shelf %}{{ <CURSOR> }}{% endfor %}").completions();
-        assert_eq!(completions, ["book", "forloop", "shelf"]);
+        assert_eq!(completions, ["book", "forloop", "shelf", "novel"]);
     }
 
     #[test]
@@ -1052,6 +1080,59 @@ mod tests {
         let completions =
             project("{% with writer=book.author %}{{ writer.<CURSOR> }}{% endwith %}").detailed();
         assert_eq!(completions, ["email — str", "name — str"]);
+    }
+
+    #[test]
+    fn a_no_argument_method_is_called_the_way_django_calls_it() {
+        // django's variable lookup calls whatever it lands on, so `book.chapters`
+        // is the list the method returns, not the method
+        let completions = project("{{ novel.chapters.<CURSOR> }}").completions();
+        assert!(
+            completions.contains(&"append".to_string()),
+            "got {completions:?}"
+        );
+    }
+
+    #[test]
+    fn a_loop_over_a_called_method_binds_the_element_type() {
+        let completions =
+            project("{% for c in novel.chapters %}{{ c.<CURSOR> }}{% endfor %}").detailed();
+        assert_eq!(completions, ["number — int", "title — str"]);
+    }
+
+    #[test]
+    fn a_method_that_needs_an_argument_is_not_called() {
+        // `book.rename(title)` takes an argument, so django would render nothing
+        // rather than call it, and there is no return type to offer
+        assert!(
+            project("{{ novel.rename.<CURSOR> }}")
+                .completions()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_types_own_members_come_before_the_ones_it_inherits() {
+        // the base stands in for `models.Model`: what a template is written
+        // against is the subclass' own fields, and burying them alphabetically
+        // among a framework's machinery is nearly the same as not offering them
+        let completions = project("{{ novel.<CURSOR> }}").completions();
+        let own = ["chapters", "rename", "title"];
+
+        let last_own = own
+            .iter()
+            .map(|name| completions.iter().position(|c| c == name).expect(name))
+            .max()
+            .unwrap();
+        let first_inherited = completions
+            .iter()
+            .position(|c| c == "save")
+            .expect("the inherited member to be offered too");
+
+        assert!(
+            last_own < first_inherited,
+            "own members must lead: {completions:?}"
+        );
     }
 
     #[test]

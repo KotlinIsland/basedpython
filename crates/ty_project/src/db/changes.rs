@@ -9,6 +9,7 @@ use ruff_db::Db as _;
 use ruff_db::files::{File, Files, system_path_to_file};
 use ruff_db::system::{SystemPath, SystemPathBuf};
 use rustc_hash::FxHashSet;
+use salsa::Setter as _;
 use ty_python_core::program::{FallibleStrategy, Program};
 
 /// Represents the result of applying changes to the project database.
@@ -55,6 +56,9 @@ impl ProjectDatabase {
         let mut removed_paths = BTreeSet::default();
         let mut reload_project = false;
         let mut reload_project_files = false;
+        // Whether the shape of the tree changed, as opposed to the contents of a
+        // file that was already there. See `Project::file_system_revision`.
+        let mut file_system_changed = false;
         // TODO: This should be removed once the incremental checker is ported
         // over to the `ignore` crate, since the `ignore` crate will respect
         // the settings provided in `create_walker`. ---AG
@@ -131,6 +135,8 @@ impl ProjectDatabase {
                 }
 
                 ChangeEvent::Created { kind, path } => {
+                    file_system_changed = true;
+
                     match kind {
                         CreatedKind::File => {
                             if synced_files.insert(path.to_path_buf()) {
@@ -174,6 +180,8 @@ impl ProjectDatabase {
                 }
 
                 ChangeEvent::Deleted { kind, path } => {
+                    file_system_changed = true;
+
                     let is_file = match kind {
                         DeletedKind::File => true,
                         DeletedKind::Directory => false,
@@ -222,6 +230,7 @@ impl ProjectDatabase {
                 }
 
                 ChangeEvent::Rescan => {
+                    file_system_changed = true;
                     reload_project = true;
                     reload_project_files = true;
                     Files::sync_all(self);
@@ -233,6 +242,14 @@ impl ProjectDatabase {
         }
 
         Files::sync_all_recursive(self, sync_recursively);
+
+        // Bumped before the reload paths below, some of which return early.
+        if file_system_changed {
+            let revision = project.file_system_revision(self);
+            project
+                .set_file_system_revision(self)
+                .to(revision.wrapping_add(1));
+        }
 
         if reload_project {
             let new_project_metadata = project.metadata(self).rediscover(self.system());

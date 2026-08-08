@@ -7,8 +7,8 @@
 
 use anyhow::Result;
 use lsp_types::{
-    DocumentDiagnosticReport, LanguageKind, Position, TextDocumentIdentifier,
-    TextDocumentPositionParams,
+    DocumentDiagnosticReport, FileChangeType, FileEvent, LanguageKind, Position,
+    TextDocumentIdentifier, TextDocumentPositionParams,
 };
 use ruff_db::system::SystemPath;
 
@@ -174,6 +174,39 @@ fn a_template_navigates_to_the_template_it_extends() -> Result<()> {
 
     let rendered = format!("{response:?}");
     assert!(rendered.contains("base.html"), "got {rendered}");
+
+    Ok(())
+}
+
+#[test]
+fn a_template_created_during_the_session_is_offered_to_an_extends() -> Result<()> {
+    // discovering templates means walking the file system, which salsa cannot
+    // see into: without something to invalidate the walk the server would go on
+    // offering the set of templates that existed when it started
+    let mut server = server("{% extends '' %}\n")?;
+    let uri = template_uri(&server);
+
+    let offered = |server: &mut TestServer| -> Vec<String> {
+        server
+            .completion_request(&uri, Position::new(0, 12))
+            .iter()
+            .map(|completion| completion.label.clone())
+            .collect()
+    };
+
+    assert!(!offered(&mut server).contains(&"blog/card.html".to_string()));
+
+    let created = SystemPath::new("src/blog/templates/blog/card.html");
+    server.write_file(created, "<p>a card</p>\n")?;
+    server.did_change_watched_files(vec![FileEvent {
+        uri: server.file_uri(created),
+        kind: FileChangeType::Created,
+    }]);
+
+    assert!(
+        offered(&mut server).contains(&"blog/card.html".to_string()),
+        "a template created after the server started is still a template"
+    );
 
     Ok(())
 }
