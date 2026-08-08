@@ -37,6 +37,28 @@ nothing is reported unless the model is certain. a serializer without a `Meta.mo
 
 `source="author.name"` on a serializer field is deliberately **not** checked: drf resolves it with `getattr` at serialization time against whatever object it is handed, which is routinely an annotated row or a dict rather than an instance of `Meta.model`
 
+### drf view and serializer specialization
+
+`djangorestframework-stubs` declares the drf bases generic over the model, but real drf code names the model in the class body rather than writing `ListAPIView[Book]`. the model the class body names is substituted for the type argument nobody writes:
+
+- a view's `get_queryset()` and `get_object()`, from the model its own `queryset` is a queryset of
+- a view's `get_serializer()` and `get_serializer_class()`, from the `serializer_class` it names
+- a `ModelSerializer`'s `save()`, `create()` and `update()`, from `Meta.model`
+
+```by
+class BookViewSet(viewsets.ModelViewSet):
+    queryset = Book.objects.all()
+    serializer_class = BookSerializer
+
+view.get_queryset()      # QuerySet[Book, Book], was QuerySet[Unknown, Unknown]
+view.get_serializer()    # BookSerializer, was BaseSerializer[Unknown]
+serializer.save()        # Book, was Unknown
+```
+
+a view or serializer that *does* write its type argument keeps it — the substitution only fills a position that carries no information today. anything the class body does not say plainly is left alone: a queryset built in `get_queryset`, a `serializer_class` chosen in `get_serializer_class`, a serializer with no `Meta.model`, and your own override of any of these methods
+
+`.data` and `.validated_data` stay `Any` on purpose — see below
+
 ### transpilation compatibility
 
 - `optional?.chaining` works across nullable relations: `author?.birthday?.year`
@@ -81,6 +103,29 @@ class Author(models.Model):
 ### dynamic model construction
 
 models created dynamically (e.g., via `type()` or factories) don't check. stick to class definitions.
+
+### drf `many=True` at the constructor
+
+`BookSerializer(data=[...], many=True)` builds a `ListSerializer` at runtime, so its `save()` returns a *list* of models. the stubs describe none of that — `many` is an ordinary `bool` parameter and the constructed type is the serializer class either way — so `save()` reads as one model:
+
+```by
+for book in BookSerializer(data=payload, many=True).save():  # `Book` is not iterable
+```
+
+writing `ModelSerializer[Book]` by hand has always read the same way; the model resolved from `Meta.model` just makes it read that way without the annotation. going through the view (`self.get_serializer(data=payload, many=True)`) is not affected — a `many=` argument there is visible, so nothing is claimed about the result
+
+### drf `.data` and `.validated_data`
+
+both stay `Any`. their key sets look like they follow from `Meta.fields`, and they don't:
+
+- `validate()` may add, drop or rename any key, and returning a rewritten dict is the documented way to do cross-field validation
+- `save(**kwargs)` merges its keywords into what `create()` receives
+- `to_representation()` may add keys to `.data`
+- a key is a field's `source`, not its name, and a dotted `source="author.name"` restructures the dict entirely
+- `.data` on a serializer built from `data=` holds only the validated subset, while `.data` on one built from an instance holds every field
+- `many=True` makes both a list
+
+a `TypedDict` is closed, so every one of these turns correct code into an error. `Any` reports nothing, which is the right answer here
 
 ### querysets from `values()` and `annotate()`
 

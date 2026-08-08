@@ -1961,6 +1961,28 @@ impl<'db> Bindings<'db> {
                         }
                     }
 
+                    // drf's view / serializer methods: substitute the model or
+                    // serializer the receiver's own class body names for the
+                    // `Unknown` an unparameterized drf base left behind
+                    Type::BoundMethod(bound_method)
+                        if django::is_drf_specialized_method(
+                            bound_method.function(db).name(db).as_str(),
+                        ) =>
+                    {
+                        let many_argument = call_arguments.iter().any(|(argument, _)| {
+                            matches!(argument, Argument::Keyword("many") | Argument::Keywords)
+                        });
+                        if let Some(refined) = django::drf_method_return_type(
+                            db,
+                            bound_method.function(db),
+                            bound_method.self_instance(db),
+                            overload.return_ty,
+                            many_argument,
+                        ) {
+                            overload.set_return_type(refined);
+                        }
+                    }
+
                     Type::BoundMethod(bound_method)
                         if let Type::PropertyInstance(property) =
                             bound_method.self_instance(db) =>
