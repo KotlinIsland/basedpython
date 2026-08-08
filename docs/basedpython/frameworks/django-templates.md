@@ -52,6 +52,12 @@ the editor's own html grammar keeps the markup; the server adds what a grammar c
 - `{% block %}` and `{% partialdef %}` names read as the fragments they name, not as variables
 - `{% comment %}` bodies and `{# … #}` are comments; `{% verbatim %}` bodies are plain text
 
+### find references
+
+asking for a name's references answers the reverse of every navigation above: from a `{% block %}`, every template in the family that declares it — including, from a *base* template, every child that overrides it, which is the question you have while editing one. from anywhere in a template, everything that renders it. from a route name, every `{% url %}` and `reverse()`. from a tag or filter, every template that uses it and the `@register` that declares it.
+
+a use a rename could not rewrite is still reported here: knowing where a name is written is useful even where it cannot be changed for you.
+
 ### hover and outline
 
 hovering says what the thing under the caret is: a variable or a path segment as its type, a tag or a filter as its documentation and the `{% load %}` it needs, a `{% block %}` as the block it overrides, an `{% extends %}` as the file it resolves to, a `{% url %}` as its route pattern.

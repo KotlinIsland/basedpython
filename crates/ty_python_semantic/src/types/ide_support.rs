@@ -2463,6 +2463,18 @@ pub fn no_argument_call_return_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Opti
         .map(|bindings| bindings.return_type(db))
 }
 
+/// Whether `ty` is a function django would try to call and could not.
+///
+/// Written for django templates, which render `string_if_invalid` — the empty
+/// string by default — for a lookup landing on a method that needs an argument.
+/// Only a function or a method is answered for: anything else that fails to call
+/// is something django's `callable()` test would not have called in the first
+/// place.
+pub fn callable_needs_arguments<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    matches!(ty, Type::FunctionLiteral(_) | Type::BoundMethod(_))
+        && no_argument_call_return_type(db, ty).is_none()
+}
+
 /// The names `ty`'s own class declares, as opposed to the ones it inherits.
 ///
 /// Written for django templates, where a model's own fields have to be told

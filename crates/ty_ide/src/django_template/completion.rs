@@ -572,7 +572,7 @@ fn variables(
             .value
             .and_then(|value| resolve::expression_type(db, variable.file, value))
             .map(|ty| ty.display(db).to_string())
-            .or_else(|| Some("from the view's context".to_string()));
+            .or_else(|| Some(variable.source.description().to_string()));
         completions.push(completion);
     }
 
@@ -734,7 +734,7 @@ fn inherited(
 /// the ones it has loaded already, and the ones the settings load into every
 /// template — a `{% load %}` for one of those is not wrong, but it is noise, so
 /// neither is one suggested.
-fn loaded_libraries(db: &dyn Db, index: &TemplateIndex) -> FxHashSet<CompactString> {
+pub(super) fn loaded_libraries(db: &dyn Db, index: &TemplateIndex) -> FxHashSet<CompactString> {
     index
         .loads()
         .iter()
@@ -749,7 +749,7 @@ fn loaded_libraries(db: &dyn Db, index: &TemplateIndex) -> FxHashSet<CompactStri
 }
 
 /// the `{% load %}` a suggestion from `library` needs, when it isn't loaded yet
-fn load_edit_for(
+pub(super) fn load_edit_for(
     index: &TemplateIndex,
     loaded: &FxHashSet<CompactString>,
     library: Option<&str>,
@@ -923,6 +923,84 @@ mod tests {
                     def intcomma(value):
                         '''adds thousand separators.'''
                         return value
+                    ",
+                ),
+            ],
+        )
+    }
+
+    /// a project whose settings name two of django's own context processors
+    ///
+    /// what a processor returns is in scope in every template the project
+    /// renders, which is what makes `{{ user }}` complete in a template no view
+    /// ever mentions it to. `context` is the dict the one view passes.
+    fn with_processors(template: &str, context: &str) -> TemplateTest {
+        let view = format!(
+            "
+            from blog.models import Book
+
+            def post(request):
+                return render(request, 'blog/post.html', {context})
+            "
+        );
+
+        TemplateTest::with_site_packages(
+            &[
+                (
+                    "manage.py",
+                    "
+                    import os
+
+                    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')
+                    ",
+                ),
+                ("project/__init__.py", ""),
+                (
+                    "project/settings.py",
+                    "
+                    INSTALLED_APPS = ['blog']
+
+                    TEMPLATES = [{'APP_DIRS': True, 'OPTIONS': {'context_processors': [
+                        'django.template.context_processors.request',
+                        'django.contrib.auth.context_processors.auth',
+                    ]}}]
+                    ",
+                ),
+                ("blog/__init__.py", ""),
+                (
+                    "blog/models.py",
+                    "
+                    class Book:
+                        title: str
+                    ",
+                ),
+                ("blog/views.py", &view),
+                ("blog/templates/blog/post.html", template),
+            ],
+            &[
+                ("django/__init__.py", ""),
+                ("django/template/__init__.py", ""),
+                (
+                    "django/template/context_processors.py",
+                    "
+                    def request(request):
+                        return {'request': request, 'site': 'a blog'}
+                    ",
+                ),
+                ("django/contrib/__init__.py", ""),
+                ("django/contrib/auth/__init__.py", ""),
+                (
+                    "django/contrib/auth/context_processors.py",
+                    "
+                    class User:
+                        username: str
+
+                    class PermWrapper:
+                        def __init__(self, user): ...
+
+                    def auth(request):
+                        user = User()
+                        return {'user': user, 'perms': PermWrapper(user)}
                     ",
                 ),
             ],
@@ -1263,6 +1341,55 @@ mod tests {
         let completions =
             project("{% for book in shelf %}{{ <CURSOR> }}{% endfor %}").completions();
         assert_eq!(completions, ["book", "forloop", "shelf", "novel"]);
+    }
+
+    #[test]
+    fn a_bare_name_offers_the_context_processors_names_after_the_views() {
+        let completions = with_processors("{{ <CURSOR> }}", "{'book': Book()}").completions();
+        assert_eq!(completions, ["book", "request", "site", "user", "perms"]);
+    }
+
+    #[test]
+    fn a_processors_name_that_has_no_type_still_says_where_it_comes_from() {
+        let completions = with_processors("{{ <CURSOR> }}", "{'book': Book()}").detailed();
+        assert!(
+            completions.contains(&"site — from a context processor".to_string()),
+            "got {completions:?}"
+        );
+    }
+
+    #[test]
+    fn a_context_processors_name_carries_its_type() {
+        let completions = with_processors("{{ user.<CURSOR> }}", "{'book': Book()}").detailed();
+        assert_eq!(completions, ["username — str"]);
+    }
+
+    #[test]
+    fn a_name_the_view_supplies_shadows_the_context_processors() {
+        let test = with_processors("{{ user.<CURSOR> }}", "{'book': Book(), 'user': Book()}");
+        assert_eq!(
+            test.detailed(),
+            ["title — str"],
+            "the view's `user` is what django renders with"
+        );
+
+        let offered = with_processors("{{ <CURSOR> }}", "{'book': Book(), 'user': Book()}")
+            .completions()
+            .iter()
+            .filter(|label| *label == "user")
+            .count();
+        assert_eq!(offered, 1, "and it is offered once");
+    }
+
+    #[test]
+    fn a_name_a_tag_binds_shadows_the_context_processors() {
+        let completions = with_processors(
+            "{% with user=book %}{{ user.<CURSOR> }}{% endwith %}",
+            "{'book': Book()}",
+        )
+        .detailed();
+
+        assert_eq!(completions, ["title — str"]);
     }
 
     #[test]

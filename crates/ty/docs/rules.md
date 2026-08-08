@@ -3420,6 +3420,39 @@ def func() -> int:
     return "a"  # error: [invalid-return-type]
 ```
 
+## `invalid-route-arguments`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22invalid-route-arguments%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L235" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks the arguments a `{% url %}` passes against the route's own pattern.
+
+**Why is this bad?**
+
+Django raises `NoReverseMatch` when it renders the template, so the page
+500s. A route's pattern names the arguments it takes and the converter
+each of them goes through, so a missing, extra or misnamed argument — and
+a literal the converter would reject — is a reversal that cannot match.
+
+Only a route whose whole pattern is known is checked, and a name several
+routes share is reported only when none of them accepts the arguments.
+
+**Examples**
+
+```django
+{# path("<int:pk>/", detail, name="detail") #}
+{% url 'detail' %}          {# error: `pk` is missing #}
+{% url 'detail' pk='x' %}   {# error: `pk` goes through `int` #}
+{% url 'detail' pk=1 %}     {# ok #}
+```
+
 ## `invalid-super-argument`
 
 <small>
@@ -6010,6 +6043,40 @@ class F(NamedTuple):
 
 - [Python documentation: super()](https://docs.python.org/3/library/functions.html#super)
 
+## `template-member-needs-arguments`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'warn'."><code>warn</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22template-member-needs-arguments%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L289" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks for a `{{ }}` lookup landing on a method that cannot be called
+without arguments.
+
+**Why is this bad?**
+
+Django calls whatever a lookup lands on. A method that needs an argument
+cannot be called, so django renders `string_if_invalid` — the empty string
+by default — silently, with no error and no output.
+
+**Examples**
+
+```python
+class Book:
+    def headline(self, length: int) -> str: ...
+    def title(self) -> str: ...
+```
+
+```django
+{{ book.headline }}    {# warning: renders nothing #}
+{{ book.title }}       {# ok #}
+```
+
 ## `too-many-positional-arguments`
 
 <small>
@@ -6320,6 +6387,35 @@ class C(Generic[T]):
 
 - [Typing spec: Scoping rules for type variables](https://typing.python.org/en/latest/spec/generics.html#scoping-rules-for-type-variables)
 
+## `unclosed-template-block`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unclosed-template-block%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L28" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks for a block tag in a django template whose closing tag is missing.
+
+**Why is this bad?**
+
+Django raises `TemplateSyntaxError` when it compiles the template, so the
+page does not render at all.
+
+Only a tag known to open a block is reported: one of django's own, or one
+the project registers with `@register.simple_block_tag`.
+
+**Examples**
+
+```django
+{% if user.is_staff %}    {# error: no `{% endif %}` #}
+  <p>hello</p>
+```
+
 ## `undeclared-raise`
 
 <small>
@@ -6473,6 +6569,181 @@ discovery lands.
 ```py
 def test_thing(no_such_fixture) -> None:  # requests an unknown fixture
     ...
+```
+
+## `unknown-template-block`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'warn'."><code>warn</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unknown-template-block%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L262" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks for a `{% block %}` overriding a block no ancestor template
+declares.
+
+**Why is this bad?**
+
+A child template's blocks are rendered by the parent, so a block the
+parent never declares is never rendered — silently, with no error and no
+output.
+
+Only a block written at the top level of a template that `{% extends %}`
+something is reported. A block nested inside another one is rendered as
+part of its enclosing block and needs no declaration above it.
+
+**Examples**
+
+```django
+{# base.html declares `content`, and nothing else #}
+{% extends "base.html" %}
+{% block sidebar %}hello{% endblock %}    {# warning: never rendered #}
+```
+
+## `unknown-template-filter`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unknown-template-filter%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L119" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks for a filter no library the template can reach registers.
+
+**Why is this bad?**
+
+Django raises `TemplateSyntaxError` when it compiles the template, so the
+page does not render at all.
+
+A filter whose library the template has simply not loaded is reported as
+[`unloaded-template-library`](#unloaded-template-library) instead.
+
+**Examples**
+
+```django
+{{ book.title|uppercase }}    {# error: the filter is `upper` #}
+```
+
+## `unknown-template-library`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unknown-template-library%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L73" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks for a `{% load %}` of a tag library the project does not have.
+
+**Why is this bad?**
+
+Django raises `TemplateSyntaxError` when it compiles the template, so the
+page does not render at all.
+
+A library is a `templatetags` module of the project or of one of the apps
+`INSTALLED_APPS` names. Nothing is reported unless the settings module was
+found and every installed app resolved, since a library that cannot be
+reached is not a library that is missing.
+
+**Examples**
+
+```django
+{% load blog_xtras %}    {# error: the library is `blog_extras` #}
+```
+
+## `unknown-template-tag`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unknown-template-tag%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L97" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks for a tag no library the template can reach registers.
+
+**Why is this bad?**
+
+Django raises `TemplateSyntaxError` when it compiles the template, so the
+page does not render at all.
+
+A tag whose library the template has simply not loaded is reported as
+[`unloaded-template-library`](#unloaded-template-library) instead.
+
+**Examples**
+
+```django
+{% iff user.is_staff %}    {# error: no such tag #}
+```
+
+## `unloaded-template-library`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unloaded-template-library%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L141" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks for a tag or filter used without the `{% load %}` it needs.
+
+**Why is this bad?**
+
+Django raises `TemplateSyntaxError` when it compiles the template, so the
+page does not render at all — the tag exists, but not in this template.
+
+A library named by `TEMPLATES[*]["OPTIONS"]["builtins"]` is loaded into
+every template already and is never reported.
+
+**Examples**
+
+```django
+{% static 'css/site.css' %}    {# error: needs `{% load static %}` #}
+```
+
+## `unmatched-template-close`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unmatched-template-close%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L51" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks for a closing tag in a django template that closes nothing.
+
+**Why is this bad?**
+
+Django raises `TemplateSyntaxError` when it compiles the template, so the
+page does not render at all.
+
+**Examples**
+
+```django
+{% for book in books %}
+  <p>{{ book.title }}</p>
+{% endwith %}    {# error: nothing here opened a `{% with %}` #}
+{% endfor %}
 ```
 
 ## `unresolved-attribute`
@@ -6668,6 +6939,96 @@ Using an undefined variable will raise a `NameError` at runtime.
 ```python
 # NameError: name 'x' is not defined
 print(x)  # error
+```
+
+## `unresolved-route`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unresolved-route%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L211" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks for a `{% url %}` naming a route the url configuration does not
+have.
+
+**Why is this bad?**
+
+Django raises `NoReverseMatch` when it renders the template, so the page
+500s.
+
+The route names are the ones the walk from `ROOT_URLCONF` finds. A project
+that does not say where its url tree starts, or whose tree could not be
+walked in full, reports nothing.
+
+**Examples**
+
+```django
+<a href="{% url 'blog:detail' book.pk %}">    {# error: it is `blog:detail` #}
+```
+
+## `unresolved-static-file`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'warn'."><code>warn</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unresolved-static-file%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L187" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks for a `{% static %}` naming a file that is not there.
+
+**Why is this bad?**
+
+Django's default storage builds the url from the name without checking it,
+so the page renders and the asset 404s — a failure nothing reports.
+
+A name whose directory holds no discovered file at all is left alone: that
+is what a bundle built into `static/` at deploy time looks like, and it is
+not something the source tree can answer.
+
+**Examples**
+
+```django
+{% load static %}
+<link href="{% static 'css/sight.css' %}">    {# warning: it is `css/site.css` #}
+```
+
+## `unresolved-template`
+
+<small>
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of 'error'."><code>error</code></a> ·
+Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.69">0.0.69</a> ·
+<a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22unresolved-template%22" target="_blank">Related issues</a> ·
+<a href="https://github.com/astral-sh/ruff/blob/main/crates%2Fty_python_semantic%2Fsrc%2Fdjango_template.rs#L163" target="_blank">View source</a>
+</small>
+
+
+**What it does**
+
+Checks for an `{% extends %}` or `{% include %}` naming a template that
+is not there.
+
+**Why is this bad?**
+
+Django raises `TemplateDoesNotExist` when it renders the template, so the
+page 500s.
+
+Nothing is reported unless the project's template directories are known:
+a project with no readable settings *and* no directory named `templates`
+is one whose template set cannot be established.
+
+**Examples**
+
+```django
+{% extends "blog/bass.html" %}    {# error: the template is `blog/base.html` #}
 ```
 
 ## `unspecialized-reified-generic`
