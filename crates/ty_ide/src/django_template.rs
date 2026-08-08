@@ -31,6 +31,9 @@ use crate::{NavigationTargets, RangedValue};
 
 use index::TemplateIndex;
 
+/// how many `{% extends %}` hops a parent chain is followed
+const MAX_INHERITANCE_DEPTH: usize = 16;
+
 /// the file extensions a django template is conventionally written with
 ///
 /// django itself puts no constraint on the extension — the template loader takes
@@ -95,6 +98,40 @@ pub fn django_template_goto_definition(
 ) -> Option<RangedValue<NavigationTargets>> {
     let source = source_text(db, file);
     goto::goto_definition(db, file, template_index(db, file), source.as_str(), offset)
+}
+
+/// the templates `index` extends, nearest ancestor first
+///
+/// a template whose parent chain has a cycle in it would not render, but the
+/// editor must not hang on one, so the walk stops at the first template it has
+/// already been through — and at [`MAX_INHERITANCE_DEPTH`] regardless.
+fn ancestors<'db>(
+    db: &'db dyn Db,
+    file: File,
+    index: &TemplateIndex,
+) -> Vec<(File, &'db TemplateIndex)> {
+    let mut collected = Vec::new();
+    let mut seen = vec![file];
+    let mut parent = index.extends().map(|reference| reference.name.clone());
+
+    while collected.len() < MAX_INHERITANCE_DEPTH {
+        let Some(name) = parent.take() else { break };
+        let Some(parent_file) = project::resolve_template(db, &name) else {
+            break;
+        };
+        if seen.contains(&parent_file) {
+            break;
+        }
+        seen.push(parent_file);
+
+        let parent_index = template_index(db, parent_file);
+        collected.push((parent_file, parent_index));
+        parent = parent_index
+            .extends()
+            .map(|reference| reference.name.clone());
+    }
+
+    collected
 }
 
 /// the completions for `offset` in `file`, read as a django template

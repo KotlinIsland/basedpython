@@ -59,6 +59,14 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
         if snapshot.is_django_template() {
             return Ok(django_template_completions(db, snapshot, file, offset));
         }
+        if triggered_by_a_template_character(&params) {
+            // `{`, `%` and `|` are registered as trigger characters for the sake
+            // of django templates, and LSP has no way to register them for one
+            // language only. python gets the requests too, and a popup listing
+            // every name in scope the moment the user opens a dict literal or
+            // writes a union is not what they asked for.
+            return Ok(None);
+        }
 
         let client_capabilities = snapshot.resolved_client_capabilities();
         let completions = completion(
@@ -169,6 +177,24 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
 
 impl RetriableRequestHandler for CompletionRequestHandler {
     const RETRY_ON_CANCELLATION: bool = true;
+}
+
+/// The characters that only ever open a django template construct.
+///
+/// Kept in step with the trigger characters the server registers in
+/// `capabilities`, where the reason they are registered at all is spelled out.
+const TEMPLATE_TRIGGER_CHARACTERS: &[&str] = &["{", "%", "|"];
+
+/// Whether this request was triggered by typing a character that means nothing
+/// outside a django template.
+fn triggered_by_a_template_character(params: &CompletionParams) -> bool {
+    params.context.as_ref().is_some_and(|context| {
+        context.trigger_kind == lsp_types::CompletionTriggerKind::TriggerCharacter
+            && context
+                .trigger_character
+                .as_deref()
+                .is_some_and(|character| TEMPLATE_TRIGGER_CHARACTERS.contains(&character))
+    })
 }
 
 /// The completion response for a django template document.

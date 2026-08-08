@@ -8,9 +8,9 @@
 //!
 //! the lexer is written for an editor rather than for a renderer, so it is
 //! deliberately tolerant: a construct whose closing delimiter the user has not
-//! typed yet still lexes, so that completions fire inside it. to keep the damage
-//! from a stray `{%` local, an unterminated construct ends at the end of its line
-//! rather than swallowing the rest of the file.
+//! typed yet still lexes, so that completions fire inside it. no construct ever
+//! crosses a newline — django's own lexer can't either — which is what keeps the
+//! damage from a stray `{%` to the line it is on.
 
 use std::ops::Range;
 
@@ -96,8 +96,8 @@ impl Construct {
 /// the result of lexing a whole template
 #[derive(Debug, Default, PartialEq, Eq, get_size2::GetSize)]
 pub(crate) struct Lexed {
-    tokens: Vec<Token>,
-    constructs: Vec<Construct>,
+    tokens: Box<[Token]>,
+    constructs: Box<[Construct]>,
 }
 
 impl Lexed {
@@ -114,19 +114,68 @@ impl Lexed {
         &self.tokens[construct.tokens.clone()]
     }
 
+    /// `construct`'s tokens with its opening and closing delimiters dropped
+    pub(crate) fn inner_tokens(&self, construct: &Construct) -> &[Token] {
+        let tokens = self.construct_tokens(construct);
+
+        let start = usize::from(
+            tokens
+                .first()
+                .is_some_and(|token| token.kind == TokenKind::Delimiter),
+        );
+        let end = tokens
+            .iter()
+            .rposition(|token| token.kind != TokenKind::Delimiter)
+            .map_or(start, |index| index + 1);
+
+        tokens.get(start..end.max(start)).unwrap_or_default()
+    }
+
     /// the construct `offset` sits in
     ///
-    /// the end of a construct counts as inside it: a cursor written as
-    /// `{% extends <CURSOR>%}` is at the boundary of the space token, and a
-    /// cursor at the very end of an unterminated `{% extends ` is at the
-    /// boundary of the construct itself.
+    /// a cursor at the very end of an *unterminated* construct is inside it: the
+    /// user is still typing `{% extends `. a cursor at the end of a terminated
+    /// one is past its closing delimiter and so back in the markup, which is why
+    /// `{{ book }}<CURSOR>` offers nothing.
     pub(crate) fn construct_at(&self, offset: TextSize) -> Option<&Construct> {
-        let index = self
+        let mut index = self
             .constructs
             .partition_point(|construct| construct.range.end() < offset);
+
+        if self
+            .constructs
+            .get(index)
+            .is_some_and(|construct| construct.terminated && construct.range.end() == offset)
+        {
+            index += 1;
+        }
+
         let construct = self.constructs.get(index)?;
         (construct.range.start() <= offset).then_some(construct)
     }
+}
+
+/// the contents of a string literal, its quotes excluded
+///
+/// a literal whose closing quote the user has not typed yet keeps everything
+/// after the opening one, so that it still names whatever it is naming.
+pub(crate) fn string_contents(source: &str, range: TextRange) -> TextRange {
+    let text = &source[range];
+    let Some(quote) = text.chars().next() else {
+        return range;
+    };
+    if !matches!(quote, '"' | '\'') {
+        return range;
+    }
+
+    let start = range.start() + TextSize::from(1);
+    let end = if text.len() > 1 && text.ends_with(quote) {
+        range.end() - TextSize::from(1)
+    } else {
+        range.end()
+    };
+
+    TextRange::new(start, end.max(start))
 }
 
 /// lex `source` as a django template
@@ -192,8 +241,8 @@ impl<'src> Lexer<'src> {
         }
 
         Lexed {
-            tokens: self.tokens,
-            constructs: self.constructs,
+            tokens: self.tokens.into_boxed_slice(),
+            constructs: self.constructs.into_boxed_slice(),
         }
     }
 
@@ -254,26 +303,30 @@ impl<'src> Lexer<'src> {
 
     /// the offset of `close` searching from the cursor, and whether it was found
     ///
-    /// an unterminated construct is cut off at the end of its line so that a
-    /// stray `{%` costs the user one line of highlighting rather than the whole
-    /// rest of the file.
+    /// the search never leaves the line. django's own lexer matches a construct
+    /// with a pattern that cannot cross a newline, so a construct that spans one
+    /// is not a construct — and searching on regardless would let a stray `{%`
+    /// swallow the next tag's `%}` and, with it, that tag.
     fn find_close(&self, close: &str) -> (usize, bool) {
-        let rest = &self.source[self.offset..];
-        match rest.find(close) {
+        let line_end = self.line_end();
+        match self.source[self.offset..line_end].find(close) {
             Some(index) => (self.offset + index, true),
-            None => {
-                let line_end = rest.find('\n').map_or(self.source.len(), |index| {
-                    let end = self.offset + index;
-                    // keep a `\r\n` terminator out of the construct
-                    if self.source[..end].ends_with('\r') {
-                        end - 1
-                    } else {
-                        end
-                    }
-                });
-                (line_end, false)
-            }
+            None => (line_end, false),
         }
+    }
+
+    /// the end of the line the cursor is on, its terminator excluded
+    fn line_end(&self) -> usize {
+        let rest = &self.source[self.offset..];
+        rest.find('\n').map_or(self.source.len(), |index| {
+            let end = self.offset + index;
+            // keep a `\r\n` terminator out of the construct
+            if self.source[..end].ends_with('\r') {
+                end - 1
+            } else {
+                end
+            }
+        })
     }
 
     /// lex the inside of a `{{ … }}` or `{% … %}`, up to `end`
@@ -801,6 +854,44 @@ mod tests {
     }
 
     #[test]
+    fn an_unterminated_construct_does_not_reach_a_later_constructs_delimiter() {
+        // the `%}` below belongs to the `{% block %}`, and taking it would erase
+        // that tag from the template — which is what the user sees the moment
+        // they type `{%` on a line above one
+        let source = "{% extends 'base.html'\n<p>hi</p>\n{% block content %}{% endblock %}";
+        let lexed = lex(source);
+
+        assert_eq!(
+            constructs(&lexed, source),
+            [
+                "Tag(extends):{% extends 'base.html'",
+                "Tag(block):{% block content %}",
+                "Tag(endblock):{% endblock %}",
+            ]
+        );
+        assert!(!lexed.constructs()[0].terminated);
+    }
+
+    #[test]
+    fn a_construct_never_crosses_a_newline() {
+        // django's own lexer matches with a pattern that cannot cross one, so a
+        // `{{` and a `}}` on different lines are two runs of literal text
+        let source = "{{ book\n.title }}";
+        let lexed = lex(source);
+
+        assert_eq!(lexed.constructs().len(), 1);
+        assert!(!lexed.constructs()[0].terminated);
+        assert_eq!(&source[lexed.constructs()[0].range], "{{ book");
+    }
+
+    #[test]
+    fn a_carriage_return_is_not_part_of_an_unterminated_construct() {
+        let source = "{% extends\r\n<p>text</p>";
+        let lexed = lex(source);
+        assert_eq!(&source[lexed.constructs()[0].range], "{% extends");
+    }
+
+    #[test]
     fn unterminated_raw_body_does_not_swallow_the_file() {
         // the closing tag is missing, so the body must keep lexing as template
         // source — otherwise everything the user types after `{% comment %}`
@@ -847,10 +938,46 @@ mod tests {
 
         assert_eq!(at(0), None, "before any construct");
         assert_eq!(at(1), Some(String::new()), "the `{{` itself");
-        assert_eq!(at(8), Some(String::new()), "the end of `}}`");
+        assert_eq!(at(7), Some(String::new()), "inside the closing braces");
+        assert_eq!(at(8), None, "past the closing braces");
         assert_eq!(at(9), None, "the literal text between them");
         assert_eq!(at(14), Some("if".to_string()));
-        assert_eq!(at(20), Some("if".to_string()), "the closing delimiter");
+        assert_eq!(
+            at(19),
+            Some("if".to_string()),
+            "inside the closing delimiter"
+        );
+        assert_eq!(at(20), None, "past the closing delimiter");
+    }
+
+    #[test]
+    fn the_end_of_an_unterminated_construct_is_still_inside_it() {
+        // the user is mid-way through typing it, and this is where completions
+        // have to fire
+        let source = "{% extends ";
+        let lexed = lex(source);
+        let end = ruff_text_size::TextSize::try_from(source.len()).unwrap();
+
+        assert_eq!(
+            lexed
+                .construct_at(end)
+                .map(|construct| construct.name(source)),
+            Some("extends")
+        );
+    }
+
+    #[test]
+    fn adjacent_constructs_do_not_overlap_at_their_boundary() {
+        let source = "{{ a }}{{ b }}";
+        let lexed = lex(source);
+
+        let at = |offset: usize| {
+            lexed
+                .construct_at(ruff_text_size::TextSize::try_from(offset).unwrap())
+                .map(|construct| &source[construct.range])
+        };
+
+        assert_eq!(at(7), Some("{{ b }}"), "the second one, not the first");
     }
 
     #[test]

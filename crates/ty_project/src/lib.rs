@@ -121,6 +121,17 @@ pub struct Project {
     #[default]
     #[returns(copy)]
     force_exclude_flag: bool,
+
+    /// A counter bumped whenever a file or directory is created or deleted.
+    ///
+    /// The project's file set holds Python files only, so nothing in the database
+    /// changes when a file of any other kind appears or disappears. A query that
+    /// discovers such files by walking the file system — the template and static
+    /// asset discovery the Django template services do — has nothing else to
+    /// depend on, and would otherwise serve its first answer forever.
+    #[default]
+    #[returns(copy)]
+    pub file_system_revision: u64,
 }
 
 /// A progress reporter.
@@ -193,6 +204,7 @@ impl Project {
             .durability(Durability::MEDIUM)
             .open_fileset_durability(Durability::LOW)
             .file_set_durability(Durability::LOW)
+            .file_system_revision_durability(Durability::LOW)
             .new(db)
     }
 

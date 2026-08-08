@@ -57,11 +57,15 @@ pub(crate) fn semantic_tokens(
             let text = &source[token.range];
             let (mut token_type, mut modifiers) = classify(token.kind, text)?;
 
-            if let Ok(found) =
-                definitions.binary_search_by_key(&token.range.start(), |(range, _)| range.start())
-                && definitions[found].0 == token.range
+            // a definition's range is the name alone, which for a quoted one —
+            // `{% block "content" %}` — sits *inside* the token rather than
+            // being it
+            let found =
+                definitions.partition_point(|(range, _)| range.start() < token.range.start());
+            if let Some(&(range, kind)) = definitions.get(found)
+                && token.range.contains_range(range)
             {
-                token_type = definitions[found].1;
+                token_type = kind;
                 modifiers |= SemanticTokenModifier::DEFINITION;
             }
 
@@ -86,7 +90,7 @@ fn classify(kind: TokenKind, text: &str) -> Option<(SemanticTokenType, SemanticT
         TokenKind::Comment => (SemanticTokenType::Comment, empty),
         TokenKind::TagName => (
             SemanticTokenType::Keyword,
-            default_library(is_builtin_tag(text)),
+            default_library(is_djangos_tag(text)),
         ),
         TokenKind::FilterName => (
             SemanticTokenType::Function,
@@ -107,7 +111,7 @@ fn classify(kind: TokenKind, text: &str) -> Option<(SemanticTokenType, SemanticT
 /// the builtin table lists a closing tag only as the `closed_by` of the tag it
 /// closes, and a branch tag only as one of its `branches`, but `{% endfor %}` and
 /// `{% empty %}` are as much django's as `{% for %}` is.
-fn is_builtin_tag(name: &str) -> bool {
+fn is_djangos_tag(name: &str) -> bool {
     builtins::tag(name).is_some()
         || builtins::TAGS
             .iter()
@@ -281,6 +285,22 @@ mod tests {
                 "operator:{%",
                 "keyword+defaultLibrary:partial",
                 "variable:card",
+                "operator:%}",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_quoted_block_name_is_still_a_definition() {
+        assert_eq!(
+            highlight("{% block \"content\" %}{% endblock %}"),
+            [
+                "operator:{%",
+                "keyword+defaultLibrary:block",
+                "function+definition:\"content\"",
+                "operator:%}",
+                "operator:{%",
+                "keyword+defaultLibrary:endblock",
                 "operator:%}",
             ]
         );

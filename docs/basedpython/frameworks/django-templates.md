@@ -13,7 +13,7 @@ what is offered depends on where the caret is.
 | `{% ‸ %}`           | tag names: django's builtins, the project's own registered tags, and the `{% end… %}` that closes the block you're in |
 | `{{ x\|‸ }}`        | filter names: django's builtins and the project's own registered filters                                              |
 | `{{ ‸ }}`           | the variables the view puts in this template's context, plus the names the template itself binds                      |
-| `{{ book.‸ }}`      | the attributes of `book`'s type — for a django model, that's its fields                                               |
+| `{{ book.‸ }}`      | the attributes of `book`'s type — for a django model its own fields lead, ahead of what `models.Model` brings         |
 | `{% extends '‸' %}` | the project's template paths                                                                                          |
 | `{% include '‸' %}` | the project's template paths                                                                                          |
 | `{% url '‸' %}`     | the project's route names, namespaced by `app_name`                                                                   |
@@ -25,6 +25,8 @@ what is offered depends on where the caret is.
 the tag that closes the block you're inside is always offered first, so `{% for %}` … `{%` completes to `{% endfor %}` in one keystroke, with `{% empty %}` right behind it.
 
 a tag or filter from a library the template hasn't loaded comes with the `{% load %}` it needs as an extra edit, written below the `{% extends %}` if there is one.
+
+`{% partialdef %}` and `{% partial %}` are django's own from 6.0 and need no `{% load %}`. on an older django they come from [django-template-partials](https://github.com/carltongibson/django-template-partials), which does need one — the tags are offered either way, but the load is not written for you.
 
 ### go-to-definition
 
@@ -68,6 +70,17 @@ def post(request):
 
 the server finds the `render()` call that names `blog/post.html`, reads `book` out of its context dict, asks the type checker what that expression is — a `Book` — and then walks `author` and `name` through the model's fields. django's field machinery is already understood (see [django support](django.md)), so a `ForeignKey` traverses and a `null=True` field is optional, exactly as in python.
 
+a lookup that lands on something callable is called, exactly as django calls it, so the idioms that traverse through a method resolve:
+
+```django
+{{ book.get_absolute_url }}                       {# `str`, not the method #}
+{% for c in book.author.book_set.all %}           {# a `Book`, through the manager #}
+    {{ c.title }}
+{% endfor %}
+```
+
+a method that needs an argument is not called — django renders nothing for it, and neither does the server offer anything past it.
+
 the same works through the template's own bindings:
 
 ```django
@@ -89,9 +102,9 @@ two views rendering the same template both contribute; a name they agree on appe
 
 ## how a template is recognised
 
-the editor usually says so: `django-html`, `htmldjango`, `django-txt` and `jinja-html` are all taken as django templates.
+the editor usually says so: `django`, `django-html`, `django-txt`, `htmldjango` and `jinja-html` are all taken as django templates.
 
-when the editor just calls the file `html` — which is what plain vs code does — the path decides: a file with a template-ish extension (`.html`, `.htm`, `.txt`, `.xml`, `.django`, `.jinja`) somewhere under a directory named `templates` is a django template. ordinary html elsewhere in the project is left alone.
+when the editor just calls the file `html` — which is what plain vs code does — the path decides: a file with a template-ish extension (`.html`, `.htm`, `.txt`, `.xml`, `.django`, `.dj`, `.jinja`) somewhere under a directory named `templates` is a django template. ordinary html elsewhere in the project is left alone.
 
 template directories, static directories and tag libraries are found by their conventional names, which is what django's own app-directories loaders use:
 
@@ -105,9 +118,11 @@ template directories, static directories and tag libraries are found by their co
 
 **a `TEMPLATES` setting is not read.** template directories are found by name rather than from `settings.py`, so a `DIRS` entry pointing somewhere else is not picked up.
 
-**dictionary lookups don't resolve.** django tries a subscript before an attribute, so `{{ mapping.key }}` works at runtime, but a mapping's keys are values rather than types and completions can only offer attributes.
+**the context has to be written where it is passed.** the names are read out of the dict literal in the `render()` call or the view class, so a context built somewhere else and passed by name — `return render(request, "…", context)` — contributes nothing.
 
-**callables are not called.** django calls `{{ author.get_full_name }}` for you; the server reports the method's type rather than its return type, so attributes past a call don't resolve.
+**a member django refuses to call is still offered.** django won't call `save()` or `delete()` from a template — they carry `alters_data` — but `django-stubs` doesn't record that, so there is nothing to read it from. they appear in the list, below the model's own fields.
+
+**dictionary lookups don't resolve.** django tries a subscript before an attribute, so `{{ mapping.key }}` works at runtime, but a mapping's keys are values rather than types and completions can only offer attributes.
 
 **`{% url %}` namespaces come from `app_name`.** a namespace given at the `include()` instead is not applied.
 
@@ -115,4 +130,4 @@ template directories, static directories and tag libraries are found by their co
 
 - [django support](django.md) — the type checker's understanding of models, fields and queries
 - [django template language](https://docs.djangoproject.com/en/stable/ref/templates/language/)
-- [django template partials](https://docs.djangoproject.com/en/stable/ref/templates/builtins/#partialdef)
+- [django-template-partials](https://github.com/carltongibson/django-template-partials) — where `{% partialdef %}` came from before django 6.0

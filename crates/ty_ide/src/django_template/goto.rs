@@ -13,12 +13,9 @@ use ty_project::Db;
 use crate::{HasNavigationTargets, NavigationTarget, NavigationTargets, RangedValue};
 
 use super::index::TemplateIndex;
-use super::lexer::{ConstructKind, Token, TokenKind};
+use super::lexer::{ConstructKind, Token, TokenKind, string_contents};
 use super::project::{self, RegistrationKind};
 use super::resolve::{self, Origin};
-
-/// how many `{% extends %}` hops a partial or block is looked for through
-const MAX_INHERITANCE_DEPTH: u32 = 16;
 
 /// where the name at `offset` of the template `file` is defined
 pub(crate) fn goto_definition(
@@ -131,12 +128,14 @@ impl Site<'_> {
 
                 let target = project::resolve_template(db, &reference.name)?;
                 let range = match &reference.partial {
-                    // `blog.html#comment-item` addresses one fragment of it
+                    // `blog.html#comment-item` addresses one fragment of it. a
+                    // fragment that isn't there is no reason to refuse to open
+                    // the template — that is where the user is going to look
                     Some(partial) => super::template_index(db, target)
                         .partials()
                         .iter()
                         .find(|candidate| candidate.name == *partial)
-                        .map(|candidate| candidate.name_range)?,
+                        .map_or_else(TextRange::default, |candidate| candidate.name_range),
                     None => TextRange::default(),
                 };
 
@@ -222,37 +221,21 @@ fn definition_in_chain(
     skip_current: bool,
     definitions: impl Fn(&TemplateIndex) -> &[super::index::Definition],
 ) -> Option<NavigationTargets> {
-    let mut current = (file, index);
-    let mut searchable = !skip_current;
-    let mut seen = vec![file];
+    let current = (!skip_current).then_some((file, index));
 
-    for _ in 0..MAX_INHERITANCE_DEPTH {
-        let (file, index) = current;
-
-        if searchable
-            && let Some(definition) = definitions(index)
+    current
+        .into_iter()
+        .chain(super::ancestors(db, file, index))
+        .find_map(|(file, index)| {
+            let definition = definitions(index)
                 .iter()
-                .find(|definition| definition.name == name)
-        {
-            return Some(NavigationTargets::from_iter([NavigationTarget::new(
+                .find(|definition| definition.name == name)?;
+
+            Some(NavigationTargets::from_iter([NavigationTarget::new(
                 file,
                 definition.name_range,
-            )]));
-        }
-
-        let parent = index.extends()?;
-        let parent_file = project::resolve_template(db, &parent.name)?;
-        if seen.contains(&parent_file) {
-            // an inheritance cycle would loop forever
-            return None;
-        }
-
-        seen.push(parent_file);
-        current = (parent_file, super::template_index(db, parent_file));
-        searchable = true;
-    }
-
-    None
+            )]))
+        })
 }
 
 /// the path segments up to and including `token`
@@ -300,26 +283,6 @@ fn path_up_to<'src>(
         .filter(|candidate| matches!(candidate.kind, TokenKind::Variable | TokenKind::Attribute))
         .map(|candidate| &source[candidate.range])
         .collect()
-}
-
-/// the contents of a string literal, its quotes excluded
-fn string_contents(source: &str, range: TextRange) -> TextRange {
-    let text = &source[range];
-    let Some(quote) = text.chars().next() else {
-        return range;
-    };
-    if !matches!(quote, '"' | '\'') {
-        return range;
-    }
-
-    let start = range.start() + TextSize::from(1);
-    let end = if text.len() > 1 && text.ends_with(quote) {
-        range.end() - TextSize::from(1)
-    } else {
-        range.end()
-    };
-
-    TextRange::new(start, end.max(start))
 }
 
 #[cfg(test)]
@@ -407,6 +370,35 @@ mod tests {
         ]);
 
         assert_eq!(test.definitions(), ["/blog/templates/blog/cards.html:card"]);
+    }
+
+    #[test]
+    fn an_include_whose_fragment_is_missing_still_opens_the_template() {
+        let test = TemplateTest::new(&[
+            (
+                "blog/templates/blog/cards.html",
+                "{% block a %}{% endblock %}",
+            ),
+            (
+                "blog/templates/blog/post.html",
+                "{% include 'blog/car<CURSOR>ds.html#gone' %}",
+            ),
+        ]);
+
+        assert_eq!(test.definitions(), ["/blog/templates/blog/cards.html:"]);
+    }
+
+    #[test]
+    fn an_inheritance_cycle_does_not_hang() {
+        let test = TemplateTest::new(&[
+            (
+                "blog/templates/a.html",
+                "{% extends 'b.html' %}{% block x<CURSOR> %}",
+            ),
+            ("blog/templates/b.html", "{% extends 'a.html' %}"),
+        ]);
+
+        assert!(test.definitions().is_empty());
     }
 
     #[test]
