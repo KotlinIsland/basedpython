@@ -686,6 +686,8 @@ impl Workspace {
                     file_id.file,
                     range,
                     diagnostic.inner.id().as_str(),
+                    // the playground has no django template documents
+                    false,
                 )
                 .into_iter()
                 .map(|action| CodeAction {

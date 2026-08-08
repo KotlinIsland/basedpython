@@ -59,13 +59,25 @@ pub(crate) fn resolve_root<'a>(
         .map(Origin::Context)
 }
 
-/// every name the project's views put in this template's context
+/// every name in scope in this template, nearest first
+///
+/// a view's own context comes first, and the names the project's context
+/// processors put in every template's context follow it: a view supplying a name
+/// a processor also supplies is the one django renders with, exactly as a tag's
+/// binding outranks them both.
 pub(crate) fn context_variables(db: &dyn Db, template: File) -> Vec<&ContextVariable> {
-    let Some(name) = template_name(db, template) else {
-        return Vec::new();
+    let mut found = match template_name(db, template) {
+        Some(name) => project::context_for_template(db, &name),
+        None => Vec::new(),
     };
 
-    project::context_for_template(db, &name)
+    for variable in project::context_processor_variables(db, db.project()) {
+        if !found.iter().any(|existing| existing.name == variable.name) {
+            found.push(variable);
+        }
+    }
+
+    found
 }
 
 /// the name the template loader knows `file` by, e.g. `blog/post.html`
@@ -195,11 +207,23 @@ pub(crate) fn path_segments<'src>(
 ///
 /// [resolved]: https://docs.djangoproject.com/en/stable/ref/templates/language/#variables
 pub(crate) fn member_type<'db>(db: &'db dyn Db, ty: Type<'db>, name: &str) -> Option<Type<'db>> {
-    let member = members(db, ty)
-        .into_iter()
-        .find(|member| member.name == name)?;
+    Some(resolved(db, uncalled_member_type(db, ty, name)?))
+}
 
-    Some(resolved(db, member.ty))
+/// the type of `name` accessed on `ty`, before the template engine calls it
+///
+/// this is the difference between a method django *would* call and what it gives
+/// once it has: a diagnostic about a member django cannot call has to see the
+/// member itself.
+pub(crate) fn uncalled_member_type<'db>(
+    db: &'db dyn Db,
+    ty: Type<'db>,
+    name: &str,
+) -> Option<Type<'db>> {
+    members(db, ty)
+        .into_iter()
+        .find(|member| member.name == name)
+        .map(|member| member.ty)
 }
 
 /// what the template engine ends up with once it has resolved a lookup

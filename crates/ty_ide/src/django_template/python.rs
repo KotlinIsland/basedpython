@@ -27,7 +27,7 @@ use super::project::{
 
 /// what a string literal in a python module names
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Names {
+pub(super) enum Names {
     /// a template, under the name its loader knows it by
     Template,
     /// a route of the project's url configuration
@@ -87,15 +87,15 @@ pub(crate) fn string_completions<'a>(
     }
 }
 
-/// where the django name the string literal at `offset` spells is defined
-pub(crate) fn string_definition(
-    db: &dyn Db,
-    file: File,
+/// what the string literal at `offset` names, with its value and its contents range
+///
+/// every request that comes through here would otherwise walk the tree for a
+/// position that is plainly not a string, which is a cost the whole crate would
+/// pay for django, so the token stream settles that first.
+pub(super) fn name_at(
     parsed: &ParsedModuleRef,
     offset: TextSize,
-) -> Option<RangedValue<NavigationTargets>> {
-    // every goto request comes through here, and walking the tree for a position
-    // that is plainly not a string would be a cost the whole crate pays for django
+) -> Option<(Names, CompactString, TextRange)> {
     if !parsed
         .tokens()
         .at_offset(offset)
@@ -107,7 +107,19 @@ pub(crate) fn string_definition(
     let covering = covering_node(parsed.syntax().into(), TextRange::empty(offset));
     let (string, names) = named(covering.ancestors())?;
     let range = contents(string)?;
-    let value = string.value.to_str();
+
+    Some((names, string.value.to_str().into(), range))
+}
+
+/// where the django name the string literal at `offset` spells is defined
+pub(crate) fn string_definition(
+    db: &dyn Db,
+    file: File,
+    parsed: &ParsedModuleRef,
+    offset: TextSize,
+) -> Option<RangedValue<NavigationTargets>> {
+    let (names, value, range) = name_at(parsed, offset)?;
+    let value = value.as_str();
 
     let targets: NavigationTargets = match names {
         Names::Template => NavigationTargets::from_iter([NavigationTarget::new(

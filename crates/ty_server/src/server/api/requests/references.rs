@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use lsp_types::ReferencesRequest;
 use lsp_types::{Location, ReferenceParams, Uri};
-use ty_ide::find_references;
+use ty_ide::{django_references, find_references};
 use ty_project::ProjectDatabase;
 
 use crate::document::{PositionExt, ToLink};
@@ -50,8 +50,17 @@ impl BackgroundDocumentRequestHandler for ReferencesRequestHandler {
         };
 
         let include_declaration = params.context.include_declaration;
+        let template = snapshot.is_django_template();
 
-        let Some(references_result) = find_references(db, file, offset, include_declaration) else {
+        // a python symbol's references are found exactly as they were; the django
+        // names a module writes as plain strings are what is left over once it
+        // declines
+        let found = (!template)
+            .then(|| find_references(db, file, offset, include_declaration))
+            .flatten()
+            .or_else(|| django_references(db, file, offset, include_declaration, template));
+
+        let Some(references_result) = found else {
             return Ok(None);
         };
 

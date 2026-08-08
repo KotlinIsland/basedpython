@@ -334,8 +334,8 @@ impl Site<'_> {
 
         match resolve::resolve_root(self.db, self.file, self.index, self.offset, root) {
             Some(Origin::Binding(_)) => vec![Content::Text("bound by this template".to_string())],
-            Some(Origin::Context(_)) => {
-                vec![Content::Text("from the view's context".to_string())]
+            Some(Origin::Context(variable)) => {
+                vec![Content::Text(variable.source.description().to_string())]
             }
             None => Vec::new(),
         }

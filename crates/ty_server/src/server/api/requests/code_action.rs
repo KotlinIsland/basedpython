@@ -99,14 +99,36 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
             if let Some(diagnostic_id) = diagnostic_id
                 && let Some(range) = diagnostic.range.to_text_range(db, file, uri, encoding)
             {
-                for action in code_actions(db, file, range, &diagnostic_id) {
+                for action in code_actions(
+                    db,
+                    file,
+                    range,
+                    &diagnostic_id,
+                    snapshot.is_django_template(),
+                ) {
+                    // an action that creates a file cannot be written as a text
+                    // edit, so it goes through the resource-operation form
+                    let document_changes = action.create.as_ref().and_then(|path| {
+                        let uri = Uri::from_file_path(path.as_std_path()).ok()?;
+                        Some(vec![lsp_types::DocumentChange::CreateFile(
+                            lsp_types::CreateFile {
+                                uri,
+                                options: None,
+                                annotation_id: None,
+                            },
+                        )])
+                    });
+
                     actions.push(CodeActionResponse::CodeAction(lsp_types::CodeAction {
                         title: action.title,
                         kind: Some(CodeActionKind::QuickFix),
                         diagnostics: Some(vec![diagnostic.clone()]),
                         edit: Some(lsp_types::WorkspaceEdit {
-                            changes: to_lsp_edits(db, file, encoding, action.edits),
-                            document_changes: None,
+                            changes: document_changes
+                                .is_none()
+                                .then(|| to_lsp_edits(db, file, encoding, action.edits))
+                                .flatten(),
+                            document_changes,
                             change_annotations: None,
                         }),
                         is_preferred: Some(action.preferred),

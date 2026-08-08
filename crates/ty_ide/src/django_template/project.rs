@@ -22,7 +22,7 @@ use ruff_db::system::walk_directory::WalkState;
 use ruff_db::system::{FileType, SystemPath, SystemPathBuf};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, AnyNodeRef, Expr, Stmt};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{Module, ModuleName, resolve_module, resolve_real_module};
 use ty_project::{Db, Project};
@@ -67,6 +67,37 @@ const OPTIONS_KEY: &str = "OPTIONS";
 /// the option naming the libraries every template has loaded already
 const BUILTINS_OPTION: &str = "builtins";
 
+/// the option an engine replaces the default template loaders with
+const LOADERS_OPTION: &str = "loaders";
+
+/// the option naming the functions every render merges the result of into its context
+const CONTEXT_PROCESSORS_OPTION: &str = "context_processors";
+
+/// the keyword a render call passes its context by
+const CONTEXT_KEYWORD: &str = "context";
+
+/// the class attribute a generic view names the object it renders by
+const CONTEXT_OBJECT_NAME_ATTRIBUTE: &str = "context_object_name";
+
+/// the class attribute a view adds fixed names to its context through
+const EXTRA_CONTEXT_ATTRIBUTE: &str = "extra_context";
+
+/// the method a class-based view builds its context in
+const GET_CONTEXT_DATA_METHOD: &str = "get_context_data";
+
+/// the method a context dict is extended in place with
+const CONTEXT_UPDATE_METHOD: &str = "update";
+
+/// how many names deep a context held in a variable is followed
+///
+/// each hop is a `{**base}` spread or a name bound to another, and a project
+/// nests a couple at most. bounding it is what keeps a context built out of
+/// itself from being followed for ever.
+const MAX_CONTEXT_DEPTH: usize = 4;
+
+/// how many base classes deep a view's context is collected from
+const MAX_VIEW_DEPTH: usize = 8;
+
 /// django's own package, whose `templatetags` is a library candidate like any
 /// installed app's
 const DJANGO_PACKAGE: &str = "django";
@@ -85,6 +116,16 @@ pub(crate) const TEMPLATE_NAME_ATTRIBUTE: &str = "template_name";
 
 /// the functions that resolve a route to its url by name
 pub(crate) const REVERSE_CALLEES: &[&str] = &["reverse", "reverse_lazy"];
+
+/// the keyword those functions take the route name by
+const REVERSE_NAME_KEYWORD: &str = "viewname";
+
+/// the keyword a rest framework hyperlinked field names its route by
+///
+/// a `HyperlinkedIdentityField(view_name="blog:detail")` reverses a route as
+/// surely as a `reverse()` does, and the keyword is distinctive enough to be
+/// read on sight wherever the field is built.
+const HYPERLINK_NAME_KEYWORD: &str = "view_name";
 
 /// the function that redirects to a route named the same way
 ///
@@ -114,7 +155,7 @@ const APP_NAME_VARIABLE: &str = "app_name";
 const URLPATTERNS_VARIABLE: &str = "urlpatterns";
 
 /// the separator django writes between a namespace and the name it qualifies
-const NAMESPACE_SEPARATOR: char = ':';
+pub(crate) const NAMESPACE_SEPARATOR: char = ':';
 
 /// the method a rest framework router routes a viewset with
 const ROUTER_REGISTER_METHOD: &str = "register";
@@ -227,8 +268,36 @@ pub(crate) struct UrlName {
     pub(crate) file: File,
     /// the `name=` literal, for navigation
     pub(crate) range: TextRange,
-    /// the route pattern, shown alongside the completion
+    /// the route pattern, every prefix it is mounted under included
+    ///
+    /// `None` where some part of the pattern could not be read, which is the
+    /// difference between a route that takes no arguments and one whose
+    /// arguments are unknown.
     pub(crate) route: Option<Box<str>>,
+    /// whether `route` is the whole pattern django reverses against
+    ///
+    /// a rest framework router generates its routes from a prefix rather than
+    /// writing them out, so what one of them takes cannot be read off `route`.
+    pub(crate) exact: bool,
+}
+
+/// where a name in a template's context comes from
+#[derive(Debug, Clone, Copy, PartialEq, Eq, get_size2::GetSize)]
+pub(crate) enum ContextSource {
+    /// a view put it in this template's context
+    View,
+    /// a context processor puts it in every template's context
+    Processor,
+}
+
+impl ContextSource {
+    /// how the name's provenance reads, for a name nothing gives a type to
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            Self::View => "from the view's context",
+            Self::Processor => "from a context processor",
+        }
+    }
 }
 
 /// a name a view puts in a template's context
@@ -243,6 +312,7 @@ pub(crate) struct ContextVariable {
     /// this is what the completions infer the variable's type from, which is how
     /// a django model in the context brings its fields with it.
     pub(crate) value: Option<TextRange>,
+    pub(crate) source: ContextSource,
 }
 
 /// the context one template is rendered with, from one place that renders it
@@ -266,6 +336,24 @@ pub(crate) struct DiscoveredFile {
     /// django loads. every consumer of a discovery takes the first file of a
     /// name, so this is what puts that one first.
     precedence: usize,
+    /// whether django loads it out of a directory of the project's own
+    ///
+    /// an installed app in site-packages holds templates django loads exactly as
+    /// it loads the project's, and they are equally real to everything that only
+    /// reads them — but they are not the project's to rewrite.
+    pub(crate) own: bool,
+}
+
+impl DiscoveredFile {
+    /// the directory the file's name is relative to
+    ///
+    /// this is the directory django's loader searched to find it, which is where
+    /// a file renamed to another name would have to end up.
+    pub(crate) fn root(&self) -> Option<&SystemPath> {
+        self.path
+            .ancestors()
+            .nth(self.name.matches('/').count() + 1)
+    }
 }
 
 /// every file under a `templates` directory of the project, or one its settings name
@@ -288,6 +376,29 @@ pub(crate) fn static_files(db: &dyn Db, project: Project) -> Box<[DiscoveredFile
         STATIC_DIRECTORY,
         static_search_order(db, project),
     )
+}
+
+/// whether everything the settings say about the project was worked out
+///
+/// what the templates, the static files and the tag libraries are discovered
+/// from is a union of what the convention finds and what the settings name,
+/// which is the right answer for a *suggestion*: a directory too many costs a
+/// completion nobody wanted. a diagnostic needs the opposite guarantee, that
+/// nothing is missing, and only a settings module read all the way through gives
+/// it — without one there is no `INSTALLED_APPS`, and without that an installed
+/// app's own templates and libraries are somewhere nothing here will ever look.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn settings_are_authoritative(db: &dyn Db, project: Project) -> bool {
+    let Some(importing) = *settings_file(db, project) else {
+        return false;
+    };
+    let settings = django_settings(db, project);
+
+    settings.read_in_full
+        && settings
+            .installed_apps
+            .iter()
+            .all(|app| app_package(db, importing, app).is_some())
 }
 
 /// the file a template name resolves to
@@ -495,22 +606,41 @@ fn is_stub(db: &dyn Db, file: File) -> bool {
 /// costs a suggestion where having fewer would cost a wrong diagnostic.
 #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
 pub(crate) fn url_names(db: &dyn Db, project: Project) -> Box<[UrlName]> {
-    let Some(root) = *root_urlconf(db, project) else {
-        return project_scan(db, project, flat_url_names);
-    };
+    walk_urls(db, project).map_or_else(
+        || project_scan(db, project, flat_url_names),
+        |walk| walk.found.into_boxed_slice(),
+    )
+}
+
+/// whether the route names are the ones django would reverse, and all of them
+///
+/// only a walk from `ROOT_URLCONF` puts a name under the namespace django gives
+/// it, and only a walk that got all the way through every include it met has
+/// seen every name there is. anything short of that is a set of names a "no such
+/// route" would be wrong about, so it answers nothing rather than something
+/// plausible.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn routes_are_authoritative(db: &dyn Db, project: Project) -> bool {
+    walk_urls(db, project).is_some_and(|walk| walk.complete)
+}
+
+/// the url tree walked from `ROOT_URLCONF`, for a project that names one
+fn walk_urls(db: &dyn Db, project: Project) -> Option<UrlWalk<'_>> {
+    let root = (*root_urlconf(db, project))?;
 
     let mut walk = UrlWalk {
         db,
         found: Vec::new(),
         visited: FxHashSet::default(),
+        complete: true,
     };
-    walk.mount(root, URLPATTERNS_VARIABLE, "", MAX_URLCONF_DEPTH);
+    walk.mount(root, URLPATTERNS_VARIABLE, "", Some(""), MAX_URLCONF_DEPTH);
 
-    let mut found = walk.found;
     let mut seen = FxHashSet::default();
-    found.retain(|url| seen.insert((url.name.clone(), url.file, url.range)));
+    walk.found
+        .retain(|url| seen.insert((url.name.clone(), url.file, url.range)));
 
-    found.into_boxed_slice()
+    Some(walk)
 }
 
 /// the module the project's url tree starts at
@@ -533,7 +663,7 @@ fn flat_url_names(db: &dyn Db, file: File) -> impl Iterator<Item = UrlName> {
     conf.entries
         .iter()
         .filter_map(move |entry| match &entry.kind {
-            UrlEntryKind::Route(route) => Some(namespaced(route, &namespace)),
+            UrlEntryKind::Route(route) => Some(mounted(route, &namespace, Some(""))),
             // an include is a tree the flat scan has no way to walk: the module it
             // names contributes its own names when the scan reaches it
             UrlEntryKind::Include(_) => None,
@@ -550,68 +680,116 @@ struct UrlWalk<'db> {
     /// of one module under two namespaces are two different sets of names — so
     /// it is the whole triple that decides whether there is anything left to do.
     visited: FxHashSet<(File, CompactString, CompactString)>,
+    /// whether every module the walk met was read all the way through
+    complete: bool,
 }
 
 impl UrlWalk<'_> {
-    /// walk the routes `binding` of `file` holds, namespaced under `prefix`
-    fn mount(&mut self, file: File, binding: &str, prefix: &str, depth: usize) {
-        if depth == 0
-            || !self.visited.insert((
-                file,
-                binding.to_compact_string(),
-                prefix.to_compact_string(),
-            ))
-        {
+    /// walk the routes `binding` of `file` holds, mounted under `namespace` and
+    /// behind the route pattern `prefix`
+    fn mount(
+        &mut self,
+        file: File,
+        binding: &str,
+        namespace: &str,
+        prefix: Option<&str>,
+        depth: usize,
+    ) {
+        if depth == 0 {
+            // a tree deeper than the walk goes is one whose names are not all here
+            self.complete = false;
+            return;
+        }
+        if !self.visited.insert((
+            file,
+            binding.to_compact_string(),
+            namespace.to_compact_string(),
+        )) {
             return;
         }
 
         let db = self.db;
+        let conf = urlconf(db, file);
+        self.complete &= conf.complete;
+
         // including a module mounts its `urlpatterns`, and a route the module
         // writes outside any list at all is taken along rather than lost
         let whole_module = binding == URLPATTERNS_VARIABLE;
+        let mut mounted_anything = false;
 
-        for entry in &urlconf(db, file).entries {
-            let mounted = match &entry.binding {
+        for entry in &conf.entries {
+            let is_mounted = match &entry.binding {
                 Some(bound) => bound == binding,
                 None => whole_module,
             };
-            if !mounted {
+            if !is_mounted {
                 continue;
             }
+            mounted_anything = true;
 
             match &entry.kind {
-                UrlEntryKind::Route(route) => self.found.push(namespaced(route, prefix)),
-                UrlEntryKind::Include(include) => self.follow(file, include, prefix, depth),
+                UrlEntryKind::Route(route) => self.found.push(mounted(route, namespace, prefix)),
+                UrlEntryKind::Include(include) => {
+                    self.follow(file, include, namespace, prefix, depth);
+                }
             }
         }
+
+        // a list this module never binds is one built somewhere the scan cannot
+        // read — by a helper, or by a router registering through a name of its
+        // own — so what it mounts is not in the answer
+        self.complete &= whole_module || mounted_anything;
     }
 
     /// walk what an include mounts, under the namespace it mounts it in
-    fn follow(&mut self, file: File, include: &Include, prefix: &str, depth: usize) {
+    fn follow(
+        &mut self,
+        file: File,
+        include: &Include,
+        namespace: &str,
+        prefix: Option<&str>,
+        depth: usize,
+    ) {
+        let prefix = join_routes(prefix, include.prefix.as_deref());
+
         match &include.target {
             IncludeTarget::Local(binding) => {
-                let prefix = extend(prefix, include.namespace.as_deref());
-                self.mount(file, binding, &prefix, depth - 1);
+                let namespace = extend(namespace, include.namespace.as_deref());
+                self.mount(file, binding, &namespace, prefix.as_deref(), depth - 1);
             }
             IncludeTarget::Module(module) => {
                 let Some(included) = ModuleName::new(module)
                     .and_then(|module| resolve_real_module(self.db, file, &module))
                     .and_then(|module| module.file(self.db))
                 else {
+                    // a urlconf that can't be reached holds names the walk will
+                    // never see
+                    self.complete = false;
                     return;
                 };
                 // an include that names no namespace leaves the included module
                 // to name its own
-                let namespace = include
+                let instance = include
                     .namespace
                     .clone()
                     .or_else(|| urlconf(self.db, included).app_name.clone());
-                let prefix = extend(prefix, namespace.as_deref());
+                let namespace = extend(namespace, instance.as_deref());
 
-                self.mount(included, URLPATTERNS_VARIABLE, &prefix, depth - 1);
+                self.mount(
+                    included,
+                    URLPATTERNS_VARIABLE,
+                    &namespace,
+                    prefix.as_deref(),
+                    depth - 1,
+                );
             }
         }
     }
+}
+
+/// one route pattern written after another, when both are known
+fn join_routes(prefix: Option<&str>, own: Option<&str>) -> Option<CompactString> {
+    Some(format!("{}{}", prefix?, own?).to_compact_string())
 }
 
 /// `prefix` with `namespace` qualified under it, as django writes it
@@ -623,10 +801,11 @@ fn extend(prefix: &str, namespace: Option<&str>) -> CompactString {
     }
 }
 
-/// `route` as it is reversed from under `prefix`
-fn namespaced(route: &UrlName, prefix: &str) -> UrlName {
+/// `route` as it is reversed from under `namespace`, behind the pattern `prefix`
+fn mounted(route: &UrlName, namespace: &str, prefix: Option<&str>) -> UrlName {
     UrlName {
-        name: extend(prefix, Some(&route.name)),
+        name: extend(namespace, Some(&route.name)),
+        route: join_routes(prefix, route.route.as_deref()).map(|route| route.as_str().into()),
         ..route.clone()
     }
 }
@@ -661,6 +840,274 @@ pub(crate) fn context_for_template<'db>(
     }
 
     seen
+}
+
+/// where a python module writes a template or a route name
+///
+/// [`super::python`] reads one of these at a cursor, which is all a completion or
+/// a goto ever needs. a rename needs the opposite: every place in the project the
+/// name is written, since one left behind is a project silently broken. so an
+/// expression in one of those positions is recorded whether or not it is a
+/// literal — a `render(request, chosen)` names a template nothing here can read,
+/// and what a rename cannot read it must refuse rather than work around.
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub(crate) struct NameUse {
+    /// the literal's value, or `None` where the expression is no literal at all
+    pub(crate) name: Option<CompactString>,
+    /// whether the name is written as one literal a single range could replace
+    ///
+    /// `"blog/" "post.html"` reads as one name to python and as nothing a range
+    /// could cover to a rename.
+    pub(crate) whole: bool,
+    pub(crate) file: File,
+    /// the literal's contents, its quotes excluded — or the whole expression,
+    /// where there is nothing to replace, so that a refusal can point at it
+    pub(crate) range: TextRange,
+}
+
+impl NameUse {
+    /// what `expr` writes, read as a name
+    fn of(file: File, expr: &Expr) -> Self {
+        let Expr::StringLiteral(literal) = expr else {
+            return Self {
+                name: None,
+                whole: false,
+                file,
+                range: expr.range(),
+            };
+        };
+
+        let (whole, range) = match literal.value.as_slice() {
+            [part] => (true, part.content_range()),
+            _ => (false, literal.range()),
+        };
+
+        Self {
+            name: Some(literal.value.to_str().to_compact_string()),
+            whole,
+            file,
+            range,
+        }
+    }
+}
+
+/// every place the project's python names a template
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+pub(crate) fn template_uses(db: &dyn Db, project: Project) -> Box<[NameUse]> {
+    project_scan(db, project, |db, file| {
+        template_uses_in_file(db, file).iter().cloned()
+    })
+}
+
+/// every place the project's python reverses a route by name
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+pub(crate) fn route_uses(db: &dyn Db, project: Project) -> Box<[NameUse]> {
+    project_scan(db, project, |db, file| {
+        route_uses_in_file(db, file).iter().cloned()
+    })
+}
+
+/// the templates one module names
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+fn template_uses_in_file(db: &dyn Db, file: File) -> Box<[NameUse]> {
+    if !mentions(db, file, CONTEXT_CALLEES) && !mentions(db, file, &[TEMPLATE_NAME_ATTRIBUTE]) {
+        return Box::default();
+    }
+
+    let parsed = parsed_module(db, file).load(db);
+    let mut visitor = TemplateUseVisitor {
+        file,
+        found: Vec::new(),
+    };
+    visitor.visit_body(parsed.suite());
+
+    visitor.found.into_boxed_slice()
+}
+
+struct TemplateUseVisitor {
+    file: File,
+    found: Vec<NameUse>,
+}
+
+impl<'ast> Visitor<'ast> for TemplateUseVisitor {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        // `template_name = "…"` names a template where django reads one, which is
+        // the body of a view class
+        if let Stmt::ClassDef(class) = stmt {
+            self.found.extend(
+                class
+                    .body
+                    .iter()
+                    .filter_map(|statement| class_attribute(statement, TEMPLATE_NAME_ATTRIBUTE))
+                    .map(|(value, _)| NameUse::of(self.file, value)),
+            );
+        }
+
+        walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if let Expr::Call(call) = expr
+            && callee_name(&call.func)
+                .is_some_and(|callee| CONTEXT_CALLEES.contains(&callee.as_str()))
+            && let Some(template) = call
+                .arguments
+                .find_argument_value(TEMPLATE_NAME_ATTRIBUTE, 1)
+        {
+            self.found.push(NameUse::of(self.file, template));
+        }
+
+        walk_expr(self, expr);
+    }
+}
+
+/// the routes one module reverses
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+fn route_uses_in_file(db: &dyn Db, file: File) -> Box<[NameUse]> {
+    if !mentions(db, file, REVERSE_CALLEES)
+        && !mentions(db, file, &[REDIRECT_CALLEE, HYPERLINK_NAME_KEYWORD])
+    {
+        return Box::default();
+    }
+
+    let parsed = parsed_module(db, file).load(db);
+    let mut visitor = RouteUseVisitor {
+        file,
+        found: Vec::new(),
+    };
+    visitor.visit_body(parsed.suite());
+
+    visitor.found.into_boxed_slice()
+}
+
+struct RouteUseVisitor {
+    file: File,
+    found: Vec<NameUse>,
+}
+
+impl<'ast> Visitor<'ast> for RouteUseVisitor {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if let Expr::Call(call) = expr
+            && let Some(callee) = callee_name(&call.func)
+        {
+            if REVERSE_CALLEES.contains(&callee.as_str())
+                && let Some(argument) = call.arguments.find_argument_value(REVERSE_NAME_KEYWORD, 0)
+            {
+                self.found.push(NameUse::of(self.file, argument));
+            } else if callee == REDIRECT_CALLEE
+                && let Some(argument) = call.arguments.args.first()
+                && let use_ = NameUse::of(self.file, argument)
+                // a redirect takes a url or a model as readily as a route name,
+                // so only a literal that could be a name is read as one — a
+                // `redirect(book)` is not a route this has failed to read
+                && use_
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| !name.contains('/'))
+            {
+                self.found.push(use_);
+            }
+        }
+
+        // a rest framework hyperlinked field names the route it points at by
+        // keyword, wherever it is built
+        if let Expr::Call(call) = expr
+            && let Some(keyword) = call.arguments.find_keyword(HYPERLINK_NAME_KEYWORD)
+        {
+            self.found.push(NameUse::of(self.file, &keyword.value));
+        }
+
+        walk_expr(self, expr);
+    }
+}
+
+/// a constant the project binds one of the names being renamed to
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BoundName {
+    pub(crate) file: File,
+    /// the literal, so that a caller can tell a binding it is already rewriting
+    /// from one it is not
+    pub(crate) value: TextRange,
+    /// the name the literal is bound to, which is what a refusal points at
+    pub(crate) bound_to: CompactString,
+    /// where that name is written
+    pub(crate) range: TextRange,
+}
+
+/// every module- or class-level name the project binds one of `names` to
+///
+/// a rename rewrites the positions it recognises, and a name written straight
+/// into one of them is one it can follow. a constant is the way a name reaches
+/// such a position without being written there — `TEMPLATE = "blog/base.html"`
+/// and then a `render(request, TEMPLATE)`, or a helper somewhere this cannot
+/// see at all — and following that is beyond anything here, so it refuses.
+///
+/// the search is deliberately not "every literal that spells the name": a
+/// `detail` or a `content` is among the commonest strings in any codebase, and
+/// an `item.get("detail")` in unrelated code is no reason to refuse anything. a
+/// binding is the narrowest thing that could still carry the name somewhere.
+pub(crate) fn bound_names(db: &dyn Db, names: &[&str]) -> Vec<BoundName> {
+    let mut found = Vec::new();
+
+    for file in &db.project().files(db) {
+        if is_stub(db, file) || !mentions(db, file, names) {
+            continue;
+        }
+
+        let parsed = parsed_module(db, file).load(db);
+        bindings_in(file, parsed.suite(), names, &mut found);
+    }
+
+    found
+}
+
+/// the bindings of `body`, and of the classes it declares
+///
+/// a function body is left out: a name bound there is visible only inside it, so
+/// it can only reach a template or a route through a call this already reads —
+/// and reads as an argument it cannot follow, which refuses on its own.
+fn bindings_in(file: File, body: &[Stmt], names: &[&str], found: &mut Vec<BoundName>) {
+    for statement in body {
+        if let Stmt::ClassDef(class) = statement {
+            bindings_in(file, &class.body, names, found);
+            continue;
+        }
+
+        let Some((bound_to, range, value)) = binding(statement) else {
+            continue;
+        };
+        let Expr::StringLiteral(literal) = value else {
+            continue;
+        };
+        if !names.contains(&literal.value.to_str()) {
+            continue;
+        }
+
+        found.push(BoundName {
+            file,
+            value: match literal.value.as_slice() {
+                [part] => part.content_range(),
+                _ => literal.range(),
+            },
+            bound_to: bound_to.to_compact_string(),
+            range,
+        });
+    }
+}
+
+/// the name a statement binds, where it writes it, and what it binds to it
+fn binding(statement: &Stmt) -> Option<(&str, TextRange, &Expr)> {
+    match statement {
+        Stmt::Assign(assign) => match assign.targets.as_slice() {
+            [Expr::Name(target)] => Some((target.id.as_str(), target.range(), &*assign.value)),
+            _ => None,
+        },
+        Stmt::AnnAssign(assign) => match (&*assign.target, assign.value.as_deref()) {
+            (Expr::Name(target), Some(value)) => Some((target.id.as_str(), target.range(), value)),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// run `scan` over every first-party source file of the project
@@ -708,7 +1155,22 @@ fn discover(
     // a directory the settings name is under no obligation to be called
     // `templates`, nor to sit under the project root, so it gets a walk of its own
     for (precedence, root) in order.named.iter().enumerate() {
-        collect_under(db, project, root, precedence, &mut found);
+        collect_under(db, project, root, precedence, true, &mut found);
+    }
+
+    // an installed app is as often as not a package in site-packages, whose
+    // `templates` directory the convention walk of the project root never
+    // reaches. django loads `admin/base_site.html` and `rest_framework/api.html`
+    // from exactly there
+    for (index, app) in order.apps.iter().enumerate() {
+        collect_under(
+            db,
+            project,
+            &app.join(directory),
+            order.named.len() + index,
+            false,
+            &mut found,
+        );
     }
 
     found.sort_by(|left, right| {
@@ -717,7 +1179,15 @@ fn discover(
             .then(left.precedence.cmp(&right.precedence))
             .then(left.path.cmp(&right.path))
     });
-    found.dedup_by(|left, right| left.name == right.name && left.path == right.path);
+    // one file reached two ways is one file, and the project's own if either way
+    // was the project's
+    found.dedup_by(|left, right| {
+        let same = left.name == right.name && left.path == right.path;
+        if same {
+            right.own |= left.own;
+        }
+        same
+    });
     found.into_boxed_slice()
 }
 
@@ -767,6 +1237,10 @@ fn discover_by_convention(
                                 name,
                                 path: entry.path().to_path_buf(),
                                 precedence: order.rank(under),
+                                // the walk starts at the project root and
+                                // respects its ignore rules, so whatever it
+                                // reaches is the project's own
+                                own: true,
                             });
                         }
                         WalkState::Continue
@@ -787,6 +1261,7 @@ fn collect_under(
     project: Project,
     root: &SystemPath,
     precedence: usize,
+    own: bool,
     found: &mut Vec<DiscoveredFile>,
 ) {
     let collected = Mutex::new(Vec::new());
@@ -808,6 +1283,7 @@ fn collect_under(
                         name,
                         path: entry.path().to_path_buf(),
                         precedence,
+                        own,
                     });
                 }
 
@@ -1112,7 +1588,7 @@ fn app_directories(db: &dyn Db, project: Project, apps: &[CompactString]) -> Box
 }
 
 /// what the project's django settings module says about where its files live
-#[derive(Debug, Default, Clone, PartialEq, Eq, get_size2::GetSize)]
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
 struct DjangoSettings {
     /// the directories `TEMPLATES[*]["DIRS"]` names
     template_dirs: Box<[SystemPathBuf]>,
@@ -1127,6 +1603,31 @@ struct DjangoSettings {
     /// the modules `TEMPLATES[*]["OPTIONS"]["builtins"]` names, whose tags and
     /// filters every template has without saying `{% load %}`
     always_loaded: Box<[CompactString]>,
+    /// the functions `TEMPLATES[*]["OPTIONS"]["context_processors"]` names, whose
+    /// returned names every template is rendered with
+    context_processors: Box<[CompactString]>,
+    /// whether every directory and module the settings name was worked out
+    ///
+    /// a `DIRS` entry built from an environment variable, or an engine that
+    /// configures its own `loaders`, leaves django loading from somewhere this
+    /// has no way to look — which is a template set nothing may call complete.
+    read_in_full: bool,
+}
+
+impl Default for DjangoSettings {
+    fn default() -> Self {
+        Self {
+            template_dirs: Box::default(),
+            app_directories: false,
+            static_dirs: Box::default(),
+            installed_apps: Box::default(),
+            root_urlconf: None,
+            always_loaded: Box::default(),
+            context_processors: Box::default(),
+            // the settings that were read, all none of them, were read in full
+            read_in_full: true,
+        }
+    }
 }
 
 /// what the project's settings module says
@@ -1274,8 +1775,11 @@ impl SettingsReader {
                 TEMPLATES_SETTING => self.engines(&assign.value, &mut template_dirs),
                 STATICFILES_DIRS_SETTING => static_dirs.extend(self.directories(&assign.value)),
                 INSTALLED_APPS_SETTING => {
-                    installed_apps
-                        .extend(elements(&assign.value).iter().filter_map(string_literal));
+                    let named = elements(&assign.value);
+                    installed_apps.extend(named.iter().filter_map(string_literal));
+                    // an app whose entry isn't written out is an app whose
+                    // templates and libraries are not in the answer
+                    self.settings.read_in_full &= installed_apps.len() == named.len();
                 }
                 ROOT_URLCONF_SETTING => {
                     self.settings.root_urlconf = string_literal(&assign.value);
@@ -1323,30 +1827,54 @@ impl SettingsReader {
 
     /// read the engine options that matter here
     ///
-    /// `builtins` is the one: a module it names is loaded into every template the
+    /// `builtins` is one: a module it names is loaded into every template the
     /// engine renders, so nothing in a template has to `{% load %}` it.
+    /// `context_processors` is the other, and names the functions whose result
+    /// every template is rendered with.
     fn options(&mut self, expr: &Expr) {
         let Expr::Dict(options) = expr else {
             return;
         };
 
         let mut always_loaded: Vec<CompactString> = self.settings.always_loaded.to_vec();
+        let mut context_processors: Vec<CompactString> = self.settings.context_processors.to_vec();
 
         for item in &options.items {
-            if item.key.as_ref().and_then(string_literal).as_deref() == Some(BUILTINS_OPTION) {
-                always_loaded.extend(elements(&item.value).iter().filter_map(string_literal));
+            match item.key.as_ref().and_then(string_literal).as_deref() {
+                Some(BUILTINS_OPTION) => {
+                    let named = elements(&item.value);
+                    always_loaded.extend(named.iter().filter_map(string_literal));
+                    self.settings.read_in_full &= always_loaded.len() == named.len();
+                }
+                // a processor that can't be read costs a name nothing reports
+                // against, so it leaves the settings authoritative as they were
+                Some(CONTEXT_PROCESSORS_OPTION) => {
+                    context_processors
+                        .extend(elements(&item.value).iter().filter_map(string_literal));
+                }
+                // an engine listing its own loaders loads from wherever they say,
+                // which need not be a directory at all
+                Some(LOADERS_OPTION) => self.settings.read_in_full = false,
+                _ => {}
             }
         }
 
         self.settings.always_loaded = always_loaded.into_boxed_slice();
+        self.settings.context_processors = context_processors.into_boxed_slice();
     }
 
     /// the directories a list of them names, the ones that can't be worked out dropped
-    fn directories(&self, expr: &Expr) -> Vec<SystemPathBuf> {
-        elements(expr)
+    fn directories(&mut self, expr: &Expr) -> Vec<SystemPathBuf> {
+        let named = elements(expr);
+        let found: Vec<SystemPathBuf> = named
             .iter()
             .filter_map(|element| self.paths.path(element))
-            .collect()
+            .collect();
+
+        // a directory django loads from and this cannot name is one whose
+        // templates are missing from every answer below
+        self.settings.read_in_full &= found.len() == named.len();
+        found
     }
 }
 
@@ -1431,11 +1959,28 @@ impl PathEvaluator {
 /// the entries are read without a namespace applied: which namespace a name ends
 /// up under is for the include that reaches it to say, and one module reached
 /// two ways is namespaced two ways.
-#[derive(Debug, Default, Clone, PartialEq, Eq, get_size2::GetSize)]
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
 struct UrlConf {
     /// the namespace an include of this module falls back to
     app_name: Option<CompactString>,
     entries: Box<[UrlEntry]>,
+    /// whether every route the module names was read
+    ///
+    /// a route whose name or whose mounted list could not be worked out leaves a
+    /// name behind that nothing here will ever report, which is exactly the
+    /// state in which a "no such route" would be wrong.
+    complete: bool,
+}
+
+impl Default for UrlConf {
+    fn default() -> Self {
+        Self {
+            app_name: None,
+            entries: Box::default(),
+            // a module that names no route at all is one there was nothing to miss in
+            complete: true,
+        }
+    }
 }
 
 /// one thing a url configuration module does
@@ -1463,6 +2008,8 @@ struct Include {
     target: IncludeTarget,
     /// the `namespace=`, or the instance namespace the two-tuple form names
     namespace: Option<CompactString>,
+    /// the route pattern the include is mounted behind, within this module
+    prefix: Option<CompactString>,
 }
 
 /// what an include mounts
@@ -1507,13 +2054,16 @@ fn urlconf(db: &dyn Db, file: File) -> UrlConf {
         db,
         file,
         binding: None,
+        prefix: Some(CompactString::default()),
         found: Vec::new(),
+        complete: true,
     };
     visitor.visit_body(parsed.suite());
 
     UrlConf {
         app_name,
         entries: visitor.found.into_boxed_slice(),
+        complete: visitor.complete,
     }
 }
 
@@ -1522,7 +2072,12 @@ struct UrlVisitor<'db> {
     file: File,
     /// the module-level name the statement being visited binds
     binding: Option<CompactString>,
+    /// the route pattern the call being visited is written inside, or `None`
+    /// where one of the patterns enclosing it could not be read
+    prefix: Option<CompactString>,
     found: Vec<UrlEntry>,
+    /// whether every route this module names was read
+    complete: bool,
 }
 
 impl UrlVisitor<'_> {
@@ -1533,7 +2088,8 @@ impl UrlVisitor<'_> {
         name: &str,
         file: File,
         range: TextRange,
-        route: Option<&str>,
+        route: Option<CompactString>,
+        exact: bool,
     ) {
         self.found.push(UrlEntry {
             binding,
@@ -1541,7 +2097,8 @@ impl UrlVisitor<'_> {
                 name: name.to_compact_string(),
                 file,
                 range,
-                route: route.map(Box::from),
+                route: route.map(|route| route.as_str().into()),
+                exact,
             }),
         });
     }
@@ -1550,7 +2107,11 @@ impl UrlVisitor<'_> {
     fn mounts(&mut self, target: IncludeTarget, namespace: Option<CompactString>) {
         self.found.push(UrlEntry {
             binding: self.binding.clone(),
-            kind: UrlEntryKind::Include(Include { target, namespace }),
+            kind: UrlEntryKind::Include(Include {
+                target,
+                namespace,
+                prefix: self.prefix.clone(),
+            }),
         });
     }
 
@@ -1571,11 +2132,16 @@ impl UrlVisitor<'_> {
         let (target, instance) = match argument {
             Expr::Tuple(pair) => match pair.elts.as_slice() {
                 [target, instance] => (target, string_literal(instance)),
-                _ => return,
+                _ => {
+                    self.complete = false;
+                    return;
+                }
             },
             _ => (argument, None),
         };
         let Some(target) = include_target(target) else {
+            // whatever this mounts, its names are not in the answer
+            self.complete = false;
             return;
         };
 
@@ -1611,28 +2177,33 @@ impl UrlVisitor<'_> {
             self.file,
             call.func.range(),
             None,
+            false,
         );
     }
 
     /// the name a `path()`-like call gives its route
     fn path_call(&mut self, call: &ast::ExprCall) {
-        if !callee_name(&call.func).is_some_and(|callee| URL_CALLEES.contains(&callee.as_str())) {
+        if !is_url_call(call) {
             return;
         }
         let Some(keyword) = call.arguments.find_keyword(URL_NAME_KEYWORD) else {
             return;
         };
         let Some(name) = string_literal(&keyword.value) else {
+            // a route django names and this doesn't is one a "no such route"
+            // would be wrong about
+            self.complete = false;
             return;
         };
 
-        let route = call.arguments.args.first().and_then(string_literal);
+        let route = join_routes(self.prefix.as_deref(), route_of(call).as_deref());
         self.record(
             self.binding.clone(),
             &name,
             self.file,
             keyword.value.range(),
-            route.as_deref(),
+            route,
+            true,
         );
     }
 
@@ -1655,12 +2226,14 @@ impl UrlVisitor<'_> {
             return;
         };
         let Some(prefix) = string_literal(prefix) else {
+            self.complete = false;
             return;
         };
         // the viewset is named either directly or through the module it lives in
         let Some(viewset @ (Expr::Name(_) | Expr::Attribute(_))) =
             call.arguments.find_argument_value("viewset", 1)
         else {
+            self.complete = false;
             return;
         };
 
@@ -1692,9 +2265,16 @@ impl UrlVisitor<'_> {
                 .and_then(|described| described.basename.clone())
             {
                 Some(basename) => (basename, viewset.range()),
-                None => return,
+                None => {
+                    self.complete = false;
+                    return;
+                }
             },
         };
+
+        // a router writes its own patterns from the prefix rather than taking
+        // them, so the prefix is what a route reads as but not what it takes
+        let route = join_routes(self.prefix.as_deref(), Some(prefix.as_str()));
 
         for suffix in ROUTER_ROUTE_SUFFIXES {
             self.record(
@@ -1702,7 +2282,8 @@ impl UrlVisitor<'_> {
                 &format!("{basename}-{suffix}"),
                 self.file,
                 anchor,
-                Some(prefix.as_str()),
+                route.clone(),
+                false,
             );
         }
 
@@ -1713,7 +2294,8 @@ impl UrlVisitor<'_> {
                 &format!("{basename}-{}", action.url_name),
                 action.file,
                 action.range,
-                Some(prefix.as_str()),
+                route.clone(),
+                false,
             );
         }
     }
@@ -1738,7 +2320,7 @@ fn resolved_class<T>(
     db: &dyn Db,
     file: File,
     expr: &Expr,
-    read: impl Fn(File, &ast::StmtClassDef) -> T,
+    mut read: impl FnMut(File, &ast::StmtClassDef) -> T,
 ) -> Option<T> {
     let model = SemanticModel::new(db, file);
 
@@ -1990,14 +2572,38 @@ impl<'ast> Visitor<'ast> for UrlVisitor<'_> {
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Expr::Call(call) = expr {
-            self.path_call(call);
-            self.router_registration(call);
-            self.include_call(call);
-        }
+        let Expr::Call(call) = expr else {
+            walk_expr(self, expr);
+            return;
+        };
+
+        self.path_call(call);
+        self.router_registration(call);
+        self.include_call(call);
+
+        // whatever this call holds — an `include()`, or a list of further routes —
+        // django mounts behind this call's own pattern
+        let outer = is_url_call(call).then(|| {
+            let inner = join_routes(self.prefix.as_deref(), route_of(call).as_deref());
+            std::mem::replace(&mut self.prefix, inner)
+        });
 
         walk_expr(self, expr);
+
+        if let Some(outer) = outer {
+            self.prefix = outer;
+        }
     }
+}
+
+/// whether `call` is a `path()`, `re_path()` or `url()`
+fn is_url_call(call: &ast::ExprCall) -> bool {
+    callee_name(&call.func).is_some_and(|callee| URL_CALLEES.contains(&callee.as_str()))
+}
+
+/// the pattern a `path()`-like call matches, when it is written out
+fn route_of(call: &ast::ExprCall) -> Option<CompactString> {
+    string_literal(call.arguments.args.first()?)
 }
 
 /// the template contexts one module builds
@@ -2011,25 +2617,33 @@ fn template_contexts_in_file(db: &dyn Db, file: File) -> Box<[TemplateContext]> 
     let parsed = parsed_module(db, file).load(db);
 
     let mut visitor = ContextVisitor {
+        db,
         file,
         found: Vec::new(),
+        scopes: Vec::new(),
     };
     visitor.visit_body(parsed.suite());
 
     visitor.found.into_boxed_slice()
 }
 
-struct ContextVisitor {
+struct ContextVisitor<'db, 'ast> {
+    db: &'db dyn Db,
     file: File,
     found: Vec<TemplateContext>,
+    /// the function bodies being walked, innermost last
+    ///
+    /// a context handed to `render()` by name is built by the statements of the
+    /// function that binds it, so that body is what the name is followed in.
+    scopes: Vec<&'ast [Stmt]>,
 }
 
-impl ContextVisitor {
+impl<'ast> ContextVisitor<'_, 'ast> {
     /// the context a `render()`/`TemplateResponse()` call passes
     ///
     /// both take the request first, the template second and the context third,
     /// and both accept those last two by keyword as well.
-    fn render_call(&self, call: &ast::ExprCall) -> Option<TemplateContext> {
+    fn render_call(&self, call: &'ast ast::ExprCall) -> Option<TemplateContext> {
         let callee = callee_name(&call.func)?;
         if !CONTEXT_CALLEES.contains(&callee.as_str()) {
             return None;
@@ -2046,36 +2660,24 @@ impl ContextVisitor {
 
         let context = call
             .arguments
-            .find_keyword("context")
+            .find_keyword(CONTEXT_KEYWORD)
             .map(|keyword| &keyword.value)
             .or_else(|| call.arguments.args.get(context_index));
 
         Some(TemplateContext {
             template,
             variables: context
-                .map(|context| self.dict_variables(context))
-                .unwrap_or_default(),
-        })
-    }
-
-    /// the names a dict literal binds
-    fn dict_variables(&self, expr: &Expr) -> Box<[ContextVariable]> {
-        let Expr::Dict(dict) = expr else {
-            return Box::default();
-        };
-
-        dict.items
-            .iter()
-            .filter_map(|item| {
-                let key = item.key.as_ref()?;
-                Some(ContextVariable {
-                    name: string_literal(key)?,
-                    file: self.file,
-                    range: key.range(),
-                    value: Some(item.value.range()),
+                .map(|context| {
+                    context_variables(
+                        self.file,
+                        self.scopes.last().copied(),
+                        context,
+                        MAX_CONTEXT_DEPTH,
+                    )
                 })
-            })
-            .collect()
+                .unwrap_or_default()
+                .into_boxed_slice(),
+        })
     }
 
     /// the context a class-based view declares
@@ -2091,61 +2693,34 @@ impl ContextVisitor {
             .and_then(|(value, _)| string_literal(value))?;
 
         let mut variables = Vec::new();
-
-        for statement in &class.body {
-            if let Some((value, range)) = class_attribute(statement, "context_object_name")
-                && let Some(name) = string_literal(value)
-            {
-                variables.push(ContextVariable {
-                    name,
-                    file: self.file,
-                    range,
-                    // the object itself is what the view will bind; its type
-                    // comes from the view's generics, which is beyond what a
-                    // syntactic scan can follow
-                    value: None,
-                });
-            }
-
-            if let Some((value, _)) = class_attribute(statement, "extra_context") {
-                variables.extend(self.dict_variables(value));
-            }
-
-            if let Stmt::FunctionDef(function) = statement
-                && function.name.as_str() == "get_context_data"
-            {
-                variables.extend(self.context_assignments(&function.body));
-            }
-        }
+        let mut seen = Vec::new();
+        view_context(
+            self.db,
+            self.file,
+            class,
+            &mut variables,
+            &mut seen,
+            MAX_VIEW_DEPTH,
+        );
 
         Some(TemplateContext {
             template,
             variables: variables.into_boxed_slice(),
         })
     }
-
-    /// the names a `get_context_data` body writes into its context dict
-    fn context_assignments(&self, body: &[Stmt]) -> Vec<ContextVariable> {
-        let mut found = Vec::new();
-
-        let mut visitor = ContextAssignmentVisitor {
-            file: self.file,
-            found: &mut found,
-        };
-        visitor.visit_body(body);
-
-        found
-    }
 }
 
-impl<'ast> Visitor<'ast> for ContextVisitor {
+impl<'ast> Visitor<'ast> for ContextVisitor<'_, 'ast> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        if let Stmt::ClassDef(class) = stmt {
-            self.found.extend(self.class_based_view(class));
-            return;
+        match stmt {
+            Stmt::ClassDef(class) => self.found.extend(self.class_based_view(class)),
+            Stmt::FunctionDef(function) => {
+                self.scopes.push(&function.body);
+                walk_stmt(self, stmt);
+                self.scopes.pop();
+            }
+            _ => walk_stmt(self, stmt),
         }
-
-        walk_stmt(self, stmt);
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
@@ -2157,7 +2732,323 @@ impl<'ast> Visitor<'ast> for ContextVisitor {
     }
 }
 
+/// everything a view class and the classes it inherits from put in the context
+///
+/// a base's `get_context_data` reaches every template its subclasses name, so the
+/// chain is walked. a class the walk has already read is not read again, and the
+/// walk is bounded: neither an inheritance chain read off the ast nor the
+/// resolution that follows it promises to be finite.
+fn view_context(
+    db: &dyn Db,
+    file: File,
+    class: &ast::StmtClassDef,
+    found: &mut Vec<ContextVariable>,
+    seen: &mut Vec<(File, TextRange)>,
+    depth: usize,
+) {
+    if depth == 0 || seen.contains(&(file, class.range())) {
+        return;
+    }
+    seen.push((file, class.range()));
+
+    declared_context(file, class, found);
+
+    for base in class.bases() {
+        resolved_class(db, file, base, |defining, base_class| {
+            view_context(db, defining, base_class, found, seen, depth - 1);
+        });
+    }
+}
+
+/// the names one view class's own body declares
+///
+/// a name the class declares itself outranks the same name from a base, exactly
+/// as it does at render time, so what is already found stays.
+fn declared_context(file: File, class: &ast::StmtClassDef, found: &mut Vec<ContextVariable>) {
+    for statement in &class.body {
+        if let Some((value, range)) = class_attribute(statement, CONTEXT_OBJECT_NAME_ATTRIBUTE)
+            && let Some(name) = string_literal(value)
+        {
+            merge_unseen(
+                found,
+                [ContextVariable {
+                    name,
+                    file,
+                    range,
+                    // the object itself is what the view will bind; its type
+                    // comes from the view's generics, which is beyond what a
+                    // syntactic scan can follow
+                    value: None,
+                    source: ContextSource::View,
+                }],
+            );
+        }
+
+        if let Some((value, _)) = class_attribute(statement, EXTRA_CONTEXT_ATTRIBUTE) {
+            merge_unseen(
+                found,
+                context_variables(file, None, value, MAX_CONTEXT_DEPTH),
+            );
+        }
+
+        if let Stmt::FunctionDef(function) = statement
+            && function.name.as_str() == GET_CONTEXT_DATA_METHOD
+        {
+            merge_unseen(found, returned_context(file, &function.body));
+        }
+    }
+}
+
+/// the names the dict a `get_context_data` body returns holds
+///
+/// what it returns is read first, and every `context["name"] = …` of the body is
+/// taken on top of that: a body that hands its dict on to `super()` rather than
+/// returning it still writes the names it writes.
+fn returned_context(file: File, body: &[Stmt]) -> Vec<ContextVariable> {
+    let mut returns = ReturnVisitor { found: Vec::new() };
+    returns.visit_body(body);
+
+    let mut found = Vec::new();
+    for value in returns.found {
+        merge_unseen(
+            &mut found,
+            context_variables(file, Some(body), value, MAX_CONTEXT_DEPTH),
+        );
+    }
+
+    let mut writes = Vec::new();
+    let mut visitor = ContextAssignmentVisitor {
+        file,
+        found: &mut writes,
+    };
+    visitor.visit_body(body);
+
+    merge_unseen(&mut found, writes);
+    found
+}
+
+/// the names `expr` contributes to a context
+///
+/// a dict literal binds its keys. a name is followed to what the body that binds
+/// it holds there, which is the whole of the difference between a context written
+/// out in the `render()` call and the far commoner one built up above it. anything
+/// else — a call, a comprehension, a name with no body to look in — contributes
+/// nothing rather than a guess.
+fn context_variables(
+    file: File,
+    scope: Option<&[Stmt]>,
+    expr: &Expr,
+    fuel: usize,
+) -> Vec<ContextVariable> {
+    let mut found = Vec::new();
+
+    match expr {
+        Expr::Dict(dict) => {
+            for item in &dict.items {
+                match item.key.as_ref() {
+                    Some(key) => {
+                        let Some(name) = string_literal(key) else {
+                            continue;
+                        };
+                        merge_over(
+                            &mut found,
+                            ContextVariable {
+                                name,
+                                file,
+                                range: key.range(),
+                                value: Some(item.value.range()),
+                                source: ContextSource::View,
+                            },
+                        );
+                    }
+                    // `{**base, "extra": …}` spreads whatever `base` holds here
+                    None if fuel > 0 => {
+                        for variable in context_variables(file, scope, &item.value, fuel - 1) {
+                            merge_over(&mut found, variable);
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+        Expr::Name(name) if fuel > 0 => {
+            if let Some(scope) = scope {
+                found = bound_context(file, scope, name.id.as_str(), name.start(), fuel - 1);
+            }
+        }
+        _ => {}
+    }
+
+    found
+}
+
+/// what the local `name` holds by the time execution reaches `before`
+///
+/// the statements that build it are read in the order they are written: a
+/// rebinding replaces what came before it, a subscript write and an `update()`
+/// add to it. that is the dict `render()` is handed.
+fn bound_context(
+    file: File,
+    scope: &[Stmt],
+    name: &str,
+    before: TextSize,
+    fuel: usize,
+) -> Vec<ContextVariable> {
+    let mut mutations = MutationVisitor {
+        name,
+        before,
+        found: Vec::new(),
+    };
+    mutations.visit_body(scope);
+
+    let mut found = Vec::new();
+    for mutation in mutations.found {
+        match mutation {
+            Mutation::Bound(value) => {
+                found = context_variables(file, Some(scope), value, fuel);
+            }
+            Mutation::Extended(value) => {
+                for variable in context_variables(file, Some(scope), value, fuel) {
+                    merge_over(&mut found, variable);
+                }
+            }
+            Mutation::Wrote(key, value) => {
+                let Some(name) = string_literal(key) else {
+                    continue;
+                };
+                merge_over(
+                    &mut found,
+                    ContextVariable {
+                        name,
+                        file,
+                        range: key.range(),
+                        value: Some(value.range()),
+                        source: ContextSource::View,
+                    },
+                );
+            }
+        }
+    }
+
+    found
+}
+
+/// add `variable`, replacing a name already there
+///
+/// a dict written twice over holds what was written last, and so does the
+/// context django renders with.
+fn merge_over(found: &mut Vec<ContextVariable>, variable: ContextVariable) {
+    match found
+        .iter_mut()
+        .find(|existing| existing.name == variable.name)
+    {
+        Some(existing) => *existing = variable,
+        None => found.push(variable),
+    }
+}
+
+/// add every name of `extra` that isn't spoken for already
+///
+/// where two independent sources name the same thing it is the first that wins,
+/// which is what puts a view's own declaration above the one it inherits.
+fn merge_unseen(
+    found: &mut Vec<ContextVariable>,
+    extra: impl IntoIterator<Item = ContextVariable>,
+) {
+    for variable in extra {
+        if !found.iter().any(|existing| existing.name == variable.name) {
+            found.push(variable);
+        }
+    }
+}
+
+/// one statement that builds up a context held in a variable
+enum Mutation<'ast> {
+    /// `context = value`, which replaces whatever it held
+    Bound(&'ast Expr),
+    /// `context.update(value)`
+    Extended(&'ast Expr),
+    /// `context["name"] = value`
+    Wrote(&'ast Expr, &'ast Expr),
+}
+
+/// collects, in the order written, what one function body does to one name
+struct MutationVisitor<'a, 'ast> {
+    name: &'a str,
+    /// where the context is read, past which nothing has run yet
+    before: TextSize,
+    found: Vec<Mutation<'ast>>,
+}
+
+impl MutationVisitor<'_, '_> {
+    /// whether `expr` is the name being followed
+    fn is_target(&self, expr: &Expr) -> bool {
+        matches!(expr, Expr::Name(name) if name.id.as_str() == self.name)
+    }
+}
+
+impl<'ast> Visitor<'ast> for MutationVisitor<'_, 'ast> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        // a statement below the read has not run when the context is handed over,
+        // and one in a body of its own belongs to that body rather than to this
+        if stmt.start() >= self.before || matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
+            return;
+        }
+
+        match stmt {
+            Stmt::Assign(assign) => match assign.targets.as_slice() {
+                [target] if self.is_target(target) => {
+                    self.found.push(Mutation::Bound(&assign.value));
+                }
+                [Expr::Subscript(subscript)] if self.is_target(&subscript.value) => {
+                    self.found
+                        .push(Mutation::Wrote(&subscript.slice, &assign.value));
+                }
+                _ => {}
+            },
+            Stmt::AnnAssign(assign) => {
+                if self.is_target(&assign.target)
+                    && let Some(value) = assign.value.as_deref()
+                {
+                    self.found.push(Mutation::Bound(value));
+                }
+            }
+            Stmt::Expr(expression) => {
+                if let Expr::Call(call) = &*expression.value
+                    && let Expr::Attribute(attribute) = &*call.func
+                    && attribute.attr.as_str() == CONTEXT_UPDATE_METHOD
+                    && self.is_target(&attribute.value)
+                    && let [argument] = call.arguments.args.as_ref()
+                {
+                    self.found.push(Mutation::Extended(argument));
+                }
+            }
+            _ => walk_stmt(self, stmt),
+        }
+    }
+}
+
+/// collects the value of every `return` of a body, its nested bodies apart
+struct ReturnVisitor<'ast> {
+    found: Vec<&'ast Expr>,
+}
+
+impl<'ast> Visitor<'ast> for ReturnVisitor<'ast> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        match stmt {
+            // a nested function returns for itself, not for the body holding it
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+            Stmt::Return(statement) => self.found.extend(statement.value.as_deref()),
+            _ => walk_stmt(self, stmt),
+        }
+    }
+}
+
 /// collects `context["name"] = value` writes
+///
+/// the dict written into has to be a name of the body's own: a write to
+/// `request.session["cart"]` is a write to something that is not a context at
+/// all, and reading it as one would put a name in every template that has none.
 struct ContextAssignmentVisitor<'a> {
     file: File,
     found: &'a mut Vec<ContextVariable>,
@@ -2167,6 +3058,7 @@ impl<'ast> Visitor<'ast> for ContextAssignmentVisitor<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         if let Stmt::Assign(assign) = stmt
             && let [Expr::Subscript(subscript)] = assign.targets.as_slice()
+            && matches!(&*subscript.value, Expr::Name(_))
             && let Some(name) = string_literal(&subscript.slice)
         {
             self.found.push(ContextVariable {
@@ -2174,11 +3066,67 @@ impl<'ast> Visitor<'ast> for ContextAssignmentVisitor<'_> {
                 file: self.file,
                 range: subscript.slice.range(),
                 value: Some(assign.value.range()),
+                source: ContextSource::View,
             });
         }
 
         walk_stmt(self, stmt);
     }
+}
+
+/// every name a context processor puts in every template's context
+///
+/// `TEMPLATES[*]["OPTIONS"]["context_processors"]` names functions django calls
+/// on each render and merges the dict of into the context, so `request` and
+/// `user` are written in templates no view ever mentions them to.
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+pub(crate) fn context_processor_variables(db: &dyn Db, project: Project) -> Box<[ContextVariable]> {
+    let Some(importing) = *settings_file(db, project) else {
+        return Box::default();
+    };
+
+    // django merges each processor's dict over the ones before it, so where two
+    // of them name the same thing it is the last that renders
+    let mut found = Vec::new();
+    for processor in &django_settings(db, project).context_processors {
+        for variable in processor_variables(db, importing, processor) {
+            merge_over(&mut found, variable);
+        }
+    }
+
+    found.into_boxed_slice()
+}
+
+/// the names the processor the dotted `name` resolves to returns
+///
+/// only what a `return` of the function itself can be read as a dict is
+/// answered. a processor building its dict some other way — a comprehension, a
+/// call into something else — contributes nothing rather than a guessed name.
+fn processor_variables(db: &dyn Db, importing: File, name: &str) -> Vec<ContextVariable> {
+    let Some((module, function)) = name.rsplit_once('.') else {
+        return Vec::new();
+    };
+    // what a processor returns is only ever written in the module that runs
+    let Some(file) = ModuleName::new(module)
+        .and_then(|module| resolve_real_module(db, importing, &module))
+        .and_then(|module| module.file(db))
+    else {
+        return Vec::new();
+    };
+
+    let parsed = parsed_module(db, file).load(db);
+    let Some(definition) = parsed.suite().iter().find_map(|statement| match statement {
+        Stmt::FunctionDef(definition) if definition.name.as_str() == function => Some(definition),
+        _ => None,
+    }) else {
+        return Vec::new();
+    };
+
+    let mut found = returned_context(file, &definition.body);
+    for variable in &mut found {
+        variable.source = ContextSource::Processor;
+    }
+    found
 }
 
 /// the value and name range of a class-body assignment to `attribute`
@@ -2248,8 +3196,8 @@ mod tests {
     use crate::django_template::tests::TemplateTest;
 
     use super::{
-        RegistrationKind, context_for_template, registrations, static_files, tag_libraries,
-        template_files, url_names,
+        RegistrationKind, context_for_template, context_processor_variables, registrations,
+        static_files, tag_libraries, template_files, url_names,
     };
 
     /// a project of python sources, with a throwaway template to anchor the
@@ -2322,6 +3270,14 @@ mod tests {
     fn context(test: &TemplateTest, template: &str) -> Vec<String> {
         context_for_template(&test.db, template)
             .into_iter()
+            .map(|variable| variable.name.to_string())
+            .collect()
+    }
+
+    /// the names the project's context processors put in every context
+    fn processors(test: &TemplateTest) -> Vec<String> {
+        context_processor_variables(&test.db, test.db.project())
+            .iter()
             .map(|variable| variable.name.to_string())
             .collect()
     }
@@ -2402,6 +3358,323 @@ mod tests {
         )]);
 
         assert_eq!(context(&test, "app/page.html"), ["book", "shelf", "author"]);
+    }
+
+    #[test]
+    fn a_context_held_in_a_variable_is_followed_to_what_it_holds() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            def show(request):
+                context = {'book': 1, 'shelf': 2}
+                return render(request, 'app/page.html', context)
+            ",
+        )]);
+
+        assert_eq!(context(&test, "app/page.html"), ["book", "shelf"]);
+    }
+
+    #[test]
+    fn a_context_is_followed_through_the_writes_and_updates_that_build_it() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            def show(request):
+                context = {'book': 1}
+                context['extra'] = 2
+                context.update({'more': 3})
+                return render(request, 'app/page.html', context)
+            ",
+        )]);
+
+        assert_eq!(context(&test, "app/page.html"), ["book", "extra", "more"]);
+    }
+
+    #[test]
+    fn a_context_spread_from_another_dict_carries_its_names_too() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            def show(request):
+                base = {'site': 1}
+                context = {**base, 'book': 2}
+                return render(request, 'app/page.html', context)
+            ",
+        )]);
+
+        assert_eq!(context(&test, "app/page.html"), ["site", "book"]);
+    }
+
+    #[test]
+    fn a_context_rebound_more_than_once_is_read_as_it_stands_at_the_render_call() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            def show(request):
+                context = {'first': 1}
+                context = {'second': 2}
+                return render(request, 'app/page.html', context)
+            ",
+        )]);
+
+        assert_eq!(context(&test, "app/page.html"), ["second"]);
+    }
+
+    #[test]
+    fn two_renders_of_one_context_each_see_what_had_run_by_then() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            def show(request):
+                context = {'book': 1}
+                if request.GET:
+                    return render(request, 'app/early.html', context)
+                context['extra'] = 2
+                return render(request, 'app/page.html', context)
+            ",
+        )]);
+
+        assert_eq!(context(&test, "app/early.html"), ["book"]);
+        assert_eq!(context(&test, "app/page.html"), ["book", "extra"]);
+    }
+
+    #[test]
+    fn a_context_that_cannot_be_followed_contributes_nothing() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            def show(request):
+                context = build_context(request)
+                context['extra'] = 1
+                return render(request, 'app/page.html', context)
+            ",
+        )]);
+
+        // the call is unreadable, but the write on top of it is not
+        assert_eq!(context(&test, "app/page.html"), ["extra"]);
+    }
+
+    #[test]
+    fn a_context_bound_outside_the_rendering_function_is_not_followed() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            context = {'book': 1}
+
+            def show(request):
+                return render(request, 'app/page.html', context)
+            ",
+        )]);
+
+        assert!(context(&test, "app/page.html").is_empty());
+    }
+
+    #[test]
+    fn a_base_class_contributes_the_context_it_builds() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            class BaseView:
+                extra_context = {'year': 2026}
+
+                def get_context_data(self, **kwargs):
+                    context = super().get_context_data(**kwargs)
+                    context['site'] = 1
+                    return context
+
+            class BookView(BaseView):
+                template_name = 'app/detail.html'
+
+                def get_context_data(self, **kwargs):
+                    context = super().get_context_data(**kwargs)
+                    context['book'] = 2
+                    return context
+            ",
+        )]);
+
+        assert_eq!(
+            context(&test, "app/detail.html"),
+            ["book", "year", "site"],
+            "the view's own names come before the ones it inherits"
+        );
+    }
+
+    #[test]
+    fn a_base_class_in_another_module_contributes_too() {
+        let test = project(&[
+            (
+                "app/base.py",
+                "
+                class BaseView:
+                    def get_context_data(self, **kwargs):
+                        context = super().get_context_data(**kwargs)
+                        context['site'] = 1
+                        return context
+                ",
+            ),
+            (
+                "app/views.py",
+                "
+                from app.base import BaseView
+
+                class BookView(BaseView):
+                    template_name = 'app/detail.html'
+                ",
+            ),
+        ]);
+
+        assert_eq!(context(&test, "app/detail.html"), ["site"]);
+    }
+
+    #[test]
+    fn a_class_that_inherits_in_a_circle_is_read_once_and_terminates() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            class First(Second):
+                template_name = 'app/detail.html'
+                extra_context = {'first': 1}
+
+            class Second(First):
+                extra_context = {'second': 2}
+            ",
+        )]);
+
+        assert_eq!(context(&test, "app/detail.html"), ["first", "second"]);
+    }
+
+    #[test]
+    fn a_get_context_data_returning_a_dict_outright_contributes_its_keys() {
+        let test = project(&[(
+            "app/views.py",
+            "
+            class BookView:
+                template_name = 'app/detail.html'
+
+                def get_context_data(self, **kwargs):
+                    return {'book': 1, **super().get_context_data(**kwargs)}
+            ",
+        )]);
+
+        assert_eq!(context(&test, "app/detail.html"), ["book"]);
+    }
+
+    #[test]
+    fn a_context_processor_contributes_the_names_it_returns() {
+        let test = configured(
+            "
+            TEMPLATES = [{'OPTIONS': {'context_processors': ['app.processors.branding']}}]
+            ",
+            &[(
+                "app/processors.py",
+                "
+                def branding(request):
+                    return {'site_name': 'a blog', 'year': 2026}
+                ",
+            )],
+        );
+
+        assert_eq!(processors(&test), ["site_name", "year"]);
+    }
+
+    #[test]
+    fn a_context_processor_is_followed_through_the_variable_it_builds() {
+        let test = configured(
+            "
+            TEMPLATES = [{'OPTIONS': {'context_processors': ['app.processors.branding']}}]
+            ",
+            &[(
+                "app/processors.py",
+                "
+                def branding(request):
+                    context = {'site_name': 'a blog'}
+                    context['year'] = 2026
+                    return context
+                ",
+            )],
+        );
+
+        assert_eq!(processors(&test), ["site_name", "year"]);
+    }
+
+    #[test]
+    fn a_context_processor_whose_result_cannot_be_read_contributes_nothing() {
+        let test = configured(
+            "
+            TEMPLATES = [{'OPTIONS': {'context_processors': [
+                'app.processors.built',
+                'app.processors.elsewhere',
+                'app.processors.missing',
+                'nowhere.at_all',
+            ]}}]
+            ",
+            &[(
+                "app/processors.py",
+                "
+                def built(request):
+                    return dict(site_name='a blog')
+
+                def elsewhere(request):
+                    return other(request)
+                ",
+            )],
+        );
+
+        assert!(processors(&test).is_empty());
+    }
+
+    #[test]
+    fn a_processor_writing_into_something_that_is_not_a_context_contributes_nothing() {
+        let test = configured(
+            "
+            TEMPLATES = [{'OPTIONS': {'context_processors': ['app.processors.branding']}}]
+            ",
+            &[(
+                "app/processors.py",
+                "
+                def branding(request):
+                    request.session['cart'] = []
+                    return {'site_name': 'a blog'}
+                ",
+            )],
+        );
+
+        assert_eq!(processors(&test), ["site_name"]);
+    }
+
+    #[test]
+    fn the_last_context_processor_to_name_something_is_the_one_that_renders() {
+        let test = configured(
+            "
+            TEMPLATES = [{'OPTIONS': {'context_processors': [
+                'app.processors.first',
+                'app.processors.second',
+            ]}}]
+            ",
+            &[(
+                "app/processors.py",
+                "
+                def first(request):
+                    return {'site_name': 'one'}
+
+                def second(request):
+                    return {'site_name': 'two'}
+                ",
+            )],
+        );
+
+        let found = context_processor_variables(&test.db, test.db.project());
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            &ruff_db::source::source_text(&test.db, found[0].file)[found[0].value.unwrap()],
+            "'two'"
+        );
+    }
+
+    #[test]
+    fn a_project_that_names_no_context_processors_has_none() {
+        let test = configured("TEMPLATES = [{'APP_DIRS': True}]", &[]);
+        assert!(processors(&test).is_empty());
     }
 
     #[test]

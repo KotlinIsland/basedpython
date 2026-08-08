@@ -15,6 +15,7 @@
 
 mod builtins;
 mod completion;
+mod diagnostics;
 mod folding;
 mod goto;
 mod hover;
@@ -22,25 +23,33 @@ mod index;
 mod lexer;
 mod project;
 mod python;
+mod references;
+mod rename;
 mod resolve;
 mod semantic_tokens;
 mod symbols;
+mod uses;
 
 pub use completion::{TemplateCompletion, TemplateEdit};
 pub use hover::{DisplayTemplateHover, TemplateHover};
 pub(crate) use python::{
     string_completions as django_string_completions, string_definition as django_string_definition,
 };
+pub use rename::{PreparedTemplateRename, TemplateRename, TemplateRenameOutcome};
 pub use symbols::TemplateSymbol;
 
+use ruff_db::diagnostic::Diagnostic;
 use ruff_db::files::File;
 use ruff_db::source::source_text;
 use ruff_db::system::SystemPath;
 use ruff_text_size::{TextRange, TextSize};
 use ty_project::Db;
 
+use ty_python_semantic::lint::LintId;
+
+use crate::code_action::QuickFix;
 use crate::semantic_tokens::SemanticTokens;
-use crate::{FoldingRange, NavigationTargets, RangedValue};
+use crate::{FoldingRange, NavigationTargets, RangedValue, ReferenceTarget};
 
 use index::TemplateIndex;
 
@@ -169,6 +178,75 @@ fn ancestors<'db>(
     collected
 }
 
+/// everything wrong with `file`, read as a django template
+///
+/// the type checker never sees a template — it is not python — so this is the
+/// whole of what a template document can report.
+pub fn django_template_diagnostics(db: &dyn Db, file: File) -> Vec<Diagnostic> {
+    let source = source_text(db, file);
+    diagnostics::diagnostics(db, file, template_index(db, file), source.as_str())
+}
+
+/// the quick fixes offered for a template diagnostic at `range`
+pub(crate) fn django_template_code_actions(
+    db: &dyn Db,
+    file: File,
+    range: TextRange,
+    lint: LintId,
+) -> Vec<QuickFix> {
+    let source = source_text(db, file);
+    diagnostics::code_actions(
+        db,
+        file,
+        template_index(db, file),
+        source.as_str(),
+        range,
+        lint,
+    )
+}
+
+/// whether the django name at `offset` of `file` can be renamed
+///
+/// `template` says the file is a django template rather than python, which the
+/// caller knows and this cannot. either language may write one of these names,
+/// and `None` — a position that names nothing django knows — is what leaves a
+/// python file's position to the python services.
+pub fn django_prepare_rename(
+    db: &dyn Db,
+    file: File,
+    offset: TextSize,
+    template: bool,
+) -> Option<PreparedTemplateRename> {
+    rename::prepare(db, file, offset, template)
+}
+
+/// every edit renaming the django name at `offset` of `file` to `new_name` makes
+pub fn django_rename(
+    db: &dyn Db,
+    file: File,
+    offset: TextSize,
+    new_name: &str,
+    template: bool,
+) -> Option<TemplateRenameOutcome> {
+    rename::rename(db, file, offset, new_name, template)
+}
+
+/// every place the django name at `offset` of `file` is written
+///
+/// `template` says the file is a django template rather than python, as for the
+/// rename above. `include_declaration` is the client's, as LSP specifies: with it
+/// off, the block the base declares, the file a template name loads and the
+/// `path(…, name=…)` a route is declared by are all left out of the answer.
+pub fn django_references(
+    db: &dyn Db,
+    file: File,
+    offset: TextSize,
+    include_declaration: bool,
+    template: bool,
+) -> Option<Vec<ReferenceTarget>> {
+    references::references(db, file, offset, include_declaration, template)
+}
+
 /// the completions for `offset` in `file`, read as a django template
 pub fn django_template_completions(
     db: &dyn Db,
@@ -186,7 +264,7 @@ pub(crate) mod tests {
     use ruff_db::system::{DbWithTestSystem, DbWithWritableSystem, SystemPath, SystemPathBuf};
     use ruff_python_ast::PythonVersion;
     use ruff_python_trivia::textwrap::dedent;
-    use ruff_text_size::TextSize;
+    use ruff_text_size::{Ranged, TextSize};
     use ty_module_resolver::SearchPathSettings;
     use ty_project::{ProjectMetadata, TestDb};
     use ty_python_core::platform::PythonPlatform;
@@ -196,13 +274,18 @@ pub(crate) mod tests {
     use crate::MarkupKind;
 
     use super::{
-        TemplateSymbol, django_template_completions, django_template_document_symbols,
-        django_template_folding_ranges, django_template_goto_definition, django_template_hover,
-        is_django_template_path,
+        PreparedTemplateRename, TemplateRenameOutcome, TemplateSymbol, django_prepare_rename,
+        django_references, django_rename, django_template_completions, django_template_diagnostics,
+        django_template_document_symbols, django_template_folding_ranges,
+        django_template_goto_definition, django_template_hover, is_django_template_path,
     };
 
     /// a project whose files are written out, with the cursor marked by
-    /// `<CURSOR>` in exactly one of them
+    /// `<CURSOR>` in at most one of them
+    ///
+    /// a test that has no cursor to place — a diagnostic's, which reads a whole
+    /// file rather than a position in one — leaves the marker out, and the file
+    /// under test is then the last one written.
     pub(crate) struct TemplateTest {
         pub(crate) db: TestDb,
         pub(crate) file: File,
@@ -271,6 +354,7 @@ pub(crate) mod tests {
             const MARKER: &str = "<CURSOR>";
 
             let mut cursor = None;
+            let mut last = None;
 
             for (path, contents) in sources {
                 let contents = dedent(contents).into_owned();
@@ -287,6 +371,7 @@ pub(crate) mod tests {
                 let path = root.join(path);
                 db.write_file(&path, &contents).unwrap();
                 let file = system_path_to_file(&db, &path).unwrap();
+                last = Some(file);
 
                 if let Some(offset) = offset {
                     assert!(cursor.is_none(), "more than one `<CURSOR>` marker");
@@ -294,8 +379,33 @@ pub(crate) mod tests {
                 }
             }
 
-            let (file, offset) = cursor.expect("a source to contain `<CURSOR>`");
+            let (file, offset) = cursor
+                .unwrap_or_else(|| (last.expect("a source to be written"), TextSize::default()));
             Self { db, file, offset }
+        }
+
+        /// every diagnostic of the file under test, rendered as
+        /// `rule severity: message [text]`
+        pub(crate) fn diagnostics(&self) -> Vec<String> {
+            let source = ruff_db::source::source_text(&self.db, self.file);
+
+            django_template_diagnostics(&self.db, self.file)
+                .into_iter()
+                .map(|diagnostic| {
+                    let range = diagnostic
+                        .primary_span()
+                        .and_then(|span| span.range())
+                        .unwrap_or_default();
+
+                    format!(
+                        "{} {:?}: {} [{}]",
+                        diagnostic.id(),
+                        diagnostic.severity(),
+                        diagnostic.primary_message(),
+                        &source[range]
+                    )
+                })
+                .collect()
         }
 
         /// the labels of the completions at the cursor, in the order offered
@@ -367,6 +477,123 @@ pub(crate) mod tests {
                 &mut lines,
             );
             lines
+        }
+
+        /// whether the file under test is read as a template rather than python
+        ///
+        /// this is the same question the server answers from what the editor told
+        /// it, and falls back to the same path check when it wasn't told.
+        fn is_template(&self) -> bool {
+            match self.file.path(&self.db) {
+                ruff_db::files::FilePath::System(path) => is_django_template_path(path),
+                _ => false,
+            }
+        }
+
+        /// what the editor is offered for a rename at the cursor
+        pub(crate) fn prepare_rename(&self) -> String {
+            match django_prepare_rename(&self.db, self.file, self.offset, self.is_template()) {
+                None => "no rename".to_string(),
+                Some(PreparedTemplateRename::Refused(why)) => format!("refused: {why}"),
+                Some(PreparedTemplateRename::Ready { range, placeholder }) => {
+                    let source = ruff_db::source::source_text(&self.db, self.file);
+                    format!("rename `{placeholder}`, replacing `{}`", &source[range])
+                }
+            }
+        }
+
+        /// every edit a rename at the cursor would make, as `path:line old -> new`
+        pub(crate) fn rename(&self, new_name: &str) -> Vec<String> {
+            let renamed = django_rename(
+                &self.db,
+                self.file,
+                self.offset,
+                new_name,
+                self.is_template(),
+            );
+
+            let rename = match renamed {
+                None => return vec!["no rename".to_string()],
+                Some(TemplateRenameOutcome::Refused(why)) => {
+                    return vec![format!("refused: {why}")];
+                }
+                Some(TemplateRenameOutcome::Edits(rename)) => rename,
+            };
+
+            let mut lines: Vec<String> = rename
+                .edits
+                .iter()
+                .map(|edit| {
+                    let source = ruff_db::source::source_text(&self.db, edit.file());
+                    let line = source.as_str()[..usize::from(edit.range().start())]
+                        .matches('\n')
+                        .count()
+                        + 1;
+
+                    format!(
+                        "{}:{line} {} -> {new_name}",
+                        // the memory file system reports the host's separator
+                        edit.file().path(&self.db).to_string().replace('\\', "/"),
+                        &source[edit.range()]
+                    )
+                })
+                .collect();
+
+            if let Some((from, to)) = rename.file_rename {
+                lines.push(format!(
+                    "move {} -> {}",
+                    from.as_str().replace('\\', "/"),
+                    to.as_str().replace('\\', "/")
+                ));
+            }
+
+            lines
+        }
+
+        /// every reference at the cursor, as `path:line text`
+        ///
+        /// a declaration is marked, since which occurrences are declarations is
+        /// what `includeDeclaration` turns on and off.
+        pub(crate) fn references(&self) -> Vec<String> {
+            self.references_with_declaration(true)
+        }
+
+        /// the same, as a client that asked for the uses alone gets them
+        pub(crate) fn references_without_declaration(&self) -> Vec<String> {
+            self.references_with_declaration(false)
+        }
+
+        fn references_with_declaration(&self, include_declaration: bool) -> Vec<String> {
+            let found = django_references(
+                &self.db,
+                self.file,
+                self.offset,
+                include_declaration,
+                self.is_template(),
+            );
+
+            found
+                .unwrap_or_default()
+                .into_iter()
+                .map(|target| {
+                    let source = ruff_db::source::source_text(&self.db, target.file());
+                    let line = source.as_str()[..usize::from(target.range().start())]
+                        .matches('\n')
+                        .count()
+                        + 1;
+
+                    format!(
+                        "{}{}:{line} {}",
+                        match target.kind() {
+                            crate::ReferenceKind::Other => "declaration ",
+                            _ => "",
+                        },
+                        // the memory file system reports the host's separator
+                        target.file().path(&self.db).to_string().replace('\\', "/"),
+                        &source[target.range()],
+                    )
+                })
+                .collect()
         }
 
         /// each foldable range, as the tags that open and close it

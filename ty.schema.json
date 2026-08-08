@@ -1210,6 +1210,16 @@
             }
           ]
         },
+        "invalid-route-arguments": {
+          "title": "detects a `{% url %}` whose arguments the route cannot take",
+          "description": "## What it does\nChecks the arguments a `{% url %}` passes against the route's own pattern.\n\n## Why is this bad?\nDjango raises `NoReverseMatch` when it renders the template, so the page\n500s. A route's pattern names the arguments it takes and the converter\neach of them goes through, so a missing, extra or misnamed argument — and\na literal the converter would reject — is a reversal that cannot match.\n\nOnly a route whose whole pattern is known is checked, and a name several\nroutes share is reported only when none of them accepts the arguments.\n\n## Examples\n```django\n{# path(\"<int:pk>/\", detail, name=\"detail\") #}\n{% url 'detail' %}          {# error: `pk` is missing #}\n{% url 'detail' pk='x' %}   {# error: `pk` goes through `int` #}\n{% url 'detail' pk=1 %}     {# ok #}\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-super-argument": {
           "title": "detects invalid arguments for `super()`",
           "description": "## What it does\n\nDetects `super()` calls where:\n\n- the first argument is not a valid class literal, or\n- the second argument is not an instance or subclass of the first argument.\n\n## Why is this bad?\n\n`super(type, obj)` expects:\n\n- the first argument to be a class,\n- and the second argument to satisfy one of the following:\n    - `isinstance(obj, type)` is `True`\n    - `issubclass(obj, type)` is `True`\n\nViolating this relationship will raise a `TypeError` at runtime.\n\n## Examples\n\n```python\nclass A: ...\n\n\nclass B(A): ...\n\n\nsuper(A, B())  # it's okay! `A` satisfies `isinstance(B(), A)`\n\n# `A()` is not a class\nsuper(A(), B())  # error\n\n# `A()` does not satisfy `isinstance(A(), B)`\nsuper(B, A())  # error\n# `A` does not satisfy `issubclass(A, B)`\nsuper(B, A)  # error\n```\n\n## References\n\n- [Python documentation: super()](https://docs.python.org/3/library/functions.html#super)",
@@ -1850,6 +1860,16 @@
             }
           ]
         },
+        "template-member-needs-arguments": {
+          "title": "detects a template lookup landing on a method that needs arguments",
+          "description": "## What it does\nChecks for a `{{ }}` lookup landing on a method that cannot be called\nwithout arguments.\n\n## Why is this bad?\nDjango calls whatever a lookup lands on. A method that needs an argument\ncannot be called, so django renders `string_if_invalid` — the empty string\nby default — silently, with no error and no output.\n\n## Examples\n```python\nclass Book:\n    def headline(self, length: int) -> str: ...\n    def title(self) -> str: ...\n```\n\n```django\n{{ book.headline }}    {# warning: renders nothing #}\n{{ book.title }}       {# ok #}\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "too-many-positional-arguments": {
           "title": "detects calls passing too many positional arguments",
           "description": "## What it does\n\nChecks for calls that pass more positional arguments than the callable can accept.\n\n## Why is this bad?\n\nPassing too many positional arguments will raise `TypeError` at runtime.\n\n## Example\n\n```python\ndef f(): ...\n\n\nf(\"foo\")  # error\n```",
@@ -1930,6 +1950,16 @@
             }
           ]
         },
+        "unclosed-template-block": {
+          "title": "detects a django template block tag that is never closed",
+          "description": "## What it does\nChecks for a block tag in a django template whose closing tag is missing.\n\n## Why is this bad?\nDjango raises `TemplateSyntaxError` when it compiles the template, so the\npage does not render at all.\n\nOnly a tag known to open a block is reported: one of django's own, or one\nthe project registers with `@register.simple_block_tag`.\n\n## Examples\n```django\n{% if user.is_staff %}    {# error: no `{% endif %}` #}\n  <p>hello</p>\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "undeclared-raise": {
           "title": "detects an exception a `raises` clause does not include",
           "description": "## What it does\nChecks for a basedpython function that can raise an exception its\n`raises` clause does not include.\n\n## Why is this bad?\nA `raises` clause is the function's contract about what can escape a\ncall to it. Callers rely on that set to decide what they must handle, so\nan exception outside it escapes somewhere nobody expects it.\n\n## Example\n\n```by\ndef f() raises TypeError:\n    raise ValueError  # error: `ValueError` is not declared\n```",
@@ -1980,6 +2010,66 @@
             }
           ]
         },
+        "unknown-template-block": {
+          "title": "detects a `{% block %}` no ancestor template declares",
+          "description": "## What it does\nChecks for a `{% block %}` overriding a block no ancestor template\ndeclares.\n\n## Why is this bad?\nA child template's blocks are rendered by the parent, so a block the\nparent never declares is never rendered — silently, with no error and no\noutput.\n\nOnly a block written at the top level of a template that `{% extends %}`\nsomething is reported. A block nested inside another one is rendered as\npart of its enclosing block and needs no declaration above it.\n\n## Examples\n```django\n{# base.html declares `content`, and nothing else #}\n{% extends \"base.html\" %}\n{% block sidebar %}hello{% endblock %}    {# warning: never rendered #}\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unknown-template-filter": {
+          "title": "detects a django template filter nothing registers",
+          "description": "## What it does\nChecks for a filter no library the template can reach registers.\n\n## Why is this bad?\nDjango raises `TemplateSyntaxError` when it compiles the template, so the\npage does not render at all.\n\nA filter whose library the template has simply not loaded is reported as\n`unloaded-template-library` instead.\n\n## Examples\n```django\n{{ book.title|uppercase }}    {# error: the filter is `upper` #}\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unknown-template-library": {
+          "title": "detects a `{% load %}` of a library the project does not have",
+          "description": "## What it does\nChecks for a `{% load %}` of a tag library the project does not have.\n\n## Why is this bad?\nDjango raises `TemplateSyntaxError` when it compiles the template, so the\npage does not render at all.\n\nA library is a `templatetags` module of the project or of one of the apps\n`INSTALLED_APPS` names. Nothing is reported unless the settings module was\nfound and every installed app resolved, since a library that cannot be\nreached is not a library that is missing.\n\n## Examples\n```django\n{% load blog_xtras %}    {# error: the library is `blog_extras` #}\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unknown-template-tag": {
+          "title": "detects a django template tag nothing registers",
+          "description": "## What it does\nChecks for a tag no library the template can reach registers.\n\n## Why is this bad?\nDjango raises `TemplateSyntaxError` when it compiles the template, so the\npage does not render at all.\n\nA tag whose library the template has simply not loaded is reported as\n`unloaded-template-library` instead.\n\n## Examples\n```django\n{% iff user.is_staff %}    {# error: no such tag #}\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unloaded-template-library": {
+          "title": "detects a tag or filter used without the `{% load %}` it needs",
+          "description": "## What it does\nChecks for a tag or filter used without the `{% load %}` it needs.\n\n## Why is this bad?\nDjango raises `TemplateSyntaxError` when it compiles the template, so the\npage does not render at all — the tag exists, but not in this template.\n\nA library named by `TEMPLATES[*][\"OPTIONS\"][\"builtins\"]` is loaded into\nevery template already and is never reported.\n\n## Examples\n```django\n{% static 'css/site.css' %}    {# error: needs `{% load static %}` #}\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unmatched-template-close": {
+          "title": "detects a django template closing tag that closes nothing",
+          "description": "## What it does\nChecks for a closing tag in a django template that closes nothing.\n\n## Why is this bad?\nDjango raises `TemplateSyntaxError` when it compiles the template, so the\npage does not render at all.\n\n## Examples\n```django\n{% for book in books %}\n  <p>{{ book.title }}</p>\n{% endwith %}    {# error: nothing here opened a `{% with %}` #}\n{% endfor %}\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "unresolved-attribute": {
           "title": "detects references to unresolved attributes",
           "description": "## What it does\n\nChecks for unresolved attributes.\n\n## Why is this bad?\n\nAccessing an unbound attribute will raise an `AttributeError` at runtime.\nAn unresolved attribute is not guaranteed to exist from the type alone,\nso this could also indicate that the object is not of the type that the user expects.\n\n## Examples\n\n```python\nclass A: ...\n\n\n# AttributeError: 'A' object has no attribute 'foo'\nA().foo  # error\n```",
@@ -2023,6 +2113,36 @@
         "unresolved-reference": {
           "title": "detects references to names that are not defined",
           "description": "## What it does\n\nChecks for references to names that are not defined.\n\n## Why is this bad?\n\nUsing an undefined variable will raise a `NameError` at runtime.\n\n## Example\n\n```python\n# NameError: name 'x' is not defined\nprint(x)  # error\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unresolved-route": {
+          "title": "detects a `{% url %}` naming a route that does not exist",
+          "description": "## What it does\nChecks for a `{% url %}` naming a route the url configuration does not\nhave.\n\n## Why is this bad?\nDjango raises `NoReverseMatch` when it renders the template, so the page\n500s.\n\nThe route names are the ones the walk from `ROOT_URLCONF` finds. A project\nthat does not say where its url tree starts, or whose tree could not be\nwalked in full, reports nothing.\n\n## Examples\n```django\n<a href=\"{% url 'blog:detail' book.pk %}\">    {# error: it is `blog:detail` #}\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unresolved-static-file": {
+          "title": "detects a `{% static %}` naming a file that is not there",
+          "description": "## What it does\nChecks for a `{% static %}` naming a file that is not there.\n\n## Why is this bad?\nDjango's default storage builds the url from the name without checking it,\nso the page renders and the asset 404s — a failure nothing reports.\n\nA name whose directory holds no discovered file at all is left alone: that\nis what a bundle built into `static/` at deploy time looks like, and it is\nnot something the source tree can answer.\n\n## Examples\n```django\n{% load static %}\n<link href=\"{% static 'css/sight.css' %}\">    {# warning: it is `css/site.css` #}\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unresolved-template": {
+          "title": "detects a reference to a template that is not there",
+          "description": "## What it does\nChecks for an `{% extends %}` or `{% include %}` naming a template that\nis not there.\n\n## Why is this bad?\nDjango raises `TemplateDoesNotExist` when it renders the template, so the\npage 500s.\n\nNothing is reported unless the project's template directories are known:\na project with no readable settings *and* no directory named `templates`\nis one whose template set cannot be established.\n\n## Examples\n```django\n{% extends \"blog/bass.html\" %}    {# error: the template is `blog/base.html` #}\n```",
           "default": "error",
           "oneOf": [
             {

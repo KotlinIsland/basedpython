@@ -10,7 +10,7 @@ use lsp_types::{
 use ruff_diagnostics::Applicability;
 use ruff_text_size::Ranged;
 use rustc_hash::{FxHashMap, FxHashSet};
-use ty_ide::{Hint, hints};
+use ty_ide::{Hint, django_template_diagnostics, hints};
 
 use ruff_db::diagnostic::{
     Annotation, DisplayDiagnosticConfig, HyperlinkMode, Severity, SubDiagnostic,
@@ -392,14 +392,6 @@ pub(super) fn compute_diagnostics(
     document: &DocumentHandle,
     encoding: PositionEncoding,
 ) -> Option<Diagnostics> {
-    // A django template is not python. Nothing here would report anything for
-    // one — the type checker never has it in its file set — but going through
-    // the motions would still parse an html file as python for the hints, so it
-    // is turned away up front.
-    if document.is_django_template() {
-        return None;
-    }
-
     let Some(file) = document.notebook_or_file(db) else {
         tracing::info!(
             "No file found for snapshot for `{}`",
@@ -407,6 +399,18 @@ pub(super) fn compute_diagnostics(
         );
         return None;
     };
+
+    // A django template is not python. It is never handed to the type checker or
+    // to the hints — either would parse an html file as python — and what it does
+    // report is the template language's own.
+    if document.is_django_template() {
+        return Some(Diagnostics {
+            items: django_template_diagnostics(db, file),
+            unnecessary_hints: Vec::new(),
+            encoding,
+            file_or_notebook: file,
+        });
+    }
 
     let diagnostics = db.check_file(file);
     let unnecessary_hints = hints(db, file);

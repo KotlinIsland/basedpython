@@ -1,5 +1,7 @@
 use crate::completion;
+use crate::django_template::django_template_code_actions;
 
+use ruff_db::system::SystemPathBuf;
 use ruff_db::{files::File, parsed::parsed_module};
 use ruff_diagnostics::Edit;
 use ruff_python_ast::find_node::covering_node;
@@ -15,18 +17,42 @@ pub struct QuickFix {
     pub title: String,
     pub edits: Vec<Edit>,
     pub preferred: bool,
+    /// A file the action creates, for a fix to a reference to something that
+    /// isn't there yet.
+    pub create: Option<SystemPathBuf>,
 }
 
+impl QuickFix {
+    fn new(title: String, edits: Vec<Edit>, preferred: bool) -> Self {
+        Self {
+            title,
+            edits,
+            preferred,
+            create: None,
+        }
+    }
+}
+
+/// The quick fixes offered for a diagnostic of `file`.
+///
+/// `template` says the file is a django template rather than python, which the
+/// caller knows and this cannot: nothing about a template may be answered by
+/// parsing it as python.
 pub fn code_actions(
     db: &dyn Db,
     file: File,
     diagnostic_range: TextRange,
     diagnostic_id: &str,
+    template: bool,
 ) -> Vec<QuickFix> {
     let registry = db.lint_registry();
     let Ok(lint_id) = registry.get(diagnostic_id) else {
         return Vec::new();
     };
+
+    if template {
+        return django_template_code_actions(db, file, diagnostic_range, lint_id);
+    }
 
     let mut actions = Vec::new();
 
@@ -40,11 +66,11 @@ pub fn code_actions(
     }
 
     // Suggest just suppressing the lint (always a valid option, but never ideal)
-    actions.push(QuickFix {
-        title: format!("Ignore '{}' for this line", lint_id.name()),
-        edits: suppress_single(db, file, lint_id, diagnostic_range).into_edits(),
-        preferred: false,
-    });
+    actions.push(QuickFix::new(
+        format!("Ignore '{}' for this line", lint_id.name()),
+        suppress_single(db, file, lint_id, diagnostic_range).into_edits(),
+        false,
+    ));
 
     actions
 }
@@ -61,11 +87,7 @@ fn unresolved_fixes(
     Some(
         completion::unresolved_fixes(db, file, &parsed, symbol, node)
             .into_iter()
-            .map(|import| QuickFix {
-                title: import.label,
-                edits: vec![import.edit],
-                preferred: true,
-            }),
+            .map(|import| QuickFix::new(import.label, vec![import.edit], true)),
     )
 }
 
@@ -969,7 +991,15 @@ mod tests {
                 .context(0)
                 .format(DiagnosticFormat::Full);
 
-            for mut action in code_actions(&self.db, self.file, self.diagnostic_range, &lint.name) {
+            // every fixture this harness writes is python; the template actions
+            // have their own tests
+            for mut action in code_actions(
+                &self.db,
+                self.file,
+                self.diagnostic_range,
+                &lint.name,
+                false,
+            ) {
                 let mut diagnostic = Diagnostic::new(
                     DiagnosticId::Lint(LintName::of("code-action")),
                     ruff_db::diagnostic::Severity::Info,

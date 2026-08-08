@@ -17,6 +17,9 @@ use ruff_text_size::{TextRange, TextSize};
 use super::builtins;
 use super::lexer::{Construct, ConstructKind, Lexed, Token, TokenKind, lex, string_contents};
 
+/// what django names a block tag's closing tag by
+pub(crate) const END_TAG_PREFIX: &str = "end";
+
 /// a name a template defines: a `{% block %}` or a `{% partialdef %}`
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
 pub(crate) struct Definition {
@@ -91,6 +94,18 @@ pub(crate) struct Block {
     pub(crate) closed: bool,
 }
 
+/// a closing tag that closed nothing
+///
+/// what makes a tag a closing one is that some other tag is waiting for it, so a
+/// tag nothing is waiting for is only a *candidate* — the reader decides whether
+/// the name is one django would have been waiting for.
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub(crate) struct Stray {
+    pub(crate) name: CompactString,
+    /// the whole `{% end… %}` construct
+    pub(crate) range: TextRange,
+}
+
 /// a template, lexed and indexed
 ///
 /// every collection is boxed: the index is a salsa-cached value, and a `Vec`
@@ -100,12 +115,14 @@ pub(crate) struct Block {
 pub(crate) struct TemplateIndex {
     lexed: Lexed,
     extends: Option<TemplateReference>,
+    extends_unresolved: bool,
     includes: Box<[TemplateReference]>,
     blocks: Box<[Definition]>,
     partials: Box<[Definition]>,
     loads: Box<[Load]>,
     bindings: Box<[Binding]>,
     spans: Box<[Block]>,
+    strays: Box<[Stray]>,
 }
 
 impl TemplateIndex {
@@ -120,6 +137,16 @@ impl TemplateIndex {
     /// the template this one extends
     pub(crate) fn extends(&self) -> Option<&TemplateReference> {
         self.extends.as_ref()
+    }
+
+    /// whether the template extends something no name can be read off
+    ///
+    /// `{% extends parent %}` picks its base at render time, so this template's
+    /// place in the inheritance tree is not knowable — which is a different
+    /// thing from extending nothing, and the difference matters to anything that
+    /// has to be sure it has found every template in a family.
+    pub(crate) fn extends_unresolved(&self) -> bool {
+        self.extends_unresolved
     }
 
     /// every template this one includes
@@ -168,6 +195,11 @@ impl TemplateIndex {
         &self.spans
     }
 
+    /// every `{% end… %}` that closed nothing, in source order
+    pub(crate) fn strays(&self) -> &[Stray] {
+        &self.strays
+    }
+
     /// the block tags still open at `offset`, innermost first
     ///
     /// this is what tells a completion inside `{% for %}…{% |` that the tag it
@@ -202,12 +234,14 @@ impl<'src> Builder<'src> {
         let end_tags = self.end_tags_present();
 
         let mut extends = None;
+        let mut extends_unresolved = false;
         let mut includes = Vec::new();
         let mut blocks = Vec::new();
         let mut partials = Vec::new();
         let mut loads = Vec::new();
         let mut bindings: Vec<Binding> = Vec::new();
         let mut spans = Vec::new();
+        let mut strays = Vec::new();
 
         let mut stack: Vec<Frame> = Vec::new();
         let template_end = TextSize::try_from(self.source.len()).unwrap_or_default();
@@ -238,11 +272,22 @@ impl<'src> Builder<'src> {
                 continue;
             }
 
+            if name.starts_with(END_TAG_PREFIX) {
+                strays.push(Stray {
+                    name: name.to_compact_string(),
+                    range: construct.range,
+                });
+            }
+
             match name {
-                "extends" if extends.is_none() => {
-                    extends = arguments
+                "extends" if extends.is_none() && !extends_unresolved => {
+                    match arguments
                         .iter()
-                        .find_map(|token| self.template_reference(token));
+                        .find_map(|token| self.template_reference(token))
+                    {
+                        Some(reference) => extends = Some(reference),
+                        None => extends_unresolved = true,
+                    }
                 }
                 "include" => {
                     if let Some(reference) = arguments
@@ -279,7 +324,7 @@ impl<'src> Builder<'src> {
                     // it is actually paired with in this file. this needs no
                     // knowledge of the tag's python definition, which is what
                     // makes unknown libraries behave.
-                    let candidate = format!("end{name}");
+                    let candidate = format!("{END_TAG_PREFIX}{name}");
                     end_tags
                         .contains(&candidate.as_str())
                         .then(|| candidate.to_compact_string())
@@ -312,12 +357,14 @@ impl<'src> Builder<'src> {
         TemplateIndex {
             lexed: self.lexed,
             extends,
+            extends_unresolved,
             includes: includes.into_boxed_slice(),
             blocks: blocks.into_boxed_slice(),
             partials: partials.into_boxed_slice(),
             loads: loads.into_boxed_slice(),
             bindings: bindings.into_boxed_slice(),
             spans: spans.into_boxed_slice(),
+            strays: strays.into_boxed_slice(),
         }
     }
 
@@ -329,7 +376,7 @@ impl<'src> Builder<'src> {
             .iter()
             .filter_map(|construct| construct.name)
             .map(|range| &self.source[range])
-            .filter(|name| name.starts_with("end"))
+            .filter(|name| name.starts_with(END_TAG_PREFIX))
             .collect();
         names.sort_unstable();
         names.dedup();
@@ -687,6 +734,15 @@ mod tests {
             ["card.html"],
             "a variable include names no template statically"
         );
+    }
+
+    #[test]
+    fn an_extends_that_names_no_template_is_told_apart_from_no_extends_at_all() {
+        assert!(!index("{% block a %}{% endblock %}").extends_unresolved());
+
+        let dynamic = index("{% extends parent %}");
+        assert!(dynamic.extends().is_none());
+        assert!(dynamic.extends_unresolved());
     }
 
     #[test]

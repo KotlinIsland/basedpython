@@ -506,9 +506,22 @@ fn respond<Req>(
 {
     if let Err(err) = &result {
         tracing::error!("An error occurred with request ID {id}: {err}");
-        client.show_error_message(format!("ty encountered a problem. {log_guidance}"));
+        report_unexpected_failure(client, err, log_guidance);
     }
     client.respond(id, result);
+}
+
+/// Tells the user the server has a problem, when it actually has one.
+///
+/// A handler that deliberately refuses — a rename it could not carry out in full,
+/// say — answers with an error whose message *is* the explanation, and the editor
+/// shows that message where the user asked. A popup on top of it saying the server
+/// hit a problem would be a lie. This is the same line the request-routing path
+/// draws for the errors it handles.
+pub(super) fn report_unexpected_failure(client: &Client, error: &Error, log_guidance: &str) {
+    if matches!(error.code, ErrorCode::InternalError) {
+        client.show_error_message(format!("ty encountered a problem. {log_guidance}"));
+    }
 }
 
 /// Sends back an error response to the server using a [`Client`] without showing a warning
