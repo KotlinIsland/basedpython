@@ -7,15 +7,18 @@
 //! of one, and which names the template itself binds.
 
 use ruff_text_size::TextRange;
+use ty_project::Db;
 
 use crate::semantic_tokens::{SemanticToken, SemanticTokenModifier, SemanticTokenType};
 
 use super::builtins;
 use super::index::{BindingOrigin, TemplateIndex};
 use super::lexer::TokenKind;
+use super::project::{self, RegistrationKind};
 
 /// the semantic tokens of a template, restricted to `range` when one is given
 pub(crate) fn semantic_tokens(
+    db: &dyn Db,
     index: &TemplateIndex,
     source: &str,
     range: Option<TextRange>,
@@ -55,7 +58,7 @@ pub(crate) fn semantic_tokens(
         })
         .filter_map(|token| {
             let text = &source[token.range];
-            let (mut token_type, mut modifiers) = classify(token.kind, text)?;
+            let (mut token_type, mut modifiers) = classify(db, token.kind, text)?;
 
             // a definition's range is the name alone, which for a quoted one —
             // `{% block "content" %}` — sits *inside* the token rather than
@@ -80,7 +83,11 @@ pub(crate) fn semantic_tokens(
 
 /// the token type and modifiers a lexed token carries, or `None` when it should
 /// be left to the editor's own grammar
-fn classify(kind: TokenKind, text: &str) -> Option<(SemanticTokenType, SemanticTokenModifier)> {
+fn classify(
+    db: &dyn Db,
+    kind: TokenKind,
+    text: &str,
+) -> Option<(SemanticTokenType, SemanticTokenModifier)> {
     let empty = SemanticTokenModifier::empty();
 
     Some(match kind {
@@ -90,11 +97,13 @@ fn classify(kind: TokenKind, text: &str) -> Option<(SemanticTokenType, SemanticT
         TokenKind::Comment => (SemanticTokenType::Comment, empty),
         TokenKind::TagName => (
             SemanticTokenType::Keyword,
-            default_library(is_djangos_tag(text)),
+            default_library(is_djangos_tag(db, text)),
         ),
         TokenKind::FilterName => (
             SemanticTokenType::Function,
-            default_library(builtins::filter(text).is_some()),
+            default_library(
+                builtins::filter(text).is_some() || registered_by_django(db, text, true),
+            ),
         ),
         TokenKind::Variable => (SemanticTokenType::Variable, empty),
         TokenKind::Attribute => (SemanticTokenType::Property, empty),
@@ -111,11 +120,26 @@ fn classify(kind: TokenKind, text: &str) -> Option<(SemanticTokenType, SemanticT
 /// the builtin table lists a closing tag only as the `closed_by` of the tag it
 /// closes, and a branch tag only as one of its `branches`, but `{% endfor %}` and
 /// `{% empty %}` are as much django's as `{% for %}` is.
-fn is_djangos_tag(name: &str) -> bool {
+fn is_djangos_tag(db: &dyn Db, name: &str) -> bool {
     builtins::tag(name).is_some()
         || builtins::TAGS
             .iter()
             .any(|tag| tag.closed_by == Some(name) || tag.branches.contains(&name))
+        || registered_by_django(db, name, false)
+}
+
+/// whether one of django's own installed libraries registers `name`
+///
+/// a `{% load humanize %}`d filter is django's just as `|upper` is, and a
+/// third-party app's is not — which is the whole difference the modifier marks.
+fn registered_by_django(db: &dyn Db, name: &str, filter: bool) -> bool {
+    project::registrations(db, db.project())
+        .iter()
+        .any(|registration| {
+            registration.django
+                && registration.name == name
+                && (registration.kind == RegistrationKind::Filter) == filter
+        })
 }
 
 fn default_library(is_builtin: bool) -> SemanticTokenModifier {
@@ -133,12 +157,23 @@ mod tests {
     use crate::semantic_tokens::SemanticTokenModifier;
 
     use super::super::index::TemplateIndex;
+    use super::super::tests::TemplateTest;
     use super::semantic_tokens;
 
-    /// render the tokens as `type[+modifier…]:text`
+    /// a project holding nothing but the template the cursor sits in
+    fn empty() -> TemplateTest {
+        TemplateTest::new(&[("app/templates/app/page.html", "<CURSOR>")])
+    }
+
+    /// render the tokens as `type[+modifier…]:text`, against an empty project
     fn highlight(source: &str) -> Vec<String> {
+        highlight_in(&empty(), source)
+    }
+
+    /// the same, against a project that may have tag libraries of its own
+    fn highlight_in(test: &TemplateTest, source: &str) -> Vec<String> {
         let index = TemplateIndex::from_source(source);
-        semantic_tokens(&index, source, None)
+        semantic_tokens(&test.db, &index, source, None)
             .into_iter()
             .map(|token| {
                 let names: Vec<_> = SemanticTokenModifier::all_names()
@@ -192,6 +227,78 @@ mod tests {
                 "variable:x",
                 "operator:|",
                 "function:intcomma",
+                "operator:}}",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_installed_apps_filter_is_djangos_only_when_the_app_is() {
+        // `intcomma` is django's, in a contrib app the project installs;
+        // `as_crispy_field` is a third-party app's and is not
+        let test = TemplateTest::with_site_packages(
+            &[
+                (
+                    "manage.py",
+                    "
+                    import os
+
+                    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')
+                    ",
+                ),
+                ("project/__init__.py", ""),
+                (
+                    "project/settings.py",
+                    "INSTALLED_APPS = ['django.contrib.humanize', 'crispy_forms']\n",
+                ),
+                ("blog/templates/blog/post.html", "<CURSOR>"),
+            ],
+            &[
+                ("django/__init__.py", ""),
+                ("django/contrib/__init__.py", ""),
+                ("django/contrib/humanize/__init__.py", ""),
+                ("django/contrib/humanize/templatetags/__init__.py", ""),
+                (
+                    "django/contrib/humanize/templatetags/humanize.py",
+                    "
+                    from django.template import Library
+
+                    register = Library()
+
+                    @register.filter
+                    def intcomma(value):
+                        return value
+                    ",
+                ),
+                ("crispy_forms/__init__.py", ""),
+                ("crispy_forms/templatetags/__init__.py", ""),
+                (
+                    "crispy_forms/templatetags/crispy_forms_filters.py",
+                    "
+                    from django import template
+
+                    register = template.Library()
+
+                    @register.filter
+                    def as_crispy_field(field):
+                        return field
+                    ",
+                ),
+            ],
+        );
+
+        assert_eq!(
+            highlight_in(&test, "{{ x|intcomma }}{{ y|as_crispy_field }}"),
+            [
+                "operator:{{",
+                "variable:x",
+                "operator:|",
+                "function+defaultLibrary:intcomma",
+                "operator:}}",
+                "operator:{{",
+                "variable:y",
+                "operator:|",
+                "function:as_crispy_field",
                 "operator:}}",
             ]
         );
@@ -351,7 +458,13 @@ mod tests {
         let index = TemplateIndex::from_source(source);
         let end = u32::try_from(source.len()).unwrap();
 
-        let tokens = semantic_tokens(&index, source, Some(TextRange::new(7.into(), end.into())));
+        let test = empty();
+        let tokens = semantic_tokens(
+            &test.db,
+            &index,
+            source,
+            Some(TextRange::new(7.into(), end.into())),
+        );
         assert_eq!(
             tokens
                 .iter()
@@ -366,7 +479,8 @@ mod tests {
         let source = "{% for x in y %}{{ x.z|upper }}{% endfor %}";
         let index = TemplateIndex::from_source(source);
 
-        let tokens = semantic_tokens(&index, source, None);
+        let test = empty();
+        let tokens = semantic_tokens(&test.db, &index, source, None);
         assert!(
             tokens
                 .windows(2)
