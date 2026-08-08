@@ -152,16 +152,20 @@ impl Site<'_> {
             text: written,
         };
 
-        let builtin = if filter {
-            builtins::filter(name).map(|filter| (filter.documentation, filter.library))
+        // the table documents django's tags and filters, but which of them this
+        // django has and where each comes from is that django's to say
+        let documented = if filter {
+            builtins::filter(name).map(|filter| filter.documentation)
         } else {
-            builtins::tag(name).map(|tag| (tag.documentation, tag.library))
+            builtins::tag(name).map(|tag| tag.documentation)
         };
 
-        if let Some((documented, library)) = builtin {
+        if let Some(documented) = documented
+            && let Some(provided) = builtins::provided_by_django(self.db, name, filter)
+        {
             return [header]
                 .into_iter()
-                .chain(documentation(documented, library))
+                .chain(documentation(documented, provided.library()))
                 .collect();
         }
 

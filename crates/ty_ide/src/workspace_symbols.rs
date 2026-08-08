@@ -1,3 +1,4 @@
+use crate::django_template::django_workspace_symbols;
 use crate::symbols::{QueryPattern, SymbolInfo, symbols_for_file};
 use rayon::prelude::*;
 use ruff_db::files::File;
@@ -20,7 +21,7 @@ pub fn workspace_symbols(db: &dyn Db, query: &str) -> Vec<WorkspaceSymbolInfo> {
     let files = project.files(db);
     let files: Vec<_> = files.iter().copied().collect();
 
-    files
+    let mut found: Vec<WorkspaceSymbolInfo> = files
         .into_par_iter()
         .map_with_db(db, |db, file| {
             let symbols_for_file_span = tracing::debug_span!(
@@ -35,11 +36,27 @@ pub fn workspace_symbols(db: &dyn Db, query: &str) -> Vec<WorkspaceSymbolInfo> {
                 .map(|(_, symbol)| WorkspaceSymbolInfo {
                     symbol: symbol.to_owned(),
                     file,
+                    container: None,
                 })
                 .collect::<Vec<_>>()
         })
         .flat_map_iter(|symbols| symbols)
-        .collect()
+        .collect();
+
+    // a django project is made of things python has no symbol for — a route
+    // name, a template — and of classes python offers without saying what django
+    // does with them. both are added to the python answer rather than changing it
+    found.extend(
+        django_workspace_symbols(db, &query)
+            .into_iter()
+            .map(|django| WorkspaceSymbolInfo {
+                symbol: django.symbol,
+                file: django.file,
+                container: Some(django.container),
+            }),
+    );
+
+    found
 }
 
 /// A symbol found in the workspace, including the file it was found in.
@@ -49,6 +66,11 @@ pub struct WorkspaceSymbolInfo {
     pub symbol: SymbolInfo<'static>,
     /// The file containing the symbol
     pub file: File,
+    /// what kind of django thing this is, for a symbol django contributed
+    ///
+    /// `None` for everything python contributes, which is every symbol that was
+    /// ever answered before django was.
+    pub container: Option<&'static str>,
 }
 
 #[cfg(test)]

@@ -37,12 +37,17 @@ impl BackgroundRequestHandler for WorkspaceSymbolRequestHandler {
 
             // Convert to LSP SymbolInformation
             for workspace_symbol_info in workspace_symbol_infos {
-                let WorkspaceSymbolInfo { symbol, file } = workspace_symbol_info;
+                let WorkspaceSymbolInfo {
+                    symbol,
+                    file,
+                    container,
+                } = workspace_symbol_info;
 
                 // Get position encoding from session
                 let encoding = snapshot.position_encoding();
 
-                let Some(symbol) = convert_to_lsp_symbol_information(db, file, symbol, encoding)
+                let Some(symbol) =
+                    convert_to_lsp_symbol_information(db, file, symbol, container, encoding)
                 else {
                     tracing::debug!(
                         "Failed to convert symbol '{}' to LSP symbol information",

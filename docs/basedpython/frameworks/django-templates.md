@@ -64,7 +64,25 @@ hovering says what the thing under the caret is: a variable or a path segment as
 
 a template's `{% block %}`s and `{% partialdef %}`s are its outline, nested as they nest, and every block tag folds.
 
-**no diagnostics.** templates are never type-checked — an unknown variable or a misspelled filter is not reported, it just doesn't complete.
+### signature help
+
+a filter's argument is the one thing a template writes that nothing beside it explains. with the caret after the `:`, `{{ value|date:"‸" }}` says what the filter takes: the registered function's second parameter, read from the project's own filters and from django's own wherever django itself can be read, together with what the filter is documented to do.
+
+a filter that takes no argument offers nothing, which is the answer to having typed a `:` after one.
+
+### inlay hints
+
+a `{% for book in shelf %}` shows the element type it binds, which is what says what `{{ book.… }}` will offer. an `{% include %}` and an `{% extends %}` show the file the name resolves to, which matters because two apps can ship the same template name and only one of them is loaded.
+
+**diagnostics.** a template reports twelve rules — an unclosed block, an unknown tag or filter, a tag used without its `{% load %}`, a missing template or static file, an unknown route or the wrong arguments to one, a block no ancestor declares, and a member django cannot call. each is silent unless the index behind it is authoritative, so a project whose settings cannot be read reports nothing rather than guessing. silence one with `{# ty: ignore #}` or `{# ty: ignore[rule-name] #}`, or configure it under `[tool.ty.rules]` like any other.
+
+an unknown *variable* is still not reported: a context can come from places a scan cannot see, so absence is not evidence.
+
+### the project's django structure
+
+a workspace symbol search answers with the django project as well as with the python in it. searching for a name offers the models, the admin classes, the views a route reaches, the route names, the templates by the name their loader uses, the `{% partialdef %}`s, and the tags and filters the project and its installed apps register — each labelled with what django calls it, beside whatever python contributed under the same name.
+
+a `{% block %}` is deliberately not among them. a block name is chosen against the one template it overrides rather than to be unique in a project, so a search for `content` would answer with one entry per template that declares one. a `{% partialdef %}` is the opposite: it exists to be rendered from elsewhere by name.
 
 ## the same names, written in python
 
@@ -132,9 +150,11 @@ two views rendering the same template both contribute; a name they agree on appe
 
 ## how a template is recognised
 
-the editor usually says so: `django`, `django-html`, `django-txt`, `htmldjango` and `jinja-html` are all taken as django templates.
+the editor usually says so: `django`, `django-html`, `django-txt` and `htmldjango` are all taken as django templates.
 
-when the editor just calls the file `html` — which is what plain vs code does — the path decides: a file with a template-ish extension (`.html`, `.htm`, `.txt`, `.xml`, `.django`, `.dj`, `.jinja`) somewhere under a directory named `templates` is a django template. ordinary html elsewhere in the project is left alone.
+when the editor just calls the file `html` — which is what plain vs code does — the path decides: a file with a template-ish extension (`.html`, `.htm`, `.txt`, `.xml`, `.django`, `.dj`) somewhere under a directory named `templates` is a django template. ordinary html elsewhere in the project is left alone.
+
+jinja is not django, and nothing here is claimed for it. a document the editor calls `jinja`, `jinja-html` or `jinja2` gets no template services at all, and neither does a `.jinja` file — everything below answers as django, so a correct `{% set %}`, `{% macro %}` or `|default("x")` would be reported as an error.
 
 template directories, static directories and tag libraries are found by their conventional names, which is what django's own app-directories loaders use:
 
@@ -162,7 +182,15 @@ only the apps `INSTALLED_APPS` names are looked at — site-packages at large is
 
 a library in `TEMPLATES[*]["OPTIONS"]["builtins"]` is available in every template without a `{% load %}`, so none is suggested for it and none is written.
 
-a project whose settings cannot be read still has its own `templatetags` modules and django's builtin tables, and behaves exactly as it did before.
+### django's own tags and filters
+
+django's implicit builtins — `django.template.defaulttags`, `django.template.defaultfilters` and `django.template.loader_tags`, the modules every engine starts with loaded — are scanned the same way. so `{% for %}`, `{% extends %}` and `|upper` are read off the installed django rather than assumed.
+
+that is what decides which of django's names exist and which library each comes from. a tag this django registers is offered whether or not it is a name we already knew, and a tag we knew that this django does not register is not offered as django's — a `{% partialdef %}` is a builtin in django 6.0 and needed `{% load partials %}` before it, and it is the installed django that says which.
+
+there is a hardcoded table of django's tags and filters behind that, and it supplies what a scan cannot see: which tag closes which block, which tags may appear in between, and the documentation shown in completion and hover.
+
+a project whose settings cannot be read, or whose django cannot be resolved at all, has its own `templatetags` modules and that table, and behaves exactly as it did before.
 
 ## limitations
 

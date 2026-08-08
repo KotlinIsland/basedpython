@@ -373,6 +373,8 @@ pub struct InlayHintOptions {
     implicit_parameters: Option<bool>,
     lambda_parameter_types: Option<bool>,
     implicit_arguments: Option<bool>,
+    template_binding_types: Option<bool>,
+    resolved_templates: Option<bool>,
 }
 
 impl InlayHintOptions {
@@ -391,6 +393,8 @@ impl InlayHintOptions {
             implicit_parameters: self.implicit_parameters.unwrap_or(true),
             lambda_parameter_types: self.lambda_parameter_types.unwrap_or(true),
             implicit_arguments: self.implicit_arguments.unwrap_or(true),
+            template_binding_types: self.template_binding_types.unwrap_or(true),
+            resolved_templates: self.resolved_templates.unwrap_or(true),
         }
     }
 }

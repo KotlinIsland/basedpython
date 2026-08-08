@@ -20,11 +20,12 @@ use ty_project::Db;
 
 use crate::completion::CompletionKind;
 
-use super::builtins;
+use super::builtins::{self, Provided};
 use super::index::{Block, TemplateIndex};
 use super::lexer::{Construct, ConstructKind, Token, TokenKind, string_contents};
 use super::project::{self, LibrarySource, Registration, RegistrationKind};
 use super::resolve;
+use super::uses::URL_TAG;
 
 /// an edit a completion carries alongside the text it inserts
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +106,7 @@ pub(crate) fn completions(
         Context::TemplatePath => template_paths(db, &cursor),
         Context::StaticPath => static_paths(db, &cursor),
         Context::UrlName => url_names(db, &cursor),
+        Context::RouteArgument(route) => route_arguments(db, file, index, offset, &cursor, &route),
         Context::Library => libraries(db, index, &cursor),
         Context::BlockName => block_names(db, file, index, &cursor),
         Context::PartialName => partial_names(db, file, index, &cursor),
@@ -130,6 +132,8 @@ enum Context {
     StaticPath,
     /// the route a `{% url %}` reverses
     UrlName,
+    /// an argument the named route takes, in a `{% url %}` that has named one
+    RouteArgument(CompactString),
     /// the library a `{% load %}` loads
     Library,
     /// the name a `{% block %}` overrides
@@ -201,18 +205,22 @@ impl<'a> Cursor<'a> {
             .is_some_and(|token| token.kind == TokenKind::String)
     }
 
-    /// the token before the cursor, skipping the one being typed
-    fn previous(&self) -> Option<&'a Token> {
-        let before = match self.current {
+    /// the index in `tokens` of the token being typed, or of the position the
+    /// cursor would insert one at
+    fn index(&self) -> usize {
+        match self.current {
             Some(index) => index,
             None => self
                 .tokens
                 .iter()
                 .position(|token| token.range.start() >= self.offset)
                 .unwrap_or(self.tokens.len()),
-        };
+        }
+    }
 
-        self.tokens.get(before.checked_sub(1)?)
+    /// the token before the cursor, skipping the one being typed
+    fn previous(&self) -> Option<&'a Token> {
+        self.tokens.get(self.index().checked_sub(1)?)
     }
 
     /// how many argument tokens the cursor is preceded by
@@ -221,16 +229,7 @@ impl<'a> Cursor<'a> {
     /// at position zero.
     fn argument_position(&self) -> usize {
         let tag_name = usize::from(self.construct.name.is_some());
-        let before = match self.current {
-            Some(index) => index,
-            None => self
-                .tokens
-                .iter()
-                .position(|token| token.range.start() >= self.offset)
-                .unwrap_or(self.tokens.len()),
-        };
-
-        before.saturating_sub(tag_name)
+        self.index().saturating_sub(tag_name)
     }
 
     /// whether the cursor is still on the tag's own name
@@ -258,7 +257,7 @@ impl<'a> Cursor<'a> {
             match (self.tag(), position) {
                 ("extends" | "include", 0) => return Context::TemplatePath,
                 ("static", 0) => return Context::StaticPath,
-                ("url", 0) => return Context::UrlName,
+                (URL_TAG, 0) => return Context::UrlName,
                 ("load", _) => return Context::Library,
                 ("block", 0) => return Context::BlockName,
                 ("partial", 0) => return Context::PartialName,
@@ -272,8 +271,88 @@ impl<'a> Cursor<'a> {
                 path if path.is_empty() => Context::None,
                 path => Context::Member(path),
             },
-            _ => Context::Variable,
+            _ => match self.route() {
+                Some(route) => Context::RouteArgument(route),
+                None => Context::Variable,
+            },
         }
+    }
+
+    /// the route a `{% url %}` names, where the cursor is starting an argument
+    /// to it
+    ///
+    /// only a position that begins a fresh argument counts: what follows a
+    /// `name=` is that argument's value rather than another argument's name, and
+    /// what follows an `as` names the tag's result rather than its input. a
+    /// quoted position is a value too, since a route takes its arguments by bare
+    /// name.
+    fn route(&self) -> Option<CompactString> {
+        if self.construct.kind != ConstructKind::Tag
+            || self.tag() != URL_TAG
+            || self.argument_position() == 0
+            || self.in_string()
+        {
+            return None;
+        }
+
+        let before = self.tokens.get(..self.index())?;
+        if before.iter().any(|token| self.is_keyword(token, "as"))
+            || before
+                .last()
+                .is_some_and(|token| token.kind == TokenKind::Operator)
+        {
+            return None;
+        }
+
+        let name = before
+            .iter()
+            .find(|token| token.kind == TokenKind::String)?;
+        Some(self.source[string_contents(self.source, name.range)].to_compact_string())
+    }
+
+    /// the arguments a `{% url %}` already passes, as the names it gives and
+    /// whether it passes anything by position
+    ///
+    /// the token being typed is not one of them: a name half written is one the
+    /// user is still choosing.
+    fn arguments_given(&self) -> (FxHashSet<CompactString>, bool) {
+        let mut named = FxHashSet::default();
+        let mut positional = false;
+        // the tag's own name and the route it reverses come before its arguments
+        let start = usize::from(self.construct.name.is_some()) + 1;
+
+        for (index, token) in self.tokens.iter().enumerate().skip(start) {
+            if self.is_keyword(token, "as") {
+                break;
+            }
+            if Some(index) == self.current {
+                continue;
+            }
+
+            match token.kind {
+                TokenKind::KeywordArgument => {
+                    named.insert(self.source[token.range].to_compact_string());
+                }
+                // a value joined to what precedes it by an operator belongs to
+                // that argument rather than starting one of its own, which is
+                // what tells `pk=book.pk` from a positional `book.pk`
+                TokenKind::String
+                | TokenKind::Number
+                | TokenKind::Variable
+                | TokenKind::BuiltinConstant => {
+                    positional |= !self.tokens[..index]
+                        .last()
+                        .is_some_and(|previous| previous.kind == TokenKind::Operator);
+                }
+                _ => {}
+            }
+        }
+
+        (named, positional)
+    }
+
+    fn is_keyword(&self, token: &Token, word: &str) -> bool {
+        token.kind == TokenKind::Keyword && self.source[token.range] == *word
     }
 
     /// the dotted path written immediately before the cursor's `.`
@@ -389,7 +468,13 @@ fn tag_names(
     let registrations = project::registrations(db, db.project());
 
     for tag in builtins::TAGS {
-        let library = djangos_library(registrations, tag.name, false).or(tag.library);
+        // a django that was read and does not register it is a django it is not
+        // in, and offering it would be offering a name django has no tag for
+        let Some(library) =
+            builtins::provided_by_django(db, tag.name, false).map(Provided::library)
+        else {
+            continue;
+        };
 
         let mut completion =
             TemplateCompletion::new(tag.name, CompletionKind::Keyword, cursor.range)
@@ -408,47 +493,37 @@ fn tag_names(
             continue;
         }
 
+        let library = needs_loading(registration);
         let mut completion = TemplateCompletion::new(
             registration.name.as_str(),
             CompletionKind::Keyword,
             cursor.range,
-        )
-        .detail(format!("{{% load {} %}}", registration.library));
+        );
+        if let Some(library) = library {
+            completion = completion.detail(format!("{{% load {library} %}}"));
+        }
         completion.documentation = registration
             .documentation
             .as_deref()
             .map(ToString::to_string);
-        completion.additional_edit = load_edit(Some(&registration.library));
+        completion.additional_edit = load_edit(library);
         completions.push(completion);
     }
 
     completions
 }
 
+/// the library a registration's template has to load first, where there is one
+///
+/// django's implicit builtins are a library like any other here, and a `{% load
+/// defaulttags %}` is not something anybody should be shown.
+fn needs_loading(registration: &Registration) -> Option<&str> {
+    (!registration.always_loaded).then(|| registration.library.as_str())
+}
+
 /// how an open block's tag reads, for a closing tag's detail line
 fn opening_tag(source: &str, block: &Block) -> String {
     source[block.open_range].trim().to_string()
-}
-
-/// the library the project's own django registers `name` under, when it does
-///
-/// the builtin table was written against one version of django, and a name can
-/// move between libraries or arrive in one from release to release. where the
-/// project's own django can be read, it is that django which decides. a tag the
-/// *project* happens to name after a builtin is not django's and says nothing.
-fn djangos_library<'a>(
-    registrations: &'a [Registration],
-    name: &str,
-    filter: bool,
-) -> Option<&'a str> {
-    registrations
-        .iter()
-        .find(|registration| {
-            registration.django
-                && registration.name == name
-                && (registration.kind == RegistrationKind::Filter) == filter
-        })
-        .map(|registration| registration.library.as_str())
 }
 
 /// whether the builtin table already offers this registration
@@ -475,7 +550,11 @@ fn filter_names(
     let registrations = project::registrations(db, db.project());
 
     for filter in builtins::FILTERS {
-        let library = djangos_library(registrations, filter.name, true).or(filter.library);
+        let Some(library) =
+            builtins::provided_by_django(db, filter.name, true).map(Provided::library)
+        else {
+            continue;
+        };
 
         let mut completion =
             TemplateCompletion::new(filter.name, CompletionKind::Function, cursor.range)
@@ -493,17 +572,20 @@ fn filter_names(
             continue;
         }
 
+        let library = needs_loading(registration);
         let mut completion = TemplateCompletion::new(
             registration.name.as_str(),
             CompletionKind::Function,
             cursor.range,
-        )
-        .detail(format!("{{% load {} %}}", registration.library));
+        );
+        if let Some(library) = library {
+            completion = completion.detail(format!("{{% load {library} %}}"));
+        }
         completion.documentation = registration
             .documentation
             .as_deref()
             .map(ToString::to_string);
-        completion.additional_edit = load_edit_for(index, &loaded, Some(&registration.library));
+        completion.additional_edit = load_edit_for(index, &loaded, library);
         completions.push(completion);
     }
 
@@ -621,20 +703,65 @@ fn url_names(db: &dyn Db, cursor: &Cursor<'_>) -> Vec<TemplateCompletion> {
         .collect()
 }
 
+/// the arguments the route a `{% url %}` names still takes
+///
+/// an argument can be passed by position as readily as by name, so the
+/// template's own variables are offered alongside the names rather than instead
+/// of them.
+fn route_arguments(
+    db: &dyn Db,
+    file: File,
+    index: &TemplateIndex,
+    offset: TextSize,
+    cursor: &Cursor<'_>,
+    route: &str,
+) -> Vec<TemplateCompletion> {
+    let mut completions = Vec::new();
+    let (named, positional) = cursor.arguments_given();
+
+    // django reverses by position or by name and refuses a mixture, so a tag
+    // that has already passed something positionally has no name left to take
+    if !positional {
+        for parameter in project::route_parameters(db, route) {
+            if named.contains(&parameter.name) {
+                continue;
+            }
+
+            let mut completion = TemplateCompletion::new(
+                parameter.name.as_str(),
+                CompletionKind::Field,
+                cursor.range,
+            );
+            completion.detail = parameter
+                .converter
+                .map(|converter| converter.name().to_string());
+            completion.insert = Some(format!("{}=", parameter.name));
+            completions.push(completion);
+        }
+    }
+
+    completions.extend(variables(db, file, index, offset, cursor));
+    completions
+}
+
 fn libraries(db: &dyn Db, index: &TemplateIndex, cursor: &Cursor<'_>) -> Vec<TemplateCompletion> {
     let loaded = loaded_libraries(db, index);
     let mut completions = Vec::new();
     let mut seen = FxHashSet::default();
 
-    for library in builtins::LIBRARIES {
-        if loaded.contains(&library.to_compact_string()) {
-            continue;
+    // the table's list is a fallback like the tables themselves: where django was
+    // read, the libraries it ships are discovered below and are the right list
+    if !project::django_is_authoritative(db, db.project()) {
+        for library in builtins::LIBRARIES {
+            if loaded.contains(&library.to_compact_string()) {
+                continue;
+            }
+            seen.insert(library.to_compact_string());
+            completions.push(
+                TemplateCompletion::new(*library, CompletionKind::Module, cursor.range)
+                    .detail("django"),
+            );
         }
-        seen.insert(library.to_compact_string());
-        completions.push(
-            TemplateCompletion::new(*library, CompletionKind::Module, cursor.range)
-                .detail("django"),
-        );
     }
 
     for library in project::tag_libraries(db, db.project()) {
@@ -784,7 +911,7 @@ pub(super) fn load_edit_for(
 #[cfg(test)]
 mod tests {
     use crate::django_template::django_template_completions;
-    use crate::django_template::tests::TemplateTest;
+    use crate::django_template::tests::{DJANGO_BUILTINS, TemplateTest};
 
     /// a small but complete django project: a couple of models, a view that
     /// renders a template with them, a url configuration, and a tag library
@@ -836,6 +963,8 @@ mod tests {
                 urlpatterns = [
                     path('books/<int:pk>/', detail, name='detail'),
                     path('books/', index, name='index'),
+                    path('books/<slug:slug>/<int:page>/', paged, name='paged'),
+                    re_path(r'^archive/(?P<year>[0-9]{4})/$', archive, name='archive'),
                 ]
                 ",
             ),
@@ -1209,7 +1338,12 @@ mod tests {
         let completions = project("{% url '<CURSOR>' %}").detailed();
         assert_eq!(
             completions,
-            ["blog:detail — books/<int:pk>/", "blog:index — books/"]
+            [
+                "blog:detail — books/<int:pk>/",
+                "blog:index — books/",
+                "blog:paged — books/<slug:slug>/<int:page>/",
+                "blog:archive — ^archive/(?P<year>[0-9]{4})/$"
+            ]
         );
     }
 
@@ -1249,6 +1383,131 @@ mod tests {
                 "book-mark-read — books"
             ]
         );
+    }
+
+    #[test]
+    fn url_offers_the_arguments_the_named_route_takes() {
+        let completions = project("{% url 'blog:detail' <CURSOR> %}").detailed();
+        assert_eq!(completions[0], "pk — int");
+    }
+
+    #[test]
+    fn a_route_argument_is_offered_with_the_equals_that_names_it() {
+        let test = project("{% url 'blog:detail' <CURSOR> %}");
+        let completions = django_template_completions(&test.db, test.file, test.offset);
+
+        assert_eq!(completions[0].insert.as_deref(), Some("pk="));
+    }
+
+    #[test]
+    fn url_offers_every_argument_a_route_takes() {
+        let completions = project("{% url 'blog:paged' <CURSOR> %}").detailed();
+        assert_eq!(&completions[..2], ["slug — slug", "page — int"]);
+    }
+
+    #[test]
+    fn url_does_not_offer_an_argument_already_given() {
+        let completions = project("{% url 'blog:paged' slug='a' <CURSOR> %}").detailed();
+        assert_eq!(completions[0], "page — int");
+    }
+
+    #[test]
+    fn url_offers_an_argument_the_cursor_is_rewriting() {
+        let completions = project("{% url 'blog:paged' sl<CURSOR> page=2 %}").detailed();
+        assert_eq!(completions[0], "slug — slug");
+    }
+
+    #[test]
+    fn url_offers_the_argument_of_a_re_path_route_without_a_converter() {
+        let completions = project("{% url 'blog:archive' <CURSOR> %}").detailed();
+        assert_eq!(completions[0], "year");
+    }
+
+    #[test]
+    fn url_offers_no_argument_for_a_route_that_takes_none() {
+        // the template's own variables are still offered: they are what a
+        // position accepts even where no argument is named
+        let completions = project("{% url 'blog:index' <CURSOR> %}").detailed();
+        assert!(
+            !completions
+                .iter()
+                .any(|completion| completion == "pk — int")
+        );
+        assert_eq!(completions.first().map(String::as_str), Some("book — Book"));
+    }
+
+    #[test]
+    fn url_offers_no_argument_for_a_route_that_is_not_there() {
+        let completions = project("{% url 'blog:missing' <CURSOR> %}").detailed();
+        assert_eq!(completions.first().map(String::as_str), Some("book — Book"));
+    }
+
+    #[test]
+    fn url_offers_no_argument_once_one_is_given_by_position() {
+        // django reverses by position or by name and refuses a mixture
+        let completions = project("{% url 'blog:paged' book.title <CURSOR> %}").detailed();
+        assert!(
+            !completions
+                .iter()
+                .any(|completion| completion == "page — int")
+        );
+    }
+
+    #[test]
+    fn url_offers_the_variables_a_positional_argument_could_be() {
+        let completions = project("{% url 'blog:detail' <CURSOR> %}").completions();
+        assert!(completions.contains(&"book".to_string()));
+    }
+
+    #[test]
+    fn url_offers_no_argument_where_a_value_goes() {
+        let completions = project("{% url 'blog:detail' pk=<CURSOR> %}").detailed();
+        assert_eq!(completions.first().map(String::as_str), Some("book — Book"));
+    }
+
+    #[test]
+    fn url_offers_no_argument_for_the_name_it_binds_its_result_to() {
+        let completions = project("{% url 'blog:detail' pk=1 as <CURSOR> %}").detailed();
+        assert!(
+            !completions
+                .iter()
+                .any(|completion| completion == "pk — int")
+        );
+    }
+
+    #[test]
+    fn url_offers_no_argument_inside_a_quoted_position() {
+        let completions = project("{% url 'blog:detail' '<CURSOR>' %}").detailed();
+        assert!(
+            !completions
+                .iter()
+                .any(|completion| completion == "pk — int")
+        );
+    }
+
+    #[test]
+    fn url_offers_the_arguments_of_every_route_that_shares_the_name() {
+        // django allows two routes one name and reverses against whichever of
+        // them matches, so what the name takes is the union of the two
+        let test = TemplateTest::new(&[
+            (
+                "blog/urls.py",
+                "
+                app_name = 'blog'
+
+                urlpatterns = [
+                    path('shelf/<int:pk>/', shelf, name='shelf'),
+                    path('shelf/<slug:slug>/', shelf, name='shelf'),
+                ]
+                ",
+            ),
+            (
+                "blog/templates/blog/post.html",
+                "{% url 'blog:shelf' <CURSOR> %}",
+            ),
+        ]);
+
+        assert_eq!(test.detailed(), ["pk — int", "slug — slug"]);
     }
 
     #[test]
@@ -1503,5 +1762,88 @@ mod tests {
         )
         .completions();
         assert!(completions.is_empty());
+    }
+
+    /// a project whose django can be read all the way down to its implicit
+    /// builtins, which register something other than what the table says
+    fn with_djangos_own_builtins(template: &str) -> TemplateTest {
+        TemplateTest::with_site_packages(
+            &[
+                (
+                    "manage.py",
+                    "
+                    import os
+
+                    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')
+                    ",
+                ),
+                ("project/__init__.py", ""),
+                (
+                    "project/settings.py",
+                    "
+                    INSTALLED_APPS = []
+
+                    TEMPLATES = [{'APP_DIRS': True}]
+                    ",
+                ),
+                ("app/templates/app/page.html", template),
+            ],
+            DJANGO_BUILTINS,
+        )
+    }
+
+    #[test]
+    fn a_tag_this_django_registers_that_the_table_never_heard_of_is_offered() {
+        let test = with_djangos_own_builtins("{% <CURSOR> %}");
+
+        assert!(
+            test.detailed().contains(&"squish".to_string()),
+            "django registers it into every template, so it is offered with no `{{% load %}}`"
+        );
+
+        let squish = django_template_completions(&test.db, test.file, test.offset)
+            .into_iter()
+            .find(|completion| completion.label == "squish")
+            .expect("the tag to be offered");
+        assert!(squish.additional_edit.is_none());
+        assert_eq!(squish.documentation.as_deref(), Some("squishes its body."));
+    }
+
+    #[test]
+    fn a_filter_this_django_registers_that_the_table_never_heard_of_is_offered() {
+        assert!(
+            with_djangos_own_builtins("{{ x|<CURSOR> }}")
+                .detailed()
+                .contains(&"shorten".to_string())
+        );
+    }
+
+    #[test]
+    fn a_name_the_table_has_that_this_django_does_not_register_is_not_offered() {
+        assert!(
+            !with_djangos_own_builtins("{% <CURSOR> %}")
+                .completions()
+                .contains(&"lorem".to_string()),
+            "the table's entry is not evidence about a django that has been read"
+        );
+        assert!(
+            !with_djangos_own_builtins("{{ x|<CURSOR> }}")
+                .completions()
+                .contains(&"slugify".to_string())
+        );
+    }
+
+    #[test]
+    fn the_table_is_offered_in_full_where_django_cannot_be_read() {
+        assert!(
+            project("{% <CURSOR> %}")
+                .completions()
+                .contains(&"lorem".to_string())
+        );
+        assert!(
+            project("{{ x|<CURSOR> }}")
+                .completions()
+                .contains(&"slugify".to_string())
+        );
     }
 }

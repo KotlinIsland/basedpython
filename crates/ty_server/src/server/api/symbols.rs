@@ -27,12 +27,16 @@ pub(crate) fn convert_symbol_kind(kind: ty_ide::SymbolKind) -> SymbolKind {
 
 /// Convert a `ty_ide` `SymbolInfo` to LSP `SymbolInformation`
 ///
+/// `container` is what the symbol belongs to, which is how a django route or
+/// model says what it is beside the python symbol of the same name.
+///
 /// Returns `None` if the symbol's range cannot be converted to a location
 /// (e.g., if the file cannot be converted to a URI).
 pub(crate) fn convert_to_lsp_symbol_information(
     db: &dyn Db,
     file: ruff_db::files::File,
     symbol: SymbolInfo<'_>,
+    container: Option<&str>,
     encoding: PositionEncoding,
 ) -> Option<SymbolInformation> {
     let symbol_kind = convert_symbol_kind(symbol.kind);
@@ -45,7 +49,7 @@ pub(crate) fn convert_to_lsp_symbol_information(
             name: symbol.name.into_owned(),
             kind: symbol_kind,
             tags: None,
-            container_name: None,
+            container_name: container.map(str::to_string),
         },
         #[allow(deprecated)]
         deprecated: None,

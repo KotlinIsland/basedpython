@@ -24,11 +24,11 @@ use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, AnyNodeRef, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::{FxHashMap, FxHashSet};
-use ty_module_resolver::{Module, ModuleName, resolve_module, resolve_real_module};
+use ty_module_resolver::{Module, ModuleName, file_to_module, resolve_module, resolve_real_module};
 use ty_project::{Db, Project};
 use ty_python_semantic::SemanticModel;
 use ty_python_semantic::types::ide_support::{
-    ImportAliasResolution, definitions_for_attribute, definitions_for_name,
+    ImportAliasResolution, ResolvedDefinition, definitions_for_attribute, definitions_for_name,
 };
 
 /// the directory name django's app-directories template loader looks in
@@ -45,6 +45,28 @@ const SETTINGS_MODULE_VARIABLE: &str = "DJANGO_SETTINGS_MODULE";
 
 /// the file stem of the script whose `DJANGO_SETTINGS_MODULE` is the one that counts
 const SETTINGS_ENTRY_POINT: &str = "manage";
+
+/// the package that declares the base every test case descends from
+const UNITTEST_PACKAGE: &str = "unittest";
+
+/// the base every test case descends from
+///
+/// django's own `SimpleTestCase` and everything below it are written against it,
+/// and django's test runner discovers by it, so it identifies a test class
+/// whether the class was written against django's bases or against plain
+/// `unittest`'s.
+const TEST_CASE_BASE: &str = "TestCase";
+
+/// the prefix django's test runner discovers test methods by
+///
+/// this is `unittest`'s own `testMethodPrefix`, which django does not change.
+pub(crate) const TEST_METHOD_PREFIX: &str = "test";
+
+/// the package a django app holds its migrations in
+pub(crate) const MIGRATIONS_PACKAGE: &str = "migrations";
+
+/// the module a django app declares its models in
+pub(crate) const MODELS_MODULE: &str = "models";
 
 /// the setting that configures the template engines
 const TEMPLATES_SETTING: &str = "TEMPLATES";
@@ -102,6 +124,17 @@ const MAX_VIEW_DEPTH: usize = 8;
 /// installed app's
 const DJANGO_PACKAGE: &str = "django";
 
+/// the modules every template engine starts with loaded
+///
+/// this is django's `Engine.default_builtins`, and it is where `{% for %}`,
+/// `{% extends %}` and `|upper` come from. they are libraries like any other
+/// here; the only difference is that nothing has to `{% load %}` them.
+const DEFAULT_BUILTIN_MODULES: &[&str] = &[
+    "django.template.defaulttags",
+    "django.template.defaultfilters",
+    "django.template.loader_tags",
+];
+
 /// the name a module's own path is bound to
 const FILE_NAME: &str = "__file__";
 
@@ -118,7 +151,10 @@ pub(crate) const TEMPLATE_NAME_ATTRIBUTE: &str = "template_name";
 pub(crate) const REVERSE_CALLEES: &[&str] = &["reverse", "reverse_lazy"];
 
 /// the keyword those functions take the route name by
-const REVERSE_NAME_KEYWORD: &str = "viewname";
+pub(crate) const REVERSE_NAME_KEYWORD: &str = "viewname";
+
+/// the keyword those functions take the route's own arguments by
+pub(crate) const REVERSE_ARGUMENTS_KEYWORD: &str = "kwargs";
 
 /// the keyword a rest framework hyperlinked field names its route by
 ///
@@ -202,6 +238,32 @@ const VIEWSET_QUERYSET_ATTRIBUTE: &str = "queryset";
 /// the manager attribute a queryset reaches its model through
 const MODEL_MANAGER_ATTRIBUTE: &str = "objects";
 
+/// django's own base class every model is written against
+const MODEL_BASE: &str = "Model";
+
+/// django's own base class every admin class is written against
+///
+/// an inline is deliberately not this: `TabularInline` and `StackedInline`
+/// descend from `InlineModelAdmin`, which is no `ModelAdmin`, and an inline is
+/// reached by another admin class's `inlines` rather than by a registration.
+const MODEL_ADMIN_BASE: &str = "ModelAdmin";
+
+/// the method an admin site registers a model with
+const ADMIN_REGISTER_METHOD: &str = "register";
+
+/// the keyword a registration names the admin class by
+const ADMIN_CLASS_KEYWORD: &str = "admin_class";
+
+/// the method a class-based view is handed to a route through
+const AS_VIEW_METHOD: &str = "as_view";
+
+/// how many base classes deep a class is followed towards django's own
+///
+/// a project's own hierarchy is a couple deep and django's own is another
+/// couple, so this is far past anything real — it is here so that a class that
+/// somehow inherits from itself stops the walk rather than running for ever.
+const MAX_BASE_DEPTH: usize = 16;
+
 /// how deep below the project root a `templates`/`static` directory is looked for
 ///
 /// django's own layout puts them at `<project>/<app>/templates`, and a
@@ -233,6 +295,8 @@ pub(crate) struct Registration {
     pub(crate) documentation: Option<Box<str>>,
     /// whether the library it comes from is django's own
     pub(crate) django: bool,
+    /// whether the library it comes from is loaded into every template already
+    pub(crate) always_loaded: bool,
 }
 
 /// where a tag library comes from
@@ -279,6 +343,173 @@ pub(crate) struct UrlName {
     /// a rest framework router generates its routes from a prefix rather than
     /// writing them out, so what one of them takes cannot be read off `route`.
     pub(crate) exact: bool,
+    /// the view the route hands the request to, where it names one this can read
+    pub(crate) view: Option<Target>,
+}
+
+/// what a python definition a django construct names is
+#[derive(Debug, Clone, Copy, PartialEq, Eq, get_size2::GetSize)]
+pub(crate) enum TargetKind {
+    Function,
+    Class,
+}
+
+/// a python definition a django construct names, wherever it is written
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub(crate) struct Target {
+    pub(crate) name: CompactString,
+    pub(crate) kind: TargetKind,
+    pub(crate) file: File,
+    /// the name it is declared under, for navigation
+    pub(crate) range: TextRange,
+    /// the whole declaration
+    pub(crate) full_range: TextRange,
+}
+
+impl UrlName {
+    /// the arguments this route takes, or `None` where they cannot be read
+    pub(crate) fn parameters(&self) -> Option<Vec<Parameter>> {
+        self.exact
+            .then_some(self.route.as_deref()?)
+            .and_then(parameters_of)
+    }
+}
+
+/// one argument a route pattern takes
+pub(crate) struct Parameter {
+    pub(crate) name: CompactString,
+    /// the converter django puts the argument through, where it is one of its own
+    pub(crate) converter: Option<Converter>,
+}
+
+/// the path converters django ships
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Converter {
+    Str,
+    Int,
+    Slug,
+    Uuid,
+    Path,
+}
+
+impl Converter {
+    fn of(name: &str) -> Option<Self> {
+        match name {
+            "str" => Some(Self::Str),
+            "int" => Some(Self::Int),
+            "slug" => Some(Self::Slug),
+            "uuid" => Some(Self::Uuid),
+            "path" => Some(Self::Path),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Str => "str",
+            Self::Int => "int",
+            Self::Slug => "slug",
+            Self::Uuid => "uuid",
+            Self::Path => "path",
+        }
+    }
+
+    /// whether a value written out in the template is one this would match
+    pub(crate) fn matches(self, value: &str) -> bool {
+        match self {
+            Self::Str => !value.is_empty() && !value.contains('/'),
+            Self::Int => !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()),
+            Self::Slug => {
+                !value.is_empty()
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+            }
+            Self::Uuid => {
+                let groups: Vec<&str> = value.split('-').collect();
+                groups.len() == 5
+                    && [8, 4, 4, 4, 12]
+                        == *groups.iter().map(|group| group.len()).collect::<Vec<_>>()
+                    // django's own pattern is lowercase, and `str(UUID(…))` is
+                    // the only spelling that reaches it at run time
+                    && value
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f' | b'-'))
+            }
+            Self::Path => !value.is_empty(),
+        }
+    }
+}
+
+/// the arguments a route pattern names
+///
+/// django writes them two ways: `path()` takes `<converter:name>` and
+/// `re_path()` takes a named group. a pattern with an *unnamed* group takes
+/// arguments nothing can name, so it answers nothing rather than too few.
+fn parameters_of(pattern: &str) -> Option<Vec<Parameter>> {
+    let mut parameters = Vec::new();
+    let mut rest = pattern;
+
+    while let Some(index) = rest.find(['<', '(']) {
+        let after = &rest[index..];
+
+        if let Some(after) = after.strip_prefix('<') {
+            let (declaration, tail) = after.split_once('>')?;
+            let (converter, name) = match declaration.split_once(':') {
+                Some((converter, name)) => (Converter::of(converter), name),
+                None => (Some(Converter::Str), declaration),
+            };
+            parameters.push(Parameter {
+                name: name.to_compact_string(),
+                converter,
+            });
+            rest = tail;
+            continue;
+        }
+
+        let after = after.strip_prefix('(').unwrap_or(after);
+        if let Some(after) = after.strip_prefix("?P<") {
+            let (name, tail) = after.split_once('>')?;
+            parameters.push(Parameter {
+                name: name.to_compact_string(),
+                // what a regex group matches is not one of django's converters,
+                // so a literal written against it is not checked
+                converter: None,
+            });
+            rest = tail;
+            continue;
+        }
+
+        // a group that captures without naming takes a positional argument this
+        // has no name for, so the pattern is one to say nothing about
+        if !after.starts_with("?:") && !after.starts_with("?=") && !after.starts_with("?!") {
+            return None;
+        }
+        rest = after;
+    }
+
+    Some(parameters)
+}
+
+/// the arguments every route of `name` takes, in the order they are declared
+///
+/// django allows two routes to share a name and reverses against whichever one
+/// matches, so the union is what such a name takes rather than either half.
+pub(crate) fn route_parameters(db: &dyn Db, name: &str) -> Vec<Parameter> {
+    let mut parameters: Vec<Parameter> = Vec::new();
+
+    for url in url_names(db, db.project())
+        .iter()
+        .filter(|url| url.name == name)
+    {
+        for parameter in url.parameters().into_iter().flatten() {
+            if !parameters.iter().any(|known| known.name == parameter.name) {
+                parameters.push(parameter);
+            }
+        }
+    }
+
+    parameters
 }
 
 /// where a name in a template's context comes from
@@ -320,7 +551,27 @@ pub(crate) struct ContextVariable {
 pub(crate) struct TemplateContext {
     /// the template the view names, as the loader sees it
     pub(crate) template: CompactString,
+    /// the view that renders it, where the name is written inside one
+    ///
+    /// a `render()` at module level is nobody's view, and a template rendered
+    /// only from there has none to name.
+    pub(crate) view: Option<ViewRef>,
     pub(crate) variables: Box<[ContextVariable]>,
+}
+
+/// the definition a template name is written inside
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub(crate) struct ViewRef {
+    /// the definition's name, qualified by whatever it is nested in
+    ///
+    /// a view written inside another definition carries both names, since
+    /// `outer.inner` is what a reader is looking for and `inner` alone is not.
+    /// the module is deliberately not part of it: which module a file is comes
+    /// from the module resolver rather than from this scan.
+    pub(crate) path: CompactString,
+    pub(crate) file: File,
+    /// the innermost definition's own name, for navigation
+    pub(crate) range: TextRange,
 }
 
 /// a file inside one of the project's template directories
@@ -421,6 +672,7 @@ pub(crate) fn registrations(db: &dyn Db, project: Project) -> Box<[Registration]
                 .iter()
                 .map(|registration| Registration {
                     django: library.source == LibrarySource::Django,
+                    always_loaded: library.always_loaded,
                     ..registration.clone()
                 })
         })
@@ -527,29 +779,68 @@ fn installed_libraries(db: &dyn Db, project: Project) -> Box<[Library]> {
         }
     }
 
+    // django's own implicit builtins, which no template has to load and which
+    // nothing above reaches: they live in `django.template`, not in anybody's
+    // `templatetags`. reading them is what stops the builtin table from being the
+    // last word on a django whose tags have moved on since it was written
+    for path in DEFAULT_BUILTIN_MODULES {
+        if let Some(discovered) = always_loaded_library(db, importing, path, LibrarySource::Django)
+        {
+            merge(&mut found, discovered);
+        }
+    }
+
     // a library the settings load into every template is available whether or not
     // any app installs it, and needs no `{% load %}` wherever it came from
     for path in &settings.always_loaded {
-        let Some(name) = ModuleName::new(path) else {
-            continue;
-        };
-        let Some(file) =
-            resolve_real_module(db, importing, &name).and_then(|module| module.file(db))
-        else {
-            continue;
-        };
-        let source = if name.components().next() == Some(DJANGO_PACKAGE) {
+        let source = if path.split('.').next() == Some(DJANGO_PACKAGE) {
             LibrarySource::Django
         } else {
             LibrarySource::Installed
         };
 
-        if let Some(discovered) = library(db, file, source, true) {
+        if let Some(discovered) = always_loaded_library(db, importing, path, source) {
             merge(&mut found, discovered);
         }
     }
 
     found.into_boxed_slice()
+}
+
+/// the library a dotted module path names, as one no template has to `{% load %}`
+fn always_loaded_library(
+    db: &dyn Db,
+    importing: File,
+    path: &str,
+    source: LibrarySource,
+) -> Option<Library> {
+    let name = ModuleName::new(path)?;
+    let file = resolve_real_module(db, importing, &name)?.file(db)?;
+
+    library(db, file, source, true)
+}
+
+/// whether django's own registrations were read, and so are the last word on
+/// what django provides
+///
+/// the implicit builtins are the surest sign of a django this module can
+/// actually read: `Engine` imports all three itself, so a project where all
+/// three resolve is one whose django is really there. short of that, nothing of
+/// django's has been read at all and the builtin table stands on its own — which
+/// is the difference between a table that is a floor and a table that is a
+/// claim.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn django_is_authoritative(db: &dyn Db, project: Project) -> bool {
+    let Some(importing) = *settings_file(db, project) else {
+        return false;
+    };
+
+    DEFAULT_BUILTIN_MODULES.iter().all(|path| {
+        ModuleName::new(path)
+            .and_then(|name| resolve_real_module(db, importing, &name))
+            .and_then(|module| module.file(db))
+            .is_some()
+    })
 }
 
 /// the package an `INSTALLED_APPS` entry names
@@ -1438,6 +1729,7 @@ impl RegistrationVisitor {
             // one module is one library however it was reached, so where it came
             // from is [`registrations`]' to say rather than this scan's
             django: false,
+            always_loaded: false,
         })
     }
 }
@@ -1446,12 +1738,18 @@ impl<'ast> Visitor<'ast> for RegistrationVisitor {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         if let Stmt::FunctionDef(function) = stmt {
             let documentation = docstring_summary(&function.body);
-            // one function is one tag even if it somehow carries two registering
-            // decorators; the first is the one that names it
-            let registration = function.decorator_list.iter().find_map(|decorator| {
-                self.registration(decorator, &function.name, documentation.clone())
-            });
-            self.found.extend(registration);
+            // one function may be registered under several names: django's own
+            // `{% translate %}` and `{% trans %}` are one function carrying two
+            // `@register.tag` decorators, and taking only the first loses the
+            // older spelling entirely
+            let registrations: Vec<Registration> = function
+                .decorator_list
+                .iter()
+                .filter_map(|decorator| {
+                    self.registration(decorator, &function.name, documentation.clone())
+                })
+                .collect();
+            self.found.extend(registrations);
             return;
         }
 
@@ -1667,7 +1965,53 @@ fn django_settings(db: &dyn Db, project: Project) -> DjangoSettings {
 /// the one a developer runs.
 #[salsa::tracked]
 fn settings_file(db: &dyn Db, project: Project) -> Option<File> {
-    let mut naming: Vec<(File, CompactString)> = Vec::new();
+    let naming = settings_naming(db, project);
+
+    let naming = naming
+        .iter()
+        .find(|naming| is_entry_point(db, naming.file))
+        .or_else(|| naming.first())?;
+
+    resolve_module(db, naming.file, &ModuleName::new(&naming.module)?)?.file(db)
+}
+
+/// the project's `manage.py`, django's own entry point
+///
+/// this is the script `manage.py test`, `manage.py migrate` and the rest are run
+/// through, so a project without one is a project in which none of them can be
+/// run. it is identified the way [`settings_file`] identifies it — by naming
+/// `DJANGO_SETTINGS_MODULE` — since a script that doesn't is no django entry
+/// point whatever it happens to be called.
+#[salsa::tracked]
+pub(crate) fn manage_file(db: &dyn Db, project: Project) -> Option<File> {
+    settings_naming(db, project)
+        .iter()
+        .find(|naming| is_entry_point(db, naming.file))
+        .map(|naming| naming.file)
+}
+
+/// whether `file` is the script django's own `startproject` writes
+fn is_entry_point(db: &dyn Db, file: File) -> bool {
+    file.path(db)
+        .as_system_path()
+        .and_then(SystemPath::file_stem)
+        == Some(SETTINGS_ENTRY_POINT)
+}
+
+/// a file that points `DJANGO_SETTINGS_MODULE` somewhere, and where at
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+struct SettingsNaming {
+    file: File,
+    module: CompactString,
+}
+
+/// every file of the project that names its settings module, in path order
+///
+/// the project's files come in no order worth relying on, and both consumers
+/// have to land on the same file twice running.
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+fn settings_naming(db: &dyn Db, project: Project) -> Box<[SettingsNaming]> {
+    let mut naming: Vec<SettingsNaming> = Vec::new();
 
     for file in &project.files(db) {
         // a stub sets no environment variable
@@ -1675,25 +2019,21 @@ fn settings_file(db: &dyn Db, project: Project) -> Option<File> {
             continue;
         }
         if let Some(module) = settings_module_in_file(db, file) {
-            naming.push((file, module.clone()));
+            naming.push(SettingsNaming {
+                file,
+                module: module.clone(),
+            });
         }
     }
 
-    // the project's files come in no order worth relying on, and the fallback has
-    // to land on the same file twice running
-    naming.sort_by(|(left, _), (right, _)| left.path(db).as_str().cmp(right.path(db).as_str()));
+    naming.sort_by(|left, right| {
+        left.file
+            .path(db)
+            .as_str()
+            .cmp(right.file.path(db).as_str())
+    });
 
-    let (importing, module) = naming
-        .iter()
-        .find(|(file, _)| {
-            file.path(db)
-                .as_system_path()
-                .and_then(SystemPath::file_stem)
-                == Some(SETTINGS_ENTRY_POINT)
-        })
-        .or_else(|| naming.first())?;
-
-    resolve_module(db, *importing, &ModuleName::new(module)?)?.file(db)
+    naming.into_boxed_slice()
 }
 
 /// the settings module `file` points `DJANGO_SETTINGS_MODULE` at
@@ -2081,25 +2421,11 @@ struct UrlVisitor<'db> {
 }
 
 impl UrlVisitor<'_> {
-    /// record `name` as a route of the list `binding`
-    fn record(
-        &mut self,
-        binding: Option<CompactString>,
-        name: &str,
-        file: File,
-        range: TextRange,
-        route: Option<CompactString>,
-        exact: bool,
-    ) {
+    /// record `route` as a route of the list `binding`
+    fn record(&mut self, binding: Option<CompactString>, route: UrlName) {
         self.found.push(UrlEntry {
             binding,
-            kind: UrlEntryKind::Route(UrlName {
-                name: name.to_compact_string(),
-                file,
-                range,
-                route: route.map(|route| route.as_str().into()),
-                exact,
-            }),
+            kind: UrlEntryKind::Route(route),
         });
     }
 
@@ -2173,11 +2499,14 @@ impl UrlVisitor<'_> {
 
         self.record(
             Some(binding.to_compact_string()),
-            &name,
-            self.file,
-            call.func.range(),
-            None,
-            false,
+            UrlName {
+                name,
+                file: self.file,
+                range: call.func.range(),
+                route: None,
+                exact: false,
+                view: None,
+            },
         );
     }
 
@@ -2197,13 +2526,21 @@ impl UrlVisitor<'_> {
         };
 
         let route = join_routes(self.prefix.as_deref(), route_of(call).as_deref());
+        let view = call
+            .arguments
+            .args
+            .get(1)
+            .and_then(|view| resolved_target(self.db, self.file, view_callable(view)));
         self.record(
             self.binding.clone(),
-            &name,
-            self.file,
-            keyword.value.range(),
-            route,
-            true,
+            UrlName {
+                name,
+                file: self.file,
+                range: keyword.value.range(),
+                route: route.map(|route| route.as_str().into()),
+                exact: true,
+                view,
+            },
         );
     }
 
@@ -2275,15 +2612,21 @@ impl UrlVisitor<'_> {
         // a router writes its own patterns from the prefix rather than taking
         // them, so the prefix is what a route reads as but not what it takes
         let route = join_routes(self.prefix.as_deref(), Some(prefix.as_str()));
+        let view = resolved_target(self.db, self.file, viewset);
+        let generated = |name: String, file: File, range: TextRange| UrlName {
+            name: name.to_compact_string(),
+            file,
+            range,
+            route: route.clone().map(|route| route.as_str().into()),
+            // a router writes its own patterns rather than taking them
+            exact: false,
+            view: view.clone(),
+        };
 
         for suffix in ROUTER_ROUTE_SUFFIXES {
             self.record(
                 binding.clone(),
-                &format!("{basename}-{suffix}"),
-                self.file,
-                anchor,
-                route.clone(),
-                false,
+                generated(format!("{basename}-{suffix}"), self.file, anchor),
             );
         }
 
@@ -2291,11 +2634,11 @@ impl UrlVisitor<'_> {
             // an action's route is that method's, so that is where it leads
             self.record(
                 binding.clone(),
-                &format!("{basename}-{}", action.url_name),
-                action.file,
-                action.range,
-                route.clone(),
-                false,
+                generated(
+                    format!("{basename}-{}", action.url_name),
+                    action.file,
+                    action.range,
+                ),
             );
         }
     }
@@ -2322,9 +2665,23 @@ fn resolved_class<T>(
     expr: &Expr,
     mut read: impl FnMut(File, &ast::StmtClassDef) -> T,
 ) -> Option<T> {
+    definitions_of(db, file, expr)
+        .into_iter()
+        .find_map(|resolved| {
+            let definition = resolved.definition()?;
+            let defining = definition.file(db);
+            let parsed = parsed_module(db, defining).load(db);
+            let class = definition.kind(db).as_class()?.node(&parsed);
+
+            Some(read(defining, class))
+        })
+}
+
+/// every definition `expr` resolves to, import aliases followed to their source
+fn definitions_of<'db>(db: &'db dyn Db, file: File, expr: &Expr) -> Vec<ResolvedDefinition<'db>> {
     let model = SemanticModel::new(db, file);
 
-    let definitions = match expr {
+    match expr {
         Expr::Name(name) => definitions_for_name(
             &model,
             name.id.as_str(),
@@ -2332,17 +2689,54 @@ fn resolved_class<T>(
             ImportAliasResolution::ResolveAliases,
         ),
         Expr::Attribute(attribute) => definitions_for_attribute(&model, attribute),
-        _ => return None,
-    };
+        _ => Vec::new(),
+    }
+}
 
-    definitions.into_iter().find_map(|resolved| {
-        let definition = resolved.definition()?;
-        let defining = definition.file(db);
-        let parsed = parsed_module(db, defining).load(db);
-        let class = definition.kind(db).as_class()?.node(&parsed);
+/// the class or function `expr` names, wherever it is declared
+fn resolved_target(db: &dyn Db, file: File, expr: &Expr) -> Option<Target> {
+    definitions_of(db, file, expr)
+        .into_iter()
+        .find_map(|resolved| {
+            let definition = resolved.definition()?;
+            let defining = definition.file(db);
+            let parsed = parsed_module(db, defining).load(db);
 
-        Some(read(defining, class))
-    })
+            let (name, kind, full_range) = match definition.kind(db) {
+                kind if kind.as_class().is_some() => {
+                    let class = kind.as_class()?.node(&parsed);
+                    (&class.name, TargetKind::Class, class.range())
+                }
+                kind => {
+                    let function = kind.as_function()?.node(&parsed);
+                    (&function.name, TargetKind::Function, function.range())
+                }
+            };
+
+            Some(Target {
+                name: name.id.to_compact_string(),
+                kind,
+                file: defining,
+                range: name.range(),
+                full_range,
+            })
+        })
+}
+
+/// what a route's view argument points at
+///
+/// a class-based view is written into a route through `as_view()`, and what the
+/// route reaches is the class that method belongs to.
+fn view_callable(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Call(call) => match &*call.func {
+            Expr::Attribute(attribute) if attribute.attr.as_str() == AS_VIEW_METHOD => {
+                &attribute.value
+            }
+            _ => expr,
+        },
+        _ => expr,
+    }
 }
 
 /// whether a router serves an index of what is registered with it
@@ -2631,14 +3025,34 @@ struct ContextVisitor<'db, 'ast> {
     db: &'db dyn Db,
     file: File,
     found: Vec<TemplateContext>,
-    /// the function bodies being walked, innermost last
+    /// the functions being walked, innermost last
     ///
     /// a context handed to `render()` by name is built by the statements of the
-    /// function that binds it, so that body is what the name is followed in.
-    scopes: Vec<&'ast [Stmt]>,
+    /// function that binds it, so that body is what the name is followed in —
+    /// and the same function is the view a lens names.
+    scopes: Vec<&'ast ast::StmtFunctionDef>,
 }
 
 impl<'ast> ContextVisitor<'_, 'ast> {
+    /// the view a render call found here is written in
+    fn enclosing_view(&self) -> Option<ViewRef> {
+        let innermost = self.scopes.last()?;
+
+        let mut path = CompactString::default();
+        for function in &self.scopes {
+            if !path.is_empty() {
+                path.push('.');
+            }
+            path.push_str(function.name.as_str());
+        }
+
+        Some(ViewRef {
+            path,
+            file: self.file,
+            range: innermost.name.range(),
+        })
+    }
+
     /// the context a `render()`/`TemplateResponse()` call passes
     ///
     /// both take the request first, the template second and the context third,
@@ -2666,11 +3080,12 @@ impl<'ast> ContextVisitor<'_, 'ast> {
 
         Some(TemplateContext {
             template,
+            view: self.enclosing_view(),
             variables: context
                 .map(|context| {
                     context_variables(
                         self.file,
-                        self.scopes.last().copied(),
+                        self.scopes.last().map(|function| function.body.as_slice()),
                         context,
                         MAX_CONTEXT_DEPTH,
                     )
@@ -2705,6 +3120,11 @@ impl<'ast> ContextVisitor<'_, 'ast> {
 
         Some(TemplateContext {
             template,
+            view: Some(ViewRef {
+                path: class.name.id.to_compact_string(),
+                file: self.file,
+                range: class.name.range(),
+            }),
             variables: variables.into_boxed_slice(),
         })
     }
@@ -2715,7 +3135,7 @@ impl<'ast> Visitor<'ast> for ContextVisitor<'_, 'ast> {
         match stmt {
             Stmt::ClassDef(class) => self.found.extend(self.class_based_view(class)),
             Stmt::FunctionDef(function) => {
-                self.scopes.push(&function.body);
+                self.scopes.push(function);
                 walk_stmt(self, stmt);
                 self.scopes.pop();
             }
@@ -3129,6 +3549,446 @@ fn processor_variables(db: &dyn Db, importing: File, name: &str) -> Vec<ContextV
     found
 }
 
+/// what django does with a class the project declares
+#[derive(Debug, Clone, Copy, PartialEq, Eq, get_size2::GetSize)]
+pub(crate) enum DjangoClassKind {
+    /// a subclass of django's `Model`, which is a table
+    Model,
+    /// a subclass of django's `ModelAdmin`, which is a model's admin page
+    Admin,
+}
+
+/// where a class is declared, which is what identifies it across files
+///
+/// its name is not enough — two apps may each hold a `BookAdmin` — and the
+/// class name's own range is unique within the file that declares it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, get_size2::GetSize)]
+pub(crate) struct ClassRef {
+    pub(crate) file: File,
+    pub(crate) range: TextRange,
+}
+
+/// a class django gives a role to
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub(crate) struct DjangoClass {
+    pub(crate) name: CompactString,
+    pub(crate) kind: DjangoClassKind,
+    pub(crate) file: File,
+    /// the class name, for navigation
+    pub(crate) range: TextRange,
+    /// the whole `class …:` statement
+    pub(crate) full_range: TextRange,
+    /// the classes it is written against, wherever they are declared
+    ///
+    /// this is what tells a base others are built on from a leaf nothing uses.
+    pub(crate) bases: Box<[ClassRef]>,
+}
+
+/// every model and admin class the project declares
+///
+/// unlike the scans above, this one is not gated on the source spelling any
+/// particular name: a model need not write django's own base itself, only
+/// inherit from something that eventually does, so there is no identifier such a
+/// class has to hold. what keeps it affordable is that a class with no bases
+/// costs nothing at all, and that each file's bases are followed once, in a
+/// query salsa keeps.
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+pub(crate) fn django_classes(db: &dyn Db, project: Project) -> Box<[DjangoClass]> {
+    project_scan(db, project, |db, file| {
+        django_classes_in_file(db, file).iter().cloned()
+    })
+}
+
+/// the models and admin classes one module declares
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+pub(crate) fn django_classes_in_file(db: &dyn Db, file: File) -> Box<[DjangoClass]> {
+    // a class only classifies by reaching a base django itself declares, and a
+    // module of django's is reached through an import that spells the package.
+    // so a project no file of which writes it has no such class anywhere, and
+    // this is what keeps a project that is no django project from having its
+    // every class followed up its bases
+    if !project_uses_django(db, db.project()) {
+        return Box::default();
+    }
+
+    let parsed = parsed_module(db, file).load(db);
+    let mut visitor = DjangoClassVisitor {
+        db,
+        file,
+        found: Vec::new(),
+    };
+    visitor.visit_body(parsed.suite());
+
+    visitor.found.into_boxed_slice()
+}
+
+struct DjangoClassVisitor<'db> {
+    db: &'db dyn Db,
+    file: File,
+    found: Vec<DjangoClass>,
+}
+
+impl<'ast> Visitor<'ast> for DjangoClassVisitor<'_> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        if let Stmt::ClassDef(class) = stmt
+            && let Some(kind) = django_class_kind(self.db, self.file, class, MAX_BASE_DEPTH)
+        {
+            self.found.push(DjangoClass {
+                name: class.name.id.to_compact_string(),
+                kind,
+                file: self.file,
+                range: class.name.range(),
+                full_range: class.range(),
+                bases: class
+                    .bases()
+                    .iter()
+                    .filter_map(|base| class_ref(self.db, self.file, base))
+                    .collect(),
+            });
+        }
+
+        walk_stmt(self, stmt);
+    }
+}
+
+/// whether anything in the project so much as names django
+///
+/// the two halves are separate queries so that an edit to one module re-reads
+/// that module's source and no other, and so that the answer — which changes
+/// about once in a project's life — is backdated rather than invalidating every
+/// scan that reads it.
+#[salsa::tracked(returns(copy))]
+fn project_uses_django(db: &dyn Db, project: Project) -> bool {
+    project
+        .files(db)
+        .iter()
+        .any(|file| file_names_django(db, *file))
+}
+
+#[salsa::tracked(returns(copy))]
+fn file_names_django(db: &dyn Db, file: File) -> bool {
+    mentions(db, file, &[DJANGO_PACKAGE])
+}
+
+/// the role django gives `class`, from the bases it is written against
+///
+/// the walk goes up the bases rather than over the name the source writes, so a
+/// class three subclasses removed from django's own — or one that imported it
+/// under another name — is classified exactly as a direct subclass is. a base
+/// that cannot be resolved to a class contributes nothing, which leaves the
+/// class unclassified rather than guessed at.
+fn django_class_kind(
+    db: &dyn Db,
+    file: File,
+    class: &ast::StmtClassDef,
+    depth: usize,
+) -> Option<DjangoClassKind> {
+    if depth == 0 {
+        return None;
+    }
+
+    class.bases().iter().find_map(|base| {
+        resolved_class(db, file, base, |defining, resolved| {
+            if is_djangos_own(db, defining) {
+                match resolved.name.as_str() {
+                    MODEL_BASE => return Some(DjangoClassKind::Model),
+                    MODEL_ADMIN_BASE => return Some(DjangoClassKind::Admin),
+                    _ => {}
+                }
+            }
+
+            django_class_kind(db, defining, resolved, depth - 1)
+        })
+        .flatten()
+    })
+}
+
+/// whether `class` is one django's test runner would collect
+///
+/// the walk goes up the bases towards `unittest.TestCase` rather than towards
+/// any of django's own bases, because that is the one class every test case
+/// reaches: django's `SimpleTestCase` is written against it, `TestCase` is
+/// written against that, and a project's own base is written against those. a
+/// plain `unittest.TestCase` in a django project is collected by the runner just
+/// the same, so reaching it is the whole of the question.
+pub(crate) fn is_test_class(db: &dyn Db, file: File, class: &ast::StmtClassDef) -> bool {
+    fn walk(db: &dyn Db, file: File, class: &ast::StmtClassDef, depth: usize) -> bool {
+        if depth == 0 {
+            return false;
+        }
+
+        class.bases().iter().any(|base| {
+            resolved_class(db, file, base, |defining, resolved| {
+                (resolved.name.as_str() == TEST_CASE_BASE && is_unittests_own(db, defining))
+                    || walk(db, defining, resolved, depth - 1)
+            })
+            .unwrap_or_default()
+        })
+    }
+
+    walk(db, file, class, MAX_BASE_DEPTH)
+}
+
+/// whether `file` is one of `unittest`'s own modules
+fn is_unittests_own(db: &dyn Db, file: File) -> bool {
+    file_to_module(db, file)
+        .is_some_and(|module| module.name(db).components().next() == Some(UNITTEST_PACKAGE))
+}
+
+/// where the class `expr` names is declared
+fn class_ref(db: &dyn Db, file: File, expr: &Expr) -> Option<ClassRef> {
+    resolved_class(db, file, expr, |defining, class| ClassRef {
+        file: defining,
+        range: class.name.range(),
+    })
+}
+
+/// whether `file` is one of django's own modules
+fn is_djangos_own(db: &dyn Db, file: File) -> bool {
+    file_to_module(db, file).is_some_and(|module| is_djangos(db, module))
+}
+
+/// what the admin registrations of one scope say
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub(crate) struct AdminRegistrations {
+    /// the admin classes registered
+    pub(crate) registered: Box<[ClassRef]>,
+    /// whether every registration was read in full
+    ///
+    /// a registration whose model or whose admin class could not be worked out
+    /// leaves a class registered that nothing here will ever match, which is
+    /// exactly the state in which a "nothing registers this" would be wrong.
+    pub(crate) complete: bool,
+}
+
+impl Default for AdminRegistrations {
+    fn default() -> Self {
+        Self {
+            registered: Box::default(),
+            // a module that registers nothing is one there was nothing to miss in
+            complete: true,
+        }
+    }
+}
+
+/// every admin class the project registers
+///
+/// nothing reads this yet. it is the other half of an "admin class nobody
+/// registers" diagnostic, which is written and not shipped: a check that fires
+/// in the editor and never in `by check` teaches people to distrust both, and
+/// making it reportable there means reaching the project's files from below
+/// `ty_project`. see `scratch.django.md` for the whole of it.
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+pub(crate) fn admin_registrations(db: &dyn Db, project: Project) -> AdminRegistrations {
+    let mut registered = Vec::new();
+    let mut complete = true;
+
+    for file in &project.files(db) {
+        // a stub declares types, never a registration django runs
+        if is_stub(db, file) {
+            continue;
+        }
+
+        let found = admin_registrations_in_file(db, file);
+        registered.extend(found.registered.iter().copied());
+        complete &= found.complete;
+    }
+
+    AdminRegistrations {
+        registered: registered.into_boxed_slice(),
+        complete,
+    }
+}
+
+/// the admin classes one module registers
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+fn admin_registrations_in_file(db: &dyn Db, file: File) -> AdminRegistrations {
+    // both forms — `admin.site.register(…)` and `@admin.register(…)` — spell the
+    // method itself, and a module that imports it under another name still
+    // writes the real one beside the alias
+    if !mentions(db, file, &[ADMIN_REGISTER_METHOD]) {
+        return AdminRegistrations::default();
+    }
+
+    let parsed = parsed_module(db, file).load(db);
+    let mut visitor = AdminRegistrationVisitor {
+        db,
+        file,
+        decorators: FxHashSet::default(),
+        registered: Vec::new(),
+        complete: true,
+    };
+    visitor.visit_body(parsed.suite());
+
+    AdminRegistrations {
+        registered: visitor.registered.into_boxed_slice(),
+        complete: visitor.complete,
+    }
+}
+
+/// what an argument of a `register(…)` call names
+enum Class {
+    /// a django model
+    Model,
+    /// a django admin class
+    Admin(ClassRef),
+    /// a class django gives no role to, or a value that is plainly no class
+    Other,
+    /// nothing this could work out
+    Unreadable,
+}
+
+struct AdminRegistrationVisitor<'db> {
+    db: &'db dyn Db,
+    file: File,
+    /// the `register(…)` calls already read as decorators
+    ///
+    /// a decorator is an expression like any other, so without this the walk
+    /// would read `@admin.register(Book)` a second time as a call registering
+    /// django's own default admin for `Book`.
+    decorators: FxHashSet<TextRange>,
+    registered: Vec<ClassRef>,
+    complete: bool,
+}
+
+impl AdminRegistrationVisitor<'_> {
+    /// the registration a `@admin.register(…)` on `class` makes
+    ///
+    /// this form names the models in the decorator and the admin class by
+    /// decorating it, so which class is registered is beyond doubt however the
+    /// models are written.
+    fn decorated(&mut self, class: &ast::StmtClassDef) {
+        for decorator in &class.decorator_list {
+            let Expr::Call(call) = &decorator.expression else {
+                continue;
+            };
+            if callee_name(&call.func).as_deref() != Some(ADMIN_REGISTER_METHOD) {
+                continue;
+            }
+            // a registration is never written as a decorator in the other form,
+            // so whatever this is, the call walk has nothing to add to it
+            self.decorators.insert(call.range());
+
+            if django_class_kind(self.db, self.file, class, MAX_BASE_DEPTH)
+                != Some(DjangoClassKind::Admin)
+            {
+                continue;
+            }
+
+            if call.arguments.args.iter().all(|model| self.is_model(model)) {
+                self.registered.push(ClassRef {
+                    file: self.file,
+                    range: class.name.range(),
+                });
+            } else {
+                self.complete = false;
+            }
+        }
+    }
+
+    /// the registration a `site.register(…)` call makes
+    ///
+    /// what identifies one is the shape of its arguments rather than the site it
+    /// is made on: a project registers as readily against an `AdminSite` of its
+    /// own as against django's, and nothing about the receiver says which.
+    ///
+    /// so a call is one of these unless it can be told apart from one. an
+    /// argument that resolves to a class django gives no role to is what tells
+    /// it apart — a rest framework router's viewset, a `singledispatch`'s type —
+    /// as is a route prefix written where django takes a model. short of that
+    /// the call counts, and a call that counts and cannot be read costs the
+    /// whole check.
+    fn register_call(&mut self, call: &ast::ExprCall) {
+        if self.decorators.contains(&call.range())
+            || callee_name(&call.func).as_deref() != Some(ADMIN_REGISTER_METHOD)
+        {
+            return;
+        }
+
+        // django's signature is `register(model_or_iterable, admin_class=None)`:
+        // without the second argument the model is given django's own default
+        // admin, and no class of the project's is named at all
+        let (Some(model), Some(admin)) = (
+            call.arguments.args.first(),
+            call.arguments.find_argument_value(ADMIN_CLASS_KEYWORD, 1),
+        ) else {
+            return;
+        };
+
+        let (model_class, admin_class) = (self.resolved(model), self.resolved(admin));
+
+        let is_someone_elses = matches!(model_class, Class::Other)
+            || matches!(admin_class, Class::Other | Class::Model);
+        if is_someone_elses {
+            return;
+        }
+
+        // an argument that cannot be read leaves an admin class registered that
+        // nothing here can match, so the answer is that there is no answer
+        let names_a_model = matches!(model_class, Class::Model) || self.is_model(model);
+        let Class::Admin(registered) = admin_class else {
+            self.complete = false;
+            return;
+        };
+        if !names_a_model {
+            self.complete = false;
+            return;
+        }
+
+        self.registered.push(registered);
+    }
+
+    /// whether `expr` names a django model, or a list of them
+    fn is_model(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::List(list) => list.elts.iter().all(|element| self.is_model(element)),
+            Expr::Tuple(tuple) => tuple.elts.iter().all(|element| self.is_model(element)),
+            _ => matches!(self.resolved(expr), Class::Model),
+        }
+    }
+
+    /// what the class `expr` names is, where it names one at all
+    fn resolved(&self, expr: &Expr) -> Class {
+        // django takes a model where a router takes its route prefix, and a
+        // string is not something this failed to read
+        if matches!(expr, Expr::StringLiteral(_)) {
+            return Class::Other;
+        }
+
+        resolved_class(self.db, self.file, expr, |defining, class| {
+            let reference = ClassRef {
+                file: defining,
+                range: class.name.range(),
+            };
+
+            match django_class_kind(self.db, defining, class, MAX_BASE_DEPTH) {
+                Some(DjangoClassKind::Model) => Class::Model,
+                Some(DjangoClassKind::Admin) => Class::Admin(reference),
+                None => Class::Other,
+            }
+        })
+        .unwrap_or(Class::Unreadable)
+    }
+}
+
+impl<'ast> Visitor<'ast> for AdminRegistrationVisitor<'_> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        if let Stmt::ClassDef(class) = stmt {
+            self.decorated(class);
+        }
+
+        walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if let Expr::Call(call) = expr {
+            self.register_call(call);
+        }
+
+        walk_expr(self, expr);
+    }
+}
+
 /// the value and name range of a class-body assignment to `attribute`
 pub(crate) fn class_attribute<'ast>(
     statement: &'ast Stmt,
@@ -3193,11 +4053,12 @@ fn docstring_summary(body: &[Stmt]) -> Option<Box<str>> {
 mod tests {
     use ty_project::Db;
 
-    use crate::django_template::tests::TemplateTest;
+    use crate::django_template::tests::{DJANGO_BUILTINS, TemplateTest};
 
     use super::{
-        RegistrationKind, context_for_template, context_processor_variables, registrations,
-        static_files, tag_libraries, template_files, url_names,
+        RegistrationKind, context_for_template, context_processor_variables,
+        django_is_authoritative, registrations, static_files, tag_libraries, template_files,
+        url_names,
     };
 
     /// a project of python sources, with a throwaway template to anchor the
@@ -5011,5 +5872,106 @@ mod tests {
             super::super::builtins::tag("localize").is_some_and(|tag| tag.library == Some("l10n"))
         );
         assert!(registered(&test).contains(&"i18n|localize (django)".to_string()));
+    }
+
+    #[test]
+    fn a_function_registered_under_two_names_answers_to_both() {
+        // django's own `{% translate %}` and `{% trans %}` are one function
+        // carrying two `@register.tag` decorators, and both spellings work
+        let test = installed(
+            "
+            INSTALLED_APPS = []
+            ",
+            &[],
+            &[
+                ("django/__init__.py", ""),
+                ("django/templatetags/__init__.py", ""),
+                (
+                    "django/templatetags/i18n.py",
+                    "
+                    from django.template import Library
+
+                    register = Library()
+
+                    @register.tag('translate')
+                    @register.tag('trans')
+                    def do_translate(parser, token): ...
+                    ",
+                ),
+            ],
+        );
+
+        assert_eq!(
+            registered(&test),
+            ["i18n|translate (django)", "i18n|trans (django)"]
+        );
+    }
+
+    #[test]
+    fn djangos_implicit_builtins_are_discovered_as_libraries_nothing_has_to_load() {
+        let test = installed(
+            "
+            INSTALLED_APPS = []
+            ",
+            &[],
+            DJANGO_BUILTINS,
+        );
+
+        assert_eq!(
+            libraries(&test),
+            [
+                "defaulttags (Django, always loaded)",
+                "defaultfilters (Django, always loaded)",
+                "loader_tags (Django, always loaded)",
+            ],
+            "`Engine.default_builtins` are libraries like any other, bar the loading"
+        );
+        assert_eq!(
+            registered(&test),
+            [
+                "defaulttags|for (django)",
+                "defaulttags|if (django)",
+                "defaulttags|squish (django)",
+                "defaultfilters|upper (django)",
+                "defaultfilters|shorten (django)",
+                "loader_tags|block (django)",
+                "loader_tags|extends (django)",
+                "loader_tags|include (django)",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_django_whose_builtins_were_read_is_authoritative() {
+        let test = installed(
+            "
+            INSTALLED_APPS = []
+            ",
+            &[],
+            DJANGO_BUILTINS,
+        );
+
+        assert!(django_is_authoritative(&test.db, test.db.project()));
+    }
+
+    #[test]
+    fn a_django_that_cannot_be_read_is_never_authoritative() {
+        // this mock has a `templatetags` package but no `django.template`, so
+        // none of what django itself registers was read
+        let test = installed(
+            "
+            INSTALLED_APPS = ['django.contrib.humanize']
+            ",
+            &[],
+            DJANGO,
+        );
+        assert!(!django_is_authoritative(&test.db, test.db.project()));
+
+        // and a project with no settings module reaches nothing installed at all
+        let test = TemplateTest::with_site_packages(
+            &[("app/templates/app/page.html", "<CURSOR>")],
+            DJANGO_BUILTINS,
+        );
+        assert!(!django_is_authoritative(&test.db, test.db.project()));
     }
 }

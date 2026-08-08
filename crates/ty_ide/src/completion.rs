@@ -8435,6 +8435,7 @@ router.register("books", BookViewSet, basename="book")
 urlpatterns = [
     path("<int:pk>/", detail, name="detail"),
     path("", index, name="index"),
+    path("<slug:slug>/<int:page>/", paged, name="paged"),
 ]
 "#,
             )
@@ -8528,6 +8529,7 @@ def show(request):
         blog:book-list
         blog:detail
         blog:index
+        blog:paged
         ");
     }
 
@@ -8545,6 +8547,7 @@ url = urls.reverse_lazy("<CURSOR>")
         blog:book-list
         blog:detail
         blog:index
+        blog:paged
         ");
     }
 
@@ -8563,6 +8566,7 @@ def show(request):
         blog:book-list
         blog:detail
         blog:index
+        blog:paged
         ");
     }
 
@@ -8598,6 +8602,81 @@ def show(request):
             r#"
 def show(request):
     return render("<CURSOR>", "blog/post.html")
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found>");
+    }
+
+    #[test]
+    fn django_reverse_offers_the_arguments_the_route_takes() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return reverse("blog:paged", kwargs={"<CURSOR>"})
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"
+        page
+        slug
+        ");
+    }
+
+    #[test]
+    fn django_reverse_does_not_offer_an_argument_already_given() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return reverse("blog:paged", kwargs={"slug": "a", "<CURSOR>": 1})
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"page");
+    }
+
+    #[test]
+    fn django_reverse_offers_no_argument_for_a_route_that_takes_none() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return reverse("blog:index", kwargs={"<CURSOR>"})
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found>");
+    }
+
+    #[test]
+    fn django_reverse_offers_no_argument_for_a_route_that_is_not_there() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return reverse("blog:missing", kwargs={"<CURSOR>"})
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found>");
+    }
+
+    #[test]
+    fn django_a_value_in_a_reverses_kwargs_names_no_argument() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return reverse("blog:paged", kwargs={"slug": "<CURSOR>"})
+"#,
+        );
+
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found>");
+    }
+
+    #[test]
+    fn django_a_dict_that_is_not_a_reverses_kwargs_names_no_argument() {
+        let builder = django_test_builder(
+            r#"
+def show(request):
+    return reverse("blog:paged", query={"<CURSOR>"})
 "#,
         );
 

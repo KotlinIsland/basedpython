@@ -51,12 +51,20 @@ impl LanguageId {
     /// setups just call it `html`. That last case is why the path is consulted
     /// at all — a `.html` file inside a `templates` directory is a django
     /// template whatever the client chose to call it.
+    ///
+    /// A jinja id is deliberately turned away rather than taken as django. The
+    /// two languages read alike, but every template service here answers as
+    /// django, so a jinja document routed to them has its correct `{% set %}`,
+    /// `{% macro %}` or `|default("x")` reported as an error — a false positive
+    /// on correct code. We have no jinja support to offer, and [`Self::Other`] —
+    /// no template services at all — is the honest answer. It is answered
+    /// outright, ahead of the path fallback, because a client that says `jinja`
+    /// has settled the question that fallback exists to guess at.
     pub(crate) fn new(language_id: &LanguageKind, path: &AnySystemPath) -> Self {
         match language_id.as_str() {
             "python" | "by" => Self::Python,
-            "django-html" | "django-txt" | "htmldjango" | "jinja-html" | "django" => {
-                Self::DjangoTemplate
-            }
+            "django-html" | "django-txt" | "htmldjango" | "django" => Self::DjangoTemplate,
+            "jinja" | "jinja-html" | "jinja2" => Self::Other,
             _ => match path.as_system() {
                 Some(path) if ty_ide::is_django_template_path(path) => Self::DjangoTemplate,
                 _ => Self::Other,
@@ -184,11 +192,60 @@ impl TextDocument {
 
 #[cfg(test)]
 mod tests {
+    use crate::document::text_document::LanguageId;
     use crate::{PositionEncoding, TextDocument};
     use lsp_types::{
         LanguageKind, Position, TextDocumentContentChangeEvent, TextDocumentContentChangePartial,
         Uri,
     };
+
+    fn opened(uri: &str, language_id: &str) -> LanguageId {
+        TextDocument::new(
+            Uri::parse(uri).unwrap(),
+            String::new(),
+            0,
+            &LanguageKind::from(language_id.to_string()),
+        )
+        .language_id()
+    }
+
+    #[test]
+    fn the_editors_django_language_ids_are_django_templates() {
+        for id in ["django", "django-html", "django-txt", "htmldjango"] {
+            assert_eq!(
+                opened("file:///app/page.html", id),
+                LanguageId::DjangoTemplate,
+                "`{id}` is a django template"
+            );
+        }
+    }
+
+    #[test]
+    fn a_jinja_document_gets_no_template_services() {
+        // jinja is a different language that reads alike, and everything the
+        // template services answer with is django's — see `LanguageId::new`
+        for id in ["jinja", "jinja-html", "jinja2"] {
+            assert_eq!(
+                opened("file:///app/templates/page.html", id),
+                LanguageId::Other,
+                "`{id}` is turned away even where the path says django"
+            );
+        }
+
+        assert_eq!(
+            opened("file:///app/templates/page.jinja", "plaintext"),
+            LanguageId::Other
+        );
+    }
+
+    #[test]
+    fn an_html_file_under_templates_is_a_django_template_whatever_it_is_called() {
+        assert_eq!(
+            opened("file:///app/templates/page.html", "html"),
+            LanguageId::DjangoTemplate
+        );
+        assert_eq!(opened("file:///app/page.html", "html"), LanguageId::Other);
+    }
 
     #[test]
     fn redo_edit() {

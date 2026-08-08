@@ -802,3 +802,380 @@ fn a_python_symbols_references_are_found_the_way_they_always_were() -> Result<()
 
     Ok(())
 }
+
+const SHELF_VIEWS: &str = "\
+from blog.models import Book
+
+
+def shelf(request):
+    return render(request, 'blog/shelf.html', {'shelf': [Book()]})
+";
+
+const EXTRAS: &str = "\
+from django import template
+
+register = template.Library()
+
+
+@register.filter
+def shout(value, suffix: str):
+    'shouts it.'
+    return value
+";
+
+const CARD: &str = "{{ book.title }}\n";
+
+/// a project whose view renders a list and whose app registers a filter taking an
+/// argument — neither of which the smaller fixture above has
+fn shelf_server(template: &str) -> Result<TestServer> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("src"), None)?
+        .with_file(SystemPath::new("src/blog/models.py"), MODELS)?
+        .with_file(SystemPath::new("src/blog/views.py"), SHELF_VIEWS)?
+        .with_file(
+            SystemPath::new("src/blog/templatetags/blog_extras.py"),
+            EXTRAS,
+        )?
+        .with_file(SystemPath::new("src/blog/templates/blog/card.html"), CARD)?
+        .with_file(
+            SystemPath::new("src/blog/templates/blog/shelf.html"),
+            template,
+        )?
+        .enable_inlay_hints(true)
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document_as(
+        SystemPath::new("src/blog/templates/blog/shelf.html"),
+        template,
+        1,
+        LanguageKind::new("django-html"),
+    );
+
+    Ok(server)
+}
+
+fn shelf_uri(server: &TestServer) -> lsp_types::Uri {
+    server.file_uri(SystemPath::new("src/blog/templates/blog/shelf.html"))
+}
+
+#[test]
+fn a_template_offers_a_project_filters_argument_as_its_signature() -> Result<()> {
+    let mut server = shelf_server("{{ book.title|shout:\"\" }}\n")?;
+    let uri = shelf_uri(&server);
+
+    let help = server
+        .signature_help_request(&uri, Position::new(0, 21))
+        .expect("a signature");
+    let signature = help.signatures.first().expect("one signature");
+
+    assert_eq!(signature.label, "|shout:suffix: str");
+    assert_eq!(
+        signature.documentation,
+        Some(lsp_types::Documentation::String("shouts it.".to_string()))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_template_offers_a_django_filters_documentation_as_its_signature() -> Result<()> {
+    // nothing installs django here, so the builtin table is all there is — and
+    // what a filter is documented to do is still more than the template says
+    let mut server = server("{{ book.title|date:\"\" }}\n")?;
+    let uri = template_uri(&server);
+
+    let help = server
+        .signature_help_request(&uri, Position::new(0, 20))
+        .expect("a signature");
+    let signature = help.signatures.first().expect("one signature");
+
+    assert_eq!(signature.label, "|date");
+    assert_eq!(
+        signature.documentation,
+        Some(lsp_types::Documentation::String(
+            "formats a date with the given format string.".to_string()
+        ))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_template_position_that_is_not_a_filter_argument_offers_no_signature() -> Result<()> {
+    let mut server = server("{{ book.title }}\n")?;
+    let uri = template_uri(&server);
+
+    assert!(
+        server
+            .signature_help_request(&uri, Position::new(0, 10))
+            .is_none()
+    );
+
+    Ok(())
+}
+
+/// a signature help request as the client sends one after the user typed `:`
+fn colon_triggered_signature_help(
+    server: &mut TestServer,
+    uri: &lsp_types::Uri,
+    position: Position,
+) -> Option<lsp_types::SignatureHelp> {
+    server.send_request_await::<lsp_types::SignatureHelpRequest>(lsp_types::SignatureHelpParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            position,
+        },
+        work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+        context: Some(lsp_types::SignatureHelpContext {
+            trigger_kind: lsp_types::SignatureHelpTriggerKind::TriggerCharacter,
+            trigger_character: Some(":".to_string()),
+            is_retrigger: false,
+            active_signature_help: None,
+        }),
+    })
+}
+
+#[test]
+fn a_colon_is_what_opens_a_filter_argument_and_triggers_the_request() -> Result<()> {
+    let mut server = shelf_server("{{ book.title|shout: }}\n")?;
+    let uri = shelf_uri(&server);
+
+    let help = colon_triggered_signature_help(&mut server, &uri, Position::new(0, 20))
+        .expect("a signature");
+
+    assert_eq!(help.signatures[0].label, "|shout:suffix: str");
+
+    Ok(())
+}
+
+#[test]
+fn a_colon_typed_in_python_is_not_a_filter_argument() -> Result<()> {
+    // `:` is a trigger character for the sake of templates alone, and LSP has no
+    // way to register it for one language only
+    let mut server = shelf_server("{{ book.title }}\n")?;
+    let views = SystemPath::new("src/blog/views.py");
+    server.open_text_document(views, SHELF_VIEWS, 1);
+    let uri = server.file_uri(views);
+
+    assert!(colon_triggered_signature_help(&mut server, &uri, Position::new(4, 45)).is_none());
+
+    Ok(())
+}
+
+#[test]
+fn a_template_hints_a_loop_binding_and_the_file_an_include_resolves_to() -> Result<()> {
+    let mut server =
+        shelf_server("{% for book in shelf %}{% include 'blog/card.html' %}{% endfor %}\n")?;
+
+    let hints = server
+        .inlay_hints_request(
+            SystemPath::new("src/blog/templates/blog/shelf.html"),
+            lsp_types::Range::new(Position::new(0, 0), Position::new(1, 0)),
+        )
+        .expect("hints");
+
+    let rendered: Vec<_> = hints
+        .iter()
+        .map(|hint| match &hint.label {
+            lsp_types::Label::String(label) => format!("{:?} {label}", hint.position.character),
+            parts @ lsp_types::Label::InlayHintLabelPartList(_) => format!("{parts:?}"),
+        })
+        .collect();
+
+    assert_eq!(
+        rendered,
+        ["11 : Book", "50  → blog/templates/blog/card.html"]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_template_is_never_hinted_as_python() -> Result<()> {
+    // the python hints would need the template parsed as python; a template that
+    // says nothing django knows says nothing at all
+    let mut server = shelf_server("<p>a = 1</p>\n")?;
+
+    assert_eq!(
+        server.inlay_hints_request(
+            SystemPath::new("src/blog/templates/blog/shelf.html"),
+            lsp_types::Range::new(Position::new(0, 0), Position::new(1, 0)),
+        ),
+        Some(Vec::new())
+    );
+
+    Ok(())
+}
+
+/// what a lens says and what it would do, as `title -> command(arguments)`
+///
+/// a run lens carries its `manage.py` arguments and a navigating one carries the
+/// locations it offers, so the two render differently on purpose.
+fn code_lenses(server: &mut TestServer, path: &SystemPath) -> Vec<String> {
+    let lenses = server
+        .send_request_await::<lsp_types::CodeLensRequest>(lsp_types::CodeLensParams {
+            text_document: TextDocumentIdentifier {
+                uri: server.file_uri(path),
+            },
+            work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+            partial_result_params: lsp_types::PartialResultParams::default(),
+        })
+        .unwrap_or_default();
+
+    lenses
+        .iter()
+        .map(|lens| {
+            let command = lens.command.as_ref().expect("a lens to carry its command");
+            let arguments = command.arguments.clone().unwrap_or_default();
+
+            let rendered = if command.command == "ty.runManageCommand" {
+                let arguments: Vec<String> = arguments
+                    .first()
+                    .and_then(|argument| argument.get("arguments").cloned())
+                    .and_then(|arguments| serde_json::from_value(arguments).ok())
+                    .unwrap_or_default();
+                format!("manage.py {}", arguments.join(" "))
+            } else {
+                let locations: Vec<lsp_types::Location> = arguments
+                    .get(2)
+                    .and_then(|argument| serde_json::from_value(argument.clone()).ok())
+                    .unwrap_or_default();
+                let rendered: Vec<String> = locations
+                    .iter()
+                    .map(|location| {
+                        format!("{}:{}", relative(&location.uri), location.range.start.line)
+                    })
+                    .collect();
+                format!("{} {}", command.command, rendered.join(", "))
+            };
+
+            format!("{} -> {rendered}", command.title)
+        })
+        .collect()
+}
+
+/// the python modules the runnable lenses are asked about
+///
+/// django's own `TestCase` is written out because a test class is recognised by
+/// the base chain it reaches, and there is no installed django here for it to
+/// reach otherwise.
+const RUNNABLE_SOURCES: &[(&str, &str)] = &[
+    ("src/django/__init__.py", ""),
+    (
+        "src/django/test/__init__.py",
+        "import unittest\n\n\nclass TestCase(unittest.TestCase):\n    pass\n",
+    ),
+    (
+        "src/blog/tests.py",
+        "from django.test import TestCase\n\n\nclass BookTest(TestCase):\n    def setUp(self):\n        pass\n\n    def test_detail(self):\n        pass\n",
+    ),
+    ("src/blog/plain.py", "value = 1\n"),
+];
+
+/// the whole project, plus the python modules a runnable lens applies to
+fn runnable_project() -> Result<TestServer> {
+    let mut builder = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("src"), None)?
+        .with_file(
+            SystemPath::new("src/manage.py"),
+            "import os\n\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')\n",
+        )?
+        .with_file(SystemPath::new("src/project/__init__.py"), "")?
+        .with_file(
+            SystemPath::new("src/project/settings.py"),
+            "INSTALLED_APPS = ['blog']\n\nTEMPLATES = [{'DIRS': [], 'APP_DIRS': True, 'OPTIONS': {}}]\n",
+        )?
+        .with_file(SystemPath::new("src/blog/__init__.py"), "")?;
+
+    for (path, contents) in RUNNABLE_SOURCES {
+        builder = builder.with_file(SystemPath::new(path), contents)?;
+    }
+
+    let mut server = builder.build().wait_until_workspaces_are_initialized();
+
+    for (path, contents) in RUNNABLE_SOURCES {
+        server.open_text_document(SystemPath::new(path), contents, 1);
+    }
+
+    Ok(server)
+}
+
+#[test]
+fn a_template_names_the_view_that_renders_it() -> Result<()> {
+    let mut server = whole_project(&[("src/blog/templates/blog/post.html", "<p>a</p>\n")])?;
+
+    assert_eq!(
+        code_lenses(
+            &mut server,
+            SystemPath::new("src/blog/templates/blog/post.html")
+        ),
+        ["rendered by blog.views.post -> editor.action.showReferences blog/views.py:4"]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_template_nothing_renders_has_no_lens() -> Result<()> {
+    let mut server = whole_project(&[("src/blog/templates/blog/orphan.html", "<p>a</p>\n")])?;
+
+    assert!(
+        code_lenses(
+            &mut server,
+            SystemPath::new("src/blog/templates/blog/orphan.html")
+        )
+        .is_empty()
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_test_module_offers_the_management_command_that_runs_it() -> Result<()> {
+    let mut server = runnable_project()?;
+
+    assert_eq!(
+        code_lenses(&mut server, SystemPath::new("src/blog/tests.py")),
+        [
+            "run BookTest -> manage.py test blog.tests.BookTest",
+            "run test -> manage.py test blog.tests.BookTest.test_detail",
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn an_ordinary_python_module_of_a_django_project_has_no_lens() -> Result<()> {
+    let mut server = runnable_project()?;
+
+    assert!(code_lenses(&mut server, SystemPath::new("src/blog/plain.py")).is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn a_management_command_that_wants_a_terminal_is_refused_rather_than_spawned() -> Result<()> {
+    // a `runserver` the server spawned would run until the editor was closed with
+    // nothing able to stop it, so it is turned away instead
+    let mut server = runnable_project()?;
+
+    let id =
+        server.send_request::<lsp_types::ExecuteCommandRequest>(lsp_types::ExecuteCommandParams {
+            command: "ty.runManageCommand".to_string(),
+            arguments: Some(vec![serde_json::json!({"arguments": ["runserver"]})]),
+            work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+        });
+
+    let failure = server
+        .try_await_response::<lsp_types::ExecuteCommandRequest>(&id, None)
+        .expect_err("a refusal rather than a process nothing could stop");
+
+    assert!(
+        format!("{failure}").contains("needs a terminal"),
+        "got {failure}"
+    );
+
+    Ok(())
+}
