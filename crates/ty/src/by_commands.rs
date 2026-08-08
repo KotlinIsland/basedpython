@@ -11,7 +11,7 @@ use ruff_db::diagnostic::{
     Span,
 };
 use ruff_db::files::system_path_to_file;
-use ruff_db::system::{OsSystem, SystemPath};
+use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
 use ty_project::{Db, ProjectDatabase, ProjectMetadata};
 use walkdir::WalkDir;
 
@@ -123,7 +123,7 @@ pub(crate) fn cmd_run(
         return Ok(ExitStatus::Failure);
     }
 
-    let (db, handles) = build_project_db(&cwd, &files)?;
+    let (db, handles, rebuilder) = build_project_db(&cwd, &files)?;
 
     // an explicit module always wins; otherwise the project's configured entry
     // point stands in for it. resolving before the (much slower) check means a
@@ -147,6 +147,7 @@ pub(crate) fn cmd_run(
         &handles,
         &config,
         CheckGate::AllErrors,
+        &rebuilder,
         |bpy, src, line_map| {
             let rel = bpy.strip_prefix(&cwd).unwrap_or(bpy);
             let py = tmp.path().join(rel).with_extension("py");
@@ -218,12 +219,13 @@ pub(crate) fn cmd_build(min_version: &str, lowering: &LoweringArgs) -> anyhow::R
         return Ok(ExitStatus::Success);
     }
 
-    let (db, handles) = build_project_db(&cwd, &files)?;
+    let (db, handles, rebuilder) = build_project_db(&cwd, &files)?;
     if !render_check_and_transpile(
         &db,
         &handles,
         &config,
         CheckGate::ParseErrorsOnly,
+        &rebuilder,
         |bpy, src, _line_map| {
             let py = out
                 .join(bpy.strip_prefix(&cwd).unwrap())
@@ -313,6 +315,11 @@ pub(crate) fn cmd_transpile(
         let system = OsSystem::new(project_root);
         let project_metadata = ProjectMetadata::discover(project_root, &system)
             .with_context(|| format!("failed to discover project at {project_root}"))?;
+        let rebuilder = Rebuilder {
+            metadata: project_metadata.clone(),
+            root: project_root.to_path_buf(),
+            included: vec![sys_path.to_path_buf()],
+        };
         let mut db = ProjectDatabase::use_defaults(project_metadata, system);
         let file = system_path_to_file(&db, sys_path)
             .with_context(|| format!("file not found in db: {sys_path}"))?;
@@ -333,7 +340,8 @@ pub(crate) fn cmd_transpile(
             return Ok(ExitStatus::Failure);
         }
 
-        match by_transforms::transpile_typed(&db, file, &config) {
+        let rebuild = || Some(rebuilder.rebuild());
+        match by_transforms::transpile_typed(&db, file, &config, Some(&rebuild)) {
             Ok(out) => {
                 if !diagnostics.is_empty() {
                     render_diagnostics(&db, &diagnostics)?;
@@ -428,12 +436,13 @@ fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
         return Ok(ExitStatus::Success);
     }
 
-    let (db, handles) = build_project_db(dir, &files)?;
+    let (db, handles, rebuilder) = build_project_db(dir, &files)?;
     let ok = render_check_and_transpile(
         &db,
         &handles,
         config,
         CheckGate::ParseErrorsOnly,
+        &rebuilder,
         |bpy, src, _line_map| {
             let py = bpy.with_extension("py");
             fs::write(&py, src).with_context(|| format!("{}", py.display()))?;
@@ -613,13 +622,42 @@ fn bpy_files(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Everything needed to build a project db a second time.
+///
+/// The transpiler asks for one when a pre-pass rewrites the source it hands to
+/// phase 0: it then serves the rewritten file out of that db, keeping the
+/// project's metadata, search paths and sibling files. The rebuilt db must be
+/// independent of the one this command uses — see
+/// [`by_transforms::RebuildProject`].
+struct Rebuilder {
+    metadata: ProjectMetadata,
+    root: SystemPathBuf,
+    included: Vec<SystemPathBuf>,
+}
+
+impl Rebuilder {
+    fn rebuild(&self) -> Box<dyn ty_python_semantic::Db> {
+        let mut db =
+            ProjectDatabase::use_defaults(self.metadata.clone(), OsSystem::new(&self.root));
+        db.project()
+            .set_included_paths(&mut db, self.included.clone());
+        Box::new(db)
+    }
+}
+
+/// A project db, the `(source_path, File)` pairs for the `.by` files it was
+/// built for, and the means to build the same project again.
+type ProjectBuild = (
+    ProjectDatabase,
+    Vec<(PathBuf, ruff_db::files::File)>,
+    Rebuilder,
+);
+
 /// Build a project db rooted at `cwd` with every `.by` file under it set as
 /// an included path, returning the db alongside `(source_path, File)` pairs
-/// in the same order as the input slice.
-fn build_project_db(
-    cwd: &Path,
-    files: &[PathBuf],
-) -> anyhow::Result<(ProjectDatabase, Vec<(PathBuf, ruff_db::files::File)>)> {
+/// in the same order as the input slice, and the means to build the same
+/// project again.
+fn build_project_db(cwd: &Path, files: &[PathBuf]) -> anyhow::Result<ProjectBuild> {
     // the project root must be canonicalized the same way the included files
     // are (below) so it stays a path *prefix* of them: otherwise a file's
     // search path isn't recognized as first-party and boundary diagnostics
@@ -632,6 +670,7 @@ fn build_project_db(
     let system = OsSystem::new(sys_cwd);
     let project_metadata = ProjectMetadata::discover(sys_cwd, &system)
         .with_context(|| format!("failed to discover project at {sys_cwd}"))?;
+    let metadata = project_metadata.clone();
     let mut db = ProjectDatabase::use_defaults(project_metadata, system);
 
     let mut handles = Vec::with_capacity(files.len());
@@ -645,8 +684,13 @@ fn build_project_db(
             .with_context(|| format!("file not found in db: {sys_path}"))?;
         handles.push((bpy.clone(), f));
     }
+    let rebuilder = Rebuilder {
+        metadata,
+        root: sys_cwd.to_path_buf(),
+        included: included.clone(),
+    };
     db.project().set_included_paths(&mut db, included);
-    Ok((db, handles))
+    Ok((db, handles, rebuilder))
 }
 
 /// How much of the check outcome blocks emitting output.
@@ -671,6 +715,7 @@ fn render_check_and_transpile(
     handles: &[(PathBuf, ruff_db::files::File)],
     config: &Config,
     gate: CheckGate,
+    rebuilder: &Rebuilder,
     mut consume: impl FnMut(&Path, &str, &[Option<u32>]) -> anyhow::Result<()>,
 ) -> anyhow::Result<bool> {
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
@@ -696,8 +741,9 @@ fn render_check_and_transpile(
         return Ok(false);
     }
 
+    let rebuild = || Some(rebuilder.rebuild());
     for (bpy, file) in handles {
-        match by_transforms::transpile_typed_with_map(db, *file, config) {
+        match by_transforms::transpile_typed_with_map(db, *file, config, Some(&rebuild)) {
             Ok((out, line_map)) => consume(bpy, &out, &line_map)?,
             Err(e) => {
                 all_diagnostics.push(transpile_bug_diagnostic(*file, &e));

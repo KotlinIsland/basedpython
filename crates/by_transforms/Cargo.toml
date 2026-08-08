@@ -21,6 +21,7 @@ ruff_python_stdlib = { workspace = true }
 ruff_python_trivia = { workspace = true }
 ruff_source_file = { workspace = true }
 ruff_text_size = { workspace = true }
+salsa = { workspace = true }
 thin-vec = { workspace = true }
 ty_project = { workspace = true, features = ["testing"] }
 ty_python_core = { workspace = true }

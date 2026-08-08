@@ -13,7 +13,9 @@ source (.by)
   │     ├─ strip use-site variance keywords (`out`/`in`) up front
   │     ├─ parse via ruff_python_parser (the unified parser accepts `.by` syntax)
   │     ├─ build a SemanticModel — the project db when available (cross-module
-  │     │  type info), else a single-file in-memory db
+  │     │  type info), else a single-file in-memory db. a pre-pass that rewrote
+  │     │  the source doesn't cost the project: the db is rebuilt over the
+  │     │  rewritten text (see "the phase-0 database" below)
   │     ├─ run AstPasses: mutate the AST in place (coalesce, cast, typeof,
   │     │  sentinel, mutable-defaults, …)
   │     ├─ run TypeAwarePasses: read the SemanticModel and emit text edits
@@ -51,10 +53,31 @@ entry points in `crates/by_transforms/src/lib.rs`:
 
 - `transpile(source, config) -> Result<String, String>` — single-file (stdin,
     tests); type-aware passes see only this file
-- `transpile_typed(db, file, config)` — uses an existing project db so type-aware
-    passes resolve cross-module types (the CLI path for `by transpile`/`build`/`run`)
-- `transpile_typed_with_map(db, file, config)` — also returns a line table for
-    traceback rewriting and diagnostic mapping
+- `transpile_typed(db, file, config, rebuild)` — uses an existing project db so
+    type-aware passes resolve cross-module types (the CLI path for
+    `by transpile`, `by build` and `by run`)
+- `transpile_typed_with_map(db, file, config, rebuild)` — also returns a line
+    table for traceback rewriting and diagnostic mapping
+
+## the phase-0 database
+
+three pre-passes run before phase 0 and can rewrite the source: erased-union
+reification, context-sensitive name qualification, and enum lowering. phase 0
+re-parses its input and binds `inferred_type` to those exact node identities, so
+its database has to hold the *rewritten* text, not the project file's
+
+that would leave phase 0 with a single-file in-memory db — no search paths, no
+sibling modules — and every `TypeAwarePass` silently declining to lower, so an
+enum declared anywhere in a file would break a lookup elsewhere in it. instead
+the caller supplies a `RebuildProject`: a way to build a second database over the
+same project, into which the rewritten source is served for this one file via
+`File::source_text_override`. the project's metadata, search paths and sibling
+files stay; only the file being transpiled reads differently
+
+the rebuilt database must be a *new* one rather than a clone — salsa handles
+cloned from one database share storage, so the override would be visible through
+the caller's own db. a caller with no project (a bare unit test) passes `None`
+and gets the single-file db: correct, just blind past the file
 
 ## passes
 

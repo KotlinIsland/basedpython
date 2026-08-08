@@ -137,7 +137,7 @@ mod tests {
 
     fn transpile_result(db: &TestDb, path: &str) -> Result<String, String> {
         let file = system_path_to_file(db, path).expect("file not in db");
-        transpile_typed(db, file, &Config::test_default()).map_err(|err| err.to_string())
+        transpile_typed(db, file, &Config::test_default(), None).map_err(|err| err.to_string())
     }
 
     /// a project db with a mock django package in site-packages (`Model` must
@@ -248,7 +248,7 @@ mod tests {
             soundness: crate::config::SoundnessPositions::all(),
             ..Config::default()
         };
-        let out = transpile_typed(&db, file, &config).expect("model should transpile");
+        let out = transpile_typed(&db, file, &config, None).expect("model should transpile");
         assert!(
             out.contains("class User(DeclarativeBase):"),
             "class structure should survive, got:\n{out}"
@@ -316,7 +316,7 @@ mod tests {
             soundness: crate::config::SoundnessPositions::all(),
             ..Config::default()
         };
-        let out = transpile_typed(&db, file, &config).expect("model should transpile");
+        let out = transpile_typed(&db, file, &config, None).expect("model should transpile");
         assert!(
             out.contains("class Author(models.Model):"),
             "class structure should survive, got:\n{out}"
@@ -424,7 +424,8 @@ mod tests {
             min_version: ruff_python_ast::PythonVersion::PY313,
             ..Config::test_default()
         };
-        let out = transpile_typed(&db, file, &config).expect("generic model should transpile");
+        let out =
+            transpile_typed(&db, file, &config, None).expect("generic model should transpile");
         assert!(
             !out.contains("@generic"),
             "a model class must never be wrapped with `@generic`, got:\n{out}"
@@ -462,7 +463,7 @@ mod tests {
             soundness: crate::config::SoundnessPositions::all(),
             ..Config::default()
         };
-        let out = transpile_typed(&db, file, &config).expect("model should transpile");
+        let out = transpile_typed(&db, file, &config, None).expect("model should transpile");
         assert!(
             out.contains("class User(BaseModel):"),
             "class structure should survive, got:\n{out}"

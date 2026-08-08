@@ -86,7 +86,7 @@ mod tests {
     fn mapped_by_line(source: &str, needle: &str) -> Option<u32> {
         let (db, file) = make_in_memory_db(source);
         let (output, line_map) =
-            transpile_typed_with_map(&db, file, &Config::test_default()).unwrap();
+            transpile_typed_with_map(&db, file, &Config::test_default(), None).unwrap();
         let index = output
             .lines()
             .position(|line| line.trim() == needle)

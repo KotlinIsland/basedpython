@@ -393,7 +393,7 @@ mod tests {
                 .expect("write file failed");
             db.init_program().expect("program init failed");
             let file = system_path_to_file(&db, "/proj/main.by").expect("file not in db");
-            transpile_typed(&db, file, &Config::test_default()).expect("transpile failed")
+            transpile_typed(&db, file, &Config::test_default(), None).expect("transpile failed")
         }
 
         #[test]

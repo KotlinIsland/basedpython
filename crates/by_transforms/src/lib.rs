@@ -9,12 +9,13 @@ pub use config::{Config, PythonVersion, SoundnessPositions};
 use std::collections::{BTreeSet, HashSet};
 
 use ruff_db::files::{File, system_path_to_file};
-use ruff_db::system::{DbWithWritableSystem as _, SystemPathBuf};
-use ruff_diagnostics::{Edit, Fix, IsolationLevel};
+use ruff_db::system::{DbWithWritableSystem as _, SystemPath, SystemPathBuf};
+use ruff_diagnostics::{Edit, Fix, IsolationLevel, SourceMap};
 use ruff_python_ast::Stmt;
 use ruff_python_ast::visitor::Visitor;
 use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextSize};
+use salsa::Setter as _;
 use ty_project::{ProjectMetadata, TestDb};
 
 use type_info::TypeInfo;
@@ -32,6 +33,47 @@ pub(crate) fn make_in_memory_db(source: &str) -> (TestDb, File) {
         .expect("write file failed");
     let file = system_path_to_file(&db, "/input.by").expect("file not in db");
     (db, file)
+}
+
+/// A caller-supplied capability to build a *second* database over the same
+/// project as the one it hands to [`transpile_typed`].
+///
+/// A pre-pass — erased-union reification, name qualification, enum lowering —
+/// can rewrite the source before phase 0 runs, and phase 0's type-aware passes
+/// must query a db whose contents are the source they walk. Given this
+/// capability the transpiler keeps the real project (its metadata, search paths
+/// and sibling files) and serves only the rewritten file from memory; without
+/// it, phase 0 falls back to a single-file db that resolves nothing outside the
+/// file — correct, but blind to imports.
+///
+/// The database must be a *new* one, not a clone: salsa handles cloned from one
+/// database share storage, so the source override would be visible through the
+/// caller's own db.
+pub type RebuildProject<'a> = &'a dyn Fn() -> Option<Box<dyn ty_python_semantic::Db>>;
+
+/// A rebuilt project db in which one file reads as rewritten source.
+struct Overlaid {
+    db: Box<dyn ty_python_semantic::Db>,
+    file: File,
+}
+
+/// Rebuild the project db and serve `source` as the contents of `path`, so
+/// type-aware passes see the rewritten source with the project still around it.
+///
+/// Returns `None` when the caller supplied no [`RebuildProject`], the rebuild
+/// failed, or the rebuilt db doesn't hold `path` — every one of which leaves the
+/// single-file fallback in place.
+fn overlay_rewritten_source(
+    rebuild: Option<RebuildProject<'_>>,
+    path: &SystemPath,
+    source: &str,
+) -> Option<Overlaid> {
+    let mut db = rebuild?()?;
+    let file = system_path_to_file(&*db, path).ok()?;
+    let text = ruff_db::source::source_text(&*db, file)
+        .with_text(source.to_owned(), &SourceMap::default());
+    file.set_source_text_override(&mut *db).to(Some(text));
+    Some(Overlaid { db, file })
 }
 
 /// Qualify every context-sensitively resolved name (`a: Color = Red` →
@@ -172,8 +214,9 @@ pub fn transpile_typed(
     db: &dyn ty_python_semantic::Db,
     file: File,
     config: &Config,
+    rebuild: Option<RebuildProject<'_>>,
 ) -> Result<String, TranspileError> {
-    transpile_typed_with_map(db, file, config).map(|(out, _)| out)
+    transpile_typed_with_map(db, file, config, rebuild).map(|(out, _)| out)
 }
 
 /// Like [`transpile_typed`] but also returns a line table mapping each output
@@ -188,6 +231,7 @@ pub fn transpile_typed_with_map(
     db: &dyn ty_python_semantic::Db,
     file: File,
     config: &Config,
+    rebuild: Option<RebuildProject<'_>>,
 ) -> Result<(String, Vec<Option<u32>>), TranspileError> {
     let source_ref = ruff_db::source::source_text(db, file);
     let original_source = source_ref.as_str();
@@ -237,13 +281,22 @@ pub fn transpile_typed_with_map(
     let enum_changed = matches!(enum_lowered.output, std::borrow::Cow::Owned(_));
     let source_changed = reified_changed || qualified_changed || enum_changed;
 
-    // phase 0: AST passes. with the project db (no enums) type-aware passes
-    // resolve cross-module imports; `phase0_map` maps spliced lines → working
-    // (post-enum) lines
-    let project = if source_changed {
-        None
+    // phase 0: AST passes. type-aware passes resolve cross-module imports from
+    // the project db; when a pre-pass rewrote the source, that db is rebuilt
+    // over the rewritten text rather than given up, so an enum or a qualified
+    // name elsewhere in the file doesn't blind them. `phase0_map` maps spliced
+    // lines → working (post-enum) lines
+    let overlaid = if source_changed {
+        file.path(db)
+            .as_system_path()
+            .and_then(|path| overlay_rewritten_source(rebuild, path, working_source))
     } else {
-        Some((db, file))
+        None
+    };
+    let project = match &overlaid {
+        Some(overlaid) => Some((&*overlaid.db, overlaid.file)),
+        None if source_changed => None,
+        None => Some((db, file)),
     };
     let (spliced, ast_errors, phase0_map) =
         transforms::ast_driver::run_against_source(working_source, config, project);
@@ -1227,7 +1280,25 @@ mod cross_file {
     use ruff_db::files::system_path_to_file;
     use ty_project::{ProjectMetadata, TestDb};
 
-    fn project_db(files: &[(&str, &str)]) -> TestDb {
+    /// a project db over `files`, keeping the file list so the project can be
+    /// built a second time — the [`RebuildProject`] capability a real caller
+    /// supplies, for when a pre-pass rewrites the source
+    struct Project {
+        files: Vec<(String, String)>,
+        db: TestDb,
+    }
+
+    impl Project {
+        fn db(&self) -> &TestDb {
+            &self.db
+        }
+
+        fn rebuild(&self) -> Box<dyn ty_python_semantic::Db> {
+            Box::new(build_db(&self.files))
+        }
+    }
+
+    fn build_db(files: &[(String, String)]) -> TestDb {
         let mut db = TestDb::new(ProjectMetadata::new(
             ruff_python_ast::name::Name::new_static(""),
             SystemPathBuf::from("/"),
@@ -1239,9 +1310,19 @@ mod cross_file {
         db
     }
 
-    fn transpile_file(db: &TestDb, path: &str, config: &Config) -> String {
-        let file = system_path_to_file(db, path).expect("file not in db");
-        transpile_typed(db, file, config).expect("transpile failed")
+    fn project_db(files: &[(&str, &str)]) -> Project {
+        let files: Vec<(String, String)> = files
+            .iter()
+            .map(|(path, src)| ((*path).to_owned(), (*src).to_owned()))
+            .collect();
+        let db = build_db(&files);
+        Project { files, db }
+    }
+
+    fn transpile_file(project: &Project, path: &str, config: &Config) -> String {
+        let file = system_path_to_file(project.db(), path).expect("file not in db");
+        let rebuild = || Some(project.rebuild());
+        transpile_typed(project.db(), file, config, Some(&rebuild)).expect("transpile failed")
     }
 
     /// `f[int](1)` must lower to `f(1)` only because ty resolves the imported
@@ -1250,11 +1331,11 @@ mod cross_file {
     /// single-file path can't see `f` and would leave the broken `f[int](1)`.
     #[test]
     fn generic_call_stripped_via_imported_function() {
-        let db = project_db(&[
+        let project = project_db(&[
             ("/mod_a.by", "def f[T](t: T) -> T: ...\n"),
             ("/mod_b.by", "from mod_a import f\nresult = f[int](1)\n"),
         ]);
-        let out = transpile_file(&db, "/mod_b.by", &Config::test_default());
+        let out = transpile_file(&project, "/mod_b.by", &Config::test_default());
         assert!(
             out.contains("result = f(1)"),
             "imported generic function should strip type args, got:\n{out}"
@@ -1281,16 +1362,15 @@ mod cross_file {
     /// `ProjectDatabase::fallible`, which needs a capability threaded in from
     /// the caller that owns the real db
     #[test]
-    #[ignore = "known defect: a pre-pass rewrite drops the project db for phase 0"]
     fn cross_module_resolution_survives_an_enum_in_the_same_file() {
-        let db = project_db(&[
+        let project = project_db(&[
             ("/mod_a.by", "def f[T](t: T) -> T: ...\n"),
             (
                 "/mod_b.by",
                 "from mod_a import f\n\nenum class Colour:\n    case Red\n\nresult = f[int](1)\n",
             ),
         ]);
-        let out = transpile_file(&db, "/mod_b.by", &Config::test_default());
+        let out = transpile_file(&project, "/mod_b.by", &Config::test_default());
         assert!(
             out.contains("result = f(1)"),
             "an enum elsewhere in the file must not blind cross-module resolution, got:\n{out}"
@@ -1306,9 +1386,8 @@ mod cross_file {
     /// so composing two shipped basedpython features in one file silently
     /// breaks the second, with a clean `by check` and valid emitted python
     #[test]
-    #[ignore = "known defect: a pre-pass rewrite drops the project db for phase 0"]
     fn cross_module_resolution_survives_a_qualified_name_in_the_same_file() {
-        let db = project_db(&[
+        let project = project_db(&[
             ("/mod_a.by", "def f[T](t: T) -> T: ...\n"),
             ("/colours.by", "enum class Colour:\n    case Red, Green\n"),
             (
@@ -1316,7 +1395,7 @@ mod cross_file {
                 "from mod_a import f\nfrom colours import Colour\n\ndef pick() -> Colour:\n    return Red\n\nresult = f[int](1)\n",
             ),
         ]);
-        let out = transpile_file(&db, "/mod_b.by", &Config::test_default());
+        let out = transpile_file(&project, "/mod_b.by", &Config::test_default());
         assert!(
             out.contains("Colour.Red"),
             "the qualification itself should still happen, got:\n{out}"
@@ -1334,7 +1413,7 @@ mod cross_file {
     /// single-file path can't make this call
     #[test]
     fn imported_reified_function_call_site_preserved() {
-        let db = project_db(&[
+        let project = project_db(&[
             (
                 "/mod_a.by",
                 "def f[T](t: object) -> bool:\n    return isinstance(t, T)\n",
@@ -1345,7 +1424,7 @@ mod cross_file {
             min_version: PythonVersion::PY312,
             ..Config::test_default()
         };
-        let out = transpile_file(&db, "/mod_b.by", &config);
+        let out = transpile_file(&project, "/mod_b.by", &config);
         assert!(
             out.contains("f[int](1)"),
             "reified call site must keep its type args, got:\n{out}"
@@ -1357,14 +1436,14 @@ mod cross_file {
     /// a class, not a function.
     #[test]
     fn imported_class_constructor_preserved() {
-        let db = project_db(&[
+        let project = project_db(&[
             (
                 "/mod_a.by",
                 "class Box[T]:\n    def __init__(self, t: T): ...\n",
             ),
             ("/mod_b.by", "from mod_a import Box\nb = Box[int](1)\n"),
         ]);
-        let out = transpile_file(&db, "/mod_b.by", &Config::test_default());
+        let out = transpile_file(&project, "/mod_b.by", &Config::test_default());
         assert!(
             out.contains("Box[int](1)"),
             "imported generic constructor must keep its type args, got:\n{out}"
@@ -1376,7 +1455,7 @@ mod cross_file {
     /// function and emits its precise import. the surface stays `import ext`
     #[test]
     fn imported_extension_rewrites_call_and_adds_import() {
-        let db = project_db(&[
+        let project = project_db(&[
             (
                 "/ext.by",
                 "extension list:\n    def second(self) -> Element:\n        return self[1]\n",
@@ -1386,7 +1465,7 @@ mod cross_file {
                 "import ext\n\nxs = [1, 2, 3]\nprint(xs.second())\n",
             ),
         ]);
-        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
             out.contains("from ext import _by_ext__list__second"),
             "backing-function import should be emitted, got:\n{out}"
@@ -1396,7 +1475,7 @@ mod cross_file {
             "call should be rewritten, got:\n{out}"
         );
         // the defining module lowers the block itself
-        let ext_out = transpile_file(&db, "/ext.by", &Config::test_default());
+        let ext_out = transpile_file(&project, "/ext.by", &Config::test_default());
         assert!(
             ext_out.contains("def _by_ext__list__second(self):"),
             "defining module should lower the block, got:\n{ext_out}"
@@ -1409,7 +1488,7 @@ mod cross_file {
     /// the using module constructs it — so the two files must agree exactly
     #[test]
     fn imported_implementation_wraps_argument_and_adds_import() {
-        let db = project_db(&[
+        let project = project_db(&[
             (
                 "/iface.by",
                 "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
@@ -1423,7 +1502,7 @@ mod cross_file {
                 "import adapters\nfrom iface import A, B\n\ndef takes_a(a: A) -> int:\n    return a.f()\n\nb = B()\ntakes_a(b)\n",
             ),
         ]);
-        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
             out.contains("from adapters import _by_impl__A__B"),
             "witness import should be emitted, got:\n{out}"
@@ -1433,7 +1512,7 @@ mod cross_file {
             "argument should be wrapped, got:\n{out}"
         );
         // the defining module emits the class under the same name
-        let adapters_out = transpile_file(&db, "/adapters.by", &Config::test_default());
+        let adapters_out = transpile_file(&project, "/adapters.by", &Config::test_default());
         assert!(
             adapters_out.contains("class _by_impl__A__B(_by_Implementation, A):"),
             "defining module should emit the witness class, got:\n{adapters_out}"
@@ -1446,7 +1525,7 @@ mod cross_file {
     /// itself — that import is the whole difference from the single-file case
     #[test]
     fn imported_from_converts_and_imports_the_target() {
-        let db = project_db(&[
+        let project = project_db(&[
             (
                 "/temps.by",
                 "class Celsius:\n    degrees: float = 0.0\n\n\
@@ -1459,7 +1538,7 @@ mod cross_file {
                 "from temps import Celsius, report\n\nreport(Celsius())\n",
             ),
         ]);
-        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
             out.contains("from temps import Fahrenheit as _by_conv__Fahrenheit"),
             "the target class should be imported under its alias, got:\n{out}"
@@ -1475,7 +1554,7 @@ mod cross_file {
     /// rebind whatever this file already means by it
     #[test]
     fn an_already_imported_target_still_uses_its_alias() {
-        let db = project_db(&[
+        let project = project_db(&[
             (
                 "/temps.by",
                 "class Celsius:\n    degrees: float = 0.0\n\n\
@@ -1488,7 +1567,7 @@ mod cross_file {
                  def report(t: Fahrenheit) -> None: ...\n\nreport(Celsius())\n",
             ),
         ]);
-        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
             out.contains("report(_by_conv__Fahrenheit.__from__(Celsius()))"),
             "argument should be converted through the alias, got:\n{out}"
@@ -1504,7 +1583,7 @@ mod cross_file {
     /// the call would reach the wrong object at runtime
     #[test]
     fn a_local_class_of_the_same_name_does_not_capture_the_conversion() {
-        let db = project_db(&[
+        let project = project_db(&[
             (
                 "/temps.by",
                 "class Celsius:\n    degrees: float = 0.0\n\n\
@@ -1518,7 +1597,7 @@ mod cross_file {
                  class Fahrenheit:\n    unrelated: int = 0\n\nreport(Celsius())\n",
             ),
         ]);
-        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
             out.contains("from temps import Fahrenheit as _by_conv__Fahrenheit"),
             "the alias keeps the local class intact, got:\n{out}"
@@ -1535,7 +1614,7 @@ mod cross_file {
     /// (`target/mod.by` → `target.mod` for the checker, `mod` at runtime)
     #[test]
     fn an_imported_witness_is_spelled_as_the_file_imports_it() {
-        let db = project_db(&[
+        let project = project_db(&[
             (
                 "/nested/iface.by",
                 "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
@@ -1549,7 +1628,7 @@ mod cross_file {
                 "import adapters\nfrom iface import A, B\n\ndef takes_a(x: A) -> int:\n    return x.f()\n\nb = B()\ntakes_a(b)\n",
             ),
         ]);
-        let out = transpile_file(&db, "/nested/main.by", &Config::test_default());
+        let out = transpile_file(&project, "/nested/main.by", &Config::test_default());
         assert!(
             out.contains("from adapters import _by_impl__A__B"),
             "the import must use the file's own spelling, got:\n{out}"
@@ -1564,7 +1643,7 @@ mod cross_file {
     /// must keep the dots
     #[test]
     fn a_relatively_imported_witness_keeps_its_dots() {
-        let db = project_db(&[
+        let project = project_db(&[
             ("/pkg/__init__.by", "\n"),
             (
                 "/pkg/iface.by",
@@ -1579,7 +1658,7 @@ mod cross_file {
                 "from .adapters import A\nfrom .iface import B\n\ndef takes_a(x: A) -> int:\n    return x.f()\n\ndef main():\n    takes_a(B())\n",
             ),
         ]);
-        let out = transpile_file(&db, "/pkg/main.by", &Config::test_default());
+        let out = transpile_file(&project, "/pkg/main.by", &Config::test_default());
         assert!(
             out.contains("from .adapters import _by_impl__A__B"),
             "the relative spelling must be kept, got:\n{out}"
@@ -1590,7 +1669,7 @@ mod cross_file {
     /// so it must bring the module's implementations into scope
     #[test]
     fn a_from_import_makes_an_implementation_applicable() {
-        let db = project_db(&[
+        let project = project_db(&[
             (
                 "/iface.by",
                 "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
@@ -1604,7 +1683,7 @@ mod cross_file {
                 "from adapters import A\nfrom iface import B\n\ndef takes_a(x: A) -> int:\n    return x.f()\n\nb = B()\ntakes_a(b)\n",
             ),
         ]);
-        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
             out.contains("from adapters import _by_impl__A__B"),
             "witness import should be emitted, got:\n{out}"
@@ -1619,7 +1698,7 @@ mod cross_file {
     /// nothing to wrap — the checker reports the assignment instead
     #[test]
     fn implementation_without_the_import_wraps_nothing() {
-        let db = project_db(&[
+        let project = project_db(&[
             (
                 "/iface.by",
                 "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
@@ -1633,7 +1712,7 @@ mod cross_file {
                 "from iface import A, B\n\ndef takes_a(a: A) -> int:\n    return a.f()\n\nb = B()\ntakes_a(b)\n",
             ),
         ]);
-        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(out.contains("takes_a(b)"), "got:\n{out}");
         assert!(!out.contains("__by_impl__"), "got:\n{out}");
     }
@@ -1645,10 +1724,11 @@ mod cross_file {
     #[test]
     fn line_map_points_runtime_line_to_by_source() {
         let src = "from collections.abc import Iterator\n\nx: int & str\n\ndef boom() -> int:\n    return 1 // 0\n";
-        let db = project_db(&[("/m.by", src)]);
-        let file = system_path_to_file(&db, "/m.by").expect("file not in db");
+        let project = project_db(&[("/m.by", src)]);
+        let file = system_path_to_file(project.db(), "/m.by").expect("file not in db");
         let (out, map) =
-            transpile_typed_with_map(&db, file, &Config::test_default()).expect("transpile failed");
+            transpile_typed_with_map(project.db(), file, &Config::test_default(), None)
+                .expect("transpile failed");
 
         let out_idx = out
             .lines()
