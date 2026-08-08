@@ -76,6 +76,8 @@ a `{% for book in shelf %}` shows the element type it binds, which is what says 
 
 **diagnostics.** a template reports twelve rules — an unclosed block, an unknown tag or filter, a tag used without its `{% load %}`, a missing template or static file, an unknown route or the wrong arguments to one, a block no ancestor declares, and a member django cannot call. each is silent unless the index behind it is authoritative, so a project whose settings cannot be read reports nothing rather than guessing. silence one with `{# ty: ignore #}` or `{# ty: ignore[rule-name] #}`, or configure it under `[tool.ty.rules]` like any other.
 
+a comment that silenced nothing is reported as `unused-ignore-comment`, the same rule a stale `# ty: ignore` raises in a python file, so a suppression left behind by a fix doesn't sit there unnoticed. the one thing a template adds is that a check reporting nothing because its index was not authoritative has decided nothing, and a comment naming that rule is left alone rather than called unused.
+
 `by check` reports them too. a template is not in the project's python file set and is never read as python — it is checked as the template it is — but it is part of the project, so the command line and the editor say the same thing about the same file. only the project's own templates are checked; an installed app's are a dependency's source, and a project with no django has no django templates.
 
 an unknown *variable* is still not reported: a context can come from places a scan cannot see, so absence is not evidence.

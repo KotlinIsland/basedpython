@@ -406,13 +406,16 @@ pub(crate) mod tests {
     use ruff_db::system::{DbWithTestSystem, DbWithWritableSystem, SystemPath, SystemPathBuf};
     use ruff_python_ast::PythonVersion;
     use ruff_python_trivia::textwrap::dedent;
+    use ruff_ranged_value::RangedValue;
     use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
     use std::ops::Range;
     use ty_module_resolver::SearchPathSettings;
+    use ty_project::metadata::options::{Options, Rules};
     use ty_project::{ProjectMetadata, TestDb};
     use ty_python_core::platform::PythonPlatform;
     use ty_python_core::program::{FallibleStrategy, Program, ProgramSettings};
     use ty_python_semantic::PythonVersionWithSource;
+    use ty_python_semantic::lint::Level;
 
     use crate::MarkupKind;
 
@@ -551,10 +554,40 @@ pub(crate) mod tests {
             sources: &[(&str, &str)],
             installed: &[(&str, &str)],
         ) -> Self {
+            Self::with_rules(sources, installed, &[])
+        }
+
+        /// the same again, with some rules set to a level of their own
+        ///
+        /// the rule selection is part of the project's metadata, so a test that
+        /// needs a rule turned off has to say so before the project is built.
+        pub(crate) fn with_rules(
+            sources: &[(&str, &str)],
+            installed: &[(&str, &str)],
+            rules: &[(&str, Level)],
+        ) -> Self {
             let root = SystemPathBuf::from("/src");
             let site_packages = SystemPathBuf::from("/site-packages");
 
-            let mut db = TestDb::new(ProjectMetadata::new("test", root.clone()));
+            let mut metadata = ProjectMetadata::new("test", root.clone());
+            if !rules.is_empty() {
+                metadata.apply_override_options(Options {
+                    rules: Some(
+                        rules
+                            .iter()
+                            .map(|(rule, level)| {
+                                (
+                                    RangedValue::cli((*rule).to_string()),
+                                    RangedValue::cli(*level),
+                                )
+                            })
+                            .collect::<Rules>(),
+                    ),
+                    ..Options::default()
+                });
+            }
+
+            let mut db = TestDb::new(metadata);
 
             for (path, contents) in installed {
                 db.write_file(site_packages.join(path), dedent(contents).as_ref())
