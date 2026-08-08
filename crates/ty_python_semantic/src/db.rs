@@ -24,6 +24,20 @@ pub trait Db: PythonCoreDb {
     /// Expected types for string-literal completions are only collected for open files.
     fn is_open_file(&self, file: File) -> bool;
 
+    /// The module the project points `DJANGO_SETTINGS_MODULE` at, if it names one.
+    ///
+    /// Which module that is comes out of the project's own files, and enumerating
+    /// them belongs to a crate above this one, so the answer is handed down rather
+    /// than worked out here. What is left to do with it — reading `settings.NAME`
+    /// off the module — is type inference and lives here. See
+    /// [`crate::django_settings`].
+    ///
+    /// The implementation is expected to be a Salsa query, so that a change to the
+    /// script that names the module is seen by everything that read this.
+    fn django_settings_file(&self) -> Option<File> {
+        None
+    }
+
     fn dyn_clone(&self) -> Box<dyn Db>;
 }
 

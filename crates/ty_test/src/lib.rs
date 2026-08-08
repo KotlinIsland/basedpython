@@ -235,6 +235,8 @@ fn run_test(
         })
         .collect();
 
+    db.set_project_files(test_files.iter().map(|test_file| test_file.file).collect());
+
     // Create a custom typeshed `VERSIONS` file if none was provided.
     if let Some(typeshed_path) = custom_typeshed_path {
         db.files()

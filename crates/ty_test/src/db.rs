@@ -19,7 +19,7 @@ use ty_python_core::Db as _;
 use ty_python_core::program::Program;
 use ty_python_semantic::lint::{LintRegistry, RuleSelection};
 use ty_python_semantic::{
-    AnalysisSettings, Db as SemanticDb, check_file_unwrap, default_lint_registry,
+    AnalysisSettings, Db as SemanticDb, check_file_unwrap, default_lint_registry, django_settings,
 };
 
 #[salsa::db]
@@ -52,6 +52,19 @@ impl Db {
 
     fn settings(&self) -> Settings {
         self.settings.unwrap()
+    }
+
+    /// Records the files the test defines, which is what the settings module a
+    /// django test names is looked for among.
+    ///
+    /// A Salsa input, because the tests of one markdown file share a database:
+    /// a type inferred from the settings module of one test must not be handed
+    /// to the next, whose files are different.
+    pub(crate) fn set_project_files(&mut self, files: Vec<File>) {
+        let settings = self.settings();
+        if settings.project_files(self) != &files {
+            settings.set_project_files(self).to(files);
+        }
     }
 
     pub(crate) fn set_verbosity(&mut self, verbose: bool) {
@@ -156,6 +169,14 @@ impl SemanticDb for Db {
         false
     }
 
+    fn django_settings_file(&self) -> Option<File> {
+        let namings = django_settings::settings_namings(
+            self,
+            self.settings().project_files(self).iter().copied(),
+        );
+        django_settings::settings_file(self, &namings)
+    }
+
     fn analysis_settings(&self, file: File) -> &AnalysisSettings {
         file_settings(self, file).analysis(self)
     }
@@ -227,6 +248,9 @@ struct Settings {
     #[default]
     #[returns(copy)]
     verbose: bool,
+    #[default]
+    #[returns(ref)]
+    project_files: Vec<File>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

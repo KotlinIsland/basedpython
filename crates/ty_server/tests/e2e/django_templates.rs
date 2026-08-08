@@ -1179,3 +1179,53 @@ fn a_management_command_that_wants_a_terminal_is_refused_rather_than_spawned() -
 
     Ok(())
 }
+
+#[test]
+fn a_setting_hovers_as_the_type_the_settings_module_gives_it() -> Result<()> {
+    // the type checker reaches the settings module through the same registered
+    // project checker the command line registers, and this is what says the server
+    // registers it too: the same file checked either way says `str` either way
+    const READER: &str = "\
+from django.conf import settings
+
+value = settings.ROOT_URLCONF
+";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("src"), None)?
+        .with_file(
+            SystemPath::new("src/manage.py"),
+            "import os\n\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'project.settings')\n",
+        )?
+        .with_file(SystemPath::new("src/project/__init__.py"), "")?
+        .with_file(
+            SystemPath::new("src/project/settings.py"),
+            "ROOT_URLCONF = 'project.urls'\n",
+        )?
+        .with_file(
+            SystemPath::new("src/django/conf/__init__.py"),
+            "from typing import Any\n\
+             \n\
+             class LazySettings:\n\
+             \x20   def __getattr__(self, name: str) -> Any: ...\n\
+             \n\
+             settings = LazySettings()\n",
+        )?
+        .with_file(SystemPath::new("src/blog/reads_settings.py"), READER)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(SystemPath::new("src/blog/reads_settings.py"), READER, 1);
+
+    let hover = server
+        .hover_request(
+            SystemPath::new("src/blog/reads_settings.py"),
+            Position::new(2, 20),
+        )
+        .expect("a hover response");
+
+    let rendered = format!("{:?}", hover.contents);
+    assert!(rendered.contains(r#"value: "str""#), "got {rendered}");
+
+    Ok(())
+}

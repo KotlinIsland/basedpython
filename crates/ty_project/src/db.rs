@@ -588,6 +588,10 @@ impl SemanticDb for ProjectDatabase {
         is_open_file_impl(self, file)
     }
 
+    fn django_settings_file(&self) -> Option<File> {
+        self.project_checker()?.django_settings_file(self)
+    }
+
     fn dyn_clone(&self) -> Box<dyn SemanticDb> {
         Box::new(self.clone())
     }

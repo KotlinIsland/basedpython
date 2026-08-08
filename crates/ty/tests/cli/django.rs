@@ -365,3 +365,53 @@ fn a_project_without_django_reports_nothing_about_its_templates() -> anyhow::Res
 
     Ok(())
 }
+
+#[test]
+fn a_setting_has_the_type_the_settings_module_gives_it() -> anyhow::Result<()> {
+    // the settings module is found from `manage.py`, which is a fact about the
+    // project rather than about the file being checked — so this is the test that
+    // says the type checker reaches it at all, and reaches it the same way the
+    // language server does
+    let case = django_project(&[(
+        "blog/reads_settings.py",
+        "
+        from django.conf import settings
+
+        reveal_type(settings.ROOT_URLCONF)
+        reveal_type(settings.INSTALLED_APPS)
+        reveal_type(settings.NAMED_NOWHERE)
+        ",
+    )])?;
+
+    write_installed(
+        &case,
+        &[(
+            "django/conf/__init__.py",
+            "from typing import Any\n\
+             \n\
+             class LazySettings:\n\
+             \x20   def __getattr__(self, name: str) -> Any: ...\n\
+             \n\
+             settings = LazySettings()\n",
+        )],
+    )?;
+
+    // no path is named: naming one narrows the project to it, and the settings
+    // module is then no more part of the project than any other file it excludes
+    assert_cmd_snapshot!(case.command().arg("--output-format=concise"), @r"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    blog/reads_settings.py:4:1: warning[undefined-reveal] `reveal_type` used without importing it
+    blog/reads_settings.py:4:13: info[revealed-type] Revealed type: `str`
+    blog/reads_settings.py:5:1: warning[undefined-reveal] `reveal_type` used without importing it
+    blog/reads_settings.py:5:13: info[revealed-type] Revealed type: `Any`
+    blog/reads_settings.py:6:1: warning[undefined-reveal] `reveal_type` used without importing it
+    blog/reads_settings.py:6:13: info[revealed-type] Revealed type: `Any`
+    Found 6 diagnostics
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}

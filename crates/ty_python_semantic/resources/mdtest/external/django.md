@@ -456,3 +456,156 @@ reveal_type(Book.objects.values_list("author", flat=True))  # revealed: QuerySet
 reveal_type(Author.objects.values_list("name", named=True))  # revealed: QuerySet[Author, Any]
 reveal_type(Author.objects.values_list())  # revealed: QuerySet[Author, Any]
 ```
+
+## Settings the project's settings module names
+
+`django.conf.settings` answers every attribute through `__getattr__`, so the stubs can only say
+`Any`. The project's settings module is ordinary python sitting in the project, and `manage.py` says
+which module it is, so a setting the module assigns is read off it.
+
+Only what django itself copies is read: a name is a setting when `name.isupper()`, which is the test
+django applies to the module's contents.
+
+`manage.py`:
+
+```py
+import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "conf.settings")
+```
+
+`conf/__init__.py`:
+
+```py
+```
+
+`conf/settings.py`:
+
+```py
+DEBUG = True
+ROOT_URLCONF = "conf.urls"
+SESSION_COOKIE_AGE = 1209600
+MY_CUSTOM = "anything the project likes"
+lowercase = "not a setting"
+```
+
+`app.py`:
+
+```py
+from django.conf import settings
+
+reveal_type(settings.DEBUG)  # revealed: bool
+reveal_type(settings.ROOT_URLCONF)  # revealed: str
+reveal_type(settings.SESSION_COOKIE_AGE)  # revealed: int
+reveal_type(settings.MY_CUSTOM)  # revealed: str
+
+# nothing names it, so it stays what the stubs say
+reveal_type(settings.NOT_A_SETTING_ANYWHERE)  # revealed: Any
+
+# django copies only upper-case names off the module, so this is not a setting
+reveal_type(settings.lowercase)  # revealed: Any
+
+# what the stubs declare outright still wins
+reveal_type(settings.SETTINGS_MODULE)  # revealed: str
+```
+
+## Settings whose value describes only one deployment
+
+A container's inferred element types come from the literal this deployment happens to hold, and
+django's contract is that anything may read and write keys the literal never mentions —
+`settings.DATABASES[alias]["TEST"]["USER"]` is django's own code. Such a setting keeps the `Any` the
+stubs give it rather than a type that is narrower than the setting really is.
+
+`manage.py`:
+
+```py
+import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "conf.settings")
+```
+
+`conf/__init__.py`:
+
+```py
+```
+
+`conf/settings.py`:
+
+```py
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
+INSTALLED_APPS = ["django.contrib.auth"]
+```
+
+`app.py`:
+
+```py
+from django.conf import settings
+
+reveal_type(settings.DATABASES)  # revealed: Any
+reveal_type(settings.INSTALLED_APPS)  # revealed: Any
+
+# a value whose type carries no arguments has no such gap
+reveal_type(settings.BASE_DIR)  # revealed: Path
+```
+
+## No settings module named
+
+A project may configure settings programmatically with `settings.configure()`, or run with
+`DJANGO_SETTINGS_MODULE` set in its environment and written down nowhere. Nothing in the project
+says what the settings are, so every setting stays `Any`.
+
+`app.py`:
+
+```py
+from django.conf import settings
+
+settings.configure(DEBUG=True)
+
+reveal_type(settings.DEBUG)  # revealed: Any
+```
+
+## A settings module assembled from another
+
+The split-settings layout — a per-environment module that starts `from .base import *` — is read
+through the star import, since that is how the names reach the module django imports.
+
+`manage.py`:
+
+```py
+import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "conf.local")
+```
+
+`conf/__init__.py`:
+
+```py
+```
+
+`conf/base.py`:
+
+```py
+ROOT_URLCONF = "conf.urls"
+SECRET_KEY = "shared"
+```
+
+`conf/local.py`:
+
+```py
+from .base import *
+
+DEBUG = True
+```
+
+`app.py`:
+
+```py
+from django.conf import settings
+
+reveal_type(settings.DEBUG)  # revealed: bool
+reveal_type(settings.ROOT_URLCONF)  # revealed: str
+reveal_type(settings.SECRET_KEY)  # revealed: str
+```
