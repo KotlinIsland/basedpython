@@ -29,7 +29,7 @@ else:
     typecodes: str
 
 @disjoint_base
-class array[in out Element: constraints (int, float, str)](MutableSequence[Element]):
+class array[in out Element in (int, float, str)](MutableSequence[Element]):
     """array(typecode [, initializer]) -> array
 
     Return a new array whose items are restricted by typecode, and

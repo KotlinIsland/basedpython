@@ -340,7 +340,7 @@ fn pep695_type_params_based() {
     db.write_dedented(
         "src/a.by",
         "
-            def f[T, U: A, V: constraints (A, B), W = A, X: A = A1, Y: constraints (int,)]():
+            def f[T, U: A, V in (A, B), W = A, X: A = A1, Y in (int,)]():
                 pass
 
             class A: ...

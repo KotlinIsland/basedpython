@@ -46,6 +46,7 @@ Module(
                                                 },
                                             ),
                                         ),
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,

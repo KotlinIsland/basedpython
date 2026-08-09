@@ -192,7 +192,7 @@ def geometric_mean(data: Iterable[SupportsFloat]) -> float:
 
     """
 
-def mean[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT]) -> NumberT:
+def mean[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT]) -> NumberT:
     """Return the sample arithmetic mean of data.
 
     >>> mean([1, 2, 3, 4, 4])
@@ -210,7 +210,7 @@ def mean[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT
 
     """
 
-def harmonic_mean[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT], weights: Iterable[Number] | None = None) -> NumberT:
+def harmonic_mean[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], weights: Iterable[Number] | None = None) -> NumberT:
     """Return the harmonic mean of data.
 
     The harmonic mean is the reciprocal of the arithmetic mean of the
@@ -235,7 +235,7 @@ def harmonic_mean[NumberT: constraints (float, Decimal, Fraction)](data: Iterabl
 
     """
 
-def median[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT]) -> NumberT:
+def median[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT]) -> NumberT:
     """Return the median (middle value) of numeric data.
 
     When the number of data points is odd, return the middle data point.
@@ -321,7 +321,7 @@ if sys.version_info >= (3, 11):
         """
 
 else:
-    def median_grouped[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT], interval: NumberT | float = 1) -> NumberT | float:
+    def median_grouped[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], interval: NumberT | float = 1) -> NumberT | float:
         """Return the 50th percentile (median) of grouped continuous data.
 
         >>> median_grouped([1, 2, 2, 3, 4, 4, 4, 4, 4, 5])
@@ -387,7 +387,7 @@ def multimode[HashableT: Hashable](data: Iterable[HashableT]) -> list[HashableT]
 
     """
 
-def pstdev[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT], mu: NumberT | None = None) -> NumberT:
+def pstdev[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], mu: NumberT | None = None) -> NumberT:
     """Return the square root of the population variance.
 
     See ``pvariance`` for arguments and other details.
@@ -397,7 +397,7 @@ def pstdev[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[Numbe
 
     """
 
-def pvariance[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT], mu: NumberT | None = None) -> NumberT:
+def pvariance[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], mu: NumberT | None = None) -> NumberT:
     """Return the population variance of ``data``.
 
     data should be a sequence or iterable of Real-valued numbers, with at least one
@@ -433,7 +433,7 @@ def pvariance[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[Nu
 
     """
 
-def quantiles[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT], *, n: int = 4, method: "inclusive" | "exclusive" = "exclusive") -> list[NumberT]:
+def quantiles[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], *, n: int = 4, method: "inclusive" | "exclusive" = "exclusive") -> list[NumberT]:
     """Divide *data* into *n* continuous intervals with equal probability.
 
     Returns a list of (n - 1) cut points separating the intervals.
@@ -451,7 +451,7 @@ def quantiles[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[Nu
 
     """
 
-def stdev[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT], xbar: NumberT | None = None) -> NumberT:
+def stdev[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], xbar: NumberT | None = None) -> NumberT:
     """Return the square root of the sample variance.
 
     See ``variance`` for arguments and other details.
@@ -461,7 +461,7 @@ def stdev[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[Number
 
     """
 
-def variance[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT], xbar: NumberT | None = None) -> NumberT:
+def variance[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], xbar: NumberT | None = None) -> NumberT:
     """Return the sample variance of data.
 
     data should be an iterable of Real-valued numbers, with at least two

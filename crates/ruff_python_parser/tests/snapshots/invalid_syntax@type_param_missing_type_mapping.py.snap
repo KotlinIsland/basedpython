@@ -1,6 +1,6 @@
 ---
 source: crates/ruff_python_parser/tests/fixtures.rs
-input_file: crates/ruff_python_parser/resources/inline/err/type_param_type_var_tuple_missing_default.py
+input_file: crates/ruff_python_parser/resources/inline/err/type_param_missing_type_mapping.py
 ---
 ## AST
 
@@ -8,7 +8,7 @@ input_file: crates/ruff_python_parser/resources/inline/err/type_param_type_var_t
 Module(
     ModModule {
         node_index: NodeIndex(None),
-        range: 0..44,
+        range: 0..45,
         body: [
             TypeAlias(
                 StmtTypeAlias {
@@ -27,18 +27,22 @@ Module(
                             range: 6..13,
                             node_index: NodeIndex(None),
                             type_params: [
-                                TypeVarTuple(
-                                    TypeParamTypeVarTuple {
+                                TypeVar(
+                                    TypeParamTypeVar {
                                         node_index: NodeIndex(None),
-                                        range: 7..12,
+                                        range: 7..11,
                                         name: Identifier {
-                                            id: Name("Ts"),
-                                            range: 8..10,
+                                            id: Name("T"),
+                                            range: 7..8,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: true,
                                         default: None,
+                                        variance: None,
                                         is_reified: false,
+                                        is_some_hole: false,
                                     },
                                 ),
                             ],
@@ -65,7 +69,7 @@ Module(
             TypeAlias(
                 StmtTypeAlias {
                     node_index: NodeIndex(None),
-                    range: 20..43,
+                    range: 20..44,
                     name: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -76,30 +80,34 @@ Module(
                     ),
                     type_params: Some(
                         TypeParams {
-                            range: 26..37,
+                            range: 26..38,
                             node_index: NodeIndex(None),
                             type_params: [
-                                TypeVarTuple(
-                                    TypeParamTypeVarTuple {
+                                TypeVar(
+                                    TypeParamTypeVar {
                                         node_index: NodeIndex(None),
                                         range: 27..32,
                                         name: Identifier {
-                                            id: Name("Ts"),
-                                            range: 28..30,
+                                            id: Name("T1"),
+                                            range: 27..29,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: true,
                                         default: None,
+                                        variance: None,
                                         is_reified: false,
+                                        is_some_hole: false,
                                     },
                                 ),
                                 TypeVar(
                                     TypeParamTypeVar {
                                         node_index: NodeIndex(None),
-                                        range: 34..36,
+                                        range: 35..37,
                                         name: Identifier {
                                             id: Name("T2"),
-                                            range: 34..36,
+                                            range: 35..37,
                                             node_index: NodeIndex(None),
                                         },
                                         lower_bound: None,
@@ -123,7 +131,7 @@ Module(
                     value: Name(
                         ExprName {
                             node_index: NodeIndex(None),
-                            range: 40..43,
+                            range: 41..44,
                             id: Name("int"),
                             ctx: Load,
                         },
@@ -139,14 +147,28 @@ Module(
 ## Errors
 
   |
-1 | type X[*Ts =] = int
-  |             ^ Syntax Error: Expected an expression
-2 | type X[*Ts =, T2] = int
+1 | type X[T in ] = int
+  |          ^^ Syntax Error: type mappings are a basedpython feature and are not valid in `.py` files
+2 | type X[T1 in , T2] = int
   |
 
 
   |
-1 | type X[*Ts =] = int
-2 | type X[*Ts =, T2] = int
+1 | type X[T in ] = int
   |             ^ Syntax Error: Expected an expression
+2 | type X[T1 in , T2] = int
+  |
+
+
+  |
+1 | type X[T in ] = int
+2 | type X[T1 in , T2] = int
+  |           ^^ Syntax Error: type mappings are a basedpython feature and are not valid in `.py` files
+  |
+
+
+  |
+1 | type X[T in ] = int
+2 | type X[T1 in , T2] = int
+  |              ^ Syntax Error: Expected an expression
   |

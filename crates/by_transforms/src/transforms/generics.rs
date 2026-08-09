@@ -400,24 +400,20 @@ impl<'src> GenericPolyfill<'src> {
                     let mut extra_args: Vec<String> = Vec::new();
 
                     if let Some(bound) = &tv.bound {
-                        // `constraints(int, str)` → positional TypeVar args (basedpython form).
+                        // the type mapping `T in (int, str)` → positional `TypeVar` args.
                         // Everything else, including tuple bounds, → bound=.
                         // In basedpython, `T: (int, str)` means bound=(int, str), not
-                        // positional constraints — the explicit `constraints(...)` keyword
-                        // is required.
-                        if let Expr::Call(call) = bound.as_ref()
-                            && call
-                                .func
-                                .as_name_expr()
-                                .is_some_and(|n| n.id == "constraints")
-                        {
-                            let inner = call
-                                .arguments
-                                .args
-                                .iter()
-                                .map(|a| self.src(a.range()))
-                                .collect::<Vec<_>>()
-                                .join(", ");
+                        // positional constraints — the mapping is written with `in`
+                        if tv.is_type_mapping {
+                            let inner = match bound.as_ref() {
+                                Expr::Tuple(t) if t.parenthesized => t
+                                    .elts
+                                    .iter()
+                                    .map(|e| self.src(e.range()))
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                                other => self.src(other.range()).to_owned(),
+                            };
                             if !inner.is_empty() {
                                 extra_args.push(inner);
                             }
@@ -547,13 +543,13 @@ impl<'src> GenericPolyfill<'src> {
         }
     }
 
-    /// For 3.12+ pass-through, strip `constraints` prefix from `TypeVar` bounds
-    /// so `T: constraints(int, str)` becomes `T: (int, str)` (valid Python).
+    /// For 3.12+ pass-through, rewrite the type mapping `T in (int, str)` as
+    /// `T: (int, str)`, which is how python spells the same constraint set.
     ///
     /// Also rewrites `.by` tuple bounds `T: (int, str)` → `T: tuple[int, str]`
     /// because Python 3.12+ treats `T: (int, str)` as positional constraints,
     /// not a tuple bound.
-    fn strip_constraints_keyword(&mut self, params: &[TypeParam]) {
+    fn lower_type_param_bounds(&mut self, params: &[TypeParam]) {
         for param in params {
             if let TypeParam::TypeVar(tv) = param {
                 if let Some(bound) = &tv.bound {
@@ -566,18 +562,14 @@ impl<'src> GenericPolyfill<'src> {
                         )));
                         continue;
                     }
-                    if let Expr::Call(call) = bound.as_ref()
-                        && call
-                            .func
-                            .as_name_expr()
-                            .is_some_and(|n| n.id == "constraints")
-                    {
-                        let edit_range = TextRange::new(
-                            call.func.range().start(),
-                            call.arguments.range().start(),
-                        );
-                        self.edits
-                            .push(Fix::safe_edit(Edit::range_deletion(edit_range)));
+                    if tv.is_type_mapping {
+                        // the ` in ` between the name and the mapping becomes python's `: `
+                        let edit_range =
+                            TextRange::new(tv.name.range().end(), bound.range().start());
+                        self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                            ": ".to_owned(),
+                            edit_range,
+                        )));
                     } else if !self.config.is_python
                         && let Expr::Tuple(t) = bound.as_ref()
                         && t.parenthesized
@@ -633,7 +625,7 @@ impl<'src> GenericPolyfill<'src> {
         let deferred_protocol = class.arguments.is_none() && self.has_protocol_marker(class);
         // PEP 695 class type params are native syntax in 3.12+ (3.13+ with defaults)
         if self.supports_native_type_params(&tp.type_params) {
-            self.strip_constraints_keyword(&tp.type_params);
+            self.lower_type_param_bounds(&tp.type_params);
             if deferred_protocol {
                 // keep the native `[T]`, append the base after it: `[T](Protocol)`
                 self.edits.push(Fix::safe_edit(Edit::insertion(
@@ -753,7 +745,7 @@ impl<'src> GenericPolyfill<'src> {
         }
         // PEP 695 function type params are native syntax in 3.12+ (3.13+ with defaults)
         if self.supports_native_type_params(&tp.type_params) {
-            self.strip_constraints_keyword(&tp.type_params);
+            self.lower_type_param_bounds(&tp.type_params);
             return;
         }
 
@@ -817,7 +809,7 @@ impl<'src> GenericPolyfill<'src> {
             .map_or(&[][..], |tp| tp.type_params.as_slice());
         if self.supports_native_type_params(params) {
             if let Some(tp) = &alias.type_params {
-                self.strip_constraints_keyword(&tp.type_params);
+                self.lower_type_param_bounds(&tp.type_params);
             }
             return;
         }
@@ -1869,10 +1861,10 @@ mod tests {
     }
 
     #[test]
-    fn constraints_keyword_polyfill() {
+    fn type_mapping_polyfill() {
         check(
             indoc! {"
-                class Foo[T: constraints (int, str)]: ...
+                class Foo[T in (int, str)]: ...
             "},
             indoc! {"
                 from typing import TypeVar, Generic
@@ -1883,10 +1875,10 @@ mod tests {
     }
 
     #[test]
-    fn constraints_keyword_function_polyfill() {
+    fn type_mapping_function_polyfill() {
         check(
             indoc! {"
-                def f[T: constraints (int, str)](x: T) -> T:
+                def f[T in (int, str)](x: T) -> T:
                     return x
             "},
             indoc! {"
@@ -1899,19 +1891,19 @@ mod tests {
     }
 
     #[test]
-    fn constraints_keyword_stripped_on_312() {
+    fn type_mapping_lowered_on_312() {
         check_at(
-            "class Foo[T: constraints (int, str)]: ...\n",
+            "class Foo[T in (int, str)]: ...\n",
             "class Foo[T: (int, str)]: ...\n",
             PythonVersion::PY312,
         );
     }
 
     #[test]
-    fn constraints_keyword_function_stripped_on_312() {
+    fn type_mapping_function_lowered_on_312() {
         check_at(
             indoc! {"
-                def f[T: constraints (int, str)](x: T) -> T:
+                def f[T in (int, str)](x: T) -> T:
                     return x
             "},
             indoc! {"
@@ -1925,7 +1917,7 @@ mod tests {
     #[test]
     fn tuple_bound_is_not_constraints() {
         // In basedpython, `T: (int, str)` is a tuple-type upper bound, NOT
-        // positional constraints. Use `T: constraints(int, str)` for that. the
+        // positional constraints. Use the type mapping `T in (int, str)` for that. the
         // bound lowers like any other type expression (matching the native
         // `class Foo[T: tuple[int, str]]` form), since the polyfill routes the
         // bound through the same type-expression lowerer
@@ -1942,26 +1934,10 @@ mod tests {
     }
 
     #[test]
-    fn constraints_with_space_same_as_without() {
-        // `constraints (int, str)` and `constraints(int, str)` produce identical output.
-        let with_space = transpile(
-            "class Foo[T: constraints (int, str)]: ...\n",
-            &Config::test_default(),
-        )
-        .unwrap();
-        let without_space = transpile(
-            "class Foo[T: constraints (int, str)]: ...\n",
-            &Config::test_default(),
-        )
-        .unwrap();
-        assert_eq!(with_space, without_space);
-    }
-
-    #[test]
-    fn constraints_with_space_stripped_on_312() {
+    fn type_mapping_on_type_alias_lowered_on_312() {
         check_at(
-            "class Foo[T: constraints (int, str)]: ...\n",
-            "class Foo[T: (int, str)]: ...\n",
+            "type X[T in (int, str)] = list[T]\n",
+            "type X[T: (int, str)] = list[T]\n",
             PythonVersion::PY312,
         );
     }
@@ -1983,13 +1959,13 @@ mod tests {
     }
 
     #[test]
-    fn mixed_tuple_bound_and_constraints_on_314() {
-        // TTuple: (int, str) → tuple[int, str]; TConst: constraints(int, str) → (int, str)
+    fn mixed_tuple_bound_and_type_mapping_on_314() {
+        // TTuple: (int, str) → tuple[int, str]; TConst in (int, str) → (int, str)
         check_at(
             indoc! {"
                 class A[
                     TTuple: (int, str),
-                    TConst: constraints (int, str),
+                    TConst in (int, str),
                 ]: ...
             "},
             indoc! {"
@@ -2254,10 +2230,10 @@ mod tests {
     }
 
     #[test]
-    fn by_constraints_keyword_is_constraints() {
-        // In .by files, T: constraints (int, str) is constraints.
+    fn by_type_mapping_is_constraints() {
+        // In .by files, `T in (int, str)` is constraints.
         check(
-            "class Foo[T: constraints (int, str)]: ...\n",
+            "class Foo[T in (int, str)]: ...\n",
             indoc! {"
                 from typing import TypeVar, Generic
                 _T = TypeVar(\"_T\", int, str)

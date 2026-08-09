@@ -24,7 +24,7 @@
 //! 3. function return annotation
 //! 4. `type X = T` RHS / `X: TypeAlias = T` (the `TypeAlias` form is reached
 //!    via `AnnAssign`, no special case needed)
-//! 5. `TypeParam` bound (PEP 695 + basedpython `constraints (…)`)
+//! 5. `TypeParam` bound (PEP 695 + the basedpython type mapping `T in (…)`)
 //! 6. `TypeParam` default
 //! 7. value-position type applications (`list[T]`, `dict[K, V]` outside an
 //!    annotation — gated on ty's `is_known_type_subscript`)
@@ -250,7 +250,16 @@ impl TypePosWalker<'_> {
         match tp {
             TypeParam::TypeVar(tv) => {
                 if let Some(b) = &tv.bound {
-                    self.visit_type_expr(b, TypePos::Root);
+                    // a type mapping holds a *set* of types, so the parentheses around it
+                    // are not a tuple type — each member is a type position of its own
+                    match b.as_ref() {
+                        Expr::Tuple(t) if tv.is_type_mapping && t.parenthesized => {
+                            for member in &t.elts {
+                                self.visit_type_expr(member, TypePos::Root);
+                            }
+                        }
+                        _ => self.visit_type_expr(b, TypePos::Root),
+                    }
                 }
                 if let Some(d) = &tv.default {
                     self.visit_type_expr(d, TypePos::Root);

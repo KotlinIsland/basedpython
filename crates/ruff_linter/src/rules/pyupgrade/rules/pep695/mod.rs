@@ -149,6 +149,9 @@ impl<'a> From<&'a TypeVar<'a>> for TypeParam {
                 name: Identifier::new(*name, TextRange::default()),
                 lower_bound: None,
                 is_some_hole: false,
+                // this rule rewrites python source, where a constraint tuple is spelled
+                // with a plain `:`
+                is_type_mapping: false,
                 bound: match restriction {
                     Some(TypeVarRestriction::Bound(bound)) => Some(Box::new((*bound).clone())),
                     Some(TypeVarRestriction::Constraint(constraints)) => {

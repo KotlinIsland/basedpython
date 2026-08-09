@@ -62,7 +62,7 @@ class SharedMemory:
 
     def __del__(self)
 
-class ShareableList[in out SLT: constraints (int, float, bool, str, bytes, None)]:
+class ShareableList[in out SLT in (int, float, bool, str, bytes, None)]:
     """Pattern for a mutable list-like object shareable via a shared
     memory block.  It differs from the built-in list type in that these
     lists can not change their overall length (i.e. no append, insert,

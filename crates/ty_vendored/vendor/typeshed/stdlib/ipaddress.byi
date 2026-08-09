@@ -139,7 +139,7 @@ class _BaseAddress(_IPAddressBase):
         def __le__(self, other: Self, NotImplemented: dynamic = ...) -> bool:
             """Return a <= b.  Computed by @total_ordering from (a < b) or (a == b)."""
 
-class _BaseNetwork[in out A: constraints (IPv4Address, IPv6Address)](_IPAddressBase):
+class _BaseNetwork[in out A in (IPv4Address, IPv6Address)](_IPAddressBase):
     """A generic IP network object.
 
     This IP class contains the version independent methods which are
@@ -640,7 +640,7 @@ def summarize_address_range(
     first: IPv4Address | IPv6Address, last: IPv4Address | IPv6Address
 ) -> Iterator[IPv4Network] | Iterator[IPv6Network]
 
-def collapse_addresses[N: constraints (IPv4Network, IPv6Network)](addresses: Iterable[N]) -> Iterator[N]:
+def collapse_addresses[N in (IPv4Network, IPv6Network)](addresses: Iterable[N]) -> Iterator[N]:
     """Collapse a list of IP objects.
 
     Example:
@@ -659,7 +659,7 @@ def collapse_addresses[N: constraints (IPv4Network, IPv6Network)](addresses: Ite
 
     """
 
-def get_mixed_type_key[A: constraints (IPv4Address, IPv6Address)](obj: A) -> (int, A):
+def get_mixed_type_key[A in (IPv4Address, IPv6Address)](obj: A) -> (int, A):
     """Return a key suitable for sorting between networks and addresses.
 
     Address and Network objects are not sortable by default; they're

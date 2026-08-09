@@ -110,7 +110,7 @@ type parameters — their bounds, their variance, and what survives to runtime
 <div class="by-index" markdown>
 
 - [generics](generics.md)
-- [explicit typevar constraints](constraints.md)
+- [type mappings](type-mappings.md)
 - [type parameter bound ranges](bound-ranges.md)
 - [bounds on a variadic pack](pack-bounds.md)
 - [attribute types (`T.a`)](attribute-types.md)

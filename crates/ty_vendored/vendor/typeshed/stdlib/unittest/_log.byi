@@ -11,7 +11,7 @@ class _LoggingWatcher(NamedTuple):
     records: list[logging.LogRecord]
     output: list[str]
 
-class _AssertLogsContext[in out L: constraints (None, _LoggingWatcher)](_BaseTestCaseContext):
+class _AssertLogsContext[in out L in (None, _LoggingWatcher)](_BaseTestCaseContext):
     """A context manager for assertLogs() and assertNoLogs()"""
 
     LOGGING_FORMAT: ClassVar[str]

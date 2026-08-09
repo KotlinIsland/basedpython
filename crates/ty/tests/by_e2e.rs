@@ -774,19 +774,19 @@ enum class Shape:
 #[test]
 fn enum_bounded_generic_lowers_type_args_not_declaration() {
     // a bounded generic enum must not leak the declaration text
-    // `[T: constraints (int, str)]` (invalid python) into the output; on the
+    // `[T in (int, str)]` (invalid python) into the output; on the
     // 3.10 polyfill path the params become constrained `TypeVar`s and the
     // variant field annotations are renamed to match
     let out = transpile(
         "\
-enum class Box[T: constraints (int, str)]:
+enum class Box[T in (int, str)]:
     case Full(T)
     case Empty
 ",
     );
     assert!(
-        !out.contains("constraints ("),
-        "constraints leaked into output\n{out}"
+        !out.contains("T in (int, str)"),
+        "type mapping leaked into output\n{out}"
     );
     assert!(
         out.contains("class _Box_Full(Box):"),

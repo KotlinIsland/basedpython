@@ -45,7 +45,7 @@ _Predicate: TypeAlias = (_T) -> object
 # Technically count can take anything that implements a number protocol and has an add method
 # but we can't enforce the add method
 @disjoint_base
-class count[in out N: constraints (int, float, SupportsFloat, SupportsInt, SupportsIndex, SupportsComplex)]:
+class count[in out N in (int, float, SupportsFloat, SupportsInt, SupportsIndex, SupportsComplex)]:
     """Return a count object whose .__next__() method returns consecutive values.
 
     Equivalent to:

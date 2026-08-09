@@ -105,16 +105,16 @@ class B[T: (A1, A2)]:
     x: T.a      # error: `T@B` has no attribute `a`
 ```
 
-an [explicitly constrained](constraints.md) parameter does resolve, per
+a parameter constrained by a [type mapping](type-mappings.md) does resolve, per
 constraint, because each specialization picks one of them:
 
 ```by
-class C[T: constraints (A1, A2)]:
+class C[T in (A1, A2)]:
     y: T.a      # `int` for `C[A1]`, `bool` for `C[A2]`
 ```
 
 in a value position the same access unions over the constraints, since the
-parameter stands for any one of them: `t.a` over `T: constraints (A1, A2)` is
+parameter stands for any one of them: `t.a` over `T in (A1, A2)` is
 `int | bool`. the lowered annotation is that union too, which is the widening
 every attribute type makes when python cannot spell the dependency.
 

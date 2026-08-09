@@ -748,7 +748,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let mut literal_types = reverse_transforms::literal_types::LiteralReverse::new(src, &model);
     let mut subscript = reverse_transforms::subscript::SubscriptReverse::new(src, &model);
     let mut indent_string = reverse_transforms::dedent_string::IndentString::new(src);
-    let mut constraints = reverse_transforms::constraints::ConstraintsReverse::new();
+    let mut type_mapping = reverse_transforms::type_mapping::TypeMappingReverse::new();
     let mut callable = {
         let c = reverse_transforms::callable::CallableReverse::new(src, &model);
         if config.is_stub { c.stub() } else { c }
@@ -788,7 +788,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         anon_named_tuple_rev.visit_stmt(stmt);
         subscript.visit_stmt(stmt);
         indent_string.visit_stmt(stmt);
-        constraints.visit_stmt(stmt);
+        type_mapping.visit_stmt(stmt);
         intersection.visit_stmt(stmt);
         not_rev.visit_stmt(stmt);
         dynamic_keyword_rev.visit_stmt(stmt);
@@ -841,7 +841,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(literal_types.edits);
     fixes.extend(subscript.edits);
     fixes.extend(indent_string.edits);
-    fixes.extend(constraints.edits);
+    fixes.extend(type_mapping.edits);
     fixes.extend(callable.edits);
     fixes.extend(intersection.edits);
     fixes.extend(not_rev.edits);

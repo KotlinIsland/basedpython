@@ -1120,12 +1120,19 @@ impl<'a> Generator<'a> {
             TypeParam::TypeVar(TypeParamTypeVar {
                 name,
                 bound,
+                is_type_mapping,
                 default,
                 ..
             }) => {
                 self.p_id(name);
                 if let Some(expr) = bound {
-                    self.p(": ");
+                    // basedpython: the type mapping `T in (int, str)` is the constraint set
+                    // python spells `T: (int, str)`, so the keyword only survives in `.by`
+                    if *is_type_mapping && self.mode == Mode::BasedPython {
+                        self.p(" in ");
+                    } else {
+                        self.p(": ");
+                    }
                     self.unparse_expr(expr, precedence::MAX);
                 }
                 if let Some(expr) = default {

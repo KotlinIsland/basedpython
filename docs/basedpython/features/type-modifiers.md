@@ -166,9 +166,8 @@ parameter's bound or default, a [`cast`](cast.md) target, an
 [anonymous named tuple](anonymous-named-tuple.md) field, and nested inside a
 subscript, a `Callable[[…], R]` parameter list or a parenthesis
 
-a [`constraints`](constraints.md) list is written as a call, whose arguments are
-values as far as the parser is concerned, so a modifier does not reach inside
-one. write the tuple bound form, `T: (literal str, literal int)`, which does
+each member of a [type mapping](type-mappings.md) is its own type position, so
+a modifier may be written inside one: `T in (literal str, literal int)`
 
 the keyword is only read as a modifier when a **name** follows it, exactly as for
 the [use-site variance keywords](variance.md). two adjacent names are never valid

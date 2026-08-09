@@ -44,7 +44,7 @@ if sys.version_info >= (3, 13):
 
 # Corresponds to the names in the `_attributes` class variable which is non-empty in certain AST nodes
 @type_check_only
-class _Attributes[in out EndPositionT: constraints (int, int | None) = int | None](TypedDict, total=False):
+class _Attributes[in out EndPositionT in (int, int | None) = int | None](TypedDict, total=False):
     lineno: int
     col_offset: int
     end_lineno: EndPositionT

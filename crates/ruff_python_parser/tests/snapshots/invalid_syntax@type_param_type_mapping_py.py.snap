@@ -1,0 +1,321 @@
+---
+source: crates/ruff_python_parser/tests/fixtures.rs
+input_file: crates/ruff_python_parser/resources/inline/err/type_param_type_mapping_py.py
+---
+## AST
+
+```
+Module(
+    ModModule {
+        node_index: NodeIndex(None),
+        range: 0..90,
+        body: [
+            TypeAlias(
+                StmtTypeAlias {
+                    node_index: NodeIndex(None),
+                    range: 0..29,
+                    name: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 5..6,
+                            id: Name("X"),
+                            ctx: Store,
+                        },
+                    ),
+                    type_params: Some(
+                        TypeParams {
+                            range: 6..23,
+                            node_index: NodeIndex(None),
+                            type_params: [
+                                TypeVar(
+                                    TypeParamTypeVar {
+                                        node_index: NodeIndex(None),
+                                        range: 7..22,
+                                        name: Identifier {
+                                            id: Name("T"),
+                                            range: 7..8,
+                                            node_index: NodeIndex(None),
+                                        },
+                                        lower_bound: None,
+                                        bound: Some(
+                                            Tuple(
+                                                ExprTuple {
+                                                    node_index: NodeIndex(None),
+                                                    range: 12..22,
+                                                    elts: [
+                                                        Name(
+                                                            ExprName {
+                                                                node_index: NodeIndex(None),
+                                                                range: 13..16,
+                                                                id: Name("int"),
+                                                                ctx: Load,
+                                                            },
+                                                        ),
+                                                        Name(
+                                                            ExprName {
+                                                                node_index: NodeIndex(None),
+                                                                range: 18..21,
+                                                                id: Name("str"),
+                                                                ctx: Load,
+                                                            },
+                                                        ),
+                                                    ],
+                                                    ctx: Load,
+                                                    parenthesized: true,
+                                                    is_anon_named_tuple: false,
+                                                    is_anon_named_tuple_value: false,
+                                                    callable_shape: None,
+                                                    is_parameter_shape: false,
+                                                },
+                                            ),
+                                        ),
+                                        is_type_mapping: true,
+                                        default: None,
+                                        variance: None,
+                                        is_reified: false,
+                                        is_some_hole: false,
+                                    },
+                                ),
+                            ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
+                        },
+                    ),
+                    value: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 26..29,
+                            id: Name("int"),
+                            ctx: Load,
+                        },
+                    ),
+                    cases: [],
+                    is_private: false,
+                },
+            ),
+            FunctionDef(
+                StmtFunctionDef {
+                    node_index: NodeIndex(None),
+                    range: 30..59,
+                    is_async: false,
+                    decorator_list: [],
+                    name: Identifier {
+                        id: Name("f"),
+                        range: 34..35,
+                        node_index: NodeIndex(None),
+                    },
+                    type_params: Some(
+                        TypeParams {
+                            range: 35..52,
+                            node_index: NodeIndex(None),
+                            type_params: [
+                                TypeVar(
+                                    TypeParamTypeVar {
+                                        node_index: NodeIndex(None),
+                                        range: 36..51,
+                                        name: Identifier {
+                                            id: Name("T"),
+                                            range: 36..37,
+                                            node_index: NodeIndex(None),
+                                        },
+                                        lower_bound: None,
+                                        bound: Some(
+                                            Tuple(
+                                                ExprTuple {
+                                                    node_index: NodeIndex(None),
+                                                    range: 41..51,
+                                                    elts: [
+                                                        Name(
+                                                            ExprName {
+                                                                node_index: NodeIndex(None),
+                                                                range: 42..45,
+                                                                id: Name("int"),
+                                                                ctx: Load,
+                                                            },
+                                                        ),
+                                                        Name(
+                                                            ExprName {
+                                                                node_index: NodeIndex(None),
+                                                                range: 47..50,
+                                                                id: Name("str"),
+                                                                ctx: Load,
+                                                            },
+                                                        ),
+                                                    ],
+                                                    ctx: Load,
+                                                    parenthesized: true,
+                                                    is_anon_named_tuple: false,
+                                                    is_anon_named_tuple_value: false,
+                                                    callable_shape: None,
+                                                    is_parameter_shape: false,
+                                                },
+                                            ),
+                                        ),
+                                        is_type_mapping: true,
+                                        default: None,
+                                        variance: None,
+                                        is_reified: false,
+                                        is_some_hole: false,
+                                    },
+                                ),
+                            ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
+                        },
+                    ),
+                    parameters: Parameters {
+                        range: 52..54,
+                        node_index: NodeIndex(None),
+                        posonlyargs: [],
+                        args: [],
+                        vararg: None,
+                        kwonlyargs: [],
+                        kwarg: None,
+                    },
+                    returns: None,
+                    raises: None,
+                    body: [
+                        Expr(
+                            StmtExpr {
+                                node_index: NodeIndex(None),
+                                range: 56..59,
+                                value: EllipsisLiteral(
+                                    ExprEllipsisLiteral {
+                                        node_index: NodeIndex(None),
+                                        range: 56..59,
+                                    },
+                                ),
+                            },
+                        ),
+                    ],
+                    is_trailing_lambda: false,
+                    is_asserts_return: false,
+                },
+            ),
+            ClassDef(
+                StmtClassDef {
+                    node_index: NodeIndex(None),
+                    range: 60..89,
+                    decorator_list: [],
+                    name: Identifier {
+                        id: Name("C"),
+                        range: 66..67,
+                        node_index: NodeIndex(None),
+                    },
+                    type_params: Some(
+                        TypeParams {
+                            range: 67..84,
+                            node_index: NodeIndex(None),
+                            type_params: [
+                                TypeVar(
+                                    TypeParamTypeVar {
+                                        node_index: NodeIndex(None),
+                                        range: 68..83,
+                                        name: Identifier {
+                                            id: Name("T"),
+                                            range: 68..69,
+                                            node_index: NodeIndex(None),
+                                        },
+                                        lower_bound: None,
+                                        bound: Some(
+                                            Tuple(
+                                                ExprTuple {
+                                                    node_index: NodeIndex(None),
+                                                    range: 73..83,
+                                                    elts: [
+                                                        Name(
+                                                            ExprName {
+                                                                node_index: NodeIndex(None),
+                                                                range: 74..77,
+                                                                id: Name("int"),
+                                                                ctx: Load,
+                                                            },
+                                                        ),
+                                                        Name(
+                                                            ExprName {
+                                                                node_index: NodeIndex(None),
+                                                                range: 79..82,
+                                                                id: Name("str"),
+                                                                ctx: Load,
+                                                            },
+                                                        ),
+                                                    ],
+                                                    ctx: Load,
+                                                    parenthesized: true,
+                                                    is_anon_named_tuple: false,
+                                                    is_anon_named_tuple_value: false,
+                                                    callable_shape: None,
+                                                    is_parameter_shape: false,
+                                                },
+                                            ),
+                                        ),
+                                        is_type_mapping: true,
+                                        default: None,
+                                        variance: None,
+                                        is_reified: false,
+                                        is_some_hole: false,
+                                    },
+                                ),
+                            ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
+                        },
+                    ),
+                    arguments: None,
+                    body: [
+                        Expr(
+                            StmtExpr {
+                                node_index: NodeIndex(None),
+                                range: 86..89,
+                                value: EllipsisLiteral(
+                                    ExprEllipsisLiteral {
+                                        node_index: NodeIndex(None),
+                                        range: 86..89,
+                                    },
+                                ),
+                            },
+                        ),
+                    ],
+                    implementation: None,
+                },
+            ),
+        ],
+    },
+)
+```
+## Errors
+
+  |
+1 | type X[T in (int, str)] = int
+  |          ^^ Syntax Error: type mappings are a basedpython feature and are not valid in `.py` files
+2 | def f[T in (int, str)](): ...
+3 | class C[T in (int, str)]: ...
+  |
+
+
+  |
+1 | type X[T in (int, str)] = int
+2 | def f[T in (int, str)](): ...
+  |         ^^ Syntax Error: type mappings are a basedpython feature and are not valid in `.py` files
+3 | class C[T in (int, str)]: ...
+  |
+
+
+  |
+1 | type X[T in (int, str)] = int
+2 | def f[T in (int, str)](): ...
+3 | class C[T in (int, str)]: ...
+  |           ^^ Syntax Error: type mappings are a basedpython feature and are not valid in `.py` files
+  |

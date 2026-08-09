@@ -2891,6 +2891,7 @@ mod tests {
         });
         let type_var_one = TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound: None,
+            is_type_mapping: false,
             is_some_hole: false,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
@@ -2902,6 +2903,7 @@ mod tests {
         });
         let type_var_two = TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound: None,
+            is_type_mapping: false,
             is_some_hole: false,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
@@ -2939,6 +2941,7 @@ mod tests {
     fn any_over_type_param_type_var() {
         let type_var_no_bound = TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound: None,
+            is_type_mapping: false,
             is_some_hole: false,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
@@ -2958,6 +2961,7 @@ mod tests {
 
         let type_var_with_bound = TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound: None,
+            is_type_mapping: false,
             is_some_hole: false,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
@@ -2980,6 +2984,7 @@ mod tests {
 
         let type_var_with_default = TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound: None,
+            is_type_mapping: false,
             is_some_hole: false,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,

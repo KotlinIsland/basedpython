@@ -1,5 +1,5 @@
 use ruff_formatter::write;
-use ruff_python_ast::{Expr, TypeParamTypeVar, Variance};
+use ruff_python_ast::{TypeParamTypeVar, Variance};
 
 use crate::prelude::*;
 
@@ -14,6 +14,7 @@ impl FormatNodeRule<TypeParamTypeVar> for FormatTypeParamTypeVar {
             name,
             lower_bound,
             bound,
+            is_type_mapping,
             default,
             variance,
             is_reified,
@@ -37,11 +38,6 @@ impl FormatNodeRule<TypeParamTypeVar> for FormatTypeParamTypeVar {
         }
         name.format().fmt(f)?;
         if let Some(bound) = bound {
-            // in basedpython .by files, `constraints (int, str)` is keyword syntax —
-            // preserve the space between `constraints` and `(` to distinguish it from a call
-            let is_constraints_call = f.options().is_basedpython()
-                && matches!(bound.as_ref(), Expr::Call(call)
-                    if call.func.as_name_expr().is_some_and(|n| n.id == "constraints"));
             if let Some(lower_bound) = lower_bound {
                 write!(
                     f,
@@ -53,17 +49,14 @@ impl FormatNodeRule<TypeParamTypeVar> for FormatTypeParamTypeVar {
                         bound.format()
                     ]
                 )?;
-            } else if is_constraints_call {
-                write!(
-                    f,
-                    [
-                        token(":"),
-                        space(),
-                        token("constraints"),
-                        space(),
-                        bound.as_call_expr().unwrap().arguments.format()
-                    ]
-                )?;
+            } else if *is_type_mapping {
+                // `T in (int, str)` ranges over a type mapping. plain python has no such
+                // spelling — there, the same tuple after a `:` already means constraints
+                if f.options().is_basedpython() {
+                    write!(f, [space(), token("in"), space(), bound.format()])?;
+                } else {
+                    write!(f, [token(":"), space(), bound.format()])?;
+                }
             } else {
                 write!(f, [token(":"), space(), bound.format()])?;
             }

@@ -1540,6 +1540,7 @@ impl<'a> From<&'a ast::TypeParam> for ComparableTypeParam<'a> {
                 name,
                 lower_bound,
                 bound,
+                is_type_mapping,
                 default,
                 is_reified,
                 range: _,
@@ -1550,6 +1551,7 @@ impl<'a> From<&'a ast::TypeParam> for ComparableTypeParam<'a> {
                 name: name.as_str(),
                 lower_bound: lower_bound.as_ref().map(Into::into),
                 bound: bound.as_ref().map(Into::into),
+                is_type_mapping: *is_type_mapping,
                 default: default.as_ref().map(Into::into),
                 is_reified: *is_reified,
             }),
@@ -1588,6 +1590,7 @@ pub struct TypeParamTypeVar<'a> {
     pub name: &'a str,
     pub lower_bound: Option<Box<ComparableExpr<'a>>>,
     pub bound: Option<Box<ComparableExpr<'a>>>,
+    pub is_type_mapping: bool,
     pub default: Option<Box<ComparableExpr<'a>>>,
     pub is_reified: bool,
 }

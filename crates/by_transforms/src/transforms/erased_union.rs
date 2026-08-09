@@ -105,10 +105,10 @@ fn plan(
     Some(Rewrite {
         annotation: annotation.range(),
         replacement: format!("{}[{}]", union.origin, arguments.join(", ")),
-        // spelled as *constraints*, which is what a union of arms is: the
+        // spelled as a *type mapping*, which is what a union of arms is: the
         // parameter ranges over exactly these types and no others. a bare
-        // `(int, str)` would be a tuple *bound* instead, which no arm satisfies
-        declaration: format!("reified {name}: constraints ({})", union.arms.join(", ")),
+        // `: (int, str)` would be a tuple *bound* instead, which no arm satisfies
+        declaration: format!("reified {name} in ({})", union.arms.join(", ")),
     })
 }
 

@@ -804,7 +804,6 @@ impl<'a> SemanticModel<'a> {
     /// True if `name` is one of the fixed set of names that basedpython resolves
     /// at transpile time, so it has no Python binding in the source but is never
     /// undefined at runtime:
-    /// - `constraints`, used in typevar bound syntax (`T: constraints(int, str)`)
     /// - `dynamic`, the surface spelling of `typing.Any`, in any type position.
     ///   in value position `dynamic` is an ordinary identifier, so it stays
     ///   subject to the usual undefined-name check
@@ -825,7 +824,7 @@ impl<'a> SemanticModel<'a> {
             return false;
         }
         match name.id.as_str() {
-            "constraints" | "Some" => true,
+            "Some" => true,
             "dynamic" | "Character" | "Overlapping" => self.in_type_definition(),
             // a trailing-lambda block filling a *receiver* callback binds the
             // receiver as `self`, in a parameter the source cannot spell — so

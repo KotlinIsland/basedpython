@@ -1,19 +1,20 @@
-//! Reverse of the `constraints` keyword in type parameter bounds:
-//!   `class Foo[T: (int, str)]:` → `class Foo[T: constraints(int, str)]:`
+//! Reverse of a type mapping in a type parameter list:
+//!   `class Foo[T: (int, str)]:` → `class Foo[T in (int, str)]:`
 //!
 //! In Python, `T: (int, str)` declares positional `TypeVar` constraints.
-//! In basedpython, the explicit `constraints(...)` keyword is required.
+//! In basedpython the same `:` declares a tuple *bound*, so the constraint set
+//! is written as a type mapping instead.
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, TypeParam};
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
 
-pub(crate) struct ConstraintsReverse {
+pub(crate) struct TypeMappingReverse {
     pub(crate) edits: Vec<Fix>,
 }
 
-impl ConstraintsReverse {
+impl TypeMappingReverse {
     pub(crate) fn new() -> Self {
         Self { edits: Vec::new() }
     }
@@ -25,9 +26,9 @@ impl ConstraintsReverse {
                     && let Expr::Tuple(t) = bound.as_ref()
                     && t.parenthesized
                 {
-                    self.edits.push(Fix::safe_edit(Edit::insertion(
-                        "constraints ".to_owned(),
-                        bound.range().start(),
+                    self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                        " in ".to_owned(),
+                        TextRange::new(tv.name.range().end(), bound.range().start()),
                     )));
                 }
             }
@@ -35,7 +36,7 @@ impl ConstraintsReverse {
     }
 }
 
-impl<'ast> Visitor<'ast> for ConstraintsReverse {
+impl<'ast> Visitor<'ast> for TypeMappingReverse {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         let type_params = match stmt {
             Stmt::ClassDef(c) => c.type_params.as_deref(),
@@ -67,7 +68,7 @@ mod tests {
         // empty_class reverse transform also strips `...` body
         check(
             "class Foo[T: (int, str)]: ...\n",
-            "class Foo[T: constraints (int, str)]\n",
+            "class Foo[T in (int, str)]\n",
         );
     }
 
@@ -79,7 +80,7 @@ mod tests {
                     return x
             "},
             indoc! {"
-                def f[T: constraints (int, str)](x: T) -> T:
+                def f[T in (int, str)](x: T) -> T:
                     return x
             "},
         );
@@ -87,7 +88,7 @@ mod tests {
 
     #[test]
     fn bound_unchanged() {
-        // `T: int` is a bound, not constraints — leave alone
+        // `T: int` is a bound, not a mapping — leave alone
         check("class Foo[T: int]: ...\n", "class Foo[T: int]\n");
     }
 
@@ -97,10 +98,10 @@ mod tests {
     }
 
     #[test]
-    fn multiple_params_only_constraints_rewritten() {
+    fn multiple_params_only_mapping_rewritten() {
         check(
             "class Foo[T: (int, str), S: int]: ...\n",
-            "class Foo[T: constraints (int, str), S: int]\n",
+            "class Foo[T in (int, str), S: int]\n",
         );
     }
 }

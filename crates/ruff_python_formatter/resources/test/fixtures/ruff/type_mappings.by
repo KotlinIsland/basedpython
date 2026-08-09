@@ -1,0 +1,14 @@
+class TypeMapping[T in (int, str)]: ...
+
+
+class TypeMappingWithDefault[in out T in (int, str) = int]: ...
+
+
+class ReifiedTypeMapping[reified T in (int, str)]: ...
+
+
+def f[T in (int, str)](x: T) -> T:
+    return x
+
+
+type Alias[T in (int, str)] = list[T]

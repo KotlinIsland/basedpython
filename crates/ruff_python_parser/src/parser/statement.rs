@@ -7900,7 +7900,41 @@ impl<'src> Parser<'src> {
 
             let name = self.parse_identifier();
 
-            let (lower_bound, bound) = if self.eat(TokenKind::Colon) {
+            // basedpython: `T in (int, str)` ranges the parameter over a type mapping, where
+            // `T: (int, str)` bounds it by the tuple type. the mapping is an arbitrary type
+            // expression, so `in` is what tells the two apart, not the shape of what follows
+            let is_type_mapping = self.at(TokenKind::In);
+            let (lower_bound, bound) = if is_type_mapping {
+                // test_err type_param_type_mapping_py
+                // type X[T in (int, str)] = int
+                // def f[T in (int, str)](): ...
+                // class C[T in (int, str)]: ...
+                self.error_if_not_basedpython(
+                    "type mappings are a basedpython feature and are not valid in `.py` files"
+                        .to_string(),
+                );
+                self.bump(TokenKind::In);
+                if self.at_expr() {
+                    (
+                        None,
+                        Some(Box::new(
+                            self.parse_conditional_expression_or_higher_impl(
+                                ExpressionContext::default().with_in_type_expression(),
+                            )
+                            .expr,
+                        )),
+                    )
+                } else {
+                    // test_err type_param_missing_type_mapping
+                    // type X[T in ] = int
+                    // type X[T1 in , T2] = int
+                    self.add_error(
+                        ParseErrorType::ExpectedExpression,
+                        self.current_token_range(),
+                    );
+                    (None, None)
+                }
+            } else if self.eat(TokenKind::Colon) {
                 // the lower end is parsed in a context that leaves a following `..` alone, so it
                 // separates the two ends instead of being eaten as a malformed attribute access
                 if self.at_expr() {
@@ -8010,6 +8044,7 @@ impl<'src> Parser<'src> {
                 name,
                 lower_bound,
                 bound,
+                is_type_mapping,
                 default,
                 variance,
                 is_reified,
@@ -8095,6 +8130,8 @@ impl<'src> Parser<'src> {
                     name: parameter.name.clone(),
                     lower_bound: None,
                     bound: Some(bound),
+                    // `some T` writes an upper bound; a hole has no `in` spelling
+                    is_type_mapping: false,
                     default: None,
                     variance: None,
                     // a hole is a type-level construct with no runtime form to reify

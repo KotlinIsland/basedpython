@@ -157,11 +157,11 @@ class E[U: str..object](C[U]): ...
 
 ## a bound range needs a plain upper end
 
-`constraints (...)` is an unordered set, not the top of a range, so the two cannot be combined.
+a parameter list is not a type, so it cannot cap a range of types.
 
 ```by
 # error: [invalid-type-variable-bound] "TypeVar bound range requires a plain upper bound as its upper end"
-class C[T: int..constraints (str, bytes)]: ...
+class C[T: int..(*: *, **: *)]: ...
 ```
 
 ## a generic lower bound is rejected
