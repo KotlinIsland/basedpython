@@ -709,7 +709,7 @@ fn validate_from_or_of<'db>(
     if !function.is_classmethod(db) {
         if let Some(builder) = context.report_lint(&INVALID_CONVERSION, &function_node.name) {
             let mut diagnostic =
-                builder.into_diagnostic(format_args!("`{name}` must be a `@classmethod`"));
+                builder.into_diagnostic(format_args!("`{name}` must be a `class def`"));
             diagnostic.info(format_args!(
                 "a conversion lowers to `{}.{name}(value)`, which would bind the value to \
                  the first parameter",

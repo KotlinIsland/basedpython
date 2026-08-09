@@ -468,6 +468,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return;
         }
 
+        // an `init(...)` is given its `-> None` by the parser, zero-width and after the
+        // parameter list. there is nothing in the source to remove, so there is nothing to say
+        if returns.range().is_empty() {
+            return;
+        }
+
         // everything below reads the class MRO and the enclosing overload chain, so don't
         // pay for it when nothing will be reported
         if !self.context.is_lint_enabled(&REDUNDANT_RETURN_ANNOTATION) {

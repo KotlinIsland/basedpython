@@ -404,7 +404,7 @@ impl UrlName {
 /// work either way, so this is all a framework has to say about its spelling —
 /// what its converter names mean is [`Converter`]'s to say.
 #[derive(Debug, Clone, Copy)]
-struct ParameterSyntax {
+pub(crate) struct ParameterSyntax {
     /// what opens a parameter
     open: char,
     /// what closes it

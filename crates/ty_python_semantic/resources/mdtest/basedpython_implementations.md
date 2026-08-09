@@ -172,10 +172,9 @@ bs: list[B] = [B()]
 xs: list[A] = [B(), *bs]
 ```
 
-## a plain assignment to a declared name does not convert
+## a plain assignment to a declared name converts
 
-The declared type lives in another statement, so the lowering has no way to recover the same target;
-annotate the assignment instead.
+The declared type lives in another statement, and the name carries it to the assignment.
 
 ```by
 abstract class A:
@@ -190,9 +189,8 @@ implementation A for B:
 
 def f() -> None:
     x: A
-    # error: [invalid-assignment] "Object of type `final B` is not assignable to `A`"
     x = B()
-    # annotating it converts
+    reveal_type(x)  # revealed: A
     y: A = B()
 ```
 

@@ -316,6 +316,27 @@ class Fahrenheit:
     }
 
     #[test]
+    fn from_converts_a_plain_assignment_to_a_declared_name() {
+        let out = check(&format!(
+            "{TEMPERATURES}x: Fahrenheit = Fahrenheit(1.0)\nx = Celsius(1.0)\n"
+        ));
+        assert!(
+            out.contains("x = Fahrenheit.__from__(Celsius(1.0))"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn several_targets_convert_nothing() {
+        // one value reaches both names, so there is no wrap that serves either
+        let out = check(&format!(
+            "{TEMPERATURES}x: Fahrenheit = Fahrenheit(1.0)\ny: Fahrenheit = Fahrenheit(1.0)\n\
+             x = y = Fahrenheit(2.0)\n"
+        ));
+        assert!(out.contains("x = y = Fahrenheit(2.0)"), "got:\n{out}");
+    }
+
+    #[test]
     fn from_converts_a_return() {
         let out = check(&format!(
             "{TEMPERATURES}def make(c: Celsius) -> Fahrenheit:\n    return c\n"

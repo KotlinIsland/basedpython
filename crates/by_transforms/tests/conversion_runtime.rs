@@ -13,8 +13,8 @@
 //! - `T.__of__(literal)` converts the written-out value, including a display
 //!   whose own elements are computed
 //! - every conversion site converts at runtime: a call argument, an annotated
-//!   assignment, an attribute assignment, a `return`, and element-wise inside a
-//!   literal collection
+//!   assignment, a plain assignment to a name declared elsewhere, an attribute
+//!   assignment, a `return`, and element-wise inside a literal collection
 
 use std::process::{Command, Stdio};
 
@@ -78,6 +78,12 @@ assert report(Celsius(100.0)) == 212.0, report(Celsius(100.0))
 boiling: Fahrenheit = Celsius(100.0)
 assert type(boiling).__name__ == "Fahrenheit"
 assert boiling.degrees == 212.0
+
+# a plain assignment to a name declared in an earlier statement
+later: Fahrenheit = Fahrenheit(0.0)
+later = Celsius(100.0)
+assert type(later).__name__ == "Fahrenheit"
+assert later.degrees == 212.0
 
 # a `return`
 def to_f(c: Celsius) -> Fahrenheit:
