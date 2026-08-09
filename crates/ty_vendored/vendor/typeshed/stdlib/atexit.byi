@@ -20,7 +20,7 @@ def _run_exitfuncs():
     If a callback raises an exception, it is logged with sys.unraisablehook.
     """
 
-def register[Parameters: (*: *, **: *), Element](func: (**Parameters) -> Element, /, *args: Parameters.args, **kwargs: Parameters.kwargs) -> (**Parameters) -> Element:
+def register[Parameters: (*: *, **: *), Element](func: (**Parameters) -> Element, /, *args: *Parameters, **kwargs: **Parameters) -> (**Parameters) -> Element:
     """Register a function to be executed upon normal program termination
 
     func - function to be called at exit

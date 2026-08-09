@@ -139,7 +139,7 @@ class staticmethod[Parameters: (*: *, **: *), out R]:
     def __get__[Element](self, instance: Element, owner: type[Element] | None = None, /) -> (**Parameters) -> R
 
     let __wrapped__: (**Parameters) -> R
-    def __call__(self, *args: Parameters.args, **kwargs: Parameters.kwargs) -> R:
+    def __call__(self, *args: *Parameters, **kwargs: **Parameters) -> R:
         """Call self as a function."""
 
     if sys.version_info >= (3, 14):

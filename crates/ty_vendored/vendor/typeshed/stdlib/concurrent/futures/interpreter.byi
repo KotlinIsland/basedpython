@@ -10,7 +10,7 @@ private type Task = (bytes, "function" | "script")
 
 @type_check_only
 private protocol TaskFunc:
-    def __call__[Parameters: (*: *, **: *), R](self, fn: (**Parameters) -> R, *args: Parameters.args, **kwargs: Parameters.kwargs) -> (bytes, "function")
+    def __call__[Parameters: (*: *, **: *), R](self, fn: (**Parameters) -> R, *args: *Parameters, **kwargs: **Parameters) -> (bytes, "function")
     def __call__(self, fn: str) -> (bytes, "script")
 
 if sys.version_info >= (3, 14):

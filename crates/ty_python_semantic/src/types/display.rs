@@ -35,9 +35,9 @@ use crate::types::visitor::TypeVisitor;
 use crate::types::{
     CallableType, DeferredOperation, DeferredType, DynamicType, IntersectionType,
     KnownBoundMethodType, KnownClass, KnownInstanceType, LiteralValueType, LiteralValueTypeKind,
-    MaterializationKind, PropertyInstanceType, Protocol, ProtocolInstanceType, SpecialFormType,
-    StringLiteralType, SubclassOfInner, SubclassOfType, Type, TypeAliasType, TypeGuardLike,
-    TypedDictModule, TypedDictType, UnionType, WrapperDescriptorKind, visitor,
+    MaterializationKind, ParamSpecAttrKind, PropertyInstanceType, Protocol, ProtocolInstanceType,
+    SpecialFormType, StringLiteralType, SubclassOfInner, SubclassOfType, Type, TypeAliasType,
+    TypeGuardLike, TypedDictModule, TypedDictType, UnionType, WrapperDescriptorKind, visitor,
 };
 use ty_python_core::definition::Definition;
 use ty_python_core::scope::{FileScopeId, ScopeKind};
@@ -1817,6 +1817,17 @@ struct DisplayBoundTypeVarIdentity<'db> {
 
 impl Display for DisplayBoundTypeVarIdentity<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let paramspec_attr = self.bound_typevar_identity.paramspec_attr;
+        // basedpython unpacks a parameter pack's two halves with stars — `*P` and `**P` —
+        // rather than naming them as attributes of the type variable
+        if basedpython_display_enabled()
+            && let Some(attr) = paramspec_attr
+        {
+            f.write_str(match attr {
+                ParamSpecAttrKind::Args => "*",
+                ParamSpecAttrKind::Kwargs => "**",
+            })?;
+        }
         f.write_str(self.bound_typevar_identity.identity.name(self.db))?;
         let binding_context = self.bound_typevar_identity.binding_context;
         if let Some(binding_context_name) = binding_context.name(self.db)
@@ -1825,8 +1836,10 @@ impl Display for DisplayBoundTypeVarIdentity<'_> {
         {
             write!(f, "@{binding_context_name}")?;
         }
-        if let Some(paramspec_attr) = self.bound_typevar_identity.paramspec_attr {
-            write!(f, ".{paramspec_attr}")?;
+        if !basedpython_display_enabled()
+            && let Some(attr) = paramspec_attr
+        {
+            write!(f, ".{attr}")?;
         }
         Ok(())
     }

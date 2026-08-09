@@ -1245,10 +1245,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         let annotated_type = self.file_expression_type(annotation);
-        // basedpython: `**kwargs: *Kwargs` unpacks a keyword-variadic pack, not a `TypedDict`
+        // basedpython: `**kwargs: **Kwargs` unpacks a keyword-variadic pack and `**kwargs: **P`
+        // a `ParamSpec`'s keyword half, neither of which is a `TypedDict`
         if matches!(
             annotated_type,
-            Type::TypeVar(typevar) if typevar.is_keyword_variadic(self.db())
+            Type::TypeVar(typevar) if typevar.is_parameter_pack(self.db())
         ) {
             return;
         }
@@ -1406,8 +1407,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             let declared_ty = self.file_expression_type(annotation).erase_overlapping(db);
 
             // P.args and P.kwargs are only valid as annotations on *args and **kwargs,
-            // not on regular parameters.
-            if let Type::TypeVar(typevar) = declared_ty
+            // not on regular parameters. basedpython has no source spelling for them at all,
+            // and says so once where the type expression is resolved
+            if !self.is_basedpython_file()
+                && let Type::TypeVar(typevar) = declared_ty
                 && typevar.is_paramspec(db)
                 && let Some(attr) = typevar.paramspec_attr(db)
             {
@@ -1612,8 +1615,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         Some(ParamSpecAttrKind::Kwargs) => {
                             // TODO: Should this diagnostic be raised as part of
                             // `ArgumentTypeChecker`?
-                            if let Some(builder) =
-                                self.context.report_lint(&INVALID_TYPE_FORM, annotation)
+                            // basedpython says everything there is to say about the spelling
+                            // where the type expression is resolved
+                            if !self.is_basedpython_file()
+                                && let Some(builder) =
+                                    self.context.report_lint(&INVALID_TYPE_FORM, annotation)
                             {
                                 let name = typevar.name(db);
                                 let mut diag = builder.into_diagnostic(format_args!(
@@ -1905,8 +1911,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     // `**kwargs: P.args`
                     Some(ParamSpecAttrKind::Args) => {
                         // TODO: Should this diagnostic be raised as part of `ArgumentTypeChecker`?
-                        if let Some(builder) =
-                            self.context.report_lint(&INVALID_TYPE_FORM, annotation)
+                        // basedpython says everything there is to say about the spelling where
+                        // the type expression is resolved
+                        if !self.is_basedpython_file()
+                            && let Some(builder) =
+                                self.context.report_lint(&INVALID_TYPE_FORM, annotation)
                         {
                             let name = typevar.name(db);
                             let mut diag = builder.into_diagnostic(format_args!(

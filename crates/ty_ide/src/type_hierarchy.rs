@@ -336,7 +336,7 @@ mod tests {
         insta::assert_snapshot!(snapshot(&test.db, &subtypes), @"
         vendored://stdlib/email/headerregistry.byi:698:708 BaseHeader :: email.headerregistry
         vendored://stdlib/enum.byi:17985:17992 StrEnum :: enum
-        vendored://stdlib/pdb.byi:38332:38337 _rstr :: pdb
+        vendored://stdlib/pdb.byi:38323:38328 _rstr :: pdb
         vendored://stdlib/xxlimited.byi:98:101 Str :: xxlimited
         ");
     }
@@ -369,7 +369,7 @@ mod tests {
         vendored://stdlib/email/headerregistry.byi:698:708 BaseHeader :: email.headerregistry
         vendored://stdlib/enum.byi:17985:17992 StrEnum :: enum
         /main.py:77:89 MyEventTypeA :: main
-        vendored://stdlib/pdb.byi:38332:38337 _rstr :: pdb
+        vendored://stdlib/pdb.byi:38323:38328 _rstr :: pdb
         vendored://stdlib/xxlimited.byi:98:101 Str :: xxlimited
         ");
     }
@@ -435,7 +435,7 @@ mod tests {
         let item = test.prepare().unwrap();
         insta::assert_snapshot!(
             snapshot(&test.db, &[item]),
-            @"vendored://stdlib/builtins.byi:7018:7022 type :: builtins",
+            @"vendored://stdlib/builtins.byi:7009:7013 type :: builtins",
         );
         let supertypes = test.supertypes();
         insta::assert_snapshot!(
@@ -492,7 +492,7 @@ mod tests {
         let supertypes = test.supertypes();
         insta::assert_snapshot!(
             snapshot(&test.db, &supertypes),
-            @"vendored://stdlib/builtins.byi:97528:97533 tuple :: builtins",
+            @"vendored://stdlib/builtins.byi:97519:97524 tuple :: builtins",
         );
     }
 

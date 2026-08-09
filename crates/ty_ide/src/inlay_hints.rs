@@ -1976,6 +1976,34 @@ Source with applied edits:
         }
     }
 
+    /// a forwarded parameter pack's halves render in the starred spelling the file is
+    /// written in, not python's attribute one
+    #[test]
+    fn forwarded_parameter_pack_hints() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def deco[Parameters: (*: *, **: *), R](fn: (**Parameters) -> R):
+                def inner(*args: *Parameters, **kwargs: **Parameters) -> R:
+                    positional = args
+                    keyword = kwargs
+                    return fn(*args, **kwargs)
+
+                return inner
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints(), @"
+
+        def deco[Parameters: (*: *, **: *), R](fn: (**Parameters) -> R):
+            def inner(*args: *Parameters, **kwargs: **Parameters) -> R:
+                positional[: *Parameters@deco] = args
+                keyword[: **Parameters@deco] = kwargs
+                return fn(*args, **kwargs)
+
+            return inner
+        ");
+    }
+
     #[test]
     fn property_accessor_hints() {
         // an accessor's header is synthesized, so it takes no implicit-parameter

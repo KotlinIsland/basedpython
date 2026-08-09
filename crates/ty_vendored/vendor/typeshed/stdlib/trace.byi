@@ -140,7 +140,7 @@ class Trace:
     def runctx(
         self, cmd: str | types.CodeType, globals: Mapping[str, dynamic] | None = None, locals: Mapping[str, dynamic] | None = None
     )
-    def runfunc[Parameters: (*: *, **: *), Element](self, func: (**Parameters) -> Element, /, *args: Parameters.args, **kw: Parameters.kwargs) -> Element
+    def runfunc[Parameters: (*: *, **: *), Element](self, func: (**Parameters) -> Element, /, *args: *Parameters, **kw: **Parameters) -> Element
     def file_module_function_of(self, frame: types.FrameType) -> FileModuleFunction
     def globaltrace_trackcallers(self, frame: types.FrameType, why: str, arg: dynamic):
         """Handler for call events.

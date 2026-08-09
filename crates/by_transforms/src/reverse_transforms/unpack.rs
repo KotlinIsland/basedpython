@@ -1,7 +1,10 @@
 //! reverse of `crate::transforms::unpack`:
 //!   `*args: Unpack[T]` → `*args: *T`
+//!   `*args: P.args, **kwargs: P.kwargs` → `*args: *P, **kwargs: **P`
 //!
-//! only fires on vararg annotations when `Unpack` resolves to the typing import
+//! the `Unpack` rewrite only fires on vararg annotations when `Unpack` resolves to the typing
+//! import. the parameter-pack rewrite only fires on the pair, which is the only shape the typing
+//! spec allows a `ParamSpec` to be forwarded in
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
@@ -60,6 +63,58 @@ impl<'src> UnpackReverse<'src> {
                 ann.range().end(),
             ))));
     }
+
+    /// `P.args` / `P.kwargs` → `*P` / `**P`.
+    ///
+    /// The pack's own source is kept and only the stars and the suffix are edited, so a reverse
+    /// transform that rewrote something inside the receiver still lands.
+    fn rewrite_pack_component(&mut self, ann: &Expr, receiver: &Expr, stars: &str) {
+        self.edits.push(Fix::safe_edit(Edit::insertion(
+            stars.to_owned(),
+            ann.range().start(),
+        )));
+        self.edits
+            .push(Fix::safe_edit(Edit::range_deletion(TextRange::new(
+                receiver.range().end(),
+                ann.range().end(),
+            ))));
+    }
+
+    /// the receiver of an `X.<name>` annotation
+    fn component_receiver<'a>(ann: Option<&'a Expr>, name: &str) -> Option<&'a Expr> {
+        let Some(Expr::Attribute(attribute)) = ann else {
+            return None;
+        };
+        (attribute.attr.id == name).then(|| attribute.value.as_ref())
+    }
+
+    /// `*args: P.args, **kwargs: P.kwargs` — the paired form, the only one the typing spec
+    /// allows a `ParamSpec` to be forwarded in, and so the only one that identifies `P` as one
+    fn process_paramspec_pair(&mut self, parameters: &ruff_python_ast::Parameters) {
+        let vararg = parameters
+            .vararg
+            .as_deref()
+            .and_then(|vararg| vararg.annotation.as_deref());
+        let kwarg = parameters
+            .kwarg
+            .as_deref()
+            .and_then(|kwarg| kwarg.annotation.as_deref());
+        let (Some(args), Some(kwargs)) = (
+            Self::component_receiver(vararg, "args"),
+            Self::component_receiver(kwarg, "kwargs"),
+        ) else {
+            return;
+        };
+        if self.src(args.range()) != self.src(kwargs.range()) {
+            return;
+        }
+        self.rewrite_pack_component(vararg.expect("checked above"), args, "*");
+        self.rewrite_pack_component(kwarg.expect("checked above"), kwargs, "**");
+    }
+
+    fn src(&self, range: TextRange) -> &str {
+        &self.source[usize::from(range.start())..usize::from(range.end())]
+    }
 }
 
 impl<'ast> Visitor<'ast> for UnpackReverse<'_> {
@@ -70,6 +125,7 @@ impl<'ast> Visitor<'ast> for UnpackReverse<'_> {
                     self.process_vararg_annotation(ann);
                 }
             }
+            self.process_paramspec_pair(&f.parameters);
         }
         walk_stmt(self, stmt);
     }
@@ -114,6 +170,47 @@ mod tests {
                 class A:
                     def method(self, *args: *tuple[str, ...])
             "},
+        );
+    }
+
+    /// a forwarded `ParamSpec` takes basedpython's starred spelling
+    #[test]
+    fn paramspec_pair_reversed() {
+        check(
+            "def f(*args: P.args, **kwargs: P.kwargs): ...\n",
+            "def f(*args: *P, **kwargs: **P)\n",
+        );
+    }
+
+    /// the rewrite is what the forward transform reads back, so the pair round-trips
+    #[test]
+    fn paramspec_pair_round_trips_through_the_forward_transform() {
+        use crate::transpile;
+        let reversed = reverse_transpile(
+            "def f(*args: P.args, **kwargs: P.kwargs): ...\n",
+            &Config::test_default(),
+        )
+        .expect("reverse failed");
+        assert_eq!(reversed, "def f(*args: *P, **kwargs: **P)\n");
+        let forward = transpile(&reversed, &Config::test_default()).expect("forward failed");
+        assert!(
+            forward.contains("*args: P.args, **kwargs: P.kwargs"),
+            "expected the runtime spelling back, got:\n{forward}"
+        );
+    }
+
+    /// only the paired form identifies a `ParamSpec`; a lone `.args` is left alone
+    #[test]
+    fn lone_args_component_unchanged() {
+        check("def f(*args: P.args): ...\n", "def f(*args: P.args)\n");
+    }
+
+    /// two different receivers are not a pair
+    #[test]
+    fn mismatched_receivers_unchanged() {
+        check(
+            "def f(*args: P.args, **kwargs: Q.kwargs): ...\n",
+            "def f(*args: P.args, **kwargs: Q.kwargs)\n",
         );
     }
 

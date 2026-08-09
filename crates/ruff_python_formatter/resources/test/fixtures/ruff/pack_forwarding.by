@@ -1,0 +1,28 @@
+def deco[Parameters: (*: *, **: *), R](fn: (**Parameters) -> R) -> (**Parameters) -> R:
+    def inner(*args: *Parameters, **kwargs: **Parameters) -> R:
+        return fn(*args, **kwargs)
+
+    return inner
+
+
+class Wrapper[Parameters: (*: *, **: *), out R]:
+    def __call__(self, *args: *Parameters, **kwargs: **Parameters) -> R: ...
+
+
+def concatenated[Parameters: (*: *, **: *)](
+    first: int, /, *args: *Parameters, **kwargs: **Parameters
+) -> None: ...
+
+
+def keyword_pack[**Kwargs](**kwargs: **Kwargs) -> None: ...
+
+
+def variadic_pack[*Ts](*args: *Ts) -> None: ...
+
+
+def broken[Parameters: (*: *, **: *), Element](
+    callback: (**Parameters) -> Element,
+    /,
+    *args: *Parameters,
+    **kwargs: **Parameters,
+) -> Element: ...

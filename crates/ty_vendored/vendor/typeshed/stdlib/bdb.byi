@@ -306,7 +306,7 @@ class Bdb:
         globals defaults to __main__.dict; locals defaults to globals.
         """
 
-    def runcall[Parameters: (*: *, **: *), Element](self, func: (**Parameters) -> Element, /, *args: Parameters.args, **kwds: Parameters.kwargs) -> Element | None:
+    def runcall[Parameters: (*: *, **: *), Element](self, func: (**Parameters) -> Element, /, *args: *Parameters, **kwds: **Parameters) -> Element | None:
         """Debug a single function call.
 
         Return the result of the function call.

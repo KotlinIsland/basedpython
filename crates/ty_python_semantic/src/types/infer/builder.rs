@@ -4541,7 +4541,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
 
             // P.args and P.kwargs are only valid as annotations on *args and **kwargs.
-            if let Type::TypeVar(typevar) = annotated.inner_type()
+            // basedpython has no source spelling for them at all, and says so once where the
+            // type expression is resolved
+            if !self.is_basedpython_file()
+                && let Type::TypeVar(typevar) = annotated.inner_type()
                 && typevar.is_paramspec(self.db())
                 && let Some(attr) = typevar.paramspec_attr(self.db())
             {
@@ -4889,8 +4892,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         // P.args and P.kwargs are only valid as annotations on *args and **kwargs,
-        // not as variable annotations. Check both resolved type and AST form.
-        if let Type::TypeVar(typevar) = declared.inner_type()
+        // not as variable annotations. Check both resolved type and AST form. basedpython has
+        // no source spelling for them at all, and says so once where the type expression is
+        // resolved
+        if !self.is_basedpython_file()
+            && let Type::TypeVar(typevar) = declared.inner_type()
             && typevar.is_paramspec(self.db())
             && let Some(attr) = typevar.paramspec_attr(self.db())
         {
@@ -13024,7 +13030,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 && !typevar.is_typevartuple(db);
             // binding the type parameter runs the lookup below — and any diagnostic for
             // a member the parameter cannot have — against its bound
-            if (typevar.is_paramspec(db) || is_attribute_type)
+            if (typevar.is_parameter_pack(db) || is_attribute_type)
                 && let Some(bound_typevar) = bind_typevar(
                     db,
                     self.index,

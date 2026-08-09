@@ -76,24 +76,36 @@ A[(bool, a: str, b: str)]
 def f[P: (*: *, **: *)](fn: (**P) -> None) -> (int, **P) -> None
 ```
 
+## forwarding
+
+a parameter specification is forwarded whole, as the pair that takes its positional half
+and its keyword half:
+
+```by
+def deco[P: (*: *, **: *), R](fn: (**P) -> R) -> (**P) -> R:
+    def inner(*args: *P, **kwargs: **P) -> R:
+        return fn(*args, **kwargs)
+
+    return inner
+```
+
+the star count follows the half being taken, the way it does for every other pack — python's
+`P.args` / `P.kwargs` is not valid in a basedpython file
+
 ## callable attribute access
 
-`Callable` exposes its parameter and return types as attributes-as-types,
-forwarded from its `Parameters` type parameter:
+`Callable` exposes its parameter list and return type as attributes-as-types:
 
 ```by
 class Callable[Parameters: (*: *, **: *), Return]:
     @type_check_only
-    args: Parameters.args
-
-    @type_check_only
-    kwargs: Parameters.kwargs
+    parameters: Parameters
 
     @type_check_only
     returns: Return
 
 class A[Fn: (*: *, **: *) -> object]:
-    def f(self, *args: *Fn.args, **kwargs: **Fn.kwargs) -> Fn.returns
+    def f(self, *args: *Fn.parameters, **kwargs: **Fn.parameters) -> Fn.returns
 ```
 
 ## see also

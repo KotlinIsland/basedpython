@@ -5,9 +5,10 @@
 //! `tuple[*Ts]`                     → `tuple[Unpack[Ts]]`
 //! `class Stack(Generic[*Ts]):`     → `class Stack(Generic[Unpack[Ts]]):`
 //!
-//! Also lowers basedpython's keyword-pack unpacking, which no python version accepts:
+//! Also lowers basedpython's pack forwarding, which no python version accepts:
 //!
 //! `def f(**kwargs: **Kwargs)`      → `def f(**kwargs: Kwargs.kwargs)`
+//! `def f(*args: *P, **kwargs: **P)` → `def f(*args: P.args, **kwargs: P.kwargs)`
 
 use std::cell::RefCell;
 
@@ -32,15 +33,17 @@ impl UnpackSyntax {
 
 impl AstPass for UnpackSyntax {
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
-        // a keyword pack is a `ParamSpec` at runtime, and `**kwargs: *Pack` is invalid python at
-        // every version, so this lowering is not version-gated like the `Unpack` polyfill below
-        let mut keyword_pack = KeywordPackKwargs {
+        // a parameter pack is a `ParamSpec` at runtime, and neither `**kwargs: **Pack` nor
+        // `*args: *P` is valid python at any version, so this lowering is not version-gated
+        // like the `Unpack` polyfill below
+        let mut pack = PackForwarding {
             edits: RefCell::new(Vec::new()),
+            lowered_varargs: Vec::new(),
         };
         for stmt in &module.body {
-            keyword_pack.visit_stmt(stmt);
+            pack.visit_stmt(stmt);
         }
-        ctx.text_edits.extend(keyword_pack.edits.into_inner());
+        ctx.text_edits.extend(pack.edits.into_inner());
 
         if self.config.min_version >= PythonVersion::PY311 {
             return;
@@ -48,6 +51,7 @@ impl AstPass for UnpackSyntax {
         let mut state = State {
             edits: RefCell::new(Vec::new()),
             needs_import: false,
+            lowered_varargs: pack.lowered_varargs,
         };
         for stmt in &module.body {
             state.visit_stmt(stmt);
@@ -60,27 +64,68 @@ impl AstPass for UnpackSyntax {
     }
 }
 
-/// Lowers `**kwargs: *Pack` to the `ParamSpec` spelling `**kwargs: Pack.kwargs`.
+/// Lowers a forwarded parameter pack to the `ParamSpec` spelling: `**kwargs: **Pack` to
+/// `**kwargs: Pack.kwargs`, and the `*args: *P` that pairs with it to `*args: P.args`.
 ///
-/// The star is dropped and the suffix appended as two edits *around* the pack's name rather than
+/// The stars are dropped and the suffix appended as two edits *around* the pack's name rather than
 /// one replacement of the whole annotation, so the pep695 polyfill's typevar rename — which
 /// rewrites that name in place — still lands.
-struct KeywordPackKwargs {
+///
+/// A single-starred `*args` annotation is a `TypeVarTuple` unpack unless the same name is
+/// double-starred by the `**kwargs` of the same signature: a `ParamSpec` may only be forwarded as
+/// the pair, which is what makes the two spellings tell apart without asking for a type.
+struct PackForwarding {
     edits: RefCell<Vec<(TextRange, String)>>,
+    /// ranges of the `*args` annotations lowered here, which the `Unpack` polyfill must leave
+    /// alone
+    lowered_varargs: Vec<TextRange>,
 }
 
-impl<'ast> Visitor<'ast> for KeywordPackKwargs {
+impl PackForwarding {
+    /// drop the stars off `starred` and append `suffix` to the name they applied to
+    fn rewrite(&self, starred: &ruff_python_ast::ExprStarred, suffix: &str) {
+        let stars = TextRange::new(starred.range().start(), starred.value.range().start());
+        let end = starred.range().end();
+        self.edits.borrow_mut().push((stars, String::new()));
+        self.edits
+            .borrow_mut()
+            .push((TextRange::new(end, end), suffix.to_owned()));
+    }
+}
+
+/// the name a `**Pack` annotation forwards, if that is what `annotation` is
+fn double_starred_pack_name(annotation: Option<&Expr>) -> Option<&str> {
+    let Some(Expr::Starred(outer)) = annotation else {
+        return None;
+    };
+    let Expr::Starred(inner) = outer.value.as_ref() else {
+        return None;
+    };
+    Some(&inner.value.as_name_expr()?.id)
+}
+
+impl<'ast> Visitor<'ast> for PackForwarding {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        if let Stmt::FunctionDef(f) = stmt
-            && let Some(kwarg) = &f.parameters.kwarg
-            && let Some(Expr::Starred(starred)) = kwarg.annotation.as_deref()
-        {
-            let star = TextRange::new(starred.range().start(), starred.value.range().start());
-            let end = starred.range().end();
-            self.edits.borrow_mut().push((star, String::new()));
-            self.edits
-                .borrow_mut()
-                .push((TextRange::new(end, end), ".kwargs".to_owned()));
+        if let Stmt::FunctionDef(f) = stmt {
+            let pack = double_starred_pack_name(
+                f.parameters
+                    .kwarg
+                    .as_ref()
+                    .and_then(|kwarg| kwarg.annotation.as_deref()),
+            );
+            if let Some(kwarg) = &f.parameters.kwarg
+                && let Some(Expr::Starred(starred)) = kwarg.annotation.as_deref()
+            {
+                self.rewrite(starred, ".kwargs");
+            }
+            if let Some(pack) = pack
+                && let Some(vararg) = &f.parameters.vararg
+                && let Some(Expr::Starred(starred)) = vararg.annotation.as_deref()
+                && starred.value.as_name_expr().is_some_and(|n| n.id == pack)
+            {
+                self.rewrite(starred, ".args");
+                self.lowered_varargs.push(starred.range());
+            }
         }
         walk_stmt(self, stmt);
     }
@@ -89,6 +134,7 @@ impl<'ast> Visitor<'ast> for KeywordPackKwargs {
 struct State {
     edits: RefCell<Vec<(TextRange, String)>>,
     needs_import: bool,
+    lowered_varargs: Vec<TextRange>,
 }
 
 impl State {
@@ -108,6 +154,10 @@ impl State {
         let Expr::Starred(starred) = ann else {
             return;
         };
+        // a forwarded `ParamSpec` already became `P.args`, which is not an unpack
+        if self.lowered_varargs.contains(&starred.range()) {
+            return;
+        }
         self.needs_import = true;
         let star_range = TextRange::new(ann.range().start(), starred.value.range().start());
         self.edits
@@ -240,5 +290,65 @@ mod tests {
     #[test]
     fn regular_arg_annotation_unchanged() {
         check("def f(x: int): ...\n", "def f(x: int): ...\n");
+    }
+
+    /// a `ParamSpec` is forwarded as the `*args` / `**kwargs` pair, which takes the runtime
+    /// `.args` / `.kwargs` spelling
+    #[test]
+    fn rewrites_forwarded_paramspec_pair() {
+        check(
+            "def f[P: (*: *, **: *)](*args: *P, **kwargs: **P) -> None: ...\n",
+            indoc! {"
+                from typing import ParamSpec
+                _P = ParamSpec(\"_P\")
+                def f(*args: _P.args, **kwargs: _P.kwargs) -> None: ...
+            "},
+        );
+    }
+
+    /// the pair is what tells a forwarded `ParamSpec` from a `TypeVarTuple` unpack: on its own,
+    /// `*args: *Ts` is still the unpack
+    #[test]
+    fn unpaired_starred_vararg_stays_an_unpack() {
+        check(
+            "def f[*Ts](*args: *Ts) -> None: ...\n",
+            indoc! {"
+                from typing_extensions import TypeVarTuple, Unpack
+                _Ts = TypeVarTuple(\"_Ts\")
+                def f(*args: Unpack[_Ts]) -> None: ...
+            "},
+        );
+    }
+
+    /// a pack unpacked by `**kwargs` under a *different* name leaves the `*args` unpack alone
+    #[test]
+    fn a_different_pack_leaves_the_vararg_alone() {
+        let output = transpile(
+            "def f[*Ts, **Kwargs](*args: *Ts, **kwargs: **Kwargs) -> None: ...\n",
+            &Config::test_default(),
+        )
+        .expect("transpile failed");
+        assert!(
+            output.contains("*args: Unpack[_Ts], **kwargs: _Kwargs.kwargs"),
+            "unexpected output:\n{output}"
+        );
+    }
+
+    /// no python version accepts `*args: *P`, so the pair lowers on 3.11 too
+    #[test]
+    fn rewrites_forwarded_paramspec_pair_on_311() {
+        let config = Config {
+            min_version: PythonVersion::PY311,
+            ..Config::test_default()
+        };
+        let output = transpile(
+            "def f[P: (*: *, **: *)](*args: *P, **kwargs: **P) -> None: ...\n",
+            &config,
+        )
+        .expect("transpile failed");
+        assert!(
+            output.contains("*args: _P.args, **kwargs: _P.kwargs"),
+            "unexpected output:\n{output}"
+        );
     }
 }

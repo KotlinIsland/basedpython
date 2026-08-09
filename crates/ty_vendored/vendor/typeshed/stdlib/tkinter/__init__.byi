@@ -739,7 +739,7 @@ class Misc:
     if sys.version_info >= (3, 14):
         # .after() can be called without the "func" argument, but it is basically never what you want.
         # It behaves like time.sleep() and freezes the GUI app.
-        def after[Parameters: (*: *, **: *)](self, ms: int | "idle", func: (**Parameters) -> object, *args: Parameters.args, **kwargs: Parameters.kwargs) -> str:
+        def after[Parameters: (*: *, **: *)](self, ms: int | "idle", func: (**Parameters) -> object, *args: *Parameters, **kwargs: **Parameters) -> str:
             """Call function once after given time.
 
             MS specifies the time in milliseconds. FUNC gives the
@@ -749,7 +749,7 @@ class Misc:
             """
 
         # after_idle is essentially partialmethod(after, "idle")
-        def after_idle[Parameters: (*: *, **: *)](self, func: (**Parameters) -> object, *args: Parameters.args, **kwargs: Parameters.kwargs) -> str:
+        def after_idle[Parameters: (*: *, **: *)](self, func: (**Parameters) -> object, *args: *Parameters, **kwargs: **Parameters) -> str:
             """Call FUNC once if the Tcl main loop has no event to
             process.
 

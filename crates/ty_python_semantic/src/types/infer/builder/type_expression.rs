@@ -11,10 +11,11 @@ use super::{DeferredExpressionState, TypeInferenceBuilder};
 use crate::types::ClassType;
 use crate::types::call::CallArguments;
 use crate::types::diagnostic::{
-    self, EXPERIMENTAL_SYNTAX, INVALID_TYPE_FORM, NOT_SUBSCRIPTABLE, UNBOUND_TYPE_VARIABLE,
-    UNRESOLVED_ATTRIBUTE, UNSUPPORTED_OPERATOR, report_invalid_argument_number_to_special_form,
-    report_invalid_arguments_to_callable, report_invalid_concatenate_last_arg,
-    report_missing_type_arguments, report_unsupported_binary_operation,
+    self, EXPERIMENTAL_SYNTAX, INVALID_PARAMSPEC, INVALID_TYPE_FORM, NOT_SUBSCRIPTABLE,
+    UNBOUND_TYPE_VARIABLE, UNRESOLVED_ATTRIBUTE, UNSUPPORTED_OPERATOR,
+    report_invalid_argument_number_to_special_form, report_invalid_arguments_to_callable,
+    report_invalid_concatenate_last_arg, report_missing_type_arguments,
+    report_unsupported_binary_operation,
 };
 use crate::types::function::{FunctionDecorators, FunctionType};
 use crate::types::infer::builder::subscript::AnnotatedExprContext;
@@ -30,12 +31,12 @@ use crate::types::type_fn::{
 use ty_python_core::scope::ScopeKind;
 
 use crate::types::{
-    BindingContext, CallableType, DeferredOperation, DeferredType, DynamicType, GenericContext,
-    InternedType, IntersectionBuilder, IntersectionType, KnownClass, KnownInstanceType,
-    LintDiagnosticGuard, LiteralValueTypeKind, OverlappingType, Parameter, Parameters,
-    RestrictedType, SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeContext,
-    TypeFormType, TypeGuardType, TypeIsType, TypeMapping, TypeVarKind, UnionBuilder, UnionType,
-    UnsafeUnionType, any_over_type, todo_type,
+    BindingContext, BoundTypeVarInstance, CallableType, DeferredOperation, DeferredType,
+    DynamicType, GenericContext, InternedType, IntersectionBuilder, IntersectionType, KnownClass,
+    KnownInstanceType, LintDiagnosticGuard, LiteralValueTypeKind, OverlappingType,
+    ParamSpecAttrKind, Parameter, Parameters, RestrictedType, SpecialFormType, SubclassOfType,
+    Type, TypeAliasType, TypeContext, TypeFormType, TypeGuardType, TypeIsType, TypeMapping,
+    TypeVarKind, UnionBuilder, UnionType, UnsafeUnionType, any_over_type, todo_type,
 };
 use crate::{FxOrderSet, Program, add_inferred_python_version_hint_to_diagnostic};
 
@@ -177,6 +178,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 _ => false,
             }
         {
+            if let Type::TypeVar(tvar) = ty
+                && let Some(attr) = tvar.paramspec_attr(self.db())
+            {
+                self.report_paramspec_attribute_spelling(annotation, tvar, attr);
+            }
             return ty;
         }
         // basedpython: a bare enum member (`E.A`) in type position denotes its
@@ -197,6 +203,42 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 error.into_fallback_type(&self.context, annotation, self.inference_flags())
             });
         self.check_for_unbound_type_variable(annotation, result_ty)
+    }
+
+    /// basedpython: a `ParamSpec`'s two halves are unpacked with stars — `*args: *P` and
+    /// `**kwargs: **P` — the same way every other pack is. `P.args` / `P.kwargs` names an
+    /// attribute of the type variable, which is not a thing a type expression can mean; it is
+    /// the python spelling and stays confined to `.py` files.
+    fn report_paramspec_attribute_spelling(
+        &self,
+        annotation: &ast::Expr,
+        typevar: BoundTypeVarInstance<'db>,
+        attr: ParamSpecAttrKind,
+    ) {
+        if !self.is_basedpython_file() {
+            return;
+        }
+        let name = typevar.name(self.db());
+        // a keyword-variadic pack has only the keyword half, so there is no positional
+        // spelling to point at
+        let suggestion = match attr {
+            ParamSpecAttrKind::Args if typevar.is_keyword_variadic(self.db()) => None,
+            ParamSpecAttrKind::Args => Some(format!("*{name}")),
+            ParamSpecAttrKind::Kwargs => Some(format!("**{name}")),
+        };
+        if let Some(builder) = self.context.report_lint(&INVALID_PARAMSPEC, annotation) {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`{name}.{attr}` is the python spelling of a parameter pack's \
+                 {attr} and is not valid in a `.by` file",
+            ));
+            if let Some(suggestion) = suggestion {
+                diagnostic.set_primary_message(format_args!("Did you mean `{suggestion}`?"));
+            } else {
+                diagnostic.set_primary_message(format_args!(
+                    "Keyword-variadic pack `{name}` has no positional parameters"
+                ));
+            }
+        }
     }
 
     /// basedpython: if `ty` is `ty_extensions.Top` / `Bottom` and we are inside
@@ -2024,9 +2066,37 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR,
                 previously_allowed_paramspec,
             );
+            // a `ParamSpec` carries positional parameters as well, so `**kwargs` takes only
+            // its keyword half — the same component python spells `P.kwargs`
+            if let Type::TypeVar(typevar) = pack_type
+                && typevar.is_paramspec(self.db())
+                && self
+                    .inference_flags()
+                    .contains(InferenceFlags::IN_KWARG_ANNOTATION)
+            {
+                return Type::TypeVar(
+                    typevar.with_paramspec_attr(self.db(), ParamSpecAttrKind::Kwargs),
+                );
+            }
             return pack_type;
         }
 
+        // basedpython: `*args: *P` unpacks a `ParamSpec`'s positional parameters, the way
+        // `**kwargs: **P` unpacks its keyword ones. the pack is named bare, so it needs the
+        // same allowance the double-starred form gets — but only for a bare reference at the
+        // top of the annotation, so a pack cannot leak into a nested type position
+        let allow_bare_pack = self.is_basedpython_file()
+            && self
+                .inference_flags()
+                .contains(InferenceFlags::IN_VARARG_ANNOTATION)
+            && !self
+                .inference_flags()
+                .contains(InferenceFlags::IN_NESTED_TYPE_EXPRESSION)
+            && matches!(value.as_ref(), ast::Expr::Name(_) | ast::Expr::Attribute(_));
+        let previously_allowed_paramspec = self
+            .context
+            .inference_flags
+            .replace(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, allow_bare_pack);
         let previously_in_unpack_type_argument = self
             .context
             .inference_flags
@@ -2036,6 +2106,35 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             InferenceFlags::IN_UNPACK_TYPE_ARGUMENT,
             previously_in_unpack_type_argument,
         );
+        self.context.inference_flags.set(
+            InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR,
+            previously_allowed_paramspec,
+        );
+
+        if allow_bare_pack
+            && let Type::TypeVar(typevar) = starred_type
+            && typevar.is_parameter_pack(self.db())
+        {
+            if typevar.is_paramspec(self.db()) {
+                return Type::TypeVar(
+                    typevar.with_paramspec_attr(self.db(), ParamSpecAttrKind::Args),
+                );
+            }
+            // a keyword-variadic pack has no positional half to take
+            self.store_type_expression_flags(
+                ast::ExprRef::from(starred),
+                TypeExpressionFlags::INVALID_UNPACK,
+            );
+            if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, starred) {
+                diagnostic::add_type_expression_reference_link(builder.into_diagnostic(
+                    format_args!(
+                        "Keyword-variadic pack `{}` has no positional parameters to unpack",
+                        typevar.name(self.db())
+                    ),
+                ));
+            }
+            return Type::homogeneous_tuple(self.db(), Type::unknown());
+        }
 
         if let Some(target) = unpack_target(self.db(), starred_type) {
             target
