@@ -813,6 +813,7 @@ pub fn walk_type_param<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, type_param:
         TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound,
             bound,
+            is_type_mapping: _,
             default,
             is_reified: _,
             name: _,

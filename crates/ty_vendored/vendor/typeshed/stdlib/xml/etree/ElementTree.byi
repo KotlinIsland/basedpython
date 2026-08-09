@@ -243,7 +243,7 @@ class QName:
     override def __hash__(self) -> int
 
 
-class ElementTree[in out Root: constraints (Element, Element | None) = Element | None]:
+class ElementTree[in out Root in (Element, Element | None) = Element | None]:
     """An XML element hierarchy.
 
     This class also provides support for serialization to and from

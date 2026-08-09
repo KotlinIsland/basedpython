@@ -582,9 +582,9 @@ fn render_params(
                     out.push_str(": ");
                     out.push_str(&render_expr(bound, source, renames));
                 } else if !decl.constraints.is_empty() {
-                    // basedpython: `T: (a, b)` is a tuple bound; constraints use
-                    // the `constraints` keyword
-                    out.push_str(": constraints (");
+                    // basedpython: `T: (a, b)` is a tuple bound, so a constraint set is
+                    // written as the type mapping `T in (a, b)`
+                    out.push_str(" in (");
                     for (j, constraint) in decl.constraints.iter().enumerate() {
                         if j > 0 {
                             out.push_str(", ");
@@ -1146,14 +1146,14 @@ class C[in out Element, in out AwaitableT: Awaitable[Element]]:
     }
 
     #[test]
-    fn constraints_use_keyword_form() {
+    fn constraints_use_type_mapping_form() {
         let src = "\
 _Str = TypeVar(\"_Str\", str, bytes)
 class C(Generic[_Str]):
     x: _Str
 ";
         let expected = "\
-class C[in out Str: constraints (str, bytes)]:
+class C[in out Str in (str, bytes)]:
     x: Str
 ";
         assert_eq!(convert(src), expected);
@@ -1241,7 +1241,7 @@ class C(Generic[AnyStr]):
 ";
         let expected = "\
 AnyStr = TypeVar(\"AnyStr\", str, bytes)
-class C[in out AnyStr: constraints (str, bytes)]:
+class C[in out AnyStr in (str, bytes)]:
     x: AnyStr
 ";
         assert_eq!(convert(src), expected);

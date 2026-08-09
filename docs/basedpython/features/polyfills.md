@@ -386,7 +386,7 @@ def identity(x: T) -> T:
     return x
 ```
 
-a bound (`T: Foo`) maps to `TypeVar("_T", bound=Foo)`. constraints (`T: (Foo, Bar)`) map to `TypeVar("_T", Foo, Bar)`
+a bound (`T: Foo`) maps to `TypeVar("_T", bound=Foo)`. a [type mapping](type-mappings.md) (`T in (Foo, Bar)`) maps to `TypeVar("_T", Foo, Bar)`
 
 `type` aliases:
 

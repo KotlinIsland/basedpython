@@ -114,7 +114,7 @@ class A[*Shape, **Kwargs]: ...
 ```
 
 the bound is checked against the `.by` source, not the emitted python — the same way
-[bound ranges](bound-ranges.md) and [constraints](constraints.md) are
+[bound ranges](bound-ranges.md) and [type mappings](type-mappings.md) are
 
 ## see also
 
@@ -122,4 +122,4 @@ the bound is checked against the `.by` source, not the emitted python — the sa
 - [keyword-variadic packs](keyword-variadic.md) — what `**Kwargs` declares
 - [dict literal types](typed-dict-literal.md) — the `{"a": int}` bound spelling
 - [type parameter bound ranges](bound-ranges.md) — `T: Lower..Upper` on an ordinary type parameter
-- [explicit typevar constraints](constraints.md) — `T: constraints (int, str)`
+- [type mappings](type-mappings.md) — `T in (int, str)`

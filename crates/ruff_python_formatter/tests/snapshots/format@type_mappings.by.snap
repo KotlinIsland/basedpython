@@ -1,0 +1,39 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/type_mappings.by
+---
+## Input
+```bython
+class TypeMapping[T in (int, str)]: ...
+
+
+class TypeMappingWithDefault[in out T in (int, str) = int]: ...
+
+
+class ReifiedTypeMapping[reified T in (int, str)]: ...
+
+
+def f[T in (int, str)](x: T) -> T:
+    return x
+
+
+type Alias[T in (int, str)] = list[T]
+```
+
+## Output
+```bython
+class TypeMapping[T in (int, str)]: ...
+
+
+class TypeMappingWithDefault[in out T in (int, str) = int]: ...
+
+
+class ReifiedTypeMapping[reified T in (int, str)]: ...
+
+
+def f[T in (int, str)](x: T) -> T:
+    return x
+
+
+type Alias[T in (int, str)] = list[T]
+```

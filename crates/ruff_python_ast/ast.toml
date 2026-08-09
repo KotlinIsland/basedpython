@@ -796,6 +796,9 @@ fields = [
   { name = "name", type = "Identifier" },
   { name = "lower_bound", type = "Box<Expr>?", doc = "The lower end of a basedpython bound range `T: Lower..Upper`" },
   { name = "bound", type = "Box<Expr>?" },
+  { name = "is_type_mapping", type = "bool", doc = """basedpython: when true, `bound` was
+introduced by `in` rather than `:` — `T in (int, str)` — which makes it a type mapping the
+parameter ranges over rather than an upper bound it sits beneath""" },
   { name = "default", type = "Box<Expr>?" },
   { name = "variance", type = "Variance?", skip_visit = true },
   { name = "is_reified", type = "bool", doc = """basedpython: when true, the parameter is

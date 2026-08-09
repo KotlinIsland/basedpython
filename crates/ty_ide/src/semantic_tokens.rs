@@ -251,6 +251,10 @@ const ASSERTS_RETURN: &[&str] = &["asserts"];
 /// name — `reified`, then the variance keywords.
 const TYPE_PARAM_MODIFIERS: &[&str] = &["reified", "in", "out"];
 
+/// The keyword introducing a type mapping, written between a type parameter's name
+/// and the mapping it ranges over.
+const TYPE_MAPPING: &[&str] = &["in"];
+
 /// The keyword introducing an `implementation A for B` block, written ahead of the
 /// interface the block implements.
 const IMPLEMENTATION: &[&str] = &["implementation"];
@@ -2220,27 +2224,16 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
         match type_param {
             TypeParam::TypeVar(type_var) => {
                 if let Some(bound) = &type_var.bound {
-                    // basedpython spells constrained type vars `T: constraints (int, str)`,
-                    // which parses as a call. The callee is the keyword; the
-                    // arguments are the constraint types.
-                    if self.is_basedpython
-                        && let Expr::Call(call) = bound.as_ref()
-                        && call
-                            .func
-                            .as_name_expr()
-                            .is_some_and(|name| name.id.as_str() == "constraints")
-                    {
-                        self.add_token(
-                            call.func.range(),
-                            SemanticTokenType::Keyword,
-                            SemanticTokenModifier::empty(),
+                    // basedpython spells a constrained type var `T in (int, str)`; the `in`
+                    // sits between the name and the mapping and is consumed by the parser
+                    if self.is_basedpython && type_var.is_type_mapping {
+                        self.add_consumed_keywords(
+                            type_var.name.range().end(),
+                            bound.range().start(),
+                            TYPE_MAPPING,
                         );
-                        for constraint in &call.arguments.args {
-                            self.visit_annotation(constraint);
-                        }
-                    } else {
-                        self.visit_annotation(bound);
                     }
+                    self.visit_annotation(bound);
                 }
                 if let Some(default) = &type_var.default {
                     self.visit_annotation(default);
@@ -5967,17 +5960,17 @@ class A:
     }
 
     #[test]
-    fn semantic_tokens_constraints_keyword() {
-        let test = SemanticTokenTest::new_by("def f[T: constraints (int, str)](): ...\n");
+    fn semantic_tokens_type_mapping_keyword() {
+        let test = SemanticTokenTest::new_by("def f[T in (int, str)](): ...\n");
 
         let tokens = test.highlight_file();
 
         assert_snapshot!(test.to_snapshot(&tokens), @r#"
         "f" @ 4..5: Function [definition]
         "T" @ 6..7: TypeParameter [definition]
-        "constraints" @ 9..20: Keyword
-        "int" @ 22..25: Class
-        "str" @ 27..30: Class
+        "in" @ 8..10: Keyword
+        "int" @ 12..15: Class
+        "str" @ 17..20: Class
         "#);
     }
 

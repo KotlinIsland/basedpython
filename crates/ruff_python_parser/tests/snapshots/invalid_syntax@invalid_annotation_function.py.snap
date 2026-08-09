@@ -37,6 +37,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -125,6 +126,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -232,6 +234,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -327,6 +330,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -441,6 +445,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -549,6 +554,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -638,6 +644,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -744,6 +751,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -849,6 +857,7 @@ Module(
                                                 },
                                             ),
                                         ),
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -920,6 +929,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: Some(
                                             Yield(
                                                 ExprYield {
@@ -1205,6 +1215,7 @@ Module(
                                                 },
                                             ),
                                         ),
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -1276,6 +1287,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: Some(
                                             Named(
                                                 ExprNamed {
@@ -1572,6 +1584,7 @@ Module(
                                                 },
                                             ),
                                         ),
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -1643,6 +1656,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: Some(
                                             Await(
                                                 ExprAwait {

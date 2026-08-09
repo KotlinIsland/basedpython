@@ -817,6 +817,7 @@ pub fn walk_type_param<V: Transformer + ?Sized>(visitor: &V, type_param: &mut Ty
         TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound,
             bound,
+            is_type_mapping: _,
             default,
             is_reified: _,
             name: _,

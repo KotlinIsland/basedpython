@@ -36,6 +36,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: Some(
                                             Name(
                                                 ExprName {
@@ -62,6 +63,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -121,6 +123,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -138,6 +141,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: Some(
                                             Name(
                                                 ExprName {
@@ -164,6 +168,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -181,6 +186,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -241,6 +247,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: Some(
                                             Name(
                                                 ExprName {
@@ -267,6 +274,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,
@@ -339,6 +347,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: Some(
                                             Name(
                                                 ExprName {
@@ -365,6 +374,7 @@ Module(
                                         },
                                         lower_bound: None,
                                         bound: None,
+                                        is_type_mapping: false,
                                         default: None,
                                         variance: None,
                                         is_reified: false,

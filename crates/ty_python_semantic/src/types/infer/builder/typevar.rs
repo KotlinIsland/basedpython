@@ -40,6 +40,27 @@ fn is_top_parameters_bound(bound: Option<&ast::Expr>) -> bool {
     bound.is_some_and(ast::helpers::is_top_parameters_form)
 }
 
+/// The types a type variable is constrained to, when what follows its name is a set of discrete
+/// constraints rather than an upper bound.
+///
+/// basedpython writes that set as a type mapping, `T in (int, str)`; python has no separate
+/// spelling, so there any parenthesized tuple after the `:` is one. A basedpython mapping that is
+/// not a tuple is a set of one member, which every caller rejects for being too small.
+fn constraint_set_nodes(
+    type_var: &ast::TypeParamTypeVar,
+    is_basedpython: bool,
+) -> Option<&[ast::Expr]> {
+    let bound = type_var.bound.as_deref()?;
+    if is_basedpython && !type_var.is_type_mapping {
+        return None;
+    }
+    match bound {
+        ast::Expr::Tuple(tuple) if tuple.parenthesized => Some(&tuple.elts),
+        _ if is_basedpython => Some(std::slice::from_ref(bound)),
+        _ => None,
+    }
+}
+
 impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     pub(super) fn is_basedpython_file(&self) -> bool {
         self.source_type().is_basedpython()
@@ -81,6 +102,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             name,
             lower_bound,
             bound,
+            is_type_mapping: _,
             default,
             variance,
             is_reified: _,
@@ -94,48 +116,29 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // ParamSpec-shaped type variable. detect early so the bound itself isn't evaluated as a
         // type expression — it denotes a parameter list, not a type
         let is_parameters_bound = is_by && is_top_parameters_bound(bound.as_deref());
-        let bound_or_constraint = match bound.as_deref() {
-            _ if is_parameters_bound => None,
-            Some(expr @ ast::Expr::Call(call))
-                if is_by
-                    && call
-                        .func
-                        .as_name_expr()
-                        .is_some_and(|n| n.id == "constraints") =>
-            {
-                if call.arguments.args.len() < 2 {
-                    if let Some(builder) = self
+        let bound_or_constraint = if is_parameters_bound {
+            None
+        } else if let Some(constraints) = constraint_set_nodes(node, is_by) {
+            if constraints.len() < 2 {
+                if let Some(expr) = bound.as_deref()
+                    && let Some(builder) = self
                         .context
                         .report_lint(&INVALID_TYPE_VARIABLE_CONSTRAINTS, expr)
-                    {
-                        builder.into_diagnostic("TypeVar must have at least two constrained types");
-                    }
-                    None
-                } else {
-                    Some(TypeVarBoundOrConstraintsEvaluation::LazyConstraints)
+                {
+                    builder.into_diagnostic("TypeVar must have at least two constrained types");
                 }
+                None
+            } else {
+                Some(TypeVarBoundOrConstraintsEvaluation::LazyConstraints)
             }
-            // in standard .py files, `T: (int, str)` is constraints (Python semantics)
-            Some(expr @ ast::Expr::Tuple(t)) if !is_by && t.parenthesized => {
-                if t.elts.len() < 2 {
-                    if let Some(builder) = self
-                        .context
-                        .report_lint(&INVALID_TYPE_VARIABLE_CONSTRAINTS, expr)
-                    {
-                        builder.into_diagnostic("TypeVar must have at least two constrained types");
-                    }
-                    None
-                } else {
-                    Some(TypeVarBoundOrConstraintsEvaluation::LazyConstraints)
-                }
-            }
-            Some(_) => Some(TypeVarBoundOrConstraintsEvaluation::LazyUpperBound),
-            None => None,
+        } else if bound.is_some() {
+            Some(TypeVarBoundOrConstraintsEvaluation::LazyUpperBound)
+        } else {
+            None
         };
         // basedpython: a bound range needs a plain upper end to bound it. the parser guarantees
-        // the syntax is `.by`-only, but `T: int..constraints (str, bytes)` and
-        // `T: int..(*: *, **: *)` still get this far, and dropping their lower end without a word
-        // would leave a confusing downstream error
+        // the syntax is `.by`-only, but `T: int..(*: *, **: *)` still gets this far, and dropping
+        // its lower end without a word would leave a confusing downstream error
         let lower_bound_evaluation = lower_bound.as_deref().and_then(|lower_expr| {
             if is_by
                 && matches!(
@@ -191,6 +194,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             name,
             lower_bound,
             bound,
+            is_type_mapping: _,
             default,
             variance: _,
             is_reified: _,
@@ -216,6 +220,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             name,
             lower_bound,
             bound,
+            is_type_mapping: _,
             default,
             variance: _,
             is_reified: _,
@@ -228,94 +233,61 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let previous_deferred_state =
             std::mem::replace(&mut self.deferred_state, DeferredExpressionState::Deferred);
         let bound_node = bound.as_deref();
-        let bound_or_constraints = match bound_node {
-            Some(bound_expr @ ast::Expr::Call(call))
-                if is_by
-                    && call
-                        .func
-                        .as_name_expr()
-                        .is_some_and(|n| n.id == "constraints") =>
-            {
-                // `T: constraints (int, str)` — basedpython explicit constraint syntax.
-                // Each argument becomes a TypeVar constraint.
-                let constraint_tys: Box<[Type<'_>]> = call
-                    .arguments
-                    .args
-                    .iter()
-                    .map(|expr| {
-                        let constraint = self.infer_type_expression(expr);
-                        if constraint.has_typevar_or_typevar_instance(db)
-                            && let Some(builder) = self
-                                .context
-                                .report_lint(&INVALID_TYPE_VARIABLE_CONSTRAINTS, expr)
-                        {
-                            builder.into_diagnostic("TypeVar constraint cannot be generic");
-                        }
-                        constraint
-                    })
-                    .collect();
+        let bound_or_constraints = if let Some(constraints) = constraint_set_nodes(node, is_by) {
+            let constraint_tys: Box<[Type<'_>]> = constraints
+                .iter()
+                .map(|expr| {
+                    let constraint = self.infer_type_expression(expr);
+                    if constraint.has_typevar_or_typevar_instance(db)
+                        && let Some(builder) = self
+                            .context
+                            .report_lint(&INVALID_TYPE_VARIABLE_CONSTRAINTS, expr)
+                    {
+                        builder.into_diagnostic("TypeVar constraint cannot be generic");
+                    }
+                    constraint
+                })
+                .collect();
 
+            // the tuple holding the set is a node of its own, and so needs a type; a mapping
+            // written as a bare type *is* its single member, already inferred above
+            if let Some(bound_expr @ ast::Expr::Tuple(_)) = bound_node {
                 let tuple_ty = Type::heterogeneous_tuple(db, constraint_tys.clone());
                 self.store_expression_type(bound_expr, tuple_ty);
-                // Mirror the `< 2` guard from `infer_typevar_definition` to avoid
-                // cascading `invalid-type-variable-default` diagnostics.
-                if call.arguments.args.len() < 2 {
-                    None
-                } else {
-                    Some(TypeVarBoundOrConstraints::Constraints(
-                        TypeVarConstraints::new(db, constraint_tys),
-                    ))
+            }
+            // Mirror the `< 2` guard from `infer_typevar_definition` to avoid
+            // cascading `invalid-type-variable-default` diagnostics.
+            if constraint_tys.len() < 2 {
+                None
+            } else {
+                Some(TypeVarBoundOrConstraints::Constraints(
+                    TypeVarConstraints::new(db, constraint_tys),
+                ))
+            }
+        } else {
+            match bound_node {
+                // in .by files, `T: (int, str)` is an upper bound of type `tuple[int, str]`.
+                // (the `is_anon_named_tuple` form `T: (name: int, age: str)` is the
+                // anonymous-named-tuple type expression — defer to `infer_type_expression`
+                // which routes it to the synthesized `NamedTuple` class)
+                Some(bound_expr @ ast::Expr::Tuple(t))
+                    if is_by && t.parenthesized && !t.is_anon_named_tuple =>
+                {
+                    let elem_tys: Box<[Type<'_>]> = t
+                        .elts
+                        .iter()
+                        .map(|expr| self.infer_type_expression(expr))
+                        .collect();
+                    let bound_ty = Type::heterogeneous_tuple(db, elem_tys);
+                    self.store_expression_type(bound_expr, bound_ty);
+                    Some(TypeVarBoundOrConstraints::UpperBound(bound_ty))
                 }
-            }
-            // in standard .py files, `T: (int, str)` is constraints (Python semantics)
-            Some(bound_expr @ ast::Expr::Tuple(t)) if !is_by && t.parenthesized => {
-                let constraint_tys: Box<[Type<'_>]> = t
-                    .elts
-                    .iter()
-                    .map(|expr| {
-                        let constraint = self.infer_type_expression(expr);
-                        if constraint.has_typevar_or_typevar_instance(db)
-                            && let Some(builder) = self
-                                .context
-                                .report_lint(&INVALID_TYPE_VARIABLE_CONSTRAINTS, expr)
-                        {
-                            builder.into_diagnostic("TypeVar constraint cannot be generic");
-                        }
-                        constraint
-                    })
-                    .collect();
-
-                let tuple_ty = Type::heterogeneous_tuple(db, constraint_tys.clone());
-                self.store_expression_type(bound_expr, tuple_ty);
-                if constraint_tys.len() < 2 {
-                    None
-                } else {
-                    Some(TypeVarBoundOrConstraints::Constraints(
-                        TypeVarConstraints::new(db, constraint_tys),
-                    ))
+                Some(expr) => {
+                    let bound_ty = self.infer_type_variable_bound(expr);
+                    Some(TypeVarBoundOrConstraints::UpperBound(bound_ty))
                 }
+                None => None,
             }
-            // in .by files, `T: (int, str)` is an upper bound of type `tuple[int, str]`.
-            // (the `is_anon_named_tuple` form `T: (name: int, age: str)` is the
-            // anonymous-named-tuple type expression — defer to `infer_type_expression`
-            // which routes it to the synthesized `NamedTuple` class)
-            Some(bound_expr @ ast::Expr::Tuple(t))
-                if is_by && t.parenthesized && !t.is_anon_named_tuple =>
-            {
-                let elem_tys: Box<[Type<'_>]> = t
-                    .elts
-                    .iter()
-                    .map(|expr| self.infer_type_expression(expr))
-                    .collect();
-                let bound_ty = Type::heterogeneous_tuple(db, elem_tys);
-                self.store_expression_type(bound_expr, bound_ty);
-                Some(TypeVarBoundOrConstraints::UpperBound(bound_ty))
-            }
-            Some(expr) => {
-                let bound_ty = self.infer_type_variable_bound(expr);
-                Some(TypeVarBoundOrConstraints::UpperBound(bound_ty))
-            }
-            None => None,
         };
         // basedpython: the lower end of a bound range is always inferred, even when the range was
         // rejected above, so that every expression in the definition region has a type
@@ -358,20 +330,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 );
             }
             if !self.check_default_for_outer_scope_typevars(default_ty, default_expr, &name.id) {
-                let bound_node = bound_node.map(|n| match n {
-                    ast::Expr::Call(call)
-                        if is_by
-                            && call
-                                .func
-                                .as_name_expr()
-                                .is_some_and(|n| n.id == "constraints") =>
-                    {
-                        BoundOrConstraintsNodes::Constraints(&call.arguments.args)
-                    }
-                    ast::Expr::Tuple(t) if !is_by && t.parenthesized => {
-                        BoundOrConstraintsNodes::Constraints(&t.elts)
-                    }
-                    _ => BoundOrConstraintsNodes::Bound(n),
+                let bound_node = bound_node.map(|n| match constraint_set_nodes(node, is_by) {
+                    Some(constraints) => BoundOrConstraintsNodes::Constraints(constraints),
+                    None => BoundOrConstraintsNodes::Bound(n),
                 });
                 self.validate_typevar_default(
                     Some(&name.id),

@@ -104,6 +104,28 @@ takes(1)   # rejected
 
 see [strict `float` and `complex`](no-number-promotions.md)
 
+### `[T: (int, str)]` is a tuple bound, not constraints
+
+python reads a tuple after a type parameter's `:` as a list of discrete
+constraints, which leaves no way to say "bounded by the type `tuple[int, str]`".
+basedpython reads the `:` literally — it is a bound like any other:
+
+```by
+def bounded[T: (int, str)](x: T) -> T:
+    reveal_type(x[0])  # int
+```
+
+the constraint set is reframed as a "type mapping", and gets its own keyword, `in`:
+
+```by
+def constrained[T in (int, str)](x: T) -> T: ...
+```
+
+so `[T: (int, str)]` ported from python means something else, and wants
+rewriting to `[T in (int, str)]` — which is what
+[`by transpile --reverse`](../getting-started.md#converting-python-to-basedpython)
+does for you. see [type mappings](type-mappings.md)
+
 ### `class A[**Kwargs]` is keyword type arguments, not a parameter specification
 
 python's typing denotes that `**P` is a parameter specification, but basedpython

@@ -1843,7 +1843,7 @@ final TYPE_CHECKING: bool
 # In stubs, the arguments of the IO class are marked as positional-only.
 # This differs from runtime, but better reflects the fact that in reality
 # classes deriving from IO use different names for the arguments.
-class IO[in out AnyStr: constraints (str, bytes)]:
+class IO[in out AnyStr in (str, bytes)]:
     """Generic base class for TextIO and BinaryIO.
 
     This is an abstract, generic version of the return of open().
@@ -1869,10 +1869,10 @@ class IO[in out AnyStr: constraints (str, bytes)]:
     abstract def fileno(self) -> int
     abstract def flush(self)
     abstract def isatty(self) -> bool
-    abstract def read[AnyStr: constraints (str, bytes)](self, n: int = -1, /) -> AnyStr
+    abstract def read[AnyStr in (str, bytes)](self, n: int = -1, /) -> AnyStr
     abstract def readable(self) -> bool
-    abstract def readline[AnyStr: constraints (str, bytes)](self, limit: int = -1, /) -> AnyStr
-    abstract def readlines[AnyStr: constraints (str, bytes)](self, hint: int = -1, /) -> list[AnyStr]
+    abstract def readline[AnyStr in (str, bytes)](self, limit: int = -1, /) -> AnyStr
+    abstract def readlines[AnyStr in (str, bytes)](self, hint: int = -1, /) -> list[AnyStr]
     abstract def seek(self, offset: int, whence: int = 0, /) -> int
     abstract def seekable(self) -> bool
     abstract def tell(self) -> int
@@ -1882,16 +1882,16 @@ class IO[in out AnyStr: constraints (str, bytes)]:
     @abstractmethod
     def write(self: IO[bytes], s: ReadableBuffer, /) -> int
     @abstractmethod
-    def write[AnyStr: constraints (str, bytes)](self, s: AnyStr, /) -> int
+    def write[AnyStr in (str, bytes)](self, s: AnyStr, /) -> int
 
     @abstractmethod
     def writelines(self: IO[bytes], lines: Iterable[ReadableBuffer], /) -> None
     @abstractmethod
-    def writelines[AnyStr: constraints (str, bytes)](self, lines: Iterable[AnyStr], /) -> None
+    def writelines[AnyStr in (str, bytes)](self, lines: Iterable[AnyStr], /) -> None
 
-    abstract def __next__[AnyStr: constraints (str, bytes)](self) -> AnyStr
-    abstract def __iter__[AnyStr: constraints (str, bytes)](self) -> Iterator[AnyStr]
-    abstract def __enter__[AnyStr: constraints (str, bytes)](self) -> IO[AnyStr]
+    abstract def __next__[AnyStr in (str, bytes)](self) -> AnyStr
+    abstract def __iter__[AnyStr in (str, bytes)](self) -> Iterator[AnyStr]
+    abstract def __enter__[AnyStr in (str, bytes)](self) -> IO[AnyStr]
     abstract def __exit__(
         self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None, /
     )

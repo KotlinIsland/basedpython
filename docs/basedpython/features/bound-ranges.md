@@ -88,11 +88,12 @@ class C:
 
 ## a range needs a plain upper end
 
-[`constraints (...)`](constraints.md) is an unordered set rather than the top of a range, so the
-two forms cannot be combined:
+a [type mapping](type-mappings.md) is an unordered set rather than the top of a range, so the two
+forms are alternatives — `in` and `:` cannot both introduce the same parameter. a parameter list is
+not a type either, so it cannot cap a range:
 
 ```by
-class C[T: int..constraints (str, bytes)]: ...   # error: needs a plain upper bound
+class C[T: int..(*: *, **: *)]: ...   # error: needs a plain upper bound
 ```
 
 ## empty ranges
@@ -141,6 +142,6 @@ emitted python.
 
 - [generics](generics.md) — the type parameter forms
 - [bounds on a variadic pack](pack-bounds.md) — what a bound means on a `*Ts` or `**Kwargs`
-- [explicit typevar constraints](constraints.md) — `T: constraints (int, str)`, an unordered
+- [type mappings](type-mappings.md) — `T in (int, str)`, an unordered
     alternative to a range
 - [typevar variance keywords](variance.md) — which direction subtyping moves a specialization

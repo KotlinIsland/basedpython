@@ -10857,6 +10857,10 @@ pub struct TypeParamTypeVar {
     /// The lower end of a basedpython bound range `T: Lower..Upper`
     pub lower_bound: Option<Box<Expr>>,
     pub bound: Option<Box<Expr>>,
+    /// basedpython: when true, `bound` was
+    /// introduced by `in` rather than `:` — `T in (int, str)` — which makes it a type mapping the
+    /// parameter ranges over rather than an upper bound it sits beneath
+    pub is_type_mapping: bool,
     pub default: Option<Box<Expr>>,
     pub variance: Option<crate::Variance>,
     /// basedpython: when true, the parameter is
@@ -12132,6 +12136,7 @@ impl TypeParamTypeVar {
             name,
             lower_bound,
             bound,
+            is_type_mapping: _,
             default,
             variance: _,
             is_reified: _,

@@ -1132,10 +1132,10 @@ class D[T = T]:
 reveal_type(D().x)  # revealed: Unknown
 ```
 
-## basedpython: explicit constraints keyword
+## basedpython: type mappings
 
-in basedpython, `T: (int, str)` is an upper bound of type `tuple[int, str]`, not constraints. use
-`T: constraints (int, str)` to declare constraints explicitly.
+in basedpython, `T: (int, str)` is an upper bound of type `tuple[int, str]`, not constraints. the
+type mapping `T in (int, str)` declares constraints.
 
 the bound / constraints are observed through `T` in _annotation_ position. a value-position
 reference to `T` would instead make the function a
@@ -1154,16 +1154,28 @@ def f[T: (int, str)](x: T):
     reveal_type(x[0])  # revealed: int
 ```
 
-### `T: constraints (int, str)` is constraints
+### `T in (int, str)` is constraints
 
 a constrained typevar resolves to exactly one constraint per specialization:
 
 ```by
-def f[T: constraints (int, str)](x: T) -> T:
+def f[T in (int, str)](x: T) -> T:
     return x
 
 reveal_type(f(1))    # revealed: int
 reveal_type(f("a"))  # revealed: str
+```
+
+### a type mapping needs at least two members
+
+```by
+# error: [invalid-type-variable-constraints] "TypeVar must have at least two constrained types"
+def f[T in (int,)](x: T) -> T:
+    return x
+
+# error: [invalid-type-variable-constraints] "TypeVar must have at least two constrained types"
+def g[T in int](x: T) -> T:
+    return x
 ```
 
 [pep 695]: https://peps.python.org/pep-0695/

@@ -3045,6 +3045,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         name,
                         lower_bound,
                         bound,
+                        is_type_mapping: _,
                         default,
                         variance: _,
                         is_reified: _,

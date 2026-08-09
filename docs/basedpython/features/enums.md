@@ -86,7 +86,7 @@ enum class Result[T, E]:
 ```
 
 bounds use the same syntax as based generics elsewhere:
-`enum class E[T: Hashable]`, `enum class E[T: constraints (int, str)]`
+`enum class E[T: Hashable]`, `enum class E[T in (int, str)]`
 
 ## variant access
 

@@ -2560,6 +2560,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 lower_bound,
                 bound,
                 default,
+                is_type_mapping: _,
                 name: _,
                 range: _,
                 node_index: _,

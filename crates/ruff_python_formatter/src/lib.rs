@@ -242,10 +242,10 @@ if True:
         Ok(())
     }
 
-    /// basedpython: `constraints (int, str)` space is preserved in .by files
+    /// basedpython: a type mapping keeps its `in` rather than collapsing to a `:` bound
     #[test]
-    fn constraints_space_preserved_in_by_files() -> Result<()> {
-        let input = "def f[T: constraints (int, str)](): ...\n";
+    fn type_mapping_round_trips_in_by_files() -> Result<()> {
+        let input = "def f[T in (int, str)](): ...\n";
         let options = PyFormatOptions::from_extension(Path::new("test.by"));
         let actual = format_module_source(input, options)?.as_code().to_string();
         assert_eq!(input, actual);

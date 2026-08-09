@@ -57,7 +57,7 @@ def isupper(c: str | int) -> bool
 def isxdigit(c: str | int) -> bool
 def isctrl(c: str | int) -> bool
 def ismeta(c: str | int) -> bool
-def ascii[CharT: constraints (str, int)](c: CharT) -> CharT
-def ctrl[CharT: constraints (str, int)](c: CharT) -> CharT
-def alt[CharT: constraints (str, int)](c: CharT) -> CharT
+def ascii[CharT in (str, int)](c: CharT) -> CharT
+def ctrl[CharT in (str, int)](c: CharT) -> CharT
+def alt[CharT in (str, int)](c: CharT) -> CharT
 def unctrl(c: str | int) -> str
