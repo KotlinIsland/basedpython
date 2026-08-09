@@ -4119,7 +4119,7 @@ fn docstring_summary(body: &[Stmt]) -> Option<Box<str>> {
 mod tests {
     use ty_project::Db;
 
-    use crate::django_template::tests::{DJANGO_BUILTINS, TemplateTest};
+    use crate::django_template::tests::{DJANGO_BUILTINS, TemplateTest, with_forward_slashes};
 
     use super::{
         RegistrationKind, context_for_template, context_processor_variables,
@@ -4173,7 +4173,7 @@ mod tests {
     fn templates(test: &TemplateTest) -> Vec<String> {
         template_files(&test.db, test.db.project())
             .iter()
-            .map(|file| format!("{} -> {}", file.name, file.path))
+            .map(|file| with_forward_slashes(format_args!("{} -> {}", file.name, file.path)))
             .collect()
     }
 
@@ -4181,7 +4181,7 @@ mod tests {
     fn statics(test: &TemplateTest) -> Vec<String> {
         static_files(&test.db, test.db.project())
             .iter()
-            .map(|file| format!("{} -> {}", file.name, file.path))
+            .map(|file| with_forward_slashes(format_args!("{} -> {}", file.name, file.path)))
             .collect()
     }
 
@@ -5221,7 +5221,10 @@ mod tests {
             .find(|url| url.name == "book-mark-read")
             .expect("the action's route to be named");
 
-        assert_eq!(action.file.path(&test.db).to_string(), "/app/views.py");
+        assert_eq!(
+            with_forward_slashes(action.file.path(&test.db)),
+            "/app/views.py"
+        );
         assert_eq!(
             &ruff_db::source::source_text(&test.db, action.file)[action.range],
             "mark_read"
@@ -5722,7 +5725,7 @@ mod tests {
             .expect("the filter to be discovered");
 
         assert_eq!(
-            intcomma.file.path(&test.db).to_string(),
+            with_forward_slashes(intcomma.file.path(&test.db)),
             "/site-packages/django/contrib/humanize/templatetags/humanize.py"
         );
     }

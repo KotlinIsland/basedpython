@@ -210,9 +210,22 @@ mod tests {
         Uri,
     };
 
-    fn opened(uri: &str, language_id: &str) -> LanguageId {
+    /// the language a client opening `path` with `language_id` gets
+    ///
+    /// `path` is absolute and written the posix way. windows has no path
+    /// without a drive and `Uri::to_file_path` rejects one, so a uri the tests
+    /// wrote out by hand would be no path at all there — and every case that
+    /// leans on the path would answer [`LanguageId::Other`] for that reason
+    /// rather than the one under test.
+    fn opened(path: &str, language_id: &str) -> LanguageId {
+        let uri = if cfg!(windows) {
+            format!("file:///C:{path}")
+        } else {
+            format!("file://{path}")
+        };
+
         TextDocument::new(
-            Uri::parse(uri).unwrap(),
+            Uri::parse(&uri).unwrap(),
             String::new(),
             0,
             &LanguageKind::from(language_id.to_string()),
@@ -224,7 +237,7 @@ mod tests {
     fn the_editors_django_language_ids_are_django_templates() {
         for id in ["django", "django-html", "django-txt", "htmldjango"] {
             assert_eq!(
-                opened("file:///app/page.html", id),
+                opened("/app/page.html", id),
                 LanguageId::DjangoTemplate,
                 "`{id}` is a django template"
             );
@@ -237,14 +250,14 @@ mod tests {
         // template services answer with is django's — see `LanguageId::new`
         for id in ["jinja", "jinja-html", "jinja2"] {
             assert_eq!(
-                opened("file:///app/templates/page.html", id),
+                opened("/app/templates/page.html", id),
                 LanguageId::Other,
                 "`{id}` is turned away even where the path says django"
             );
         }
 
         assert_eq!(
-            opened("file:///app/templates/page.jinja", "plaintext"),
+            opened("/app/templates/page.jinja", "plaintext"),
             LanguageId::Other
         );
     }
@@ -253,7 +266,7 @@ mod tests {
     fn the_editors_python_language_ids_are_python() {
         for id in ["python", "by", "basedpython"] {
             assert_eq!(
-                opened("file:///app/mod.by", id),
+                opened("/app/mod.by", id),
                 LanguageId::Python,
                 "`{id}` is python"
             );
@@ -264,33 +277,30 @@ mod tests {
     fn a_python_path_is_python_whatever_the_client_calls_it() {
         // an id we do not know would otherwise leave the file out of the project
         // entirely: no diagnostics, and every service reading it as last saved
-        for (uri, id) in [
-            ("file:///app/mod.py", "python3"),
-            ("file:///app/mod.py", "py"),
-            ("file:///app/mod.by", "basedpython-lang"),
-            ("file:///app/mod.pyi", ""),
-            ("file:///app/mod.byi", "plaintext"),
+        for (path, id) in [
+            ("/app/mod.py", "python3"),
+            ("/app/mod.py", "py"),
+            ("/app/mod.by", "basedpython-lang"),
+            ("/app/mod.pyi", ""),
+            ("/app/mod.byi", "plaintext"),
         ] {
             assert_eq!(
-                opened(uri, id),
+                opened(path, id),
                 LanguageId::Python,
-                "`{uri}` called `{id}` is python"
+                "`{path}` called `{id}` is python"
             );
         }
 
-        assert_eq!(
-            opened("file:///app/notes.txt", "plaintext"),
-            LanguageId::Other
-        );
+        assert_eq!(opened("/app/notes.txt", "plaintext"), LanguageId::Other);
     }
 
     #[test]
     fn an_html_file_under_templates_is_a_django_template_whatever_it_is_called() {
         assert_eq!(
-            opened("file:///app/templates/page.html", "html"),
+            opened("/app/templates/page.html", "html"),
             LanguageId::DjangoTemplate
         );
-        assert_eq!(opened("file:///app/page.html", "html"), LanguageId::Other);
+        assert_eq!(opened("/app/page.html", "html"), LanguageId::Other);
     }
 
     #[test]
