@@ -520,6 +520,17 @@ pub(crate) mod tests {
         ),
     ];
 
+    /// `text` with the host's path separator written back as a forward slash
+    ///
+    /// the memory file system normalizes what a test writes to the separator of
+    /// the machine running it, so every path that reaches an assertion — and
+    /// every message quoting one — reads as `\src\...` on windows where the
+    /// test says `/src/...`. it turns *every* backslash, so keep it off any
+    /// rendering that can carry one of its own: a route pattern's `\d`, say.
+    pub(crate) fn with_forward_slashes(text: impl std::fmt::Display) -> String {
+        text.to_string().replace('\\', "/")
+    }
+
     /// a project whose files are written out, with the cursor marked by
     /// `<CURSOR>` in at most one of them
     ///
@@ -774,8 +785,7 @@ pub(crate) mod tests {
                         "{} {} [{}]",
                         found.container.unwrap_or("python"),
                         found.symbol.name,
-                        // the memory file system reports the host's separator
-                        found.file.path(&self.db).to_string().replace('\\', "/"),
+                        with_forward_slashes(found.file.path(&self.db)),
                     )
                 })
                 .collect();
@@ -824,8 +834,7 @@ pub(crate) mod tests {
                     let source = ruff_db::source::source_text(&self.db, target.file());
                     format!(
                         "{}:{}",
-                        // the memory file system reports the host's separator
-                        target.file().path(&self.db).to_string().replace('\\', "/"),
+                        with_forward_slashes(target.file().path(&self.db)),
                         &source[target.focus_range()]
                     )
                 })
@@ -902,7 +911,10 @@ pub(crate) mod tests {
                         .next()
                         .unwrap_or_default();
 
-                    format!("{:?} at `{anchored}`: `{}`", hint.kind, hint.label)
+                    with_forward_slashes(format_args!(
+                        "{:?} at `{anchored}`: `{}`",
+                        hint.kind, hint.label
+                    ))
                 })
                 .collect()
         }
@@ -946,7 +958,9 @@ pub(crate) mod tests {
         pub(crate) fn prepare_rename(&self) -> String {
             match django_prepare_rename(&self.db, self.file, self.offset, self.is_template()) {
                 None => "no rename".to_string(),
-                Some(PreparedTemplateRename::Refused(why)) => format!("refused: {why}"),
+                Some(PreparedTemplateRename::Refused(why)) => {
+                    with_forward_slashes(format_args!("refused: {why}"))
+                }
                 Some(PreparedTemplateRename::Ready { range, placeholder }) => {
                     let source = ruff_db::source::source_text(&self.db, self.file);
                     format!("rename `{placeholder}`, replacing `{}`", &source[range])
@@ -967,7 +981,7 @@ pub(crate) mod tests {
             let rename = match renamed {
                 None => return vec!["no rename".to_string()],
                 Some(TemplateRenameOutcome::Refused(why)) => {
-                    return vec![format!("refused: {why}")];
+                    return vec![with_forward_slashes(format_args!("refused: {why}"))];
                 }
                 Some(TemplateRenameOutcome::Edits(rename)) => rename,
             };
@@ -984,8 +998,7 @@ pub(crate) mod tests {
 
                     format!(
                         "{}:{line} {} -> {new_name}",
-                        // the memory file system reports the host's separator
-                        edit.file().path(&self.db).to_string().replace('\\', "/"),
+                        with_forward_slashes(edit.file().path(&self.db)),
                         &source[edit.range()]
                     )
                 })
@@ -994,8 +1007,8 @@ pub(crate) mod tests {
             if let Some((from, to)) = rename.file_rename {
                 lines.push(format!(
                     "move {} -> {}",
-                    from.as_str().replace('\\', "/"),
-                    to.as_str().replace('\\', "/")
+                    with_forward_slashes(from),
+                    with_forward_slashes(to)
                 ));
             }
 
@@ -1040,8 +1053,7 @@ pub(crate) mod tests {
                             crate::ReferenceKind::Other => "declaration ",
                             _ => "",
                         },
-                        // the memory file system reports the host's separator
-                        target.file().path(&self.db).to_string().replace('\\', "/"),
+                        with_forward_slashes(target.file().path(&self.db)),
                         &source[target.range()],
                     )
                 })
@@ -1072,8 +1084,7 @@ pub(crate) mod tests {
                                 let source = ruff_db::source::source_text(&self.db, target.file);
                                 format!(
                                     "{}:{}",
-                                    // the memory file system reports the host's separator
-                                    target.file.path(&self.db).to_string().replace('\\', "/"),
+                                    with_forward_slashes(target.file.path(&self.db)),
                                     &source[target.range],
                                 )
                             })

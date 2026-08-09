@@ -365,7 +365,7 @@ fn documentation(text: &str, library: Option<&str>) -> Option<Content> {
 
 #[cfg(test)]
 mod tests {
-    use crate::django_template::tests::TemplateTest;
+    use crate::django_template::tests::{TemplateTest, with_forward_slashes};
 
     /// the same small django project the completion and goto tests use
     fn project(template: &str) -> TemplateTest {
@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn extends_hovers_as_the_resolved_path() {
         assert_eq!(
-            project("{% extends 'blog/b<CURSOR>ase.html' %}").hover(),
+            with_forward_slashes(project("{% extends 'blog/b<CURSOR>ase.html' %}").hover()),
             "template `/blog/templates/blog/base.html`"
         );
     }

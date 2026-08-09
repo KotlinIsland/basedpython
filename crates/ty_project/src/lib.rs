@@ -142,8 +142,8 @@ pub struct Project {
 /// read the whole project rather than the file on its own.
 ///
 /// Registering one of these with [`ProjectDatabase::set_checker`] joins it to
-/// [`Project::check`], which stays the single place that knows how to check a
-/// project: the extra files go through the same parallel loop, the same
+/// [`ProjectDatabase::check`], which stays the single place that knows how to
+/// check a project: the extra files go through the same parallel loop, the same
 /// [`ProgressReporter`], and the same output formats and exit codes, and an editor
 /// registering the same checker reports exactly what the command line does.
 ///
