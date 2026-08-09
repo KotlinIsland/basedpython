@@ -3256,6 +3256,25 @@ pub(super) fn report_bool_as_int_assignment<'db>(
     }
 }
 
+/// basedpython: is this assignment a position the transpiler can emit a conversion at?
+///
+/// It is the one written by hand against a single declared place: `x: A = b`, or `x = b`
+/// where an earlier statement declared `x`. Everything else is left out because the
+/// transpiler cannot write the same call there — an unpacking binds one element of the
+/// value to each name, and `x = y = b` binds one value to two places that need not agree
+/// about what it should be converted to.
+fn is_conversion_site(definition_kind: &DefinitionKind<'_>, target_node: AnyNodeRef) -> bool {
+    match definition_kind {
+        DefinitionKind::AnnotatedAssignment(_) => true,
+        DefinitionKind::Assignment(assignment) => {
+            assignment.unpack().is_none()
+                && assignment.is_sole_target()
+                && matches!(target_node, AnyNodeRef::ExprName(_))
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn report_invalid_assignment<'db>(
     context: &InferContext<'db, '_>,
     target_node: AnyNodeRef,
@@ -3278,11 +3297,8 @@ pub(super) fn report_invalid_assignment<'db>(
     // value (or, for a collection literal, for each of its elements).
     // `value_conversions` is the same answer the transpiler emits, so the two
     // cannot disagree about what converts
-    // only the annotated form: for a plain `x = b` against an earlier `x: A` the
-    // declared type lives in another statement, and the transpiler has no way to
-    // recover the same answer — accepting it here would emit an unconverted value
     if let Some(value_node) = value_node
-        && matches!(definition_kind, DefinitionKind::AnnotatedAssignment(_))
+        && is_conversion_site(definition_kind, target_node)
     {
         let model = crate::SemanticModel::new(context.db(), context.file());
         let conversions = crate::types::conversions::value_conversions(

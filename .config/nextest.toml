@@ -45,3 +45,16 @@ slow-timeout = { period = "60s", terminate-after = 6 }
 [[profile.ci.overrides]]
 filter = 'test(mdtest::external/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
+
+# The linter corpus shards type-check every fixture ruff's linter owns, in an
+# unoptimized build. `f` alone is 611 files — every `flake8_*` directory — and
+# a single letter is as fine as the sharding gets, so it cannot be split down.
+# It measured 35s on a fast linux runner and 59.6s on windows against the 60s
+# cutoff, which made the cutoff a coin toss rather than a deadlock guard: it
+# fired on 2026-08-09 for a run whose *every* test was ~2x slower (631s of
+# tests on main, 1345s on the same commit range), not for anything the code did.
+# Same reasoning as the two above — the limit is a stop-gap for deadlock, and
+# 3 minutes still catches one.
+[[profile.ci.overrides]]
+filter = 'test(linter_no_panic)'
+slow-timeout = { period = "60s", terminate-after = 3 }

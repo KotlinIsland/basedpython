@@ -1405,6 +1405,19 @@ def g() -> "None":
 
 only a literal `None` is reported; a quoted one is left alone.
 
+### an `init(...)`
+
+the parser gives the shorthand its `-> None`, so there is nothing in the source to remove:
+
+```by
+class A:
+    init(let value: int)
+
+class B:
+    init(self, value: int):
+        self.value = value
+```
+
 ### a body that always raises
 
 `Never` is what the body hands back, so `None` is a real widening:

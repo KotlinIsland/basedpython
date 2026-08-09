@@ -545,6 +545,7 @@ pub(crate) struct AssignmentDefinitionNodeRef<'ast, 'db> {
     pub(crate) unpack: Option<Unpack<'db>>,
     pub(crate) value: &'ast ast::Expr,
     pub(crate) target: &'ast ast::Expr,
+    pub(crate) sole_target: bool,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -713,10 +714,12 @@ impl<'db> DefinitionNodeRef<'_, 'db> {
                 unpack,
                 value,
                 target,
+                sole_target,
             }) => DefinitionKind::Assignment(AssignmentDefinitionKind {
                 unpack,
                 value: AstNodeRef::new(parsed, value),
                 target: AstNodeRef::new(parsed, target),
+                sole_target,
             }),
             DefinitionNodeRef::AnnotatedAssignment(AnnotatedAssignmentDefinitionNodeRef {
                 node,
@@ -868,6 +871,7 @@ impl<'db> DefinitionNodeRef<'_, 'db> {
                 value: _,
                 unpack: _,
                 target,
+                sole_target: _,
             }) => DefinitionNodeKey(NodeKey::from_node(target)),
             Self::AnnotatedAssignment(ann_assign) => ann_assign.node.into(),
             Self::AugmentedAssignment(node) => node.into(),
@@ -1511,6 +1515,7 @@ pub struct AssignmentDefinitionKind<'db> {
     unpack: Option<Unpack<'db>>,
     value: AstNodeRef<ast::Expr>,
     target: AstNodeRef<ast::Expr>,
+    sole_target: bool,
 }
 
 impl<'db> AssignmentDefinitionKind<'db> {
@@ -1524,6 +1529,14 @@ impl<'db> AssignmentDefinitionKind<'db> {
 
     pub fn target<'ast>(&self, module: &'ast ParsedModuleRef) -> &'ast ast::Expr {
         self.target.node(module)
+    }
+
+    /// whether the statement assigns to this target and nothing else
+    ///
+    /// `a = b = value` binds one value to two places, so what is written into
+    /// either of them is not the target's alone to decide.
+    pub fn is_sole_target(&self) -> bool {
+        self.sole_target
     }
 }
 

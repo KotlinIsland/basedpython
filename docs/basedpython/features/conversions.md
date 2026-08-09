@@ -155,6 +155,7 @@ expression where it stands:
 ```by
 f(c)                            # argument to a parameter declared `Fahrenheit`
 x: Fahrenheit = c               # annotated assignment
+x = c                           # assignment to a name declared elsewhere
 self.field = c                  # a declared attribute
 def g() -> Fahrenheit: return c # return in a function declared `-> Fahrenheit`
 xs: list[Fahrenheit] = [c1, c2] # each element of a literal with a declared target
@@ -202,9 +203,10 @@ report_all([Fahrenheit.__from__(c) for c in cs])
 ```
 
 likewise not sites: `*args` / `**kwargs` splats, an unpacked element (`[c, *cs]`),
-a plain `x = c` against a declaration in another statement, an argument to an
-overloaded or union callee (no single parameter type), and a typevar solved by
-inference.
+an unpacking target (`x, y = ...`, which binds an element rather than the value),
+a name in `x = y = c` (one value reaching two places that need not agree about
+it), an argument to an overloaded or union callee (no single parameter type), and
+a typevar solved by inference.
 
 a union works on both sides. a union *target* converts through whichever arm
 offers the conversion, so `x: Fahrenheit? = c` is a site like any other. a union

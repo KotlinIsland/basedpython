@@ -1514,6 +1514,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         unpack,
                         value: &node.value,
                         target: expr,
+                        sole_target: node.targets.len() == 1,
                     },
                 );
 

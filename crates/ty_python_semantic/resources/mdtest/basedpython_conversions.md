@@ -428,9 +428,9 @@ from temps import Celsius, report
 report(Celsius())
 ```
 
-## a plain assignment is not a conversion site
+## a plain assignment to a declared name is a conversion site
 
-The declared type lives in another statement, so the transpiler cannot recover the same answer.
+The declared type lives in another statement, and the name carries it here.
 
 ```by
 class Celsius:
@@ -444,7 +444,72 @@ class Fahrenheit:
         return cls()
 
 t: Fahrenheit = Fahrenheit()
-t = Celsius()  # error: [invalid-assignment]
+t = Celsius()
+reveal_type(t)  # revealed: Fahrenheit
+```
+
+## an assignment to several names at once is not a conversion site
+
+One value reaches every target, and the targets need not agree about what it should be converted to.
+
+```by
+class Celsius:
+    degrees: float = 0.0
+
+class Fahrenheit:
+    degrees: float = 0.0
+
+    @classmethod
+    def __from__(cls, value: Celsius) -> Self:
+        return cls()
+
+t: Fahrenheit = Fahrenheit()
+u: Fahrenheit = Fahrenheit()
+# error: [invalid-assignment]
+# error: [invalid-assignment]
+t = u = Celsius()
+```
+
+## an unpacking is not a conversion site
+
+Each name is bound an element of the value rather than the value itself.
+
+```by
+class Celsius:
+    degrees: float = 0.0
+
+class Fahrenheit:
+    degrees: float = 0.0
+
+    @classmethod
+    def __from__(cls, value: Celsius) -> Self:
+        return cls()
+
+t: Fahrenheit = Fahrenheit()
+u: Fahrenheit = Fahrenheit()
+# error: [invalid-assignment]
+# error: [invalid-assignment]
+t, u = (Celsius(), Celsius())
+```
+
+## a plain assignment to an undeclared name converts nothing
+
+There is no declared type to convert towards, so the name simply takes the value's own type.
+
+```by
+class Celsius:
+    degrees: float = 0.0
+
+class Fahrenheit:
+    degrees: float = 0.0
+
+    @classmethod
+    def __from__(cls, value: Celsius) -> Self:
+        return cls()
+
+t = Fahrenheit()
+t = Celsius()
+reveal_type(t)  # revealed: final Celsius
 ```
 
 ## a splatted argument is not a conversion site

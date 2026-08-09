@@ -325,18 +325,33 @@ impl<'db> SemanticModel<'db> {
             }
             ast::Stmt::Assign(assignment) => {
                 // one target only: with several, each could declare a different type
-                // and there would be no single answer for the one value. only an
-                // attribute target — a plain name's declaration lives in another
-                // statement, so the checker declines that case too
-                let [ast::Expr::Attribute(attribute)] = assignment.targets.as_slice() else {
-                    return None;
-                };
-                let object_ty = attribute.value.inferred_type(self)?;
-                let declared = object_ty
-                    .member(db, attribute.attr.as_str())
-                    .place
-                    .ignore_possibly_undefined()?;
-                Some((&assignment.value, declared))
+                // and there would be no single answer for the one value. the checker
+                // declines the same shapes — see `is_conversion_site`
+                match assignment.targets.as_slice() {
+                    [ast::Expr::Attribute(attribute)] => {
+                        let object_ty = attribute.value.inferred_type(self)?;
+                        let declared = object_ty
+                            .member(db, attribute.attr.as_str())
+                            .place
+                            .ignore_possibly_undefined()?;
+                        Some((&assignment.value, declared))
+                    }
+                    // a plain name's declaration lives in another statement: the one
+                    // the binding was checked against, which is what reaches it here
+                    [ast::Expr::Name(name)] => {
+                        let index = semantic_index(db, self.file);
+                        let binding = index.try_definition(name)?;
+                        let declarations = index
+                            .use_def_map(binding.file_scope(db))
+                            .declarations_at_binding(binding);
+                        let declared = crate::place::place_from_declarations(db, declarations)
+                            .ignore_conflicting_declarations()
+                            .place
+                            .ignore_possibly_undefined()?;
+                        Some((&assignment.value, declared))
+                    }
+                    _ => None,
+                }
             }
             ast::Stmt::Return(ret) => {
                 let value = ret.value.as_deref()?;

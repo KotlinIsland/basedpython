@@ -228,6 +228,7 @@ that is one rule over machinery ty already has, and it covers:
 ```by
 f(b)                            # argument to a parameter declared `A`
 x: A = b                        # annotated assignment
+x = b                           # assignment to a name declared elsewhere
 self.field = b                  # a declared attribute
 def g() -> A: return b          # return in a function declared `-> A`
 z: A = b if c else other_b      # a propagated context — the whole value converts
@@ -270,9 +271,10 @@ the type error at such a site carries a subdiagnostic pointing at the applicable
 implementation and suggesting the explicit form, so the restriction is
 discoverable rather than mysterious
 
-`*args` / `**kwargs` splats, an unpacked element (`[b, *bs]`), a value already
-stored in a variable of the wrong type, and a typevar solved by inference are
-likewise not conversion sites
+`*args` / `**kwargs` splats, an unpacked element (`[b, *bs]`), an unpacking
+target (`x, y = ...`, which binds an element rather than the value), a name in
+`x = y = b` (one value reaching two places that need not agree about it), and a
+typevar solved by inference are likewise not conversion sites
 
 ## scope and coherence
 
