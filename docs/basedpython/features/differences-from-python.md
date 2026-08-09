@@ -121,6 +121,22 @@ HasKeywords[foo=int, bar=str]
 
 see [generics](generics.md)
 
+### a parameter specification is forwarded with stars
+
+python names a parameter specification's two halves as attributes of the type variable,
+`*args: P.args` and `**kwargs: P.kwargs`. basedpython unpacks them the way it unpacks every
+other pack, and the attribute spelling is an error:
+
+```by
+def deco[P: (*: *, **: *), R](fn: (**P) -> R) -> (**P) -> R:
+    def inner(*args: *P, **kwargs: **P) -> R:
+        return fn(*args, **kwargs)
+
+    return inner
+```
+
+see [forwarding](generics.md#forwarding)
+
 ## type checking
 
 the code runs the same; the checker's verdict differs

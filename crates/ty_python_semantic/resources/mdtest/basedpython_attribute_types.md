@@ -312,10 +312,16 @@ class B[T]:
 
 ## a parameter pack is not a receiver
 
-`P.args` and `P.kwargs` name the components of a parameter pack, not a member of it.
+`P.args` and `P.kwargs` name the components of a parameter pack, not a member of it — and
+basedpython spells those components [with stars](basedpython_paramspec.md) instead.
 
 ```by
-def f[**P](*args: P.args, **kwargs: P.kwargs) -> None: ...
+def f[**P](
+    # error: [invalid-paramspec] "`P.args` is the python spelling of a parameter pack's args and is not valid in a `.by` file"
+    *args: P.args,
+    # error: [invalid-paramspec] "`P.kwargs` is the python spelling of a parameter pack's kwargs and is not valid in a `.by` file"
+    **kwargs: P.kwargs,
+) -> None: ...
 ```
 
 ## attribute types are `.by` only

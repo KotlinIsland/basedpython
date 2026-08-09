@@ -5966,6 +5966,25 @@ class A:
         "#);
     }
 
+    /// a forwarded parameter pack is a starred reference to the type parameter, not an
+    /// attribute of it
+    #[test]
+    fn semantic_tokens_forwarded_parameter_pack() {
+        let test =
+            SemanticTokenTest::new_by("def f[P: (*: *, **: *)](*args: *P, **kwargs: **P): ...\n");
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 4..5: Function [definition]
+        "P" @ 6..7: TypeParameter [definition]
+        "args" @ 25..29: Parameter [definition]
+        "P" @ 32..33: TypeParameter
+        "kwargs" @ 37..43: Parameter [definition]
+        "P" @ 47..48: TypeParameter
+        "#);
+    }
+
     #[test]
     fn semantic_tokens_constraints_keyword() {
         let test = SemanticTokenTest::new_by("def f[T: constraints (int, str)](): ...\n");

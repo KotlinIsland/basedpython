@@ -250,7 +250,7 @@ class finalize[Parameters: (*: *, **: *), in out Element]:
     """
 
     __slots__ = ()
-    init(self, obj: Element, func: (**Parameters) -> dynamic, /, *args: Parameters.args, **kwargs: Parameters.kwargs)
+    init(self, obj: Element, func: (**Parameters) -> dynamic, /, *args: *Parameters, **kwargs: **Parameters)
     def __call__(self, _: dynamic = None) -> dynamic | None:
         """If alive then mark as dead and return func(*args, **kwargs);
         otherwise return None

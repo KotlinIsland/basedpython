@@ -14,7 +14,7 @@ def f(a: A[foo=int, bar=str]):
 
 a pack is a true variadic: its fields are written inline at the specialization site, and unpacking
 it with `**` splices them into a parameter list. a `ParamSpec` by contrast is opaque — it can only
-be forwarded whole, through `P.args` / `P.kwargs`
+be forwarded whole, as the `*args: *P` / `**kwargs: **P` pair
 
 ## specialization
 

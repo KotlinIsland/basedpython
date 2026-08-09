@@ -92,7 +92,7 @@ final class _lru_cache_wrapper[Fn: (...) -> object]:
     """
 
     __wrapped__: Fn
-    def __call__[Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(**Parameters) -> R], *args: Parameters.args, **kwargs: Parameters.kwargs) -> R:
+    def __call__[Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(**Parameters) -> R], *args: *Parameters, **kwargs: **Parameters) -> R:
         """Call self as a function."""
 
     def __get__(self, instance: None, owner: type | None = None) -> Self
@@ -160,7 +160,7 @@ final WRAPPER_UPDATES: ("__dict__",)
 @type_check_only
 class _Wrapped[PWrapped: (*: *, **: *), in out RWrapped, PWrapper: (*: *, **: *), in out RWrapper]:
     __wrapped__: (**PWrapped) -> RWrapped
-    def __call__(self, *args: PWrapper.args, **kwargs: PWrapper.kwargs) -> RWrapper
+    def __call__(self, *args: *PWrapper, **kwargs: **PWrapper) -> RWrapper
     # as with ``Callable``, we'll assume that these attributes exist
     __name__: str
     __qualname__: str

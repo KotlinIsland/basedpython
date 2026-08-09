@@ -81,7 +81,7 @@ final class Context(Mapping[ContextVar[dynamic], dynamic]):
     def get[Element](self, key: ContextVar[Element], default: Element, /) -> Element
     def get[Element, D](self, key: ContextVar[Element], default: D, /) -> Element | D
 
-    def run[Parameters: (*: *, **: *), Element](self, callable: (**Parameters) -> Element, *args: Parameters.args, **kwargs: Parameters.kwargs) -> Element
+    def run[Parameters: (*: *, **: *), Element](self, callable: (**Parameters) -> Element, *args: *Parameters, **kwargs: **Parameters) -> Element
     def copy(self) -> Context:
         """Return a shallow copy of the context object."""
 

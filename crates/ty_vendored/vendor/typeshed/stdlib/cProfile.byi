@@ -54,7 +54,7 @@ class Profile(_lsprof.Profiler):
     def snapshot_stats(self)
     def run(self, cmd: str) -> Self
     def runctx(self, cmd: str, globals: dict[str, dynamic], locals: Mapping[str, dynamic]) -> Self
-    def runcall[Parameters: (*: *, **: *), Element](self, func: (**Parameters) -> Element, /, *args: Parameters.args, **kw: Parameters.kwargs) -> Element
+    def runcall[Parameters: (*: *, **: *), Element](self, func: (**Parameters) -> Element, /, *args: *Parameters, **kw: **Parameters) -> Element
     def __enter__(self) -> Self
     def __exit__(self, *exc_info: Unused)
 

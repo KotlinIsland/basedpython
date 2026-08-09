@@ -75,7 +75,8 @@ every other receiver shape — a subscript, a chain built on one — has no othe
 meaning in a type position, so there is nothing to collide with.
 
 a parameter pack is not a receiver either: `P.args` and `P.kwargs` name the
-components of the pack rather than a member of it. nor is an `Annotated`
+components of the pack rather than a member of it, and basedpython spells those
+components [`*P` and `**P`](generics.md#forwarding) instead. nor is an `Annotated`
 metadata element a type position — `Annotated[int, T.a]` is an attribute access
 on the type parameter itself, not an attribute type.
 

@@ -345,7 +345,7 @@ class Widget(tkinter.Widget):
         matches statespec. statespec is expected to be a sequence.
         """
     def instate[Parameters: (*: *, **: *), Element](
-        self, statespec: Sequence[str], callback: (**Parameters) -> Element, *args: Parameters.args, **kw: Parameters.kwargs
+        self, statespec: Sequence[str], callback: (**Parameters) -> Element, *args: *Parameters, **kw: **Parameters
     ) -> False | Element
 
     def state(self, statespec: Sequence[str] | None = None) -> (*: str):

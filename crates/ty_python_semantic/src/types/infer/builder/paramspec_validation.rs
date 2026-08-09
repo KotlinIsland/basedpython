@@ -2,6 +2,25 @@ use crate::types::{ParamSpecAttrKind, Type, context::InferContext, diagnostic::I
 use ruff_python_ast as ast;
 use ruff_text_size::Ranged;
 
+/// How a parameter pack's positional or keyword half is written in `context`'s file:
+/// `*args: *P` in basedpython, `*args: P.args` in python.
+fn component(
+    context: &InferContext<'_, '_>,
+    parameter: &str,
+    pack: &str,
+    attr: ParamSpecAttrKind,
+) -> String {
+    let stars = match attr {
+        ParamSpecAttrKind::Args => "*",
+        ParamSpecAttrKind::Kwargs => "**",
+    };
+    if context.file().source_type(context.db()).is_basedpython() {
+        format!("{stars}{parameter}: {stars}{pack}")
+    } else {
+        format!("{stars}{parameter}: {pack}.{attr}")
+    }
+}
+
 /// Validate the usage of `ParamSpec` components (`P.args` and `P.kwargs`) across all
 /// parameters of a function.
 ///
@@ -52,13 +71,14 @@ pub(super) fn validate_paramspec_components<'db>(
         (Some((args_tv, _args_annotation)), Some((kwargs_tv, kwargs_annotation))) => {
             // Check they refer to the same ParamSpec
             if !args_tv.is_same_typevar_as(db, kwargs_tv) {
-                let args_name = args_tv.name(db);
+                let name = args_tv.name(db);
                 let vararg = vararg_name.unwrap_or("args");
                 let kwarg = kwarg_name.unwrap_or("kwargs");
                 if let Some(builder) = context.report_lint(&INVALID_PARAMSPEC, kwargs_annotation) {
                     builder.into_diagnostic(format_args!(
-                        "`*{vararg}: {args_name}.args` must be accompanied \
-                             by `**{kwarg}: {args_name}.kwargs`",
+                        "`{}` must be accompanied by `{}`",
+                        component(context, vararg, name, ParamSpecAttrKind::Args),
+                        component(context, kwarg, name, ParamSpecAttrKind::Kwargs),
                     ));
                 }
             } else {
@@ -71,8 +91,9 @@ pub(super) fn validate_paramspec_components<'db>(
                         context.report_lint(&INVALID_PARAMSPEC, &parameters.kwonlyargs[0])
                     {
                         builder.into_diagnostic(format_args!(
-                            "No parameters may appear between \
-                                 `*{vararg}: {name}.args` and `**{kwarg}: {name}.kwargs`",
+                            "No parameters may appear between `{}` and `{}`",
+                            component(context, vararg, name, ParamSpecAttrKind::Args),
+                            component(context, kwarg, name, ParamSpecAttrKind::Kwargs),
                         ));
                     }
                 }
@@ -95,7 +116,9 @@ pub(super) fn validate_paramspec_components<'db>(
             };
             if let Some(builder) = context.report_lint(&INVALID_PARAMSPEC, range) {
                 builder.into_diagnostic(format_args!(
-                    "`*{vararg}: {name}.args` must be accompanied by `**{kwarg}: {name}.kwargs`",
+                    "`{}` must be accompanied by `{}`",
+                    component(context, vararg, name, ParamSpecAttrKind::Args),
+                    component(context, kwarg, name, ParamSpecAttrKind::Kwargs),
                 ));
             }
         }
@@ -116,14 +139,17 @@ pub(super) fn validate_paramspec_components<'db>(
             };
             if let Some(builder) = context.report_lint(&INVALID_PARAMSPEC, range) {
                 builder.into_diagnostic(format_args!(
-                    "`**{kwarg}: {name}.kwargs` must be accompanied by `*{vararg}: {name}.args`",
+                    "`{}` must be accompanied by `{}`",
+                    component(context, kwarg, name, ParamSpecAttrKind::Kwargs),
+                    component(context, vararg, name, ParamSpecAttrKind::Args),
                 ));
             } else {
                 // No *args at all
                 if let Some(builder) = context.report_lint(&INVALID_PARAMSPEC, kwargs_annotation) {
                     builder.into_diagnostic(format_args!(
-                        "`**{kwarg}: {name}.kwargs` must be accompanied by \
-                             `*{kwarg}: {name}.args`",
+                        "`{}` must be accompanied by `{}`",
+                        component(context, kwarg, name, ParamSpecAttrKind::Kwargs),
+                        component(context, kwarg, name, ParamSpecAttrKind::Args),
                     ));
                 }
             }

@@ -9,6 +9,9 @@ variable bound by the *top parameters* form `(*: *, **: *)` — the parameter li
 parameter list is a subtype of — or the legacy `P = ParamSpec("P")`. the arrow syntax unpacks any of
 them
 
+a function forwards a `ParamSpec` with `*args: *P` and `**kwargs: **P`; python's `P.args` /
+`P.kwargs` is not valid in a basedpython file
+
 ```toml
 [environment]
 python-version = "3.12"
@@ -128,7 +131,7 @@ from typing import ParamSpec, Callable, Concatenate
 P = ParamSpec("P")
 
 def g(arrow: (str, int, **P) -> bool, callable: Callable[Concatenate[str, int, P], bool]):
-    reveal_type(arrow)  # revealed: (str, int, /, *args: P@g.args, **kwargs: P@g.kwargs) -> bool
+    reveal_type(arrow)  # revealed: (str, int, /, *args: *P@g, **kwargs: **P@g) -> bool
     arrow = callable
     callable = arrow
 ```
@@ -165,13 +168,13 @@ def f(c: C[[str, int]]):
 
 ## a top-parameters bound declares a `ParamSpec` in a stub too
 
-this is the form the vendored typeshed uses, `.args`/`.kwargs` included
+this is the form the vendored typeshed uses
 
 `stub.byi`:
 
 ```byi
 class C[P: (*: *, **: *), out R]:
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+    def __call__(self, *args: *P, **kwargs: **P) -> R: ...
 ```
 
 `main.by`:
@@ -184,4 +187,96 @@ def f(c: C[[str, int], bool]):
     # error: [invalid-argument-type] "Expected `str`, found `1`"
     # error: [invalid-argument-type] "Expected `int`, found `"x"`"
     c(1, "x")
+```
+
+## `*args: *P` and `**kwargs: **P` forward a `ParamSpec`
+
+a parameter pack is unpacked with stars, and a `ParamSpec` is the pack whose two halves are the
+positional and the keyword parameters. the star count follows the half being taken, the same way
+`*args: *Ts` and `**kwargs: **Kwargs` do
+
+```by
+def deco[Parameters: (*: *, **: *), R](fn: (**Parameters) -> R) -> (**Parameters) -> R:
+    def inner(*args: *Parameters, **kwargs: **Parameters) -> R:
+        return fn(*args, **kwargs)
+
+    return inner
+
+@deco
+def h(a: int, b: str) -> bool:
+    return True
+
+reveal_type(h)  # revealed: (a: int, b: str) -> bool
+h(1, "x")
+h(1, b="x")
+# error: [invalid-argument-type] "Expected `int`, found `"x"`"
+# error: [invalid-argument-type] "Expected `str`, found `1`"
+h("x", 1)
+```
+
+## the prefix parameters make it a `Concatenate`
+
+```by
+def f[Parameters: (*: *, **: *)](first: int, *args: *Parameters, **kwargs: **Parameters) -> None:
+    ...
+
+reveal_type(f)  # revealed: def f[**Parameters](first: int, *args: *Parameters, **kwargs: **Parameters)
+```
+
+## `P.args` / `P.kwargs` is the python spelling
+
+it names an attribute of the type variable, which is not something a type expression can mean. it
+stays confined to `.py` files
+
+```by
+def f[Parameters: (*: *, **: *)](
+    # error: [invalid-paramspec] "`Parameters.args` is the python spelling of a parameter pack's args and is not valid in a `.by` file"
+    *args: Parameters.args,
+    # error: [invalid-paramspec] "`Parameters.kwargs` is the python spelling of a parameter pack's kwargs and is not valid in a `.by` file"
+    **kwargs: Parameters.kwargs,
+) -> None: ...
+```
+
+## the two halves come as a pair
+
+```by
+# error: [invalid-paramspec] "`*args: *P` must be accompanied by `**kwargs: **P`"
+def a[P: (*: *, **: *)](*args: *P) -> None: ...
+```
+
+## neither half stands on its own
+
+```by
+# error: [invalid-paramspec] "`**kwargs: **P` must be accompanied by `*args: *P`"
+def b[P: (*: *, **: *)](**kwargs: **P) -> None: ...
+```
+
+## nothing may appear between the two halves
+
+```by
+def c[P: (*: *, **: *)](
+    *args: *P,
+    # error: [invalid-paramspec] "No parameters may appear between `*args: *P` and `**kwargs: **P`"
+    x: int,
+    **kwargs: **P,
+) -> None: ...
+```
+
+## a keyword-variadic pack has no positional half
+
+```by
+def f[**Kwargs](
+    # error: [invalid-type-form] "Keyword-variadic pack `Kwargs` has no positional parameters to unpack"
+    *args: *Kwargs,
+    **kwargs: **Kwargs,
+) -> None: ...
+```
+
+## an unpacked pack is only the whole annotation
+
+```by
+def f[Parameters: (*: *, **: *)](
+    # error: [invalid-type-form] "Bare ParamSpec `Parameters` is not valid in this context in a parameter annotation"
+    *args: list[*Parameters],
+) -> None: ...
 ```

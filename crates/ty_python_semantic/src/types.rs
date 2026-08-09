@@ -4721,13 +4721,16 @@ impl<'db> Type<'db> {
                     ty.map(Place::bound).unwrap_or_default().into()
                 }
 
-                Type::TypeVar(typevar) if name_str == "args" && typevar.is_paramspec(db) => {
+                // a keyword-variadic pack shares the `ParamSpec` value representation, so it
+                // resolves the same two components — basedpython has no source spelling for
+                // them, and the type expression that names one is reported there
+                Type::TypeVar(typevar) if name_str == "args" && typevar.is_parameter_pack(db) => {
                     Place::declared(Type::TypeVar(
                         typevar.with_paramspec_attr(db, ParamSpecAttrKind::Args),
                     ))
                     .into()
                 }
-                Type::TypeVar(typevar) if name_str == "kwargs" && typevar.is_paramspec(db) => {
+                Type::TypeVar(typevar) if name_str == "kwargs" && typevar.is_parameter_pack(db) => {
                     Place::declared(Type::TypeVar(
                         typevar.with_paramspec_attr(db, ParamSpecAttrKind::Kwargs),
                     ))

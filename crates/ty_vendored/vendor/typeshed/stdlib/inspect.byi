@@ -1079,7 +1079,7 @@ def getmro(cls: type) -> (*: type):
     """Return tuple of base classes (including cls) in method resolution order."""
 
 @deprecated("Deprecated since Python 3.5. Use `Signature.bind` and `Signature.bind_partial` instead.")
-def getcallargs[Parameters: (*: *, **: *)](func: (**Parameters) -> dynamic, /, *args: Parameters.args, **kwds: Parameters.kwargs) -> dict[str, dynamic]:
+def getcallargs[Parameters: (*: *, **: *)](func: (**Parameters) -> dynamic, /, *args: *Parameters, **kwds: **Parameters) -> dict[str, dynamic]:
     """Get the mapping of arguments to values.
 
     A dict is returned, with keys the function argument names (including the
