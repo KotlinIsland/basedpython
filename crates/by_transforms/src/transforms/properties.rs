@@ -379,8 +379,16 @@ impl PropertiesPass<'_> {
                     continue;
                 }
                 spans.push((std::mem::take(&mut prefix), TextRange::new(cursor, newline)));
-                let indent = leading_whitespace(&self.source[usize::from(next_line)..]);
-                prefix = reindent(indent, source_indent, body_indent);
+                let line = &self.source[usize::from(next_line)..];
+                let indent = leading_whitespace(line);
+                // a blank line carries no indentation of its own, matching
+                // `indent_block`'s rule — re-indenting one would leave trailing
+                // whitespace behind
+                prefix = if line[indent.len()..].starts_with(['\n', '\r']) {
+                    String::new()
+                } else {
+                    reindent(indent, source_indent, body_indent)
+                };
                 cursor = next_line + TextSize::try_from(indent.len()).expect("indent fits u32");
             }
             spans.push((prefix, TextRange::new(cursor, end)));

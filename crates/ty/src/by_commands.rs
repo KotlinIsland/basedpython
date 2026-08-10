@@ -148,12 +148,12 @@ pub(crate) fn cmd_run(
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let tmp = tempfile::TempDir::new().context("failed to create temp directory")?;
 
-    let (db, handles, rebuilder) = build_project_db(&cwd)?;
+    let (db, handles, rebuilder, root) = build_project_db(&cwd)?;
     if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Failure);
     }
-    let roots = module_roots(&db, &cwd);
+    let roots = module_roots(&db, &root);
 
     // an explicit module always wins; otherwise the project's configured entry
     // point stands in for it. resolving before the (much slower) check means a
@@ -179,7 +179,7 @@ pub(crate) fn cmd_run(
         CheckGate::AllErrors,
         &rebuilder,
         |bpy, src, line_map| {
-            let py = tmp.path().join(module_relative_path(&roots, &cwd, bpy));
+            let py = tmp.path().join(module_relative_path(&roots, &root, bpy));
             fs::create_dir_all(py.parent().unwrap())?;
             fs::write(&py, src)?;
             traceback_entries.push(TracebackEntry {
@@ -276,13 +276,13 @@ pub(crate) fn cmd_build(
     lowering.apply(&mut config)?;
     let out = cwd.join("out");
 
-    let (db, handles, rebuilder) = build_project_db(&cwd)?;
+    let (db, handles, rebuilder, root) = build_project_db(&cwd)?;
     if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Success);
     }
     let file_count = handles.len();
-    let roots = module_roots(&db, &cwd);
+    let roots = module_roots(&db, &root);
     if !render_check_and_transpile(
         &db,
         &handles,
@@ -290,7 +290,7 @@ pub(crate) fn cmd_build(
         CheckGate::ParseErrorsOnly,
         &rebuilder,
         |bpy, src, _line_map| {
-            let py = out.join(module_relative_path(&roots, &cwd, bpy));
+            let py = out.join(module_relative_path(&roots, &root, bpy));
             fs::create_dir_all(py.parent().unwrap())?;
             fs::write(&py, src)?;
             eprintln!("{} -> {}", bpy.display(), py.display());
@@ -492,7 +492,7 @@ fn reverse_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
 /// build`, but written in place rather than to `out/`).
 #[allow(clippy::print_stderr)]
 fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
-    let (db, handles, rebuilder) = build_project_db(dir)?;
+    let (db, handles, rebuilder, _root) = build_project_db(dir)?;
     if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Success);
@@ -697,11 +697,18 @@ impl Rebuilder {
 }
 
 /// A project db, the `(source_path, File)` pairs for the `.by` files it was
-/// built for, and the means to build the same project again.
+/// built for, the canonical project root every one of those paths is rooted at,
+/// and the means to build the same project again.
+///
+/// The root is handed back rather than re-derived by each caller: `canonicalize`
+/// and `current_dir` do not agree on every platform — on windows the first
+/// returns the `\\?\` verbatim form and the second does not — so a caller that
+/// re-derived it would find none of the db's paths under it.
 type ProjectBuild = (
     ProjectDatabase,
     Vec<(PathBuf, ruff_db::files::File)>,
     Rebuilder,
+    PathBuf,
 );
 
 /// Whether `path` sits inside a hidden or build-output directory under `root`.
@@ -767,7 +774,7 @@ fn build_project_db(cwd: &Path) -> anyhow::Result<ProjectBuild> {
         root: sys_cwd.to_path_buf(),
         included,
     };
-    Ok((db, sources, rebuilder))
+    Ok((db, sources, rebuilder, canonical_cwd))
 }
 
 /// How much of the check outcome blocks emitting output.

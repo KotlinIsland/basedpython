@@ -78,6 +78,20 @@ handling happen at lex time, so a tag cannot retroactively change the escape
 processing of its content — the underlying `t"..."` is processed normally.
 this is the same generality boundary PEP 750 drew, drawn in the same place
 
+## where a tag resolves
+
+the tag is an ordinary name, resolved where it is written. inside a
+[trailing lambda](trailing-lambdas.md) block whose callback declares an
+[implicit receiver](implicit-receivers.md), that includes the receiver's
+members — so `text"…"` reaches the same method `text(t"…")` does:
+
+```by
+root.div:
+    text"hello {who}"
+```
+
+both spellings lower to the same call on the receiver
+
 ## runtime
 
 `Template` is a python 3.14 type. on earlier targets the tag receives a
