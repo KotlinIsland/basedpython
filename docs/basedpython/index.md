@@ -9,10 +9,10 @@ files any python tool can read
 - **a python type checker with [framework support](frameworks/index.md)** —
     pydantic, sqlalchemy, pytest and django are modelled directly, so the magic
     they do at runtime checks like ordinary code
+- **a build system** — write code against the latest version of python, and ship wheels that are compatible with old ones, no more waiting for 5 years to use something
 - **basedpython, a python-like language that builds into python wheels**
 - **compiles into high performance python extension modules**
-- **a language server, formatter and linter** — `by server` drives the editor,
-    and `buff` is the basedpython build of ruff
+- **a language server, formatter and linter** — high performance and feature rich tooling
 
 <div class="by-actions" markdown>
 [get started](getting-started.md){ .md-button .md-button--primary }
@@ -47,6 +47,22 @@ def main():
     print(f"{summary.count} shapes, {summary.total} total")
     print(shapes.first_circle()?.radius ?? 0)
 ```
+
+## why
+
+> Wouldn't it be nice if you could say `protocol C:` instead of having to write:
+>
+> ```python
+> from typing import Protocol
+>
+> class C(Protocol):
+> ```
+>
+> \- Guido van Rossum
+
+Python and it's type system are held back due to an inability to make changes and a hesitation to introduce new syntax
+
+other languages have indulged in modern features and powerful type systems, and integrated tooling. we want to close that gap
 
 ## what you get
 
