@@ -17,11 +17,13 @@ pub use typeshed::{
     PyVersionRange, TypeshedVersions, TypeshedVersionsParseError, vendored_typeshed_versions,
 };
 
+pub use distributions::{DistributionIndex, DistributionName, distribution_index};
 pub use list::{all_modules, list_modules};
 pub use module_glob::{ModuleGlobError, ModuleGlobSet, ModuleGlobSetBuilder, ModuleNameMatch};
 pub use resolve::{ModuleResolveMode, SearchPathIterator, search_paths};
 
 mod db;
+mod distributions;
 mod list;
 mod module;
 mod module_glob;
