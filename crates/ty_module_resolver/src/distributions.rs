@@ -259,8 +259,9 @@ fn top_level_names(record: &str) -> impl Iterator<Item = &str> {
         if first.is_empty()
             || first == ".."
             || first == "."
-            || first.ends_with(".dist-info")
-            || first.ends_with(".data")
+            || METADATA_DIRECTORIES
+                .iter()
+                .any(|suffix| first.ends_with(suffix))
         {
             return None;
         }
@@ -285,6 +286,9 @@ fn top_level_names(record: &str) -> impl Iterator<Item = &str> {
 
 /// What a file directly inside `site-packages` has to end with to be importable.
 const MODULE_SUFFIXES: &[&str] = &[".py", ".pyi", ".by", ".byi", ".so", ".pyd"];
+
+/// What an install leaves beside the code it installed, which is not importable.
+const METADATA_DIRECTORIES: &[&str] = &[".dist-info", ".data", ".egg-info"];
 
 /// The first field of a `RECORD` line, which is a CSV record.
 fn record_path(line: &str) -> Option<&str> {
@@ -554,7 +558,11 @@ types_requests-2.32.0.dist-info/RECORD,,
                 &[("PyJWT-2.10.1.dist-info", "jwt/__init__.py,sha256=a,1\n")],
             );
 
-            assert!(distribution_index(&db).owners_of_top_level("numpy").is_empty());
+            assert!(
+                distribution_index(&db)
+                    .owners_of_top_level("numpy")
+                    .is_empty()
+            );
 
             db.write_file(site_packages.join("numpy/__init__.py"), "")
                 .unwrap();
@@ -574,7 +582,11 @@ types_requests-2.32.0.dist-info/RECORD,,
                 &[("PyJWT-2.10.1.dist-info", "jwt/__init__.py,sha256=a,1\n")],
             );
 
-            assert!(distribution_index(&db).owners_of_top_level("extra").is_empty());
+            assert!(
+                distribution_index(&db)
+                    .owners_of_top_level("extra")
+                    .is_empty()
+            );
 
             db.write_file(
                 site_packages.join("PyJWT-2.10.1.dist-info/RECORD"),

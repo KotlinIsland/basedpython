@@ -4480,7 +4480,7 @@ person who wrote it, whose environment has the whole group.
 **Examples**
 
 
-```toml
+```toml {data-mdtest="ignore"}
 [project]
 name = "my-lib"
 dependencies = ["requests"]
@@ -4489,7 +4489,7 @@ dependencies = ["requests"]
 dev = ["pytest"]
 ```
 
-```python
+```python {data-mdtest="ignore"}
 # src/my_lib/fixtures.py
 import pytest  # error: [misplaced-dependency]
 ```
@@ -4503,14 +4503,14 @@ Which files ship is derived from the name the project gives itself — a project
 named `my-lib` ships the module `my_lib` — and can be stated outright when that
 is not right:
 
-```toml
+```toml {data-mdtest="ignore"}
 [tool.ty.analysis]
 shipped-modules = ["my_lib", "my_lib_plugins"]
 ```
 
 A file's groups can also be set directly, which overrides the derivation:
 
-```toml
+```toml {data-mdtest="ignore"}
 [[tool.ty.overrides]]
 include = ["src/my_lib/_dev_only/**"]
 
@@ -6632,13 +6632,13 @@ Depending on something means saying so.
 `requests` installs `charset_normalizer`, but a project that only declares
 `requests` has not declared `charset_normalizer`:
 
-```toml
+```toml {data-mdtest="ignore"}
 [project]
 name = "my-lib"
 dependencies = ["requests"]
 ```
 
-```python
+```python {data-mdtest="ignore"}
 import charset_normalizer  # error: [undeclared-dependency]
 ```
 

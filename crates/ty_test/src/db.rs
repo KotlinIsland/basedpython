@@ -218,33 +218,38 @@ fn file_settings(db: &dyn SemanticDb, file: File) -> FileSettings {
         return FileSettings::Global;
     };
 
-    FileSettings::File {
+    FileSettings::File(Box::new(InlineSettings {
         rules: MdtestRuleSelection(mdtest_rule_selection(options.rules.as_ref(), None)),
         analysis: mdtest_analysis_settings(options.analysis.as_ref()),
-    }
+    }))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FileSettings {
     Global,
-    File {
-        rules: MdtestRuleSelection,
-        analysis: AnalysisSettings,
-    },
+    // boxed because the settings dwarf the other variant, and most files use it
+    File(Box<InlineSettings>),
+}
+
+/// The settings a test's own inline configuration block sets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InlineSettings {
+    rules: MdtestRuleSelection,
+    analysis: AnalysisSettings,
 }
 
 impl FileSettings {
     fn rules<'db>(&'db self, db: &'db Db) -> &'db RuleSelection {
         match self {
             Self::Global => db.settings().rule_selection(db),
-            Self::File { rules, .. } => rules,
+            Self::File(settings) => &settings.rules,
         }
     }
 
     fn analysis<'db>(&'db self, db: &'db Db) -> &'db AnalysisSettings {
         match self {
             Self::Global => db.settings().analysis(db),
-            Self::File { analysis, .. } => analysis,
+            Self::File(settings) => &settings.analysis,
         }
     }
 }

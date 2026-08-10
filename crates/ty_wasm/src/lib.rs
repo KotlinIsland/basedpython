@@ -696,7 +696,7 @@ impl Workspace {
                     edits: action
                         .edits
                         .into_iter()
-                        .map(|edit| edit_to_text_edit(self, file_id.file, &edit))
+                        .map(|edit| edit_to_text_edit(self, edit.file, &edit.edit))
                         .collect(),
                 }),
             );

@@ -187,6 +187,8 @@ Settings: Settings {
             regex_set: RegexSet([]),
             globs: [],
         },
+        dependency_groups: None,
+        shipped_modules: None,
         disable_fluid_specializations: false,
         sound_types: false,
         infer_unannotated_signatures: true,

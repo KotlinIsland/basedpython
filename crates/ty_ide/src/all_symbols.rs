@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use ruff_db::files::File;
 use ty_module_resolver::{Module, ModuleName, all_modules, resolve_real_shadowable_module};
 use ty_project::{Db, parallel::ParallelIteratorExt};
+use ty_python_semantic::dependencies::{self, ImportStanding};
 
 use crate::{
     SymbolKind,
@@ -49,6 +50,17 @@ pub fn all_symbols<'db>(
             // Filter out non-first-party modules that are conventionally
             // regarded as private or tests.
             if is_non_first_party && (name.is_private() || name.is_test_module()) {
+                return Vec::new();
+            }
+
+            // A distribution the project only has because something else needed
+            // it is not one it can import. Auto-import searches by symbol name,
+            // so there is no way for the user to ask for one on purpose here;
+            // offering them means offering imports that break on a fresh install.
+            if matches!(
+                dependencies::import_standing(db, importing_from, module),
+                ImportStanding::Undeclared { .. }
+            ) {
                 return Vec::new();
             }
 

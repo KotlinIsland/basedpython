@@ -155,7 +155,7 @@ pub enum ImportStanding<'a> {
 /// `[project] name = "my-lib"` ships `my_lib`. A project that says nothing about
 /// its name ships nothing that can be identified, and then every group is
 /// available everywhere — under-eager, but never wrong.
-pub fn available_groups<'db>(db: &'db dyn Db, file: File) -> AvailableGroups<'db> {
+pub fn available_groups(db: &dyn Db, file: File) -> AvailableGroups<'_> {
     let Some(manifest) = db.dependency_manifest(file) else {
         return AvailableGroups::Unknown;
     };
