@@ -148,7 +148,7 @@ pub(crate) fn explain_miss<'db>(
 /// visit the enum classes an expected type offers members of. a union offers
 /// each of its elements' (a based enum in a type expression *is* the union of
 /// its variants, and an optional enum is a union with `None`)
-fn for_each_candidate<'db>(
+pub(crate) fn for_each_candidate<'db>(
     db: &'db dyn Db,
     target: Type<'db>,
     visit: &mut impl FnMut(ClassType<'db>) -> ControlFlow<()>,

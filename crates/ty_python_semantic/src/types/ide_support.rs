@@ -1,13 +1,18 @@
 use std::collections::HashMap;
 
 use crate::FxIndexSet;
-use crate::place::{builtins_module_scope, imported_symbol};
+use std::ops::ControlFlow;
+
+use crate::place::{Place, builtins_module_scope, imported_symbol};
 use crate::reachability::is_range_reachable;
+use crate::types::EnumLiteralType;
 use crate::types::call::bind::CheckTypesMode;
 use crate::types::call::{CallArguments, CallError, MatchedArgument};
 use crate::types::class::{DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTupleAnchor};
 use crate::types::constraints::ConstraintSetBuilder;
+use crate::types::context_sensitive::for_each_candidate;
 use crate::types::dedicated::django;
+use crate::types::extensions::{applicable_extensions, resolve_extension_member};
 use crate::types::function::FunctionDecorators;
 use crate::types::generics::GenericContext;
 use crate::types::list_members::all_end_of_scope_members;
@@ -2406,6 +2411,151 @@ pub fn inferred_override<'db>(
                 .is_undefined()
         })
         .map(Type::from)
+}
+
+/// The enum members `target` admits under their bare name, each as its name
+/// and type.
+///
+/// basedpython resolves a bare `Red` against the type expected at the
+/// position, so a completion list there should offer what that resolution
+/// would accept. Every enum reachable through the expected type contributes
+/// its members — a union of enums contributes all of them.
+pub fn context_sensitive_members<'db>(
+    db: &'db dyn Db,
+    target: Type<'db>,
+) -> Vec<(Name, Type<'db>)> {
+    let mut members = Vec::new();
+    let mut seen = FxHashSet::default();
+    let _ = for_each_candidate(db, target, &mut |candidate| {
+        for base in candidate.iter_mro(db).filter_map(ClassBase::into_class) {
+            let Some(enum_class) = base.class_literal(db).into_enum_class(db) else {
+                continue;
+            };
+            for name in enum_class.member_names(db) {
+                if seen.insert(name.clone()) {
+                    members.push((
+                        name.clone(),
+                        Type::enum_literal(EnumLiteralType::new(db, enum_class, name.clone())),
+                    ));
+                }
+            }
+        }
+        ControlFlow::Continue(())
+    });
+    members
+}
+
+/// The extension members that apply to `receiver`, each as its name and the
+/// type it has once bound to that receiver.
+///
+/// `resolve_extension_member` answers for one name at a time, which is what
+/// type inference needs; a completion list needs the whole set, so this walks
+/// every applicable extension's body and asks about each name it declares.
+pub fn extension_members<'db>(
+    db: &'db dyn Db,
+    file: File,
+    receiver: Type<'db>,
+) -> Vec<(Name, Type<'db>)> {
+    let mut members = Vec::new();
+    let mut seen = FxHashSet::default();
+    for &extension in applicable_extensions(db, file).iter() {
+        for member in all_end_of_scope_members(db, extension.body_scope(db)) {
+            let name = member.member.name;
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            if let Some(resolution) = resolve_extension_member(db, file, receiver, &name) {
+                members.push((name, resolution.ty));
+            }
+        }
+    }
+    members
+}
+
+/// A superclass member a class does not define, and could override.
+pub struct OverridableMember<'db> {
+    /// The member's name.
+    pub name: Name,
+    /// The `def` header the override would be written with, without its `def`
+    /// keyword or trailing colon.
+    pub signature: String,
+    /// The class the member is inherited from.
+    pub superclass: Name,
+    /// The member's type, for the completion's own display.
+    pub ty: Type<'db>,
+}
+
+/// The superclass members `class` inherits without defining, each with the
+/// header an override of it would be written with.
+///
+/// basedpython writes an override with the `override` modifier, and an IDE
+/// that offers the members can write the whole signature down — the one thing
+/// about an override that is not worth typing out. `object`'s members are left
+/// out: everything inherits them, and almost nothing means to override them.
+pub fn overridable_members<'db>(db: &'db dyn Db, class: Type<'db>) -> Vec<OverridableMember<'db>> {
+    let Type::ClassLiteral(class) = class else {
+        return Vec::new();
+    };
+    let mut seen: FxHashSet<Name> = FxHashSet::default();
+    let mut members = Vec::new();
+
+    // the mro opens with the class itself, whose names seed `seen`: a name it
+    // already binds is not one it is about to add, and after that the first
+    // superclass to declare a name is the one an override would be against
+    for (depth, superclass) in class
+        .default_specialization(db)
+        .iter_mro(db)
+        .filter_map(ClassBase::into_class)
+        .enumerate()
+    {
+        let Some((literal, _)) = superclass.static_class_literal(db) else {
+            continue;
+        };
+        let inherited = depth > 0;
+        // everything inherits `object`'s members and almost nothing means to
+        // override them
+        if inherited && literal.is_known(db, KnownClass::Object) {
+            continue;
+        }
+        let superclass_name = literal.name(db).clone();
+        for member in all_end_of_scope_members(db, literal.body_scope(db)) {
+            let name = member.member.name;
+            if !seen.insert(name.clone())
+                || !inherited
+                || is_constructor_like_method(&name)
+                || is_mangled_private(&name)
+            {
+                continue;
+            }
+            let Place::Defined(defined) = superclass.own_class_member(db, None, &name).inner.place
+            else {
+                continue;
+            };
+            let Type::FunctionLiteral(function) = defined.ty else {
+                continue;
+            };
+            let Some(signature) = function
+                .signature(db)
+                .overloads
+                .iter()
+                .next()
+                .map(|overload| {
+                    overload
+                        .display_with(db, DisplaySettings::default().disallow_signature_name())
+                        .to_string()
+                })
+            else {
+                continue;
+            };
+            members.push(OverridableMember {
+                name,
+                signature,
+                superclass: superclass_name.clone(),
+                ty: defined.ty,
+            });
+        }
+    }
+    members
 }
 
 /// basedpython: the parameters a trailing lambda block binds implicitly, each as
