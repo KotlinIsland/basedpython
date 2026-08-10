@@ -1,4 +1,5 @@
 use crate::AnalysisSettings;
+use crate::dependencies::DependencyManifest;
 use crate::lint::{LintRegistry, RuleSelection};
 use ruff_db::diagnostic::Diagnostic;
 use ruff_db::files::File;
@@ -56,6 +57,23 @@ pub trait Db: PythonCoreDb {
     /// first conformance to a project invalidates everything that read this.
     fn project_declares_conformances(&self) -> bool {
         true
+    }
+
+    /// What the project `file` belongs to declares it depends on.
+    ///
+    /// Reading `pyproject.toml` — or the PEP 723 block of a script, which is why
+    /// this is asked per file — belongs to a crate above this one, so the answer
+    /// is handed down. The shape follows [`Db::django_settings_file`].
+    ///
+    /// `None` means nothing is known, which every caller has to read as "impose
+    /// no restriction": a project with no manifest must behave exactly as one
+    /// whose every import is declared.
+    ///
+    /// The implementation is expected to be a Salsa query, so that editing the
+    /// dependency list is seen by everything that read this.
+    fn dependency_manifest(&self, file: File) -> Option<&DependencyManifest> {
+        let _ = file;
+        None
     }
 
     fn dyn_clone(&self) -> Box<dyn Db>;

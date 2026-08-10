@@ -1,14 +1,19 @@
 use crate::metadata::options::Options;
 use crate::metadata::python_version::SupportedPythonVersion;
 use pep440_rs::{Version, VersionSpecifiers, release_specifiers_to_ranges};
+use pep508_rs::{Requirement, VerbatimUrl};
 use ruff_python_ast::PythonVersion;
 use ruff_ranged_value::{RangedValue, ValueSource, ValueSourceGuard};
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::Bound;
+use std::collections::{BTreeMap, Bound};
 use std::ops::Deref;
+use std::str::FromStr;
 use strum::IntoEnumIterator;
 use thiserror::Error;
 use ty_combine::Combine;
+use ty_module_resolver::DistributionName;
+use ty_python_semantic::dependencies::{DependencyGroup, DependencyManifest, GroupName};
 
 /// A `pyproject.toml` as specified in PEP 517.
 #[derive(Deserialize, Serialize, Debug, Default, Clone, PartialEq, Eq)]
@@ -18,6 +23,14 @@ pub struct PyProject {
     pub project: Option<Project>,
     /// Tool-specific metadata.
     pub tool: Option<Tool>,
+    /// PEP 735 dependency groups.
+    pub dependency_groups: Option<BTreeMap<String, Vec<DependencyGroupEntry>>>,
+    /// A PEP 723 script's requirements.
+    ///
+    /// A `pyproject.toml` has no top-level `dependencies` key. This is only ever
+    /// set when the file being read is a script's inline metadata block, which
+    /// this type doubles as — see [`crate::metadata::script::script_metadata`].
+    pub dependencies: Option<Vec<String>>,
 }
 
 impl PyProject {
@@ -36,6 +49,95 @@ impl PyProject {
             .is_some_and(|tool| tool.basedpython.is_some() || tool.ty.is_some())
     }
 
+    /// What this file declares the project depends on, or `None` if it declares
+    /// nothing at all.
+    ///
+    /// A file with neither a `[project]` table nor a `[dependency-groups]` table
+    /// is not a manifest: it says nothing about dependencies, which is different
+    /// from saying there are none.
+    pub(crate) fn dependency_manifest(&self) -> Option<DependencyManifest> {
+        let uv_dev = self
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.dev_dependencies.as_deref());
+
+        if self.project.is_none()
+            && self.dependency_groups.is_none()
+            && self.dependencies.is_none()
+            && uv_dev.is_none()
+        {
+            return None;
+        }
+
+        let mut groups = Vec::new();
+
+        // a script's own requirements and `[project].dependencies` are the same
+        // thing — what has to be installed for the code to run — so they are one
+        // group, and only one of the two is ever present
+        let runtime = self
+            .project
+            .as_ref()
+            .and_then(|project| project.dependencies.as_deref())
+            .or(self.dependencies.as_deref());
+
+        if self.project.is_some() || runtime.is_some() {
+            groups.push(DependencyGroup {
+                name: GroupName::Project,
+                requirements: distribution_names(runtime.unwrap_or(&[])),
+            });
+        }
+
+        if let Some(project) = &self.project {
+
+            for (extra, requirements) in project.optional_dependencies.iter().flatten() {
+                groups.push(DependencyGroup {
+                    name: GroupName::Extra(Box::from(&**extra)),
+                    requirements: distribution_names(requirements),
+                });
+            }
+        }
+
+        if let Some(declared) = &self.dependency_groups {
+            for name in declared.keys() {
+                groups.push(DependencyGroup {
+                    name: GroupName::Group(Box::from(&**name)),
+                    requirements: resolve_group(declared, name),
+                });
+            }
+        }
+
+        if let Some(dev) = uv_dev {
+            // uv merges `[tool.uv].dev-dependencies` into the `dev` group rather
+            // than keeping a second group beside it
+            let requirements = distribution_names(dev);
+            match groups
+                .iter_mut()
+                .find(|group| group.name == GroupName::Group(Box::from("dev")))
+            {
+                Some(group) => {
+                    let mut merged = group.requirements.to_vec();
+                    merged.extend(requirements);
+                    merged.sort_unstable();
+                    merged.dedup();
+                    group.requirements = merged.into_boxed_slice();
+                }
+                None => groups.push(DependencyGroup {
+                    name: GroupName::Group(Box::from("dev")),
+                    requirements,
+                }),
+            }
+        }
+
+        let project_name = self
+            .project
+            .as_ref()
+            .and_then(|project| project.name.as_ref())
+            .map(|name| DistributionName::new(name.as_str()));
+
+        Some(DependencyManifest::new(project_name, groups))
+    }
+
     /// The names of the configured sections, for diagnostics. Empty if there are none.
     pub(crate) fn section_names(&self) -> String {
         let Some(tool) = self.tool.as_ref() else {
@@ -49,6 +151,64 @@ impl PyProject {
             (None, None) => String::new(),
         }
     }
+}
+
+/// The distributions a list of PEP 508 requirement strings names.
+///
+/// An entry that does not parse is dropped rather than guessed at: a requirement
+/// ty cannot read is one it knows nothing about, and inventing a name for it
+/// would make an import look declared when it is not.
+fn distribution_names(requirements: &[String]) -> Box<[DistributionName]> {
+    let mut names: Vec<_> = requirements
+        .iter()
+        .filter_map(|requirement| {
+            Requirement::<VerbatimUrl>::from_str(requirement)
+                .inspect_err(|error| {
+                    tracing::debug!("Ignoring unreadable requirement `{requirement}`: {error}");
+                })
+                .ok()
+        })
+        .map(|requirement| DistributionName::new(requirement.name.as_ref()))
+        .collect();
+
+    names.sort_unstable();
+    names.dedup();
+    names.into_boxed_slice()
+}
+
+/// The requirements of `group`, with every `include-group` followed.
+///
+/// PEP 735 forbids a cycle between groups, but a `pyproject.toml` is not
+/// validated before it gets here, so the walk tracks what it has seen instead of
+/// trusting that.
+fn resolve_group(
+    groups: &BTreeMap<String, Vec<DependencyGroupEntry>>,
+    group: &str,
+) -> Box<[DistributionName]> {
+    let mut requirements = Vec::new();
+    let mut seen = FxHashSet::from_iter([group]);
+    let mut queue = vec![group];
+
+    while let Some(name) = queue.pop() {
+        let Some(entries) = groups.get(name) else {
+            continue;
+        };
+
+        for entry in entries {
+            match entry {
+                DependencyGroupEntry::Requirement(requirement) => {
+                    requirements.push(requirement.clone());
+                }
+                DependencyGroupEntry::Include { include_group } => {
+                    if seen.insert(include_group) {
+                        queue.push(include_group);
+                    }
+                }
+            }
+        }
+    }
+
+    distribution_names(&requirements)
 }
 
 #[derive(Error, Debug)]
@@ -106,6 +266,14 @@ pub struct Project {
     pub version: Option<RangedValue<Version>>,
     /// The Python versions this project is compatible with.
     pub requires_python: Option<RangedValue<VersionSpecifiers>>,
+    /// The requirements installed alongside the project.
+    ///
+    /// Kept as written rather than as parsed requirements: one entry ty cannot
+    /// make sense of must not cost it the whole file, and a `[project]` table it
+    /// fails to deserialize is a project it fails to load.
+    pub dependencies: Option<Vec<String>>,
+    /// The requirements of each extra, installed only when the extra is asked for.
+    pub optional_dependencies: Option<BTreeMap<String, Vec<String>>>,
 }
 
 impl Project {
@@ -189,11 +357,32 @@ pub enum ResolveRequiresPythonError {
     NoSupportedVersion(String),
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct Tool {
     pub ty: Option<Options>,
     pub basedpython: Option<Options>,
+    pub uv: Option<Uv>,
+}
+
+/// The parts of `[tool.uv]` that say what the project depends on.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct Uv {
+    /// uv's own development dependencies, which predate PEP 735 and are still
+    /// widely written. uv treats them as the `dev` group, and so does this.
+    pub dev_dependencies: Option<Vec<String>>,
+}
+
+/// One entry of a PEP 735 dependency group: a requirement, or another group.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum DependencyGroupEntry {
+    /// A PEP 508 requirement string.
+    Requirement(String),
+    /// `{include-group = "..."}`, which pulls in another group's requirements.
+    #[serde(rename_all = "kebab-case")]
+    Include { include_group: String },
 }
 
 /// The normalized name of a package.
@@ -306,6 +495,206 @@ pub(crate) enum InvalidPackageNameError {
     InvalidCharacter(char),
     #[error("name must not be empty")]
     Empty,
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+    use ruff_ranged_value::ValueSource;
+
+    fn manifest(source: &str) -> Option<DependencyManifest> {
+        PyProject::from_toml_str_without_spans(source, ValueSource::Cli)
+            .expect("should parse")
+            .dependency_manifest()
+    }
+
+    /// The groups a manifest declares, as `(group, [distribution])` pairs.
+    fn groups(source: &str) -> Vec<(String, Vec<String>)> {
+        manifest(source)
+            .expect("should be a manifest")
+            .groups()
+            .iter()
+            .map(|group| {
+                (
+                    group.name.as_str().to_string(),
+                    group
+                        .requirements
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_file_that_says_nothing_about_dependencies_is_not_a_manifest() {
+        assert!(manifest("").is_none());
+        assert!(manifest("[tool.ty]\n").is_none());
+    }
+
+    #[test]
+    fn a_project_that_depends_on_nothing_is_still_a_manifest() {
+        assert_eq!(
+            groups("[project]\nname = \"mine\"\n"),
+            [("project".to_string(), vec![])]
+        );
+    }
+
+    #[test]
+    fn requirement_strings_are_read_down_to_their_names() {
+        assert_eq!(
+            groups(
+                r#"
+[project]
+name = "mine"
+dependencies = [
+    "numpy",
+    "requests>=2.31",
+    "httpx[http2] == 0.27.*",
+    "typing-extensions; python_version < '3.12'",
+    "mine @ git+https://example.invalid/mine.git",
+]
+"#,
+            ),
+            [(
+                "project".to_string(),
+                vec![
+                    "httpx".to_string(),
+                    "mine".to_string(),
+                    "numpy".to_string(),
+                    "requests".to_string(),
+                    "typing-extensions".to_string(),
+                ],
+            )]
+        );
+    }
+
+    #[test]
+    fn an_unreadable_requirement_is_dropped_rather_than_guessed_at() {
+        assert_eq!(
+            groups(
+                r#"
+[project]
+name = "mine"
+dependencies = ["numpy", "!!not a requirement!!"]
+"#,
+            ),
+            [("project".to_string(), vec!["numpy".to_string()])]
+        );
+    }
+
+    #[test]
+    fn extras_and_dependency_groups_are_their_own_groups() {
+        assert_eq!(
+            groups(
+                r#"
+[project]
+name = "mine"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+cli = ["click"]
+
+[dependency-groups]
+dev = ["pytest"]
+"#,
+            ),
+            [
+                ("project".to_string(), vec!["numpy".to_string()]),
+                ("cli".to_string(), vec!["click".to_string()]),
+                ("dev".to_string(), vec!["pytest".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn include_group_is_followed() {
+        assert_eq!(
+            groups(
+                r#"
+[dependency-groups]
+test = ["pytest"]
+lint = ["ruff"]
+dev = [{ include-group = "test" }, { include-group = "lint" }, "ipython"]
+"#,
+            ),
+            [
+                (
+                    "dev".to_string(),
+                    vec![
+                        "ipython".to_string(),
+                        "pytest".to_string(),
+                        "ruff".to_string()
+                    ]
+                ),
+                ("lint".to_string(), vec!["ruff".to_string()]),
+                ("test".to_string(), vec!["pytest".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cycle_between_groups_terminates() {
+        assert_eq!(
+            groups(
+                r#"
+[dependency-groups]
+a = ["one", { include-group = "b" }]
+b = ["two", { include-group = "a" }]
+"#,
+            ),
+            [
+                ("a".to_string(), vec!["one".to_string(), "two".to_string()]),
+                ("b".to_string(), vec!["one".to_string(), "two".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn uv_dev_dependencies_are_the_dev_group() {
+        assert_eq!(
+            groups("[tool.uv]\ndev-dependencies = [\"pytest\"]\n"),
+            [("dev".to_string(), vec!["pytest".to_string()])]
+        );
+    }
+
+    #[test]
+    fn uv_dev_dependencies_merge_into_a_declared_dev_group() {
+        assert_eq!(
+            groups(
+                r#"
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.uv]
+dev-dependencies = ["ruff"]
+"#,
+            ),
+            [(
+                "dev".to_string(),
+                vec!["pytest".to_string(), "ruff".to_string()]
+            )]
+        );
+    }
+
+    #[test]
+    fn a_script_declares_its_requirements_as_the_project_group() {
+        // PEP 723 writes `dependencies` at the top level, not under `[project]`
+        assert_eq!(
+            groups("dependencies = [\"numpy\"]\nrequires-python = \">=3.11\"\n"),
+            [("project".to_string(), vec!["numpy".to_string()])]
+        );
+    }
+
+    #[test]
+    fn the_project_name_identifies_what_it_ships() {
+        let manifest = manifest("[project]\nname = \"My.Lib\"\n").unwrap();
+        assert_eq!(
+            manifest.project_name().map(ToString::to_string).as_deref(),
+            Some("my-lib")
+        );
+    }
 }
 
 #[cfg(test)]

@@ -5,15 +5,20 @@ use std::{cmp, fmt};
 
 pub use self::changes::ChangeResult;
 use crate::CollectReporter;
+use crate::metadata::pyproject::PyProject;
+use crate::metadata::script::script_metadata;
 use crate::metadata::settings::file_settings;
 use crate::{ProgressReporter, Project, ProjectChecker, ProjectMetadata};
 use get_size2::StandardTracker;
 use ruff_db::Db as SourceDb;
 use ruff_db::diagnostic::Diagnostic;
-use ruff_db::files::{File, Files};
+use ruff_db::files::{File, Files, system_path_to_file};
+use ruff_db::source::source_text;
 use ruff_db::system::System;
 use ruff_db::vendored::VendoredFileSystem;
+use ruff_ranged_value::ValueSource;
 use salsa::{Database, Event, Setter};
+use ty_python_semantic::dependencies::DependencyManifest;
 use ty_module_resolver::SearchPaths;
 use ty_python_core::program::{
     FallibleStrategy, MisconfigurationStrategy, Program, UseDefaultStrategy,
@@ -596,6 +601,14 @@ impl SemanticDb for ProjectDatabase {
         *project_declares_conformances(self, self.project())
     }
 
+    fn dependency_manifest(&self, file: File) -> Option<&DependencyManifest> {
+        // a script carries its own requirements and is not covered by the
+        // project's
+        script_dependency_manifest(self, file)
+            .as_ref()
+            .or_else(|| project_dependency_manifest(self, self.project()).as_ref())
+    }
+
     fn dyn_clone(&self) -> Box<dyn SemanticDb> {
         Box::new(self.clone())
     }
@@ -977,6 +990,34 @@ mod tests {
 
         Ok(())
     }
+}
+
+/// What a PEP 723 script's own inline metadata declares it depends on.
+///
+/// `None` for anything that is not a script, which is what sends a caller on to
+/// the project's manifest.
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+fn script_dependency_manifest(db: &dyn Db, file: File) -> Option<DependencyManifest> {
+    script_metadata(db, file).as_ref()?.dependency_manifest()
+}
+
+/// What the project's own `pyproject.toml` declares it depends on.
+///
+/// `None` when there is no `pyproject.toml`, when it cannot be read, or when it
+/// says nothing about dependencies. All three mean the same thing to a caller:
+/// nothing is known, so nothing is out of place.
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+fn project_dependency_manifest(db: &dyn Db, project: Project) -> Option<DependencyManifest> {
+    let path = project.root(db).join("pyproject.toml");
+    let file = system_path_to_file(db, &path).ok()?;
+    let source = source_text(db, file);
+
+    PyProject::from_toml_str_without_spans(&source, ValueSource::File(Arc::new(path)))
+        .inspect_err(|error| {
+            tracing::debug!("Failed to read dependencies from `pyproject.toml`: {error}");
+        })
+        .ok()?
+        .dependency_manifest()
 }
 
 /// basedpython: does any file in the project declare a protocol conformance?
