@@ -146,6 +146,31 @@ v2: Vec3 = t                    # error — `t` is not a literal
 that restriction is what separates `__of__` from `__from__`. a type that wants
 both spellings declares both.
 
+## conversions from an extension
+
+a conversion dunder is looked up the way any other member is, so an
+[extension](extensions.md) can supply one for a type whose definition is out of
+reach:
+
+```by
+extension Path:
+    class def __of__(cls, value: str) -> Path:
+        return Path(value)
+
+p: Path = "/tmp/x"
+```
+
+the dunder is not a runtime attribute, so the site lowers to whatever that
+extension lowers to — its backing function, receiving the class as its `cls`:
+
+```python
+p: Path = _by_ext__Path____of__(Path, "/tmp/x")
+```
+
+a type that declares the dunder itself wins, the same way an extension never
+shadows a declared member. this is how the builtin frozen containers get theirs;
+see [frozen container displays](frozen-displays.md).
+
 ## conversion sites
 
 exactly the positions a [conformance](extensions.md#conformance) repairs, for the

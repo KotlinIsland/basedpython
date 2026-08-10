@@ -35,6 +35,7 @@ use crate::types::class::{ClassLiteral, ClassType, KnownClass, StaticClassLitera
 use crate::types::class_base::ClassBase;
 use crate::types::conformance;
 use crate::types::context::InferContext;
+use crate::types::conversions::CONVERSION_DUNDERS;
 use crate::types::diagnostic::INVALID_EXTENSION;
 use crate::types::generics::Specialization;
 use crate::types::member::class_member;
@@ -45,10 +46,10 @@ use crate::types::{MemberLookupPolicy, Type};
 pub(crate) const EXTENSION_SYMBOL_PREFIX: &str = "<extension:";
 
 /// the vendored basedpython prelude — a `.byi` stub of builtin `extension`
-/// declarations (the grapheme string surface) every basedpython file sees without
-/// importing. its members are type-only: the transpiler lowers each access to a
-/// plain python expression, so the extension-call rewrite skips them (see
-/// [`is_prelude_extension`])
+/// declarations (the grapheme string surface, and the frozen containers'
+/// `__of__`) every basedpython file sees without importing. its members are
+/// type-only: the transpiler lowers each access to a plain python expression, so
+/// the generic extension-call rewrite skips them (see [`is_prelude_extension`])
 const PRELUDE_MODULE: &str = "ty_extensions._prelude";
 
 /// the prelude module's file, resolved from `from_file`'s search paths. `None`
@@ -59,8 +60,9 @@ pub(crate) fn prelude_file(db: &dyn Db, from_file: File) -> Option<File> {
 }
 
 /// whether `extension` is declared in the basedpython prelude. the transpiler
-/// asks so it can leave a prelude member's access to the dedicated lowering
-/// (`grapheme_string`) rather than emitting a backing-function call
+/// asks so it can leave a prelude member's access to the lowering that group has
+/// — construction for a conversion dunder, a plain expression for the grapheme
+/// string surface — rather than emitting a backing-function call
 pub(crate) fn is_prelude_extension(
     db: &dyn Db,
     from_file: File,
@@ -159,6 +161,56 @@ pub(crate) fn applicable_extensions(db: &dyn Db, file: File) -> Box<[StaticClass
         }
     }
     extensions.into_boxed_slice()
+}
+
+/// the classes an applicable extension supplies a conversion dunder for.
+///
+/// The transpiler's hot-path gate asks whether a type might convert before doing
+/// the work to find out; an extension-supplied dunder is invisible to a member
+/// lookup on the class, so it has to be discovered from the extension side. The
+/// prelude puts three classes here and a file rarely adds more, so the answer is
+/// a short list rather than a set
+#[salsa::tracked(returns(deref), heap_size = ruff_memory_usage::heap_size)]
+pub(crate) fn conversion_extension_targets(db: &dyn Db, file: File) -> Box<[ClassLiteral<'_>]> {
+    let mut targets: Vec<ClassLiteral<'_>> = Vec::new();
+    for &extension in applicable_extensions(db, file) {
+        let Some(target) = extended_class(db, extension) else {
+            continue;
+        };
+        if targets.contains(&target) {
+            continue;
+        }
+        let body = extension.body_scope(db);
+        if CONVERSION_DUNDERS
+            .iter()
+            .any(|dunder| !class_member(db, body, dunder).is_undefined())
+        {
+            targets.push(target);
+        }
+    }
+    targets.into_boxed_slice()
+}
+
+/// does an applicable `extension` supply a conversion dunder for `class`, or for
+/// anything it inherits from?
+///
+/// The transpiler's gate must not miss one, or it skips a site the checker
+/// accepted and emits python that never converts. Tracked for the same reason
+/// `class_declares_conversion` is: the gate asks it of every argument and every
+/// parameter of every call, and the prelude keeps the target list non-empty in
+/// every file, so the MRO walk would otherwise run on all of them
+#[salsa::tracked(returns(copy), heap_size = ruff_memory_usage::heap_size)]
+pub(crate) fn extension_converts_class<'db>(
+    db: &'db dyn Db,
+    file: File,
+    class: StaticClassLiteral<'db>,
+) -> bool {
+    let converting = conversion_extension_targets(db, file);
+    !converting.is_empty()
+        && class.default_specialization(db).iter_mro(db).any(|base| {
+            base.into_class()
+                .is_some_and(|base| converting.contains(&base.class_literal(db)))
+        })
 }
 
 /// the class an extension declaration extends: its name resolved in the
@@ -313,9 +365,27 @@ pub(crate) fn resolve_extension_member<'db>(
     receiver: Type<'db>,
     name: &str,
 ) -> Option<ExtensionMemberResolution<'db>> {
+    let mut resolutions = resolve_extension_members(db, file, receiver, name).into_iter();
+    let mut resolved = resolutions.next()?;
+    resolved.ambiguous_with = resolutions.next().map(|other| other.extension);
+    Some(resolved)
+}
+
+/// every applicable extension that supplies `name` for `receiver`, in
+/// precedence order.
+///
+/// [`resolve_extension_member`] collapses this to the winner plus a flag; a
+/// caller that has to *describe* the losers — a conversion site reporting which
+/// extensions disagree — needs each one's own resolution
+pub(crate) fn resolve_extension_members<'db>(
+    db: &'db dyn Db,
+    file: File,
+    receiver: Type<'db>,
+    name: &str,
+) -> Vec<ExtensionMemberResolution<'db>> {
     let candidates = applicable_extensions(db, file);
     if candidates.is_empty() {
-        return None;
+        return Vec::new();
     }
 
     // a use-site modifier says nothing about which class the receiver is an
@@ -327,7 +397,10 @@ pub(crate) fn resolve_extension_member<'db>(
     let (receiver_class, instance) = if let Some(class) = receiver.nominal_class(db) {
         (class, Some(receiver))
     } else {
-        (receiver.to_class_type(db)?, None)
+        match receiver.to_class_type(db) {
+            Some(class) => (class, None),
+            None => return Vec::new(),
+        }
     };
 
     // a member reached through a conformance is written against the interface,
@@ -347,15 +420,7 @@ pub(crate) fn resolve_extension_member<'db>(
             .map_or(member, |(ty, _)| ty)
     };
 
-    // a conformance's own member *overrides* a default the interface's own
-    // extension supplies, rather than competing with it — which is how the
-    // witness table resolves it, and reporting an ambiguity instead made the
-    // documented override flow unusable
-    let is_conformance = |candidate: StaticClassLiteral<'db>| {
-        !conformance::declared_conformances(db, candidate).is_empty()
-    };
-
-    let mut resolved: Option<ExtensionMemberResolution<'db>> = None;
+    let mut resolved = Vec::new();
     for &extension in candidates {
         let Some(applicable) = applicable_member(db, file, extension, receiver_class, name) else {
             continue;
@@ -372,26 +437,32 @@ pub(crate) fn resolve_extension_member<'db>(
         {
             continue;
         }
-        let fresh = ExtensionMemberResolution {
+        resolved.push(ExtensionMemberResolution {
             extension,
             ty: bind(member, applicable.conformed_as),
             kind,
             ambiguous_with: None,
-        };
-        match &mut resolved {
-            None => resolved = Some(fresh),
-            Some(resolution) => {
-                let overrides = is_conformance(extension) && !is_conformance(resolution.extension);
-                let overridden = is_conformance(resolution.extension) && !is_conformance(extension);
-                if overrides {
-                    *resolution = fresh;
-                } else if !overridden && resolution.ambiguous_with.is_none() {
-                    resolution.ambiguous_with = Some(extension);
-                }
-            }
-        }
+        });
+    }
+
+    // a conformance's own member *overrides* a default the interface's own
+    // extension supplies, rather than competing with it — which is how the
+    // witness table resolves it, and reporting an ambiguity instead made the
+    // documented override flow unusable. dropping the overridden candidates here
+    // rather than folding pairwise leaves every remaining one a genuine peer, so
+    // a caller that has to describe the losers can take them at face value
+    if resolved
+        .iter()
+        .any(|resolution| is_conformance(db, resolution.extension))
+    {
+        resolved.retain(|resolution| is_conformance(db, resolution.extension));
     }
     resolved
+}
+
+/// does `extension` declare a conformance, rather than plain members?
+fn is_conformance<'db>(db: &'db dyn Db, extension: StaticClassLiteral<'db>) -> bool {
+    !conformance::declared_conformances(db, extension).is_empty()
 }
 
 /// basedpython: the extension method `name` supplies for `receiver`, bound to

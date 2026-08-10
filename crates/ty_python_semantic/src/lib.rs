@@ -22,7 +22,7 @@ use rustc_hash::FxHasher;
 pub use semantic_model::{
     Completion, DjangoLookupArgument, ExpectedStringLiteralCompletion, ExtensionOperatorRewrite,
     HasDefinition, HasOptionalDefinition, HasType, ImplicitReceiverReference, MemberDefinition,
-    NameKind, SemanticModel,
+    NameKind, PreludeDunderReceiver, SemanticModel,
 };
 use std::hash::BuildHasherDefault;
 pub use suppression::{

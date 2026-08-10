@@ -183,6 +183,7 @@ syntax inside a function body
 - [extensions](extensions.md) — add members to an existing type, and declare that
     it conforms to an existing protocol
 - [conversions (`__from__` / `__into__` / `__of__`)](conversions.md)
+- [frozen container displays](frozen-displays.md) — `{1}` for a `frozenset`
 - [context parameters](context-parameters.md)
 - [local lifetimes (`local` / `once`)](local-lifetimes.md)
 - [exception tracking (`raises`)](exceptions.md)

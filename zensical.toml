@@ -183,6 +183,7 @@ features = [
     { "export imports" = "features/export-imports.md" },
     { "extensions" = "features/extensions.md" },
     { "conversions (__from__ / __into__ / __of__)" = "features/conversions.md" },
+    { "frozen container displays" = "features/frozen-displays.md" },
     { "context parameters" = "features/context-parameters.md" },
     { "local lifetimes (local / once)" = "features/local-lifetimes.md" },
     { "exception tracking (raises)" = "features/exceptions.md" },

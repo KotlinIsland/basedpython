@@ -154,6 +154,23 @@ preserves what the syntax means:
 each of those keeps reporting the operator as unsupported, so the checker and
 the runtime never disagree. write the call out, or the two comparisons
 
+## conversions
+
+the [conversion dunders](conversions.md) are the one family outside the operator
+table that an extension can supply and have the *language* reach for you:
+
+```by
+extension Path:
+    class def __of__(cls, value: str) -> Path:
+        return Path(value)
+
+p: Path = "/tmp/x"
+```
+
+so a type you do not own can be given a conversion from a literal, or from
+another type. see
+[conversions from an extension](conversions.md#conversions-from-an-extension)
+
 ## unqualified inside a block
 
 a [trailing lambda](trailing-lambdas.md) block whose callback declares an
@@ -476,9 +493,10 @@ header already carries
 - an unapplied method reference (`f = xs.second`) lowers to
     `functools.partial`, which binds the receiver eagerly like a bound method
     but is not one at runtime
-- an extension supplies only the [operator](#operators) dunders; every other
-    dunder is reachable by name but not through the syntax that invokes it, and
-    a comparison chain is not rewritten
+- besides the [operator](#operators) dunders and the
+    [conversion](#conversions) ones, every other dunder is reachable by name but
+    not through the syntax that invokes it, and a comparison chain is not
+    rewritten
 - a conformance repairs an assignment at the positions the type checker checks
     a value against a declared type — an argument, an annotated assignment, a
     `return`, an element of a collection literal. it does not reach inside an

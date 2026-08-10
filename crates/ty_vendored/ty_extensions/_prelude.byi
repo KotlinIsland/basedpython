@@ -3,11 +3,14 @@
 # folds these in for every basedpython source file.
 #
 # these members are type-only: the transpiler lowers each access to a plain
-# python expression (see `by_transforms::transforms::grapheme_string`), so no
-# backing function is emitted and the extension-call rewrite skips them.
+# python expression, so no backing function is emitted and the generic
+# extension-call rewrite skips them. each group below has its own lowering —
+# the grapheme string surface in `by_transforms::transforms::grapheme_string`,
+# the conversion dunders in `by_transforms::transforms::conversion`.
 
+import sys
 from collections.abc import Iterator, Sequence
-from typing import SupportsIndex
+from typing import Never, SupportsIndex
 
 # grapheme string surface. `str`'s user-perceived character is
 # an extended grapheme cluster (unicode UAX #29), which may span several code
@@ -32,3 +35,23 @@ extension str:
     def drop_last(self) -> str
     def prefix(self, count: SupportsIndex, /) -> str
     def suffix(self, count: SupportsIndex, /) -> str
+
+# frozen container displays. python spells `{…}` for the mutable containers
+# only, so the declared type supplies the frozen reading: a written-out display
+# converts through `__of__` like any other literal. a prelude `__of__` lowers to
+# the target's constructor rather than to a method call, so `{1}` in a
+# `frozenset[int]` context emits `frozenset({1})`
+#
+# `dict[Never, Never]` is the *empty* display and nothing else — a conversion
+# site types `{}` exactly rather than widening it — which is what lets `{}`
+# stand for an empty set
+extension set:
+    class def __of__(cls, value: dict[Never, Never], /) -> set[Element]
+
+extension frozenset:
+    class def __of__(cls, value: set[Element], /) -> frozenset[Element]
+    class def __of__(cls, value: dict[Never, Never], /) -> frozenset[Element]
+
+if sys.version_info >= (3, 15):
+    extension frozendict:
+        class def __of__(cls, value: dict[Key, Value], /) -> frozendict[Key, Value]
