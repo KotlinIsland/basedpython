@@ -62,6 +62,19 @@ apply:
 
 assert seen == "ABC3abc", "a block's receiver, its members and `it` all bind"
 
+# a receiver callable naming its own enclosing class: the annotation must not be
+# evaluated while the class body is still running
+class Tag:
+    init(let name: str)
+    def wrap(self, block: Tag.() -> None) -> None:
+        block(Tag("inner"))
+
+names: list[str] = []
+Tag("outer").wrap:
+    names.append(self.name)
+
+assert names == ["inner"], "a self-referential receiver annotation stays deferred"
+
 print("ok")
 "##;
 

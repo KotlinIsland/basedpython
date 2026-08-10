@@ -164,12 +164,17 @@ impl State<'_> {
 
         // build `tag(_Template(<parts>))` over the whole call range. the call
         // already reads `tag` then the literal, so replace it wholesale; the
-        // wide replacement covers `func` and the literal together
+        // wide replacement covers `func` and the literal together.
+        //
+        // the tag itself passes through as source rather than being baked in as
+        // literal text: a tag written inside a trailing-lambda block resolves
+        // against the block's receiver, and that rewrite (`text` →
+        // `_by_self.text`) is a sibling edit on exactly this range
         let _ = lit_range;
-        let mut frags: Vec<Fragment> = vec![Fragment::Lit(format!(
-            "{}(_Template(",
-            self.src(call.func.range())
-        ))];
+        let mut frags: Vec<Fragment> = vec![
+            Fragment::Src(call.func.range()),
+            Fragment::Lit("(_Template(".to_owned()),
+        ];
         let mut first = true;
         // a single-part t-string is the common case; concatenated parts iterate
         // their elements in order, which is still correct for the flat
@@ -313,6 +318,23 @@ mod tests {
         native(
             "q = sql\"select {a} from {b}\"\n",
             "q = sql(t\"select {a} from {b}\")\n",
+        );
+    }
+
+    /// a tag written inside a trailing-lambda block names a member of the
+    /// block's receiver, and the polyfill path re-emits the tag from source so
+    /// that rewrite lands — baking it in as literal text dropped the sibling
+    /// edit and left a bare call that `NameError`s
+    #[test]
+    fn a_tag_in_a_block_keeps_its_receiver() {
+        let out = transpile(
+            "class Tag:\n    def text(self, t): ...\n    def div(self, block: Tag.() -> None):\n        block(Tag())\n\ndef f(root: Tag, who: str):\n    root.div:\n        text\"hello {who}\"\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("_by_self.text(_Template(\"hello \", _Interpolation(who, \"who\")))"),
+            "got:\n{out}"
         );
     }
 

@@ -83,3 +83,29 @@ x = not_callable"oops"
 # error: [unresolved-reference]
 y = undefined_tag"oops"
 ```
+
+## a tag resolves against a block's receiver
+
+A [trailing lambda](basedpython_trailing_lambda.md) block puts its receiver's members in scope
+unqualified, and a tag is an ordinary name in that scope — so `text"…"` reaches the receiver's
+`text` exactly as a written-out `text(...)` call does.
+
+```toml
+[environment]
+python-version = "3.14"
+```
+
+```by
+from string.templatelib import Template
+
+class Tag:
+    def text(self, t: Template) -> int:
+        return 1
+
+    def div(self, block: Tag.() -> None) -> None:
+        block(self)
+
+def build(root: Tag, who: str) -> None:
+    root.div:
+        reveal_type(text"hello {who}")  # revealed: int
+```

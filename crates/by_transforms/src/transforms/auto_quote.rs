@@ -177,7 +177,7 @@ fn process_class_body_stmt(stmt: &Stmt, visitor: &mut Visitor<'_>, quote_annotat
         Stmt::Assign(a) => walk_value_subscripts(a.value.as_ref(), visitor),
         Stmt::AnnAssign(a) => {
             if quote_annotations {
-                walk_one_type_expr(a.annotation.as_ref(), visitor);
+                visitor.quote_annotation(a.annotation.as_ref());
             }
             if let Some(value) = &a.value {
                 walk_value_subscripts(value.as_ref(), visitor);
@@ -189,21 +189,21 @@ fn process_class_body_stmt(stmt: &Stmt, visitor: &mut Visitor<'_>, quote_annotat
             }
             for param in f.parameters.iter_non_variadic_params() {
                 if let Some(ann) = &param.parameter.annotation {
-                    walk_one_type_expr(ann, visitor);
+                    visitor.quote_annotation(ann);
                 }
             }
             if let Some(var) = &f.parameters.vararg
                 && let Some(ann) = &var.annotation
             {
-                walk_one_type_expr(ann, visitor);
+                visitor.quote_annotation(ann);
             }
             if let Some(kwarg) = &f.parameters.kwarg
                 && let Some(ann) = &kwarg.annotation
             {
-                walk_one_type_expr(ann, visitor);
+                visitor.quote_annotation(ann);
             }
             if let Some(ret) = &f.returns {
-                walk_one_type_expr(ret, visitor);
+                visitor.quote_annotation(ret);
             }
         }
         _ => {}
@@ -283,6 +283,27 @@ impl TypeExprVisitor for Visitor<'_> {
 }
 
 impl Visitor<'_> {
+    /// Quote the self-references in one annotation.
+    ///
+    /// A [callable type](super::callable) is basedpython syntax, so a
+    /// self-reference inside one cannot be quoted where it is written —
+    /// `"(A) -> None"` is not a python type. The whole annotation is quoted
+    /// instead, as a pair of boundary insertions: the callable lowering's own
+    /// replacement sits strictly inside them and still applies, so what ends up
+    /// between the quotes is the *lowered* `Callable[…]`. Every other
+    /// annotation keeps the narrow leaf quoting.
+    fn quote_annotation(&mut self, annotation: &Expr) {
+        if contains_callable_self_ref(annotation, self.class_name) {
+            let range = annotation.range();
+            self.edits
+                .push((TextRange::empty(range.start()), "\"".to_owned()));
+            self.edits
+                .push((TextRange::empty(range.end()), "\"".to_owned()));
+            return;
+        }
+        walk_one_type_expr(annotation, self);
+    }
+
     fn emit_quote(&mut self, range: TextRange) {
         let raw = &self.source[usize::from(range.start())..usize::from(range.end())];
         // basedpython renames PEP 695 typevars (`T` → `_T`) when polyfilling
@@ -312,6 +333,40 @@ fn contains_self_ref(expr: &Expr, class_name: &str) -> bool {
             contains_self_ref(&b.left, class_name) || contains_self_ref(&b.right, class_name)
         }
         Expr::Tuple(t) => t.elts.iter().any(|e| contains_self_ref(e, class_name)),
+        Expr::CallableType(c) => {
+            c.receiver
+                .iter()
+                .any(|receiver| contains_self_ref(receiver, class_name))
+                || c.args
+                    .iter()
+                    .any(|argument| contains_self_ref(argument, class_name))
+                || contains_self_ref(&c.returns, class_name)
+        }
+        _ => false,
+    }
+}
+
+/// whether `expr` holds a callable type that names the enclosing class.
+///
+/// A callable type is basedpython syntax, so its self-reference cannot be
+/// quoted where it is written — `"(A) -> None"` is not a python type. The whole
+/// annotation is quoted instead, *after* the callable lowering has rewritten it
+/// to `Callable[…]`, which is what [`quote_lowered_annotation`] arranges.
+fn contains_callable_self_ref(expr: &Expr, class_name: &str) -> bool {
+    match expr {
+        Expr::CallableType(_) => contains_self_ref(expr, class_name),
+        Expr::Subscript(s) => {
+            contains_callable_self_ref(&s.value, class_name)
+                || contains_callable_self_ref(&s.slice, class_name)
+        }
+        Expr::BinOp(b) => {
+            contains_callable_self_ref(&b.left, class_name)
+                || contains_callable_self_ref(&b.right, class_name)
+        }
+        Expr::Tuple(t) => t
+            .elts
+            .iter()
+            .any(|e| contains_callable_self_ref(e, class_name)),
         _ => false,
     }
 }
@@ -360,6 +415,60 @@ mod tests {
         assert_eq!(
             transpile(input, &Config::test_default()).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    /// a callable type is basedpython syntax, so a self-reference inside one
+    /// cannot be quoted where it is written. the whole annotation is quoted
+    /// around the *lowered* `Callable[…]` instead — without it the annotation
+    /// evaluates `Tag` while the class body is still running
+    #[test]
+    fn a_callable_annotation_naming_its_class_is_quoted() {
+        check(
+            indoc! {"
+                class Tag:
+                    def a(self, x: (Tag) -> None): ...
+                    def b(self, x: Tag.() -> None): ...
+            "},
+            indoc! {"
+                from typing import Callable
+                class Tag:
+                    def a(self, x: \"Callable[[Tag], None]\"): ...
+                    def b(self, x: \"Callable[[Tag], None]\"): ...
+            "},
+        );
+    }
+
+    /// the quote wraps the whole annotation, so a callable nested inside one
+    /// carries its lowering with it
+    #[test]
+    fn a_nested_callable_self_reference_quotes_the_whole_annotation() {
+        check(
+            indoc! {"
+                class Tag:
+                    def a(self, x: list[(Tag) -> None]): ...
+            "},
+            indoc! {"
+                from typing import Callable
+                class Tag:
+                    def a(self, x: \"list[Callable[[Tag], None]]\"): ...
+            "},
+        );
+    }
+
+    /// a callable that names no self-reference is left alone
+    #[test]
+    fn a_callable_without_a_self_reference_is_not_quoted() {
+        check(
+            indoc! {"
+                class Tag:
+                    def a(self, x: (int) -> None): ...
+            "},
+            indoc! {"
+                from typing import Callable
+                class Tag:
+                    def a(self, x: Callable[[int], None]): ...
+            "},
         );
     }
 
