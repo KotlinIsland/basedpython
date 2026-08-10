@@ -16,8 +16,8 @@
 
 use std::borrow::Cow;
 
-use ruff_python_ast::visitor::{Visitor, walk_expr};
-use ruff_python_ast::{Expr, Stmt};
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_pattern};
+use ruff_python_ast::{Expr, Pattern, PatternMatchAs, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::type_info::TypeInfo;
@@ -37,6 +37,22 @@ impl<'ast> Visitor<'ast> for Qualify<'_> {
                 .push((name.range(), format!("{qualifier}.{}", name.id)));
         }
         walk_expr(self, expr);
+    }
+
+    fn visit_pattern(&mut self, pattern: &'ast Pattern) {
+        // `case Red:` is a capture in python, so the qualified spelling is what
+        // makes the emitted `match` test for the member the checker read it as
+        if let Pattern::MatchAs(PatternMatchAs {
+            pattern: None,
+            name: Some(name),
+            ..
+        }) = pattern
+            && let Some(qualifier) = self.types.case_name_qualifier(name)
+        {
+            self.edits
+                .push((name.range(), format!("{qualifier}.{}", name.id)));
+        }
+        walk_pattern(self, pattern);
     }
 }
 
@@ -239,6 +255,150 @@ mod tests {
                     GREEN = 2
 
                 a: Color = Color.RED
+            "},
+        );
+    }
+
+    #[test]
+    fn a_bare_case_name_is_qualified() {
+        check(
+            indoc! {"
+                enum class Color:
+                    case Red, Green
+
+                def paint(c: Color) -> int:
+                    match c:
+                        case Red:
+                            return 1
+                        case Green:
+                            return 2
+            "},
+            indoc! {"
+                from __future__ import annotations
+                from enum import Enum, auto
+                class Color(Enum):
+                    Red = auto()
+                    Green = auto()
+
+                def paint(c: Color) -> int:
+                    match c:
+                        case Color.Red:
+                            return 1
+                        case Color.Green:
+                            return 2
+            "},
+        );
+    }
+
+    #[test]
+    fn a_bare_case_class_pattern_is_qualified() {
+        check(
+            indoc! {"
+                enum class Shape:
+                    case Circle(radius: int)
+                    case Empty
+
+                def area(s: Shape) -> int:
+                    match s:
+                        case Circle(r):
+                            return r
+                        case Empty:
+                            return 0
+            "},
+            indoc! {"
+                from __future__ import annotations
+                from dataclasses import dataclass
+                from typing import final
+                class Shape:
+                    pass
+
+                @final
+                @dataclass(frozen=True, slots=True)
+                class _Shape_Circle(Shape):
+                    radius: int
+                _Shape_Circle.__name__ = \"Circle\"
+                _Shape_Circle.__qualname__ = Shape.__qualname__ + \".Circle\"
+                Shape.Circle = _Shape_Circle
+
+                class _Shape_Empty(Shape):
+                    __slots__ = ()
+                    def __repr__(self): return \"Empty\"
+                    def __reduce__(self): return type(self).__qualname__
+                _Shape_Empty.__name__ = \"Empty\"
+                _Shape_Empty.__qualname__ = Shape.__qualname__ + \".Empty\"
+                Shape.Empty = _Shape_Empty()
+
+                def area(s: Shape) -> int:
+                    match s:
+                        case Shape.Circle(r):
+                            return r
+                        case Shape.Empty:
+                            return 0
+            "},
+        );
+    }
+
+    #[test]
+    fn a_capturing_case_name_is_left_alone() {
+        // the name names no member of the subject, so it is python's capture and
+        // the emitted `match` keeps it
+        check(
+            indoc! {"
+                enum class Color:
+                    case Red, Green
+
+                def paint(c: Color) -> int:
+                    match c:
+                        case Red:
+                            return 1
+                        case other:
+                            return 2
+            "},
+            indoc! {"
+                from __future__ import annotations
+                from enum import Enum, auto
+                class Color(Enum):
+                    Red = auto()
+                    Green = auto()
+
+                def paint(c: Color) -> int:
+                    match c:
+                        case Color.Red:
+                            return 1
+                        case other:
+                            return 2
+            "},
+        );
+    }
+
+    #[test]
+    fn a_nested_case_name_is_left_alone() {
+        // only a name matched against the subject itself has an expected type
+        check(
+            indoc! {"
+                enum class Color:
+                    case Red, Green
+
+                def paint(pair: tuple[Color, Color]) -> int:
+                    match pair:
+                        case [Red, second]:
+                            return 1
+                        case _:
+                            return 2
+            "},
+            indoc! {"
+                from __future__ import annotations
+                from enum import Enum, auto
+                class Color(Enum):
+                    Red = auto()
+                    Green = auto()
+
+                def paint(pair: tuple[Color, Color]) -> int:
+                    match pair:
+                        case [Red, second]:
+                            return 1
+                        case _:
+                            return 2
             "},
         );
     }

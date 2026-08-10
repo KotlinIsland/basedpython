@@ -52,11 +52,11 @@ use crate::place::{
     match_subject_place_expressions,
 };
 use crate::predicate::{
-    CallableAndCallExpr, ClassPatternKeywordPredicateKind, ClassPatternPredicateKind,
-    MappingPatternEntryPredicateKind, MappingPatternPredicateKind, PatternPredicate,
-    PatternPredicateKind, PatternSubject, Predicate, PredicateNode, PredicateOrLiteral,
-    ScopedPredicateId, SequencePatternPredicateKind, StarImportPlaceholderPredicate,
-    SubjectElementPatternPredicate,
+    CallableAndCallExpr, CaseNameCapturePredicate, CaseNamePredicateKind,
+    ClassPatternKeywordPredicateKind, ClassPatternPredicateKind, MappingPatternEntryPredicateKind,
+    MappingPatternPredicateKind, PatternPredicate, PatternPredicateKind, PatternSubject, Predicate,
+    PredicateNode, PredicateOrLiteral, ScopedPredicateId, SequencePatternPredicateKind,
+    StarImportPlaceholderPredicate, SubjectElementPatternPredicate,
 };
 use crate::re_exports::exported_names;
 use crate::reachability_constraints::{
@@ -318,6 +318,11 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     /// time, keyed by the pattern node
     destructures: FxHashMap<NodeKey, Destructure<'db>>,
 
+    /// basedpython: every case-pattern name context-sensitive resolution is
+    /// offered — a bare `case A:` name, keyed by its identifier, and a bare class
+    /// pattern's `case Circle(r):` name, keyed by its expression.
+    case_names: FxHashMap<NodeKey, CaseNamePredicateKind<'db>>,
+
     /// basedpython: places this file's narrowing return annotations name, computed on
     /// demand. See [`Self::basedpython_guard_targets`].
     basedpython_guard_targets: Option<GuardTargets>,
@@ -380,6 +385,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             narrowing_aliases: FxHashMap::default(),
             alias_predicates: FxHashMap::default(),
             destructures: FxHashMap::default(),
+            case_names: FxHashMap::default(),
             basedpython_guard_targets: None,
         };
 
@@ -1393,6 +1399,12 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         self.current_place_table_mut().mark_bound(id);
     }
 
+    /// basedpython: [`Self::mark_place_bound`] for a bare `case A:` capture.
+    #[track_caller]
+    fn mark_place_bound_by_case_name(&mut self, id: ScopedPlaceId) {
+        self.current_place_table_mut().mark_bound_by_case_name(id);
+    }
+
     #[track_caller]
     fn mark_place_declared(&mut self, id: ScopedPlaceId) {
         self.current_place_table_mut().mark_declared(id);
@@ -1707,8 +1719,16 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         //     global x  # [invalid-syntax] if `x` is already used or bound
         //     x = 1
         // ```
+        let binds_by_case_name = matches!(
+            kind,
+            DefinitionKind::MatchPattern(match_pattern) if match_pattern.is_case_name()
+        );
         if category.is_binding() && !is_loop_header {
-            self.mark_place_bound(place);
+            if binds_by_case_name {
+                self.mark_place_bound_by_case_name(place);
+            } else {
+                self.mark_place_bound(place);
+            }
             self.invalidate_narrowing_aliases_for(place);
         }
         if category.is_declaration() {
@@ -2659,7 +2679,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     | PredicateNode::IsNonTerminalCall(_)
                     | PredicateNode::IsNonEmptyIterable(_)
                     | PredicateNode::OrPatternAlternative(_)
-                    | PredicateNode::StarImportPlaceholder(_) => {
+                    | PredicateNode::StarImportPlaceholder(_)
+                    | PredicateNode::CaseNameCapture(_) => {
                         // These predicates don't narrow any places
                         PossiblyNarrowedPlaces::default()
                     }
@@ -2813,7 +2834,28 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         }
     }
 
-    fn predicate_kind(&mut self, pattern: &ast::Pattern) -> PatternPredicateKind<'db> {
+    /// The pattern structure type checking needs, and the bare `case A:` names
+    /// [context-sensitive resolution](CaseNamePredicateKind) is offered.
+    ///
+    /// `against_subject` says whether this node is matched against the case's
+    /// subject rather than against some part of it: only there does a bare name
+    /// stand a chance of being an enum member, and only while it holds does a
+    /// [`PatternPredicateKind::CaseName`] get built. Collecting the names here
+    /// rather than in a second walk is what keeps the predicate and the bindings
+    /// [`Self::visit_pattern`] records from ever disagreeing about which names
+    /// those are.
+    fn predicate_kind(
+        &mut self,
+        pattern: &'ast ast::Pattern,
+        subject: PatternSubject<'db>,
+        against_subject: bool,
+        case_names: &mut CaseNames<'ast, 'db>,
+    ) -> PatternPredicateKind<'db> {
+        // a nested pattern matches a part of the subject, which the name has no
+        // expected type for
+        let nested = |this: &mut Self, pattern, case_names: &mut _| {
+            this.predicate_kind(pattern, subject, false, case_names)
+        };
         match pattern {
             ast::Pattern::MatchValue(pattern) => {
                 let value = self.add_standalone_expression(&pattern.value);
@@ -2824,6 +2866,21 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             }
             ast::Pattern::MatchClass(pattern) => {
                 let cls = self.add_standalone_expression(&pattern.cls);
+                // basedpython: `case Circle(r):` names a variant of the subject
+                // the same way `case Empty:` names one, so it is offered to
+                // context-sensitive resolution too. Unlike a bare name it is
+                // already an expression, so the resolution rides on the ordinary
+                // name lookup and nothing about the pattern's shape changes
+                if against_subject && let ast::Expr::Name(name) = &*pattern.cls {
+                    self.case_names.insert(
+                        NodeKey::from_node(name),
+                        CaseNamePredicateKind {
+                            name: name.id.clone(),
+                            scope: self.current_scope_id(),
+                            subject,
+                        },
+                    );
+                }
 
                 PatternPredicateKind::Class(ClassPatternPredicateKind {
                     class: cls,
@@ -2831,7 +2888,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         .arguments
                         .patterns
                         .iter()
-                        .map(|pattern| self.predicate_kind(pattern))
+                        .map(|pattern| nested(self, pattern, case_names))
                         .collect(),
                     keywords: pattern
                         .arguments
@@ -2839,7 +2896,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         .iter()
                         .map(|keyword| ClassPatternKeywordPredicateKind {
                             attr: keyword.attr.id.clone(),
-                            pattern: self.predicate_kind(&keyword.pattern),
+                            pattern: nested(self, &keyword.pattern, case_names),
                         })
                         .collect(),
                 })
@@ -2853,7 +2910,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         .zip(&pattern.patterns)
                         .map(|(key, pattern)| MappingPatternEntryPredicateKind {
                             key: self.add_standalone_expression(key),
-                            pattern: self.predicate_kind(pattern),
+                            pattern: nested(self, pattern, case_names),
                         })
                         .collect(),
                     rest: pattern.rest.as_ref().map(|name| name.id.clone()),
@@ -2864,15 +2921,17 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     patterns: pattern
                         .patterns
                         .iter()
-                        .map(|pattern| self.predicate_kind(pattern))
+                        .map(|pattern| nested(self, pattern, case_names))
                         .collect(),
                 })
             }
+            // an alternative, a conjunct and an `as` pattern's left-hand side are
+            // each matched against whatever the pattern as a whole is
             ast::Pattern::MatchOr(pattern) => {
                 let predicates = pattern
                     .patterns
                     .iter()
-                    .map(|pattern| self.predicate_kind(pattern))
+                    .map(|p| self.predicate_kind(p, subject, against_subject, case_names))
                     .collect::<Vec<_>>()
                     .into_boxed_slice();
                 PatternPredicateKind::Or(predicates)
@@ -2881,16 +2940,30 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 let predicates = pattern
                     .patterns
                     .iter()
-                    .map(|pattern| self.predicate_kind(pattern))
+                    .map(|p| self.predicate_kind(p, subject, against_subject, case_names))
                     .collect::<Vec<_>>()
                     .into_boxed_slice();
                 PatternPredicateKind::And(predicates)
             }
+            ast::Pattern::MatchAs(ast::PatternMatchAs {
+                pattern: None,
+                name: Some(name),
+                ..
+            }) if against_subject => {
+                let kind = CaseNamePredicateKind {
+                    name: name.id.clone(),
+                    scope: self.current_scope_id(),
+                    subject,
+                };
+                self.case_names
+                    .insert(NodeKey::from_node(name), kind.clone());
+                case_names.push((name, kind.clone()));
+                PatternPredicateKind::CaseName(kind)
+            }
             ast::Pattern::MatchAs(pattern) => PatternPredicateKind::As(
-                pattern
-                    .pattern
-                    .as_ref()
-                    .map(|p| Box::new(self.predicate_kind(p))),
+                pattern.pattern.as_ref().map(|p| {
+                    Box::new(self.predicate_kind(p, subject, against_subject, case_names))
+                }),
                 pattern.name.as_ref().map(|name| name.id.clone()),
             ),
             ast::Pattern::MatchStar(pattern) => {
@@ -3001,15 +3074,19 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             (subject_targets, sequence_subject_targets),
         )) = pattern
         {
-            let pattern_predicate = self.create_pattern_predicate(
+            // `if let` is a test, so a bare name in it may be a value
+            let (pattern_predicate, case_names) = self.create_pattern_predicate(
                 PatternSubject::Expression(subject),
                 pattern,
                 None,
                 None,
+                true,
             );
-            let outer_match_case = self
-                .current_match_case
-                .replace(CurrentMatchCase::new(pattern, pattern_predicate));
+            let outer_match_case = self.current_match_case.replace(CurrentMatchCase::new(
+                pattern,
+                pattern_predicate,
+                case_names,
+            ));
             self.visit_pattern(pattern);
             self.current_match_case = outer_match_case;
             // never a catchall, even for an irrefutable pattern. That shortcut
@@ -3053,12 +3130,17 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         pattern: &'ast ast::Pattern,
         binder: Definition<'db>,
     ) {
-        let predicate =
-            self.create_pattern_predicate(PatternSubject::Binder(binder), pattern, None, None);
+        let (predicate, case_names) = self.create_pattern_predicate(
+            PatternSubject::Binder(binder),
+            pattern,
+            None,
+            None,
+            false,
+        );
         self.record_destructure(pattern, predicate, None);
         let outer_match_case = self
             .current_match_case
-            .replace(CurrentMatchCase::new(pattern, predicate));
+            .replace(CurrentMatchCase::new(pattern, predicate, case_names));
         self.visit_pattern(pattern);
         self.current_match_case = outer_match_case;
     }
@@ -3079,13 +3161,18 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         );
     }
 
+    /// `names_may_be_values` says whether a bare name matched against the subject
+    /// may be an enum member rather than a capture — true wherever basedpython
+    /// lets the pattern fail, and false for the irrefutable binders, whose whole
+    /// purpose is to bind.
     fn create_pattern_predicate(
         &mut self,
         subject: PatternSubject<'db>,
-        pattern: &ast::Pattern,
+        pattern: &'ast ast::Pattern,
         guard: Option<&ast::Expr>,
         previous_pattern: Option<PatternPredicate<'db>>,
-    ) -> PatternPredicate<'db> {
+        names_may_be_values: bool,
+    ) -> (PatternPredicate<'db>, CaseNames<'ast, 'db>) {
         // This is called for the top-level pattern of each match arm. We need to create a
         // standalone expression for each arm of a match statement, since they can introduce
         // constraints on the match subject. (Or more accurately, for the match arm's pattern,
@@ -3097,10 +3184,12 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         //
         // See the comment in TypeInferenceBuilder::infer_match_pattern for more details.
 
-        let kind = self.predicate_kind(pattern);
+        let mut case_names = Vec::new();
+        let against_subject = names_may_be_values && self.source_type.is_basedpython();
+        let kind = self.predicate_kind(pattern, subject, against_subject, &mut case_names);
         let guard = guard.map(|guard| self.add_standalone_expression(guard));
 
-        PatternPredicate::new(
+        let predicate = PatternPredicate::new(
             self.db,
             self.file,
             self.current_scope(),
@@ -3108,7 +3197,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             kind,
             guard,
             previous_pattern.map(Box::new),
-        )
+        );
+        (predicate, case_names)
     }
 
     fn add_pattern_narrowing_constraint(
@@ -3758,6 +3848,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             async_comprehensions: FrozenSet::from(self.async_comprehensions),
             narrowing_alias_predicates: FrozenMap::from(self.alias_predicates),
             destructures: FrozenMap::from(self.destructures),
+            case_names: FrozenMap::from(self.case_names),
         }
     }
 
@@ -4465,15 +4556,18 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 // are not visible on the path where nothing matched
                 let no_match = self.flow_snapshot();
 
-                let predicate = self.create_pattern_predicate(
+                // without an `else` block the pattern has to be irrefutable, so
+                // a bare name there is only ever the capture it looks like
+                let (predicate, case_names) = self.create_pattern_predicate(
                     PatternSubject::Expression(subject),
                     pattern,
                     None,
                     None,
+                    !orelse.is_empty(),
                 );
                 let outer_match_case = self
                     .current_match_case
-                    .replace(CurrentMatchCase::new(pattern, predicate));
+                    .replace(CurrentMatchCase::new(pattern, predicate, case_names));
                 self.visit_pattern(pattern);
                 self.current_match_case = outer_match_case;
 
@@ -4873,15 +4967,23 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 let mut previous_pattern: Option<PatternPredicate<'_>> = None;
 
                 for (i, case) in cases.iter().enumerate() {
-                    let match_pattern_predicate = self.create_pattern_predicate(
+                    let (match_pattern_predicate, case_names) = self.create_pattern_predicate(
                         PatternSubject::Expression(subject_expr),
                         &case.pattern,
                         case.guard.as_deref(),
                         previous_pattern,
+                        true,
                     );
+                    // basedpython: `case A:` looks like a wildcard but is not one
+                    // when the name resolves to an enum member, and that is not
+                    // known until type checking. The shortcut below is a
+                    // precision optimization, so the conservative answer is to
+                    // give it up for any case that offered a name at all
+                    let offers_case_names = !case_names.is_empty();
                     self.current_match_case = Some(CurrentMatchCase::new(
                         &case.pattern,
                         match_pattern_predicate,
+                        case_names,
                     ));
                     self.visit_pattern(&case.pattern);
                     self.current_match_case = None;
@@ -4889,7 +4991,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     // here because the effects of visiting a pattern is binding
                     // symbols, and this doesn't occur unless the pattern
                     // actually matches
-                    let is_catchall = has_catchall && i == cases.len() - 1;
+                    let is_catchall = has_catchall && i == cases.len() - 1 && !offers_case_names;
                     let (match_predicate, match_narrowing_id) = self
                         .add_pattern_narrowing_constraint(
                             match_pattern_predicate,
@@ -6027,6 +6129,7 @@ impl<'ast> Visitor<'ast> for SemanticIndexBuilder<'_, 'ast> {
                     pattern: state.pattern,
                     identifier: name,
                     predicate: state.predicate,
+                    is_case_name: false,
                 },
             );
         }
@@ -6042,14 +6145,37 @@ impl<'ast> Visitor<'ast> for SemanticIndexBuilder<'_, 'ast> {
         {
             let symbol = self.add_symbol(name.id().clone());
             let state = self.current_match_case.as_ref().unwrap();
-            self.add_definition(
-                symbol.into(),
-                MatchPatternDefinitionNodeRef {
-                    pattern: state.pattern,
-                    identifier: name,
-                    predicate: state.predicate,
-                },
+            let (pattern_node, predicate, case_name) = (
+                state.pattern,
+                state.predicate,
+                state.case_name(name).cloned(),
             );
+            let node_ref = MatchPatternDefinitionNodeRef {
+                pattern: pattern_node,
+                identifier: name,
+                predicate,
+                is_case_name: case_name.is_some(),
+            };
+            if let Some(case_name) = case_name {
+                // basedpython: the name binds only where it turned out not to be
+                // an enum member of the subject, which is a question for type
+                // checking — so the binding is recorded as the branch it is:
+                //
+                // ```py
+                // if <the name is a capture>:
+                //     A = <subject>
+                // ```
+                let capture = CaseNameCapturePredicate::new(self.db, case_name);
+                let no_capture = self.flow_snapshot();
+                let constraint = self.record_reachability_constraint(capture.into());
+                self.add_definition(symbol.into(), node_ref);
+                let captured = self.flow_snapshot();
+                self.flow_restore(no_capture);
+                self.record_negated_reachability_constraint(constraint);
+                self.flow_merge(captured);
+            } else {
+                self.add_definition(symbol.into(), node_ref);
+            }
         }
     }
 }
@@ -6547,11 +6673,37 @@ struct CurrentMatchCase<'ast, 'db> {
 
     /// The predicate for the complete match case.
     predicate: PatternPredicate<'db>,
+
+    /// basedpython: the bare `case A:` names the predicate offered to
+    /// context-sensitive resolution, as collected by
+    /// [`SemanticIndexBuilder::predicate_kind`].
+    case_names: CaseNames<'ast, 'db>,
 }
 
+/// basedpython: the bare `case A:` names of one pattern, each paired with what
+/// type checking needs to decide whether it is a capture at all.
+type CaseNames<'ast, 'db> = Vec<(&'ast ast::Identifier, CaseNamePredicateKind<'db>)>;
+
 impl<'ast, 'db> CurrentMatchCase<'ast, 'db> {
-    fn new(pattern: &'ast ast::Pattern, predicate: PatternPredicate<'db>) -> Self {
-        Self { pattern, predicate }
+    fn new(
+        pattern: &'ast ast::Pattern,
+        predicate: PatternPredicate<'db>,
+        case_names: CaseNames<'ast, 'db>,
+    ) -> Self {
+        Self {
+            pattern,
+            predicate,
+            case_names,
+        }
+    }
+
+    /// basedpython: what type checking needs to decide whether `identifier`
+    /// captures, or `None` when it is an ordinary capture either way.
+    fn case_name(&self, identifier: &ast::Identifier) -> Option<&CaseNamePredicateKind<'db>> {
+        self.case_names
+            .iter()
+            .find(|(case_name, _)| std::ptr::eq(*case_name, identifier))
+            .map(|(_, kind)| kind)
     }
 }
 

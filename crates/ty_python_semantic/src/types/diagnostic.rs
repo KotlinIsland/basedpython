@@ -13,6 +13,7 @@ use crate::types::call::{CallDiagnosticOverride, CallError};
 use crate::types::class::{
     CodeGeneratorKind, DisjointBase, DisjointBaseKind, ExpandedClassBaseEntry, MethodDecorator,
 };
+use crate::types::context_sensitive;
 use crate::types::function::{FunctionDecorators, FunctionType, KnownFunction, OverloadLiteral};
 use crate::types::infer::UnsupportedComparisonError;
 use crate::types::overrides::MethodKind;
@@ -53,6 +54,7 @@ use std::fmt::{self, Formatter};
 use ty_module_resolver::{KnownModule, Module, ModuleName, file_to_module};
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::place::{PlaceTable, ScopedPlaceId};
+use ty_python_core::predicate::CaseNamePredicateKind;
 use ty_python_core::{ProgramFile, global_scope, place_table, use_def_map};
 
 const RUNTIME_CHECKABLE_DOCS_URL: &str =
@@ -4649,6 +4651,72 @@ pub(crate) fn report_invalid_arguments_to_callable(
     builder.into_diagnostic(format_args!(
         "Special form `Callable` expected exactly two arguments (parameter types and return type)",
     ));
+}
+
+/// basedpython: a bare `case A:` that turned out to be a capture rather than an
+/// enum member, with cases after it that can therefore never run.
+///
+/// python rejects this as a syntax error, but in basedpython whether the name
+/// captures at all is a question for the type checker, so it is reported here.
+pub(crate) fn report_capturing_case_name<T: Ranged>(
+    context: &InferContext,
+    pattern: T,
+    kind: &CaseNamePredicateKind,
+) {
+    let Some(builder) = context.report_lint(&INVALID_MATCH_PATTERN, pattern) else {
+        return;
+    };
+    let name = &kind.name;
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "name capture `{name}` makes remaining patterns unreachable"
+    ));
+    add_capturing_case_name_context(context, &mut diagnostic, kind);
+}
+
+/// Why the name captured — a member the subject does declare but that one of the
+/// resolution rules kept from answering is worth naming, since the qualified
+/// spelling always works.
+fn add_capturing_case_name_context(
+    context: &InferContext,
+    diagnostic: &mut LintDiagnosticGuard,
+    kind: &CaseNamePredicateKind,
+) {
+    let db = context.db();
+    let env = context.program_environment();
+    let name = &kind.name;
+    match context_sensitive::explain_case_name_miss(db, env, kind) {
+        Some(context_sensitive::Miss::Shadowed(enum_class)) => diagnostic.info(format_args!(
+            "`{enum_name}` declares `{name}`, but this scope binds `{name}` itself: \
+             write `{enum_name}.{name}`",
+            enum_name = enum_class.name(db)
+        )),
+        Some(context_sensitive::Miss::Unnameable(enum_class)) => diagnostic.info(format_args!(
+            "`{name}` is a member of `{enum_name}`, which is not in scope here under that name",
+            enum_name = enum_class.name(db)
+        )),
+        Some(context_sensitive::Miss::Ambiguous(first, second)) => diagnostic.info(format_args!(
+            "`{first_name}` and `{second_name}` both declare `{name}`: write it qualified",
+            first_name = first.name(db),
+            second_name = second.name(db)
+        )),
+        None => diagnostic.info(format_args!(
+            "`{name}` names no member of the subject's type, so it captures every value"
+        )),
+    }
+}
+
+/// basedpython: a bare case name that captures, as one alternative of an `or`
+/// pattern — its siblings then bind names it does not, which python rejects.
+pub(crate) fn report_capturing_case_name_alternative(
+    context: &InferContext,
+    identifier: &ast::Identifier,
+    kind: &CaseNamePredicateKind,
+) {
+    let Some(builder) = context.report_lint(&INVALID_MATCH_PATTERN, identifier) else {
+        return;
+    };
+    let mut diagnostic = builder.into_diagnostic("alternative patterns bind different names");
+    add_capturing_case_name_context(context, &mut diagnostic, kind);
 }
 
 pub(crate) fn report_invalid_class_match_pattern<T: Ranged>(

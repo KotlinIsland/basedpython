@@ -27,6 +27,10 @@
 //! witness: no earlier fallback claims it, so an enum member of that name
 //! resolves context-sensitively today, and widening the enum gate to
 //! [`claimed_by_name_resolution`] would silently take that away
+//!
+//! context-sensitive resolution asks a third, *narrower* question of one position
+//! only — a bare `case A:`, whose capture would otherwise be the binding that
+//! claims the name from itself. see [`claimed_by_lexical_scope_outside_case_names`]
 
 use ruff_db::files::File;
 use ty_python_core::scope::ScopeId;
@@ -56,12 +60,47 @@ pub(crate) fn claimed_by_lexical_scope(
     scope: ScopeId<'_>,
     name: &str,
 ) -> bool {
+    claimed_by_lexical_scope_impl(db, env, file, scope, name, false)
+}
+
+/// [`claimed_by_lexical_scope`], but blind to the binding a bare `case A:` makes.
+///
+/// That binding exists only where the name turned out *not* to be an enum member
+/// of the subject, so it cannot be part of deciding which of the two the name is:
+/// counting it would make every bare case name claim itself and the rule would
+/// never fire. Every other rule keeps using [`claimed_by_lexical_scope`], so a
+/// name a case pattern captures still takes itself back everywhere else.
+pub(crate) fn claimed_by_lexical_scope_outside_case_names(
+    db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
+    file: File,
+    scope: ScopeId<'_>,
+    name: &str,
+) -> bool {
+    claimed_by_lexical_scope_impl(db, env, file, scope, name, true)
+}
+
+fn claimed_by_lexical_scope_impl(
+    db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
+    file: File,
+    scope: ScopeId<'_>,
+    name: &str,
+    ignore_case_name_bindings: bool,
+) -> bool {
     let index = semantic_index(db, db.program_file(file));
     for (ancestor_id, _) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
         let ancestor_scope = ancestor_id.to_scope_id(db, db.program_file(file));
         if place_table(db, ancestor_scope)
             .symbol_by_name(name)
-            .is_some_and(|symbol| symbol.is_bound() || symbol.is_declared())
+            .is_some_and(|symbol| {
+                let bound = if ignore_case_name_bindings {
+                    symbol.is_bound_outside_case_name_pattern()
+                } else {
+                    symbol.is_bound()
+                };
+                bound || symbol.is_declared()
+            })
         {
             return true;
         }
@@ -103,7 +142,10 @@ mod tests {
 
     use crate::db::tests::setup_db;
 
-    use super::{claimed_by_lexical_scope, claimed_by_name_resolution};
+    use super::{
+        claimed_by_lexical_scope, claimed_by_lexical_scope_outside_case_names,
+        claimed_by_name_resolution,
+    };
 
     /// the two gates must disagree on *exactly* the implicitly-available names, so
     /// that a future edit cannot quietly collapse them into one
@@ -157,6 +199,59 @@ mod tests {
             );
             assert!(
                 claimed_by_name_resolution(&db, &db.program_environment(), file, scope, name),
+                "{name}"
+            );
+        }
+    }
+
+    /// the case-name gate must differ from [`claimed_by_lexical_scope`] on
+    /// *exactly* the binding a bare `case A:` makes — a bare case name that
+    /// claimed itself would keep the rule from ever firing, and a gate that
+    /// ignored anything more would qualify a name with a real binding behind it
+    #[test]
+    fn the_case_name_gate_ignores_only_a_case_capture() {
+        let mut db = setup_db();
+        db.write_file(
+            "/src/a.by",
+            "match 1:
+    case Red:
+        pass
+x = 1
+",
+        )
+        .unwrap();
+        let file = system_path_to_file(&db, "/src/a.by").unwrap();
+        let scope = global_scope(&db, crate::Db::program_file(&db, file));
+
+        assert!(claimed_by_lexical_scope(
+            &db,
+            &db.program_environment(),
+            file,
+            scope,
+            "Red"
+        ));
+        assert!(!claimed_by_lexical_scope_outside_case_names(
+            &db,
+            &db.program_environment(),
+            file,
+            scope,
+            "Red"
+        ));
+
+        // an ordinary binding, and a builtin, are claimed by both
+        for name in ["x", "int"] {
+            assert!(
+                claimed_by_lexical_scope(&db, &db.program_environment(), file, scope, name),
+                "{name}"
+            );
+            assert!(
+                claimed_by_lexical_scope_outside_case_names(
+                    &db,
+                    &db.program_environment(),
+                    file,
+                    scope,
+                    name
+                ),
                 "{name}"
             );
         }

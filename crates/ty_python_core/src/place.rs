@@ -439,6 +439,20 @@ impl PlaceTableBuilder {
         }
     }
 
+    /// basedpython: [`Self::mark_bound`] for a bare `case A:` capture, which only
+    /// ever binds a symbol.
+    #[track_caller]
+    pub(super) fn mark_bound_by_case_name(&mut self, id: ScopedPlaceId) {
+        match id {
+            ScopedPlaceId::Symbol(symbol_id) => {
+                self.symbol_mut(symbol_id).mark_bound_by_case_name();
+            }
+            ScopedPlaceId::Member(member_id) => {
+                self.member_mut(member_id).mark_bound();
+            }
+        }
+    }
+
     #[track_caller]
     pub(super) fn mark_declared(&mut self, id: ScopedPlaceId) {
         match id {

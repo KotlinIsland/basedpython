@@ -23,6 +23,7 @@ use crate::types::{
     infer_complete_scope_types, inferred_declaration,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
+use ty_python_core::node_key::NodeKey;
 use ty_python_core::place_table;
 use ty_python_core::scope::{FileScopeId, Scope};
 use ty_python_core::semantic_index;
@@ -851,6 +852,20 @@ impl<'db> SemanticModel<'db> {
             || name.inferred_type(self),
         )
         .map(Name::to_string)
+    }
+
+    /// basedpython: the enum a bare `case A:` must be qualified with in the
+    /// emitted python — `case Color.Red:`. `None` for a name that is the capture
+    /// python spells it as, and for every pattern that is not a bare name
+    pub fn case_name_qualifier(&self, identifier: &ast::Identifier) -> Option<String> {
+        let index = semantic_index(self.db, self.file);
+        let case_name = index.case_name(NodeKey::from_node(identifier))?;
+        crate::types::context_sensitive::resolve_case_name(
+            self.db,
+            &self.program_environment(),
+            case_name,
+        )
+        .map(|member| member.qualifier(self.db).to_string())
     }
 
     /// basedpython: the bracketed type-argument spelling the transpiler
