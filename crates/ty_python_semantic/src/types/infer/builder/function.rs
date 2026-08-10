@@ -158,9 +158,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         self.check_pytest_function(function);
 
-        // basedpython: enforce `local` (no escape) and `once` (exactly one call),
-        // both on the function's own parameters and on a trailing-lambda block's
-        // `it`, which is borrowed when the callee's callback declares it so
+        // basedpython: enforce `local` (no escape), both on the function's own
+        // parameters and on a trailing-lambda block's `it`, which is borrowed
+        // when the callee's callback declares it so
         let inherited_borrow = self.trailing_lambda_inherited_borrow(function);
         crate::types::lifetimes::check_local_lifetimes(&self.context, function, inherited_borrow);
 
@@ -195,6 +195,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             function,
             inherited_borrow,
             |expr| self.try_expression_type(expr),
+        );
+
+        // basedpython: enforce the `once` count obligation. also after the body:
+        // a callback declared with a receiver (`Html.() -> None`) is called as
+        // `page.builder()`, and only the receiver's type says that is the call
+        crate::types::lifetimes::check_once_obligations(
+            &self.context,
+            function,
+            inherited_borrow,
+            |attribute| self.is_implicit_receiver_attribute(attribute),
         );
 
         // basedpython: check the body against the `raises` clause. runs after the
@@ -1734,6 +1744,24 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .is_some_and(|callee_ty| {
                 crate::types::trailing_lambda::callee_callback_is_once(self.db(), callee_ty)
             })
+    }
+
+    /// basedpython: whether `attribute` resolves through an implicit receiver —
+    /// `x.fn` where `fn` names a receiver callable in scope rather than a member
+    /// of `x`, which the transpiler lowers to `fn(x)`
+    fn is_implicit_receiver_attribute(&self, attribute: &ast::ExprAttribute) -> bool {
+        self.is_basedpython_file()
+            && self
+                .try_expression_type(&attribute.value)
+                .is_some_and(|receiver_ty| {
+                    crate::types::receivers::is_implicit_receiver_attribute(
+                        self.db(),
+                        self.file(),
+                        self.scope(),
+                        attribute,
+                        receiver_ty,
+                    )
+                })
     }
 
     /// basedpython: a trailing-lambda block binds one argument, as `it`, plus the

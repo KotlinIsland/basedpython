@@ -159,3 +159,44 @@ def with_retry(once fn: (once cb: (int) -> None) -> None):
 with_retry:
     it(1)
 ```
+
+## a `once` callback with a receiver is called through it
+
+A callback declared with an [implicit receiver](basedpython_implicit_receiver.md) is called as
+`x.cb()`, which is the same call as `cb(x)`. It discharges the obligation.
+
+```by
+class Html: ...
+
+def build(once builder: Html.() -> None) -> Html:
+    result = Html()
+    result.builder()
+    return result
+```
+
+## a receiver call counts toward the twice check
+
+```by
+class Html: ...
+
+def build(once builder: Html.() -> None) -> Html:
+    result = Html()
+    result.builder()
+    result.builder()  # error: [once-called-twice] "once callback `builder` may be called more than once"
+    return result
+```
+
+## a real member of the same name is not the callback
+
+`shout` is declared on `Text`, so `value.shout()` is that method — the receiver callable is only
+ever the last fallback, and the obligation is still outstanding.
+
+```by
+class Text:
+    def shout(self) -> None: ...
+
+# error: [once-not-called] "once callback `shout` is never called"
+def build(once shout: Text.() -> None) -> None:
+    value = Text()
+    value.shout()
+```

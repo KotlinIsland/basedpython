@@ -41,3 +41,38 @@ def f(x: M[K=int, V=str], y: (int, /, name: str) -> bool, z: (a: int, b: str)) -
     reveal_type(y)  # revealed: (int, /, name: str) -> bool
     reveal_type(z)  # revealed: (a: int, b: str)
 ```
+
+## a keyword subscript of a value is checked as the `__getitem__` call it lowers to
+
+```by
+class A:
+    def __getitem__(self, item: int) -> int:
+        return 1
+
+def f(a: A) -> None:
+    # error: [missing-argument]
+    # error: [unknown-argument]
+    a[foo=1]
+```
+
+## a `__getitem__` that declares the keyword accepts it
+
+```by
+class A:
+    def __getitem__(self, index: int, *, unit: str = "px") -> int:
+        return index
+
+def f(a: A) -> None:
+    reveal_type(a[1, unit="em"])  # revealed: int
+```
+
+## the keyword's value is checked against its parameter
+
+```by
+class A:
+    def __getitem__(self, *, unit: str) -> int:
+        return 1
+
+def f(a: A) -> None:
+    a[unit=1]  # error: [invalid-argument-type]
+```

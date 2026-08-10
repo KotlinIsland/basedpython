@@ -68,6 +68,8 @@ impl Guard {
 struct MutableDefaults<'src> {
     source: &'src str,
     edits: Vec<(TextRange, Vec<Fragment>)>,
+    /// the guard suites, anchored at the body statement they precede
+    guards: Vec<(TextSize, Vec<Fragment>)>,
     used: bool,
     /// functions whose body starts with parser-synthesized statements, so a
     /// guard has no source position to anchor to
@@ -188,7 +190,7 @@ impl MutableDefaults<'_> {
                 }
                 frags.push(Fragment::Lit(format!("\n{base}")));
             }
-            self.edits.push((TextRange::empty(insert_at), frags));
+            self.guards.push((insert_at, frags));
         } else if let Some(range) = docstring_count
             .checked_sub(1)
             .and_then(|i| f.body.get(i))
@@ -200,7 +202,7 @@ impl MutableDefaults<'_> {
                 frags.push(Fragment::Lit(format!("\n{base}")));
                 guard.push(&mut frags, &base);
             }
-            self.edits.push((TextRange::empty(range.end()), frags));
+            self.guards.push((range.end(), frags));
         } else {
             // nothing in the body came from the source, so there is nowhere to
             // put the guard. say so rather than splice it at a synthesized
@@ -234,6 +236,7 @@ impl TypeAwarePass for MutableDefaultsPass<'_> {
         let mut inner = MutableDefaults {
             source: self.source,
             edits: Vec::new(),
+            guards: Vec::new(),
             used: false,
             unanchored: Vec::new(),
         };
@@ -250,6 +253,7 @@ impl TypeAwarePass for MutableDefaultsPass<'_> {
             ctx.required_imports.push("_MISSING = object()".to_owned());
         }
         ctx.template_edits.extend(inner.edits);
+        ctx.statement_inserts.extend(inner.guards);
     }
 }
 
@@ -263,6 +267,35 @@ mod tests {
         assert_eq!(
             transpile(input, &crate::Config::test_default()).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    /// a guard is a *statement*, so an expression rewrite of the body statement
+    /// it sits in front of must not absorb it into its own passthrough — that
+    /// spliced the guard suite into the middle of a call's arguments
+    #[test]
+    fn a_guard_is_not_absorbed_by_a_rewrite_of_the_statement_it_precedes() {
+        let out = transpile(
+            indoc! {r#"
+                DEFAULT = "x"
+
+                class A:
+                    d: dict[str, int]
+
+                    def f(self, k: str = DEFAULT):
+                        self.d.pop(k, None)
+            "#},
+            &crate::Config {
+                soundness: crate::SoundnessPositions::defaults(),
+                ..crate::Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains(
+                "        if k is _MISSING:\n            k = DEFAULT\n        _soundness_check(self.d.pop(k, None)"
+            ),
+            "got:\n{out}"
         );
     }
 

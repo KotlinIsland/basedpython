@@ -18,7 +18,7 @@ use crate::place::implicit_globals::all_implicit_module_globals;
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
 use crate::types::list_members::{Member, all_members, all_reachable_members};
 use crate::types::{
-    CycleDetector, SpecialFormType, Type, TypeQualifiers, UnionType, binding_type,
+    CycleDetector, SpecialFormType, Type, TypeQualifiers, binding_type,
     infer_complete_scope_types, inferred_declaration,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
@@ -380,6 +380,16 @@ impl<'db> SemanticModel<'db> {
         crate::types::implementations::function_declared_return_type(db, self.file, function)
     }
 
+    /// basedpython: whether subscripting `value` is a runtime `__getitem__`
+    /// call rather than a type specialization, which decides what a keyword
+    /// subscript on it lowers to. `false` for a value the checker could not
+    /// resolve — the specialization reading is the one it also checks
+    pub fn subscript_is_getitem_call(&self, value: &Expr) -> bool {
+        value
+            .inferred_type(self)
+            .is_some_and(|ty| crate::types::subscript::is_runtime_subscript(self.db, ty))
+    }
+
     /// basedpython: whether an attribute access resolves through an *implicit
     /// receiver* — `x.fn` where `fn` names a receiver callable (`int.() -> str`)
     /// in scope rather than a member of `x`. The transpiler rewrites those to
@@ -390,45 +400,16 @@ impl<'db> SemanticModel<'db> {
         let Some(receiver_ty) = attribute.value.inferred_type(self) else {
             return false;
         };
-        // an optional-chain link resolves against the chain's *present* type —
-        // the `None` it short-circuits with is not part of the receiver
-        let receiver_ty = if attribute.optional || spine_has_optional(&attribute.value) {
-            strip_none(db, receiver_ty)
-        } else {
-            receiver_ty
-        };
-        if !receiver_ty
-            .member(db, attribute.attr.as_str())
-            .place
-            .is_undefined()
-        {
-            return false;
-        }
-        // an extension member wins over a receiver callable, matching the order
-        // the two fallbacks run in during inference. resolving again here is
-        // near-free in a file with no extensions: the applicable-extension list
-        // is a cached query that comes back empty
-        if crate::types::extensions::resolve_extension_member(
-            db,
-            self.file,
-            receiver_ty,
-            attribute.attr.as_str(),
-        )
-        .is_some()
-        {
-            return false;
-        }
         let Some(scope) = self.scope(ast::AnyNodeRef::from(attribute)) else {
             return false;
         };
-        crate::types::receivers::resolve_receiver_attribute(
+        crate::types::receivers::is_implicit_receiver_attribute(
             db,
             self.file,
             scope.to_scope_id(db, self.file),
+            attribute,
             receiver_ty,
-            attribute.attr.as_str(),
         )
-        .is_some()
     }
 
     /// basedpython: how a bare name resolves through the enclosing trailing
@@ -1150,32 +1131,6 @@ impl<'db> SemanticModel<'db> {
 
         infer_complete_scope_types(self.db, scope).try_expected_type(expr)
     }
-}
-
-/// basedpython: whether an access sits on a `?.` optional chain, so its type
-/// carries the `None` the chain short-circuits with
-fn spine_has_optional(expr: &Expr) -> bool {
-    match expr {
-        Expr::Attribute(attribute) => attribute.optional || spine_has_optional(&attribute.value),
-        Expr::Subscript(subscript) => spine_has_optional(&subscript.value),
-        Expr::Call(call) => spine_has_optional(&call.func),
-        _ => false,
-    }
-}
-
-/// basedpython: `ty` without the `None` an optional chain unions in
-fn strip_none<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
-    let Type::Union(union) = ty else {
-        return ty;
-    };
-    UnionType::from_elements(
-        db,
-        union
-            .elements(db)
-            .iter()
-            .copied()
-            .filter(|element| !element.is_none(db)),
-    )
 }
 
 /// The type and definition of a symbol.

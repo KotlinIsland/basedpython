@@ -232,7 +232,7 @@ mod visitor;
 mod definition;
 #[cfg(test)]
 mod property_tests;
-mod subscript;
+pub(crate) mod subscript;
 
 pub fn check_types(db: &dyn Db, file: File) -> Vec<Diagnostic> {
     check_types_with(db, file, Vec::new())

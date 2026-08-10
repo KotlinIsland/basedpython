@@ -530,14 +530,28 @@ impl<'ast> Visitor<'ast> for ExtensionCallLower<'_> {
                         self.note_import(&info);
                         let mut fragments = vec![Fragment::Lit(format!("{}(", info.function))];
                         let receiver_counts = info.kind != ExtensionMemberKind::StaticMethod;
+                        let mut written = false;
                         if receiver_counts {
                             Self::receiver_fragments(&info, &attr.value, &mut fragments);
+                            written = true;
                         }
                         if let Some(span) = arguments_span(&call.arguments) {
-                            if receiver_counts {
+                            if written {
                                 fragments.push(Fragment::Lit(", ".to_owned()));
                             }
                             fragments.push(Fragment::Src(span));
+                            written = true;
+                        }
+                        // this template replaces the whole call, so `context`
+                        // parameters have to be filled here — the injection
+                        // `context_params` anchors to the closing paren lands
+                        // inside the range being replaced and is dropped
+                        for (parameter, variable) in self.types.implicit_context_arguments(call) {
+                            if written {
+                                fragments.push(Fragment::Lit(", ".to_owned()));
+                            }
+                            fragments.push(Fragment::Lit(format!("{parameter}={variable}")));
+                            written = true;
                         }
                         fragments.push(Fragment::Lit(")".to_owned()));
                         self.edits.push((call.range(), fragments));
@@ -859,6 +873,37 @@ mod tests {
             "got:\n{out}"
         );
         assert!(!out.contains("__by_ext"), "got:\n{out}");
+    }
+
+    /// the call template replaces the whole call, so `context_params`' own
+    /// injection (anchored to the closing paren) is inside the replaced range —
+    /// the extension lowering has to fill the parameter itself, or the emitted
+    /// call raises `TypeError` for the missing argument
+    #[test]
+    fn a_context_parameter_of_an_extension_member_is_filled() {
+        let out = check(
+            "extension str:\n    def foo(self, context val: int) -> None:\n        print(val)\n\ncontext a = 2\n\"asdf\".foo()\n",
+        );
+        assert!(out.contains("_by_ext__str__foo(\"asdf\", val=a)"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_context_parameter_follows_the_explicit_arguments() {
+        let out = check(
+            "extension str:\n    def foo(self, n: int, context val: int) -> None:\n        print(val)\n\ncontext a = 2\n\"asdf\".foo(1)\n",
+        );
+        assert!(
+            out.contains("_by_ext__str__foo(\"asdf\", 1, val=a)"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_context_parameter_of_a_static_extension_member_is_filled() {
+        let out = check(
+            "class W: ...\n\nextension W:\n    static def make(context val: int) -> None:\n        print(val)\n\ncontext a = 2\nW.make()\n",
+        );
+        assert!(out.contains("_by_ext__W__make(val=a)"), "got:\n{out}");
     }
 
     #[test]

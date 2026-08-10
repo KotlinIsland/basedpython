@@ -150,27 +150,23 @@ impl EscapeRoute {
     }
 }
 
-/// basedpython entry point: enforce `local` (no escape) and `once` (exactly one
-/// call) on `function`'s parameters.
-pub(super) fn check_local_lifetimes<'db, 'ast>(
+/// the borrowed parameters of `function`: every `local` / `once` one, and the
+/// `once` subset. `once` is a borrow with an extra "called exactly once"
+/// obligation, so it appears in both
+fn borrowed_parameters<'db, 'ast>(
     context: &InferContext<'db, 'ast>,
     function: &'ast ast::StmtFunctionDef,
     inherited: Option<InheritedBorrow<'_, 'db, 'ast>>,
+) -> (
+    FxHashMap<&'ast str, BorrowDeclaration>,
+    FxHashMap<&'ast str, BorrowDeclaration>,
 ) {
     let source = source_text(context.db(), context.file());
-
-    // `local` / `once` parameter names → the range of their declaration, plus
-    // the set of every parameter name. a parameter's attributes / items outlive
-    // the call, because the caller holds the value bound to the parameter
     let mut locals: FxHashMap<&'ast str, BorrowDeclaration> = FxHashMap::default();
     let mut once: FxHashMap<&'ast str, BorrowDeclaration> = FxHashMap::default();
-    let mut params: FxHashSet<&'ast str> = FxHashSet::default();
     for param in &function.parameters {
         let param = param.as_parameter();
-        params.insert(param.name.as_str());
         let modifiers = parameter_modifiers(&source, param);
-        // a `once` callback is a `local` borrow with an extra "called exactly
-        // once" obligation, so it is escape-checked exactly like a `local`
         if modifiers.local || modifiers.once {
             locals.insert(
                 param.name.as_str(),
@@ -187,28 +183,61 @@ pub(super) fn check_local_lifetimes<'db, 'ast>(
     if let Some(inherited) = inherited {
         inherited.seed(&mut locals, &mut once);
     }
+    (locals, once)
+}
 
-    if !locals.is_empty() {
-        // names rebound to an outer scope by a `global` / `nonlocal` declaration
-        let mut outer_names: FxHashSet<&'ast str> = FxHashSet::default();
-        OuterNameCollector {
-            names: &mut outer_names,
-        }
-        .visit_body(&function.body);
-
-        EscapeChecker {
-            context,
-            locals: &locals,
-            once: &once,
-            params: &params,
-            outer_names: &outer_names,
-            inherited,
-        }
-        .visit_body(&function.body);
+/// basedpython entry point: enforce `local` (no escape) on `function`'s
+/// parameters. The `once` count obligation is checked separately, by
+/// [`check_once_obligations`], which needs the body's inferred types.
+pub(super) fn check_local_lifetimes<'db, 'ast>(
+    context: &InferContext<'db, 'ast>,
+    function: &'ast ast::StmtFunctionDef,
+    inherited: Option<InheritedBorrow<'_, 'db, 'ast>>,
+) {
+    let (locals, once) = borrowed_parameters(context, function, inherited);
+    if locals.is_empty() {
+        return;
     }
 
+    // every parameter name: a parameter's attributes / items outlive the call,
+    // because the caller holds the value bound to the parameter
+    let params: FxHashSet<&'ast str> = function
+        .parameters
+        .iter()
+        .map(|param| param.as_parameter().name.as_str())
+        .collect();
+
+    // names rebound to an outer scope by a `global` / `nonlocal` declaration
+    let mut outer_names: FxHashSet<&'ast str> = FxHashSet::default();
+    OuterNameCollector {
+        names: &mut outer_names,
+    }
+    .visit_body(&function.body);
+
+    EscapeChecker {
+        context,
+        locals: &locals,
+        once: &once,
+        params: &params,
+        outer_names: &outer_names,
+        inherited,
+    }
+    .visit_body(&function.body);
+}
+
+/// basedpython entry point: enforce the `once` "called exactly once"
+/// obligation. Runs after the body is inferred, because a call can be spelled
+/// `x.cb()` through the callback's own [implicit receiver](super::receivers),
+/// and only the receiver's type says whether it is one.
+pub(super) fn check_once_obligations<'db, 'ast>(
+    context: &InferContext<'db, 'ast>,
+    function: &'ast ast::StmtFunctionDef,
+    inherited: Option<InheritedBorrow<'_, 'db, 'ast>>,
+    receiver_call: impl Fn(&'ast ast::ExprAttribute) -> bool,
+) {
+    let (_, once) = borrowed_parameters(context, function, inherited);
     if !once.is_empty() {
-        check_once_callbacks(context, &function.body, &once);
+        check_once_callbacks(context, &function.body, &once, &receiver_call);
     }
 }
 
@@ -600,6 +629,7 @@ fn check_once_callbacks<'db, 'ast>(
     context: &InferContext<'db, 'ast>,
     body: &'ast [Stmt],
     once: &FxHashMap<&'ast str, BorrowDeclaration>,
+    receiver_call: &dyn Fn(&'ast ast::ExprAttribute) -> bool,
 ) {
     // a callback mentioned anywhere — including a nested scope — might still be
     // called, so it is not "never called"
@@ -607,6 +637,7 @@ fn check_once_callbacks<'db, 'ast>(
     RefCollector {
         once,
         referenced: &mut referenced,
+        receiver_call,
     }
     .visit_body(body);
 
@@ -615,6 +646,7 @@ fn check_once_callbacks<'db, 'ast>(
         info: FxHashMap::default(),
         loop_depth: 0,
         cond_depth: 0,
+        receiver_call,
     };
     counter.visit_body(body);
 
@@ -654,14 +686,25 @@ fn check_once_callbacks<'db, 'ast>(
 struct RefCollector<'a, 'ast> {
     once: &'a FxHashMap<&'ast str, BorrowDeclaration>,
     referenced: &'a mut FxHashSet<&'ast str>,
+    receiver_call: &'a dyn Fn(&'ast ast::ExprAttribute) -> bool,
 }
 
 impl<'ast> Visitor<'ast> for RefCollector<'_, 'ast> {
     fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Expr::Name(name) = expr
-            && self.once.contains_key(name.id.as_str())
-        {
-            self.referenced.insert(name.id.as_str());
+        match expr {
+            Expr::Name(name) if self.once.contains_key(name.id.as_str()) => {
+                self.referenced.insert(name.id.as_str());
+            }
+            // a receiver callable is also spelled `x.cb` — the same callback,
+            // reached through its declared receiver rather than by bare name
+            Expr::Attribute(attribute) => {
+                if let Some((&name, _)) = self.once.get_key_value(attribute.attr.as_str())
+                    && (self.receiver_call)(attribute)
+                {
+                    self.referenced.insert(name);
+                }
+            }
+            _ => {}
         }
         walk_expr(self, expr);
     }
@@ -677,9 +720,24 @@ struct OnceCounter<'a, 'ast> {
     info: FxHashMap<&'ast str, OnceCallInfo>,
     loop_depth: u32,
     cond_depth: u32,
+    receiver_call: &'a dyn Fn(&'ast ast::ExprAttribute) -> bool,
 }
 
 impl<'ast> OnceCounter<'_, 'ast> {
+    /// the `once` callback `callee` calls, whether it is spelled by bare name
+    /// or through the callback's own [receiver](super::receivers) (`x.cb()`)
+    fn called_once_callback(&self, callee: &'ast Expr) -> Option<&'ast str> {
+        match callee {
+            Expr::Name(name) => self.once.get_key_value(name.id.as_str()).map(|(&name, _)| name),
+            Expr::Attribute(attribute) => self
+                .once
+                .get_key_value(attribute.attr.as_str())
+                .filter(|_| (self.receiver_call)(attribute))
+                .map(|(&name, _)| name),
+            _ => None,
+        }
+    }
+
     fn record(&mut self, name: &'ast str, range: TextRange) {
         let info = self.info.entry(name).or_default();
         if self.loop_depth > 0 {
@@ -697,10 +755,8 @@ impl<'ast> OnceCounter<'_, 'ast> {
     fn scan(&mut self, expr: &'ast Expr) {
         match expr {
             Expr::Call(call) => {
-                if let Expr::Name(name) = call.func.as_ref()
-                    && self.once.contains_key(name.id.as_str())
-                {
-                    self.record(name.id.as_str(), call.range());
+                if let Some(name) = self.called_once_callback(call.func.as_ref()) {
+                    self.record(name, call.range());
                 }
                 self.scan(&call.func);
                 for arg in &call.arguments.args {

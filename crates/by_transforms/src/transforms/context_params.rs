@@ -104,6 +104,16 @@ impl ContextLowerer<'_, '_> {
 
     /// append the resolved implicit arguments before the call's closing paren
     fn lower_call(&mut self, call: &ast::ExprCall) {
+        // an extension member's call is re-emitted whole by the extension
+        // lowering — receiver first, then the arguments — so the separator this
+        // reads off the source parens is not the one the output needs. that
+        // lowering fills the `context` arguments itself
+        if let Expr::Attribute(attr) = call.func.as_ref()
+            && attr.ctx.is_load()
+            && self.types.extension_attribute_info(attr).is_some()
+        {
+            return;
+        }
         let implicit = self.types.implicit_context_arguments(call);
         if implicit.is_empty() {
             return;

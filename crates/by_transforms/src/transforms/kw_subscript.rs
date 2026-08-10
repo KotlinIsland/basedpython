@@ -95,6 +95,15 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
         true
     }
 
+    /// whether the subscript specializes a *class* rather than calling
+    /// `__getitem__`. a value ty could not resolve counts as a class: the
+    /// keyword form spells type arguments in practice, and rewriting an
+    /// annotation into a call is the more damaging of the two guesses
+    fn subscripts_a_class(&self, value: &Expr) -> bool {
+        self.types
+            .is_none_or(|types| !types.subscript_is_getitem_call(value))
+    }
+
     /// whether the subscript carries a keyword field (`x[a=1]`) — the parser
     /// spells one as a named expression whose target is [`ExprContext::Invalid`]
     fn is_keyword_field(element: &Expr) -> bool {
@@ -163,14 +172,15 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
         // for a multi-typevar class with declared defaults, expand to a
         // positional list filling unbound slots with their declared defaults
         // (`A[R=int]` with `class A[T=int, R=str]` → `A[int, int]`).
-        // single-typevar class falls back to dropping the kw name
+        // single-typevar class drops the kw name
         if let Expr::Named(n) = sub.slice.as_ref()
             && let Some(target) = n.label()
         {
-            if let Some(types) = self.types
-                && let Some(typevars) = types.class_typevars(&sub.value)
-                && typevars.len() > 1
-            {
+            let typevars = self
+                .types
+                .and_then(|types| types.class_typevars(&sub.value))
+                .filter(|typevars| typevars.len() > 1);
+            if let Some(typevars) = typevars {
                 let value_src = self.value_src(n.value.as_ref());
                 let mut parts: Vec<String> = Vec::with_capacity(typevars.len());
                 for (tv_name, tv_default) in &typevars {
@@ -198,10 +208,27 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
                 )));
                 return;
             }
-            let value_src = self.value_src(n.value.as_ref());
+            // a class the subscript specializes erases the keyword with the rest
+            // of its type arguments. anything else — an instance, a `Mapping`
+            // whose `__getitem__` takes keywords — is a runtime call, the same
+            // reading the tuple form below takes and the one ty checks
+            if self.subscripts_a_class(&sub.value) {
+                let value_src = self.value_src(n.value.as_ref());
+                self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                    value_src,
+                    n.range(),
+                )));
+                return;
+            }
+            let value_src = self.src(sub.value.range()).to_owned();
+            let replacement = format!(
+                "{value_src}.__getitem__({}={})",
+                target.id.as_str(),
+                self.value_src(n.value.as_ref())
+            );
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                value_src,
-                n.range(),
+                replacement,
+                sub.range(),
             )));
             return;
         }
@@ -357,6 +384,23 @@ mod tests {
 
     /// a `?` on a kw-subscript value lowers instead of leaking the bare token
     /// (our whole-subscript edit would otherwise subsume `optional_type`'s)
+    /// an *instance* is not specializable, so a single keyword field on one is
+    /// the runtime call the tuple form already lowers to — dropping the name
+    /// silently turned it into a positional index
+    #[test]
+    fn single_kw_on_an_instance_is_a_getitem_call() {
+        check(
+            "class A:\n    def __getitem__(self, *, foo: int) -> int: ...\n\nprint(A()[foo=1])\n",
+            "class A:\n    def __getitem__(self, *, foo: int) -> int: ...\n\nprint(A().__getitem__(foo=1))\n",
+        );
+    }
+
+    #[test]
+    fn single_kw_on_a_single_typevar_class_still_drops_the_name() {
+        let out = transpile("class B[T]: ...\n\na: B[T=int]\n", &Config::test_default()).unwrap();
+        assert!(out.ends_with("a: B[int]\n"), "got:\n{out}");
+    }
+
     #[test]
     fn single_kw_value_optional_lowers() {
         check("a: A[T=int?]\n", "a: A[int | None]\n");
