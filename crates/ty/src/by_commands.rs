@@ -124,6 +124,7 @@ pub(crate) fn cmd_run(
     }
 
     let (db, handles, rebuilder) = build_project_db(&cwd, &files)?;
+    let roots = module_roots(&db, &cwd);
 
     // an explicit module always wins; otherwise the project's configured entry
     // point stands in for it. resolving before the (much slower) check means a
@@ -149,8 +150,7 @@ pub(crate) fn cmd_run(
         CheckGate::AllErrors,
         &rebuilder,
         |bpy, src, line_map| {
-            let rel = bpy.strip_prefix(&cwd).unwrap_or(bpy);
-            let py = tmp.path().join(rel).with_extension("py");
+            let py = tmp.path().join(module_relative_path(&roots, &cwd, bpy));
             fs::create_dir_all(py.parent().unwrap())?;
             fs::write(&py, src)?;
             traceback_entries.push(TracebackEntry {
@@ -180,6 +180,37 @@ pub(crate) fn cmd_run(
     // exiting while it's still in scope would leak the directory
     drop(tmp);
     std::process::exit(code);
+}
+
+/// The project's first-party module roots, longest first, as absolute paths.
+///
+/// These are the directories a module name is resolved against — for a
+/// src-layout project, `src/` before the project root. Only roots inside the
+/// project are kept: an emitted tree can only mirror what is being built.
+fn module_roots(db: &ProjectDatabase, cwd: &Path) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = ty_module_resolver::system_module_search_paths(db)
+        .map(|path| PathBuf::from(path.as_str()))
+        .filter(|path| path.starts_with(cwd))
+        .collect();
+    // a nested root shadows the one containing it, so the deepest match wins
+    roots.sort_by_key(|root| std::cmp::Reverse(root.components().count()));
+    roots
+}
+
+/// Where `bpy`'s transpiled python goes, relative to the output root.
+///
+/// The tree mirrored is the *module* tree, not the directory tree: a src-layout
+/// project's `src/pkg/main.by` is the module `pkg.main`, so it has to land at
+/// `pkg/main.py`. Mirroring the directory instead emits `src/pkg/main.py`,
+/// whose module is `src.pkg.main` — a name nothing imports, and one `run.main`
+/// cannot sensibly be set to.
+fn module_relative_path(roots: &[PathBuf], cwd: &Path, bpy: &Path) -> PathBuf {
+    roots
+        .iter()
+        .find_map(|root| bpy.strip_prefix(root).ok())
+        .or_else(|| bpy.strip_prefix(cwd).ok())
+        .unwrap_or(bpy)
+        .with_extension("py")
 }
 
 /// The project's `run.main` entry point, if one is configured.
@@ -220,6 +251,7 @@ pub(crate) fn cmd_build(min_version: &str, lowering: &LoweringArgs) -> anyhow::R
     }
 
     let (db, handles, rebuilder) = build_project_db(&cwd, &files)?;
+    let roots = module_roots(&db, &cwd);
     if !render_check_and_transpile(
         &db,
         &handles,
@@ -227,9 +259,7 @@ pub(crate) fn cmd_build(min_version: &str, lowering: &LoweringArgs) -> anyhow::R
         CheckGate::ParseErrorsOnly,
         &rebuilder,
         |bpy, src, _line_map| {
-            let py = out
-                .join(bpy.strip_prefix(&cwd).unwrap())
-                .with_extension("py");
+            let py = out.join(module_relative_path(&roots, &cwd, bpy));
             fs::create_dir_all(py.parent().unwrap())?;
             fs::write(&py, src)?;
             eprintln!("{} -> {}", bpy.display(), py.display());

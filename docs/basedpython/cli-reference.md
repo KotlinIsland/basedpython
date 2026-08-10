@@ -67,9 +67,13 @@ by build                            # transpile every .by/.byi under the project
 by build --min-version 3.12         # target a specific runtime python version
 ```
 
-writes the transpiled python to `./out/` mirroring the source tree. the
-`out/` directory is **not** considered first-party source for `by check`
-or `by generate-api-file` — it is regenerated on every build
+writes the transpiled python to `./out/` mirroring the *module* tree. a
+src-layout project's `src/package_name/main.by` is the module
+`package_name.main`, so it lands at `out/package_name/main.py` — `out/` is a
+directory you can put on `sys.path` as it stands, and `run.main` names a module
+the same way an import does. the `out/` directory is **not** considered
+first-party source for `by check` or `by generate-api-file` — it is regenerated
+on every build
 
 ## `by generate-api-file`
 

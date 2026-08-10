@@ -1232,6 +1232,73 @@ fn build_skips_hidden_directories() {
     );
 }
 
+/// a src-layout project's `src/pkg/main.by` is the module `pkg.main`, so the
+/// emitted tree has to be rooted at `src` — mirroring the directory instead
+/// emits `out/src/pkg/main.py`, whose module is `src.pkg.main`, a name nothing
+/// imports and `run.main` cannot sensibly be set to
+#[test]
+fn build_mirrors_the_module_tree_not_the_directory_tree() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"package-name\"\nversion = \"0.1.0\"\n\
+         \n[tool.basedpython.run]\nmain = \"package_name.main\"\n",
+    )
+    .unwrap();
+    let package = dir.path().join("src").join("package_name");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(package.join("main.by"), "print(\"src layout\")\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    let out = dir.path().join("out");
+    assert!(
+        out.join("package_name").join("main.py").exists(),
+        "expected out/package_name/main.py:\n{stderr}"
+    );
+    assert!(
+        !out.join("src").exists(),
+        "the source root must not appear in the output tree:\n{stderr}"
+    );
+}
+
+/// the counterpart at run time: `run.main` names the module, and the temporary
+/// tree `by run` executes has to be rooted the same way
+#[test]
+fn run_resolves_a_src_layout_entry_point() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"package-name\"\nversion = \"0.1.0\"\n\
+         \n[tool.basedpython.run]\nmain = \"package_name.main\"\n",
+    )
+    .unwrap();
+    let package = dir.path().join("src").join("package_name");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(package.join("main.by"), "print(\"src layout\")\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("run")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "src layout");
+}
+
 #[test]
 fn transpile_proceeds_past_non_syntax_errors() {
     // type errors are surfaced as diagnostics but don't block transpile —
