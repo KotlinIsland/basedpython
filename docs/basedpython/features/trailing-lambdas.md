@@ -62,6 +62,21 @@ g:  # error: missing argument for `x`
     print(it)
 ```
 
+the parameter the block lands in has to be able to hold one. a callee whose last
+parameter is not callable takes the block as an ordinary argument, where nothing
+the block's body says ever runs — so that is an error rather than a silent drop:
+
+```by
+def br(src: str? = None, extra: dict[str, str]? = None): ...
+
+br:  # error: expected `dict[str, str] | None`, found `(...) -> Unknown`
+    print("this block has nowhere to go")
+```
+
+the block's own shape stays gradual in that check: its `it` parameter is typed
+from the callback, and its return is checked by `trailing-lambda-return-type`,
+so neither is re-checked as an argument
+
 ## lowering
 
 the block lowers to a named function followed by the call:

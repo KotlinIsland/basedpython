@@ -544,6 +544,38 @@ def find(items: list[int]) -> int:  # error: [invalid-return-type]
         return it  # error: [trailing-lambda-control-flow]
 ```
 
+## the block's parameter has to be callable
+
+A block fills the callee's last parameter, so that parameter has to be able to hold one. Binding it
+to a parameter that is not callable drops the body into an ordinary argument, where nothing the
+author wrote in the block ever runs.
+
+```by
+def br(src: str? = None, extra: dict[str, str]? = None) -> None: ...
+
+# error: [invalid-argument-type] "Expected `dict[str, str] | None`, found `(...) -> Unknown`"
+br:
+    print("this block has nowhere to go")
+```
+
+## a parameter that accepts a callable takes the block
+
+The block's own shape stays gradual: its `it` parameter is typed from the callback, and its return
+is checked separately, so neither is re-checked here.
+
+```by
+def each(fn: (int) -> None) -> None:
+    fn(1)
+
+def anything(fn: object) -> None: ...
+
+each:
+    print(it)
+
+anything:
+    print("a callable is an object")
+```
+
 ## not valid in `.py` files
 
 The shape parses exactly as it does in upstream python — an annotated assignment missing its
