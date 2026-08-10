@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, btree_map::Entry as BTreeEntry, hash_map::Entry
 use crate::reachability::{narrow_type_by_constraint, type_narrowed_by_previous_patterns};
 use crate::subscript::PyIndex;
 use crate::types::callable::CallableTypes;
+use crate::types::context_sensitive::case_name_pattern_type;
 use crate::types::function::KnownFunction;
 use crate::types::infer::{ExpressionInference, infer_same_file_expression_type};
 use crate::types::narrowing_guards::{GuardRoot, guard_root, narrowed_place, narrowed_scope_place};
@@ -131,7 +132,8 @@ pub(crate) fn infer_narrowing_constraints<'db>(
         PredicateNode::IsNonTerminalCall(_)
         | PredicateNode::IsNonEmptyIterable(_)
         | PredicateNode::OrPatternAlternative(_)
-        | PredicateNode::StarImportPlaceholder(_) => (None, None),
+        | PredicateNode::StarImportPlaceholder(_)
+        | PredicateNode::CaseNameCapture(_) => (None, None),
     };
 
     if predicate.is_positive {
@@ -1635,6 +1637,10 @@ fn necessary_match_pattern_type<'db>(
             .map(|pattern| necessary_match_pattern_type(db, env, pattern))
             .unwrap_or_else(Type::object),
         PatternPredicateKind::Value(_) | PatternPredicateKind::Star(_) => Type::object(),
+        // basedpython: a resolved bare `case A:` matches nothing but its member
+        PatternPredicateKind::CaseName(case_name) => {
+            case_name_pattern_type(db, env, case_name).unwrap_or_else(Type::object)
+        }
     }
 }
 
@@ -1708,6 +1714,7 @@ impl<'db, 'ast> NarrowingConstraintsBuilder<'db, 'ast> {
             PredicateNode::IsNonEmptyIterable(_) => return None,
             PredicateNode::OrPatternAlternative(_) => return None,
             PredicateNode::StarImportPlaceholder(_) => return None,
+            PredicateNode::CaseNameCapture(_) => return None,
         };
 
         constraints.map(FrozenNarrowingConstraints::from)
@@ -1882,6 +1889,14 @@ impl<'db, 'ast> NarrowingConstraintsBuilder<'db, 'ast> {
             PatternPredicateKind::Value(expr) => PatternNarrowingResult::Possible(
                 self.evaluate_match_pattern_value(subject, *expr, false),
             ),
+            // basedpython: a resolved bare `case A:` rules its member out for the
+            // later cases exactly as `case Color.Red:` does; an unresolved one is
+            // a capture, whose failure says nothing
+            PatternPredicateKind::CaseName(case_name) => PatternNarrowingResult::Possible(
+                case_name_pattern_type(self.db, &self.env, case_name).and_then(|member_ty| {
+                    self.evaluate_match_pattern_value_type(subject, member_ty, false)
+                }),
+            ),
             PatternPredicateKind::Or(predicates) => PatternNarrowingResult::merge_alternatives(
                 predicates.iter().map(|predicate| {
                     self.evaluate_negative_pattern_predicate_kind(predicate, subject)
@@ -1993,6 +2008,13 @@ impl<'db, 'ast> NarrowingConstraintsBuilder<'db, 'ast> {
             PatternPredicateKind::Value(value) => {
                 let value_ty = infer_same_file_expression_type(db, *value, TypeContext::default());
                 self.evaluate_expr_compare_op(subject_ty, value_ty, ast::CmpOp::Eq, true)
+                    .map(NarrowingConstraint::intersection)
+            }
+            // basedpython: a resolved bare `case A:` tests the subject for its
+            // member, exactly as the value pattern above does
+            PatternPredicateKind::CaseName(case_name) => {
+                let member_ty = case_name_pattern_type(self.db, &self.env, case_name)?;
+                self.evaluate_expr_compare_op(subject_ty, member_ty, ast::CmpOp::Eq, true)
                     .map(NarrowingConstraint::intersection)
             }
             PatternPredicateKind::Singleton(singleton) => Some(NarrowingConstraint::intersection(
@@ -2147,7 +2169,32 @@ impl<'db> PatternSuccessAnalyzer<'db> {
                 }
             }
             PatternPredicateKind::Value(value) => {
-                let matched_subject_ty = self.match_value_pattern_subject_type(*value, subject_ty);
+                let value_ty =
+                    infer_same_file_expression_type(self.db, *value, TypeContext::default());
+                let matched_subject_ty =
+                    self.match_value_pattern_subject_type(value_ty, subject_ty);
+                PatternSuccessResult {
+                    matched_subject_ty,
+                    binding_subject_ty: matched_subject_ty,
+                    bindings: BTreeMap::new(),
+                }
+            }
+            // basedpython: a resolved bare `case A:` is a value pattern and binds
+            // nothing; an unresolved one is the capture python spells it as
+            PatternPredicateKind::CaseName(case_name) => {
+                let Some(member_ty) = case_name_pattern_type(self.db, &self.env, case_name) else {
+                    let mut bindings = BTreeMap::new();
+                    if let Some(place) = self.places().symbol_id(case_name.name.as_str()) {
+                        bindings.insert(place.into(), PatternBindingTypes::subject(subject_ty));
+                    }
+                    return PatternSuccessResult {
+                        matched_subject_ty: subject_ty,
+                        binding_subject_ty: subject_ty,
+                        bindings,
+                    };
+                };
+                let matched_subject_ty =
+                    self.match_value_pattern_subject_type(member_ty, subject_ty);
                 PatternSuccessResult {
                     matched_subject_ty,
                     binding_subject_ty: matched_subject_ty,
@@ -2203,7 +2250,15 @@ impl<'db> PatternSuccessAnalyzer<'db> {
             }
             PatternPredicateKind::As(None, _) | PatternPredicateKind::Star(_) => subject_ty,
             PatternPredicateKind::Value(value) => {
-                self.match_value_pattern_subject_type(*value, subject_ty)
+                let value_ty =
+                    infer_same_file_expression_type(self.db, *value, TypeContext::default());
+                self.match_value_pattern_subject_type(value_ty, subject_ty)
+            }
+            PatternPredicateKind::CaseName(case_name) => {
+                match case_name_pattern_type(self.db, &self.env, case_name) {
+                    Some(member_ty) => self.match_value_pattern_subject_type(member_ty, subject_ty),
+                    None => subject_ty,
+                }
             }
             PatternPredicateKind::Singleton(_) => self.intersect_types(
                 subject_ty,
@@ -2248,11 +2303,10 @@ impl<'db> PatternSuccessAnalyzer<'db> {
     /// The `str` arm remains because a `str` subclass can compare equal to `1`.
     fn match_value_pattern_subject_type(
         &self,
-        value: Expression<'db>,
+        value_ty: Type<'db>,
         subject_ty: Type<'db>,
     ) -> Type<'db> {
         let db = self.db;
-        let value_ty = infer_same_file_expression_type(db, value, TypeContext::default());
         evaluate_type_equality(
             db,
             &self.env,
@@ -3455,6 +3509,7 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
                 callable.scope(self.db)
             }
             PredicateNode::IsNonEmptyIterable(expression) => expression.scope(db),
+            PredicateNode::CaseNameCapture(capture) => capture.kind(db).scope,
             PredicateNode::StarImportPlaceholder(definition) => definition.scope(db),
         }
     }
@@ -4918,6 +4973,19 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
         value: Expression<'db>,
         is_positive: bool,
     ) -> Option<NarrowingConstraints<'db>> {
+        let value_ty = infer_same_file_expression_type(self.db, value, TypeContext::default());
+        self.evaluate_match_pattern_value_type(subject, value_ty, is_positive)
+    }
+
+    /// [`Self::evaluate_match_pattern_value`] for a value the caller has already
+    /// resolved to a type — a basedpython bare `case A:`, which has no expression
+    /// of its own to infer.
+    fn evaluate_match_pattern_value_type(
+        &mut self,
+        subject: Expression<'db>,
+        value_ty: Type<'db>,
+        is_positive: bool,
+    ) -> Option<NarrowingConstraints<'db>> {
         let db = self.db;
         let subject_node = subject.node_ref(db).node(self.module);
         let place = {
@@ -4925,7 +4993,6 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
             self.expect_place(&subject)
         };
         let subject_ty = infer_same_file_expression_type(db, subject, TypeContext::default());
-        let value_ty = infer_same_file_expression_type(db, value, TypeContext::default());
 
         let mut constraints = self
             .evaluate_expr_compare_op(subject_ty, value_ty, ast::CmpOp::Eq, is_positive)

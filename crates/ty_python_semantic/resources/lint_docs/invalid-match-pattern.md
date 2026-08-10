@@ -4,13 +4,15 @@ Checks for invalid match patterns.
 
 ## Why is this bad?
 
-Invalid match patterns can cause a `TypeError` at runtime. This includes:
+Invalid match patterns can cause a `TypeError` or a `SyntaxError` at runtime.
+This includes:
 
 - Using a non-type object in a class pattern.
 - Providing positional subpatterns when `__match_args__` is missing or has an invalid static type.
 - Matching against `collections.abc.Callable` with positional subpatterns.
 - Matching against a non-runtime-checkable protocol.
 - Matching against a `TypedDict`.
+- basedpython: a bare `case A:` that captures rather than naming a member of the subject's type.
 
 ## Examples
 

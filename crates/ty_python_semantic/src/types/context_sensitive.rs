@@ -27,6 +27,7 @@ use std::ops::ControlFlow;
 
 use ruff_db::files::File;
 use ruff_python_ast::name::Name;
+use ty_python_core::predicate::CaseNamePredicateKind;
 use ty_python_core::scope::ScopeId;
 use ty_python_core::{place_table, semantic_index};
 
@@ -36,7 +37,10 @@ use crate::types::ProgramEnvironment;
 use crate::types::class::{ClassLiteral, ClassType, based_enum_of_variant};
 use crate::types::class_base::ClassBase;
 use crate::types::literal::EnumLiteralType;
-use crate::types::name_fallback::claimed_by_lexical_scope;
+use crate::types::name_fallback::{
+    claimed_by_lexical_scope, claimed_by_lexical_scope_outside_case_names,
+};
+use crate::types::narrow::pattern_subject_type;
 use crate::types::receivers;
 use crate::types::{Type, TypeContext};
 
@@ -48,6 +52,13 @@ pub(crate) struct ContextSensitiveMember<'db> {
     enum_class: ClassLiteral<'db>,
     /// the type of `<enum_class>.<name>`
     pub(crate) ty: Type<'db>,
+}
+
+impl<'db> ContextSensitiveMember<'db> {
+    /// the spelling the transpiler qualifies the name with
+    pub(crate) fn qualifier(self, db: &'db dyn Db) -> &'db Name {
+        self.enum_class.name(db)
+    }
 }
 
 /// what the expected type has to say about `name` before the resolution rules
@@ -118,6 +129,41 @@ pub(crate) fn resolve_in_context<'db>(
     is_nameable(db, file, scope, member.enum_class).then_some(member)
 }
 
+/// the member a bare `case A:` names, or `None` when it is the capture python
+/// spells it as
+///
+/// A case pattern's expected type is its subject's, so the rules are the ones
+/// [`resolve_in_context`] applies — with one difference: the capture's own
+/// binding is not allowed to claim the name, or no bare case name could ever
+/// resolve. See [`claimed_by_lexical_scope_outside_case_names`]
+pub(crate) fn resolve_case_name<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    kind: &CaseNamePredicateKind<'db>,
+) -> Option<ContextSensitiveMember<'db>> {
+    let scope = kind.scope;
+    let file = scope.file(db);
+    let name = kind.name.as_str();
+    if claimed_by_lexical_scope_outside_case_names(db, env, file, scope, name) {
+        return None;
+    }
+    let subject_ty = pattern_subject_type(db, kind.subject);
+    let Search::Found(member) = search(db, env, subject_ty, name) else {
+        return None;
+    };
+    is_nameable(db, file, scope, member.enum_class).then_some(member)
+}
+
+/// the type a bare `case A:` matches, or `None` when the name is an ordinary
+/// capture and the pattern therefore matches everything
+pub(crate) fn case_name_pattern_type<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    kind: &CaseNamePredicateKind<'db>,
+) -> Option<Type<'db>> {
+    resolve_case_name(db, env, kind).map(|member| member.ty)
+}
+
 /// why a name the expected type *does* declare was still not resolved — the hint
 /// an `unresolved-reference` carries when context-sensitive resolution came
 /// close. `None` when the context has nothing to say about the name
@@ -130,6 +176,29 @@ pub(crate) enum Miss<'db> {
     Unnameable(ClassLiteral<'db>),
     /// two enums in the expected type declare it
     Ambiguous(ClassLiteral<'db>, ClassLiteral<'db>),
+}
+
+/// [`explain_miss`] for a bare `case A:`, whose expected type is its subject's
+pub(crate) fn explain_case_name_miss<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    kind: &CaseNamePredicateKind<'db>,
+) -> Option<Miss<'db>> {
+    let scope = kind.scope;
+    let file = scope.file(db);
+    let name = kind.name.as_str();
+    match search(db, env, pattern_subject_type(db, kind.subject), name) {
+        Search::Ambiguous(first, second) => Some(Miss::Ambiguous(first, second)),
+        Search::Found(member)
+            if claimed_by_lexical_scope_outside_case_names(db, env, file, scope, name) =>
+        {
+            Some(Miss::Shadowed(member.enum_class))
+        }
+        Search::Found(member) if !is_nameable(db, file, scope, member.enum_class) => {
+            Some(Miss::Unnameable(member.enum_class))
+        }
+        Search::Found(_) | Search::Nothing => None,
+    }
 }
 
 pub(crate) fn explain_miss<'db>(

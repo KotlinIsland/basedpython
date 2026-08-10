@@ -10,6 +10,7 @@ use ty_python_core::predicate::{
 
 use crate::place::{DefinedPlace, Place};
 use crate::types::callable::{CallableFunctionProvenance, CallableTypeKind};
+use crate::types::context_sensitive::case_name_pattern_type;
 use crate::types::equality::{
     ComparisonSoundnessPolicy, evaluate_type_equality, is_same_enum_domain,
 };
@@ -650,6 +651,20 @@ pub(crate) fn definite_match_pattern_type_for_subject<'db>(
         return subject_independent_ty;
     }
 
+    // basedpython: a bare `case A:` is resolved against the case's own subject
+    // rather than against whatever reaches this node, so it is answered before
+    // the union split below rather than once per element
+    if let PatternPredicateKind::CaseName(case_name) = kind {
+        return match case_name_pattern_type(db, env, case_name) {
+            Some(member_ty) => IntersectionBuilder::new(db, env)
+                .add_positive(subject_ty)
+                .add_positive(member_ty)
+                .build(),
+            // an ordinary capture matches whatever reaches it
+            None => subject_ty,
+        };
+    }
+
     let resolved_subject_ty = subject_ty.resolve_type_alias(db);
     if let Type::Union(union) = resolved_subject_ty {
         return UnionType::from_elements(
@@ -767,6 +782,19 @@ fn pattern_fallthrough_type<'db>(
     kind: &PatternPredicateKind<'db>,
     subject_ty: Type<'db>,
 ) -> Type<'db> {
+    // basedpython: a resolved bare `case A:` removes exactly its member from what
+    // reaches the later cases, which is what makes an enum `match` exhaustive; an
+    // unresolved one is a capture and leaves nothing behind
+    if let PatternPredicateKind::CaseName(case_name) = kind {
+        return match case_name_pattern_type(db, env, case_name) {
+            Some(member_ty) => IntersectionBuilder::new(db, env)
+                .add_positive(subject_ty)
+                .add_negative(member_ty)
+                .build(),
+            None => Type::Never,
+        };
+    }
+
     if let PatternPredicateKind::Value(value) = kind {
         let value_ty = infer_same_file_expression_type(db, *value, TypeContext::default());
         // A subject confined to the same enum cannot contain cross-type values that compare equal
@@ -1124,7 +1152,9 @@ fn subject_independent_definite_match_pattern_type<'db>(
         PatternPredicateKind::As(Some(pattern), _) => {
             subject_independent_definite_match_pattern_type(db, env, pattern)
         }
-        PatternPredicateKind::Value(_) => None,
+        // both depend on the subject: the value pattern through python equality,
+        // and the basedpython bare name through what its subject's type declares
+        PatternPredicateKind::Value(_) | PatternPredicateKind::CaseName(_) => None,
         _ => Some(definite_match_pattern_type(db, env, kind)),
     }
 }
@@ -1191,6 +1221,11 @@ pub(crate) fn definite_match_pattern_type<'db>(
             .map(|p| definite_match_pattern_type(db, env, p))
             .unwrap_or_else(Type::object),
         PatternPredicateKind::Star(_) => Type::object(),
+        // basedpython: a resolved bare `case A:` matches its member and nothing
+        // else; an unresolved one is a capture, which matches everything
+        PatternPredicateKind::CaseName(case_name) => {
+            case_name_pattern_type(db, env, case_name).unwrap_or_else(Type::object)
+        }
     }
 }
 

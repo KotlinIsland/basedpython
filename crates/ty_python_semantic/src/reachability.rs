@@ -196,6 +196,7 @@
 use crate::ProgramEnvironment;
 use std::cell::RefCell;
 
+use crate::types::context_sensitive::case_name_pattern_type;
 use crate::types::function::KnownFunction;
 use crate::types::narrow::pattern_subject_type;
 use crate::{
@@ -554,6 +555,7 @@ fn predicate_scope<'db>(db: &'db dyn Db, predicate: &Predicate<'db>) -> ScopeId<
         PredicateNode::SubjectElementPattern(subject_element) => subject_element.pattern.scope(db),
         PredicateNode::IsNonEmptyIterable(expression) => expression.scope(db),
         PredicateNode::StarImportPlaceholder(star_import) => star_import.scope(db),
+        PredicateNode::CaseNameCapture(capture) => capture.kind(db).scope,
     }
 }
 
@@ -1302,6 +1304,20 @@ fn analyze_single_pattern_predicate_kind<'db>(
     precomputed_definite_match_ty: Option<Type<'db>>,
 ) -> Truthiness {
     match predicate_kind {
+        // basedpython: a resolved bare `case A:` tests for its member exactly as
+        // `case Color.Red:` would; an unresolved one is a capture and matches
+        PatternPredicateKind::CaseName(case_name) => {
+            let Some(member_ty) = case_name_pattern_type(db, env, case_name) else {
+                return Truthiness::AlwaysTrue;
+            };
+            if subject_ty.is_subtype_of(db, env, member_ty) {
+                Truthiness::AlwaysTrue
+            } else if subject_ty.is_disjoint_from(db, env, member_ty) {
+                Truthiness::AlwaysFalse
+            } else {
+                Truthiness::Ambiguous
+            }
+        }
         PatternPredicateKind::Value(value) => {
             let value_ty = infer_same_file_expression_type(db, *value, TypeContext::default());
 
@@ -1575,6 +1591,12 @@ fn analyze_single(db: &dyn Db, env: &ProgramEnvironment<'_>, predicate: &Predica
         PredicateNode::AssertsCall(_) => Truthiness::AlwaysTrue.negate_if(!predicate.is_positive),
         PredicateNode::Pattern(inner) => analyze_pattern_predicate(db, inner),
         PredicateNode::OrPatternAlternative(_) => Truthiness::Ambiguous,
+        // basedpython: the capture a bare `case A:` would bind exists only where
+        // the name did not resolve to an enum member of the subject
+        PredicateNode::CaseNameCapture(capture) => {
+            Truthiness::from(case_name_pattern_type(db, env, capture.kind(db)).is_none())
+                .negate_if(!predicate.is_positive)
+        }
         PredicateNode::SubjectElementPattern(subject_element) => {
             analyze_pattern_predicate(db, subject_element.pattern)
         }

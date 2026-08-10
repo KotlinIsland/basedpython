@@ -154,6 +154,34 @@ pub enum PredicateNode<'db> {
     OrPatternAlternative(ScopeId<'db>),
     SubjectElementPattern(SubjectElementPatternPredicate<'db>),
     StarImportPlaceholder(StarImportPlaceholderPredicate<'db>),
+    /// basedpython: whether a bare `case A:` binds `A` at all.
+    ///
+    /// The name is a capture only when it is *not* an enum member of the
+    /// subject's type — see [`CaseNamePredicateKind`] — so the capture's binding
+    /// is recorded under this predicate and disappears where the name turned out
+    /// to be a value pattern. Evaluates to [`crate::Truthiness::AlwaysTrue`] or
+    /// [`crate::Truthiness::AlwaysFalse`], never to
+    /// [`crate::Truthiness::Ambiguous`]: a name either resolves or it does not.
+    CaseNameCapture(CaseNameCapturePredicate<'db>),
+}
+
+/// basedpython: one bare `case A:` name — `case A | B:` records one for each.
+#[salsa::tracked(debug, heap_size=ruff_memory_usage::heap_size)]
+pub struct CaseNameCapturePredicate<'db> {
+    #[returns(ref)]
+    pub kind: CaseNamePredicateKind<'db>,
+}
+
+// The Salsa heap is tracked separately.
+impl get_size2::GetSize for CaseNameCapturePredicate<'_> {}
+
+impl<'db> From<CaseNameCapturePredicate<'db>> for PredicateOrLiteral<'db> {
+    fn from(predicate: CaseNameCapturePredicate<'db>) -> Self {
+        PredicateOrLiteral::Predicate(Predicate {
+            node: PredicateNode::CaseNameCapture(predicate),
+            is_positive: true,
+        })
+    }
 }
 
 /// A pattern predicate applied to one expression in a sequence-display subject.
@@ -231,6 +259,32 @@ pub struct MappingPatternEntryPredicateKind<'db> {
     pub pattern: PatternPredicateKind<'db>,
 }
 
+/// basedpython: a bare `case A:` matched directly against the subject.
+///
+/// Such a name is a capture in python, but in basedpython it is first offered to
+/// ty's context-sensitive resolution: an unambiguous enum member of the subject's
+/// type makes it a *value* pattern, and anything else leaves it the capture
+/// python spells. Which one it is depends on the subject's type, so this is the
+/// one pattern whose shape is not settled until type checking.
+///
+/// The scope is carried here because the resolution rules are the same as the
+/// rest of context-sensitive resolution's: the name must be claimed by no
+/// lexical scope, and the enum must be nameable in this one.
+#[derive(Debug, Clone, Hash, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
+pub struct CaseNamePredicateKind<'db> {
+    pub name: Name,
+    pub scope: ScopeId<'db>,
+
+    /// What the case matches, which is what the name is resolved against.
+    ///
+    /// Held here rather than taken from whatever subject type reaches this node,
+    /// because that one has already been narrowed by the preceding cases: by the
+    /// last case of an exhaustive `match` nothing of the enum is left, and a name
+    /// that stopped resolving there would silently turn back into a capture. What
+    /// a name means cannot depend on which case it is written in.
+    pub subject: PatternSubject<'db>,
+}
+
 /// Pattern structure used for type narrowing, static reachability, and inferring the types of
 /// names bound by a successful match.
 #[derive(Debug, Clone, Hash, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
@@ -245,6 +299,8 @@ pub enum PatternPredicateKind<'db> {
     Sequence(SequencePatternPredicateKind<'db>),
     As(Option<Box<PatternPredicateKind<'db>>>, Option<Name>),
     Star(Option<Name>),
+    /// basedpython `case A:`
+    CaseName(CaseNamePredicateKind<'db>),
 }
 
 #[salsa::tracked(debug, heap_size=ruff_memory_usage::heap_size)]

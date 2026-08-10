@@ -28,7 +28,7 @@ use expression::Expression;
 use narrowing_constraints::ScopedNarrowingConstraint;
 use node_key::NodeKey;
 pub use place::{PlaceExprRef, PlaceTable};
-use predicate::PatternPredicate;
+use predicate::{CaseNamePredicateKind, PatternPredicate};
 pub use reachability_constraints::ReachabilityConstraintsBuilder;
 use reachability_constraints::ScopedReachabilityConstraintId;
 pub use scope::FileScopeId;
@@ -364,6 +364,11 @@ pub struct SemanticIndex<'db> {
     /// basedpython: what each destructuring binder's pattern needs from the flow
     /// analysis, keyed by the pattern node.
     destructures: FrozenMap<NodeKey, Destructure<'db>>,
+
+    /// basedpython: every case-pattern name context-sensitive resolution is
+    /// offered — a bare `case A:` name, keyed by its identifier, and a bare class
+    /// pattern's `case Circle(r):` name, keyed by its expression.
+    case_names: FrozenMap<NodeKey, CaseNamePredicateKind<'db>>,
 }
 
 /// basedpython: what a destructuring binder — a `let` statement, a `for` target,
@@ -400,6 +405,12 @@ impl<'db> SemanticIndex<'db> {
     /// inference time, if that pattern is one.
     pub fn destructure(&self, key: impl Into<NodeKey>) -> Option<&Destructure<'db>> {
         self.destructures.get(&key.into())
+    }
+
+    /// basedpython: what context-sensitive resolution needs to answer for the
+    /// case-pattern name `key`, if it is one of the names offered to it.
+    pub fn case_name(&self, key: impl Into<NodeKey>) -> Option<&CaseNamePredicateKind<'db>> {
+        self.case_names.get(&key.into())
     }
 
     /// basedpython: whether this call expression is made as a bare statement.

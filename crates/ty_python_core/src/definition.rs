@@ -659,6 +659,10 @@ pub(crate) struct MatchPatternDefinitionNodeRef<'ast, 'db> {
     pub(crate) identifier: &'ast ast::Identifier,
     /// The predicate for the complete match case containing this binding.
     pub(crate) predicate: PatternPredicate<'db>,
+    /// basedpython: whether this is a bare `case A:` whose name type checking may
+    /// yet resolve to an enum member of the subject, in which case the pattern is
+    /// a value pattern and binds nothing.
+    pub(crate) is_case_name: bool,
 }
 
 impl<'db> DefinitionNodeRef<'_, 'db> {
@@ -799,10 +803,12 @@ impl<'db> DefinitionNodeRef<'_, 'db> {
                 pattern,
                 identifier,
                 predicate,
+                is_case_name,
             }) => DefinitionKind::MatchPattern(MatchPatternDefinitionKind {
                 pattern: AstNodeRef::new(parsed, pattern),
                 identifier: AstNodeRef::new(parsed, identifier),
                 predicate,
+                is_case_name,
             }),
             DefinitionNodeRef::ExceptHandler(ExceptHandlerDefinitionNodeRef {
                 handler,
@@ -1324,6 +1330,7 @@ pub struct MatchPatternDefinitionKind<'db> {
     pattern: AstNodeRef<ast::Pattern>,
     identifier: AstNodeRef<ast::Identifier>,
     predicate: PatternPredicate<'db>,
+    is_case_name: bool,
 }
 
 impl<'db> MatchPatternDefinitionKind<'db> {
@@ -1333,6 +1340,13 @@ impl<'db> MatchPatternDefinitionKind<'db> {
 
     pub fn predicate(&self) -> PatternPredicate<'db> {
         self.predicate
+    }
+
+    /// basedpython: whether this is a bare `case A:` whose name type checking may
+    /// yet resolve to an enum member of the subject, in which case the pattern is
+    /// a value pattern and binds nothing.
+    pub fn is_case_name(&self) -> bool {
+        self.is_case_name
     }
 }
 

@@ -111,15 +111,76 @@ qualified — `x: C = f` does not find `C.f`
     b: C = C.Red   # always works
     ```
 
-- **`match` patterns are unaffected.** a bare name in a `case` pattern is a
-    capture, not a load, and keeps that meaning. match an enum member with its
-    qualified form, as python requires:
+## match patterns
 
-    ```by
-    match colour:
-        case Color.Red: ...
-        case _: ...
-    ```
+a `case` pattern's expected type is its subject's, so a bare name there resolves
+the same way. python reads such a name as a capture — and it still is wherever it
+names no member — but a member wins, and the case becomes the value pattern it
+looks like:
+
+```by
+enum class Color:
+    case Red, Green, Blue
+
+def describe(c: Color) -> str:
+    match c:
+        case Red:
+            return "warm"
+        case Green | Blue:
+            return "cool"
+```
+
+the match is exhaustive, each case narrows its subject, and no name is bound:
+`Red` inside the first case is not in scope, exactly as if `Color.Red` had been
+written.
+
+a payload variant is matched and unpacked the same way, because the class of a
+`case` pattern is resolved against the subject too:
+
+```by
+enum class Shape:
+    case Circle(radius: float)
+    case Square(side: float)
+
+def area(s: Shape) -> float:
+    match s:
+        case Circle(r):
+            return 3.14 * r * r
+        case Square(a):
+            return a * a
+```
+
+only a name matched against the subject *itself* is offered to the lookup —
+through `|`, `and` and the left-hand side of `as`. inside a class, sequence or
+mapping pattern a bare name captures the part it is aligned with, as in python:
+
+```by
+def f(pair: tuple[Color, Color]) -> None:
+    match pair:
+        case [Red, second]: ...  # both are captures
+```
+
+a binder whose pattern has to succeed — a `for` target, a `with` item, a
+parameter, an `else`-less `let` — never resolves a bare name either: its whole
+purpose is to bind.
+
+### a capture where python wanted a test
+
+python rejects a capture that makes later cases unreachable, or that binds names
+its sibling alternatives do not. basedpython cannot tell a capture from a member
+without types, so the checker reports both instead of the parser:
+
+```by
+enum class Color:
+    case Red, Green
+
+def f(c: Color) -> int:
+    match c:
+        case nope:  # error: name capture `nope` makes remaining patterns unreachable
+            return 1
+        case Green:
+            return 2
+```
 
 ## transpiler output
 
@@ -130,6 +191,13 @@ enum class Color:
     case Red, Green
 
 a: Color = Red
+
+def f(c: Color) -> int:
+    match c:
+        case Red:
+            return 1
+        case Green:
+            return 2
 ```
 
 ```python
@@ -140,4 +208,11 @@ class Color(Enum):
     Green = auto()
 
 a: Color = Color.Red
+
+def f(c: Color) -> int:
+    match c:
+        case Color.Red:
+            return 1
+        case Color.Green:
+            return 2
 ```

@@ -13,6 +13,7 @@ use ruff_python_ast::{
 };
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::{FxBuildHasher, FxHashSet};
+use std::cell::RefCell;
 use std::fmt::Display;
 
 #[derive(Debug, Default)]
@@ -805,16 +806,47 @@ impl SemanticSyntaxChecker {
         }
     }
 
+    /// basedpython: the two `match` checks that a `.by` source holds back, run
+    /// over python.
+    ///
+    /// A bare `case A:` name may be an enum member of the subject rather than a
+    /// capture, and no syntactic rule can tell which — so for a `.by` source the
+    /// type checker reports both of these instead. The transpiler runs them
+    /// again over the python it emits, where every name is spelled out and the
+    /// answer is plain again, which is what keeps a `match` the checker rejected
+    /// from being emitted as python that cannot be parsed.
+    pub fn python_match_statement_errors(
+        stmt: &ast::StmtMatch,
+        python_version: PythonVersion,
+    ) -> Vec<SemanticSyntaxError> {
+        let context = CollectMatchErrors {
+            python_version,
+            errors: RefCell::default(),
+        };
+        Self::irrefutable_match_case(stmt, &context);
+        for case in &stmt.cases {
+            Self::check_pattern_bindings(&case.pattern, &context);
+        }
+        context.errors.into_inner()
+    }
+
     /// Reports a pattern that binds the same name more than once.
     fn check_pattern_bindings<Ctx: SemanticSyntaxContext>(pattern: &Pattern, ctx: &Ctx) {
         let mut visitor = MatchPatternVisitor {
             names: FxHashSet::default(),
             ctx,
         };
-        visitor.visit_pattern(pattern);
+        // basedpython: a bare name matched against the subject may name an enum
+        // member and bind nothing at all, so what it binds is not known here
+        visitor.visit_pattern_against_subject(pattern, ctx.is_basedpython());
     }
 
     fn irrefutable_match_case<Ctx: SemanticSyntaxContext>(stmt: &ast::StmtMatch, ctx: &Ctx) {
+        // basedpython: a bare `case A:` is only a capture when the name is not an
+        // enum member of the subject, which is a question for the type checker —
+        // so it reports this one instead, and `_` is all that is irrefutable here
+        let names_may_be_values = ctx.is_basedpython();
+
         // test_ok irrefutable_case_pattern_at_end
         // match x:
         //     case 2: ...
@@ -847,6 +879,9 @@ impl SemanticSyntaxChecker {
             .filter_map(|case| match case.guard {
                 Some(_) => None,
                 None => case.pattern.irrefutable_pattern(),
+            })
+            .filter(|case| {
+                !(names_may_be_values && matches!(case.kind, IrrefutablePatternKind::Name(_)))
             })
         {
             Self::add_error(
@@ -2242,6 +2277,30 @@ struct MatchPatternVisitor<'a, Ctx> {
 
 impl<'a, Ctx: SemanticSyntaxContext> MatchPatternVisitor<'a, Ctx> {
     fn visit_pattern(&mut self, pattern: &'a Pattern) {
+        self.visit_pattern_against_subject(pattern, false);
+    }
+
+    /// [`Self::visit_pattern`], tracking whether `pattern` is matched against the
+    /// subject itself rather than against some part of it.
+    ///
+    /// basedpython: only there can a bare name turn out to be an enum member,
+    /// and only the type checker knows whether it did — so such a name is left
+    /// out of the binding sets an `or` pattern's alternatives are compared by,
+    /// and the checker reports the mismatch a capture would make instead.
+    fn visit_pattern_against_subject(&mut self, pattern: &'a Pattern, against_subject: bool) {
+        if against_subject
+            && let Pattern::MatchAs(ast::PatternMatchAs {
+                pattern: None,
+                name: Some(_),
+                ..
+            }) = pattern
+        {
+            return;
+        }
+        self.visit_pattern_impl(pattern, against_subject);
+    }
+
+    fn visit_pattern_impl(&mut self, pattern: &'a Pattern, against_subject: bool) {
         // test_ok class_keyword_in_case_pattern
         // match 2:
         //     case Class(x=x): ...
@@ -2377,7 +2436,7 @@ impl<'a, Ctx: SemanticSyntaxContext> MatchPatternVisitor<'a, Ctx> {
             }
             Pattern::MatchAs(ast::PatternMatchAs { pattern, name, .. }) => {
                 if let Some(pattern) = pattern {
-                    self.visit_pattern(pattern);
+                    self.visit_pattern_against_subject(pattern, against_subject);
                 }
                 if let Some(name) = name {
                     self.insert(name);
@@ -2413,7 +2472,7 @@ impl<'a, Ctx: SemanticSyntaxContext> MatchPatternVisitor<'a, Ctx> {
                         names: FxHashSet::default(),
                         ctx: self.ctx,
                     };
-                    visitor.visit_pattern(pattern);
+                    visitor.visit_pattern_against_subject(pattern, against_subject);
                     let Some(prev) = &previous_names else {
                         previous_names = Some(visitor.names);
                         continue;
@@ -2471,7 +2530,7 @@ impl<'a, Ctx: SemanticSyntaxContext> MatchPatternVisitor<'a, Ctx> {
             //     case Class(x) and [x]: ...
             Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
                 for pattern in patterns {
-                    self.visit_pattern(pattern);
+                    self.visit_pattern_against_subject(pattern, against_subject);
                 }
             }
         }
@@ -2774,8 +2833,79 @@ pub trait SemanticSyntaxContext {
     /// Returns `true` if the source file is basedpython (`.by` or `.byi`).
     ///
     /// basedpython relaxes a few python rules — currently this gates the
-    /// repeated `_` parameter check (so `def f(_, _): ...` is allowed)
+    /// repeated `_` parameter check (so `def f(_, _): ...` is allowed) and the
+    /// irrefutable name-capture check (a bare `case A:` may be an enum member)
     fn is_basedpython(&self) -> bool {
+        false
+    }
+}
+
+/// The context [`SemanticSyntaxChecker::python_match_statement_errors`] runs its
+/// two checks under.
+///
+/// Neither reads anything about the surrounding scopes, so every other method is
+/// answered with the value that makes its check a no-op — this context must
+/// never be handed to the checker at large.
+struct CollectMatchErrors {
+    python_version: PythonVersion,
+    errors: RefCell<Vec<SemanticSyntaxError>>,
+}
+
+impl SemanticSyntaxContext for CollectMatchErrors {
+    fn report_semantic_error(&self, error: SemanticSyntaxError) {
+        self.errors.borrow_mut().push(error);
+    }
+
+    fn python_version(&self) -> PythonVersion {
+        self.python_version
+    }
+
+    fn future_annotations_or_stub(&self) -> bool {
+        false
+    }
+    fn lazy_import_context(&self) -> Option<LazyImportContext> {
+        None
+    }
+    fn source(&self) -> &'static str {
+        ""
+    }
+    fn global(&self, _name: &str) -> Option<TextRange> {
+        None
+    }
+    fn has_nonlocal_binding(&self, _name: &str) -> bool {
+        false
+    }
+    fn in_async_context(&self) -> bool {
+        false
+    }
+    fn in_await_allowed_context(&self) -> bool {
+        false
+    }
+    fn in_yield_allowed_context(&self) -> bool {
+        false
+    }
+    fn in_sync_comprehension(&self) -> bool {
+        false
+    }
+    fn in_class_body_comprehension(&self) -> bool {
+        false
+    }
+    fn in_module_scope(&self) -> bool {
+        false
+    }
+    fn in_function_scope(&self) -> bool {
+        false
+    }
+    fn in_generator_context(&self) -> bool {
+        false
+    }
+    fn in_notebook(&self) -> bool {
+        false
+    }
+    fn in_loop_context(&self) -> bool {
+        false
+    }
+    fn is_bound_parameter(&self, _name: &str) -> bool {
         false
     }
 }

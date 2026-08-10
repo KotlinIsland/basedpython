@@ -66,7 +66,7 @@ use crate::types::class::{
 };
 use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
-use crate::types::context_sensitive;
+use crate::types::context_sensitive::{self, case_name_pattern_type};
 use crate::types::dedicated::{django, pydantic};
 use crate::types::deferred::{is_integer_operand, is_symbolic_operand};
 use crate::types::diagnostic::{
@@ -86,7 +86,8 @@ use crate::types::diagnostic::{
     hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
     report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_bool_as_int,
     report_bool_as_int_assignment, report_call_to_abstract_method,
-    report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
+    report_cannot_pop_required_field_on_typed_dict, report_capturing_case_name,
+    report_capturing_case_name_alternative, report_invalid_assignment,
     report_invalid_class_match_pattern, report_invalid_exception_caught,
     report_invalid_exception_cause, report_invalid_exception_raised,
     report_invalid_exception_tuple_caught, report_invalid_generator_yield_type,
@@ -3136,7 +3137,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         self.infer_standalone_expression(subject, TypeContext::default());
 
-        for case in cases {
+        for (index, case) in cases.iter().enumerate() {
             let ast::MatchCase {
                 range: _,
                 node_index: _,
@@ -3145,6 +3146,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 guard,
             } = case;
             self.infer_match_pattern(pattern);
+            self.check_capturing_case_names(pattern, index + 1 < cases.len() && guard.is_none());
 
             if let Some(guard) = guard.as_deref() {
                 let guard_ty = self.infer_standalone_expression(guard, TypeContext::default());
@@ -3157,6 +3159,37 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
 
             self.infer_body(body);
+        }
+    }
+
+    /// basedpython: report the bare `case A:` names that turned out to capture,
+    /// where python's own checks were held back because such a name might have
+    /// named an enum member of the subject instead.
+    ///
+    /// Two of python's rules are at stake, and a capture breaks both: it makes
+    /// every later case unreachable, and inside an `or` pattern it binds a name
+    /// its sibling alternatives do not.
+    fn check_capturing_case_names(&mut self, pattern: &ast::Pattern, cases_follow: bool) {
+        // a python file's case names are the captures they look like, and the
+        // parser has already reported whatever there was to report about them
+        if !self.is_basedpython_file() {
+            return;
+        }
+        let mut captures = Vec::new();
+        for_each_subject_level_case_name(pattern, false, &mut |alternative, identifier| {
+            let Some(case_name) = self.index.case_name(NodeKey::from_node(identifier)) else {
+                return;
+            };
+            if case_name_pattern_type(self.db(), self.program_environment(), case_name).is_none() {
+                captures.push((alternative, identifier, case_name));
+            }
+        });
+        for (alternative, identifier, case_name) in captures {
+            if alternative {
+                report_capturing_case_name_alternative(&self.context, identifier, case_name);
+            } else if cases_follow {
+                report_capturing_case_name(&self.context, pattern, case_name);
+            }
         }
     }
 
@@ -12740,6 +12773,22 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 } else {
                     Place::Undefined.into()
                 }
+            })
+            // basedpython: the same rule for the class of a case pattern
+            // (`case Circle(r):`), whose expected type is the subject's rather
+            // than anything the surrounding expression can carry. Resolved from
+            // the name itself, not from a `tcx`, so that every reader of this
+            // expression's type — the narrowing and exhaustiveness analyses
+            // included — gets the one answer
+            .or_fall_back_to(db, env, || {
+                if self.is_basedpython_file()
+                    && let Some(case_name) = self.index.case_name(NodeKey::from_node(name_node))
+                    && let Some(member) = context_sensitive::resolve_case_name(db, env, case_name)
+                {
+                    Place::bound(member.ty).into()
+                } else {
+                    Place::Undefined.into()
+                }
             });
 
         let ty = resolved_after_fallback.unwrap_with_diagnostic(db, env, |lookup_error| {
@@ -16441,5 +16490,39 @@ fn match_type_subpatterns(pattern: &ast::Pattern) -> Box<dyn Iterator<Item = &as
         | ast::Pattern::MatchSingleton(_)
         | ast::Pattern::MatchClass(_)
         | ast::Pattern::MatchMapping(_) => Box::new(std::iter::empty()),
+    }
+}
+
+/// basedpython: visit the bare names of `pattern` that are matched against the
+/// subject itself, each with whether it is one alternative of an `or` pattern.
+///
+/// Mirrors the walk the semantic index makes when it decides which names to
+/// offer to context-sensitive resolution.
+fn for_each_subject_level_case_name<'ast>(
+    pattern: &'ast ast::Pattern,
+    alternative: bool,
+    visit: &mut impl FnMut(bool, &'ast ast::Identifier),
+) {
+    match pattern {
+        ast::Pattern::MatchAs(ast::PatternMatchAs {
+            pattern: None,
+            name: Some(name),
+            ..
+        }) => visit(alternative, name),
+        ast::Pattern::MatchAs(ast::PatternMatchAs {
+            pattern: Some(inner),
+            ..
+        }) => for_each_subject_level_case_name(inner, alternative, visit),
+        ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => {
+            for pattern in patterns {
+                for_each_subject_level_case_name(pattern, true, visit);
+            }
+        }
+        ast::Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
+            for pattern in patterns {
+                for_each_subject_level_case_name(pattern, alternative, visit);
+            }
+        }
+        _ => {}
     }
 }

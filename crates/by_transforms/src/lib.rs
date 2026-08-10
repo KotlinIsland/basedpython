@@ -709,7 +709,61 @@ fn verify_syntax(source: &str) -> Result<(), TranspileError> {
         });
     }
 
+    // a `.by` source holds back python's two `match` checks, because a bare
+    // `case A:` name may be an enum member of the subject rather than the
+    // capture it looks like. by here every name is spelled out, so the checks
+    // apply again — and a `match` that fails them is python that will not parse
+    if let Some(error) = first_invalid_match_statement(parsed.suite()) {
+        return Err(TranspileError {
+            message: format!("transpiler produced invalid Python: {error}"),
+            output_range: Some(error.range),
+            by_range: None,
+        });
+    }
+
     Ok(())
+}
+
+/// The first `match` in `suite` that python's own parse-time checks reject.
+fn first_invalid_match_statement(
+    suite: &[ruff_python_ast::Stmt],
+) -> Option<ruff_python_parser::semantic_errors::SemanticSyntaxError> {
+    use ruff_python_ast::visitor::{Visitor, walk_stmt};
+    use ruff_python_parser::semantic_errors::{SemanticSyntaxChecker, SemanticSyntaxError};
+
+    struct Scanner {
+        error: Option<SemanticSyntaxError>,
+    }
+    impl<'ast> Visitor<'ast> for Scanner {
+        fn visit_stmt(&mut self, stmt: &'ast ruff_python_ast::Stmt) {
+            if self.error.is_some() {
+                return;
+            }
+            if let ruff_python_ast::Stmt::Match(match_stmt) = stmt {
+                self.error = SemanticSyntaxChecker::python_match_statement_errors(
+                    match_stmt,
+                    // the checks are version-independent; `match` itself needs
+                    // 3.10, which the parse above has already settled
+                    ruff_python_ast::PythonVersion::latest(),
+                )
+                .into_iter()
+                .next();
+                if self.error.is_some() {
+                    return;
+                }
+            }
+            walk_stmt(self, stmt);
+        }
+    }
+
+    let mut scanner = Scanner { error: None };
+    for stmt in suite {
+        scanner.visit_stmt(stmt);
+        if scanner.error.is_some() {
+            break;
+        }
+    }
+    scanner.error
 }
 
 /// Map a byte offset in the generated python to a byte range in the original
@@ -1304,6 +1358,40 @@ mod python_parse_errors {
 mod transpile_error {
     use super::*;
     use ruff_text_size::TextSize;
+
+    /// basedpython holds back python's two `match` checks for a `.by` source,
+    /// where a bare `case A:` name may be an enum member rather than a capture.
+    /// The emitted python has every name spelled out, so a `match` that is
+    /// invalid there has to be caught rather than written out.
+    #[test]
+    fn verify_syntax_rejects_an_invalid_match() {
+        for source in [
+            // alternatives that bind different names
+            "match x:\n    case a | b:\n        pass\n",
+            // a capture that makes the remaining cases unreachable
+            "match x:\n    case a:\n        pass\n    case 2:\n        pass\n",
+            // nested in a function, which the scan has to reach
+            "def f(x):\n    match x:\n        case a | b:\n            pass\n",
+        ] {
+            let err = verify_syntax(source).unwrap_err();
+            assert!(
+                err.message
+                    .starts_with("transpiler produced invalid Python:"),
+                "got: {}",
+                err.message
+            );
+        }
+    }
+
+    /// The qualified spelling a resolved case name lowers to binds nothing, so
+    /// the alternatives agree and the check has nothing to say.
+    #[test]
+    fn verify_syntax_accepts_a_qualified_match() {
+        verify_syntax(
+            "match x:\n    case Color.Red | Color.Green:\n        pass\n    case Color.Blue:\n        pass\n",
+        )
+        .unwrap();
+    }
 
     #[test]
     fn verify_syntax_message_has_no_byte_range() {

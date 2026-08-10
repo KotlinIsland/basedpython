@@ -226,6 +226,10 @@ pub(crate) trait TypeInfo {
     /// that resolves the ordinary way
     fn context_sensitive_qualifier(&self, name: &ExprName) -> Option<String>;
 
+    /// the enum a bare `case A:` must be qualified with — `case Color.Red:`.
+    /// `None` for a name that is the capture python spells it as
+    fn case_name_qualifier(&self, identifier: &ruff_python_ast::Identifier) -> Option<String>;
+
     /// whether `expr` resolves to `typing.Any` (the explicitly-annotated
     /// dynamic type). distinguishes the special form from a shadowing binding
     /// or the `Unknown` that an unresolved / invalid type expression yields,
@@ -664,6 +668,10 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn context_sensitive_qualifier(&self, name: &ExprName) -> Option<String> {
         SemanticModel::context_sensitive_qualifier(self, name)
+    }
+
+    fn case_name_qualifier(&self, identifier: &ruff_python_ast::Identifier) -> Option<String> {
+        SemanticModel::case_name_qualifier(self, identifier)
     }
 
     fn is_any(&self, expr: &Expr) -> bool {

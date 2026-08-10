@@ -44,6 +44,13 @@ bitflags! {
         /// true if the symbol is assigned more than once, or if it is assigned even though it is already in use
         const IS_REASSIGNED         = 1 << 5;
         const IS_PARAMETER          = 1 << 6;
+        /// basedpython: the symbol is given a value by a bare `case A:` capture,
+        /// which type checking may yet resolve to an enum member that binds
+        /// nothing. Kept apart from `IS_BOUND` so that
+        /// [`Symbol::is_bound_outside_case_name_pattern`] can answer the one
+        /// question the resolution itself asks — whether anything *else* in the
+        /// scope claims the name — without the capture claiming it first.
+        const IS_BOUND_BY_CASE_NAME = 1 << 7;
     }
 }
 
@@ -68,6 +75,17 @@ impl Symbol {
 
     /// Is the symbol given a value in its containing scope?
     pub const fn is_bound(&self) -> bool {
+        self.flags
+            .intersects(SymbolFlags::IS_BOUND.union(SymbolFlags::IS_BOUND_BY_CASE_NAME))
+    }
+
+    /// basedpython: is the symbol given a value by anything other than a bare
+    /// `case A:` capture?
+    ///
+    /// A bare case name is only a capture when it is not an enum member of the
+    /// subject, so the binding it would make cannot be what decides that — this
+    /// is [`Self::is_bound`] with that one binding left out.
+    pub const fn is_bound_outside_case_name_pattern(&self) -> bool {
         self.flags.contains(SymbolFlags::IS_BOUND)
     }
 
@@ -140,6 +158,15 @@ impl Symbol {
         }
 
         self.insert_flags(SymbolFlags::IS_BOUND);
+    }
+
+    /// basedpython: [`Self::mark_bound`] for a bare `case A:` capture.
+    pub(super) fn mark_bound_by_case_name(&mut self) {
+        if self.is_bound() || self.is_used() {
+            self.insert_flags(SymbolFlags::IS_REASSIGNED);
+        }
+
+        self.insert_flags(SymbolFlags::IS_BOUND_BY_CASE_NAME);
     }
 
     pub(super) fn mark_used(&mut self) {
