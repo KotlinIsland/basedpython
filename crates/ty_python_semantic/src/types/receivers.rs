@@ -23,6 +23,7 @@
 
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
+use ruff_python_ast::{self as ast, Expr};
 use ty_python_core::scope::{ScopeId, ScopeKind};
 use ty_python_core::{place_table, semantic_index};
 
@@ -30,7 +31,7 @@ use crate::Db;
 use crate::place::{ConsideredDefinitions, symbol};
 use crate::types::name_fallback::claimed_by_name_resolution;
 use crate::types::signatures::{Parameters, Signature};
-use crate::types::{Type, TypeContext, infer_expression_types};
+use crate::types::{Type, TypeContext, UnionType, infer_expression_types};
 
 /// the single signature of `ty` when it is a callable that declares a receiver
 fn receiver_signature<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<&'db Signature<'db>> {
@@ -117,6 +118,64 @@ pub(crate) fn resolve_receiver_attribute<'db>(
         return bind_receiver(db, declared, receiver_ty);
     }
     None
+}
+
+/// basedpython: whether `attribute` resolves through an *implicit receiver* —
+/// `x.fn` where `fn` names a receiver callable (`int.() -> str`) in scope rather
+/// than a member of `x`. `receiver_ty` is the type of the attribute's own value.
+/// The receiver form is the last fallback, so a declared member and an
+/// applicable extension member both win over it
+pub(crate) fn is_implicit_receiver_attribute<'db>(
+    db: &'db dyn Db,
+    file: File,
+    scope: ScopeId<'db>,
+    attribute: &ast::ExprAttribute,
+    receiver_ty: Type<'db>,
+) -> bool {
+    // an optional-chain link resolves against the chain's *present* type — the
+    // `None` it short-circuits with is not part of the receiver
+    let receiver_ty = if attribute.optional || spine_has_optional(&attribute.value) {
+        strip_none(db, receiver_ty)
+    } else {
+        receiver_ty
+    };
+    let name = attribute.attr.as_str();
+    if !receiver_ty.member(db, name).place.is_undefined() {
+        return false;
+    }
+    // an extension member wins over a receiver callable, matching the order the
+    // two fallbacks run in during inference. resolving again here is near-free
+    // in a file with no extensions: the applicable-extension list is a cached
+    // query that comes back empty
+    if crate::types::extensions::resolve_extension_member(db, file, receiver_ty, name).is_some() {
+        return false;
+    }
+    resolve_receiver_attribute(db, file, scope, receiver_ty, name).is_some()
+}
+
+/// whether any link of the attribute spine `expr` is an optional access
+fn spine_has_optional(expr: &Expr) -> bool {
+    match expr {
+        Expr::Attribute(attribute) => attribute.optional || spine_has_optional(&attribute.value),
+        Expr::Subscript(subscript) => spine_has_optional(&subscript.value),
+        Expr::Call(call) => spine_has_optional(&call.func),
+        _ => false,
+    }
+}
+
+/// basedpython: `ty` without the `None` an optional chain unions in
+fn strip_none<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
+    let Type::Union(union) = ty else {
+        return ty;
+    };
+    UnionType::from_elements(
+        db,
+        union
+            .elements(db)
+            .iter()
+            .copied()
+            .filter(|element| !element.is_none(db)),
+    )
 }
 
 /// basedpython: what a bare name in a trailing lambda block resolves to through

@@ -27,6 +27,32 @@ use super::{
     UnionBuilder, UnionType, UnsafeUnionType, todo_type,
 };
 
+/// basedpython: whether subscripting a value of type `ty` is a runtime
+/// `__getitem__` call rather than a type specialization.
+///
+/// Only a value that is definitely an *instance* of something other than
+/// `type` qualifies. A class object, alias, special form, or anything the
+/// checker could not resolve keeps the specialization reading, which is what a
+/// keyword subscript in an annotation (`A[T=int]`) needs — and the reading ty
+/// itself takes for those.
+pub(crate) fn is_runtime_subscript<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    match ty {
+        Type::Restricted(restricted) => is_runtime_subscript(db, restricted.value_type(db)),
+        Type::Overlapping(overlapping) => is_runtime_subscript(db, overlapping.value_type(db)),
+        Type::TypeAlias(alias) => is_runtime_subscript(db, alias.value_type(db)),
+        Type::Union(union) => union
+            .elements(db)
+            .iter()
+            .all(|element| is_runtime_subscript(db, *element)),
+        Type::NominalInstance(_)
+        | Type::ProtocolInstance(_)
+        | Type::TypedDict(_)
+        | Type::NewTypeInstance(_)
+        | Type::LiteralValue(_) => !ty.is_assignable_to(db, KnownClass::Type.to_instance(db)),
+        _ => false,
+    }
+}
+
 /// The kind of subscriptable type that had an out-of-bounds index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SubscriptKind {
@@ -132,6 +158,11 @@ pub(crate) enum SubscriptErrorKind<'db> {
         value_ty: Type<'db>,
         method: DunderMethod,
     },
+    /// basedpython: a keyword subscript (`x[a, z=1]`) whose `__getitem__` does
+    /// not accept those arguments. Reported through the call's own binding
+    /// diagnostics, which name the parameter at fault — the index-shaped
+    /// wording of [`Self::DunderCallError`] cannot.
+    KeywordSubscriptCallError { bindings: Box<Bindings<'db>> },
     /// An invalid argument was provided to `Generic` or `Protocol`.
     InvalidLegacyGenericArgument {
         origin: LegacyGenericOrigin,
@@ -325,6 +356,9 @@ impl<'db> SubscriptErrorKind<'db> {
             }
             Self::NotSubscriptable { value_ty, method } => {
                 report_not_subscriptable(context, subscript, *value_ty, method.as_str());
+            }
+            Self::KeywordSubscriptCallError { bindings } => {
+                bindings.report_diagnostics(context, subscript.into());
             }
             Self::InvalidLegacyGenericArgument {
                 origin,

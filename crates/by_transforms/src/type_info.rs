@@ -283,6 +283,12 @@ pub(crate) trait TypeInfo {
     /// `None` if `expr` is not a generic class
     fn class_typevars(&self, expr: &Expr) -> Option<Vec<(String, Option<String>)>>;
 
+    /// whether subscripting `expr` is a runtime `__getitem__` call rather than
+    /// a type specialization, which decides what a keyword subscript on it
+    /// lowers to. `false` for a value ty could not resolve — the specialization
+    /// reading is the one it also checks
+    fn subscript_is_getitem_call(&self, expr: &Expr) -> bool;
+
     /// whether the first type parameter of the class referenced by `expr`
     /// is a `ParamSpec` (e.g. `class A[**P]` or `class A[P: Parameters]`).
     /// returns `false` when `expr` is not a generic class
@@ -820,6 +826,10 @@ impl TypeInfo for SemanticModel<'_> {
                     .collect(),
             ),
         })
+    }
+
+    fn subscript_is_getitem_call(&self, expr: &Expr) -> bool {
+        SemanticModel::subscript_is_getitem_call(self, expr)
     }
 
     fn class_first_typevar_is_paramspec(&self, expr: &Expr) -> bool {

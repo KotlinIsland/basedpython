@@ -26,10 +26,13 @@ use crate::types::infer::{InferenceFlags, TypeExpressionFlags};
 use crate::types::match_type::{MatchTypeOutcome, evaluate_match_type};
 use crate::types::regex;
 use crate::types::special_form::AliasSpec;
-use crate::types::subscript::{LegacyGenericOrigin, SubscriptError, SubscriptErrorKind};
+use crate::types::subscript::{
+    DunderMethod, LegacyGenericOrigin, SubscriptError, SubscriptErrorKind,
+};
 use crate::types::tuple::{Tuple, TupleSpecBuilder, TupleType, VariableSegment};
 use crate::types::typed_dict::{TypedDictAssignmentKind, TypedDictKeyAssignment};
 use crate::types::typevar::pack_bound_violation;
+use crate::types::call::Argument;
 use crate::types::{
     BoundTypeVarInstance, CallArguments, CallDunderError, CallableBinding, CycleDetector,
     DynamicType, InternedType, KnownClass, KnownInstanceType, LintDiagnosticGuard,
@@ -42,6 +45,23 @@ use ty_python_core::definition::Definition;
 use ty_python_core::place::{PlaceExpr, PlaceExprRef};
 use ty_python_core::scope::FileScopeId;
 use ty_python_core::{SemanticIndex, place_table};
+
+/// basedpython: the elements of a subscript that carries at least one keyword
+/// field (`x[a, z=1]`). `None` for every all-positional subscript, which is
+/// ordinary python and keeps its ordinary meaning.
+///
+/// The parser spells a keyword field as a named expression whose target is an
+/// [`ast::ExprContext::Invalid`] name.
+fn keyword_subscript_elements(subscript: &ast::ExprSubscript) -> Option<&[ast::Expr]> {
+    let elements = match subscript.slice.as_ref() {
+        ast::Expr::Tuple(tuple) if !tuple.parenthesized => &*tuple.elts,
+        single => std::slice::from_ref(single),
+    };
+    elements
+        .iter()
+        .any(|element| matches!(element, ast::Expr::Named(named) if named.label().is_some()))
+        .then_some(elements)
+}
 
 /// Given a string literal or a union of string literals, return an iterator over the contained
 /// strings, or `None` if the type is neither.
@@ -2067,6 +2087,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let generic_context = GenericContext::from_typevar_instances(db, variables);
                 Ok(Type::Dynamic(DynamicType::UnknownGeneric(generic_context)))
             }
+            // basedpython: a keyword subscript is a `__getitem__` call carrying
+            // more than the one index argument — `x[a, z=1]` lowers to
+            // `x.__getitem__(a, z=1)`, and is checked as that call. reached only
+            // here, so a generic class / alias / special form keeps the
+            // specialization reading it was given above
+            _ if self.is_basedpython_file()
+                && keyword_subscript_elements(subscript).is_some() =>
+            {
+                self.infer_keyword_subscript(subscript, value_ty, slice_ty, tcx)
+            }
             _ => value_ty.subscript(db, slice_ty, expr_context, tcx),
         };
 
@@ -2074,6 +2104,56 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             e.report_diagnostics(&self.context, subscript);
             e.result_type()
         })
+    }
+
+    /// basedpython: check `x[a, z=1]` as the `x.__getitem__(a, z=1)` call it
+    /// lowers to. Every element's type is already inferred — the slice as a
+    /// whole was — so this only re-reads them into an argument list.
+    fn infer_keyword_subscript(
+        &self,
+        subscript: &ast::ExprSubscript,
+        value_ty: Type<'db>,
+        slice_ty: Type<'db>,
+        tcx: TypeContext<'db>,
+    ) -> Result<Type<'db>, SubscriptError<'db>> {
+        let db = self.db();
+        let Some(elements) = keyword_subscript_elements(subscript) else {
+            return value_ty.subscript(db, slice_ty, ast::ExprContext::Load, tcx);
+        };
+        let arguments: CallArguments<'_, 'db> = elements
+            .iter()
+            .map(|element| match element {
+                ast::Expr::Named(named) => {
+                    let ty = self.expression_type(&named.value);
+                    match named.label() {
+                        Some(label) => (Argument::Keyword(&label.id), Some(ty)),
+                        None => (Argument::Positional, Some(ty)),
+                    }
+                }
+                _ => (Argument::Positional, Some(self.expression_type(element))),
+            })
+            .collect();
+        match value_ty.try_call_dunder(db, "__getitem__", arguments, tcx) {
+            Ok(outcome) => Ok(outcome.return_type(db)),
+            Err(CallDunderError::PossiblyUnbound { bindings, .. }) => Err(SubscriptError::new(
+                bindings.return_type(db),
+                SubscriptErrorKind::DunderPossiblyUnbound {
+                    method: DunderMethod::GetItem,
+                    value_ty,
+                },
+            )),
+            Err(CallDunderError::CallError(_, bindings, _)) => Err(SubscriptError::new(
+                bindings.return_type(db),
+                SubscriptErrorKind::KeywordSubscriptCallError { bindings },
+            )),
+            Err(CallDunderError::MethodNotAvailable) => Err(SubscriptError::new(
+                Type::unknown(),
+                SubscriptErrorKind::NotSubscriptable {
+                    value_ty,
+                    method: DunderMethod::GetItem,
+                },
+            )),
+        }
     }
 
     pub(super) fn infer_slice_expression(&mut self, slice: &ast::ExprSlice) -> Type<'db> {

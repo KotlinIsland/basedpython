@@ -66,7 +66,7 @@ use std::fmt::Write as _;
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Comprehension, Expr, ExprCall, Stmt, StmtFunctionDef, UnaryOp};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::parametric_is::{PARAMETRIC_IS_RUNTIME, variance_tuple};
@@ -147,6 +147,8 @@ struct Soundness<'a> {
     /// inserting `parameters` entry guards
     source: &'a str,
     edits: Vec<(TextRange, Vec<Fragment>)>,
+    /// the entry-guard suites, anchored at the body statement they precede
+    guards: Vec<(TextSize, Vec<Fragment>)>,
     /// gated expressions already covered by a wrap on an enclosing `!`
     /// force-unwrap — wrapping them directly would splice the check's second
     /// argument into `_force_unwrap`'s call parens
@@ -170,6 +172,7 @@ impl<'a> Soundness<'a> {
             positions,
             source,
             edits: Vec::new(),
+            guards: Vec::new(),
             consumed: Vec::new(),
             return_targets: Vec::new(),
             used_iter: false,
@@ -404,8 +407,7 @@ impl<'a> Soundness<'a> {
             }
             func.body[docstring_count - 1].range().end()
         };
-        self.edits
-            .push((TextRange::empty(insert_at), vec![Fragment::Lit(text)]));
+        self.guards.push((insert_at, vec![Fragment::Lit(text)]));
     }
 }
 
@@ -552,7 +554,7 @@ impl TypeAwarePass for SoundnessPass<'_> {
             }
             inner.visit_stmt(stmt);
         }
-        if inner.edits.is_empty() {
+        if inner.edits.is_empty() && inner.guards.is_empty() {
             return;
         }
         ctx.required_imports.push(CHECK_HELPER.to_owned());
@@ -576,6 +578,7 @@ impl TypeAwarePass for SoundnessPass<'_> {
             ctx.required_imports.push(AITER_P_HELPER.to_owned());
         }
         ctx.template_edits.extend(inner.edits);
+        ctx.statement_inserts.extend(inner.guards);
     }
 }
 

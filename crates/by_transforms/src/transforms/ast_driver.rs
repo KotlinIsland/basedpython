@@ -31,7 +31,7 @@ use ruff_python_ast::{Expr, ModModule, PySourceType, Stmt};
 use ruff_python_codegen::{Generator, Indentation, Mode};
 use ruff_python_parser::parse_unchecked_source;
 use ruff_source_file::{LineEnding, LineRanges};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
@@ -99,6 +99,13 @@ pub(crate) struct PassContext {
     /// sibling edits they contain applied — use this for any rewrite that
     /// re-emits operand source
     pub(crate) template_edits: Vec<(TextRange, Vec<Fragment>)>,
+    /// Templates inserted at a *statement* boundary — a guard a pass injects
+    /// ahead of the statement starting at that offset. Identical to a
+    /// zero-width [`template_edits`](Self::template_edits) entry except that a
+    /// rewrite of the statement's own first expression cannot absorb it: a
+    /// statement materialized inside an expression is a syntax error, not a
+    /// composition
+    pub(crate) statement_inserts: Vec<(TextSize, Vec<Fragment>)>,
     /// Hard transpile errors a pass surfaced — abort the pipeline rather
     /// than emit partial / invalid output. Each entry is a human-readable
     /// message suitable for showing the user
@@ -188,6 +195,10 @@ pub(crate) fn render_expr(expr: &Expr) -> String {
 enum SubPatch {
     Text(String),
     Template(Vec<Fragment>),
+    /// a template anchored at a statement boundary — see
+    /// [`PassContext::statement_inserts`]. Materializes exactly like
+    /// [`SubPatch::Template`]; the difference is only in what may claim it
+    Statement(Vec<Fragment>),
 }
 
 /// The sub-edits a template materializes, in position order: those nested in
@@ -296,7 +307,7 @@ fn apply_within(
         out.push_str(&source[cursor..s]);
         match &all[idx].2 {
             SubPatch::Text(t) => out.push_str(t),
-            SubPatch::Template(frags) => {
+            SubPatch::Template(frags) | SubPatch::Statement(frags) => {
                 let inner: Vec<usize> = contained[k + 1..]
                     .iter()
                     .copied()
@@ -846,6 +857,7 @@ pub(crate) fn run_against_source<'a>(
         && ctx.hoisted.is_empty()
         && ctx.text_edits.is_empty()
         && ctx.template_edits.is_empty()
+        && ctx.statement_inserts.is_empty()
         && ctx.epilogue.is_empty()
     {
         let cow = blanked.stripped(source);
@@ -943,10 +955,16 @@ pub(crate) fn run_against_source<'a>(
                 SubPatch::Template(frags),
             )
         }))
+        .chain(ctx.statement_inserts.into_iter().map(|(at, frags)| {
+            let at = usize::from(at);
+            (at, at, SubPatch::Statement(frags))
+        }))
         .collect();
     // start asc. tie-break by edit shape:
     //   1. zero-width insertions first — they don't consume bytes, so any
-    //      following deletion/replacement at the same start can still apply
+    //      following deletion/replacement at the same start can still apply.
+    //      a statement-anchored insertion leads them: it emits whole statements
+    //      that must precede everything the statement itself lowers to
     //   2. then wider replacements before narrower ones — so a wider edit
     //      wins over (or, for templates, absorbs) a narrow one nested inside
     //      it
@@ -961,18 +979,19 @@ pub(crate) fn run_against_source<'a>(
         let priority = |e: &(usize, usize, SubPatch)| {
             let rewrites = i64::from(match &e.2 {
                 SubPatch::Text(_) => false,
-                SubPatch::Template(frags) => {
+                SubPatch::Template(frags) | SubPatch::Statement(frags) => {
                     frags.iter().any(|frag| matches!(frag, Fragment::Src(_)))
                 }
             });
-            // (start, is_replacement_not_insertion, neg_end-for-wider-first,
-            //  substitution-before-rewrite)
+            let statement = i64::from(!matches!(e.2, SubPatch::Statement(_)));
+            // (start, is_replacement_not_insertion, statement-insert-first,
+            //  neg_end-for-wider-first, substitution-before-rewrite)
             if e.1 == e.0 {
-                (e.0, 0i64, 0i64, rewrites) // insertion
+                (e.0, 0i64, statement, 0i64, rewrites) // insertion
             } else {
                 #[allow(clippy::cast_possible_wrap)]
                 let neg_end = -(e.1 as i64);
-                (e.0, 1i64, neg_end, rewrites)
+                (e.0, 1i64, statement, neg_end, rewrites)
             }
         };
         priority(a).cmp(&priority(b))
@@ -984,14 +1003,20 @@ pub(crate) fn run_against_source<'a>(
     // insertions are absorbed by a template (they target the construct's first
     // token, e.g. `_force_unwrap(` ahead of a coalesce operand) but stay
     // independent ahead of a plain-text replacement, preserving the documented
-    // insertion + deletion compose behaviour
+    // insertion + deletion compose behaviour. the one exception is a
+    // statement-anchored insertion sharing a boundary: it emits statements, so
+    // absorbing it into an expression rewrite of the statement it precedes
+    // would splice a suite into the middle of an expression
     let mut claimed = vec![false; sub_edits.len()];
     for i in 0..sub_edits.len() {
         let (s_i, e_i) = (sub_edits[i].0, sub_edits[i].1);
         if e_i == s_i || claimed[i] {
             continue;
         }
-        let is_template = matches!(sub_edits[i].2, SubPatch::Template(_));
+        let is_template = matches!(
+            sub_edits[i].2,
+            SubPatch::Template(_) | SubPatch::Statement(_)
+        );
         for (m, edit) in sub_edits.iter().enumerate() {
             if m == i || claimed[m] {
                 continue;
@@ -999,7 +1024,8 @@ pub(crate) fn run_against_source<'a>(
             let (s_m, e_m) = (edit.0, edit.1);
             let inside = s_m >= s_i && e_m <= e_i && s_m != e_i;
             let boundary_insertion = s_m == e_m && (s_m == s_i || s_m == e_i);
-            if inside && (is_template || !boundary_insertion) {
+            let anchored = matches!(edit.2, SubPatch::Statement(_));
+            if inside && (is_template || !boundary_insertion) && !(boundary_insertion && anchored) {
                 claimed[m] = true;
             }
         }
@@ -1037,7 +1063,7 @@ pub(crate) fn run_against_source<'a>(
                 if !claimed[j] {
                     match &sub_edits[j].2 {
                         SubPatch::Text(t) => combined.push_str(t),
-                        SubPatch::Template(frags) => {
+                        SubPatch::Template(frags) | SubPatch::Statement(frags) => {
                             let contained = template_claimees(frags, &sub_edits, &claimed, j, None);
                             materialize_fragments(
                                 &mut combined,
@@ -1058,7 +1084,7 @@ pub(crate) fn run_against_source<'a>(
         let repl = match &sub_edits[i].2 {
             // a plain-text replacement wins over anything inside it
             SubPatch::Text(t) => t.clone(),
-            SubPatch::Template(frags) => {
+            SubPatch::Template(frags) | SubPatch::Statement(frags) => {
                 // the claimees nested in this span materialize inside the
                 // template's `Src` passthrough fragments
                 let contained =
