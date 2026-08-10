@@ -1444,9 +1444,18 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
         self.expecting_docstring = false;
         match stmt {
             ast::Stmt::FunctionDef(func) => {
-                // Visit decorator expressions
-                for decorator in &func.decorator_list {
-                    self.visit_decorator(decorator);
+                // basedpython: a trailing lambda block's single synthetic
+                // decorator carries the *called* expression — source the reader
+                // sees as an ordinary call, so it highlights as one
+                if func.is_trailing_lambda {
+                    for decorator in &func.decorator_list {
+                        self.visit_expr(&decorator.expression);
+                    }
+                } else {
+                    // Visit decorator expressions
+                    for decorator in &func.decorator_list {
+                        self.visit_decorator(decorator);
+                    }
                 }
 
                 // basedpython `init(...)` is parsed as a `__init__` function whose
@@ -5833,6 +5842,54 @@ from pathlib import Missing as Alias
 
         let tokens = test.highlight_file();
         assert_snapshot!(test.to_snapshot(&tokens), @r#""pathlib" @ 6..13: Namespace"#);
+    }
+
+    #[test]
+    fn semantic_tokens_trailing_lambda_callee() {
+        // the block's callee rides on a synthetic decorator, but it is written
+        // as an ordinary call — highlighting it as a decorator would colour it
+        // unlike the same name anywhere else
+        let test = SemanticTokenTest::new_by(
+            "
+class C:
+    def m(self, fn: () -> None): ...
+
+def f(fn: () -> None): ...
+
+f:
+    print(\"hi\")
+
+C().m:
+    print(\"hi\")
+
+a = f:
+    print(\"hi\")
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "C" @ 7..8: Class [definition]
+        "m" @ 18..19: Method [definition]
+        "self" @ 20..24: SelfParameter [definition]
+        "fn" @ 26..28: Parameter [definition]
+        "None" @ 36..40: BuiltinConstant
+        "f" @ 52..53: Function [definition]
+        "fn" @ 54..56: Parameter [definition]
+        "None" @ 64..68: BuiltinConstant
+        "f" @ 76..77: Function
+        "print" @ 83..88: Function
+        "\"hi\"" @ 89..93: String
+        "C" @ 96..97: Class
+        "m" @ 100..101: Method
+        "print" @ 107..112: Function
+        "\"hi\"" @ 113..117: String
+        "a" @ 120..121: Variable [definition]
+        "f" @ 124..125: Function
+        "print" @ 131..136: Function
+        "\"hi\"" @ 137..141: String
+        "#);
     }
 
     #[test]

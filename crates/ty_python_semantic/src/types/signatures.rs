@@ -4571,6 +4571,25 @@ impl<'db> Parameters<'db> {
 
         let mut positional_only: Vec<Parameter> = posonlyargs.iter().map(pos_only_param).collect();
 
+        // basedpython: a trailing lambda block's whole parameter list is the one
+        // implicit `it`, which the semantic index declares only when the block's
+        // callback passes an argument for it. the node stays in the AST either
+        // way, for the runtime default the lowering emits, but an undeclared
+        // parameter has no definition to build from and is not part of the
+        // signature either. the range test keeps every written parameter off
+        // this path
+        let args = match &args[..] {
+            [only]
+                if only.parameter.range.is_empty()
+                    && semantic_index(db, definition.file(db))
+                        .try_definition(&only.parameter)
+                        .is_none() =>
+            {
+                &[]
+            }
+            args => args,
+        };
+
         let mut pos_or_keyword_iter = args.iter();
 
         // If there are no PEP-570 positional-only parameters, check for the legacy PEP-484 convention

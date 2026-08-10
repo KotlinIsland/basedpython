@@ -66,6 +66,24 @@ def via_kw() -> int:
 
 assert via_kw() == 7, "keyword-only once callback write-through"
 
+# a block standing as a statement's value binds the call it stands for, with the
+# `def` hoisted in front of the whole assignment
+def totalling(fn: (int) -> None) -> str:
+    fn(3)
+    return "done"
+
+outcome = totalling:
+    counter = it
+assert outcome == "done" and counter == 3, "block as a module-level value"
+
+def annotated() -> str:
+    seen: int = 0
+    label: str = totalling:
+        seen = it
+    return f"{label}{seen}"
+
+assert annotated() == "done3", "block as an annotated local's value"
+
 print("ok")
 "#;
 

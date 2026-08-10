@@ -50,6 +50,27 @@ impl StmtFunctionDef {
     }
 }
 
+impl crate::ExprStatement {
+    /// basedpython: the trailing lambda block this statement expression wraps.
+    ///
+    /// A block written as a statement's value (`a = f:`) is the one statement
+    /// expression whose value is not built from the wrapped statement's tail
+    /// expressions — it is the call the block stands for.
+    pub fn trailing_lambda(&self) -> Option<&StmtFunctionDef> {
+        match &*self.stmt {
+            Stmt::FunctionDef(function) if function.is_trailing_lambda => Some(function),
+            _ => None,
+        }
+    }
+
+    /// Whether this statement expression wraps a [trailing lambda block].
+    ///
+    /// [trailing lambda block]: crate::ExprStatement::trailing_lambda
+    pub fn is_trailing_lambda(&self) -> bool {
+        self.trailing_lambda().is_some()
+    }
+}
+
 impl StmtClassDef {
     /// Return an iterator over the bases of the class.
     pub fn bases(&self) -> &[Expr] {

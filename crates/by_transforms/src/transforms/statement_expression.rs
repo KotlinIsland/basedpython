@@ -342,10 +342,15 @@ fn contains_statement_expression(expr: &Expr) -> bool {
 
     impl<'a> Visitor<'a> for Finder {
         fn visit_expr(&mut self, expr: &'a Expr) {
-            if expr.is_statement_expr() {
-                self.found = true;
-            } else if !self.found {
-                walk_expr(self, expr);
+            match expr {
+                // a trailing lambda block needs no temporary: its value is the
+                // call it stands for, which [`trailing_lambda`] emits in place
+                //
+                // [`trailing_lambda`]: super::trailing_lambda
+                Expr::Statement(statement) if statement.is_trailing_lambda() => {}
+                Expr::Statement(_) => self.found = true,
+                _ if !self.found => walk_expr(self, expr),
+                _ => {}
             }
         }
     }

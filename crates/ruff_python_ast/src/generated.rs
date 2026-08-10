@@ -10738,6 +10738,12 @@ pub struct ExprProtocolMethod {
 /// the wrapped statement's tail expressions — and, for the loop forms, of every
 /// `break <value>` targeting that loop. `raise` and `return` never complete, so
 /// they type as `Never`.
+///
+/// a [trailing lambda block] assigned to a name (`a = f:`) is wrapped here too, as
+/// the synthetic `def` the block parses to. it is the one form whose value is not
+/// built from tail expressions: it is the call the block stands for.
+///
+/// [trailing lambda block]: crate::StmtFunctionDef::trailing_lambda_callee
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
 pub struct ExprStatement {

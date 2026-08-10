@@ -175,6 +175,14 @@ pub fn unused_bindings(db: &dyn Db, file: ruff_db::files::File) -> Box<[UnusedBi
 
             let range = kind.target_range(&parsed);
 
+            // basedpython: a binding the source never spells has an empty range —
+            // a trailing lambda block's `it`, an `init(...)` receiver. there is no
+            // text to mark unnecessary, and the empty range lands on whatever
+            // character follows it (a block's `it` sits on the header's `:`)
+            if range.is_empty() {
+                continue;
+            }
+
             unused.push(UnusedBinding {
                 range,
                 name: symbol.name().clone(),
@@ -922,6 +930,29 @@ mod tests {
                 name: Name::new("x"),
             }]
         );
+        Ok(())
+    }
+
+    /// basedpython: a trailing lambda block's `it` is declared by the block, not
+    /// the source. Its range is empty and sits on the header's `:`, so hinting it
+    /// marks that colon unnecessary — an "unused" mark on a character the reader
+    /// did not write. The callback passes an argument here, so the block really
+    /// does bind an unread `it`.
+    #[test]
+    fn skips_a_binding_the_source_never_spells() -> anyhow::Result<()> {
+        let source = dedent(
+            "
+            def f(fn: (int) -> None) -> None:
+                fn(1)
+
+            f:
+                unread = 1
+                print(\"hi\")
+            ",
+        );
+
+        let names = collect_unused_names_in_file("/src/main.by", &source)?;
+        assert_eq!(names, vec!["unread".to_string()]);
         Ok(())
     }
 }

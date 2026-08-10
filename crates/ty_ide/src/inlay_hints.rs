@@ -9950,6 +9950,55 @@ Source with applied edits:
         }));
     }
 
+    /// A callback that passes no argument gives the block no `it` to bind, so
+    /// there is no implicit parameter to hint — hinting one would name something
+    /// the body cannot resolve.
+    #[test]
+    fn basedpython_implicit_parameters_without_an_argument() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def apply(fn: () -> None) -> None:
+                fn()
+
+            def against(fn: str.() -> None) -> None:
+                'a'.fn()
+
+            apply:
+                print('hi')
+
+            against:
+                print(upper())
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            implicit_parameters: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// A block standing as a statement's value binds the same parameters, and
+    /// the variable it binds is hinted with the call's type, not the callee's.
+    #[test]
+    fn basedpython_implicit_parameters_as_a_value() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def apply(fn: (int) -> None) -> str:
+                fn(1)
+                return 'done'
+
+            result = apply:
+                print(it)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            implicit_parameters: true,
+            variable_types: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
     /// The `self` an `init(...)` binds is hinted under its own setting, so it
     /// can be turned off without losing a trailing lambda's `it`. A property
     /// accessor's synthesized header is not hinted at all.

@@ -135,8 +135,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // Parameters are odd: they are Definitions in the function body scope, but have no
         // constituent nodes that are part of the function body. In order to get diagnostics
         // merged/emitted for them, we need to explicitly infer their definitions here.
+        //
+        // basedpython: a parameter the parser synthesized may be left undeclared —
+        // a trailing lambda block's `it`, when its callback passes none — and
+        // then has no definition to infer.
         for parameter in &function.parameters {
-            self.infer_definition(parameter);
+            if self.index.try_definition(parameter).is_some() {
+                self.infer_definition(parameter);
+            }
         }
 
         // basedpython: a destructuring parameter's pattern binds in this scope too

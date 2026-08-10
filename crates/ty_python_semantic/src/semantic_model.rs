@@ -1614,12 +1614,32 @@ macro_rules! impl_binding_has_ty_def {
             }
         }
     };
+    // basedpython: a parameter the parser synthesized may be left undeclared —
+    // a trailing lambda block's `it`, when its callback passes none — and then
+    // has no type of its own, rather than a missing definition to panic on
+    ($ty: ty, optional) => {
+        impl HasDefinition for $ty {
+            #[inline]
+            fn definition<'db>(&self, model: &SemanticModel<'db>) -> Definition<'db> {
+                let index = semantic_index(model.db, model.file);
+                index.expect_single_definition(self)
+            }
+        }
+
+        impl HasType for $ty {
+            #[inline]
+            fn inferred_type<'db>(&self, model: &SemanticModel<'db>) -> Option<Type<'db>> {
+                let index = semantic_index(model.db, model.file);
+                Some(binding_type(model.db, index.try_definition(self)?))
+            }
+        }
+    };
 }
 
 impl_binding_has_ty_def!(ast::StmtFunctionDef);
 impl_binding_has_ty_def!(ast::StmtClassDef);
-impl_binding_has_ty_def!(ast::Parameter);
-impl_binding_has_ty_def!(ast::ParameterWithDefault);
+impl_binding_has_ty_def!(ast::Parameter, optional);
+impl_binding_has_ty_def!(ast::ParameterWithDefault, optional);
 impl_binding_has_ty_def!(ast::TypeParamTypeVar);
 impl_binding_has_ty_def!(ast::TypeParamParamSpec);
 impl_binding_has_ty_def!(ast::TypeParamTypeVarTuple);

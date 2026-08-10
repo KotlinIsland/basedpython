@@ -17,11 +17,9 @@ f(2):
 
 customising the lambda's parameters is not supported yet — the block takes
 exactly one parameter named `it` (plus the callback's
-[receiver](#implicit-receivers), where it declares one), defaulted to `None` so
-a callback whose type takes no argument (`() -> None`, invoked as `fn()`) can
-still call it. a callback that takes *more* than that one argument is rejected
-with `trailing-lambda-parameters`: the extra arguments have no parameter to land
-in, and no spelling in the body
+[receiver](#implicit-receivers), where it declares one). a callback that takes
+*more* than that one argument is rejected with `trailing-lambda-parameters`: the
+extra arguments have no parameter to land in, and no spelling in the body
 
 ```by
 def f(a: (int, str) -> None):
@@ -30,6 +28,54 @@ def f(a: (int, str) -> None):
 f:  # error: the block binds only `it`, so `"two"` has nowhere to go
     print(it)
 ```
+
+`it` exists exactly when the callback passes one. a callback that takes *nothing*
+is invoked as `a()`, so a block filling it binds no `it` at all, and the name
+means nothing more there than any other name nobody wrote
+
+```by
+def g(a: () -> None):
+    a()
+
+g:
+    print(it)  # error[unresolved-reference] — `a` passes no argument
+
+g:
+    print("hi")  # fine — the block just doesn't take one
+```
+
+nothing holds the name, so such a block is free to use `it` for a local of its
+own. a callback whose shape cannot be read — a gradual `(...) -> None`, an
+imported callee — keeps `it`, untyped
+
+## as a value
+
+a block can stand as an assignment's value, where it binds the call it stands
+for — not the callee:
+
+```by
+def f(x: int, a: (int) -> None) -> str:
+    a(x)
+    return "done"
+
+result = f(2):
+    print(it)
+
+reveal_type(result)  # str
+```
+
+→
+
+```python
+def _trailing_lambda_0(it=None):
+    print(it)
+result = f(2, a=_trailing_lambda_0)
+```
+
+an annotation works the same way (`result: str = f(2):`). the target has to be a
+single name, though: a block's value is worked out together with the binding its
+target makes, and only one binding can do that — so neither a chain
+(`a = b = f:`) nor an unpacking (`a, b = f:`) takes a block
 
 ## binding
 

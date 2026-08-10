@@ -2489,14 +2489,8 @@ impl<'src> Parser<'src> {
                 } else if self.at(TokenKind::Colon) {
                     // basedpython: an expression followed by `:` and an indented
                     // suite is a trailing lambda block — the suite becomes a
-                    // function passed as the call's last argument. an annotation
-                    // can never start with a newline, so the shapes are disjoint.
-                    // gated on basedpython mode (not just reported) because the
-                    // shape shows up in `.py` error recovery — consuming the
-                    // suite there would change upstream's diagnostics
-                    if self.options.is_basedpython
-                        && self.peek2() == (TokenKind::Newline, TokenKind::Indent)
-                    {
+                    // function passed as the call's last argument
+                    if self.at_trailing_lambda_block() {
                         return Stmt::FunctionDef(
                             self.parse_trailing_lambda_statement(parsed_expr, start),
                         );
@@ -3640,6 +3634,10 @@ impl<'src> Parser<'src> {
             });
         }
 
+        // basedpython: `a = f:` + suite — the block is the assignment's value, so
+        // what the target binds is the call the block stands for
+        value = self.try_parse_trailing_lambda_value(value, &targets);
+
         for target in &mut targets {
             helpers::set_expr_ctx(target, ExprContext::Store);
             // test_err assign_stmt_invalid_target
@@ -3713,8 +3711,11 @@ impl<'src> Parser<'src> {
                 // x: Any = *a and b
                 // x: Any = x := 1
                 // x: list = [x, *a | b, *a or b]
+                let value =
+                    self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or());
+                // basedpython: `a: T = f:` + suite, as for a plain assignment
                 Some(Box::new(
-                    self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
+                    self.try_parse_trailing_lambda_value(value, std::slice::from_ref(&target.expr))
                         .expr,
                 ))
             } else {
@@ -5636,6 +5637,74 @@ impl<'src> Parser<'src> {
         let first = members.next().unwrap_or(decl);
         self.pending_members.extend(members);
         first
+    }
+
+    /// basedpython: whether the parser is at the `:` that opens a trailing
+    /// lambda block's suite.
+    ///
+    /// An annotation can never start with a newline, so this shape and an
+    /// annotated target are disjoint. Gated on basedpython mode rather than
+    /// merely reported: the shape also shows up in `.py` error recovery, where
+    /// consuming the suite would replace upstream's diagnostics.
+    pub(super) fn at_trailing_lambda_block(&mut self) -> bool {
+        self.options.is_basedpython
+            && self.at(TokenKind::Colon)
+            && self.peek2() == (TokenKind::Newline, TokenKind::Indent)
+    }
+
+    /// basedpython: wraps `value` as a trailing lambda block when a `:` and an
+    /// indented suite follow it, so an assignment can take the block's call as
+    /// its value:
+    ///
+    /// ```text
+    /// a = f(2):
+    ///     print(it)
+    /// ```
+    ///
+    /// The block is the same synthetic [`StmtFunctionDef`] a statement-level
+    /// block produces, wrapped in an [`ExprStatement`] — the node that stands for
+    /// a compound statement written where a value is expected. Its value is the
+    /// call, not the tail expressions the other statement expressions produce.
+    ///
+    /// The block's value is inferred together with the definition its target
+    /// makes: the suite defines a function, and a standalone inference of the
+    /// value — what every other assignment shape is driven from — could not own
+    /// that definition. So `targets` has to be a single name; any other shape is
+    /// reported and the block is not consumed.
+    ///
+    /// Returns `value` untouched when no block follows.
+    ///
+    /// [`StmtFunctionDef`]: ast::StmtFunctionDef
+    /// [`ExprStatement`]: ast::ExprStatement
+    fn try_parse_trailing_lambda_value(
+        &mut self,
+        value: ParsedExpr,
+        targets: &[Expr],
+    ) -> ParsedExpr {
+        if !self.at_trailing_lambda_block() {
+            return value;
+        }
+
+        if !matches!(targets, [Expr::Name(_)]) {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "a trailing lambda block's value binds a single name".to_string(),
+                ),
+                self.current_token_range(),
+            );
+            return value;
+        }
+
+        let start = value.expr.range().start();
+        let function = self.parse_trailing_lambda_statement(value, start);
+        self.expr_consumed_suite = true;
+
+        Expr::Statement(ast::ExprStatement {
+            range: function.range,
+            stmt: Box::new(Stmt::FunctionDef(function)),
+            node_index: AtomicNodeIndex::NONE,
+        })
+        .into()
     }
 
     /// Parses a statement-level trailing lambda block — an expression followed

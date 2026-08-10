@@ -1,4 +1,4 @@
-//! Lowering for statement-level trailing lambda blocks.
+//! Lowering for trailing lambda blocks.
 //!
 //! The parser turns
 //!
@@ -23,6 +23,17 @@
 //! lambda to the last parameter even when earlier parameters are defaulted.
 //! When the callee's signature is not inspectable the lambda is appended
 //! positionally instead.
+//!
+//! A block can also stand as a statement's value, where the parser wraps it in
+//! an `ExprStatement`. The rewrite is the same, keyed on the enclosing
+//! statement instead of the block's own range so the `def` is hoisted in front
+//! of the whole line:
+//!
+//! ```text
+//! def _trailing_lambda_0(it=None):
+//!     print(it)
+//! a = f(2, a=_trailing_lambda_0)
+//! ```
 //!
 //! The whole statement is one template edit: the suite and the called
 //! expression pass through as [`Fragment::Src`] spans, so comments survive
@@ -50,6 +61,14 @@ struct TrailingLambdaLower<'a, 'src> {
     edits: Vec<(TextRange, Vec<Fragment>)>,
     /// monotonic across the file so sibling lambdas get distinct names
     counter: usize,
+    /// the statement currently being walked, which a block written as its value
+    /// is rewritten against rather than against its own range
+    enclosing: TextRange,
+    /// set on entering the [`ExprStatement`] that wraps a block, and taken by
+    /// that block — the only statement reachable in between
+    ///
+    /// [`ExprStatement`]: ruff_python_ast::ExprStatement
+    wrapper: Option<TextRange>,
 }
 
 /// Collects the `Name` targets *assigned* directly in a block — every rebinding,
@@ -195,12 +214,15 @@ impl TrailingLambdaLower<'_, '_> {
         (Some(out), preinits)
     }
 
-    fn process(&mut self, function: &StmtFunctionDef) {
+    /// Rewrites one block. `stmt_range` is the statement the block occupies —
+    /// its own when it stands alone, and the enclosing assignment when it is
+    /// that assignment's value, so the `def` is hoisted in front of the whole
+    /// line and everything before the callee (`a = `) is carried through.
+    fn process(&mut self, function: &StmtFunctionDef, stmt_range: TextRange) {
         let [decorator] = function.decorator_list.as_slice() else {
             return;
         };
         let callee = &decorator.expression;
-        let stmt_range = function.range();
 
         // the header colon sits between the called expression and the suite,
         // with only whitespace before it
@@ -340,9 +362,16 @@ impl TrailingLambdaLower<'_, '_> {
                 // already a postfix-primary so precedence can't rebind the call
                 let bare = matches!(callee, Expr::Name(_) | Expr::Attribute(_));
                 if bare {
-                    fragments.push(Fragment::Src(callee.range()));
+                    fragments.push(Fragment::Src(TextRange::new(
+                        stmt_range.start(),
+                        callee.range().end(),
+                    )));
                     fragments.push(Fragment::Lit(format!("({trailing_argument})")));
                 } else {
+                    fragments.push(Fragment::Src(TextRange::new(
+                        stmt_range.start(),
+                        callee.range().start(),
+                    )));
                     fragments.push(Fragment::Lit("(".to_owned()));
                     fragments.push(Fragment::Src(callee.range()));
                     fragments.push(Fragment::Lit(format!(")({trailing_argument})")));
@@ -417,9 +446,21 @@ impl<'ast> Visitor<'ast> for TrailingLambdaLower<'_, '_> {
         if let Stmt::FunctionDef(function) = stmt
             && function.is_trailing_lambda
         {
-            self.process(function);
+            let stmt_range = self.wrapper.take().unwrap_or_else(|| stmt.range());
+            self.process(function, stmt_range);
         }
+        let enclosing = std::mem::replace(&mut self.enclosing, stmt.range());
         walk_stmt(self, stmt);
+        self.enclosing = enclosing;
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if let Expr::Statement(statement) = expr
+            && statement.is_trailing_lambda()
+        {
+            self.wrapper = Some(self.enclosing);
+        }
+        walk_expr(self, expr);
     }
 }
 
@@ -440,6 +481,8 @@ impl TypeAwarePass for TrailingLambdaPass<'_> {
             types,
             edits: Vec::new(),
             counter: 0,
+            enclosing: TextRange::default(),
+            wrapper: None,
         };
         for stmt in stmts {
             inner.visit_stmt(stmt);
@@ -518,6 +561,129 @@ mod tests {
         );
         assert!(out.contains("f(a=_trailing_lambda_0)"), "got:\n{out}");
         assert!(out.contains("f(2, a=_trailing_lambda_1)"), "got:\n{out}");
+    }
+
+    #[test]
+    fn block_as_an_assignment_value() {
+        let out = check(indoc! {"
+            def f(x: int, a: (int) -> None) -> str:
+                a(x)
+                return \"done\"
+
+            result = f(2):
+                print(it)
+        "});
+        assert!(
+            out.contains("def _trailing_lambda_0(it=None):\n    print(it)"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("result = f(2, a=_trailing_lambda_0)"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn bare_callee_as_an_assignment_value() {
+        // the callee is wrapped in a call of its own, so the `def` has to be
+        // hoisted in front of the whole assignment, not just the callee
+        let out = check(indoc! {"
+            def f(a: (int) -> None) -> str:
+                a(1)
+                return \"done\"
+
+            result: str = f:
+                print(it)
+        "});
+        assert!(
+            out.contains("def _trailing_lambda_0(it=None):\n    print(it)\nresult: str = f(a=_trailing_lambda_0)"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn assignment_value_block_is_indented_with_its_statement() {
+        let out = check(indoc! {"
+            def f(a: (int) -> None) -> int:
+                a(1)
+                return 1
+
+            def outer() -> int:
+                total = 0
+                result = f:
+                    total = it
+                return result + total
+        "});
+        assert!(
+            out.contains(
+                "    def _trailing_lambda_0(it=None):\n        nonlocal total\n        total = it\n    result = f(a=_trailing_lambda_0)"
+            ),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn nested_block_as_an_assignment_value() {
+        let out = check(indoc! {"
+            def g(a: (int) -> None) -> int:
+                a(0)
+                return 1
+
+            outer = g:
+                inner = g:
+                    print(it)
+        "});
+        assert!(
+            out.contains("    def _trailing_lambda_1(it=None):\n        print(it)"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("    inner = g(a=_trailing_lambda_1)"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("\nouter = g(a=_trailing_lambda_0)"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn parenthesized_callee_as_an_assignment_value() {
+        // a callee that isn't a postfix-primary is wrapped in parentheses before
+        // it is called, so the assignment's own prefix has to stay outside them
+        let out = check(indoc! {"
+            from somewhere import a, b
+
+            result = a or b:
+                print(it)
+        "});
+        assert!(
+            out.contains("result = (a or b)(_trailing_lambda_0)"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn once_block_return_as_an_assignment_value() {
+        // the enclosing function's re-return goes after the assignment, not
+        // between the `def` and it
+        let out = check(indoc! {"
+            def each(items: list[int], once fn: (int) -> None) -> str:
+                fn(items[0])
+                return \"done\"
+
+            def find(items: list[int]) -> int:
+                label = each(items):
+                    return it
+                print(label)
+                return -1
+        "});
+        assert!(
+            out.contains(
+                "    label = each(items, fn=_trailing_lambda_0)\n    if _trailing_lambda_0_return:\n        return _trailing_lambda_0_return[0]"
+            ),
+            "got:\n{out}"
+        );
     }
 
     #[test]

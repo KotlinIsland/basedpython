@@ -97,6 +97,72 @@ against:
     reveal_type(it)  # revealed: int
 ```
 
+## a callback that passes nothing declares no `it`
+
+A callback taking no argument is invoked as `a()`, so a block filling it binds nothing to `it`. The
+name is then an ordinary unresolved one, as in kotlin, where `it` exists exactly when the lambda
+takes one parameter.
+
+```by
+def f(a: () -> None):
+    a()
+
+f:
+    print(it)  # error: [unresolved-reference] "Name `it` used when not defined"
+```
+
+## a block that never reads `it` is fine
+
+```by
+def f(a: () -> None):
+    a()
+
+f:
+    print("hi")
+```
+
+## a block may bind `it` itself
+
+Nothing declares the name, so a body is free to use it for its own local.
+
+```by
+def f(a: () -> None):
+    a()
+
+f:
+    it = 1
+    reveal_type(it)  # revealed: 1
+```
+
+## a receiver callback with no argument of its own
+
+The receiver is bound implicitly, so `it` is the argument *after* it — which this callback does not
+have.
+
+```by
+def against(fn: str.() -> None):
+    "a".fn()
+
+against:
+    print(upper())
+
+against:
+    print(upper(), it)  # error: [unresolved-reference] "Name `it` used when not defined"
+```
+
+## a callback whose shape cannot be read still declares `it`
+
+The block is filled by whatever the callee passes, so a callback this cannot see through — a gradual
+`(...)`, an imported callee, a `Callable[...]` spelling — keeps `it`, untyped.
+
+```by
+def f(a: (...) -> None):
+    a(1)
+
+f:
+    reveal_type(it)  # revealed: Unknown
+```
+
 ## earlier defaulted parameters keep their defaults
 
 A required parameter may follow a defaulted one in a `def` — the trailing block binds the last
@@ -588,5 +654,100 @@ f:  # error: [invalid-syntax]
 # error: [invalid-syntax] "Unexpected indentation"
 # error: [unresolved-reference] "Name `it` used when not defined"
 # error: [invalid-syntax] "Expected a statement"
+    print(it)
+```
+
+## a block can be a statement's value
+
+A block written as an assignment's value binds the call the block stands for, not the callee.
+
+```by
+def f(x: int, a: (int) -> None) -> str:
+    a(x)
+    return "done"
+
+result = f(2):
+    reveal_type(it)  # revealed: int
+
+reveal_type(result)  # revealed: str
+```
+
+## a bare callee takes its value from the same call
+
+```by
+def g(a: (int) -> None) -> int:
+    a(1)
+    return 2
+
+n = g:
+    print(it)
+
+reveal_type(n)  # revealed: int
+```
+
+## an annotated assignment takes one too
+
+The declared type is checked against the call's, as for any other value.
+
+```by
+def f(a: (int) -> None) -> str:
+    a(1)
+    return "done"
+
+s: str = f:
+    print(it)
+
+reveal_type(s)  # revealed: str
+
+# error: [invalid-assignment] "Object of type `str` is not assignable to `int`"
+bad: int = f:
+    print(it)
+```
+
+## the call is still checked as a call
+
+```by
+def f(x: int, a: (int) -> None) -> str:
+    a(x)
+    return "done"
+
+# error: [missing-argument] "No argument provided for required parameter `x`"
+result = f:
+    print(it)
+```
+
+## a block's value cannot bind a chain of targets
+
+The block's value is inferred with the definition its target makes, and only one definition can own
+it — so the target is a single name.
+
+```by
+def f(a: (int) -> None) -> int:
+    a(1)
+    return 1
+
+# error: [invalid-syntax] "a trailing lambda block's value binds a single name"
+# error: [invalid-syntax] "Expected a statement"
+x = y = f:
+    # error: [invalid-syntax] "Unexpected indentation"
+    # error: [unresolved-reference] "Name `it` used when not defined"
+    # error: [invalid-syntax] "Expected a statement"
+    print(it)
+```
+
+## a block's value cannot be unpacked
+
+```by
+def f(a: (int) -> None) -> tuple[int, int]:
+    a(1)
+    return (1, 2)
+
+# error: [invalid-syntax] "a trailing lambda block's value binds a single name"
+# error: [invalid-syntax] "Expected a statement"
+# error: [not-iterable] "Object of type `def f(a: (int, /) -> None) -> (int, int)` is not iterable"
+p, q = f:
+    # error: [invalid-syntax] "Unexpected indentation"
+    # error: [unresolved-reference] "Name `it` used when not defined"
+    # error: [invalid-syntax] "Expected a statement"
     print(it)
 ```
