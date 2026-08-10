@@ -92,4 +92,4 @@ if [[ "$SKIP_PATCHES" -eq 0 ]]; then
 fi
 
 echo "==> done. review diff with: git diff -- $TYPESHED"
-echo "==> next step: cargo nextest run + uvx prek run -a"
+echo "==> next step: cargo nextest run + uv run prek run -a"
