@@ -13,6 +13,7 @@ use ruff_formatter::printer::SourceMapGeneration;
 use ruff_python_ast::{AnyStringFlags, StringFlags, str::Quote};
 use ruff_python_parser::ParseOptions;
 use ruff_python_trivia::TriviaRanges;
+use ruff_python_trivia::basedpython::{TripleQuotedDedent, dedent_triple_quoted_body};
 use {
     ruff_formatter::{FormatOptions, IndentStyle, LineWidth, Printed, write},
     ruff_python_trivia::{PythonWhitespace, is_python_whitespace, tab_offset},
@@ -217,55 +218,38 @@ pub(crate) fn format(normalized: &NormalizedString, f: &mut PyFormatter) -> Form
 /// Format a triple-quoted based multiline string, adjusting indentation to match the current
 /// scope without changing string content (no chaperone spaces, no whitespace trimming).
 ///
-/// based multiline strings auto-dedent at runtime, so the formatter reindents content to match
-/// the current block level — the inverse of what the runtime will strip.
+/// based multiline strings [auto-dedent](https://docs.basedpython.org/features/dedent-strings)
+/// at transpile time, so the formatter reindents content to match the current block level — the
+/// inverse of what the transpiler will strip. That inverse only holds for a string the transpiler
+/// really does dedent: any other triple-quoted string is written back exactly as it was, because
+/// reindenting it would change its value.
 pub(crate) fn format_multiline_string(
     normalized: &NormalizedString,
     f: &mut PyFormatter,
 ) -> FormatResult<()> {
-    let docstring = &normalized.text();
+    let body = &normalized.text();
 
-    if contains_unescaped_newline(docstring) {
+    if contains_unescaped_newline(body) {
         return normalized.fmt(f);
     }
 
-    let already_normalized = matches!(docstring, Cow::Borrowed(_));
-    let mut lines = docstring.split('\n').peekable();
+    let TripleQuotedDedent::Dedents { indent, .. } = dedent_triple_quoted_body(body) else {
+        return normalized.fmt(f);
+    };
+
+    let already_normalized = matches!(body, Cow::Borrowed(_));
 
     let kind = normalized.flags();
     let quotes = StringQuotes::from(kind);
-    write!(f, [kind.prefix(), quotes])?;
-    let mut offset = normalized.start();
+    write!(f, [kind.prefix(), quotes, hard_line_break()])?;
 
-    let first = lines.next().unwrap_or_default();
-    if !first.is_empty() {
-        if already_normalized {
-            source_text_slice(TextRange::at(offset, first.text_len())).fmt(f)?;
-        } else {
-            text(first).fmt(f)?;
-        }
-    }
-    offset += first.text_len();
+    // the body opens on the line after the quotes and closes on a line of its own —
+    // `dedent_triple_quoted_body` only reports `Dedents` for that shape, so the last
+    // line here is the one the closing quotes sit on
+    let mut offset = normalized.start() + "\n".text_len();
+    let stripped_indentation = indent.text_len();
 
-    if docstring[first.len()..].trim().is_empty() {
-        write!(f, [quotes])?;
-        return Ok(());
-    }
-
-    hard_line_break().fmt(f)?;
-    offset += "\n".text_len();
-
-    let stripped_indentation = lines
-        .clone()
-        .filter(|line| !line.trim().is_empty())
-        .map(Indentation::from_str)
-        .min_by_key(|indentation| indentation.columns())
-        .unwrap_or_default();
-
-    let stripped_indentation_len = stripped_indentation.text_len();
-    // closing """ is on its own line only when the last split element is empty/whitespace
-    let closing_on_own_line = lines.clone().last().is_some_and(|l| l.trim().is_empty());
-
+    let mut lines = body["\n".len()..].split('\n').peekable();
     while let Some(line) = lines.next() {
         let is_last = lines.peek().is_none();
 
@@ -282,26 +266,21 @@ pub(crate) fn format_multiline_string(
 
         // strip only the shared leading indentation, preserving content including trailing whitespace
         if already_normalized {
-            let content_start = stripped_indentation_len;
-            let line_len = TextSize::try_from(line.len()).unwrap();
-            let trimmed_range = TextRange::at(offset, line_len).add_start(content_start);
+            let trimmed_range =
+                TextRange::at(offset, line.text_len()).add_start(stripped_indentation);
             source_text_slice(trimmed_range).fmt(f)?;
         } else {
-            let content = &line[stripped_indentation_len.to_usize()..];
-            text(content).fmt(f)?;
+            text(&line[indent.len()..]).fmt(f)?;
         }
 
         if !is_last {
             hard_line_break().fmt(f)?;
         }
 
-        offset += TextSize::try_from(line.len()).unwrap() + "\n".text_len();
+        offset += line.text_len() + "\n".text_len();
     }
 
-    if closing_on_own_line {
-        text("    ").fmt(f)?;
-    }
-    write!(f, [quotes])
+    write!(f, [text("    "), quotes])
 }
 
 fn contains_unescaped_newline(haystack: &str) -> bool {

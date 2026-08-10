@@ -2,6 +2,7 @@
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, ModModule, Stmt, StringFlags};
+use ruff_python_trivia::basedpython::{TripleQuotedDedent, dedent_triple_quoted_body};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{AstPass, PassContext};
@@ -104,81 +105,29 @@ fn dedent_triple_string(raw: &str) -> DedentOutcome {
     if !after_open.ends_with(quote) {
         return DedentOutcome::Unchanged;
     }
-    let inner = &after_open[..after_open.len() - 3];
+    let body = &after_open[..after_open.len() - 3];
 
-    if !inner.starts_with('\n') {
-        return DedentOutcome::Unchanged;
-    }
-    let inner = &inner[1..];
-
-    let lines: Vec<&str> = inner.split('\n').collect();
-    let Some(last) = lines.last() else {
-        return DedentOutcome::Unchanged;
-    };
-    if !last.chars().all(|c| c == ' ' || c == '\t') {
-        return DedentOutcome::Unchanged;
-    }
-    let closing_indent = *last;
-
-    let content_lines = &lines[..lines.len() - 1];
-    if content_lines.is_empty() {
-        return DedentOutcome::Unchanged;
-    }
-
-    let has_text = content_lines.iter().any(|l| !l.trim().is_empty());
-    let indent = find_common_indent(content_lines);
-
-    // closing `"""` indented more than the actual content of the string has
-    // no consistent dedent interpretation — refuse rather than silently produce
-    // a misaligned literal
-    if has_text && closing_indent.len() > indent.len() {
-        return DedentOutcome::Error(format!(
+    match dedent_triple_quoted_body(body) {
+        TripleQuotedDedent::Unchanged => DedentOutcome::Unchanged,
+        TripleQuotedDedent::ClosingOverIndented => DedentOutcome::Error(format!(
             "closing `{quote}` is indented more than the content of the triple-quoted string"
-        ));
+        )),
+        TripleQuotedDedent::Dedents { content, indent } => {
+            let deindented: Vec<&str> = content
+                .split('\n')
+                .map(|line| {
+                    if line.trim().is_empty() {
+                        ""
+                    } else {
+                        &line[indent.len()..]
+                    }
+                })
+                .collect();
+
+            let content = deindented.join("\n");
+            DedentOutcome::Transformed(format!("{prefix}{quote}\\\n{content}\\\n{quote}"))
+        }
     }
-
-    if indent.is_empty() {
-        return DedentOutcome::Unchanged;
-    }
-
-    let deindented: Vec<&str> = content_lines
-        .iter()
-        .map(|l| {
-            if l.trim().is_empty() {
-                ""
-            } else {
-                &l[indent.len()..]
-            }
-        })
-        .collect();
-
-    let content = deindented.join("\n");
-    DedentOutcome::Transformed(format!("{prefix}{quote}\\\n{content}\\\n{quote}"))
-}
-
-fn find_common_indent(lines: &[&str]) -> String {
-    let mut indent: Option<String> = None;
-    for line in lines.iter().filter(|l| !l.trim().is_empty()) {
-        let line_indent = leading_whitespace(line).to_owned();
-        indent = Some(match indent {
-            None => line_indent,
-            Some(prev) => common_string_prefix(&prev, &line_indent),
-        });
-    }
-    indent.unwrap_or_default()
-}
-
-fn leading_whitespace(s: &str) -> &str {
-    let end = s.find(|c: char| c != ' ' && c != '\t').unwrap_or(s.len());
-    &s[..end]
-}
-
-fn common_string_prefix(a: &str, b: &str) -> String {
-    a.chars()
-        .zip(b.chars())
-        .take_while(|(x, y)| x == y)
-        .map(|(c, _)| c)
-        .collect()
 }
 
 #[cfg(test)]
@@ -323,16 +272,6 @@ mod tests {
             "text = u\"\"\"\n    hello\n    \"\"\"\n",
             "text = u\"\"\"\\\nhello\\\n\"\"\"\n",
         );
-    }
-
-    #[test]
-    fn unit_find_common_indent_spaces() {
-        assert_eq!(super::find_common_indent(&["    a", "    b"]), "    ");
-    }
-
-    #[test]
-    fn unit_find_common_indent_partial() {
-        assert_eq!(super::find_common_indent(&["    a", "  b"]), "  ");
     }
 
     #[test]
