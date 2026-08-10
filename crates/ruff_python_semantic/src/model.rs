@@ -786,6 +786,7 @@ impl<'a> SemanticModel<'a> {
             || self.is_basedpython_transpile_resolved_name(name)
             || self.is_basedpython_type_is_lhs(name)
             || self.is_basedpython_django_lookup_path(name)
+            || self.in_basedpython_receiver_block()
         {
             // basedpython resolves these forms at transpile time, so the name is
             // not actually undefined at runtime
@@ -826,13 +827,6 @@ impl<'a> SemanticModel<'a> {
         match name.id.as_str() {
             "Some" => true,
             "dynamic" | "Character" | "Overlapping" => self.in_type_definition(),
-            // a trailing-lambda block filling a *receiver* callback binds the
-            // receiver as `self`, in a parameter the source cannot spell — so
-            // there is no binding here to find. whether the callback really has
-            // a receiver takes the callback's type, which the linter does not
-            // have; ty reports a `self` that resolves to nothing, so deferring
-            // to it is the same split the rest of this list already makes
-            "self" => self.in_trailing_lambda_block(),
             other => {
                 ruff_python_stdlib::basedpython::is_implicit_typing_name(other)
                     || self.is_based_enum_variant(other)
@@ -862,6 +856,23 @@ impl<'a> SemanticModel<'a> {
                     .get(name)
                     .is_some_and(|id| !self.bindings[id].is_unbound())
         })
+    }
+
+    /// True inside a
+    /// [trailing-lambda](https://docs.basedpython.org/features/trailing-lambdas)
+    /// block, where an unqualified name resolves against the block's
+    /// [implicit receiver](https://docs.basedpython.org/features/implicit-receivers).
+    ///
+    /// A block filling a receiver callback binds the receiver as `self`, in a
+    /// parameter the source cannot spell, and every member of that receiver is
+    /// in scope unqualified — which is the whole point of the dsls trailing
+    /// lambdas exist to enable. Neither the receiver's type nor its members are
+    /// anything the linter can see, and the region is: so a name that resolves
+    /// nowhere else inside a block is deferred to ty, which reports the ones
+    /// that really are unresolved. This is the same split the rest of
+    /// [`Self::is_basedpython_transpile_resolved_name`] makes.
+    fn in_basedpython_receiver_block(&self) -> bool {
+        self.in_basedpython_file() && self.in_trailing_lambda_block()
     }
 
     /// True when the innermost function scope is a
