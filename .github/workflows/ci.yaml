@@ -623,6 +623,11 @@ jobs:
           ./scripts/add_plugin.py test --url https://pypi.org/project/-test/0.1.0/ --prefix TST
           ./scripts/add_rule.py --name FirstRule --prefix TST --code 001 --linter test
       - run: cargo check
+      # The round-trip report has to fit GitHub's comment size limit, and has to
+      # not report a project as changed just because two binaries produced the
+      # same failure. Both are only observable in a `pull_request` run, so they
+      # are covered by unit tests instead.
+      - run: uv run --no-project --with pytest pytest scripts/test_check_ecosystem_roundtrip.py
       # Lint/format/type-check py-fuzzer
       # (dogfooding with ty is done in a separate job)
       - run: uv run --directory=./python/py-fuzzer mypy

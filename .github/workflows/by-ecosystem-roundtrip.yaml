@@ -180,8 +180,9 @@ jobs:
           pattern: roundtrip-shard-*
           merge-multiple: true
 
-      # the round-trip findings (regressions/changed/error-changed) are reported
-      # in the PR comment for humans to review — they don't fail the job. the job
+      # the round-trip findings (regressions/changed/error-changed), and the
+      # projects that fail to round-trip on both base and head, are reported in
+      # the PR comment for humans to review — none of them fail the job. the job
       # fails only if the harness itself fails (a non-zero exit here is a crash,
       # not a finding)
       - name: Render report

@@ -32,6 +32,10 @@ that fails the check. Output that merely *changed*, or a project that now builds
 when it used to fail, is surfaced in the report but does not fail — those want a
 human's eyes, not a red build.
 
+A project that fails the same way on *both* binaries is not a regression and
+does not fail the check either, but it is still reported: the check is blind to
+that project, and saying nothing would let the corpus rot silently.
+
 Modes:
 
 * ``check_ecosystem_roundtrip.py <by-new> --baseline <by-old>`` — diff the
@@ -60,6 +64,7 @@ import difflib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -132,6 +137,28 @@ COMMENT_MARKER = "<!-- by-ecosystem-roundtrip -->"
 # label used for a whole-project build failure (no single file owns it)
 BUILD_PATH = Path("<build>")
 
+# GitHub rejects an issue comment body over 65536 characters, and truncates a
+# step summary over 1MB. Stay under both with room for the omission notice.
+COMMENT_CHAR_LIMIT = 65_536
+_COMMENT_BUDGET = 60_000
+
+# per-finding cap, so one project's enormous diagnostic dump can't crowd every
+# other finding out of the total budget. shared out over the findings, within
+# these bounds: a report with three findings can afford to show far more of
+# each than one with two hundred
+_MAX_DETAIL_CHARS = 12_000
+_MIN_DETAIL_CHARS = 1_500
+
+# the `<details>`/fence scaffolding wrapped around each detail, and room for the
+# omission notice — both come out of the budget before it is shared out
+_ENTRY_OVERHEAD = 120
+_NOTICE_RESERVE = 250
+
+# a project that fails identically on both binaries gets one line, not a dump
+_SUMMARY_CHARS = 200
+
+_SKIPPED_HEADING = "### ⏭️ skipped"
+
 # directories that aren't first-party source (skipped when sizing a project)
 _NON_SOURCE_DIRS = frozenset(
     {
@@ -183,7 +210,7 @@ class ProjectOutcome(NamedTuple):
 
 class FileDiff(NamedTuple):
     path: Path
-    # "broken" | "fixed" | "changed" | "error-changed"
+    # "broken" | "fixed" | "changed" | "error-changed" | "error-unchanged"
     kind: str
     detail: str
 
@@ -334,6 +361,46 @@ def _unified_diff(old: bytes, new: bytes, rel: Path) -> str:
     )
 
 
+# a panic header carries the thread's id: `thread 'main' (4094) panicked at ...`.
+# not anchored: the harness prefixes the phase, as `reverse: thread 'main' ...`
+_THREAD_ID_RE = re.compile(r"\b(thread '[^']*') \(\d+\)")
+
+# `by`'s diagnostic footer names the binary and the commit it was built from,
+# so it can never match between the base and head binaries
+_VERSION_RE = re.compile(r"^info: Version: .*$", re.MULTILINE)
+_ARGS_RE = re.compile(r"^info: Args: .*$", re.MULTILINE)
+
+# salsa's opaque interning handles, in both panic messages and `Query stack:`
+# entries. the query *names* are the signal; the ids shift whenever interning
+# order does, which any unrelated change can cause
+_SALSA_ID_RE = re.compile(r"\bId\([0-9a-f]+\)")
+
+# everything from `stack backtrace:` to the trailing `note:` (or to the end).
+# frame indices, source line numbers and recursion depth all move under edits
+# that leave the panic itself untouched
+_BACKTRACE_RE = re.compile(
+    r"^stack backtrace:\n.*?(?=^note: Some details are omitted|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def canonical_error(msg: str) -> str:
+    """Strip the parts of a build failure that differ between two runs of the
+    *same* failure.
+
+    The base and head binaries are separate processes built from separate
+    commits, so a raw stderr comparison never matches once a project fails
+    under both: the thread id, the version/argv footer and every backtrace line
+    number differ by construction. That reported every erroring project as
+    `error-changed` on every PR. Compare what identifies the failure — the
+    panic message and the diagnostics — not the run that produced it."""
+    msg = _THREAD_ID_RE.sub(r"\1", msg)
+    msg = _VERSION_RE.sub("info: Version: <elided>", msg)
+    msg = _ARGS_RE.sub("info: Args: <elided>", msg)
+    msg = _SALSA_ID_RE.sub("Id(<elided>)", msg)
+    return _BACKTRACE_RE.sub("stack backtrace: <elided>\n", msg)
+
+
 def classify_project(
     name: str, old: ProjectOutcome, new: ProjectOutcome
 ) -> ProjectDiff:
@@ -342,7 +409,7 @@ def classify_project(
 
     if old.error is not None or new.error is not None:
         if old.error is not None and new.error is not None:
-            if old.error != new.error:
+            if canonical_error(old.error) != canonical_error(new.error):
                 diffs.append(
                     FileDiff(
                         BUILD_PATH,
@@ -350,6 +417,10 @@ def classify_project(
                         f"base: {old.error}\nhead: {new.error}",
                     )
                 )
+            else:
+                # not a change, so not a finding — but the check is blind to
+                # this project, and saying nothing reads as "all good"
+                diffs.append(FileDiff(BUILD_PATH, "error-unchanged", new.error))
         elif new.error is not None:  # built on base, fails on head
             diffs.append(FileDiff(BUILD_PATH, "broken", new.error))
         else:  # failed on base, builds on head
@@ -448,91 +519,180 @@ async def setup_primer_project(name: str, parent: Path) -> AsyncIterator[Path]:
     yield target
 
 
+def _detail_cap(n_findings: int) -> int:
+    """How much of each finding we can afford to show. Aims at 90% of the
+    budget so the usual report fits whole and nothing has to be dropped."""
+    if n_findings <= 0:
+        return _MAX_DETAIL_CHARS
+    share = (_COMMENT_BUDGET * 9 // 10) // n_findings - _ENTRY_OVERHEAD
+    return max(_MIN_DETAIL_CHARS, min(_MAX_DETAIL_CHARS, share))
+
+
+def _truncate_detail(detail: str, cap: int) -> str:
+    """Cap one finding's body, keeping both ends: a panic is identified by its
+    header and topmost frames, a failed build by where it finally gave up."""
+    if len(detail) <= cap:
+        return detail
+    marker = "\n... {} characters elided ...\n"
+    head_budget = cap * 3 // 4
+    tail_budget = max(0, cap - head_budget - len(marker) - 12)
+    # snap both cuts to a line boundary so neither end starts or ends mid-line
+    head = detail[:head_budget].rsplit("\n", 1)[0]
+    tail = detail[len(detail) - tail_budget :].split("\n", 1)[-1] if tail_budget else ""
+    out = head + marker.format(len(detail) - len(head) - len(tail)) + tail
+    return out if len(out) <= cap else out[:cap]
+
+
+def _one_line(text: str) -> str:
+    """Flatten a multi-line reason so it renders as a single list item."""
+    s = " ".join(text.split()).replace("`", "")
+    return s[: _SUMMARY_CHARS - 1] + "…" if len(s) > _SUMMARY_CHARS else s
+
+
+def _error_summary(err: str) -> str:
+    """One line naming how a project failed. A project that fails the same way
+    on both binaries isn't a finding, so it gets a line rather than a dump."""
+    phase, _, rest = err.partition(": ")
+    m = re.search(r"panicked at ([^\n]*?):\n([^\n]*)", err)
+    if m:
+        summary = f"panicked at {m.group(1).rsplit('/', 1)[-1]}: {m.group(2)}"
+    else:
+        summary = next((x for x in rest.splitlines() if x.strip()), rest)
+    return _one_line(f"{phase}: {summary}")
+
+
+def _details_entry(
+    name: str, path: Path, detail: str, cap: int, fence: str = ""
+) -> str:
+    return "\n".join(
+        [
+            f"<details><summary>{name} — {path}</summary>",
+            "",
+            f"```{fence}",
+            _truncate_detail(detail, cap).rstrip(),
+            "```",
+            "",
+            "</details>",
+        ]
+    )
+
+
+def _assemble(header: list[str], sections: list[tuple[str, list[str]]]) -> str:
+    """Join the report under GitHub's comment size limit, dropping whole
+    findings rather than cutting the report off mid-sentence.
+
+    Sections are consumed in severity order, so what gets dropped first is the
+    least important thing in the report — never a regression."""
+    out = list(header)
+    used = sum(len(line) + 1 for line in out) + _NOTICE_RESERVE
+    dropped = 0
+    for heading, entries in sections:
+        placed = False
+        pending = [heading, ""]
+        pending_cost = sum(len(line) + 1 for line in pending)
+        for entry in entries:
+            cost = len(entry) + 1
+            if used + (0 if placed else pending_cost) + cost > _COMMENT_BUDGET:
+                dropped += 1
+                continue
+            if not placed:
+                out.extend(pending)
+                used += pending_cost
+                placed = True
+            out.append(entry)
+            used += cost
+        if placed:
+            out.append("")
+            used += 1
+    if dropped:
+        out.append(
+            f"_{dropped} finding(s) omitted to fit GitHub's "
+            f"{COMMENT_CHAR_LIMIT}-character comment limit. The full report is "
+            f"the `comment.md` artifact of this run._"
+        )
+    return "\n".join(out).rstrip() + "\n"
+
+
 def render_diff_report(
     results: list[ProjectDiff], old_label: str, new_label: str
 ) -> tuple[str, bool]:
-    broken = [(r, d) for r in results for d in r.diffs if d.kind == "broken"]
-    fixed = [(r, d) for r in results for d in r.diffs if d.kind == "fixed"]
-    changed = [(r, d) for r in results for d in r.diffs if d.kind == "changed"]
-    error_changed = [
-        (r, d) for r in results for d in r.diffs if d.kind == "error-changed"
-    ]
-    skipped = [r for r in results if r.skipped is not None]
+    # sorted, not in shard-completion order: the report is read by diffing it
+    # against the last run, and a stable order is what makes new entries visible
+    def of_kind(kind: str) -> list[tuple[ProjectDiff, FileDiff]]:
+        return sorted(
+            ((r, d) for r in results for d in r.diffs if d.kind == kind),
+            key=lambda rd: (rd[0].name, rd[1].path),
+        )
+
+    broken = of_kind("broken")
+    fixed = of_kind("fixed")
+    changed = of_kind("changed")
+    error_changed = of_kind("error-changed")
+    failing = of_kind("error-unchanged")
+    skipped = sorted(
+        (r for r in results if r.skipped is not None), key=lambda r: r.name
+    )
     total_files = sum(r.files_checked for r in results)
     n_projects = len(results) - len(skipped)
 
     lines: list[str] = ["## by ecosystem round-trip", "", COMMENT_MARKER, ""]
 
-    if not broken and not fixed and not changed and not error_changed:
+    skipped_section = (
+        _SKIPPED_HEADING,
+        [f"- `{r.name}`: {_one_line(r.skipped or '')}" for r in skipped],
+    )
+
+    if broken or fixed or changed or error_changed:
+        lines.append(f"base: `{old_label}` → head: `{new_label}`")
+        lines.append("")
+        lines.append(
+            f"regressions: {len(broken)}, changed: {len(changed)}, "
+            f"improvements: {len(fixed)}, error changes: {len(error_changed)} "
+            f"(across {total_files} files in {n_projects} projects)"
+        )
+    else:
         lines.append(
             f"✅ no round-trip differences between `{old_label}` and `{new_label}` "
             f"across {total_files} files in {n_projects} projects."
         )
-        if skipped:
-            lines.append("")
-            lines.append(_render_skipped(skipped))
-        return "\n".join(lines).rstrip() + "\n", True
 
-    lines.append(f"base: `{old_label}` → head: `{new_label}`")
-    lines.append("")
-    lines.append(
-        f"regressions: {len(broken)}, changed: {len(changed)}, "
-        f"improvements: {len(fixed)}, error changes: {len(error_changed)} "
-        f"(across {total_files} files in {n_projects} projects)"
-    )
+    # never silent: a project failing on both binaries is not a regression, but
+    # the check is blind to it, and the count belongs in the header where
+    # nothing can drop it
+    if failing:
+        lines.append("")
+        lines.append(
+            f"⚠️ {len(failing)} project(s) fail to round-trip on both base and "
+            f"head, so this check says nothing about them."
+        )
     lines.append("")
 
-    if broken:
-        lines.append("### ❌ regressions (built on base, now fails)")
-        lines.append("")
-        for r, d in broken:
-            lines.append(f"- `{r.name}` `{d.path}`: {d.detail}")
-        lines.append("")
+    cap = _detail_cap(len(broken) + len(changed) + len(error_changed))
+    sections = [
+        (
+            "### ❌ regressions (built on base, now fails)",
+            [_details_entry(r.name, d.path, d.detail, cap) for r, d in broken],
+        ),
+        (
+            "### ℹ️ changed round-trip output",  # noqa: RUF001
+            [_details_entry(r.name, d.path, d.detail, cap, "diff") for r, d in changed],
+        ),
+        (
+            "### ⚠️ build error changed (failed before and after)",
+            [_details_entry(r.name, d.path, d.detail, cap) for r, d in error_changed],
+        ),
+        (
+            "### 💥 fails to round-trip (unchanged from base)",
+            [f"- `{r.name}`: {_error_summary(d.detail)}" for r, d in failing],
+        ),
+        (
+            "### ✅ improvements (failed on base, now builds)",
+            [f"- `{r.name}` `{d.path}`" for r, d in fixed],
+        ),
+        skipped_section,
+    ]
 
-    if changed:
-        lines.append("### ℹ️ changed round-trip output")  # noqa: RUF001
-        lines.append("")
-        for r, d in changed:
-            lines.append(f"<details><summary>{r.name} — {d.path}</summary>")
-            lines.append("")
-            lines.append("```diff")
-            lines.append(d.detail.rstrip())
-            lines.append("```")
-            lines.append("")
-            lines.append("</details>")
-        lines.append("")
-
-    if error_changed:
-        lines.append("### ⚠️ build error changed (failed before and after)")
-        lines.append("")
-        for r, d in error_changed:
-            lines.append(f"<details><summary>{r.name} — {d.path}</summary>")
-            lines.append("")
-            lines.append("```")
-            lines.append(d.detail.rstrip())
-            lines.append("```")
-            lines.append("")
-            lines.append("</details>")
-        lines.append("")
-
-    if fixed:
-        lines.append("### ✅ improvements (failed on base, now builds)")
-        lines.append("")
-        for r, d in fixed:
-            lines.append(f"- `{r.name}` `{d.path}`")
-        lines.append("")
-
-    if skipped:
-        lines.append(_render_skipped(skipped))
-        lines.append("")
-
-    return "\n".join(lines).rstrip() + "\n", not broken
-
-
-def _render_skipped(skipped: list[ProjectDiff]) -> str:
-    parts = ["### ⏭️ skipped", ""]
-    parts.extend(f"- `{r.name}`: {r.skipped}" for r in skipped)
-    return "\n".join(parts)
+    return _assemble(lines, sections), not broken
 
 
 def _project_diff_to_dict(p: ProjectDiff) -> dict:
