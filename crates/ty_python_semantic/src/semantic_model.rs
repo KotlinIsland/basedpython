@@ -298,6 +298,48 @@ impl<'db> SemanticModel<'db> {
         self.extension_rewrite(&resolution, attribute.attr.as_str(), receiver_is_class)
     }
 
+    /// basedpython: when this attribute access resolves to a conversion dunder
+    /// the *prelude* declares, how it was reached.
+    ///
+    /// A prelude member is type-only, and the prelude spells a conversion as
+    /// construction — so `frozenset.__of__(x)` written out by hand means
+    /// `frozenset(x)`, exactly what the conversion site emits. Without this the
+    /// call would survive verbatim into the output and raise `AttributeError`,
+    /// which is the one thing a member that does not exist at runtime must not
+    /// be allowed to do
+    pub fn prelude_conversion_dunder(
+        &self,
+        attribute: &ast::ExprAttribute,
+    ) -> Option<PreludeDunderReceiver> {
+        let db = self.db;
+        let name = attribute.attr.as_str();
+        if !crate::types::conversions::CONVERSION_DUNDERS.contains(&name) {
+            return None;
+        }
+        let receiver_ty = attribute.value.inferred_type(self)?;
+        if !receiver_ty.member(db, name).place.is_undefined() {
+            return None;
+        }
+        let resolution =
+            crate::types::extensions::resolve_extension_member(db, self.file, receiver_ty, name)?;
+        if !crate::types::extensions::is_prelude_extension(db, self.file, resolution.extension) {
+            return None;
+        }
+        // a use-site modifier does not turn an instance into a class object:
+        // `A()` is a `final A`, still an instance
+        Some(
+            if receiver_ty
+                .erase_restriction(db)
+                .nominal_class(db)
+                .is_none()
+            {
+                PreludeDunderReceiver::Class
+            } else {
+                PreludeDunderReceiver::Instance
+            },
+        )
+    }
+
     /// basedpython: how the transpiler rewrites an *operator* that resolved to
     /// an extension member — `+text` → `_by_ext__str____pos__(text)`. `None`
     /// for every operator the operand's own type supports, which is all of
@@ -468,7 +510,9 @@ impl<'db> SemanticModel<'db> {
         }
         for argument in call.arguments.iter_source_order() {
             match argument.value().inferred_type(self) {
-                Some(ty) if crate::types::conversions::may_convert(db, ty) => return true,
+                Some(ty) if crate::types::conversions::may_convert(db, self.file, ty) => {
+                    return true;
+                }
                 // an argument whose type is unknown here could be anything
                 None => return true,
                 Some(_) => {}
@@ -483,7 +527,7 @@ impl<'db> SemanticModel<'db> {
         };
         signature.iter().any(|overload| {
             overload.parameters().iter().any(|parameter| {
-                crate::types::conversions::may_convert(db, parameter.annotated_type())
+                crate::types::conversions::may_convert(db, self.file, parameter.annotated_type())
             })
         })
     }
@@ -1376,6 +1420,19 @@ pub struct ExtensionOperatorRewrite {
     /// operator (`__radd__`), or a membership test (`a in b` calls
     /// `b.__contains__(a)`)
     pub reflected: bool,
+}
+
+/// basedpython: how a hand-written conversion dunder the prelude supplies was
+/// reached, which decides whether it can be lowered
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreludeDunderReceiver {
+    /// `frozenset.__of__(x)` — the receiver already names the class the call has
+    /// to reach, so dropping the `.__of__` is the whole lowering
+    Class,
+    /// `fs.__of__(x)` — python reaches a classmethod through an instance too,
+    /// but the class it would construct is not written anywhere here, and
+    /// recovering it would mean evaluating the receiver a second time
+    Instance,
 }
 
 /// basedpython: one positional argument of a django lookup method that spells a

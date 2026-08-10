@@ -30,10 +30,12 @@ use ty_module_resolver::{ModuleName, resolve_module};
 use ty_python_core::semantic_index;
 
 use crate::Db;
+use crate::place::builtins_symbol;
 use crate::types::call::CallArguments;
-use crate::types::class::{ClassLiteral, ClassType, StaticClassLiteral};
+use crate::types::class::{ClassLiteral, ClassType, KnownClass, StaticClassLiteral};
 use crate::types::context::InferContext;
 use crate::types::diagnostic::{AMBIGUOUS_CONVERSION, INVALID_CONVERSION};
+use crate::types::extensions::{self, ExtensionMemberKind, ExtensionMemberResolution};
 use crate::types::function::FunctionType;
 use crate::types::signatures::Parameters;
 use crate::types::{MemberLookupPolicy, Type, TypeContext};
@@ -48,6 +50,21 @@ pub(crate) const OF: &str = "__of__";
 /// every conversion dunder, for the declaration-site validation
 pub(crate) const CONVERSION_DUNDERS: [&str; 3] = [FROM, INTO, OF];
 
+/// where a target's `__from__` / `__of__` was declared.
+///
+/// An `extension` may supply a conversion for a type it does not own, which is
+/// how the builtin frozen containers get one — but an extension member is not a
+/// runtime attribute, so the lowering cannot spell it `T.__of__(x)`. The route
+/// carries its origin so `conversion_info` can ask the extension what it lowers
+/// to instead
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DunderSource<'db> {
+    /// the target class declares the dunder itself
+    Declared,
+    /// an applicable `extension` declares it for the target
+    Extension(StaticClassLiteral<'db>),
+}
+
 /// one way a value can be made to satisfy a declared type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Route<'db> {
@@ -56,9 +73,9 @@ pub(crate) enum Route<'db> {
     /// the object the protocol dispatches on
     Conformance(ClassType<'db>),
     /// `T.__from__(value)`, where `T` is the target class
-    From(ClassType<'db>),
+    From(ClassType<'db>, DunderSource<'db>),
     /// `T.__of__(value)`, where `T` is the target class
-    Of(ClassType<'db>),
+    Of(ClassType<'db>, DunderSource<'db>),
     /// `value.__into__()`. carries the *source* type, for diagnostics only —
     /// the lowered call names nothing
     Into(Type<'db>),
@@ -67,10 +84,20 @@ pub(crate) enum Route<'db> {
 impl<'db> Route<'db> {
     /// how the route reads in a diagnostic
     fn describe(self, db: &'db dyn Db) -> String {
+        let dunder = |class: ClassType<'db>, source: DunderSource<'db>, dunder: &str| match source {
+            DunderSource::Declared => format!("{}.{dunder}", class.name(db)),
+            // two extensions supplying the same dunder read alike without this,
+            // and telling them apart is the whole point of the report
+            DunderSource::Extension(extension) => format!(
+                "{}.{dunder}, from the extension in `{}`",
+                class.name(db),
+                extension.file(db).path(db)
+            ),
+        };
         match self {
             Route::Conformance(protocol) => format!("conformance to `{}`", protocol.name(db)),
-            Route::From(class) => format!("{}.{FROM}", class.name(db)),
-            Route::Of(class) => format!("{}.{OF}", class.name(db)),
+            Route::From(class, source) => dunder(class, source, FROM),
+            Route::Of(class, source) => dunder(class, source, OF),
             Route::Into(source) => format!("{}.{INTO}", source.display(db)),
         }
     }
@@ -118,7 +145,7 @@ pub(crate) fn repair_conversion<'db>(
     if let Some(protocol) = super::conformance::repair_with_conformance(db, file, source, target) {
         routes.push(Route::Conformance(protocol));
     }
-    dunder_routes(db, source, target, value, &mut routes);
+    dunder_routes(db, file, source, target, value, &mut routes);
 
     let mut routes = routes.into_iter();
     let route = routes.next()?;
@@ -132,6 +159,7 @@ pub(crate) fn repair_conversion<'db>(
 /// order so that an ambiguity reads the same way whichever site asks
 fn dunder_routes<'db>(
     db: &'db dyn Db,
+    file: File,
     source: Type<'db>,
     target: Type<'db>,
     value: Option<&ast::Expr>,
@@ -147,19 +175,43 @@ fn dunder_routes<'db>(
             if dunder == OF && !literal {
                 continue;
             }
+            // `__of__` reads the syntax, so an empty display is typed exactly
+            // here rather than at the widening ordinary inference gives it
+            let sources = std::iter::once(source).chain(
+                value
+                    .filter(|_| dunder == OF)
+                    .and_then(|value| empty_display_type(db, value)),
+            );
+            let route = |dunder_source| {
+                if dunder == FROM {
+                    Route::From(class, dunder_source)
+                } else {
+                    Route::Of(class, dunder_source)
+                }
+            };
+
             // the lowered call is `T.__from__(x)`, which binds `x` to `cls`
             // unless the member really is a classmethod. resolving the route the
             // same way the declaration is validated keeps a malformed dunder
             // from converting anything
-            if conversion_classmethod(db, class, dunder).is_none() {
+            if conversion_classmethod(db, class, dunder).is_some() {
+                if sources.clone().any(|source| {
+                    converts(db, arm, dunder, CallArguments::positional([source]), target)
+                }) {
+                    routes.push(route(DunderSource::Declared));
+                }
                 continue;
             }
-            if converts(db, arm, dunder, CallArguments::positional([source]), target) {
-                routes.push(if dunder == FROM {
-                    Route::From(class)
-                } else {
-                    Route::Of(class)
-                });
+            // a type that declares no conversion of its own may still be given
+            // one from outside. `try_call_dunder` cannot see an extension
+            // member, so it is resolved and called directly
+            for member in extension_classmethods(db, file, class, dunder) {
+                if sources
+                    .clone()
+                    .any(|source| calls_to(db, member.ty, source, target))
+                {
+                    routes.push(route(DunderSource::Extension(member.extension)));
+                }
             }
         }
     }
@@ -183,6 +235,66 @@ fn converts<'db>(
     receiver
         .try_call_dunder(db, dunder, arguments, TypeContext::default())
         .is_ok_and(|bindings| bindings.return_type(db).is_assignable_to(db, target))
+}
+
+/// the same question for an already-bound member: does calling it with `source`
+/// produce something the target accepts? An extension member does not live on
+/// the receiver's meta-type, so it is resolved first and called here
+fn calls_to<'db>(db: &'db dyn Db, member: Type<'db>, source: Type<'db>, target: Type<'db>) -> bool {
+    member
+        .try_call(db, &CallArguments::positional([source]))
+        .is_ok_and(|bindings| bindings.return_type(db).is_assignable_to(db, target))
+}
+
+/// the `__from__` / `__of__` an `extension` supplies for `class`, bound to the
+/// class object the lowered call would name.
+///
+/// More than one applicable extension is not resolved here: both are returned so
+/// the site reports the ambiguity rather than silently picking the first
+fn extension_classmethods<'db>(
+    db: &'db dyn Db,
+    file: File,
+    class: ClassType<'db>,
+    dunder: &str,
+) -> Vec<ExtensionMemberResolution<'db>> {
+    extensions::resolve_extension_members(db, file, Type::from(class), dunder)
+        .into_iter()
+        .filter(|resolution| resolution.kind == ExtensionMemberKind::ClassMethod)
+        .collect()
+}
+
+/// the exact type of an empty display.
+///
+/// Ordinary inference widens `{}` to `dict[Unknown, Unknown]` so that a later
+/// `d["k"] = 1` is not an error, which leaves it indistinguishable from a
+/// populated display whose keys and values happen to be `Unknown`. `__of__` must
+/// not confuse the two — one taking `dict[Never, Never]` is asking for the empty
+/// display and nothing else — and unlike ordinary inference it has the syntax in
+/// hand. Offered *beside* the widened type rather than replacing it, so a dunder
+/// that accepts `dict[str, int]` still takes `{}` the way it always has
+fn empty_display_type<'db>(db: &'db dyn Db, value: &ast::Expr) -> Option<Type<'db>> {
+    match value {
+        ast::Expr::Dict(_) if is_empty_display(value) => {
+            Some(KnownClass::Dict.to_specialized_instance(db, &[Type::Never, Type::Never]))
+        }
+        ast::Expr::List(_) if is_empty_display(value) => {
+            Some(KnownClass::List.to_specialized_instance(db, &[Type::Never]))
+        }
+        _ => None,
+    }
+}
+
+/// is `value` a display written with nothing in it?
+///
+/// Asked by the type above and by the lowering, which must agree: the lowering
+/// drops the value only where the checker typed it as the empty display, and it
+/// can only drop it safely because there is nothing inside to drop
+fn is_empty_display(value: &ast::Expr) -> bool {
+    match value {
+        ast::Expr::Dict(dict) => dict.items.is_empty(),
+        ast::Expr::List(list) => list.elts.is_empty(),
+        _ => false,
+    }
 }
 
 /// the arms of a union, or the type itself. a target may offer `__from__` on any
@@ -269,10 +381,13 @@ fn class_declares_conversion<'db>(db: &'db dyn Db, class: StaticClassLiteral<'db
 /// might `ty` be one end of a conversion? the call gate's question, deliberately
 /// over-approximate in both directions: a `true` only costs the full check that
 /// would have run anyway, and anything this cannot classify answers `true`
-pub(crate) fn may_convert<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+pub(crate) fn may_convert<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> bool {
     union_arms(db, ty).iter().any(|arm| {
         match arm.nominal_class(db).map(|class| class.class_literal(db)) {
-            Some(ClassLiteral::Static(literal)) => *class_declares_conversion(db, literal),
+            Some(ClassLiteral::Static(literal)) => {
+                *class_declares_conversion(db, literal)
+                    || extensions::extension_converts_class(db, file, literal)
+            }
             // a synthesized class, or a type with no class at all: not worth
             // classifying cheaply, so let the full check decide
             Some(_) => true,
@@ -634,6 +749,9 @@ fn element_conversions<'db>(
     let Some(element_target) = declared_element_type(db, declared) else {
         return Vec::new();
     };
+    if !display_kind_fits(db, model, value, declared) {
+        return Vec::new();
+    }
     let mut conversions = Vec::new();
     for element in elements {
         let Some(element_ty) = crate::HasType::inferred_type(element, model) else {
@@ -649,6 +767,36 @@ fn element_conversions<'db>(
         }
     }
     conversions
+}
+
+/// does the display's own kind satisfy `declared`, setting aside the element
+/// types the per-element conversions repair?
+///
+/// Element-wise conversion replaces the elements, never the display: `{1, 2}` is
+/// still a `set` and `[1, 2]` still a `list` however their elements are wrapped.
+/// So a declared type the display's own class does not satisfy — a `frozenset`,
+/// a `tuple` — is not repairable this way, and accepting it would emit a value
+/// of the wrong kind with nothing to report it. Both element types are erased to
+/// `Unknown` because only the *kind* is in question here
+fn display_kind_fits<'db>(
+    db: &'db dyn Db,
+    model: &crate::SemanticModel<'db>,
+    value: &ast::Expr,
+    declared: Type<'db>,
+) -> bool {
+    let erased = |ty: Type<'db>| {
+        ty.nominal_class(db)
+            .map(|class| Type::instance(db, class.class_literal(db).unknown_specialization(db)))
+    };
+    let Some(value_ty) = crate::HasType::inferred_type(value, model).and_then(erased) else {
+        return true;
+    };
+    // a target with no nominal class of its own — a union, a structural protocol
+    // — cannot be compared this way, so it is left to the ordinary check
+    let Some(declared) = erased(declared) else {
+        return true;
+    };
+    value_ty.is_assignable_to(db, declared)
 }
 
 /// the sub-expression of `value` covering exactly `range`.
@@ -682,11 +830,21 @@ pub enum ConversionInfo {
     Call {
         prefix: String,
         suffix: String,
+        /// whether the value is *dropped* rather than kept between the two.
+        ///
+        /// Only ever set where the value has no sub-expression a sibling pass
+        /// could be rewriting — an empty display — because the source span
+        /// carries any edit made inside it, and dropping the span drops those
+        /// too. `{}` reaching a `frozenset` is the case: the emitted
+        /// `frozenset()` says what `frozenset({})` says without building the
+        /// throwaway dict first
+        replaces_value: bool,
         /// the module-level name `prefix` spells, which python binds when its own
         /// statement runs — so a conversion at import time may not precede it.
         /// `None` for a route that names nothing (`__into__`)
         referenced_name: Option<String>,
-        import: Option<ConversionImport>,
+        /// every name `prefix` spells that this file does not already bind
+        imports: Vec<ConversionImport>,
     },
     /// the checker accepted the site, but the conversion cannot be spelled here.
     /// The transpiler reports this rather than skipping it: emitting nothing
@@ -717,25 +875,36 @@ pub(crate) fn conversion_info<'db>(
         Route::Conformance(_) => ConversionInfo::Call {
             prefix: String::new(),
             suffix: String::new(),
+            replaces_value: false,
             referenced_name: None,
-            import: None,
+            imports: Vec::new(),
         },
-        Route::From(class) => dunder_call_info(db, from_file, model, anchor, class, FROM),
-        Route::Of(class) => dunder_call_info(db, from_file, model, anchor, class, OF),
+        Route::From(class, source) => {
+            dunder_call_info(db, from_file, model, anchor, class, FROM, source)
+        }
+        Route::Of(class, source) => {
+            dunder_call_info(db, from_file, model, anchor, class, OF, source)
+        }
         // the receiver is the value itself, so nothing has to be named or
         // imported. the parentheses are what make it safe to wrap an operand of
         // any precedence
         Route::Into(_) => ConversionInfo::Call {
             prefix: "(".to_owned(),
             suffix: format!(").{INTO}()"),
+            replaces_value: false,
             referenced_name: None,
-            import: None,
+            imports: Vec::new(),
         },
     }
 }
 
 /// `T.__from__(` / `T.__of__(`, with `T` spelled so that it resolves to the
-/// target class *at the conversion site*
+/// target class *at the conversion site*.
+///
+/// A dunder an `extension` supplies is not a runtime attribute, so it lowers to
+/// whatever that extension lowers to: the target's own constructor for a prelude
+/// declaration (`{1}` in a `frozenset[int]` context is `frozenset({1})`), and
+/// the backing function for one a module declares
 fn dunder_call_info<'db>(
     db: &'db dyn Db,
     from_file: File,
@@ -743,15 +912,86 @@ fn dunder_call_info<'db>(
     anchor: &ast::Expr,
     class: ClassType<'db>,
     dunder: &str,
+    source: DunderSource<'db>,
 ) -> ConversionInfo {
+    if let DunderSource::Extension(extension) = source
+        && !extensions::is_prelude_extension(db, from_file, extension)
+    {
+        return backing_call_info(db, from_file, model, anchor, class, extension, dunder);
+    }
+    // a prelude conversion means construction, so the emitted call is the class
+    // itself — spelled, and shadow-checked, exactly as the dunder call would be
+    let constructs = matches!(source, DunderSource::Extension(_));
+    let spelling = |name: &str| {
+        if constructs {
+            format!("{name}(")
+        } else {
+            format!("{name}.{dunder}(")
+        }
+    };
+    // constructing from an empty display needs no argument at all: `frozenset()`
+    // is what `frozenset({})` means, without the throwaway dict. safe only
+    // because construction *is* the conversion here — a real `T.__of__(x)` needs
+    // its argument, and an empty display holds nothing another pass could edit
+    let replaces_value = constructs && is_empty_display(anchor);
     match class_reference(db, from_file, model, anchor, class) {
         Ok((name, import)) => ConversionInfo::Call {
-            prefix: format!("{name}.{dunder}("),
+            prefix: spelling(&name),
             suffix: ")".to_owned(),
+            replaces_value,
             referenced_name: Some(name),
-            import,
+            imports: import.into_iter().collect(),
         },
         Err(reason) => ConversionInfo::Rejected(reason),
+    }
+}
+
+/// the call an extension-supplied dunder lowers to: the extension's own backing
+/// function, imported when the extension is declared elsewhere.
+///
+/// A conversion dunder is a `class def`, so the first argument is the class
+/// object — the same thing `Widget.kind` passes when an ordinary `static let` is
+/// read off the class. The class is what the ordering check watches, because a
+/// `class` statement binds its name late while the backing function is hoisted
+/// above the module
+fn backing_call_info<'db>(
+    db: &'db dyn Db,
+    from_file: File,
+    model: &crate::SemanticModel<'db>,
+    anchor: &ast::Expr,
+    class: ClassType<'db>,
+    extension: StaticClassLiteral<'db>,
+    dunder: &str,
+) -> ConversionInfo {
+    let function = extensions::backing_function_name(db, extension, dunder);
+    let extension_file = extension.file(db);
+    let mut imports = Vec::new();
+    if extension_file != from_file {
+        let Some(module) = imported_module_spelling(db, from_file, extension_file) else {
+            return ConversionInfo::Rejected(
+                "the conversion this value needs comes from an `extension` in a module this \
+                 file does not import; import it, or convert the value explicitly"
+                    .to_owned(),
+            );
+        };
+        imports.push(ConversionImport {
+            module,
+            name: function.clone(),
+            alias: function.clone(),
+        });
+    }
+    let (receiver, class_import) = match class_reference(db, from_file, model, anchor, class) {
+        Ok(spelling) => spelling,
+        Err(reason) => return ConversionInfo::Rejected(reason),
+    };
+    imports.extend(class_import);
+    ConversionInfo::Call {
+        prefix: format!("{function}({receiver}, "),
+        suffix: ")".to_owned(),
+        // the backing function takes the value as a parameter, so it stays
+        replaces_value: false,
+        referenced_name: Some(receiver),
+        imports,
     }
 }
 
@@ -785,6 +1025,19 @@ pub(crate) fn class_reference<'db>(
         return Err("this value converts through a type that has no class statement".to_owned());
     };
     let name = literal.name(db).to_string();
+    // a builtin needs no import — the name is already there — but it can still
+    // be shadowed by a local, which would send the emitted call elsewhere
+    if literal.file(db) != from_file && is_builtin_class(db, literal) {
+        return if name_is_shadowed_at(db, from_file, model, anchor, &name) {
+            Err(format!(
+                "the conversion this value needs goes through the builtin `{name}`, which is \
+                 shadowed by a binding in an enclosing scope; rename that binding, or convert \
+                 the value explicitly"
+            ))
+        } else {
+            Ok((name, None))
+        };
+    }
     if literal.file(db) == from_file {
         // the class is right here, so the bare name is the spelling — unless a
         // scope between the site and the module binds it to something else
@@ -812,6 +1065,20 @@ pub(crate) fn class_reference<'db>(
             alias,
         }),
     ))
+}
+
+/// is `class` the builtin of its own name?
+///
+/// A builtin is in scope everywhere, so the emitted call names it directly
+/// rather than importing it under an alias. Asked by identity, not by module
+/// path: a class that merely *lives* in `builtins` but is shadowed there by
+/// something else is not what the bare name would reach
+fn is_builtin_class<'db>(db: &'db dyn Db, class: StaticClassLiteral<'db>) -> bool {
+    builtins_symbol(db, class.name(db))
+        .place
+        .ignore_possibly_undefined()
+        .and_then(Type::as_class_literal)
+        == Some(ClassLiteral::Static(class))
 }
 
 /// does a scope between `anchor` and the module bind `name`?

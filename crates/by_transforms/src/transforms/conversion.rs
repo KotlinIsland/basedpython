@@ -15,11 +15,17 @@
 //! on each side of the value, plus the module-level name that text references.
 //! Resolving it in the checker is what keeps the emitted call and the type it
 //! was accepted for from ever disagreeing (see `TypeInfo::call_conversions`).
+//!
+//! The pass also lowers a conversion dunder the *prelude* supplies when it is
+//! written out by hand. Those members do not exist at runtime — the prelude
+//! spells such a conversion as construction — so `frozenset.__of__(x)` becomes
+//! `frozenset(x)` by having its `.__of__` deleted, which is the same call the
+//! implicit site emits.
 
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::{self as ast, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
-use ty_python_semantic::ConversionInfo;
+use ty_python_semantic::{ConversionInfo, PreludeDunderReceiver};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
@@ -65,11 +71,34 @@ impl TypeAwarePass for ConversionPass<'_> {
         let mut collector = ConversionCollector {
             types,
             sites: Vec::new(),
+            prelude_dunders: Vec::new(),
+            instance_dunders: Vec::new(),
             function_depth: 0,
         };
         for stmt in stmts {
             collector.visit_stmt(stmt);
         }
+        // a conversion dunder the prelude declares is spelled as construction, so
+        // dropping the `.__of__` *is* the lowering — the receiver is already the
+        // class the call has to reach, exactly as the source wrote it
+        ctx.text_edits.extend(
+            collector
+                .prelude_dunders
+                .iter()
+                .map(|range| (*range, String::new())),
+        );
+        // reached through an instance there is no class to construct, and the
+        // receiver cannot be evaluated twice to recover one. reported rather than
+        // emitted: the member does not exist at runtime, so leaving the call
+        // alone would raise `AttributeError` for something the checker accepted
+        ctx.errors
+            .extend(collector.instance_dunders.iter().map(|range| {
+                format!(
+                    "a conversion dunder of a builtin container is only reachable through the \
+                     class itself; write the constructor, or spell the class (offset {})",
+                    u32::from(range.start())
+                )
+            }));
         if collector.sites.is_empty() {
             return;
         }
@@ -89,7 +118,7 @@ impl TypeAwarePass for ConversionPass<'_> {
             for (value_range, info) in &site.wraps {
                 let ConversionInfo::Call {
                     referenced_name,
-                    import,
+                    imports,
                     ..
                 } = info
                 else {
@@ -105,7 +134,7 @@ impl TypeAwarePass for ConversionPass<'_> {
                     rejected = true;
                     continue;
                 };
-                if let Some(import) = import {
+                for import in imports {
                     // always aliased: the class's own name may already mean
                     // something else here, and an import that rebinds it — or that
                     // this file's own class then shadows — would send the call to
@@ -119,14 +148,15 @@ impl TypeAwarePass for ConversionPass<'_> {
                             import.module, import.name, import.alias
                         ));
                     }
-                    continue;
                 }
                 // python binds a class name when its statement executes, so a
                 // conversion that runs at import time cannot precede the class it
                 // converts through. inside a function body the name is resolved at
-                // call time, so order does not matter there
+                // call time, so order does not matter there — and an *imported*
+                // name is bound by its own statement above every conversion
                 if site.runs_at_import
                     && let Some(name) = referenced_name
+                    && !imports.iter().any(|import| &import.alias == name)
                     && let Some((_, declared_at)) =
                         declarations.iter().find(|(declared, _)| declared == name)
                     && value_range.start() < declared_at.start()
@@ -166,11 +196,22 @@ impl TypeAwarePass for ConversionPass<'_> {
                     shave_last_char(self.source, cursor, value_range.start());
                 fragments.push(Fragment::Src(lead));
                 fragments.push(Fragment::Lit(opening_punctuation));
-                let ConversionInfo::Call { prefix, suffix, .. } = info else {
+                let ConversionInfo::Call {
+                    prefix,
+                    suffix,
+                    replaces_value,
+                    ..
+                } = info
+                else {
                     continue;
                 };
                 fragments.push(Fragment::Lit(prefix.clone()));
-                fragments.push(Fragment::Src(*value_range));
+                // the value passes through as source, so a peer pass rewriting
+                // something inside it still lands — unless the conversion says it
+                // replaces the value outright, which only an empty display does
+                if !replaces_value {
+                    fragments.push(Fragment::Src(*value_range));
+                }
                 fragments.push(Fragment::Lit(suffix.clone()));
                 let (closing_punctuation, rest) =
                     shave_first_char(self.source, value_range.end(), site.claim_range.end());
@@ -200,6 +241,11 @@ struct SiteConversions {
 struct ConversionCollector<'a> {
     types: &'a dyn TypeInfo,
     sites: Vec<SiteConversions>,
+    /// the `.__of__` spans of conversion dunders written out by hand that the
+    /// prelude supplies, which lower by being deleted
+    prelude_dunders: Vec<TextRange>,
+    /// the same reached through an instance, which has no lowering
+    instance_dunders: Vec<TextRange>,
     /// how many function bodies enclose the node being visited. a call inside one
     /// resolves its names when the function runs, not when the module loads
     function_depth: usize,
@@ -249,6 +295,20 @@ impl<'ast> ast::visitor::Visitor<'ast> for ConversionCollector<'_> {
             ast::visitor::walk_expr(self, expr);
             self.function_depth -= 1;
             return;
+        }
+        if let Expr::Attribute(attribute) = expr {
+            match self.types.prelude_conversion_dunder(attribute) {
+                // from the end of the receiver through the attribute name: the
+                // dot and any whitespace around it go with the member
+                Some(PreludeDunderReceiver::Class) => self.prelude_dunders.push(TextRange::new(
+                    attribute.value.range().end(),
+                    attribute.range().end(),
+                )),
+                Some(PreludeDunderReceiver::Instance) => {
+                    self.instance_dunders.push(attribute.range());
+                }
+                None => {}
+            }
         }
         if let Expr::Call(call) = expr {
             let mut wraps = self.types.call_conversions(call);
@@ -609,6 +669,141 @@ report(Fahrenheit.__from__(Celsius()))
         assert!(
             back.contains("report(Fahrenheit.__from__(Celsius()))"),
             "the conversion call should survive verbatim, got:\n{back}"
+        );
+    }
+
+    #[test]
+    fn a_set_display_lowers_to_a_frozenset() {
+        let out = check("b: frozenset[int] = {1, 2}\n");
+        assert!(
+            out.contains("b: frozenset[int] = frozenset({1, 2})"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn an_empty_display_lowers_to_an_empty_set() {
+        // no argument at all: construction *is* the conversion here, so the
+        // throwaway dict `frozenset({})` would build is never made
+        let out = check("d: set[int] = {}\ne: frozenset[int] = {}\n");
+        assert!(out.contains("d: set[int] = set()"), "got:\n{out}");
+        assert!(
+            out.contains("e: frozenset[int] = frozenset()"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn an_empty_display_lowers_in_a_return_position() {
+        let out = check(indoc! {"
+            def f() -> set[int]:
+                return {}
+
+            def g() -> frozenset[int]:
+                return {}
+        "});
+        assert!(out.contains("return set()"), "got:\n{out}");
+        assert!(out.contains("return frozenset()"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_declared_dunder_keeps_its_empty_argument() {
+        // only the prelude's construct-route may drop the value; a real
+        // `__of__` is a call whose parameter has to be filled
+        let out = check(indoc! {"
+            class Bag:
+                init(count: int)
+
+                @classmethod
+                def __of__(cls, value: dict[str, int]) -> Self:
+                    return cls(len(value))
+
+            b: Bag = {}
+        "});
+        assert!(out.contains("b: Bag = Bag.__of__({})"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_dict_display_keeps_its_kind_where_a_dict_is_declared() {
+        // the prelude only converts what does not already fit
+        let out = check("d: dict[str, int] = {\"a\": 1}\n");
+        assert!(
+            out.contains("d: dict[str, int] = {\"a\": 1}"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_frozen_display_converts_as_an_element() {
+        let out = check("nested: list[frozenset[int]] = [{1}, {2}]\n");
+        assert!(
+            out.contains("nested: list[frozenset[int]] = [frozenset({1}), frozenset({2})]"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn an_extension_supplied_conversion_lowers_to_its_backing_function() {
+        // the dunder is not a runtime attribute, so the call is the extension's
+        // own lowering — and a `class def` receives the class as its `cls`
+        let out = check(indoc! {"
+            class Path:
+                init(raw: str)
+
+            extension Path:
+                class def __of__(cls, value: str) -> Path:
+                    return Path(value)
+
+            p: Path = \"/tmp/y\"
+        "});
+        assert!(
+            out.contains("p: Path = _by_ext__Path____of__(Path, \"/tmp/y\")"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_prelude_dunder_written_by_hand_lowers_too() {
+        // the member does not exist at runtime, so leaving the call verbatim
+        // would emit an `AttributeError` for something the checker accepted
+        let out = check("b = frozenset.__of__({1, 2})\nc = set.__of__({})\n");
+        assert!(out.contains("b = frozenset({1, 2})"), "got:\n{out}");
+        assert!(out.contains("c = set({})"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_prelude_dunder_through_an_instance_is_rejected() {
+        // there is no class written here to construct, and the receiver cannot be
+        // evaluated twice to recover one — so this is reported rather than
+        // lowered into `fs({2})`
+        let err = transpile(
+            "fs: frozenset[int] = {1}\nb = fs.__of__({2})\n",
+            &Config::test_default(),
+        )
+        .expect_err("an unlowerable receiver should be reported");
+        assert!(
+            format!("{err:?}").contains("only reachable through the class itself"),
+            "got:\n{err:?}"
+        );
+    }
+
+    #[test]
+    fn element_wise_conversion_declines_where_the_display_kind_does_not_fit() {
+        // the elements would convert, but `{1, 2}` is still a `set` afterwards —
+        // wrapping them would emit a `set` where a `frozenset` was declared
+        let out = check(indoc! {"
+            class Meters:
+                init(value: float)
+
+                @classmethod
+                def __of__(cls, value: int) -> Self:
+                    return Meters(float(value))
+
+            fm: frozenset[Meters] = {1, 2}
+        "});
+        assert!(
+            out.contains("fm: frozenset[Meters] = {1, 2}"),
+            "got:\n{out}"
         );
     }
 }

@@ -241,6 +241,15 @@ fn clean_mdtest_blocks_run() {
         .output()
         .is_ok_and(|o| o.status.success());
 
+    // `frozendict` is a 3.15 builtin, so on the 3.13 floor this harness targets
+    // its blocks cannot run at all. skipped exactly like a missing third-party
+    // dependency; run them locally against a 3.15 interpreter to enforce the
+    // contract
+    let has_frozendict = Command::new(&python)
+        .args(["-c", "frozendict"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+
     let dir = mdtest_dir();
     let mut files: Vec<PathBuf> = fs::read_dir(&dir)
         .expect("mdtest dir")
@@ -314,6 +323,9 @@ fn clean_mdtest_blocks_run() {
                         }
                     };
                     if !has_typing_extensions && transpiled.contains("typing_extensions") {
+                        continue;
+                    }
+                    if !has_frozendict && transpiled.contains("frozendict") {
                         continue;
                     }
                     if !has_pydantic && transpiled.contains("pydantic") {

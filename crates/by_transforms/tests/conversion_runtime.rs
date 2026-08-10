@@ -128,6 +128,99 @@ assert mapping["boiling"].degrees == 212.0
 print("ok")
 "#;
 
+/// the frozen container displays, whose conversion comes from the prelude rather
+/// than from a dunder the program declares.
+///
+/// The text-level test shows the wrap; only running it shows that the wrap
+/// produces a *frozen* object rather than the display's own kind, which is the
+/// one thing a plausible-looking lowering would get wrong. `frozendict` is left
+/// to [`FROZENDICT_PROGRAM`] because it is a 3.15 builtin
+const FROZEN_PROGRAM: &str = r#"
+class Path:
+    def __init__(self, raw: str):
+        self.raw = raw
+
+extension Path:
+    class def __of__(cls, value: str) -> Path:
+        return Path(value)
+
+def takes(fs: frozenset[str]) -> int:
+    return len(fs)
+
+# a set display, at an annotated assignment and at a call argument
+b: frozenset[int] = {1, 2}
+assert type(b).__name__ == "frozenset", type(b).__name__
+assert sorted(b) == [1, 2]
+assert takes({"a", "b"}) == 2
+
+# `{}` is the empty set where a set is asked for, and stays a dict where one is
+e: frozenset[int] = {}
+assert type(e).__name__ == "frozenset", type(e).__name__
+assert len(e) == 0
+
+d: set[int] = {}
+assert type(d).__name__ == "set", type(d).__name__
+assert len(d) == 0
+
+plain: dict[str, int] = {}
+assert type(plain).__name__ == "dict", type(plain).__name__
+
+# a `return`, and an element of another display
+def gives() -> frozenset[int]:
+    return {1, 2}
+
+assert type(gives()).__name__ == "frozenset"
+
+# an empty display in a return position, for both the mutable and frozen kinds
+def empty_set() -> set[int]:
+    return {}
+
+def empty_frozen() -> frozenset[int]:
+    return {}
+
+assert type(empty_set()).__name__ == "set", type(empty_set()).__name__
+assert len(empty_set()) == 0
+assert type(empty_frozen()).__name__ == "frozenset", type(empty_frozen()).__name__
+assert len(empty_frozen()) == 0
+
+nested: list[frozenset[int]] = [{1}, {2}]
+assert all(type(f).__name__ == "frozenset" for f in nested)
+assert [sorted(f) for f in nested] == [[1], [2]]
+
+# an empty display is constructed with no argument at all, and must still work
+# where it sits beside a wrapped one in the same edit
+mixed: list[frozenset[int]] = [{}, {1}]
+assert all(type(f).__name__ == "frozenset" for f in mixed)
+assert [sorted(f) for f in mixed] == [[], [1]]
+
+# an `extension` supplying `__of__` for a type it does not own: the lowered call
+# is the backing function, and it must receive the class as its `cls`
+p: Path = "/tmp/y"
+assert type(p).__name__ == "Path", type(p).__name__
+assert p.raw == "/tmp/y"
+
+# the prelude's dunder written out by hand: it is not a runtime attribute, so
+# leaving the call alone would raise `AttributeError` here
+h = frozenset.__of__({1, 2})
+assert type(h).__name__ == "frozenset", type(h).__name__
+assert sorted(h) == [1, 2]
+
+print("ok")
+"#;
+
+/// the same for `frozendict`, which only exists on python 3.15
+const FROZENDICT_PROGRAM: &str = r#"
+a: frozendict[str, str] = {}
+assert type(a).__name__ == "frozendict", type(a).__name__
+assert len(a) == 0
+
+c: frozendict[str, int] = {"x": 1}
+assert type(c).__name__ == "frozendict", type(c).__name__
+assert c["x"] == 1
+
+print("ok")
+"#;
+
 /// the first interpreter that accepts `probe`
 fn python_supporting(probe: &str) -> Option<String> {
     let mut candidates = Vec::new();
@@ -147,23 +240,15 @@ fn python_supporting(probe: &str) -> Option<String> {
     })
 }
 
-#[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
-fn conversions_run_correctly() {
-    let Some(python) = python_supporting("import sys; sys.exit(0)") else {
-        eprintln!("skipping conversion runtime test: no python interpreter found");
-        return;
-    };
+/// transpile `program` and run it, asserting it exits cleanly
+fn run_transpiled(python: &str, program: &str, min_version: PythonVersion) {
     let config = Config {
-        min_version: PythonVersion::PY313,
+        min_version,
         ..Config::default()
     };
-    let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
+    let transpiled = transpile(program, &config).expect("transpile should succeed");
 
-    let output = Command::new(&python)
+    let output = Command::new(python)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -175,4 +260,43 @@ fn conversions_run_correctly() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn conversions_run_correctly() {
+    let Some(python) = python_supporting("import sys; sys.exit(0)") else {
+        eprintln!("skipping conversion runtime test: no python interpreter found");
+        return;
+    };
+    run_transpiled(&python, PROGRAM, PythonVersion::PY313);
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn frozen_displays_run_correctly() {
+    let Some(python) = python_supporting("import sys; sys.exit(0)") else {
+        eprintln!("skipping frozen display runtime test: no python interpreter found");
+        return;
+    };
+    run_transpiled(&python, FROZEN_PROGRAM, PythonVersion::PY313);
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn frozendict_displays_run_correctly() {
+    let Some(python) = python_supporting("frozendict") else {
+        eprintln!("skipping frozendict runtime test: no interpreter with `frozendict` (3.15+)");
+        return;
+    };
+    run_transpiled(&python, FROZENDICT_PROGRAM, PythonVersion::PY315);
 }

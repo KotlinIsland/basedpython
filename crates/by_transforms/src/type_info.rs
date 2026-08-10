@@ -143,6 +143,15 @@ pub(crate) trait TypeInfo {
         attribute: &ruff_python_ast::ExprAttribute,
     ) -> Option<ty_python_semantic::ExtensionAttributeInfo>;
 
+    /// how a conversion dunder the prelude declares was reached, when an
+    /// attribute access resolves to one. the prelude spells such a conversion as
+    /// construction, so `frozenset.__of__(x)` written by hand lowers to
+    /// `frozenset(x)` — the same call the conversion site emits
+    fn prelude_conversion_dunder(
+        &self,
+        attribute: &ruff_python_ast::ExprAttribute,
+    ) -> Option<ty_python_semantic::PreludeDunderReceiver>;
+
     /// when an operator's dunder is supplied by a basedpython `extension`, the
     /// backing-function rewrite to apply (`+text` →
     /// `_by_ext__str____pos__(text)`). `None` for every operator the operand's
@@ -583,6 +592,13 @@ impl TypeInfo for SemanticModel<'_> {
         attribute: &ruff_python_ast::ExprAttribute,
     ) -> Option<ty_python_semantic::ExtensionAttributeInfo> {
         SemanticModel::extension_attribute_info(self, attribute)
+    }
+
+    fn prelude_conversion_dunder(
+        &self,
+        attribute: &ruff_python_ast::ExprAttribute,
+    ) -> Option<ty_python_semantic::PreludeDunderReceiver> {
+        SemanticModel::prelude_conversion_dunder(self, attribute)
     }
 
     fn extension_operator_info(

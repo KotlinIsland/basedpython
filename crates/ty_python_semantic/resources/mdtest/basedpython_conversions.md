@@ -696,3 +696,108 @@ class Widget:
     def __into__(cls) -> int:
         return 1
 ```
+
+## an `extension` supplies a conversion for a type it does not own
+
+A conversion dunder is resolved the way any other member is, so an `extension` can offer one for a
+type whose definition is out of reach. This is how the builtin frozen containers get theirs.
+
+```by
+class Path:
+    raw: str = ""
+
+extension Path:
+    class def __of__(cls, value: str) -> Path:
+        return Path()
+
+p: Path = "/tmp/x"
+reveal_type(p)  # revealed: Path
+```
+
+## an `extension` supplies `__from__` too
+
+```by
+class UserId:
+    raw: str = ""
+
+extension UserId:
+    class def __from__(cls, value: int) -> UserId:
+        return UserId()
+
+def register(u: UserId) -> None: ...
+
+register(3)
+```
+
+## a member the class declares itself wins over an extension's
+
+Extensions never shadow declared members, and a conversion is no exception — so a type that grows
+its own dunder later does not silently keep converting through someone else's.
+
+```by
+class Path:
+    raw: str = ""
+
+    @classmethod
+    def __of__(cls, value: str) -> Self:
+        return cls()
+
+extension Path:
+    class def __of__(cls, value: int) -> Path:
+        return Path()
+
+p: Path = "/tmp/x"
+reveal_type(p)  # revealed: Path
+q: Path = 3  # error: [invalid-assignment]
+```
+
+## element-wise conversion needs the display's own kind to fit
+
+Wrapping the elements leaves the display alone — `{1, 2}` is still a `set` — so a declared type the
+display itself does not satisfy is not repairable this way.
+
+```by
+class Meters:
+    value: float = 0.0
+
+    @classmethod
+    def __of__(cls, value: int) -> Self:
+        return cls()
+
+lengths: list[Meters] = [1, 2]  # a list display for a list: fine
+fm: frozenset[Meters] = {1, 2}  # error: [invalid-assignment]
+tup: tuple[Meters, ...] = [1, 2]  # error: [invalid-assignment]
+```
+
+## element-wise conformance still reaches a display whose kind fits
+
+The display-kind rule above rejects a *mismatched* kind. It must not get in the way of the ordinary
+element-wise repair, which is what carries a conformance into a collection literal.
+
+```by
+protocol Show:
+    def show(self) -> str
+
+extension str(Show):
+    override def show(self) -> str:
+        return self
+
+xs: list[Show] = ["a", "b"]
+reveal_type(xs)  # revealed: list[Show]
+
+d: dict[str, Show] = {"k": "v"}
+reveal_type(d)  # revealed: dict[str, Show]
+```
+
+## a conformance does not reach a display of the wrong kind either
+
+```by
+protocol Show:
+    def show(self) -> str
+
+extension str(Show):
+    override def show(self) -> str:
+        return self
+
+frozen: frozenset[Show] = {"a"}  # error: [invalid-assignment]
+```
