@@ -5288,6 +5288,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     op,
                     TypeContext::default(),
                 )
+                // an extension's operator dunder is deliberately *not* consulted
+                // here: an augmented assignment has no lowering to the backing
+                // function (rewriting `a += b` re-evaluates the target), so
+                // accepting it would put the checker and the runtime at odds
                 .unwrap_or_else(|| {
                     report_unsupported_augmented_assignment(
                         &builder.context,
@@ -13442,6 +13446,64 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// basedpython: the type a unary operator evaluates to when an applicable
+    /// extension supplies its dunder. `None` outside a basedpython file, when
+    /// no extension supplies it, or when the resolved member does not accept
+    /// the call — each of which leaves the operator unsupported, exactly as it
+    /// is without the extension
+    pub(super) fn try_unary_extension_operator(
+        &self,
+        op: ast::UnaryOp,
+        operand: Type<'db>,
+    ) -> Option<Type<'db>> {
+        if !self.is_basedpython_file() {
+            return None;
+        }
+        let db = self.db();
+        extensions::unary_extension_operator(db, self.file(), op, operand)?
+            .return_type(db, &CallArguments::none())
+    }
+
+    /// basedpython: the type a binary operator evaluates to when an applicable
+    /// extension supplies its dunder, on either operand
+    pub(super) fn try_binary_extension_operator(
+        &self,
+        left: Type<'db>,
+        op: ast::Operator,
+        right: Type<'db>,
+    ) -> Option<Type<'db>> {
+        if !self.is_basedpython_file() {
+            return None;
+        }
+        let db = self.db();
+        let operator = extensions::binary_extension_operator(db, self.file(), left, op, right)?;
+        let argument = if operator.reflected { left } else { right };
+        operator.return_type(db, &CallArguments::positional([argument]))
+    }
+
+    /// basedpython: the type a comparison evaluates to when an applicable
+    /// extension supplies its dunder. A membership test coerces
+    /// `__contains__`'s result, so it is a `bool` whatever the extension
+    /// declares
+    pub(super) fn try_comparison_extension_operator(
+        &self,
+        left: Type<'db>,
+        op: ast::CmpOp,
+        right: Type<'db>,
+    ) -> Option<Type<'db>> {
+        if !self.is_basedpython_file() {
+            return None;
+        }
+        let db = self.db();
+        let operator = extensions::comparison_extension_operator(db, self.file(), left, op, right)?;
+        let argument = if operator.reflected { left } else { right };
+        let returned = operator.return_type(db, &CallArguments::positional([argument]))?;
+        Some(match op {
+            ast::CmpOp::In | ast::CmpOp::NotIn => KnownClass::Bool.to_instance(db),
+            _ => returned,
+        })
+    }
+
     fn infer_unary_expression(&mut self, unary: &ast::ExprUnaryOp) -> Type<'db> {
         let ast::ExprUnaryOp {
             range: _,
@@ -13482,6 +13544,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             ) {
                 Ok(outcome) => outcome.return_type(self.db()),
                 Err(e) => {
+                    // basedpython: an applicable extension may supply the dunder
+                    if let Some(ty) = self.try_unary_extension_operator(op, operand_type) {
+                        return ty;
+                    }
                     self.report_unsupported_unary_operator(
                         unary,
                         op,
@@ -13893,6 +13959,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     range,
                     &BinaryComparisonVisitor::new(Ok(Type::bool_literal(true))),
                 )
+                // basedpython: an applicable extension may supply the dunder.
+                // only for a lone comparison — a chain is two calls joined by a
+                // short-circuit, which the lowering does not build, so accepting
+                // one would put the checker and the runtime at odds
+                .or_else(|error| {
+                    if single_comparison {
+                        builder
+                            .try_comparison_extension_operator(left_ty, *op, right_ty)
+                            .ok_or(error)
+                    } else {
+                        Err(error)
+                    }
+                })
                 .unwrap_or_else(|error| {
                     report_unsupported_comparison(
                         &builder.context,

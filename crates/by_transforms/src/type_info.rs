@@ -143,6 +143,15 @@ pub(crate) trait TypeInfo {
         attribute: &ruff_python_ast::ExprAttribute,
     ) -> Option<ty_python_semantic::ExtensionAttributeInfo>;
 
+    /// when an operator's dunder is supplied by a basedpython `extension`, the
+    /// backing-function rewrite to apply (`+text` →
+    /// `_by_ext__str____pos__(text)`). `None` for every operator the operand's
+    /// own type already supports
+    fn extension_operator_info(
+        &self,
+        expr: &Expr,
+    ) -> Option<ty_python_semantic::ExtensionOperatorRewrite>;
+
     /// the name of the witness class an `implementation A for B [as N]:` block
     /// lowers to. resolved by ty so that the emitted class and the constructor
     /// inserted at a conversion site can never disagree
@@ -564,6 +573,13 @@ impl TypeInfo for SemanticModel<'_> {
         attribute: &ruff_python_ast::ExprAttribute,
     ) -> Option<ty_python_semantic::ExtensionAttributeInfo> {
         SemanticModel::extension_attribute_info(self, attribute)
+    }
+
+    fn extension_operator_info(
+        &self,
+        expr: &Expr,
+    ) -> Option<ty_python_semantic::ExtensionOperatorRewrite> {
+        SemanticModel::extension_operator_info(self, expr)
     }
 
     fn implementation_witness_name(&self, class_def: &StmtClassDef) -> Option<String> {

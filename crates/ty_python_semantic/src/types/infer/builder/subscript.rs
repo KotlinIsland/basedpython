@@ -7,6 +7,7 @@ use ty_module_resolver::file_to_module;
 
 use super::TypeInferenceBuilder;
 use crate::place::{DefinedPlace, Definedness, Place};
+use crate::types::call::Argument;
 use crate::types::call::CallErrorKind;
 use crate::types::call::bind::CallableDescription;
 use crate::types::constraints::ConstraintSetBuilder;
@@ -32,7 +33,6 @@ use crate::types::subscript::{
 use crate::types::tuple::{Tuple, TupleSpecBuilder, TupleType, VariableSegment};
 use crate::types::typed_dict::{TypedDictAssignmentKind, TypedDictKeyAssignment};
 use crate::types::typevar::pack_bound_violation;
-use crate::types::call::Argument;
 use crate::types::{
     BoundTypeVarInstance, CallArguments, CallDunderError, CallableBinding, CycleDetector,
     DynamicType, InternedType, KnownClass, KnownInstanceType, LintDiagnosticGuard,
@@ -2092,9 +2092,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // `x.__getitem__(a, z=1)`, and is checked as that call. reached only
             // here, so a generic class / alias / special form keeps the
             // specialization reading it was given above
-            _ if self.is_basedpython_file()
-                && keyword_subscript_elements(subscript).is_some() =>
-            {
+            _ if self.is_basedpython_file() && keyword_subscript_elements(subscript).is_some() => {
                 self.infer_keyword_subscript(subscript, value_ty, slice_ty, tcx)
             }
             _ => value_ty.subscript(db, slice_ty, expr_context, tcx),

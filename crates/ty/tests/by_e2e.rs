@@ -597,6 +597,67 @@ print(\"quiet\".shouty)
     );
 }
 
+/// an extension may supply an operator's dunder; the checker accepts the
+/// operator and the lowering emits the backing-function call it resolved to
+#[test]
+fn extension_operators_run() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+class Money:
+    def __init__(self, cents: int):
+        self.cents = cents
+
+extension Money:
+    def __add__(self, other: Money) -> Money:
+        return Money(self.cents + other.cents)
+
+    def __neg__(self) -> Money:
+        return Money(-self.cents)
+
+    def __lt__(self, other: Money) -> bool:
+        return self.cents < other.cents
+
+class Wallet:
+    def __init__(self, held: list[int]):
+        self.held = held
+
+extension Wallet:
+    def __contains__(self, m: Money) -> bool:
+        return m.cents in self.held
+
+a = Money(5)
+b = Money(7)
+print((a + b).cents)
+print((-a).cents)
+print(a < b)
+w = Wallet([5])
+print(a in w)
+print(b not in w)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "12\n-5\nTrue\nTrue\nTrue"
+    );
+}
+
 #[test]
 fn static_property_reads_off_the_class_and_the_instance() {
     // a `static let` accessor block is a class-level computed property: in a plain
