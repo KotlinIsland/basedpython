@@ -1301,6 +1301,35 @@ def recur(a):
 reveal_type(recur([]))  # revealed: list[Divergent]
 ```
 
+### recursion that grows a tuple
+
+a body that concatenates onto its own result adds an element every round, so no tuple length is the
+answer — the length is the analysis counting its own rounds. it is given up, and the element type,
+which the body really does determine, is kept:
+
+```py
+def shape(tensor):
+    if not hasattr(tensor, "__iter__"):
+        return ()
+    return (len(tensor),) + shape(tensor[0])
+
+reveal_type(shape([]))  # revealed: tuple[int, ...]
+```
+
+the same holds when the recursion goes round two functions:
+
+```py
+def outer(a):
+    if a:
+        return ()
+    return inner(a)
+
+def inner(b):
+    return (1,) + outer(b)
+
+reveal_type(outer([]))  # revealed: tuple[Literal[1], ...]
+```
+
 ### generators
 
 ```py
