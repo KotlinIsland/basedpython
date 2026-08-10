@@ -263,3 +263,120 @@ assert [1].tagged()
 
 reveal_type([1].tagged())  # revealed: int
 ```
+
+## an extension supplies an operator's dunder
+
+an operator never goes through attribute lookup, so it consults applicable extensions directly. the
+precedence is the same one every extension member follows: the operand's own dunder wins.
+
+```by
+class Money:
+    cents: int
+
+extension Money:
+    def __neg__(self) -> Money:
+        return self
+
+    def __add__(self, other: Money) -> Money:
+        return self
+
+    def __lt__(self, other: Money) -> bool:
+        return self.cents < other.cents
+
+def f(a: Money, b: Money) -> None:
+    reveal_type(-a)  # revealed: Money
+    reveal_type(a + b)  # revealed: Money
+    reveal_type(a < b)  # revealed: bool
+```
+
+## a reflected binary dunder answers for the right operand
+
+```by
+class Money:
+    cents: int
+
+extension Money:
+    def __radd__(self, other: int) -> Money:
+        return self
+
+def f(a: Money) -> None:
+    reveal_type(1 + a)  # revealed: Money
+```
+
+## a membership test resolves against the container
+
+`a in b` calls `b.__contains__(a)`, and python coerces the result, so the test is a `bool` whatever
+the extension declares.
+
+```by
+class Wallet:
+    held: list[int]
+
+extension Wallet:
+    def __contains__(self, m: int) -> int:
+        return m
+
+def f(w: Wallet) -> None:
+    reveal_type(1 in w)  # revealed: bool
+    reveal_type(1 not in w)  # revealed: bool
+```
+
+## an operand that does not fit the declared parameter is still an error
+
+```by
+class Money:
+    cents: int
+
+extension Money:
+    def __add__(self, other: Money) -> Money:
+        return self
+
+def f(a: Money) -> None:
+    a + 1  # error: [unsupported-operator]
+```
+
+## an extension does not shadow the operand's own dunder
+
+`str` declares `__add__`, so the extension never answers for it — the ordinary error stands.
+
+```by
+extension str:
+    def __add__(self, other: int) -> str:
+        return self
+
+def f(s: str) -> None:
+    s + 1  # error: [unsupported-operator]
+```
+
+## an augmented assignment is not rewritten
+
+`a += b` has no lowering to the backing function — rewriting it re-evaluates the target — so the
+operator stays unsupported, keeping the checker and the runtime in agreement.
+
+```by
+class Money:
+    cents: int
+
+extension Money:
+    def __add__(self, other: Money) -> Money:
+        return self
+
+def f(a: Money, b: Money) -> None:
+    a += b  # error: [unsupported-operator]
+```
+
+## a comparison chain is not rewritten
+
+```by
+class Money:
+    cents: int
+
+extension Money:
+    def __lt__(self, other: Money) -> bool:
+        return True
+
+def f(a: Money, b: Money, c: Money) -> None:
+    # error: [unsupported-operator]
+    # error: [unsupported-operator]
+    a < b < c
+```

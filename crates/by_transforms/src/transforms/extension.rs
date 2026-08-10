@@ -611,9 +611,70 @@ impl<'ast> Visitor<'ast> for ExtensionCallLower<'_> {
                     }
                 }
             }
+            Expr::UnaryOp(_) | Expr::BinOp(_) | Expr::Compare(_) => self.lower_operator(expr),
             _ => {}
         }
         walk_expr(self, expr);
+    }
+}
+
+impl ExtensionCallLower<'_> {
+    /// rewrite an operator whose dunder an extension supplies to the call it
+    /// resolves to: `+text` → `_by_ext__str____pos__(text)`, `a in b` →
+    /// `_by_ext__B____contains__(b, a)`
+    fn lower_operator(&mut self, expr: &Expr) {
+        let Some(rewrite) = self.types.extension_operator_info(expr) else {
+            return;
+        };
+        let Some((left, right)) = operator_operands(expr) else {
+            return;
+        };
+        self.note_import(&rewrite.info);
+        let (receiver, argument) = match (rewrite.reflected, right) {
+            (true, Some(right)) => (right, Some(left)),
+            (true, None) => return,
+            (false, right) => (left, right),
+        };
+        // a membership test is `bool(b.__contains__(a))` — python coerces the
+        // dunder's result, and negates it for `not in`
+        let wrapper = match expr {
+            Expr::Compare(compare) => match compare.ops.as_ref() {
+                [ast::CmpOp::In] => Some("bool("),
+                [ast::CmpOp::NotIn] => Some("not bool("),
+                _ => None,
+            },
+            _ => None,
+        };
+        let mut fragments = Vec::new();
+        if let Some(wrapper) = wrapper {
+            fragments.push(Fragment::Lit(wrapper.to_owned()));
+        }
+        fragments.push(Fragment::Lit(format!("{}(", rewrite.info.function)));
+        fragments.push(Fragment::Src(receiver.range()));
+        if let Some(argument) = argument {
+            fragments.push(Fragment::Lit(", ".to_owned()));
+            fragments.push(Fragment::Src(argument.range()));
+        }
+        fragments.push(Fragment::Lit(")".to_owned()));
+        if wrapper.is_some() {
+            fragments.push(Fragment::Lit(")".to_owned()));
+        }
+        self.edits.push((expr.range(), fragments));
+    }
+}
+
+/// the operands of an operator expression the extension rewrite handles, as
+/// `(left, right)`. `None` for a comparison chain, which the checker also
+/// leaves alone — it is two calls joined by a short-circuit, a different rewrite
+fn operator_operands(expr: &Expr) -> Option<(&Expr, Option<&Expr>)> {
+    match expr {
+        Expr::UnaryOp(unary) => Some((&unary.operand, None)),
+        Expr::BinOp(binary) => Some((&binary.left, Some(&binary.right))),
+        Expr::Compare(compare) => match compare.comparators.as_ref() {
+            [right] => Some((&compare.left, Some(right))),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -884,7 +945,10 @@ mod tests {
         let out = check(
             "extension str:\n    def foo(self, context val: int) -> None:\n        print(val)\n\ncontext a = 2\n\"asdf\".foo()\n",
         );
-        assert!(out.contains("_by_ext__str__foo(\"asdf\", val=a)"), "got:\n{out}");
+        assert!(
+            out.contains("_by_ext__str__foo(\"asdf\", val=a)"),
+            "got:\n{out}"
+        );
     }
 
     #[test]
@@ -904,6 +968,63 @@ mod tests {
             "class W: ...\n\nextension W:\n    static def make(context val: int) -> None:\n        print(val)\n\ncontext a = 2\nW.make()\n",
         );
         assert!(out.contains("_by_ext__W__make(val=a)"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_unary_operator_lowers_to_its_backing_function() {
+        let out = check(
+            "extension str:\n    def __pos__(self) -> str:\n        return self\n\nprint(+\"asdf\")\n",
+        );
+        assert!(
+            out.contains("print(_by_ext__str____pos__(\"asdf\"))"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_binary_operator_lowers_to_its_backing_function() {
+        let out = check(
+            "class Money: ...\n\nextension Money:\n    def __add__(self, other: Money) -> Money:\n        return self\n\ndef f(a: Money, b: Money) -> Money:\n    return a + b\n",
+        );
+        assert!(
+            out.contains("return _by_ext__Money____add__(a, b)"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_reflected_binary_operator_takes_the_right_operand_as_receiver() {
+        let out = check(
+            "class Money: ...\n\nextension Money:\n    def __radd__(self, other: int) -> Money:\n        return self\n\ndef f(a: Money) -> Money:\n    return 1 + a\n",
+        );
+        assert!(
+            out.contains("return _by_ext__Money____radd__(a, 1)"),
+            "got:\n{out}"
+        );
+    }
+
+    /// python coerces `__contains__`'s result and negates it for `not in`, so
+    /// the lowered call has to do the same
+    #[test]
+    fn a_membership_test_lowers_against_the_container() {
+        let source = "class Wallet: ...\n\nextension Wallet:\n    def __contains__(self, n: int) -> int:\n        return n\n\ndef f(w: Wallet) -> bool:\n    return 1 in w\n\ndef g(w: Wallet) -> bool:\n    return 1 not in w\n";
+        let out = check(source);
+        assert!(
+            out.contains("return bool(_by_ext__Wallet____contains__(w, 1))"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("return not bool(_by_ext__Wallet____contains__(w, 1))"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn an_operator_the_operand_supports_is_untouched() {
+        let out = check(
+            "extension str:\n    def __add__(self, other: int) -> str:\n        return self\n\ndef f(s: str) -> str:\n    return s + s\n",
+        );
+        assert!(out.contains("return s + s"), "got:\n{out}");
     }
 
     #[test]

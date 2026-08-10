@@ -18,8 +18,8 @@ use crate::place::implicit_globals::all_implicit_module_globals;
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
 use crate::types::list_members::{Member, all_members, all_reachable_members};
 use crate::types::{
-    CycleDetector, SpecialFormType, Type, TypeQualifiers, binding_type,
-    infer_complete_scope_types, inferred_declaration,
+    CycleDetector, SpecialFormType, Type, TypeQualifiers, binding_type, infer_complete_scope_types,
+    inferred_declaration,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::place_table;
@@ -124,10 +124,69 @@ impl<'db> SemanticModel<'db> {
             receiver_ty,
             attribute.attr.as_str(),
         )?;
-        // prelude members (the grapheme string surface) have no backing function —
-        // the dedicated `grapheme_string` lowering handles them, so the extension
-        // rewrite must leave the access alone. skip when either the resolved
-        // extension or an ambiguous peer is the prelude
+        // a use-site modifier does not turn an instance into a class object:
+        // `A()` is a `final A`, still a receiver a `class def` has to widen
+        let receiver_is_class = receiver_ty
+            .erase_restriction(db)
+            .nominal_class(db)
+            .is_none();
+        self.extension_rewrite(&resolution, attribute.attr.as_str(), receiver_is_class)
+    }
+
+    /// basedpython: how the transpiler rewrites an *operator* that resolved to
+    /// an extension member — `+text` → `_by_ext__str____pos__(text)`. `None`
+    /// for every operator the operand's own type supports, which is all of
+    /// them outside a file that declares such an extension
+    pub fn extension_operator_info(&self, expr: &Expr) -> Option<ExtensionOperatorRewrite> {
+        let db = self.db;
+        let operator = match expr {
+            Expr::UnaryOp(unary) => {
+                let operand = unary.operand.inferred_type(self)?;
+                crate::types::extensions::unary_extension_operator(
+                    db, self.file, unary.op, operand,
+                )?
+            }
+            Expr::BinOp(binary) => {
+                let left = binary.left.inferred_type(self)?;
+                let right = binary.right.inferred_type(self)?;
+                crate::types::extensions::binary_extension_operator(
+                    db, self.file, left, binary.op, right,
+                )?
+            }
+            // only a single comparison lowers: a chain (`a < b < c`) is two
+            // calls joined by a short-circuit, which is a different rewrite
+            Expr::Compare(compare) => {
+                let [op] = compare.ops.as_ref() else {
+                    return None;
+                };
+                let [right_expr] = compare.comparators.as_ref() else {
+                    return None;
+                };
+                let left = compare.left.inferred_type(self)?;
+                let right = right_expr.inferred_type(self)?;
+                crate::types::extensions::comparison_extension_operator(
+                    db, self.file, left, *op, right,
+                )?
+            }
+            _ => return None,
+        };
+        Some(ExtensionOperatorRewrite {
+            info: self.extension_rewrite(&operator.resolution, operator.member, false)?,
+            reflected: operator.reflected,
+        })
+    }
+
+    /// the transpiler's rewrite for a resolved extension member. `None` for a
+    /// prelude member — the grapheme string surface has no backing function,
+    /// and its own lowering handles it — or for one whose declaring module this
+    /// file has no import spelling for
+    fn extension_rewrite(
+        &self,
+        resolution: &crate::types::extensions::ExtensionMemberResolution<'db>,
+        member: &str,
+        receiver_is_class: bool,
+    ) -> Option<crate::types::extensions::ExtensionAttributeInfo> {
+        let db = self.db;
         if crate::types::extensions::is_prelude_extension(db, self.file, resolution.extension)
             || resolution.ambiguous_with.is_some_and(|other| {
                 crate::types::extensions::is_prelude_extension(db, self.file, other)
@@ -153,16 +212,11 @@ impl<'db> SemanticModel<'db> {
             function: crate::types::extensions::backing_function_name(
                 db,
                 resolution.extension,
-                attribute.attr.as_str(),
+                member,
             ),
             kind: resolution.kind,
             import_from,
-            // a use-site modifier does not turn an instance into a class object:
-            // `A()` is a `final A`, still a receiver a `class def` has to widen
-            receiver_is_class: receiver_ty
-                .erase_restriction(db)
-                .nominal_class(db)
-                .is_none(),
+            receiver_is_class,
         })
     }
 
@@ -1138,6 +1192,18 @@ impl<'db> SemanticModel<'db> {
 pub struct MemberDefinition<'db> {
     pub ty: Type<'db>,
     pub first_reachable_definition: Definition<'db>,
+}
+
+/// basedpython: how the transpiler rewrites an operator whose dunder an
+/// `extension` supplies
+#[derive(Clone, Debug)]
+pub struct ExtensionOperatorRewrite {
+    /// the backing function and the import that reaches it
+    pub info: crate::types::extensions::ExtensionAttributeInfo,
+    /// whether the *right* operand is the receiver — a reflected binary
+    /// operator (`__radd__`), or a membership test (`a in b` calls
+    /// `b.__contains__(a)`)
+    pub reflected: bool,
 }
 
 /// basedpython: one positional argument of a django lookup method that spells a

@@ -104,6 +104,56 @@ a `static let` in an extension needs none of the descriptor machinery the same
 declaration requires in a plain class: the access site is rewritten at transpile
 time, so `Widget.kind` simply passes the class to the backing function
 
+## operators
+
+an extension may supply an operator's dunder, which makes the operator itself
+available on the extended type:
+
+```by
+class Money:
+    cents: int
+
+extension Money:
+    def __add__(self, other: Money) -> Money:
+        return Money(self.cents + other.cents)
+
+    def __neg__(self) -> Money:
+        return Money(-self.cents)
+
+    def __lt__(self, other: Money) -> bool:
+        return self.cents < other.cents
+```
+
+`a + b`, `-a` and `a < b` then type-check, and each lowers to its backing
+function the same way a named member does — `a + b` →
+`_by_ext__Money____add__(a, b)`
+
+the supported set is the operators python itself resolves through a dunder on
+its operands:
+
+| form                              | dunder                                             |
+| --------------------------------- | -------------------------------------------------- |
+| `-a`, `+a`, `~a`                  | `__neg__`, `__pos__`, `__invert__`                 |
+| `a + b` and every binary operator | `__add__` …, and the reflected `__radd__` … on `b` |
+| `a < b`, `a == b`, …              | `__lt__`, `__eq__`, …                              |
+| `a in b`, `a not in b`            | `__contains__` on `b`                              |
+
+precedence is the same rule every extension member follows: the operand's own
+dunder wins, and an extension only answers where nothing else does. `str`
+declares `__add__`, so an `extension str: def __add__` is never reached —
+extensions are purely additive here too
+
+three forms are deliberately left out, because there is no lowering that
+preserves what the syntax means:
+
+- a comparison **chain** (`a < b < c`) — two calls joined by a short-circuit
+- an **augmented assignment** (`a += b`) — rewriting it re-evaluates the target
+- every dunder outside the table (`__call__`, `__iter__`, `__enter__`, …) —
+    reachable by name, not through the syntax that would normally invoke it
+
+each of those keeps reporting the operator as unsupported, so the checker and
+the runtime never disagree. write the call out, or the two comparisons
+
 ## implicit imports
 
 importing a module makes its extensions applicable — there is no per-extension
@@ -224,3 +274,6 @@ another module conservatively stays as the explicit call
 - an unapplied method reference (`f = xs.second`) lowers to
     `functools.partial`, which binds the receiver eagerly like a bound method
     but is not one at runtime
+- an extension supplies only the [operator](#operators) dunders; every other
+    dunder is reachable by name but not through the syntax that invokes it, and
+    a comparison chain is not rewritten

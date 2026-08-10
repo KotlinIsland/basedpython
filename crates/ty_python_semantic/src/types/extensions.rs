@@ -30,13 +30,14 @@ use ty_python_core::{global_scope, place_table, semantic_index};
 
 use crate::Db;
 use crate::place::{builtins_symbol, global_symbol};
-use crate::types::Type;
+use crate::types::call::CallArguments;
 use crate::types::class::{ClassLiteral, ClassType, KnownClass, StaticClassLiteral};
 use crate::types::class_base::ClassBase;
 use crate::types::context::InferContext;
 use crate::types::diagnostic::INVALID_EXTENSION;
 use crate::types::member::class_member;
 use crate::types::typevar::{BoundTypeVarInstance, TypeVarBoundOrConstraints};
+use crate::types::{MemberLookupPolicy, Type};
 
 /// the symbol-name prefix the semantic index gives extension declarations
 pub(crate) const EXTENSION_SYMBOL_PREFIX: &str = "<extension:";
@@ -348,6 +349,149 @@ pub(crate) fn resolve_extension_member<'db>(
         }
     }
     resolved
+}
+
+/// basedpython: the extension method `name` supplies for `receiver`, bound to
+/// it, when the receiver's own type has no such member.
+///
+/// An operator never goes through attribute lookup — `+x` calls `__pos__` on
+/// the meta-type directly — so operator inference asks here instead of through
+/// the attribute fallback. The precedence is the same one every extension
+/// member follows: a declared dunder wins, and an extension only answers what
+/// nothing else does.
+pub(crate) fn extension_operator<'db>(
+    db: &'db dyn Db,
+    file: File,
+    receiver: Type<'db>,
+    name: &str,
+) -> Option<ExtensionMemberResolution<'db>> {
+    // the same lookup the operator itself performs — on the meta-type, with no
+    // instance fallback — so an extension answers exactly where that finds
+    // nothing
+    if !receiver
+        .member_lookup_with_policy(db, name, MemberLookupPolicy::NO_INSTANCE_FALLBACK)
+        .place
+        .is_undefined()
+    {
+        return None;
+    }
+    let resolution = resolve_extension_member(db, file, receiver, name)?;
+    // an operator is invoked, so only a method can answer one — a computed
+    // property named `__pos__` would be read, not called
+    matches!(resolution.kind, ExtensionMemberKind::Method).then_some(resolution)
+}
+
+/// basedpython: an operator an extension supplies the dunder for, and which
+/// operand it is called on.
+///
+/// The checker and the transpiler both resolve an operator through here, so the
+/// call the checker approved is the call the lowering emits.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ExtensionOperator<'db> {
+    pub(crate) resolution: ExtensionMemberResolution<'db>,
+    /// the dunder the operator resolved to
+    pub(crate) member: &'static str,
+    /// whether the *right* operand is the receiver — a reflected binary
+    /// operator (`__radd__`) or a membership test (`a in b` calls
+    /// `b.__contains__(a)`)
+    pub(crate) reflected: bool,
+}
+
+impl<'db> ExtensionOperator<'db> {
+    /// the type the operator evaluates to. `None` when the resolved member
+    /// does not accept the other operand, which leaves the operator
+    /// unsupported exactly as it is without the extension
+    pub(crate) fn return_type(
+        self,
+        db: &'db dyn Db,
+        arguments: &CallArguments<'_, 'db>,
+    ) -> Option<Type<'db>> {
+        self.resolution
+            .ty
+            .try_call(db, arguments)
+            .ok()
+            .map(|bindings| bindings.return_type(db))
+    }
+}
+
+/// The extension supplying `op`'s dunder for a unary operator, if any.
+pub(crate) fn unary_extension_operator<'db>(
+    db: &'db dyn Db,
+    file: File,
+    op: ast::UnaryOp,
+    operand: Type<'db>,
+) -> Option<ExtensionOperator<'db>> {
+    let dunder = match op {
+        ast::UnaryOp::Invert => "__invert__",
+        ast::UnaryOp::UAdd => "__pos__",
+        ast::UnaryOp::USub => "__neg__",
+        // `not` reads truthiness rather than calling an operator dunder, and
+        // the basedpython postfix operators are lowered before any dunder
+        ast::UnaryOp::Not
+        | ast::UnaryOp::Optional
+        | ast::UnaryOp::Propagate
+        | ast::UnaryOp::Force => return None,
+    };
+    Some(ExtensionOperator {
+        resolution: extension_operator(db, file, operand, dunder)?,
+        member: dunder,
+        reflected: false,
+    })
+}
+
+/// The extension supplying `op`'s dunder for a binary operator, if any. The
+/// left operand's own dunder is tried first, then the right operand's
+/// reflected one — the order python itself resolves in.
+pub(crate) fn binary_extension_operator<'db>(
+    db: &'db dyn Db,
+    file: File,
+    left: Type<'db>,
+    op: ast::Operator,
+    right: Type<'db>,
+) -> Option<ExtensionOperator<'db>> {
+    extension_operator(db, file, left, op.dunder())
+        .map(|resolution| ExtensionOperator {
+            resolution,
+            member: op.dunder(),
+            reflected: false,
+        })
+        .or_else(|| {
+            extension_operator(db, file, right, op.reflected_dunder()).map(|resolution| {
+                ExtensionOperator {
+                    resolution,
+                    member: op.reflected_dunder(),
+                    reflected: true,
+                }
+            })
+        })
+}
+
+/// The extension supplying `op`'s dunder for a comparison, if any. A
+/// membership test resolves against the *right* operand — `a in b` calls
+/// `b.__contains__(a)` — and an identity test has no dunder at all.
+pub(crate) fn comparison_extension_operator<'db>(
+    db: &'db dyn Db,
+    file: File,
+    left: Type<'db>,
+    op: ast::CmpOp,
+    right: Type<'db>,
+) -> Option<ExtensionOperator<'db>> {
+    let (reflected, dunder) = match op {
+        ast::CmpOp::In | ast::CmpOp::NotIn => (true, "__contains__"),
+        ast::CmpOp::Eq => (false, "__eq__"),
+        ast::CmpOp::NotEq => (false, "__ne__"),
+        ast::CmpOp::Lt => (false, "__lt__"),
+        ast::CmpOp::LtE => (false, "__le__"),
+        ast::CmpOp::Gt => (false, "__gt__"),
+        ast::CmpOp::GtE => (false, "__ge__"),
+        ast::CmpOp::Is | ast::CmpOp::IsNot => return None,
+    };
+    let receiver = if reflected { right } else { left };
+    Some(ExtensionOperator {
+        resolution: extension_operator(db, file, receiver, dunder)?,
+        member: dunder,
+        reflected,
+    })
 }
 
 /// if `extension` extends `receiver_class` (or a class in its MRO), its bounds

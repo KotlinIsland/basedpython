@@ -80,6 +80,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             };
 
         self.infer_binary_expression_type(binary.into(), false, left_ty, right_ty, *op, tcx)
+            // basedpython: an applicable extension may supply the left
+            // operand's dunder, or the right operand's reflected one
+            .or_else(|| self.try_binary_extension_operator(left_ty, *op, right_ty))
             .unwrap_or_else(|| {
                 report_unsupported_binary_operation(&self.context, binary, left_ty, right_ty, *op);
                 Type::unknown()

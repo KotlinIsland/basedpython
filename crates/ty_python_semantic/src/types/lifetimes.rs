@@ -728,7 +728,10 @@ impl<'ast> OnceCounter<'_, 'ast> {
     /// or through the callback's own [receiver](super::receivers) (`x.cb()`)
     fn called_once_callback(&self, callee: &'ast Expr) -> Option<&'ast str> {
         match callee {
-            Expr::Name(name) => self.once.get_key_value(name.id.as_str()).map(|(&name, _)| name),
+            Expr::Name(name) => self
+                .once
+                .get_key_value(name.id.as_str())
+                .map(|(&name, _)| name),
             Expr::Attribute(attribute) => self
                 .once
                 .get_key_value(attribute.attr.as_str())
