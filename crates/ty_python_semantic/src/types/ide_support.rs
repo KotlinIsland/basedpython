@@ -2458,7 +2458,7 @@ pub fn extension_members<'db>(
 ) -> Vec<(Name, Type<'db>)> {
     let mut members = Vec::new();
     let mut seen = FxHashSet::default();
-    for &extension in applicable_extensions(db, file).iter() {
+    for &extension in applicable_extensions(db, file) {
         for member in all_end_of_scope_members(db, extension.body_scope(db)) {
             let name = member.member.name;
             if !seen.insert(name.clone()) {

@@ -698,6 +698,9 @@ struct SymbolVisitor<'db> {
     /// This is true even when we're inside a function definition
     /// that is inside a class.
     in_class: bool,
+    /// basedpython: the span of the property construct being walked, whose
+    /// synthesized members all stand for source the getter already covers.
+    property_construct: Option<TextRange>,
     /// When enabled, the visitor should only try to extract
     /// symbols from a module that we believed form the "exported"
     /// interface for that module. i.e., `__all__` is only respected
@@ -727,6 +730,7 @@ impl<'db> SymbolVisitor<'db> {
             symbol_stack: vec![],
             in_function: false,
             in_class: false,
+            property_construct: None,
             exports_only: false,
             all_origin: None,
             all_names: FxHashSet::default(),
@@ -1241,10 +1245,47 @@ impl<'db> SymbolVisitor<'db> {
     }
 }
 
+/// basedpython: the range of the property construct `func` was synthesized
+/// from, if it is that construct's getter.
+///
+/// The parser lowers `var x: int` plus its accessor blocks into a getter, an
+/// optional backing declaration and an optional setter, and marks the getter
+/// with a synthetic decorator spanning the whole construct. All three are
+/// ranged inside that span, and the source spells one member.
+fn property_construct(func: &ast::StmtFunctionDef) -> Option<TextRange> {
+    func.decorator_list.iter().find_map(|decorator| {
+        let ast::Expr::Name(marker) = &decorator.expression else {
+            return None;
+        };
+        matches!(marker.id.as_str(), "__property__" | "__static_property__").then(|| marker.range())
+    })
+}
+
 impl<'db> SourceOrderVisitor<'db> for SymbolVisitor<'db> {
     fn visit_stmt(&mut self, stmt: &'db ast::Stmt) {
+        // basedpython: everything else the property construct was lowered into
+        // stands for source the getter already accounts for
+        if self
+            .property_construct
+            .is_some_and(|construct| construct.contains_range(stmt.range()))
+        {
+            return;
+        }
         match stmt {
             ast::Stmt::FunctionDef(func_def) => {
+                if let Some(construct) = property_construct(func_def) {
+                    self.property_construct = Some(construct);
+                    self.add_symbol(SymbolTree {
+                        parent: None,
+                        name: func_def.name.to_string(),
+                        kind: SymbolKind::Property,
+                        deprecated: Self::has_deprecated_decorator(&func_def.decorator_list),
+                        name_range: func_def.name.range(),
+                        full_range: construct,
+                        imported_from: None,
+                    });
+                    return;
+                }
                 let kind = SymbolKind::function_kind(
                     &func_def.name,
                     self.iter_symbol_stack()

@@ -18,6 +18,56 @@ mod tests {
         SubDiagnosticSeverity,
     };
 
+    /// basedpython: an accessor property is one member in the source, so it is
+    /// one symbol in the outline — not the getter, backing field and setter the
+    /// parser lowers it into.
+    ///
+    /// An enum's variants and an extension's methods are already carried by the
+    /// ordinary class walk, since both are classes by the time the outline sees
+    /// them.
+    #[test]
+    fn basedpython_symbols() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "\
+enum class Shape:
+    case Circle(radius: float)
+    case Square
+
+extension list:
+    def second(self) -> int:
+        return 0
+
+class P:
+    var x: int = 0
+        get() = field
+        set(value):
+            field = value
+<CURSOR>",
+            )
+            .build();
+
+        let symbols = test.document_symbols();
+        let outline: Vec<&str> = symbols
+            .lines()
+            .filter_map(|line| line.strip_prefix("info: "))
+            .collect();
+        assert_eq!(
+            outline,
+            [
+                "Class Shape",
+                "Class Circle",
+                "Field radius",
+                "Class Square",
+                "Class list",
+                "Method second",
+                "Class P",
+                "Property x",
+            ]
+        );
+    }
+
     #[test]
     fn test_document_symbols_simple() {
         let test = cursor_test(
