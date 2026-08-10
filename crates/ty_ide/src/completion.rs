@@ -21,7 +21,9 @@ use rustc_hash::FxHashSet;
 use ty_module_resolver::{KnownModule, Module, ModuleName};
 use ty_python_semantic::HasType;
 use ty_python_semantic::types::format::{SpecLanguage, spec_language};
-use ty_python_semantic::types::ide_support::is_awaitable;
+use ty_python_semantic::types::ide_support::{
+    context_sensitive_members, extension_members, is_awaitable, overridable_members,
+};
 use ty_python_semantic::types::{SpecialFormType, UnionType};
 use ty_python_semantic::{
     Completion as SemanticCompletion, NameKind, SemanticModel,
@@ -100,6 +102,7 @@ pub fn completion<'db>(
         ContextKind::NonImport(ref non_import) => match non_import.target {
             CompletionTargetAst::ObjectDot { expr } => {
                 completions.extend(model.attribute_completions(expr));
+                add_extension_completions(expr, &model, file, &mut completions);
                 add_postfix_completions(
                     expr,
                     &context.cursor,
@@ -131,6 +134,19 @@ pub fn completion<'db>(
                     &mut completions,
                 );
                 add_compound_keyword_completions(&context.cursor, source_type, &mut completions);
+                add_context_sensitive_completions(
+                    &context.cursor,
+                    &model,
+                    source_type,
+                    &mut completions,
+                );
+                add_override_completions(
+                    &context.cursor,
+                    &model,
+                    source_type,
+                    capabilities,
+                    &mut completions,
+                );
                 add_main_completion(
                     &parsed,
                     &source,
@@ -1652,6 +1668,66 @@ impl<'m> ContextCursor<'m> {
             .unwrap_or(false)
     }
 
+    /// The type the position under the cursor expects a value of, when the
+    /// source says what it is.
+    ///
+    /// Only the two positions a bare enum member is written in are read: the
+    /// value of a declared assignment, and a `case` pattern, whose expected
+    /// type is the subject the `match` is over.
+    fn expected_type<'db>(&self, model: &SemanticModel<'db>) -> Option<Type<'db>> {
+        if let Some(ty) = self.expected_type_at(model, self.range) {
+            return Some(ty);
+        }
+        // a position that has only been opened holds no node the cursor falls
+        // in — `a: Color = ` ends at the `=` — so ask again from the token
+        // that opened it
+        let preceding = match self.typed {
+            Some(_) => &self.tokens_before[..self.tokens_before.len().saturating_sub(1)],
+            None => self.tokens_before,
+        };
+        let token = preceding
+            .iter()
+            .rev()
+            .find(|token| !token.kind().is_trivia())?;
+        self.expected_type_at(model, token.range())
+    }
+
+    /// The expected type at `probe`, which is either the cursor or the token
+    /// that opened the position it sits in.
+    fn expected_type_at<'db>(
+        &self,
+        model: &SemanticModel<'db>,
+        probe: TextRange,
+    ) -> Option<Type<'db>> {
+        self.covering_node(probe)
+            .ancestors()
+            .find_map(|node| match node {
+                // everything past the annotation is the value being declared
+                ast::AnyNodeRef::StmtAnnAssign(stmt) => (probe.start()
+                    >= stmt.annotation.range().end())
+                .then(|| stmt.target.inferred_type(model))
+                .flatten(),
+                // every pattern is matched against the subject
+                ast::AnyNodeRef::StmtMatch(stmt) => (probe.start() > stmt.subject.range().end())
+                    .then(|| stmt.subject.inferred_type(model))
+                    .flatten(),
+                _ => None,
+            })
+    }
+
+    /// The class whose body the cursor sits directly in.
+    ///
+    /// Unlike [`Self::enclosing_class_def`], which finds the class whose
+    /// *bases* are being written, this is the class a member would be declared
+    /// on.
+    fn enclosing_class_body(&self) -> Option<&'m ast::StmtClassDef> {
+        self.covering_node.ancestors().find_map(|node| match node {
+            ast::AnyNodeRef::StmtClassDef(class) => Some(Some(class)),
+            ast::AnyNodeRef::StmtFunctionDef(_) | ast::AnyNodeRef::ExprLambda(_) => Some(None),
+            _ => None,
+        })?
+    }
+
     /// Whether the cursor sits directly in a class body, where a method
     /// modifier can be written.
     fn is_in_class_body(&self) -> bool {
@@ -2477,6 +2553,98 @@ fn add_type_keyword_completions(
     }
     for &keyword in TYPE_KEYWORDS {
         completions.add(CompletionBuilder::keyword(keyword).context_specific(true));
+    }
+}
+
+/// basedpython: adds the enum members the expected type admits by bare name.
+///
+/// `a: Color = Red` resolves `Red` against the type the position expects, so
+/// the completion list there should offer what that resolution would accept.
+fn add_context_sensitive_completions<'db>(
+    cursor: &ContextCursor<'_>,
+    model: &SemanticModel<'db>,
+    source_type: PySourceType,
+    completions: &mut Completions<'db>,
+) {
+    if !source_type.is_basedpython() {
+        return;
+    }
+    let Some(target) = cursor.expected_type(model) else {
+        return;
+    };
+    for (name, ty) in context_sensitive_members(model.db(), target) {
+        completions.add(
+            Completion::builder(name.as_str())
+                .ty(ty)
+                .context_specific(true),
+        );
+    }
+}
+
+/// basedpython: adds the members an `extension` block in scope declares on the
+/// receiver's type.
+///
+/// An extension's methods are reached through ordinary attribute access, but
+/// they do not live on the class, so the attribute completions never see them.
+fn add_extension_completions<'db>(
+    expr: &ast::ExprAttribute,
+    model: &SemanticModel<'db>,
+    file: File,
+    completions: &mut Completions<'db>,
+) {
+    let Some(receiver) = expr.value.inferred_type(model) else {
+        return;
+    };
+    for (name, ty) in extension_members(model.db(), file, receiver) {
+        completions.add(
+            Completion::builder(name.as_str())
+                .ty(ty)
+                .detail("extension"),
+        );
+    }
+}
+
+/// basedpython: adds the superclass members a class could override, each as
+/// the whole `def` header it would be written with.
+///
+/// Offered wherever a member can be declared in a class body — the modifier
+/// keyword the completion list already carries says `override`, and this says
+/// what there is to override.
+fn add_override_completions<'db>(
+    cursor: &ContextCursor<'_>,
+    model: &SemanticModel<'db>,
+    source_type: PySourceType,
+    capabilities: CompletionCapabilities,
+    completions: &mut Completions<'db>,
+) {
+    if !source_type.is_basedpython()
+        || !cursor.is_at_statement_start()
+        || !cursor.is_in_class_body()
+    {
+        return;
+    }
+    let Some(class) = cursor
+        .enclosing_class_body()
+        .and_then(|class| class.inferred_type(model))
+    else {
+        return;
+    };
+
+    for member in overridable_members(model.db(), class) {
+        let header = format!("override def {}{}:", member.name, member.signature);
+        let body = if capabilities.snippets { "$0" } else { "" };
+        let builder = Completion::builder(member.name.as_str())
+            .kind(CompletionKind::Method)
+            .label(format!("override def {}", member.name))
+            .ty(member.ty)
+            .detail(format!("override {}", member.superclass))
+            .documentation(format!("override `{}.{}`", member.superclass, member.name))
+            .context_specific(true);
+        completions.add(if capabilities.snippets {
+            builder.snippet(format!("{header}\n{body}"))
+        } else {
+            builder.insert(header)
+        });
     }
 }
 
@@ -10968,6 +11136,158 @@ if foo:
         completion_test_builder("x = <CURSOR>")
             .build()
             .not_contains("async def");
+    }
+
+    /// basedpython: a bare enum member resolves against the type the position
+    /// expects, so the completion list there offers what that would accept.
+    #[test]
+    fn basedpython_context_sensitive_enum_members() {
+        CursorTest::builder()
+            .source(
+                "main.by",
+                "enum class Color:\n    case Red\n    case Green\n\na: Color = <CURSOR>",
+            )
+            .completion_test_builder()
+            .skip_auto_import()
+            .build()
+            .contains("Red")
+            .contains("Green");
+    }
+
+    /// A `case` pattern is resolved against the subject the `match` is over.
+    #[test]
+    fn basedpython_context_sensitive_case_patterns() {
+        CursorTest::builder()
+            .source(
+                "main.by",
+                "enum class Color:\n    case Red\n    case Green\n\ndef f(c: Color):\n    match c:\n        case <CURSOR>",
+            )
+            .completion_test_builder()
+            .skip_auto_import()
+            .build()
+            .contains("Red")
+            .contains("Green");
+    }
+
+    /// Nothing is offered where the expected type is not an enum.
+    #[test]
+    fn context_sensitive_members_need_an_enum() {
+        CursorTest::builder()
+            .source(
+                "main.by",
+                "enum class Color:\n    case Red\n\na: int = <CURSOR>",
+            )
+            .completion_test_builder()
+            .skip_auto_import()
+            .build()
+            .not_contains("Red");
+    }
+
+    /// basedpython: an extension's methods are reached through attribute
+    /// access, but do not live on the class, so they have to be offered
+    /// alongside the class's own members.
+    #[test]
+    fn basedpython_extension_completions() {
+        let builder = CursorTest::builder()
+            .source(
+                "main.by",
+                "extension list:\n    def second(self) -> int:\n        return 0\n\nxs = [1]\nxs.<CURSOR>",
+            )
+            .completion_test_builder()
+            .skip_auto_import()
+            .filter(|c| c.detail.as_deref() == Some("extension"));
+        assert_snapshot!(builder.build().snapshot(), @"second");
+    }
+
+    /// An extension in an imported module applies too.
+    #[test]
+    fn basedpython_extension_completions_across_modules() {
+        CursorTest::builder()
+            .source(
+                "helpers.by",
+                "extension list:\n    def second(self) -> int:\n        return 0\n",
+            )
+            .source("main.by", "import helpers\nxs = [1]\nxs.sec<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import()
+            .build()
+            .contains("second");
+    }
+
+    /// An extension only applies to the type it extends.
+    #[test]
+    fn basedpython_extension_completions_respect_the_receiver() {
+        CursorTest::builder()
+            .source(
+                "main.by",
+                "extension list:\n    def second(self) -> int:\n        return 0\n\ns = 'a'\ns.<CURSOR>",
+            )
+            .completion_test_builder()
+            .skip_auto_import()
+            .filter(|c| c.detail.as_deref() == Some("extension"))
+            .build()
+            .not_contains("second");
+    }
+
+    /// basedpython: a class body offers the superclass members it could
+    /// override, each as the whole header it would be written with.
+    #[test]
+    fn basedpython_override_completions() {
+        let builder = CursorTest::builder()
+            .source(
+                "main.by",
+                "class A:\n    def greet(self, name: str) -> str:\n        return name\n    def shared(self) -> int:\n        return 1\n\nclass B(A):\n    def shared(self) -> int:\n        return 2\n    gre<CURSOR>",
+            )
+            .completion_test_builder()
+            .skip_auto_import()
+            .filter(|c| c.detail.as_deref().is_some_and(|d| d.starts_with("override")));
+        let test = builder.build();
+        assert_snapshot!(
+            test.snapshot(),
+            @"override def greet(self, name: str) -> str:"
+        );
+    }
+
+    /// A member the class already defines is not one it can add.
+    #[test]
+    fn basedpython_override_completions_skip_defined_members() {
+        CursorTest::builder()
+            .source(
+                "main.by",
+                "class A:\n    def shared(self) -> int:\n        return 1\n\nclass B(A):\n    def shared(self) -> int:\n        return 2\n    sha<CURSOR>",
+            )
+            .completion_test_builder()
+            .skip_auto_import()
+            .filter(|c| c.detail.as_deref().is_some_and(|d| d.starts_with("override")))
+            .build()
+            .not_contains("shared");
+    }
+
+    /// `object`'s members are inherited by everything and almost never meant
+    /// to be overridden.
+    #[test]
+    fn basedpython_override_completions_skip_object() {
+        let builder = CursorTest::builder()
+            .source("main.by", "class A:\n    <CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import()
+            .filter(|c| {
+                c.detail
+                    .as_deref()
+                    .is_some_and(|d| d.starts_with("override"))
+            });
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found after filtering out completions>");
+    }
+
+    #[test]
+    fn override_completions_are_basedpython_only() {
+        completion_test_builder(
+            "class A:\n    def greet(self) -> str:\n        return \"\"\n\nclass B(A):\n    gre<CURSOR>",
+        )
+        .skip_auto_import()
+        .filter(|c| c.detail.as_deref().is_some_and(|d| d.starts_with("override")))
+        .build()
+        .not_contains("greet");
     }
 
     /// basedpython: a type is written with words python has no keyword for.
