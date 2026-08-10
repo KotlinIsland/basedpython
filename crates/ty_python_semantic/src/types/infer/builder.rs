@@ -1512,9 +1512,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// carried by its synthetic decorator — with the lambda appended as its
     /// last argument. The argument is bound by keyword (the callee's last
     /// declared parameter) when the signature is inspectable, mirroring the
-    /// lowering; positionally otherwise. Its type is deliberately `Unknown`:
-    /// the lambda's `it` parameter is context-typed separately, and the
-    /// block's return is unchecked (it is written for effect).
+    /// lowering; positionally otherwise.
+    ///
+    /// Its type is the gradual callable `(...) -> Unknown` — enough to reject a
+    /// parameter that is not callable at all (a block bound to `extra:
+    /// dict[str, str]` has nowhere to go, and its body would vanish from the
+    /// program), and gradual everywhere else: the lambda's `it` parameter is
+    /// context-typed separately, and the block's return is checked by
+    /// [`TRAILING_LAMBDA_RETURN_TYPE`](crate::types::diagnostic::TRAILING_LAMBDA_RETURN_TYPE),
+    /// which a concrete return here would duplicate.
     ///
     /// Diagnostics anchor on the decorator node — never the call expression —
     /// so argument-index lookups can't reach for the synthetic argument,
@@ -1567,12 +1573,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         let keyword = trailing_lambda_keyword(self.db(), callee_ty);
+        let block_ty = Type::single_callable(
+            self.db(),
+            Signature::new(Parameters::gradual_form(), Type::unknown()),
+        );
         items.push((
             match &keyword {
                 Some(name) => Argument::Keyword(name),
                 None => Argument::Positional,
             },
-            Some(Type::unknown()),
+            Some(block_ty),
         ));
         let call_arguments: CallArguments<'_, 'db> = items.into_iter().collect();
 

@@ -154,6 +154,40 @@ struct Backing<'a> {
     value: Option<&'a Expr>,
 }
 
+/// the leading whitespace of the line `text` starts at
+fn leading_whitespace(text: &str) -> &str {
+    let line = text.split_once('\n').map_or(text, |(line, _)| line);
+    &line[..line.len() - line.trim_start().len()]
+}
+
+/// `line_indent` shifted from the accessor suite's indentation to the emitted
+/// method body's. A line shallower than the suite (only reachable inside a
+/// continuation the string scan did not claim) keeps the body indent rather than
+/// going negative.
+fn reindent(line_indent: &str, source_indent: &str, body_indent: &str) -> String {
+    let extra = line_indent.strip_prefix(source_indent).unwrap_or("");
+    format!("{body_indent}{extra}")
+}
+
+/// Collects the source ranges of every string-like literal in a body, so a line
+/// that begins inside one is never re-indented — its leading whitespace is part
+/// of the value.
+struct StringSpanFinder {
+    spans: Vec<TextRange>,
+}
+
+impl<'ast> Visitor<'ast> for StringSpanFinder {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if matches!(
+            expr,
+            Expr::StringLiteral(_) | Expr::BytesLiteral(_) | Expr::FString(_) | Expr::TString(_)
+        ) {
+            self.spans.push(expr.range());
+        }
+        ruff_python_ast::visitor::walk_expr(self, expr);
+    }
+}
+
 /// Re-indents a rendered statement to `indent`, leaving blank lines empty.
 fn indent_block(rendered: &str, indent: &str) -> String {
     rendered
@@ -287,20 +321,71 @@ impl PropertiesPass<'_> {
             frags.push(Fragment::Src(first.range()));
             frags
         } else {
-            // one passthrough per statement, each placed at the method's body indent.
-            // a statement's range opens at its first token, so this re-indents the
-            // body's top level without touching anything inside a statement — a
-            // nested block or a multi-line string keeps its source text verbatim
+            // the source body sits at the accessor suite's indent; the emitted
+            // `def`'s body sits at the method's. every line has to shift by the
+            // difference, or a statement whose body spans lines (an `if`) keeps
+            // its source column and lands at the wrong depth — invalid python
+            // when the shift is not a multiple of the block indent, and silently
+            // over-nested when it is
+            let source_indent = line_indent(self.source, first.range().start());
+            let spans = self.reindented_line_spans(func, source_indent, body_indent);
             let mut frags = Vec::new();
-            for (idx, stmt) in func.body.iter().enumerate() {
+            for (idx, (prefix, span)) in spans.into_iter().enumerate() {
                 if idx > 0 {
                     frags.push(Fragment::Lit("\n".to_owned()));
                 }
-                frags.push(Fragment::Lit(body_indent.to_owned()));
-                frags.push(Fragment::Src(stmt.range()));
+                frags.push(Fragment::Lit(prefix));
+                frags.push(Fragment::Src(span));
             }
             frags
         }
+    }
+
+    /// The accessor body as `(emitted indent, source span)` pairs, one per line
+    /// the body is re-indented at.
+    ///
+    /// A line is only split off — and so re-indented — when its start is outside
+    /// every string literal in the body: the continuation lines of a multi-line
+    /// string are part of the value, and shifting them would change it. Each span
+    /// stays a source range, so the sibling lowerings written inside the body
+    /// still materialize within it.
+    fn reindented_line_spans(
+        &self,
+        func: &StmtFunctionDef,
+        source_indent: &str,
+        body_indent: &str,
+    ) -> Vec<(String, TextRange)> {
+        let mut strings = StringSpanFinder { spans: Vec::new() };
+        for stmt in &func.body {
+            strings.visit_stmt(stmt);
+        }
+        let inside_string =
+            |offset: TextSize| strings.spans.iter().any(|span| span.contains(offset));
+
+        let mut spans = Vec::new();
+        for stmt in &func.body {
+            let mut cursor = stmt.range().start();
+            let mut prefix = body_indent.to_owned();
+            let end = stmt.range().end();
+            // walk the statement's remaining lines, cutting at each newline whose
+            // following line begins outside a string
+            let mut offset = cursor;
+            while let Some(relative) = self.source[usize::from(offset)..usize::from(end)].find('\n')
+            {
+                let newline = offset + TextSize::try_from(relative).expect("offset fits u32");
+                let next_line = newline + TextSize::from(1u32);
+                offset = next_line;
+                if next_line >= end || inside_string(next_line) {
+                    continue;
+                }
+                spans.push((std::mem::take(&mut prefix), TextRange::new(cursor, newline)));
+                let indent = leading_whitespace(&self.source[usize::from(next_line)..]);
+                prefix = reindent(indent, source_indent, body_indent);
+                cursor = next_line + TextSize::try_from(indent.len()).expect("indent fits u32");
+            }
+            spans.push((prefix, TextRange::new(cursor, end)));
+        }
+        spans
     }
 
     fn process_class(&self, class: &StmtClassDef, ctx: &mut PassContext) {
@@ -665,6 +750,65 @@ mod tests {
 
     fn check(input: &str, expected: &str) {
         assert_eq!(transpile(input, &Config::test_default()).unwrap(), expected);
+    }
+
+    /// an accessor body's statements sit at the suite's indent, which is deeper
+    /// than the emitted method body's. every line has to shift by the difference
+    /// — passing a compound statement through verbatim left its nested lines at
+    /// the source column, which is invalid python (or silently over-nested)
+    #[test]
+    fn a_compound_accessor_body_is_reindented() {
+        check(
+            indoc! {"
+                class Tag:
+                    var attrs: dict[str, str] = {}
+                    var id: str?
+                        get() = self.attrs.get(\"id\")
+                        set(value):
+                            if value:
+                                self.attrs[\"id\"] = value
+                            else:
+                                self.attrs.pop(\"id\")
+            "},
+            indoc! {"
+                class Tag:
+                    attrs: dict[str, str] = {}
+                    @property
+                    def id(self) -> str | None:
+                        return self.attrs.get(\"id\")
+                    @id.setter
+                    def id(self, value: str | None) -> None:
+                        if value:
+                            self.attrs[\"id\"] = value
+                        else:
+                            self.attrs.pop(\"id\")
+            "},
+        );
+    }
+
+    /// the continuation lines of a multi-line string are part of its value, so
+    /// the re-indent must step over them
+    #[test]
+    fn a_multiline_string_in_an_accessor_keeps_its_value() {
+        let out = transpile(
+            indoc! {"
+                class Doc:
+                    var text: str
+                        get():
+                            if True:
+                                return \"\"\"one
+                    two
+                        three\"\"\"
+                            return \"\"
+                        set(value): print(value)
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("            return \"\"\"one\n    two\n        three\"\"\"\n"),
+            "got:\n{out}"
+        );
     }
 
     /// the design doc's motivating example
