@@ -63,7 +63,19 @@ jobs:
               return;
             }
 
-            const body = fs.readFileSync("comment.md", "utf8");
+            // the renderer already fits the report under this, but it reads
+            // untrusted-ish output from a fork build — never let an oversized
+            // body turn into a hard 422 that fails the job
+            const LIMIT = 65536;
+            let body = fs.readFileSync("comment.md", "utf8");
+            const chars = Array.from(body);
+            if (chars.length > LIMIT) {
+              const notice =
+                "\n\n_report truncated to fit GitHub's comment size limit; " +
+                "see the `comment.md` artifact of the run for the full text._\n";
+              body = chars.slice(0, LIMIT - notice.length).join("") + notice;
+            }
+
             const prNumber = parseInt(fs.readFileSync("pr-number.txt", "utf8").trim(), 10);
             if (!Number.isInteger(prNumber)) {
               core.info("no PR number; nothing to post");
