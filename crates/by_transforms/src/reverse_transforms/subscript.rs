@@ -132,4 +132,15 @@ mod tests {
         let source = "def shape(tensor):\n    if not hasattr(tensor, '__iter__'):\n        return ()\n    seq = list(tensor)\n    return (len(seq),) + shape(seq[0])\n";
         check(source, source);
     }
+
+    #[test]
+    fn call_narrowing_its_own_callee_terminates() {
+        // every statement-level call in a basedpython file records an assertion-guard
+        // predicate over its arguments, so working out what one of these calls narrows can
+        // need a type whose inference reads a place that same call narrows — a question
+        // asked while it is already being answered. the subscript is the entry point: it is
+        // what asks for a type mid-walk
+        let source = "def merge(word):\n    while True:\n        smallest = min(pairs)\n        merged = []\n        while index:\n            merged.extend(word)\n            merged.append(word[index])\n            pairs = pairs_of(word)\n";
+        check(source, source);
+    }
 }
