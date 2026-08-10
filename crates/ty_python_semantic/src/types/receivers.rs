@@ -185,12 +185,18 @@ pub(crate) enum ImplicitReceiverName<'db> {
     Receiver(Type<'db>),
     /// a member of the receiver, read off it in the lowering
     Member(Type<'db>),
+    /// a member an applicable `extension` supplies for the receiver, lowered to
+    /// its backing function rather than an attribute read
+    ExtensionMember {
+        ty: Type<'db>,
+        resolution: crate::types::extensions::ExtensionMemberResolution<'db>,
+    },
 }
 
 impl<'db> ImplicitReceiverName<'db> {
     pub(crate) fn ty(&self) -> Type<'db> {
         match self {
-            Self::Receiver(ty) | Self::Member(ty) => *ty,
+            Self::Receiver(ty) | Self::Member(ty) | Self::ExtensionMember { ty, .. } => *ty,
         }
     }
 }
@@ -213,11 +219,18 @@ pub(crate) fn implicit_receiver_name<'db>(
     if name == "self" {
         return Some(ImplicitReceiverName::Receiver(receiver));
     }
-    receiver
-        .member(db, name)
-        .place
-        .ignore_possibly_undefined()
-        .map(ImplicitReceiverName::Member)
+    if let Some(member) = receiver.member(db, name).place.ignore_possibly_undefined() {
+        return Some(ImplicitReceiverName::Member(member));
+    }
+    // an extension of the receiver's type supplies members too, and the block's
+    // scope is the receiver's — so `p:` inside a `div:` block reaches an
+    // `extension Tag: def p` exactly as `self.p:` does. reached last, after the
+    // receiver's own members, like every other extension lookup
+    let resolution = crate::types::extensions::resolve_extension_member(db, file, receiver, name)?;
+    Some(ImplicitReceiverName::ExtensionMember {
+        ty: resolution.ty,
+        resolution,
+    })
 }
 
 /// the receiver of the trailing lambda block `scope` is the body of. Walks out

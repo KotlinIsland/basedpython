@@ -454,6 +454,64 @@ pub(super) fn arguments_span(arguments: &ast::Arguments) -> Option<TextRange> {
     Some(TextRange::new(starts.min()?, ends.max()?))
 }
 
+/// The fragments an extension member *reference* lowers to, given the fragments
+/// that produce its receiver.
+///
+/// Shared by the attribute form (`xs.second`, whose receiver is a source span)
+/// and the unqualified form inside a trailing-lambda block (`second`, whose
+/// receiver is the block's receiver parameter). Returns `None` when the member
+/// needs `functools`, which the caller must then import.
+pub(super) fn member_reference_fragments(
+    info: &ty_python_semantic::ExtensionAttributeInfo,
+    receiver: &[Fragment],
+) -> (Vec<Fragment>, bool) {
+    let mut fragments = Vec::new();
+    let mut needs_functools = false;
+    match info.kind {
+        // a property is *read*, so the reference is the call itself
+        ExtensionMemberKind::Property => {
+            fragments.push(Fragment::Lit(format!("{}(", info.function)));
+            fragments.extend_from_slice(receiver);
+            fragments.push(Fragment::Lit(")".to_owned()));
+        }
+        // a class-level property reads like an instance one but its backing
+        // function takes the class, so an instance receiver has to be widened
+        ExtensionMemberKind::StaticProperty => {
+            fragments.push(Fragment::Lit(format!("{}(", info.function)));
+            if info.receiver_is_class {
+                fragments.extend_from_slice(receiver);
+            } else {
+                fragments.push(Fragment::Lit("type(".to_owned()));
+                fragments.extend_from_slice(receiver);
+                fragments.push(Fragment::Lit(")".to_owned()));
+            }
+            fragments.push(Fragment::Lit(")".to_owned()));
+        }
+        // a `static def` takes no receiver at all
+        ExtensionMemberKind::StaticMethod => {
+            fragments.push(Fragment::Lit(info.function.clone()));
+        }
+        // an unapplied member reference: bind the receiver the way the bound
+        // method would have
+        ExtensionMemberKind::Method | ExtensionMemberKind::ClassMethod => {
+            needs_functools = true;
+            fragments.push(Fragment::Lit(format!(
+                "functools.partial({}, ",
+                info.function
+            )));
+            if info.kind == ExtensionMemberKind::ClassMethod && !info.receiver_is_class {
+                fragments.push(Fragment::Lit("type(".to_owned()));
+                fragments.extend_from_slice(receiver);
+                fragments.push(Fragment::Lit(")".to_owned()));
+            } else {
+                fragments.extend_from_slice(receiver);
+            }
+            fragments.push(Fragment::Lit(")".to_owned()));
+        }
+    }
+    (fragments, needs_functools)
+}
+
 /// rewrites attribute accesses that ty resolved to extension members
 struct ExtensionCallLower<'a> {
     types: &'a dyn TypeInfo,
@@ -1025,6 +1083,32 @@ mod tests {
             "extension str:\n    def __add__(self, other: int) -> str:\n        return self\n\ndef f(s: str) -> str:\n    return s + s\n",
         );
         assert!(out.contains("return s + s"), "got:\n{out}");
+    }
+
+    /// a block puts its receiver's members in scope unqualified; an extension
+    /// of the receiver's type supplies members too, and they lower to the
+    /// backing function bound to the block's receiver
+    #[test]
+    fn an_unqualified_extension_member_lowers_inside_a_block() {
+        let out = check(
+            "class Tag: ...\n\nclass Doc:\n    def div(self, block: Tag.() -> None) -> None:\n        block(Tag())\n\nextension Tag:\n    def p(self, block: Tag.() -> None) -> None:\n        block(self)\n\ndef build(doc: Doc) -> None:\n    doc.div:\n        p:\n            print(1)\n",
+        );
+        assert!(
+            out.contains("functools.partial(_by_ext__Tag__p, _by_self)"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("import functools"), "got:\n{out}");
+    }
+
+    #[test]
+    fn an_unqualified_extension_property_lowers_to_a_call() {
+        let out = check(
+            "class Tag:\n    name: str\n\nclass Doc:\n    def div(self, block: Tag.() -> None) -> None:\n        block(Tag())\n\nextension Tag:\n    @property\n    def label(self) -> str:\n        return self.name\n\ndef build(doc: Doc) -> None:\n    doc.div:\n        print(label)\n",
+        );
+        assert!(
+            out.contains("print(_by_ext__Tag__label(_by_self))"),
+            "got:\n{out}"
+        );
     }
 
     #[test]

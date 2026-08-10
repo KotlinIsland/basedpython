@@ -380,3 +380,53 @@ def f(a: Money, b: Money, c: Money) -> None:
     # error: [unsupported-operator]
     a < b < c
 ```
+
+## an extension member resolves unqualified inside a block
+
+A [trailing lambda](basedpython_trailing_lambda.md) block whose callback declares a receiver puts
+that receiver's members in scope unqualified. An extension of the receiver's type supplies members
+too, so they resolve the same way — reached last, after the receiver's own.
+
+```by
+class Tag:
+    name: str
+
+class Doc:
+    def div(self, block: Tag.() -> None) -> None:
+        block(Tag())
+
+extension Tag:
+    def p(self, block: Tag.() -> None) -> None:
+        block(self)
+
+    @property
+    def label(self) -> str:
+        return self.name
+
+def build(doc: Doc) -> None:
+    doc.div:
+        reveal_type(label)  # revealed: str
+        p:
+            reveal_type(self)  # revealed: Tag
+```
+
+## the receiver's own member still wins
+
+```by
+class Tag:
+    def label(self) -> int:
+        return 1
+
+class Doc:
+    def div(self, block: Tag.() -> None) -> None:
+        block(Tag())
+
+extension Tag:
+    @property
+    def label(self) -> str:
+        return "x"
+
+def build(doc: Doc) -> None:
+    doc.div:
+        reveal_type(label)  # revealed: bound method Tag.label() -> int
+```

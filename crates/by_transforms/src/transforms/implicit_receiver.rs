@@ -36,6 +36,8 @@ struct ImplicitReceiverLower<'a> {
     /// bare-access arm doesn't rewrite them a second time
     handled: Vec<TextRange>,
     needs_functools: bool,
+    /// precise imports for backing functions declared in another module
+    imports: std::collections::BTreeSet<String>,
 }
 
 impl<'ast> Visitor<'ast> for ImplicitReceiverLower<'_> {
@@ -83,14 +85,31 @@ impl<'ast> Visitor<'ast> for ImplicitReceiverLower<'_> {
                 if name.ctx.is_load()
                     && let Some(reference) = self.types.implicit_receiver_name(name)
                 {
-                    let lowered = match reference {
-                        ImplicitReceiverReference::Receiver => RECEIVER_PARAMETER.to_owned(),
+                    let fragments = match reference {
+                        ImplicitReceiverReference::Receiver => {
+                            vec![Fragment::Lit(RECEIVER_PARAMETER.to_owned())]
+                        }
                         ImplicitReceiverReference::Member => {
-                            format!("{RECEIVER_PARAMETER}.{}", name.id)
+                            vec![Fragment::Lit(format!("{RECEIVER_PARAMETER}.{}", name.id))]
+                        }
+                        // an extension supplies the member, so there is nothing
+                        // to read off the receiver — the reference is its
+                        // backing function bound to the block's receiver
+                        ImplicitReceiverReference::ExtensionMember(info) => {
+                            if let Some(module) = &info.import_from {
+                                self.imports
+                                    .insert(format!("from {module} import {}", info.function));
+                            }
+                            let (fragments, needs_functools) =
+                                super::extension::member_reference_fragments(
+                                    &info,
+                                    &[Fragment::Lit(RECEIVER_PARAMETER.to_owned())],
+                                );
+                            self.needs_functools |= needs_functools;
+                            fragments
                         }
                     };
-                    self.edits
-                        .push((name.range(), vec![Fragment::Lit(lowered)]));
+                    self.edits.push((name.range(), fragments));
                 }
             }
             _ => {}
@@ -136,6 +155,7 @@ impl TypeAwarePass for ImplicitReceiverPass {
             handled: Vec::new(),
             errors: Vec::new(),
             needs_functools: false,
+            imports: std::collections::BTreeSet::new(),
         };
         for stmt in stmts {
             inner.visit_stmt(stmt);
@@ -147,6 +167,7 @@ impl TypeAwarePass for ImplicitReceiverPass {
         if inner.needs_functools {
             ctx.required_imports.push("import functools".to_owned());
         }
+        ctx.required_imports.extend(inner.imports);
         ctx.template_edits.extend(inner.edits);
     }
 }
