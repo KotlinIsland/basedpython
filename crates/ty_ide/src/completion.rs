@@ -20,6 +20,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::FxHashSet;
 use ty_module_resolver::{KnownModule, Module, ModuleName};
 use ty_python_semantic::HasType;
+use ty_python_semantic::dependencies::{self, ImportStanding};
 use ty_python_semantic::types::format::{SpecLanguage, spec_language};
 use ty_python_semantic::types::ide_support::{
     context_sensitive_members, extension_members, is_awaitable, overridable_members,
@@ -281,6 +282,18 @@ impl<'db> Completions<'db> {
             return false;
         }
         self.add_skip_query(builder)
+    }
+
+    /// Whether the user has typed something `name` starts with.
+    ///
+    /// This is what tells a request for a particular name apart from a list the
+    /// user is browsing, which is the difference between offering something the
+    /// project cannot rely on and hiding it.
+    fn query_names(&self, name: &str) -> bool {
+        matches!(
+            self.query.match_quality(name),
+            MatchQuality::Exact | MatchQuality::Prefix
+        )
     }
 
     /// Attempts to add the given semantic completion to this collection.
@@ -2162,6 +2175,9 @@ enum ModuleOriginRank {
     Project,
     StdlibSpecial,
     Other,
+    /// Only installed because something else needed it, so it ranks below
+    /// everything the project actually asked for.
+    Transitive,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -2219,9 +2235,17 @@ enum ModuleDependencyKind {
     /// could do better once we know how to navigate namespace
     /// packages better.
     Namespace,
-    /// Symbols defined somewhere in a dependency, direct or
-    /// indirect.
-    ThirdParty,
+    /// Symbols from a distribution the project depends on, or from
+    /// one it cannot be told apart from a dependency: an environment
+    /// with no install metadata, or a project that declares nothing,
+    /// answers this for everything installed.
+    DirectDependency,
+    /// Symbols from a distribution that is only installed because
+    /// something else the project depends on needed it.
+    ///
+    /// The project cannot rely on it being there, so these rank last
+    /// and are kept out of the lists a user did not ask for by name.
+    TransitiveDependency,
 }
 
 impl ModuleDependencyKind {
@@ -2233,16 +2257,27 @@ impl ModuleDependencyKind {
             ModuleDependencyKind::StdlibSpecial => ModuleOriginRank::StdlibSpecial,
             ModuleDependencyKind::Stdlib
             | ModuleDependencyKind::Namespace
-            | ModuleDependencyKind::ThirdParty => ModuleOriginRank::Other,
+            | ModuleDependencyKind::DirectDependency => ModuleOriginRank::Other,
+            ModuleDependencyKind::TransitiveDependency => ModuleOriginRank::Transitive,
         }
     }
 
+    /// Whether a symbol of this kind belongs only in a list the user asked for
+    /// by name.
+    fn is_transitive(self) -> bool {
+        matches!(self, ModuleDependencyKind::TransitiveDependency)
+    }
+
     /// Determines the "kind" of a symbol based on the module it is
-    /// defined in.
+    /// defined in, as seen from `importing_from`.
     ///
     /// Note that this can never return `ModuleDependencyKind::Current`.
     /// Callers are expected to handle that case themselves.
-    fn from_module(db: &dyn Db, module: Module<'_>) -> ModuleDependencyKind {
+    fn from_module<'db>(
+        db: &'db dyn Db,
+        importing_from: File,
+        module: Module<'db>,
+    ) -> ModuleDependencyKind {
         if module.is_known(db, KnownModule::Builtins) {
             return ModuleDependencyKind::Builtin;
         }
@@ -2258,7 +2293,15 @@ impl ModuleDependencyKind {
                 ModuleDependencyKind::Stdlib
             }
         } else if sp.is_site_packages() {
-            ModuleDependencyKind::ThirdParty
+            match dependencies::import_standing(db, importing_from, module) {
+                ImportStanding::Undeclared { .. } => ModuleDependencyKind::TransitiveDependency,
+                // a distribution declared in a group this file may not use is
+                // still a dependency, and is still worth completing: the fix is
+                // to move it, which is what the diagnostic on the import says
+                ImportStanding::Unknown
+                | ImportStanding::Available
+                | ImportStanding::Misplaced { .. } => ModuleDependencyKind::DirectDependency,
+            }
         } else {
             // We assume anything else, including
             // "extra" search paths and editable installs,
@@ -3381,7 +3424,11 @@ fn add_unimported_completions<'db>(
                 .module_name(module_name)
                 .import(import_action.import().cloned())
                 .deprecated(symbol.deprecated())
-                .module_dependency_kind(ModuleDependencyKind::from_module(db, symbol.module())),
+                .module_dependency_kind(ModuleDependencyKind::from_module(
+                    db,
+                    file,
+                    symbol.module(),
+                )),
         );
     }
 }
@@ -4035,11 +4082,12 @@ impl<'a> ImportStatement<'a> {
         match *self {
             ImportStatement::Import(Import { ref kind, .. }) => match *kind {
                 ImportKind::Module => {
-                    add_import_completions(db, completions, model.import_completions());
+                    add_import_completions(db, file, completions, model.import_completions());
                 }
                 ImportKind::Submodule { ref parent } => {
                     add_import_completions(
                         db,
+                        file,
                         completions,
                         model.import_submodule_completions_for_name(parent),
                     );
@@ -4047,11 +4095,12 @@ impl<'a> ImportStatement<'a> {
             },
             ImportStatement::FromImport(FromImport { ast, ref kind }) => match *kind {
                 FromImportKind::Module => {
-                    add_import_completions(db, completions, model.import_completions());
+                    add_import_completions(db, file, completions, model.import_completions());
                 }
                 FromImportKind::Submodule { ref parent } => {
                     add_import_completions(
                         db,
+                        file,
                         completions,
                         model.import_submodule_completions_for_name(parent),
                     );
@@ -4062,6 +4111,7 @@ impl<'a> ImportStatement<'a> {
                 } => {
                     add_import_completions(
                         db,
+                        file,
                         completions,
                         model.import_submodule_completions_for_name(parent),
                     );
@@ -4072,7 +4122,7 @@ impl<'a> ImportStatement<'a> {
                 FromImportKind::Attribute => {
                     let module_dependency_kind = model
                         .resolve_module(ast.module.as_ref().map(ast::Identifier::as_str), ast.level)
-                        .map(|module| ModuleDependencyKind::from_module(db, module));
+                        .map(|module| ModuleDependencyKind::from_module(db, file, module));
                     add_import_completions_with_module_dependency_kind(
                         db,
                         completions,
@@ -4097,36 +4147,54 @@ fn add_import_completions_with_module_dependency_kind<'db>(
     semantic_completions: impl IntoIterator<Item = SemanticCompletion<'db>>,
     module_dependency_kind: Option<ModuleDependencyKind>,
 ) {
-    add_import_completions_impl(db, completions, semantic_completions, |_| {
-        module_dependency_kind
+    add_import_completions_impl(db, completions, semantic_completions, |_, _| {
+        Some(module_dependency_kind)
     });
 }
 
+/// Adds the module names offered for an `import <CURSOR>` position.
+///
+/// A distribution the project only has because something else needed it is left
+/// out unless the query names it: it is not a module the project can rely on, so
+/// offering it unprompted is offering a broken import.
 fn add_import_completions<'db>(
     db: &'db dyn Db,
+    file: File,
     completions: &mut Completions<'db>,
     semantic_completions: impl IntoIterator<Item = SemanticCompletion<'db>>,
 ) {
-    add_import_completions_impl(db, completions, semantic_completions, |semantic| {
-        if let Some(Type::ModuleLiteral(module_literal)) = semantic.ty {
-            Some(ModuleDependencyKind::from_module(
-                db,
-                module_literal.module(db),
-            ))
-        } else {
-            None
-        }
-    });
+    add_import_completions_impl(
+        db,
+        completions,
+        semantic_completions,
+        |completions, semantic| {
+            let Some(Type::ModuleLiteral(module_literal)) = semantic.ty else {
+                return Some(None);
+            };
+            let kind = ModuleDependencyKind::from_module(db, file, module_literal.module(db));
+            if kind.is_transitive() && !completions.query_names(semantic.name.as_str()) {
+                return None;
+            }
+            Some(Some(kind))
+        },
+    );
 }
 
+/// `classify` answers `None` for a completion that should not be offered at all,
+/// and otherwise the kind to rank it by.
 fn add_import_completions_impl<'db>(
     db: &'db dyn Db,
     completions: &mut Completions<'db>,
     semantic_completions: impl IntoIterator<Item = SemanticCompletion<'db>>,
-    module_dependency_kind: impl Fn(&SemanticCompletion<'db>) -> Option<ModuleDependencyKind>,
+    classify: impl Fn(
+        &Completions<'db>,
+        &SemanticCompletion<'db>,
+    ) -> Option<Option<ModuleDependencyKind>>,
 ) {
     for semantic in semantic_completions {
-        let module_dependency_kind = module_dependency_kind(&semantic);
+        let Some(module_dependency_kind) = classify(completions, &semantic) else {
+            continue;
+        };
         let mut builder = CompletionBuilder::from_semantic_completion(db, semantic);
         if let Some(module_dependency_kind) = module_dependency_kind {
             builder = builder.module_dependency_kind(module_dependency_kind);
@@ -11919,6 +11987,95 @@ from .imp<CURSOR>
         deprecated :: typing_extensions
         deprecated :: warnings
         ");
+    }
+
+    /// A project depending on `requests` alone, in an environment where
+    /// `charset_normalizer` came along for the ride.
+    const DECLARED_AND_TRANSITIVE: &str = r#"
+[project]
+name = "mine"
+dependencies = ["requests"]
+"#;
+
+    fn with_a_transitive_dependency(source: &str) -> CompletionTestBuilder {
+        CursorTest::builder()
+            .with_site_packages()
+            .source("pyproject.toml", DECLARED_AND_TRANSITIVE)
+            .source("main.py", source)
+            .site_packages("requests/__init__.py", "def get(): ...")
+            .site_packages(
+                "requests-2.32.5.dist-info/RECORD",
+                "requests/__init__.py,sha256=a,1\n",
+            )
+            .site_packages(
+                "charset_normalizer/__init__.py",
+                "def detect(): ...\nCHARSET_MARKER = 1\n",
+            )
+            .site_packages(
+                "charset_normalizer-3.4.4.dist-info/RECORD",
+                "charset_normalizer/__init__.py,sha256=a,1\n",
+            )
+            .completion_test_builder()
+    }
+
+    #[test]
+    fn import_omits_a_transitive_dependency() {
+        let builder = with_a_transitive_dependency("import <CURSOR>")
+            .filter(|c| matches!(c.name.as_str(), "requests" | "charset_normalizer"));
+        assert_snapshot!(builder.build().snapshot(), @"requests");
+    }
+
+    #[test]
+    fn import_offers_a_transitive_dependency_the_query_names() {
+        let builder = with_a_transitive_dependency("import charset_no<CURSOR>")
+            .filter(|c| matches!(c.name.as_str(), "requests" | "charset_normalizer"));
+        assert_snapshot!(builder.build().snapshot(), @"charset_normalizer");
+    }
+
+    #[test]
+    fn from_import_still_offers_a_transitive_dependency_its_members() {
+        let builder = with_a_transitive_dependency("from charset_normalizer import <CURSOR>")
+            .filter(|c| c.name.starts_with("detect") || c.name.starts_with("CHARSET"));
+        assert_snapshot!(builder.build().snapshot(), @"
+        CHARSET_MARKER
+        detect
+        ");
+    }
+
+    #[test]
+    fn auto_import_omits_a_transitive_dependency() {
+        let builder = with_a_transitive_dependency("CHARSET_MARK<CURSOR>")
+            .module_names()
+            .filter(|c| c.name == "CHARSET_MARKER");
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found>");
+    }
+
+    /// The control for [`auto_import_omits_a_transitive_dependency`]: the same
+    /// setup finds a symbol of the declared dependency, so the test above is
+    /// about the filter rather than about auto-import not running.
+    #[test]
+    fn auto_import_offers_a_declared_dependency() {
+        let builder = with_a_transitive_dependency("ge<CURSOR>")
+            .module_names()
+            .filter(|c| {
+                c.name == "get" && c.module_name.map(ModuleName::as_str) == Some("requests")
+            });
+        assert_snapshot!(builder.build().snapshot(), @"get :: requests");
+    }
+
+    #[test]
+    fn everything_is_offered_without_a_manifest() {
+        let builder = CursorTest::builder()
+            .with_site_packages()
+            .source("main.py", "import <CURSOR>")
+            .site_packages("charset_normalizer/__init__.py", "def detect(): ...")
+            .site_packages(
+                "charset_normalizer-3.4.4.dist-info/RECORD",
+                "charset_normalizer/__init__.py,sha256=a,1\n",
+            )
+            .completion_test_builder()
+            .filter(|c| c.name == "charset_normalizer");
+        assert_snapshot!(builder.build().snapshot(), @"charset_normalizer");
     }
 
     #[test]

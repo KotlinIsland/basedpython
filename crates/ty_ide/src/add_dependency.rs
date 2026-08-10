@@ -11,7 +11,7 @@ use ruff_db::source::source_text;
 use ruff_diagnostics::Edit;
 use ruff_python_ast as ast;
 use ruff_python_ast::find_node::covering_node;
-use ruff_text_size::{Ranged, TextRange, TextSize};
+use ruff_text_size::{TextRange, TextSize};
 use toml_edit::{Array, DocumentMut, Item, Table, Value};
 use ty_module_resolver::{DistributionName, ModuleName, resolve_module};
 use ty_project::Db;
@@ -276,6 +276,7 @@ fn floor_char_boundary(text: &str, index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ruff_text_size::Ranged;
 
     fn declared(source: &str, target: &Target, name: &str) -> Option<String> {
         declare(source, target, name)
@@ -355,7 +356,9 @@ respect-ignore-files = true
                 "click"
             )
             .as_deref(),
-            Some("[project]\nname = \"mine\"\n\n[project.optional-dependencies]\ncli = [\"click\"]\n")
+            Some(
+                "[project]\nname = \"mine\"\n\n[project.optional-dependencies]\ncli = [\"click\"]\n"
+            )
         );
     }
 
@@ -374,7 +377,12 @@ respect-ignore-files = true
 
     #[test]
     fn a_requirement_already_there_is_not_added_again() {
-        for existing in ["numpy", "numpy>=2", "NumPy [extra] == 2.*", " numpy ; sys_platform"] {
+        for existing in [
+            "numpy",
+            "numpy>=2",
+            "NumPy [extra] == 2.*",
+            " numpy ; sys_platform",
+        ] {
             let source = format!("[project]\ndependencies = [\"{existing}\"]\n");
             assert_eq!(
                 declared(&source, &Target::Project, "numpy"),
@@ -386,12 +394,14 @@ respect-ignore-files = true
 
     #[test]
     fn a_different_requirement_is_not_mistaken_for_it() {
-        assert!(declared(
-            "[project]\ndependencies = [\"numpy-financial\"]\n",
-            &Target::Project,
-            "numpy"
-        )
-        .is_some());
+        assert!(
+            declared(
+                "[project]\ndependencies = [\"numpy-financial\"]\n",
+                &Target::Project,
+                "numpy"
+            )
+            .is_some()
+        );
     }
 
     #[test]
@@ -426,13 +436,16 @@ respect-ignore-files = true
         use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
         use ty_project::ProjectMetadata;
 
-        let mut db = ty_project::TestDb::new(ProjectMetadata::new("test", SystemPathBuf::from("/")));
+        let mut db =
+            ty_project::TestDb::new(ProjectMetadata::new("test", SystemPathBuf::from("/")));
         db.init_program().unwrap();
         db.write_file("pyproject.toml", manifest).unwrap();
         db.write_file("main.py", source).unwrap();
 
         let file = system_path_to_file(&db, "main.py").unwrap();
-        let start = source.find(reported).expect("`reported` should be in source");
+        let start = source
+            .find(reported)
+            .expect("`reported` should be in source");
         let range = TextRange::at(
             TextSize::try_from(start).unwrap(),
             TextSize::try_from(reported.len()).unwrap(),

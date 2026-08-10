@@ -37,6 +37,8 @@ features that apply to a project rather than to a file
 <div class="by-index" markdown>
 
 - [api lockfile (`api.lock`)](api-lock.md)
+- [declared dependencies](dependencies.md) — imports checked against
+    `pyproject.toml`, and a quick fix that declares them
 - [editor support](editor.md) — postfix templates, completions, inlay hints
     and the outline
 
