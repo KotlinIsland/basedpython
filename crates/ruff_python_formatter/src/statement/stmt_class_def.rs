@@ -50,7 +50,6 @@ impl FormatNodeRule<StmtClassDef> for FormatStmtClassDef {
             body,
             type_params,
             decorator_list,
-            implementation,
         } = item;
 
         let comments = f.context().comments().clone();
@@ -100,34 +99,6 @@ impl FormatNodeRule<StmtClassDef> for FormatStmtClassDef {
             });
 
         let format_header = format_with(|f| {
-            // basedpython: `implementation A for B as N:` — every part is a real
-            // node with a real range, so the header prints from the AST like any
-            // other clause header rather than falling back to verbatim
-            if let Some(header) = implementation.as_deref() {
-                write!(
-                    f,
-                    [
-                        token("implementation"),
-                        space(),
-                        header.interface.format(),
-                        space(),
-                        token("for"),
-                        space(),
-                        name.format()
-                    ]
-                )?;
-
-                if let Some(type_params) = type_params.as_deref() {
-                    write!(f, [type_params.format()])?;
-                }
-
-                if let Some(witness) = &header.witness {
-                    write!(f, [space(), token("as"), space(), witness.format()])?;
-                }
-
-                return Ok(());
-            }
-
             if !suppress_class_keyword {
                 write!(f, [token("class"), space()])?;
             }

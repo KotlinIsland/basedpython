@@ -1778,7 +1778,6 @@ Module(
                             },
                         ),
                     ],
-                    implementation: None,
                 },
             ),
             TypeAlias(

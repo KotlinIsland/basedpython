@@ -404,14 +404,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 .filter(|ty_range| !expected_return.accepts(db, ty_range.ty))
             {
                 // basedpython: a `return` is a conversion site — an in-scope
-                // `implementation A for B:` or a conversion dunder makes the value
+                // a conformance or a conversion dunder makes the value
                 // returnable where it otherwise is not, and the transpiler emits the
                 // conversion. the generator paths above return early, so this is the
                 // plain case where the declared type really is the value's target
                 // only when the type the transpiler will recover for this function is
                 // the one being enforced here; otherwise the conversion it emits would
                 // be built from a different target
-                if crate::types::implementations::function_declared_return_type(
+                if crate::types::conversions::function_declared_return_type(
                     db,
                     self.file(),
                     function,

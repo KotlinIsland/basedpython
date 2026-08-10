@@ -331,10 +331,9 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
             return true;
         }
         // basedpython: an attribute assignment is a conversion site — an in-scope
-        // `implementation A for B:` makes a `B` assignable where an `A` is declared,
-        // and the transpiler wraps the value in the witness. the same
-        // `value_conversions` answer the transpiler emits, so neither side can
-        // accept what the other cannot
+        // conformance makes a conforming type assignable where a protocol is
+        // declared, and a conversion dunder materializes the call. both sides ask
+        // `value_conversions`, so neither can accept what the other cannot
         let file = self.builder.file();
         let model = crate::SemanticModel::new(db, file);
         // the transpiler recovers the target type by looking the attribute up on the

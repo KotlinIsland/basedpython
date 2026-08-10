@@ -38,6 +38,26 @@ pub trait Db: PythonCoreDb {
         None
     }
 
+    /// basedpython: does any file in the project declare a protocol conformance
+    /// (`extension str(A):`)?
+    ///
+    /// Whether a requirement read off an interface-typed receiver has to go
+    /// through the witness table is a *whole-program* question: a conformance is
+    /// written in the module that imports the interface, so the module declaring
+    /// the function that uses it can never see one. Enumerating the project's
+    /// files belongs to a crate above this one, so the answer is handed down —
+    /// the same shape as [`Db::django_settings_file`].
+    ///
+    /// Defaults to `true`. A database that cannot answer must keep dispatching:
+    /// answering `false` wrongly is a miscompile, answering `true` wrongly only
+    /// costs a lookup in an empty registry.
+    ///
+    /// The implementation is expected to be a Salsa query, so that adding the
+    /// first conformance to a project invalidates everything that read this.
+    fn project_declares_conformances(&self) -> bool {
+        true
+    }
+
     fn dyn_clone(&self) -> Box<dyn Db>;
 }
 

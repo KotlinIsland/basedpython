@@ -144,6 +144,11 @@ impl Helper {
     }
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent yes/no facts about one pass — the form it lowers to, \
+              and which runtime helpers its predicates reached for"
+)]
 struct CastLower<'a> {
     types: &'a dyn TypeInfo,
     /// `true` when the checked (`cast`) form does its runtime check; `false`
@@ -153,6 +158,7 @@ struct CastLower<'a> {
     used: BTreeSet<Helper>,
     needs_parametric: bool,
     needs_protocol: bool,
+    needs_conformance: bool,
 }
 
 impl<'a> CastLower<'a> {
@@ -164,6 +170,7 @@ impl<'a> CastLower<'a> {
             used: BTreeSet::new(),
             needs_parametric: false,
             needs_protocol: false,
+            needs_conformance: false,
         }
     }
 
@@ -194,6 +201,7 @@ impl<'a> CastLower<'a> {
         if !needs.all_plain && !needs.erased {
             self.needs_parametric |= needs.parametric_runtime;
             self.needs_protocol |= needs.protocol_runtime;
+            self.needs_conformance |= needs.conformance_runtime;
             let mut fragments = vec![Fragment::Lit(format!("lambda {CAST_VALUE_PARAM}: "))];
             fragments.extend(predicate);
             return (helper.as_predicate(), fragments);
@@ -304,6 +312,10 @@ impl TypeAwarePass for CheckedCastPass {
         }
         if inner.needs_protocol {
             ctx.required_imports.push(PROTOCOL_IS_RUNTIME.to_owned());
+        }
+        if inner.needs_conformance {
+            ctx.required_imports
+                .push(super::conformance::WITNESS_RUNTIME.to_owned());
         }
         for helper in &inner.used {
             ctx.required_imports.push(helper.runtime().to_owned());

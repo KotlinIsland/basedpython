@@ -97,7 +97,6 @@ Module(
                             },
                         ),
                     ],
-                    implementation: None,
                 },
             ),
             ClassDef(
@@ -182,7 +181,6 @@ Module(
                             },
                         ),
                     ],
-                    implementation: None,
                 },
             ),
             ClassDef(
@@ -265,7 +263,6 @@ Module(
                             },
                         ),
                     ],
-                    implementation: None,
                 },
             ),
             ClassDef(
@@ -343,7 +340,6 @@ Module(
                             },
                         ),
                     ],
-                    implementation: None,
                 },
             ),
             ClassDef(
@@ -427,7 +423,6 @@ Module(
                             },
                         ),
                     ],
-                    implementation: None,
                 },
             ),
             ClassDef(
@@ -511,7 +506,6 @@ Module(
                             },
                         ),
                     ],
-                    implementation: None,
                 },
             ),
             ClassDef(
@@ -588,7 +582,6 @@ Module(
                             },
                         ),
                     ],
-                    implementation: None,
                 },
             ),
         ],

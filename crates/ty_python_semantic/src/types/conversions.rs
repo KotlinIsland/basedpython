@@ -4,8 +4,7 @@
 //! assignable to `Fahrenheit`, or `list[Celsius]` would be a `list[Fahrenheit]`
 //! and reading an element back would hand out a value no one converted. So the
 //! relation stays out of the lattice and lives only at the positions where the
-//! transpiler can materialize the call — the same conversion-site rule
-//! [implementations] are built on.
+//! transpiler can materialize the call.
 //!
 //! This module owns that rule for all four routes a value can be repaired by,
 //! so every site asks one question and gets one answer:
@@ -14,8 +13,11 @@
 //! - `x.__into__()` — a method on the source returning the target
 //! - `T.__of__(x)` — like `__from__`, but only when `x` is written out as a
 //!   literal at the site
-//! - an `implementation A for B:` witness, which [`super::implementations`]
-//!   resolves and this module only routes to
+//! - a conformance extension (`extension str(A):`), which
+//!   [`super::conformance`] resolves and this module only routes to. Nothing is
+//!   emitted for one — the value already *is* what the protocol asks for at
+//!   runtime — but the route still lives here so that a site served by two
+//!   routes at once is reported rather than silently picked between
 //!
 //! More than one applicable route is an error rather than a precedence rule:
 //! `__from__` and `__into__` are hand-written bodies that can disagree, and
@@ -24,6 +26,7 @@
 use ruff_db::files::File;
 use ruff_python_ast as ast;
 use ruff_text_size::{Ranged, TextRange};
+use ty_module_resolver::{ModuleName, resolve_module};
 use ty_python_core::semantic_index;
 
 use crate::Db;
@@ -32,9 +35,6 @@ use crate::types::class::{ClassLiteral, ClassType, StaticClassLiteral};
 use crate::types::context::InferContext;
 use crate::types::diagnostic::{AMBIGUOUS_CONVERSION, INVALID_CONVERSION};
 use crate::types::function::FunctionType;
-use crate::types::implementations::{
-    self, ImplementationRepair, imported_module_spelling, report_ambiguous_implementation,
-};
 use crate::types::signatures::Parameters;
 use crate::types::{MemberLookupPolicy, Type, TypeContext};
 
@@ -51,8 +51,10 @@ pub(crate) const CONVERSION_DUNDERS: [&str; 3] = [FROM, INTO, OF];
 /// one way a value can be made to satisfy a declared type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Route<'db> {
-    /// wrap the value in an `implementation A for B:` witness
-    Witness(ImplementationRepair<'db>),
+    /// a visible conformance extension makes the source's class conform to the
+    /// protocol the target asks for. nothing is emitted: the value is already
+    /// the object the protocol dispatches on
+    Conformance(ClassType<'db>),
     /// `T.__from__(value)`, where `T` is the target class
     From(ClassType<'db>),
     /// `T.__of__(value)`, where `T` is the target class
@@ -66,7 +68,7 @@ impl<'db> Route<'db> {
     /// how the route reads in a diagnostic
     fn describe(self, db: &'db dyn Db) -> String {
         match self {
-            Route::Witness(repair) => repair.witness.name(db).to_string(),
+            Route::Conformance(protocol) => format!("conformance to `{}`", protocol.name(db)),
             Route::From(class) => format!("{}.{FROM}", class.name(db)),
             Route::Of(class) => format!("{}.{OF}", class.name(db)),
             Route::Into(source) => format!("{}.{INTO}", source.display(db)),
@@ -113,8 +115,8 @@ pub(crate) fn repair_conversion<'db>(
     let source = source.erase_restriction(db);
 
     let mut routes: Vec<Route<'db>> = Vec::new();
-    if let Some(repair) = implementations::repair_with_implementation(db, file, source, target) {
-        routes.push(Route::Witness(repair));
+    if let Some(protocol) = super::conformance::repair_with_conformance(db, file, source, target) {
+        routes.push(Route::Conformance(protocol));
     }
     dunder_routes(db, source, target, value, &mut routes);
 
@@ -341,6 +343,227 @@ pub(crate) fn returned_value_at(
     visitor.found
 }
 
+/// the search state for [`imported_module_spelling`]: the first import statement
+/// resolving to `target` wins
+struct ImportSpelling<'a> {
+    db: &'a dyn Db,
+    from_file: File,
+    target: File,
+    found: Option<String>,
+}
+
+impl ImportSpelling<'_> {
+    fn resolves(&self, name: &ModuleName) -> bool {
+        resolve_module(self.db, self.from_file, name).and_then(|module| module.file(self.db))
+            == Some(self.target)
+    }
+}
+
+impl<'ast> ast::visitor::Visitor<'ast> for ImportSpelling<'_> {
+    fn visit_stmt(&mut self, stmt: &'ast ast::Stmt) {
+        if self.found.is_some() {
+            return;
+        }
+        match stmt {
+            ast::Stmt::Import(import) => {
+                for alias in &import.names {
+                    if let Some(name) = ModuleName::new(&alias.name)
+                        && self.resolves(&name)
+                    {
+                        self.found = Some(alias.name.to_string());
+                        return;
+                    }
+                }
+            }
+            ast::Stmt::ImportFrom(import) => {
+                if let Ok(name) = ModuleName::from_import_statement(self.db, self.from_file, import)
+                    && self.resolves(&name)
+                {
+                    // keep the leading dots: a relative import is how this file
+                    // addresses the module, and the absolute name may not resolve
+                    let mut spelling = ".".repeat(import.level as usize);
+                    if let Some(module) = &import.module {
+                        spelling.push_str(module);
+                    }
+                    self.found = Some(spelling);
+                    return;
+                }
+            }
+            _ => {}
+        }
+        ast::visitor::walk_stmt(self, stmt);
+    }
+}
+
+/// how `from_file` spells the module that `target` is, in its own imports.
+///
+/// A synthesized import has to address the module the way the importing file
+/// already does. ty's absolute module name is not usable for that: a file under a
+/// directory that is not an importable package still resolves for the checker
+/// (`target/mod.by` → `target.mod`), while the interpreter running the output only
+/// sees `mod` — and a relative import has no absolute spelling at all.
+pub(crate) fn imported_module_spelling(
+    db: &dyn Db,
+    from_file: File,
+    target: File,
+) -> Option<String> {
+    let module = ruff_db::parsed::parsed_module(db, from_file).load(db);
+    let mut spelling = ImportSpelling {
+        db,
+        from_file,
+        target,
+        found: None,
+    };
+    for stmt in &module.syntax().body {
+        ast::visitor::Visitor::visit_stmt(&mut spelling, stmt);
+        if spelling.found.is_some() {
+            break;
+        }
+    }
+    spelling.found
+}
+
+/// every module named by a `from <module> import ...` statement anywhere in
+/// `file`, relative imports resolved.
+///
+/// [`SemanticIndex::imported_modules`] deliberately records only `import mod`, so
+/// anything that wants both forms has to collect these itself.
+///
+/// [`SemanticIndex::imported_modules`]: ty_python_core::SemanticIndex::imported_modules
+#[salsa::tracked(returns(deref), heap_size = ruff_memory_usage::heap_size)]
+pub(crate) fn from_imported_modules(db: &dyn Db, file: File) -> Box<[ModuleName]> {
+    struct Collector<'a> {
+        db: &'a dyn Db,
+        file: File,
+        modules: Vec<ModuleName>,
+    }
+    impl<'ast> ast::visitor::Visitor<'ast> for Collector<'_> {
+        fn visit_stmt(&mut self, stmt: &'ast ast::Stmt) {
+            if let ast::Stmt::ImportFrom(import) = stmt
+                && let Ok(name) = ModuleName::from_import_statement(self.db, self.file, import)
+                && !self.modules.contains(&name)
+            {
+                self.modules.push(name);
+            }
+            ast::visitor::walk_stmt(self, stmt);
+        }
+    }
+
+    let module = ruff_db::parsed::parsed_module(db, file).load(db);
+    let mut collector = Collector {
+        db,
+        file,
+        modules: Vec::new(),
+    };
+    for stmt in &module.syntax().body {
+        // `visit_stmt`, not `walk_stmt`: the latter descends into the statement's
+        // children and would skip the statement itself
+        ast::visitor::Visitor::visit_stmt(&mut collector, stmt);
+    }
+    collector.modules.into_boxed_slice()
+}
+
+/// the declared return type of `function`, as the conversion machinery sees it.
+///
+/// Both sides go through this: the transpiler to find what a `return` value must
+/// convert to, and the checker to confirm the type it is enforcing is the same one
+/// — a `return` is only a conversion site when the two agree, so the lowering can
+/// never be handed a target the checker did not use.
+pub(crate) fn function_declared_return_type<'db>(
+    db: &'db dyn Db,
+    file: File,
+    function: &ast::StmtFunctionDef,
+) -> Option<Type<'db>> {
+    let index = semantic_index(db, file);
+    let definition = index.expect_single_definition(function);
+    let Type::FunctionLiteral(literal) = crate::types::binding_type(db, definition) else {
+        return None;
+    };
+    // one signature only: an overloaded function has no single declared return
+    let [overload] = literal.signature(db).overloads.as_slice() else {
+        return None;
+    };
+    Some(overload.return_ty)
+}
+
+/// the element expressions of a collection literal, when each one is a whole
+/// expression the transpiler can wrap.
+///
+/// `None` for anything else — including a literal containing an unpack
+/// (`[*bs]`, `{**d}`), whose elements come from another collection and so have no
+/// expression of their own at this site
+pub(crate) fn addressable_elements(value: &ast::Expr) -> Option<Vec<&ast::Expr>> {
+    fn plain(elements: &[ast::Expr]) -> Option<Vec<&ast::Expr>> {
+        elements
+            .iter()
+            .map(|element| (!element.is_starred_expr()).then_some(element))
+            .collect()
+    }
+    match value {
+        ast::Expr::List(list) => plain(&list.elts),
+        ast::Expr::Set(set) => plain(&set.elts),
+        ast::Expr::Tuple(tuple) => plain(&tuple.elts),
+        // only the values convert; a key's own type is checked against the key type
+        ast::Expr::Dict(dict) => dict
+            .items
+            .iter()
+            .map(|item| item.key.as_ref().map(|_| &item.value))
+            .collect(),
+        ast::Expr::ListComp(comp) => Some(vec![&comp.elt]),
+        ast::Expr::SetComp(comp) => Some(vec![&comp.elt]),
+        ast::Expr::Generator(comp) => Some(vec![&comp.elt]),
+        ast::Expr::DictComp(comp) => Some(vec![&comp.value]),
+        _ => None,
+    }
+}
+
+/// the type a declared collection's elements must satisfy: a mapping's *value*
+/// type, else what iterating the declared type yields
+pub(crate) fn declared_element_type<'db>(
+    db: &'db dyn Db,
+    declared: Type<'db>,
+) -> Option<Type<'db>> {
+    // a mapping is keyed, and only its values sit at the literal's element
+    // positions (`{"k": b}`); iterating one would give the *key* type
+    if let Some((_, value)) = declared.unpack_keys_and_items(db) {
+        return Some(value);
+    }
+    let element = declared.iterate(db).homogeneous_element_type(db);
+    (!element.is_unknown() && !element.is_never()).then_some(element)
+}
+
+/// the annotated parameter type each of `call`'s source-order arguments was
+/// matched to, binding the call outside inference.
+///
+/// `None` when the callee is a union or overloaded — where no single parameter
+/// type per argument is well-defined. The checker declines to repair in exactly
+/// that case too, so the two answers cannot drift apart
+pub(crate) fn call_parameter_types<'db>(
+    model: &crate::semantic_model::SemanticModel<'db>,
+    callable_ty: Type<'db>,
+    call: &ast::ExprCall,
+) -> Option<Vec<Option<Type<'db>>>> {
+    use crate::types::constraints::ConstraintSetBuilder;
+
+    let db = model.db();
+    let arguments = CallArguments::from_arguments_typed(&call.arguments, |splatted_value| {
+        crate::HasType::inferred_type(splatted_value, model).unwrap_or_else(Type::unknown)
+    });
+    let constraints = ConstraintSetBuilder::new();
+    // a conversion site's binding *does* carry an argument error — the checker
+    // suppresses its diagnostic rather than making the argument assignable — so
+    // the parameter types have to be read out of either outcome
+    let bindings = match callable_ty
+        .bindings(db)
+        .match_parameters(db, &arguments)
+        .check_types(db, &constraints, &arguments, TypeContext::default(), &[])
+    {
+        Ok(bindings) => bindings,
+        Err(error) => *error.into_bindings(),
+    };
+    bindings.plain_callee_parameter_types(arguments.len())
+}
+
 /// report a conversion site served by more than one route. the site is otherwise
 /// accepted — any of the conversions would work — but which one runs must not
 /// depend on ordering
@@ -351,11 +574,6 @@ pub(crate) fn report_ambiguous_conversion<'db>(
 ) {
     let db = context.db();
     if repair.ambiguous_with.is_empty() {
-        // one route, which may still be two implementations of the same pair —
-        // that has its own message, and it names the interface and the type
-        if let Route::Witness(witness) = repair.route {
-            report_ambiguous_implementation(context, node, &witness);
-        }
         return;
     }
     let Some(builder) = context.report_lint(&AMBIGUOUS_CONVERSION, node.range()) else {
@@ -410,10 +628,10 @@ fn element_conversions<'db>(
     value: &ast::Expr,
     declared: Type<'db>,
 ) -> Vec<(TextRange, ConversionRepair<'db>)> {
-    let Some(elements) = implementations::addressable_elements(value) else {
+    let Some(elements) = addressable_elements(value) else {
         return Vec::new();
     };
-    let Some(element_target) = implementations::declared_element_type(db, declared) else {
+    let Some(element_target) = declared_element_type(db, declared) else {
         return Vec::new();
     };
     let mut conversions = Vec::new();
@@ -440,7 +658,7 @@ fn element_conversions<'db>(
 /// scope in every case a comprehension is not involved, and a different one when
 /// it is
 pub(crate) fn expression_at(value: &ast::Expr, range: TextRange) -> Option<&ast::Expr> {
-    implementations::addressable_elements(value)?
+    addressable_elements(value)?
         .into_iter()
         .find(|element| element.range() == range)
 }
@@ -493,26 +711,15 @@ pub(crate) fn conversion_info<'db>(
         );
     }
     match repair.route {
-        Route::Witness(witness) => {
-            match implementations::conversion_info(db, from_file, &witness) {
-                // a witness name is generated and already collision-proof, so unlike
-                // a user's class name below it needs no alias
-                Some(info) => ConversionInfo::Call {
-                    prefix: format!("{}(", info.witness),
-                    suffix: ")".to_owned(),
-                    referenced_name: Some(info.witness.clone()),
-                    import: info.import_from.map(|module| ConversionImport {
-                        module,
-                        name: info.witness.clone(),
-                        alias: info.witness,
-                    }),
-                },
-                None => ConversionInfo::Rejected(
-                    "the `implementation` this value converts through cannot be named here"
-                        .to_owned(),
-                ),
-            }
-        }
+        // conformance is not a conversion at runtime: the value already answers
+        // every member the protocol asks for, through the witness table its
+        // conformance registered. the site emits nothing at all
+        Route::Conformance(_) => ConversionInfo::Call {
+            prefix: String::new(),
+            suffix: String::new(),
+            referenced_name: None,
+            import: None,
+        },
         Route::From(class) => dunder_call_info(db, from_file, model, anchor, class, FROM),
         Route::Of(class) => dunder_call_info(db, from_file, model, anchor, class, OF),
         // the receiver is the value itself, so nothing has to be named or
@@ -553,8 +760,13 @@ fn dunder_call_info<'db>(
 /// Always aliased, never the class's own name: this file may already bind that
 /// name to something else, and an import that silently rebinds it — or that the
 /// file's own class then shadows — turns the conversion into an `AttributeError`
-/// at runtime. One leading underscore, not two, so a reference inside a class
-/// body is not python name-mangled
+/// at runtime.
+///
+/// Reusing a name the file already binds to the *same* class looks tempting and
+/// is not safe: the binding may be conditional (`if TYPE_CHECKING:`) or come
+/// after the site, and the end-of-scope type a symbol lookup reports says
+/// nothing about either. One leading underscore, not two, so a reference inside
+/// a class body is not python name-mangled
 fn conversion_alias(name: &str) -> String {
     format!("_by_conv__{name}")
 }
@@ -562,7 +774,7 @@ fn conversion_alias(name: &str) -> String {
 /// how the conversion site spells `class`: its own name when this file declares
 /// it and nothing between the site and the module shadows that name, otherwise
 /// an aliased import. `Err` when neither is possible
-fn class_reference<'db>(
+pub(crate) fn class_reference<'db>(
     db: &'db dyn Db,
     from_file: File,
     model: &crate::SemanticModel<'db>,

@@ -3608,13 +3608,6 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     NodeWithScopeRef::ClassTypeParameters(class),
                     class.type_params.as_deref(),
                     |builder| {
-                        // basedpython: an implementation's interface is a base
-                        // expression written outside an argument list; it resolves
-                        // in the same scope as one
-                        if let Some(header) = class.implementation.as_deref() {
-                            builder.visit_expr(&header.interface);
-                        }
-
                         if let Some(arguments) = &class.arguments {
                             builder.visit_arguments(arguments);
                         }
@@ -3644,22 +3637,6 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         class.name.id,
                         class.range.start().to_u32()
                     ))
-                } else if let Some(header) = class.implementation.as_deref() {
-                    // an `implementation A for B:` block references `B` rather than
-                    // declaring it. a named implementation binds its witness class
-                    // under the `as` name; an anonymous one binds a mangled symbol,
-                    // like an extension, so that it stays enumerable but invisible
-                    // to name resolution
-                    header.witness.as_ref().map_or_else(
-                        || {
-                            Name::new(format!(
-                                "<implementation:{}:{}>",
-                                class.name.id,
-                                class.range.start().to_u32()
-                            ))
-                        },
-                        |witness| witness.id.clone(),
-                    )
                 } else {
                     class.name.id.clone()
                 };

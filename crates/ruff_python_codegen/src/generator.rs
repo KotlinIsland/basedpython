@@ -420,7 +420,6 @@ impl<'a> Generator<'a> {
                 body,
                 decorator_list,
                 type_params,
-                implementation,
                 range: _,
                 node_index: _,
             }) => {
@@ -430,32 +429,6 @@ impl<'a> Generator<'a> {
                         self.p("@");
                         self.unparse_expr(&decorator.expression, precedence::MAX);
                     });
-                }
-                // basedpython: an `implementation A for B:` block keeps its
-                // surface form; there is no python spelling of the header, and
-                // the witness class it lowers to is built by the transpiler
-                if let Some(header) = implementation.as_deref()
-                    && self.mode == Mode::BasedPython
-                {
-                    statement!({
-                        self.p("implementation ");
-                        self.unparse_expr(&header.interface, precedence::MAX);
-                        self.p(" for ");
-                        self.p_id(name);
-                        if let Some(type_params) = type_params {
-                            self.unparse_type_params(type_params);
-                        }
-                        if let Some(witness) = &header.witness {
-                            self.p(" as ");
-                            self.p_id(witness);
-                        }
-                        self.p(":");
-                    });
-                    self.body(body);
-                    if self.indent_depth == 0 {
-                        self.newlines(2);
-                    }
-                    return;
                 }
                 statement!({
                     self.p("class ");
@@ -2313,41 +2286,6 @@ mod tests {
     #[test_case::test_case("d: typeof a.b" ; "over an attribute")]
     fn basedpython_typeof_round_trip(contents: &str) {
         assert_eq!(based_round_trip(contents), contents);
-    }
-
-    /// An `implementation A for B:` header has no python spelling, so it
-    /// round-trips through its own surface form. Only the header is asserted:
-    /// the generator's class-body layout (a blank line after the header, `@`-form
-    /// modifier decorators) is its existing behaviour for every declaration
-    #[test_case::test_case("implementation A for B:" ; "anonymous")]
-    #[test_case::test_case("implementation A for B as BAsA:" ; "named witness")]
-    #[test_case::test_case("implementation Container[int] for B:" ; "specialized interface")]
-    #[test_case::test_case("implementation collections.abc.Sized for B:" ; "dotted interface")]
-    #[test_case::test_case("implementation Show for list[Element: Show]:" ; "bounded target")]
-    fn basedpython_implementation_round_trip(header: &str) {
-        let rendered = based_round_trip(&format!("{header}\n    def f(self):\n        pass"));
-        assert_eq!(rendered.lines().next(), Some(header));
-    }
-
-    /// In python mode there is no `implementation` keyword to emit; the header
-    /// falls back to the ordinary `class` rendering rather than producing
-    /// basedpython-only syntax in a `.py` output
-    #[test]
-    fn implementation_header_is_not_emitted_in_python_mode() {
-        let parsed = ruff_python_parser::parse(
-            "implementation A for B:\n    def f(self):\n        pass",
-            ParseOptions::from(ruff_python_ast::PySourceType::BasedPython),
-        )
-        .expect("basedpython source should parse without errors");
-        let Mod::Module(ModModule { body, .. }) = parsed.into_syntax() else {
-            panic!("source code didn't return ModModule")
-        };
-        let indentation = Indentation::default();
-        let mut generator = Generator::new(&indentation, LineEnding::default());
-        generator.unparse_suite(&body);
-        let out = generator.generate();
-        assert!(!out.contains("implementation"), "got {out:?}");
-        assert!(out.contains("class B:"), "got {out:?}");
     }
 
     fn jupyter_round_trip(contents: &str) -> String {

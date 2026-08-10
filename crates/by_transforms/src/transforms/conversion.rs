@@ -6,7 +6,6 @@
 //! the call it was handed:
 //!
 //! ```text
-//! takes_a(b)              →  takes_a(_by_impl__A__B(b))     an `implementation A for B:` witness
 //! report(celsius)         →  report(Fahrenheit.__from__(celsius))
 //! v: Vec3 = [1.0, 2.0]    →  v: Vec3 = Vec3.__of__([1.0, 2.0])
 //! report(celsius)         →  report((celsius).__into__())
@@ -76,15 +75,10 @@ impl TypeAwarePass for ConversionPass<'_> {
         }
 
         // where each module-level class this file declares is bound, so a
-        // conversion that runs at import time can be checked against it. a
-        // witness class carries the name ty mangled for it; every other class
-        // carries the one it was written with
+        // conversion that runs at import time can be checked against it
         let declarations: Vec<(String, TextRange)> = stmts
             .iter()
             .filter_map(|stmt| match stmt {
-                Stmt::ClassDef(class) if class.is_implementation() => types
-                    .implementation_witness_name(class)
-                    .map(|witness| (witness, class.range)),
                 Stmt::ClassDef(class) => Some((class.name.to_string(), class.range)),
                 _ => None,
             })

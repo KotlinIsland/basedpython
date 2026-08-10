@@ -685,12 +685,6 @@ impl<'src> Parser<'src> {
             );
             return Some(self.parse_extension_def(start));
         }
-        if kw == "implementation" && self.peek() == TokenKind::Name {
-            self.error_if_not_basedpython(
-                "`implementation` declarations are not valid in .py files".to_string(),
-            );
-            return Some(self.parse_implementation_def(start));
-        }
         // `enum class E:` / `enum class E[T]:` — a "based enum" (an algebraic
         // sum type when its body has payload variants, an idiomatic `Enum` when
         // its variants are all unit). the `class` keyword is part of the
@@ -1672,84 +1666,20 @@ impl<'src> Parser<'src> {
             type_params: type_params.map(Box::new),
             arguments,
             body,
-            implementation: None,
             node_index: AtomicNodeIndex::NONE,
         })
     }
 
-    /// Parses an `implementation Interface for Type[bounds] as Witness:`
-    /// declaration — a retroactive statement that `Type` satisfies `Interface`.
-    ///
-    /// Produces a [`ClassDef`] whose `implementation_interface` holds the
-    /// interface expression (its presence marks the class as an implementation)
-    /// and whose `name` is the *implemented* type, a reference to an existing
-    /// declaration as for an `extension`. `implementation_witness` holds the
-    /// optional `as` name the witness class binds to.
-    ///
-    /// [`ClassDef`]: ast::StmtClassDef
-    fn parse_implementation_def(&mut self, start: TextSize) -> Stmt {
-        self.bump(TokenKind::Name); // consume "implementation"
-
-        let interface = self.parse_conditional_expression_or_higher().expr;
-
-        if !self.eat(TokenKind::For) {
-            self.add_error(
-                ParseErrorType::OtherError(
-                    "Expected `for` after the interface of an `implementation` declaration"
-                        .to_string(),
-                ),
-                self.current_token_range(),
-            );
-        }
-
-        let name = self.parse_identifier();
-        let type_params = self.try_parse_type_params();
-
-        let witness = self.eat(TokenKind::As).then(|| self.parse_identifier());
-
-        // the witness class derives the interface; a base list would be a second,
-        // conflicting answer to what it derives
-        if self.at(TokenKind::Lpar) {
-            self.add_error(
-                ParseErrorType::OtherError(
-                    "`implementation` declarations cannot have base classes".to_string(),
-                ),
-                self.current_token_range(),
-            );
-        }
-
-        let body = if self.eat(TokenKind::Colon) {
-            self.parse_body(Clause::Class)
-        } else {
-            self.add_error(
-                ParseErrorType::OtherError(
-                    "Expected `:` after `implementation` declaration".to_string(),
-                ),
-                self.current_token_range(),
-            );
-            Suite::new()
-        };
-
-        Stmt::ClassDef(ast::StmtClassDef {
-            range: self.node_range(start),
-            decorator_list: DecoratorList::new(),
-            name,
-            type_params: type_params.map(Box::new),
-            arguments: None,
-            body,
-            implementation: Some(Box::new(ast::ImplementationHeader { interface, witness })),
-            node_index: AtomicNodeIndex::NONE,
-        })
-    }
-
-    /// Parses an `extension Name[bounds]:` declaration — methods and computed
-    /// properties added to an existing type without subclassing it.
+    /// Parses an `extension Name[bounds](Interfaces):` declaration — methods and
+    /// computed properties added to an existing type without subclassing it,
+    /// plus the interfaces the type is declared to conform to.
     ///
     /// Produces a [`ClassDef`] carrying a synthetic `extension_def` marker
     /// decorator. the class name is the *extended* type (it references an
-    /// existing declaration rather than introducing a new one), and any
-    /// bracketed type params are constraints on that type's own parameters
-    /// (`extension list[Element: int]:`), not fresh declarations
+    /// existing declaration rather than introducing a new one), any bracketed
+    /// type params are constraints on that type's own parameters
+    /// (`extension list[Element: int]:`) rather than fresh declarations, and the
+    /// argument list holds the conformances, in the field a class's bases live in
     ///
     /// [`ClassDef`]: ast::StmtClassDef
     fn parse_extension_def(&mut self, start: TextSize) -> Stmt {
@@ -1773,14 +1703,36 @@ impl<'src> Parser<'src> {
         let name = self.parse_identifier();
         let type_params = self.try_parse_type_params();
 
-        // an extension adds behaviour to the named type; it has no bases
-        if self.at(TokenKind::Lpar) {
-            self.add_error(
-                ParseErrorType::OtherError(
-                    "`extension` declarations cannot have base classes".to_string(),
-                ),
-                self.current_token_range(),
-            );
+        // an argument list on an extension is a *conformance* list: the
+        // interfaces the extended type is being declared to satisfy. they are
+        // stored where a class's bases go, so the extension literal derives
+        // them and `override` checking against them comes for free
+        let arguments = self
+            .at(TokenKind::Lpar)
+            .then(|| Box::new(self.parse_arguments(ArgumentsContext::ClassDefinition)));
+        // a conformance list names interfaces and nothing else: a keyword (a
+        // metaclass, say) has no meaning here, and an unpacking cannot be
+        // resolved to the interfaces a conformance has to register under
+        if let Some(arguments) = &arguments {
+            for keyword in &arguments.keywords {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "an `extension` conformance list takes interfaces, not keyword arguments"
+                            .to_string(),
+                    ),
+                    keyword.range(),
+                );
+            }
+            for argument in &arguments.args {
+                if argument.is_starred_expr() {
+                    self.add_error(
+                        ParseErrorType::OtherError(
+                            "an `extension` conformance list cannot be unpacked".to_string(),
+                        ),
+                        argument.range(),
+                    );
+                }
+            }
         }
 
         let body = if self.eat(TokenKind::Colon) {
@@ -1805,9 +1757,8 @@ impl<'src> Parser<'src> {
             decorator_list: decorators,
             name,
             type_params: type_params.map(Box::new),
-            arguments: None,
+            arguments,
             body,
-            implementation: None,
             node_index: AtomicNodeIndex::NONE,
         })
     }
@@ -1971,7 +1922,6 @@ impl<'src> Parser<'src> {
             type_params: type_params.map(Box::new),
             arguments: None,
             body,
-            implementation: None,
             node_index: AtomicNodeIndex::NONE,
         })
     }
@@ -2090,7 +2040,6 @@ impl<'src> Parser<'src> {
                         type_params: None,
                         arguments: None,
                         body: Suite::new(),
-                        implementation: None,
                         node_index: AtomicNodeIndex::NONE,
                     })
                 }
@@ -2175,7 +2124,6 @@ impl<'src> Parser<'src> {
             type_params: None,
             arguments: None,
             body,
-            implementation: None,
             node_index: AtomicNodeIndex::NONE,
         })
     }
@@ -5864,7 +5812,6 @@ impl<'src> Parser<'src> {
             type_params: type_params.map(Box::new),
             arguments,
             body,
-            implementation: None,
             node_index: AtomicNodeIndex::NONE,
         }
     }

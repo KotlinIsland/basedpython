@@ -33,8 +33,10 @@ use crate::place::{builtins_symbol, global_symbol};
 use crate::types::call::CallArguments;
 use crate::types::class::{ClassLiteral, ClassType, KnownClass, StaticClassLiteral};
 use crate::types::class_base::ClassBase;
+use crate::types::conformance;
 use crate::types::context::InferContext;
 use crate::types::diagnostic::INVALID_EXTENSION;
+use crate::types::generics::Specialization;
 use crate::types::member::class_member;
 use crate::types::typevar::{BoundTypeVarInstance, TypeVarBoundOrConstraints};
 use crate::types::{MemberLookupPolicy, Type};
@@ -103,8 +105,14 @@ pub(crate) fn extensions_in_module(db: &dyn Db, file: File) -> Box<[StaticClassL
 }
 
 /// the extensions applicable in `file`: its own, then those of every module it
-/// imports with a plain `import mod` (in that order — a same-module extension
-/// wins over an imported one when both apply)
+/// imports (in that order — a same-module extension wins over an imported one
+/// when both apply).
+///
+/// Both `import mod` and `from mod import X` count. Naming what a module
+/// declares is how a file most often depends on it — a conformance is written
+/// against an interface imported by name — and requiring a separate `import mod`
+/// whose symbols are never used would leave an import that reads as removable to
+/// anyone tidying the file, silently withdrawing every member it carried.
 ///
 /// cycles for the same reason [`extensions_in_module`] does, and recovers the
 /// same way
@@ -118,7 +126,12 @@ pub(crate) fn applicable_extensions(db: &dyn Db, file: File) -> Box<[StaticClass
         return Box::default();
     }
     let mut extensions: Vec<StaticClassLiteral<'_>> = extensions_in_module(db, file).to_vec();
-    for module_name in semantic_index(db, file).imported_modules() {
+    // `imported_modules` deliberately records only `import mod` (see its docs),
+    // so the `from mod import X` forms are collected from the file's own statements
+    let imported = semantic_index(db, file)
+        .imported_modules()
+        .chain(crate::types::conversions::from_imported_modules(db, file));
+    for module_name in imported {
         let Some(module) = resolve_module(db, file, module_name) else {
             continue;
         };
@@ -128,7 +141,11 @@ pub(crate) fn applicable_extensions(db: &dyn Db, file: File) -> Box<[StaticClass
         if module_file == file {
             continue;
         }
-        extensions.extend_from_slice(extensions_in_module(db, module_file));
+        for &extension in extensions_in_module(db, module_file) {
+            if !extensions.contains(&extension) {
+                extensions.push(extension);
+            }
+        }
     }
     // the builtin prelude applies everywhere without an import, so it is folded
     // in last — a same-module or imported extension of the same member wins
@@ -147,7 +164,12 @@ pub(crate) fn applicable_extensions(db: &dyn Db, file: File) -> Box<[StaticClass
 /// the class an extension declaration extends: its name resolved in the
 /// declaring module's globals, else builtins. `None` when the name does not
 /// resolve to a class (reported at the declaration)
-#[salsa::tracked(returns(copy))]
+///
+/// resolving the name infers module-level code, and that inference asks which
+/// conformances are visible — which asks what every extension extends. the cycle
+/// starts from "not resolved yet" and iterates, exactly as the queries either
+/// side of it do
+#[salsa::tracked(returns(copy), cycle_initial = |_, _, _| None)]
 pub(crate) fn extended_class<'db>(
     db: &'db dyn Db,
     extension: StaticClassLiteral<'db>,
@@ -308,11 +330,37 @@ pub(crate) fn resolve_extension_member<'db>(
         (receiver.to_class_type(db)?, None)
     };
 
+    // a member reached through a conformance is written against the interface,
+    // so it binds against the interface: the value really is one, and its own
+    // class is not in the interface's lattice
+    let bind = |member: Type<'db>, conformed_as: Option<ClassType<'db>>| {
+        let bind_instance = match (conformed_as, instance) {
+            (Some(protocol), Some(_)) => Some(Type::instance(db, protocol)),
+            (_, other) => other,
+        };
+        let owner = match bind_instance {
+            Some(instance_ty) => instance_ty.to_meta_type(db),
+            None => receiver,
+        };
+        member
+            .try_call_dunder_get(db, bind_instance, owner)
+            .map_or(member, |(ty, _)| ty)
+    };
+
+    // a conformance's own member *overrides* a default the interface's own
+    // extension supplies, rather than competing with it — which is how the
+    // witness table resolves it, and reporting an ambiguity instead made the
+    // documented override flow unusable
+    let is_conformance = |candidate: StaticClassLiteral<'db>| {
+        !conformance::declared_conformances(db, candidate).is_empty()
+    };
+
     let mut resolved: Option<ExtensionMemberResolution<'db>> = None;
     for &extension in candidates {
-        let Some(member) = applicable_member(db, extension, receiver_class, name) else {
+        let Some(applicable) = applicable_member(db, file, extension, receiver_class, name) else {
             continue;
         };
+        let member = applicable.member;
         let kind = classify_member(db, member);
         if instance.is_none()
             && !matches!(
@@ -324,25 +372,20 @@ pub(crate) fn resolve_extension_member<'db>(
         {
             continue;
         }
+        let fresh = ExtensionMemberResolution {
+            extension,
+            ty: bind(member, applicable.conformed_as),
+            kind,
+            ambiguous_with: None,
+        };
         match &mut resolved {
-            None => {
-                let owner = match instance {
-                    Some(instance_ty) => instance_ty.to_meta_type(db),
-                    None => receiver,
-                };
-                let bound = member
-                    .try_call_dunder_get(db, instance, owner)
-                    .map(|(ty, _)| ty)
-                    .unwrap_or(member);
-                resolved = Some(ExtensionMemberResolution {
-                    extension,
-                    ty: bound,
-                    kind,
-                    ambiguous_with: None,
-                });
-            }
+            None => resolved = Some(fresh),
             Some(resolution) => {
-                if resolution.ambiguous_with.is_none() {
+                let overrides = is_conformance(extension) && !is_conformance(resolution.extension);
+                let overridden = is_conformance(resolution.extension) && !is_conformance(extension);
+                if overrides {
+                    *resolution = fresh;
+                } else if !overridden && resolution.ambiguous_with.is_none() {
                     resolution.ambiguous_with = Some(extension);
                 }
             }
@@ -494,15 +537,47 @@ pub(crate) fn comparison_extension_operator<'db>(
     })
 }
 
-/// if `extension` extends `receiver_class` (or a class in its MRO), its bounds
-/// hold for the receiver's specialization, and it declares `name`, return the
-/// member's type with the receiver's type arguments substituted in
-fn applicable_member<'db>(
+/// how an extension applies to one receiver: the type arguments its members'
+/// signatures must be specialized with
+pub(crate) struct ExtensionApplication<'db> {
+    /// the specialization the receiver gives the extended class, which the
+    /// extension's members reuse by name
+    receiver_specialization: Option<Specialization<'db>>,
+    /// the receiver's argument for each bracket-declared typevar, in the
+    /// extension's own parameter order. empty when the extension declares none
+    bracket_substitution: Vec<Type<'db>>,
+}
+
+impl<'db> ExtensionApplication<'db> {
+    /// substitute this application's type arguments into a member's type: first
+    /// the extension's own bracket typevars (matched to the extended type's
+    /// parameters by name), then the extended class's typevars the member's
+    /// signature reuses directly
+    fn apply(
+        &self,
+        db: &'db dyn Db,
+        extension: StaticClassLiteral<'db>,
+        member: Type<'db>,
+    ) -> Type<'db> {
+        let mut member = member;
+        if let Some(context) = extension.generic_context(db) {
+            member = member.apply_specialization(
+                db,
+                context.specialize(db, self.bracket_substitution.clone()),
+            );
+        }
+        member.apply_optional_specialization(db, self.receiver_specialization)
+    }
+}
+
+/// does `extension` apply to a receiver of `receiver_class` — is the extended
+/// class in the receiver's MRO, and does the receiver satisfy every bracket
+/// bound?
+pub(crate) fn extension_applies<'db>(
     db: &'db dyn Db,
     extension: StaticClassLiteral<'db>,
     receiver_class: ClassType<'db>,
-    name: &str,
-) -> Option<Type<'db>> {
+) -> Option<ExtensionApplication<'db>> {
     let target = extended_class(db, extension)?;
 
     // find the extended class in the receiver's MRO, with the specialization
@@ -511,6 +586,17 @@ fn applicable_member<'db>(
         ClassBase::Class(class) if class.class_literal(db) == target => Some(class),
         _ => None,
     })?;
+    applied_at(db, extension, target, target_class)
+}
+
+/// [`extension_applies`] once the extended class has been located, with the
+/// specialization the receiver gives it
+pub(crate) fn applied_at<'db>(
+    db: &'db dyn Db,
+    extension: StaticClassLiteral<'db>,
+    target: ClassLiteral<'db>,
+    target_class: ClassType<'db>,
+) -> Option<ExtensionApplication<'db>> {
     let receiver_specialization = match target_class {
         ClassType::Generic(alias) => Some(alias.specialization(db)),
         ClassType::NonGeneric(_) => None,
@@ -519,9 +605,8 @@ fn applicable_member<'db>(
     // bracket bounds constrain the receiver: every spelled typevar must name a
     // parameter the extended class declares, and the receiver's argument for
     // it must satisfy the bound
-    let extension_context = extension.generic_context(db);
-    let mut extension_substitution: Vec<Type<'db>> = Vec::new();
-    if let Some(extension_context) = extension_context {
+    let mut bracket_substitution: Vec<Type<'db>> = Vec::new();
+    if let Some(extension_context) = extension.generic_context(db) {
         let target_context = target.generic_context(db)?;
         for extension_var in extension_context.variables(db) {
             let target_var =
@@ -532,22 +617,62 @@ fn applicable_member<'db>(
             if !satisfies_bound(db, receiver_argument, extension_var) {
                 return None;
             }
-            extension_substitution.push(receiver_argument);
+            bracket_substitution.push(receiver_argument);
         }
     }
+    Some(ExtensionApplication {
+        receiver_specialization,
+        bracket_substitution,
+    })
+}
 
-    let member = class_member(db, extension.body_scope(db), name).ignore_possibly_undefined()?;
+/// the member `name` an extension declares in its own body, `None` when it
+/// declares none
+pub(crate) fn own_member<'db>(
+    db: &'db dyn Db,
+    extension: StaticClassLiteral<'db>,
+    name: &str,
+) -> Option<Type<'db>> {
+    class_member(db, extension.body_scope(db), name).ignore_possibly_undefined()
+}
 
-    // substitute the receiver's type arguments: first for the extension's own
-    // bracket typevars (matched to the target's parameters by name), then for
-    // the extended class's typevars reused directly by the member's signature
-    let mut member = member;
-    if let Some(extension_context) = extension_context {
-        member = member
-            .apply_specialization(db, extension_context.specialize(db, extension_substitution));
+/// an extension member that applies to one receiver
+struct ApplicableMember<'db> {
+    member: Type<'db>,
+    /// the interface the receiver reached this member through, when it was
+    /// reached by conformance rather than by being an instance of the extended
+    /// type. that interface is what the member's `self` is written as
+    conformed_as: Option<ClassType<'db>>,
+}
+
+/// if `extension` applies to `receiver_class` and declares `name`, return the
+/// member's type with the receiver's type arguments substituted in.
+///
+/// An extension of a *protocol* also applies to any class a visible conformance
+/// extension conforms to it — that is what makes a protocol extension's members
+/// reachable on a conforming type, exactly as they are on the protocol itself
+fn applicable_member<'db>(
+    db: &'db dyn Db,
+    file: File,
+    extension: StaticClassLiteral<'db>,
+    receiver_class: ClassType<'db>,
+    name: &str,
+) -> Option<ApplicableMember<'db>> {
+    if let Some(application) = extension_applies(db, extension, receiver_class) {
+        let member = own_member(db, extension, name)?;
+        return Some(ApplicableMember {
+            member: application.apply(db, extension, member),
+            conformed_as: None,
+        });
     }
-    member = member.apply_optional_specialization(db, receiver_specialization);
-    Some(member)
+    let target = extended_class(db, extension)?;
+    let conformed = conformance::conformance_for(db, file, receiver_class, target)?;
+    let application = applied_at(db, extension, target, conformed)?;
+    let member = own_member(db, extension, name)?;
+    Some(ApplicableMember {
+        member: application.apply(db, extension, member),
+        conformed_as: Some(conformed),
+    })
 }
 
 /// does the receiver's type argument satisfy a bracket typevar's bound?

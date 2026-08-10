@@ -51,6 +51,8 @@
 //!   while a cast is an assertion that only holds the value to arguments the
 //!   runtime can actually see
 
+use std::fmt::Write as _;
+
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, CmpOp, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
@@ -459,6 +461,8 @@ pub(crate) struct PredicateNeeds {
     pub(crate) parametric_runtime: bool,
     /// the predicate calls `_by_protocol_is`
     pub(crate) protocol_runtime: bool,
+    /// the predicate calls `_by_conforms`
+    pub(crate) conformance_runtime: bool,
     /// no arm carried a parametric claim — a plain `isinstance` covers the whole
     /// target, so a caller may use its compact shallow form instead
     pub(crate) all_plain: bool,
@@ -518,6 +522,34 @@ fn arm_predicate(
         needs.all_true = false;
         needs.references_value = true;
         return vec![value_ref(), Fragment::Lit(" is None".to_owned())];
+    }
+    // an interface something visibly conforms to cannot be answered by
+    // `isinstance`: a conforming type is not a subclass, and a protocol is not
+    // even a legal `isinstance` target. the registry answers first, and a value
+    // nothing registered falls back to carrying the requirements
+    if let Some(test) = types.conformance_test(arm) {
+        needs.all_plain = false;
+        needs.all_true = false;
+        needs.references_value = true;
+        needs.conformance_runtime = true;
+        let members = match &test.members {
+            Some(names) => {
+                let mut spelled = String::from(", (");
+                for name in names {
+                    let _ = write!(spelled, "\"{name}\", ");
+                }
+                spelled.push(')');
+                spelled
+            }
+            None => String::new(),
+        };
+        return vec![
+            Fragment::Lit("_by_conforms(".to_owned()),
+            value_ref(),
+            Fragment::Lit(", ".to_owned()),
+            Fragment::Src(arm.range()),
+            Fragment::Lit(format!("{members})")),
+        ];
     }
     let Some(plan) = plan_for(types, value_expr, arm, position) else {
         needs.all_true = false;
@@ -623,6 +655,7 @@ struct ParametricIs<'src, 'ti> {
     edits: Vec<(TextRange, Vec<Fragment>)>,
     needs_probe: bool,
     needs_protocol: bool,
+    needs_conformance: bool,
 }
 
 impl ParametricIs<'_, '_> {
@@ -654,6 +687,7 @@ impl ParametricIs<'_, '_> {
         );
         self.needs_probe |= needs.parametric_runtime;
         self.needs_protocol |= needs.protocol_runtime;
+        self.needs_conformance |= needs.conformance_runtime;
 
         // a predicate that folded to a constant inverts in place rather than
         // growing a `not`
@@ -695,6 +729,7 @@ impl ParametricIs<'_, '_> {
         );
         self.needs_probe |= needs.parametric_runtime;
         self.needs_protocol |= needs.protocol_runtime;
+        self.needs_conformance |= needs.conformance_runtime;
         frags
     }
 
@@ -826,6 +861,7 @@ impl TypeAwarePass for ParametricIsPass<'_> {
             edits: Vec::new(),
             needs_probe: false,
             needs_protocol: false,
+            needs_conformance: false,
         };
         for stmt in stmts {
             inner.visit_stmt(stmt);
@@ -840,6 +876,10 @@ impl TypeAwarePass for ParametricIsPass<'_> {
         }
         if inner.needs_protocol {
             ctx.required_imports.push(PROTOCOL_IS_RUNTIME.to_owned());
+        }
+        if inner.needs_conformance {
+            ctx.required_imports
+                .push(super::conformance::WITNESS_RUNTIME.to_owned());
         }
         ctx.template_edits.extend(inner.edits);
     }

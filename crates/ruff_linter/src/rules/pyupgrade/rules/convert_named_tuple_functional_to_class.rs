@@ -247,7 +247,6 @@ fn create_class_def_stmt(typename: &str, body: Suite, base_class: &Expr) -> Stmt
         body,
         type_params: None,
         decorator_list: DecoratorList::new(),
-        implementation: None,
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
     }

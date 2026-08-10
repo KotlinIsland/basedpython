@@ -139,7 +139,6 @@ Module(
                             },
                         ),
                     ],
-                    implementation: None,
                 },
             ),
             TypeAlias(

@@ -192,7 +192,8 @@ pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
     // --- Phase 2: import-redirect, surface-syntax cleanup, lazy-import marking ---
     let final_output = run_import_redirect_phase(output, config);
     let final_output = run_anon_named_tuple_cleanup(final_output, config)?;
-    let final_output = run_lazy_import_phase(final_output, config);
+    let final_output =
+        run_lazy_import_phase(final_output, config, &model.eagerly_imported_modules());
 
     // --- Phase 3: syntax verification ---
     verify_syntax(&final_output).map_err(|e| e.message)?;
@@ -298,6 +299,9 @@ pub fn transpile_typed_with_map(
         None if source_changed => None,
         None => Some((db, file)),
     };
+    // which imports must stay eager, computed against the *project* db: a
+    // single-file db cannot resolve the modules that declare the conformances
+    let eager_imports = ty_python_semantic::SemanticModel::new(db, file).eagerly_imported_modules();
     let (spliced, ast_errors, phase0_map) =
         transforms::ast_driver::run_against_source(working_source, config, project);
     if let Some(first) = ast_errors.first() {
@@ -337,7 +341,7 @@ pub fn transpile_typed_with_map(
 
     let final_output = run_import_redirect_phase(output, config);
     let final_output = run_anon_named_tuple_cleanup(final_output, config)?;
-    let final_output = run_lazy_import_phase(final_output, config);
+    let final_output = run_lazy_import_phase(final_output, config, &eager_imports);
 
     // phases 1-2c only prepend preambles at the top and edit within lines, so
     // the spliced body keeps its line correspondence: prepend one `None` per
@@ -487,7 +491,11 @@ fn run_import_redirect_phase(source: String, config: &Config) -> String {
 /// Python, so we leave imports eager when the target version can't handle
 /// the keyword. A redundant `lazy` keyword written in source is stripped
 /// in that case so the output stays valid
-fn run_lazy_import_phase(source: String, config: &Config) -> String {
+///
+/// `eager` names the modules that must not be deferred whatever the target: a
+/// module declaring a conformance exists at runtime only because its
+/// registration ran, so deferring it defers the conformance out of existence
+fn run_lazy_import_phase(source: String, config: &Config, eager: &[String]) -> String {
     if !config.lazy_imports {
         return source;
     }
@@ -498,7 +506,7 @@ fn run_lazy_import_phase(source: String, config: &Config) -> String {
     let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
 
     let keyword_supported = config.min_version >= ruff_python_ast::PythonVersion::from((3, 15));
-    let mut lazy = transforms::lazy_import::LazyImport::new(src, keyword_supported);
+    let mut lazy = transforms::lazy_import::LazyImport::new(src, keyword_supported, eager);
     for stmt in module.suite() {
         lazy.visit_stmt(stmt);
     }
@@ -778,8 +786,6 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let mut enums_rev = reverse_transforms::enums::EnumsReverse::new();
     let mut extension_rev =
         reverse_transforms::extension::ExtensionReverse::new(src, module.suite());
-    let mut implementation_rev =
-        reverse_transforms::implementation::ImplementationReverse::new(src, module.suite());
     let mut coalesce_rev = reverse_transforms::coalesce::CoalesceReverse::new(src);
     let mut generics_rev = reverse_transforms::generics::GenericsReverse::new(src);
     let mut auto_quote_rev = reverse_transforms::auto_quote::AutoQuoteReverse::new(src);
@@ -810,7 +816,6 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         modifiers_rev.visit_stmt(stmt);
         enums_rev.visit_stmt(stmt);
         extension_rev.visit_stmt(stmt);
-        implementation_rev.visit_stmt(stmt);
         coalesce_rev.visit_stmt(stmt);
         auto_quote_rev.visit_stmt(stmt);
         compat_rev.visit_stmt(stmt);
@@ -865,7 +870,6 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(modifiers_rev.edits);
     fixes.extend(enums_rev.edits);
     fixes.extend(extension_rev.edits);
-    fixes.extend(implementation_rev.edits);
     fixes.extend(coalesce_rev.edits);
     fixes.extend(generics_rev.edits);
     fixes.extend(auto_quote_rev.edits);
@@ -1492,40 +1496,237 @@ mod cross_file {
         );
     }
 
-    /// a conversion site whose witness class lives in another module must both
-    /// wrap the argument and import the class. the mangled name is computed from
-    /// the checker's answer on both sides — the defining module emits the class,
-    /// the using module constructs it — so the two files must agree exactly
+    /// Locate an interpreter for the cross-module runtime checks.
+    fn python() -> Option<String> {
+        let mut candidates = Vec::new();
+        if let Ok(p) = std::env::var("PYTHON") {
+            candidates.push(p);
+        }
+        candidates.extend(["python3.13", "python3", "python"].map(String::from));
+        candidates.into_iter().find(|py| {
+            std::process::Command::new(py)
+                .args(["-c", ""])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
+    }
+
+    /// a target new enough that `override` resolves in the stdlib rather than
+    /// through `typing_extensions`, which the test environment need not have
+    fn runtime_config() -> Config {
+        Config {
+            min_version: ruff_python_ast::PythonVersion::PY313,
+            ..Config::test_default()
+        }
+    }
+
+    /// Transpile every module of `project` into a temp directory and run `main`.
+    ///
+    /// Asserting the emitted *text* of each file in isolation is not enough for
+    /// anything cross-module: a conformance registers in one module and is read
+    /// in another, so only executing both together proves the two halves meet.
+    /// Two text-asserting tests once passed while the program they described
+    /// raised `AttributeError`.
+    fn run_project(project: &Project, config: &Config) -> Result<String, String> {
+        let Some(python) = python() else {
+            return Ok("SKIPPED".to_owned());
+        };
+        let dir = tempfile::tempdir().expect("temp dir");
+        for (path, _) in &project.files {
+            let out = transpile_file(project, path, config);
+            let name = path.trim_start_matches('/').replace(".by", ".py");
+            let target = dir.path().join(&name);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).expect("mkdir");
+            }
+            std::fs::write(&target, out).expect("write");
+        }
+        let output = std::process::Command::new(&python)
+            .arg("main.py")
+            .current_dir(dir.path())
+            .output()
+            .expect("spawn python");
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        }
+    }
+
+    /// the feature's headline case: the interface comes from one module, the
+    /// conformance from another, and the consumer sees both only through its
+    /// imports. this must *run*, not merely lower
     #[test]
-    fn imported_implementation_wraps_argument_and_adds_import() {
+    fn an_imported_conformance_dispatches_at_runtime() {
         let project = project_db(&[
-            (
-                "/iface.by",
-                "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
-            ),
+            ("/iface.by", "protocol Show:\n    def show(self) -> str\n"),
             (
                 "/adapters.by",
-                "from iface import A, B\n\nimplementation A for B:\n    override def f(self) -> int:\n        return self.a\n",
+                "from iface import Show\n\nextension str(Show):\n    override def show(self) -> str:\n        return \"OWN:\" + self\n",
             ),
             (
                 "/main.by",
-                "import adapters\nfrom iface import A, B\n\ndef takes_a(a: A) -> int:\n    return a.f()\n\nb = B()\ntakes_a(b)\n",
+                "import adapters\nfrom iface import Show\n\ndef render(value: Show) -> str:\n    return value.show()\n\nprint(render(\"hi\"))\n",
+            ),
+        ]);
+        match run_project(&project, &runtime_config()) {
+            Ok(out) if out == "SKIPPED" => {}
+            Ok(out) => assert_eq!(out, "OWN:hi"),
+            Err(err) => panic!("the imported conformance did not dispatch:\n{err}"),
+        }
+    }
+
+    /// the module that declares the protocol-typed function is *upstream* of the
+    /// conformance by construction, so it can never see one. it still has to
+    /// emit a dispatch
+    #[test]
+    fn a_conformance_declared_downstream_of_its_use_still_dispatches() {
+        let project = project_db(&[
+            (
+                "/lib.by",
+                "protocol Show:\n    def show(self) -> str\n\ndef render(value: Show) -> str:\n    return value.show()\n",
+            ),
+            (
+                "/main.by",
+                "from lib import Show, render\n\nextension str(Show):\n    override def show(self) -> str:\n        return \"OWN:\" + self\n\nprint(render(\"hi\"))\n",
+            ),
+        ]);
+        match run_project(&project, &runtime_config()) {
+            Ok(out) if out == "SKIPPED" => {}
+            Ok(out) => assert_eq!(out, "OWN:hi"),
+            Err(err) => panic!("a downstream conformance did not dispatch:\n{err}"),
+        }
+    }
+
+    /// a project with no conformance anywhere is byte-for-byte unaffected.
+    ///
+    /// whether a requirement dispatches is a whole-program question — a
+    /// conformance is written downstream of the interface, so no per-file gate is
+    /// sound — but "does this project contain one at all" *is* answerable, and
+    /// without it every protocol member access in every python project would be
+    /// rewritten, naming the protocol at runtime where a `TYPE_CHECKING`-only
+    /// import could not survive it
+    #[test]
+    fn a_project_without_conformances_is_untouched() {
+        let project = project_db(&[(
+            "/main.by",
+            "from typing import Protocol\n\nclass Shape(Protocol):\n    def area(self) -> int: ...\n\ndef total(s: Shape) -> int:\n    return s.area()\n",
+        )]);
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
+        assert!(out.contains("return s.area()"), "got:\n{out}");
+        assert!(!out.contains("_by_witness"), "got:\n{out}");
+        assert!(!out.contains("_by_conformances"), "got:\n{out}");
+    }
+
+    /// laziness is only given up where it has to be: for a module whose
+    /// *execution* is the point of the import.
+    ///
+    /// a conformance registers itself when its module runs, so importing one
+    /// lazily would defer the conformance out of existence. nothing else earns
+    /// that: an ordinary extension is resolved at transpile time, and a module
+    /// that merely imports a conforming one is not where any conformance is
+    /// applicable — ty grants visibility one level, so this mirrors it
+    #[test]
+    fn only_a_direct_conformance_import_gives_up_laziness() {
+        let project = project_db(&[
+            (
+                "/plainext.by",
+                "extension list:\n    def second(self) -> Element:\n        return self[1]\n",
+            ),
+            ("/iface.by", "protocol Show:\n    def show(self) -> str\n"),
+            (
+                "/adapters.by",
+                "from iface import Show\n\nextension str(Show):\n    override def show(self) -> str:\n        return self\n",
+            ),
+            ("/mid.by", "import adapters\n\nVALUE = 1\n"),
+            (
+                "/main.by",
+                "import plainext\nimport mid\nimport adapters\n\nxs = [1, 2, 3]\nprint(xs.second())\n",
+            ),
+        ]);
+        // `test_default` turns laziness off, and the whole point here is what it
+        // does when it is on
+        let config = Config {
+            lazy_imports: true,
+            ..Config::test_default()
+        };
+        let out = transpile_file(&project, "/main.by", &config);
+        assert!(
+            out.contains("plainext = _lazy_module(\"plainext\")"),
+            "an ordinary extension needs nothing to have run, got:\n{out}"
+        );
+        assert!(
+            out.contains("mid = _lazy_module(\"mid\")"),
+            "merely reaching a conformance is not declaring one, got:\n{out}"
+        );
+        assert!(
+            out.contains("import adapters"),
+            "the conformance's own module must be imported eagerly, got:\n{out}"
+        );
+        assert!(
+            !out.contains("adapters = _lazy_module"),
+            "the registration would never run, got:\n{out}"
+        );
+    }
+
+    /// a conformance declared in another module dispatches from here: the
+    /// registration lives with the conformance, and this file only needs to spell
+    /// the interface. the whole point of the feature is invisible in one file
+    #[test]
+    fn an_imported_conformance_dispatches_here() {
+        let project = project_db(&[
+            ("/iface.by", "protocol Show:\n    def show(self) -> str\n"),
+            (
+                "/adapters.by",
+                "from iface import Show\n\nextension str(Show):\n    override def show(self) -> str:\n        return self\n",
+            ),
+            (
+                "/main.by",
+                "import adapters\nfrom iface import Show\n\ndef render(value: Show) -> str:\n    return value.show()\n\nprint(render(\"hi\"))\n",
             ),
         ]);
         let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
-            out.contains("from adapters import _by_impl__A__B"),
-            "witness import should be emitted, got:\n{out}"
+            out.contains("return _by_witness(value, _by_conv__Show, \"show\")()"),
+            "the requirement should dispatch through the table, got:\n{out}"
         );
-        assert!(
-            out.contains("takes_a(_by_impl__A__B(b))"),
-            "argument should be wrapped, got:\n{out}"
-        );
-        // the defining module emits the class under the same name
+        // the conformance is not this file's to register
+        assert!(!out.contains("_by_conform(_by_conv__Show,"), "got:\n{out}");
+
+        // the declaring module emits both halves, naming the backing function it
+        // lowered itself
         let adapters_out = transpile_file(&project, "/adapters.by", &Config::test_default());
         assert!(
-            adapters_out.contains("class _by_impl__A__B(_by_Implementation, A):"),
-            "defining module should emit the witness class, got:\n{adapters_out}"
+            adapters_out
+                .contains("_by_conform(_by_conv__Show, str, {\"show\": _by_ext__str__show})"),
+            "the declaring module should register the table, got:\n{adapters_out}"
+        );
+    }
+
+    /// a conformance whose requirement is answered by a protocol extension in a
+    /// third module has to import that module's backing function into the
+    /// registration — the table names a function, not a member
+    #[test]
+    fn a_registration_imports_a_default_from_another_module() {
+        let project = project_db(&[
+            (
+                "/iface.by",
+                "protocol Show:\n    def show(self) -> str\n\nextension Show:\n    def show(self) -> str:\n        return \"?\"\n",
+            ),
+            (
+                "/adapters.by",
+                "from iface import Show\n\nextension str(Show): ...\n",
+            ),
+        ]);
+        let out = transpile_file(&project, "/adapters.by", &Config::test_default());
+        assert!(
+            out.contains("_by_ext__Show__show") && out.contains("from iface import"),
+            "the default's backing function must be imported, got:\n{out}"
+        );
+        assert!(
+            out.contains("_by_conform(_by_conv__Show, str, {\"show\": _by_ext__Show__show})"),
+            "got:\n{out}"
         );
     }
 
@@ -1560,8 +1761,9 @@ mod cross_file {
     }
 
     /// a cross-module target is *always* imported under a mangled alias, even
-    /// when the file already binds its own name. importing the bare name would
-    /// rebind whatever this file already means by it
+    /// when the file already binds its own name. reusing that binding is not
+    /// safe: it may be conditional (`if TYPE_CHECKING:`) or come after the site,
+    /// and the end-of-scope type a symbol lookup reports says nothing about either
     #[test]
     fn an_already_imported_target_still_uses_its_alias() {
         let project = project_db(&[
@@ -1616,115 +1818,6 @@ mod cross_file {
             out.contains("report(_by_conv__Fahrenheit.__from__(Celsius()))"),
             "the conversion must not go through the local class, got:\n{out}"
         );
-    }
-
-    /// the synthesized witness import must address the module the way the importing
-    /// file does. ty's absolute module name can be one the interpreter cannot
-    /// resolve — a file under a directory that is not an importable package
-    /// (`target/mod.by` → `target.mod` for the checker, `mod` at runtime)
-    #[test]
-    fn an_imported_witness_is_spelled_as_the_file_imports_it() {
-        let project = project_db(&[
-            (
-                "/nested/iface.by",
-                "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
-            ),
-            (
-                "/nested/adapters.by",
-                "from iface import A, B\n\nimplementation A for B:\n    override def f(self) -> int:\n        return self.a\n",
-            ),
-            (
-                "/nested/main.by",
-                "import adapters\nfrom iface import A, B\n\ndef takes_a(x: A) -> int:\n    return x.f()\n\nb = B()\ntakes_a(b)\n",
-            ),
-        ]);
-        let out = transpile_file(&project, "/nested/main.by", &Config::test_default());
-        assert!(
-            out.contains("from adapters import _by_impl__A__B"),
-            "the import must use the file's own spelling, got:\n{out}"
-        );
-        assert!(
-            !out.contains("nested.adapters"),
-            "an absolute name the interpreter cannot resolve leaked in:\n{out}"
-        );
-    }
-
-    /// a relative import has no absolute spelling at all, so the synthesized one
-    /// must keep the dots
-    #[test]
-    fn a_relatively_imported_witness_keeps_its_dots() {
-        let project = project_db(&[
-            ("/pkg/__init__.by", "\n"),
-            (
-                "/pkg/iface.by",
-                "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
-            ),
-            (
-                "/pkg/adapters.by",
-                "from .iface import A, B\n\nimplementation A for B:\n    override def f(self) -> int:\n        return self.a\n",
-            ),
-            (
-                "/pkg/main.by",
-                "from .adapters import A\nfrom .iface import B\n\ndef takes_a(x: A) -> int:\n    return x.f()\n\ndef main():\n    takes_a(B())\n",
-            ),
-        ]);
-        let out = transpile_file(&project, "/pkg/main.by", &Config::test_default());
-        assert!(
-            out.contains("from .adapters import _by_impl__A__B"),
-            "the relative spelling must be kept, got:\n{out}"
-        );
-    }
-
-    /// a `from mod import X` establishes the dependency just as `import mod` does,
-    /// so it must bring the module's implementations into scope
-    #[test]
-    fn a_from_import_makes_an_implementation_applicable() {
-        let project = project_db(&[
-            (
-                "/iface.by",
-                "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
-            ),
-            (
-                "/adapters.by",
-                "from iface import A, B\n\nimplementation A for B:\n    override def f(self) -> int:\n        return self.a\n",
-            ),
-            (
-                "/main.by",
-                "from adapters import A\nfrom iface import B\n\ndef takes_a(x: A) -> int:\n    return x.f()\n\nb = B()\ntakes_a(b)\n",
-            ),
-        ]);
-        let out = transpile_file(&project, "/main.by", &Config::test_default());
-        assert!(
-            out.contains("from adapters import _by_impl__A__B"),
-            "witness import should be emitted, got:\n{out}"
-        );
-        assert!(
-            out.contains("takes_a(_by_impl__A__B(b))"),
-            "argument should be wrapped, got:\n{out}"
-        );
-    }
-
-    /// without the import the implementation is not applicable, so there is
-    /// nothing to wrap — the checker reports the assignment instead
-    #[test]
-    fn implementation_without_the_import_wraps_nothing() {
-        let project = project_db(&[
-            (
-                "/iface.by",
-                "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
-            ),
-            (
-                "/adapters.by",
-                "from iface import A, B\n\nimplementation A for B:\n    override def f(self) -> int:\n        return self.a\n",
-            ),
-            (
-                "/main.by",
-                "from iface import A, B\n\ndef takes_a(a: A) -> int:\n    return a.f()\n\nb = B()\ntakes_a(b)\n",
-            ),
-        ]);
-        let out = transpile_file(&project, "/main.by", &Config::test_default());
-        assert!(out.contains("takes_a(b)"), "got:\n{out}");
-        assert!(!out.contains("__by_impl__"), "got:\n{out}");
     }
 
     /// the line map must point a runtime statement in the generated python back

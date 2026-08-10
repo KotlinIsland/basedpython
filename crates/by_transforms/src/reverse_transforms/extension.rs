@@ -66,6 +66,32 @@ impl<'src> ExtensionReverse<'src> {
         reverse
     }
 
+    /// the interface and target names of a `_by_conform(Interface, Target, {…})`
+    /// registration, when both are plain names
+    fn conformance_operands(call: &ruff_python_ast::ExprCall) -> Option<(String, String)> {
+        let [interface, target, _] = call.arguments.args.as_ref() else {
+            return None;
+        };
+        let (Expr::Name(interface), Expr::Name(target)) = (interface, target) else {
+            return None;
+        };
+        Some((interface.id.to_string(), target.id.to_string()))
+    }
+
+    /// does some backing function in this file carry a marker for `target`? if
+    /// so its header already names the conformance and the registration is
+    /// redundant
+    fn has_block_for(&self, target: &str) -> bool {
+        self.source.match_indices(EXTENSION_MARKER).any(|(at, _)| {
+            let line = self.source[at..].split('\n').next().unwrap_or_default();
+            line.split_once(' ')
+                .and_then(|(_, rest)| rest.split_once(' '))
+                .is_some_and(|(_, header)| {
+                    header.trim().split(['[', '(']).next().map(str::trim) == Some(target)
+                })
+        })
+    }
+
     /// a top-level function's marker data, when it is a recognisable backing
     /// function: (kind, header, target, member)
     fn backing_marker(
@@ -75,8 +101,10 @@ impl<'src> ExtensionReverse<'src> {
         let (kind_word, header) = marker_payload(self.source, func.range())?;
         let kind = parse_kind_word(kind_word)?;
         let header = header.to_owned();
+        // the header carries the bracket bounds and the conformance list; the
+        // mangle uses the bare target name, so both are trimmed off
         let target = header
-            .split_once('[')
+            .split_once(['[', '('])
             .map_or(header.as_str(), |(target, _)| target)
             .trim()
             .to_owned();
@@ -86,10 +114,38 @@ impl<'src> ExtensionReverse<'src> {
 
     /// group consecutive top-level backing functions with the same header into
     /// one `extension <header>:` block, and register every backing function
-    /// for the call-site re-sugar
+    /// for the call-site re-sugar. a witness-table registration is dropped: it
+    /// is the lowering of the conformance list the header already carries
     fn resugar_blocks(&mut self, suite: &[Stmt]) {
         let mut index = 0;
         while index < suite.len() {
+            if let Stmt::Expr(expr) = &suite[index]
+                && let Expr::Call(call) = expr.value.as_ref()
+                && matches!(call.func.as_ref(), Expr::Name(name) if name.id == "_by_conform")
+                // only in a file this transpiler produced: the name alone is no
+                // evidence, and deleting someone's own `_by_conform` call would
+                // break the rule this module states for every other shape
+                && self.source.contains("def _by_witness_entry(")
+            {
+                let start = line_start(self.source, expr.range().start());
+                let span = TextRange::new(start, expr.range().end());
+                // a conformance whose block supplied no member of its own lowers
+                // to *only* this call — there is no marker comment anywhere, so
+                // deleting it would lose the conformance entirely
+                let replacement = match Self::conformance_operands(call) {
+                    Some((interface, target)) if !self.has_block_for(&target) => {
+                        format!("extension {target}({interface}): ...")
+                    }
+                    _ => String::new(),
+                };
+                self.edits.push(Fix::safe_edit(if replacement.is_empty() {
+                    Edit::range_deletion(span)
+                } else {
+                    Edit::range_replacement(replacement, span)
+                }));
+                index += 1;
+                continue;
+            }
             let Stmt::FunctionDef(func) = &suite[index] else {
                 index += 1;
                 continue;

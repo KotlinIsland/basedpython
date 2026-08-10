@@ -23,7 +23,6 @@ Module(
                     type_params: None,
                     arguments: None,
                     body: [],
-                    implementation: None,
                 },
             ),
             ClassDef(
@@ -46,7 +45,6 @@ Module(
                         },
                     ),
                     body: [],
-                    implementation: None,
                 },
             ),
             Assign(

@@ -138,7 +138,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&PRIVATE_IMPORT);
     registry.register_lint(&INVALID_EXTENSION);
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
-    registry.register_lint(&INVALID_IMPLEMENTATION);
+    registry.register_lint(&INVALID_CONFORMANCE);
     registry.register_lint(&INVALID_CONVERSION);
     registry.register_lint(&AMBIGUOUS_CONVERSION);
     registry.register_lint(&MISSING_FRAMEWORK_STUBS);
@@ -1098,31 +1098,30 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
-    /// Checks for invalid basedpython `implementation` declarations: an interface
-    /// that is neither an abstract class nor a protocol, an implemented name that
-    /// does not resolve to a class, a type that already satisfies the interface,
-    /// a member that corresponds to nothing on the interface, or a second
-    /// implementation of the same pair in one module.
+    /// Checks for invalid basedpython conformance declarations
+    /// (`extension str(A):`): an interface that is neither a protocol nor an
+    /// abstract class, or a requirement nothing answers.
     ///
     /// ## Why is this bad?
-    /// An implementation states that an existing type satisfies an existing
-    /// interface, and lowers to a witness class deriving that interface. An
-    /// interface with stored state has nothing for the witness to hold; a type
-    /// that already conforms would never be converted, so the block would be dead
-    /// code; and a member matching nothing on the interface promises nothing —
-    /// an `extension` adds inherent members instead.
+    /// A conformance states that an existing type satisfies an existing
+    /// interface, and registers a witness table so that a call through an
+    /// interface-typed receiver reaches it. Conforming to a concrete class would
+    /// mean promising its fields, which a conformance has nowhere to store; and a
+    /// requirement neither the block, a default on the interface's own extension,
+    /// nor the type itself answers is an `AttributeError` the first time anything
+    /// dispatches through the conformance.
     ///
     /// ## Example
     ///
     /// ```by
-    /// class Concrete:
-    ///     x: int
+    /// protocol A:
+    ///     def bar(self)
     ///
-    /// implementation Concrete for B:  # error: not an abstract class or protocol
-    ///     override def f(self): ...
+    /// extension str(A):  # error: `str` does not answer every member of `A`
+    ///     ...
     /// ```
-    pub(crate) static INVALID_IMPLEMENTATION = {
-        summary: "detects invalid basedpython implementation declarations",
+    pub(crate) static INVALID_CONFORMANCE = {
+        summary: "detects invalid basedpython conformance declarations",
         status: LintStatus::stable("0.0.1-alpha.5"),
         default_level: Level::Error,
     }
@@ -1158,7 +1157,7 @@ declare_lint! {
 declare_lint! {
     /// ## What it does
     /// Checks for conversion sites where more than one conversion applies — two
-    /// dunders, a dunder and an in-scope `implementation`, or two applicable
+    /// dunders, a dunder and an in-scope conformance, or two applicable
     /// `implementation`s of the same interface and type.
     ///
     /// ## Why is this bad?
@@ -3292,7 +3291,7 @@ pub(super) fn report_invalid_assignment<'db>(
     }
 
     // basedpython: an assignment is a conversion site — an in-scope
-    // `implementation A for B:` or a conversion dunder makes the value acceptable
+    // a conformance or a conversion dunder makes the value acceptable
     // where it otherwise is not, and the transpiler emits the conversion for the
     // value (or, for a collection literal, for each of its elements).
     // `value_conversions` is the same answer the transpiler emits, so the two

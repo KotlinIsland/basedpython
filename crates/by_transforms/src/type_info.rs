@@ -152,16 +152,26 @@ pub(crate) trait TypeInfo {
         expr: &Expr,
     ) -> Option<ty_python_semantic::ExtensionOperatorRewrite>;
 
-    /// the name of the witness class an `implementation A for B [as N]:` block
-    /// lowers to. resolved by ty so that the emitted class and the constructor
-    /// inserted at a conversion site can never disagree
-    fn implementation_witness_name(&self, class_def: &StmtClassDef) -> Option<String>;
+    /// the runtime registrations a conformance extension (`extension str(A):`)
+    /// emits — one per interface in its header, mapping each requirement an
+    /// extension supplies to the backing function that answers it
+    fn conformance_registrations(
+        &self,
+        class_def: &StmtClassDef,
+    ) -> Vec<ty_python_semantic::ConformanceRegistration>;
 
-    /// the delegating dunders the witness class for `class_def` may carry: those
-    /// the interface leaves to `object`. Emitting one the interface declares would
-    /// shadow the interface's own version at runtime while the checker still
-    /// resolves the interface's
-    fn implementation_delegated_dunders(&self, class_def: &StmtClassDef) -> Vec<&'static str>;
+    /// when `attribute` reads a protocol *requirement* off an interface-typed
+    /// receiver, how it dispatches through the witness table. `None` for
+    /// everything else, which resolves statically
+    fn witness_dispatch(
+        &self,
+        attribute: &ruff_python_ast::ExprAttribute,
+    ) -> Option<ty_python_semantic::WitnessDispatch>;
+
+    /// how `x is <target>` is answered when `target` is an interface something
+    /// visibly conforms to. `None` when the ordinary `isinstance` lowering is
+    /// still right
+    fn conformance_test(&self, target: &Expr) -> Option<ty_python_semantic::ConformanceTest>;
 
     /// the conversions a statement's value needs: an annotated assignment, an
     /// attribute assignment, or a `return`. one wrap for a value that converts
@@ -172,9 +182,9 @@ pub(crate) trait TypeInfo {
     ) -> Vec<(TextRange, ty_python_semantic::ConversionInfo)>;
 
     /// the conversions a call's arguments need, as `(argument range, conversion)`
-    /// pairs: an `implementation A for B:` in scope, a `__from__` / `__of__` on
-    /// the parameter type or an `__into__` on the argument's own type all make an
-    /// argument acceptable where it otherwise is not
+    /// pairs: a conformance in scope, a `__from__` / `__of__` on the parameter
+    /// type or an `__into__` on the argument's own type all make an argument
+    /// acceptable where it otherwise is not
     fn call_conversions(
         &self,
         call: &ruff_python_ast::ExprCall,
@@ -582,19 +592,22 @@ impl TypeInfo for SemanticModel<'_> {
         SemanticModel::extension_operator_info(self, expr)
     }
 
-    fn implementation_witness_name(&self, class_def: &StmtClassDef) -> Option<String> {
-        let class = class_def.inferred_type(self)?.as_class_literal()?;
-        ty_python_semantic::types::implementation_witness_name(self.db(), class)
+    fn conformance_registrations(
+        &self,
+        class_def: &StmtClassDef,
+    ) -> Vec<ty_python_semantic::ConformanceRegistration> {
+        SemanticModel::conformance_registrations(self, class_def)
     }
 
-    fn implementation_delegated_dunders(&self, class_def: &StmtClassDef) -> Vec<&'static str> {
-        let Some(class) = class_def
-            .inferred_type(self)
-            .and_then(ty_python_semantic::types::Type::as_class_literal)
-        else {
-            return Vec::new();
-        };
-        ty_python_semantic::types::witness_delegated_dunders(self.db(), class)
+    fn witness_dispatch(
+        &self,
+        attribute: &ruff_python_ast::ExprAttribute,
+    ) -> Option<ty_python_semantic::WitnessDispatch> {
+        SemanticModel::witness_dispatch(self, attribute)
+    }
+
+    fn conformance_test(&self, target: &Expr) -> Option<ty_python_semantic::ConformanceTest> {
+        SemanticModel::conformance_test(self, target)
     }
 
     fn statement_conversions(

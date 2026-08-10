@@ -1,9 +1,8 @@
 use crate::{
     Alias, Arguments, BoolOp, BytesLiteral, CmpOp, Comprehension, Decorator, ElifElseClause,
-    ExceptHandler, Expr, FString, ImplementationHeader, InterpolatedStringElement, Keyword,
-    MatchCase, Mod, Operator, Parameter, ParameterWithDefault, Parameters, Pattern,
-    PatternArguments, PatternKeyword, Singleton, Stmt, StringLiteral, TString, TypeParam,
-    TypeParams, UnaryOp, WithItem,
+    ExceptHandler, Expr, FString, InterpolatedStringElement, Keyword, MatchCase, Mod, Operator,
+    Parameter, ParameterWithDefault, Parameters, Pattern, PatternArguments, PatternKeyword,
+    Singleton, Stmt, StringLiteral, TString, TypeParam, TypeParams, UnaryOp, WithItem,
 };
 use crate::{AnyNodeRef, Identifier};
 
@@ -43,12 +42,6 @@ pub trait SourceOrderVisitor<'a> {
     #[inline]
     fn visit_decorator(&mut self, decorator: &'a Decorator) {
         walk_decorator(self, decorator);
-    }
-
-    /// basedpython: the header of an `implementation A for B as N:` declaration
-    #[inline]
-    fn visit_implementation_header(&mut self, header: &'a ImplementationHeader) {
-        walk_implementation_header(self, header);
     }
 
     #[inline]
@@ -254,16 +247,6 @@ impl TraversalSignal {
 
 pub fn walk_annotation<'a, V: SourceOrderVisitor<'a> + ?Sized>(visitor: &mut V, expr: &'a Expr) {
     visitor.visit_expr(expr);
-}
-
-/// basedpython: an implementation header is a payload struct rather than a node,
-/// so it has no `AnyNodeRef` of its own; walk straight into its interface type
-/// expression (the `as` name is an identifier, which carries no children)
-pub fn walk_implementation_header<'a, V>(visitor: &mut V, header: &'a ImplementationHeader)
-where
-    V: SourceOrderVisitor<'a> + ?Sized,
-{
-    visitor.visit_expr(&header.interface);
 }
 
 pub fn walk_decorator<'a, V>(visitor: &mut V, decorator: &'a Decorator)

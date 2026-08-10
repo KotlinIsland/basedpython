@@ -28,6 +28,14 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 )]
 pub(crate) struct LazyImport<'src> {
     source: &'src str,
+    /// whether the walk is currently in module-level statements. PEP 810's
+    /// `lazy` keyword is only valid there
+    at_module_level: bool,
+    /// modules whose import must stay eager whatever the target version,
+    /// because executing them is the point: a module declaring a conformance
+    /// registers it at import, so deferring the import defers the conformance
+    /// out of existence
+    eager: Vec<String>,
     /// True when the target Python version supports PEP 810 (3.15+). When
     /// false, the transform uses the runtime polyfill instead
     keyword_supported: bool,
@@ -50,9 +58,11 @@ pub(crate) struct LazyImport<'src> {
 }
 
 impl<'src> LazyImport<'src> {
-    pub(crate) fn new(source: &'src str, keyword_supported: bool) -> Self {
+    pub(crate) fn new(source: &'src str, keyword_supported: bool, eager: &[String]) -> Self {
         Self {
             source,
+            at_module_level: true,
+            eager: eager.to_vec(),
             keyword_supported,
             edits: Vec::new(),
             needs_module_helper: false,
@@ -106,11 +116,29 @@ impl<'src> LazyImport<'src> {
         &self.source[line_start..stmt_start]
     }
 
+    /// a module whose import must stay eager whatever the target version: its
+    /// execution is the point of the import, not just the binding
+    fn is_eager(&self, name: &str) -> bool {
+        self.eager.iter().any(|module| module == name)
+    }
+
     fn is_bootstrap(name: &str) -> bool {
         matches!(name, "sys" | "importlib") || name.starts_with("importlib.")
     }
 
     fn process_import(&mut self, node: &StmtImport) {
+        // a module whose execution is the point of the import is never deferred,
+        // whichever mechanism this target uses
+        if node
+            .names
+            .iter()
+            .any(|alias| self.is_eager(alias.name.id.as_str()))
+        {
+            if node.is_lazy {
+                self.strip_lazy_keyword(node.range());
+            }
+            return;
+        }
         if self.keyword_supported {
             if !node.is_lazy {
                 self.insert_lazy_keyword(node.range().start());
@@ -161,6 +189,18 @@ impl<'src> LazyImport<'src> {
             .as_ref()
             .is_some_and(|m| m.id.as_str() == "__future__");
         let is_star = node.names.iter().any(|a| a.name.id.as_str() == "*");
+
+        // a module whose execution is the point of the import is never deferred
+        if node
+            .module
+            .as_ref()
+            .is_some_and(|module| self.is_eager(module.id.as_str()))
+        {
+            if node.is_lazy {
+                self.strip_lazy_keyword(node.range());
+            }
+            return;
+        }
 
         if self.keyword_supported {
             if is_future || is_star {
@@ -289,8 +329,29 @@ impl<'src> LazyImport<'src> {
 impl<'ast> Visitor<'ast> for LazyImport<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         match stmt {
-            Stmt::Import(n) => self.process_import(n),
-            Stmt::ImportFrom(n) => self.process_from(n),
+            // PEP 810 allows `lazy` only on a module-level import: inside a
+            // function, a class body, or a `try`, it is a syntax error. the
+            // polyfill's rewrite is legal anywhere, but it defers module
+            // *execution*, which an import written inside a function has
+            // usually been placed there to control — so both modes leave a
+            // nested import exactly as written
+            Stmt::Import(n) if self.at_module_level => self.process_import(n),
+            Stmt::ImportFrom(n) if self.at_module_level => self.process_from(n),
+            Stmt::Import(n) => {
+                if n.is_lazy {
+                    self.strip_lazy_keyword(n.range());
+                }
+            }
+            Stmt::ImportFrom(n) => {
+                if n.is_lazy {
+                    self.strip_lazy_keyword(n.range());
+                }
+            }
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) | Stmt::Try(_) => {
+                let outer = std::mem::replace(&mut self.at_module_level, false);
+                walk_stmt(self, stmt);
+                self.at_module_level = outer;
+            }
             _ => walk_stmt(self, stmt),
         }
     }

@@ -9928,13 +9928,6 @@ pub struct StmtClassDef {
     pub type_params: Option<Box<crate::TypeParams>>,
     pub arguments: Option<Box<crate::Arguments>>,
     pub body: thin_vec::ThinVec<Stmt>,
-    /// basedpython: the header of an `implementation A for B as N:` declaration.
-    /// Its presence is what marks the class as an implementation, and `name` holds the
-    /// *implemented* type (`B`) — a reference to an existing declaration, as for an
-    /// `extension`, so the header introduces no binding for it. Boxed so that the two
-    /// extra pieces of surface cost one pointer rather than growing `Stmt` for every
-    /// statement in every file
-    pub implementation: Option<Box<crate::ImplementationHeader>>,
 }
 
 /// See also [Return](https://docs.python.org/3/library/ast.html#ast.Return)
@@ -10993,7 +10986,6 @@ impl StmtClassDef {
             type_params,
             arguments,
             body,
-            implementation,
             range: _,
             node_index: _,
         } = self;
@@ -11012,10 +11004,6 @@ impl StmtClassDef {
         }
 
         visitor.visit_body(body);
-
-        if let Some(implementation) = implementation {
-            visitor.visit_implementation_header(implementation);
-        }
     }
 }
 

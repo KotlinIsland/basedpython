@@ -148,7 +148,6 @@ Module(
                             },
                         ),
                     ],
-                    implementation: None,
                 },
             ),
             Expr(

@@ -442,7 +442,7 @@
         },
         "ambiguous-conversion": {
           "title": "detects conversion sites served by more than one conversion",
-          "description": "## What it does\nChecks for conversion sites where more than one conversion applies — two\ndunders, a dunder and an in-scope `implementation`, or two applicable\n`implementation`s of the same interface and type.\n\n## Why is this bad?\n`__from__` and `__into__` are hand-written bodies that can disagree, so\nwhich one runs must not depend on arbitrary ordering. Remove one of them,\nor write the conversion you want explicitly.\n\n## Example\n\n```by\nclass Celsius:\n    def __into__(self) -> Fahrenheit: ...\n\nclass Fahrenheit:\n    @classmethod\n    def __from__(cls, value: Celsius) -> Self: ...\n\nreport(Celsius())  # error: two conversions apply\n```",
+          "description": "## What it does\nChecks for conversion sites where more than one conversion applies — two\ndunders, a dunder and an in-scope conformance, or two applicable\n`implementation`s of the same interface and type.\n\n## Why is this bad?\n`__from__` and `__into__` are hand-written bodies that can disagree, so\nwhich one runs must not depend on arbitrary ordering. Remove one of them,\nor write the conversion you want explicitly.\n\n## Example\n\n```by\nclass Celsius:\n    def __into__(self) -> Fahrenheit: ...\n\nclass Fahrenheit:\n    @classmethod\n    def __from__(cls, value: Celsius) -> Self: ...\n\nreport(Celsius())  # error: two conversions apply\n```",
           "default": "error",
           "oneOf": [
             {
@@ -850,6 +850,16 @@
             }
           ]
         },
+        "invalid-conformance": {
+          "title": "detects invalid basedpython conformance declarations",
+          "description": "## What it does\nChecks for invalid basedpython conformance declarations\n(`extension str(A):`): an interface that is neither a protocol nor an\nabstract class, or a requirement nothing answers.\n\n## Why is this bad?\nA conformance states that an existing type satisfies an existing\ninterface, and registers a witness table so that a call through an\ninterface-typed receiver reaches it. Conforming to a concrete class would\nmean promising its fields, which a conformance has nowhere to store; and a\nrequirement neither the block, a default on the interface's own extension,\nnor the type itself answers is an `AttributeError` the first time anything\ndispatches through the conformance.\n\n## Example\n\n```by\nprotocol A:\n    def bar(self)\n\nextension str(A):  # error: `str` does not answer every member of `A`\n    ...\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-context-manager": {
           "title": "detects expressions used in with statements that don't implement the context manager protocol",
           "description": "## What it does\n\nChecks for expressions used in `with` statements\nthat do not implement the context manager protocol.\n\n## Why is this bad?\n\nSuch a statement will raise `TypeError` at runtime.\n\n## Examples\n\n```python\n# TypeError: 'int' object does not support the context manager protocol\nwith 1:  # error\n    print(2)\n```",
@@ -1004,16 +1014,6 @@
           "title": "detects ignore comments that use invalid syntax",
           "description": "## What it does\n\nChecks for `type: ignore` and `ty: ignore` comments that are syntactically incorrect.\n\n## Why is this bad?\n\nA syntactically incorrect ignore comment is probably a mistake and is useless.\n\n## Examples\n\n```py\n# error\na = 20 / 1  # type: ignoree\n```\n\nUse instead:\n\n```py\na = 20 / 0  # type: ignore\n```",
           "default": "warn",
-          "oneOf": [
-            {
-              "$ref": "#/definitions/Level"
-            }
-          ]
-        },
-        "invalid-implementation": {
-          "title": "detects invalid basedpython implementation declarations",
-          "description": "## What it does\nChecks for invalid basedpython `implementation` declarations: an interface\nthat is neither an abstract class nor a protocol, an implemented name that\ndoes not resolve to a class, a type that already satisfies the interface,\na member that corresponds to nothing on the interface, or a second\nimplementation of the same pair in one module.\n\n## Why is this bad?\nAn implementation states that an existing type satisfies an existing\ninterface, and lowers to a witness class deriving that interface. An\ninterface with stored state has nothing for the witness to hold; a type\nthat already conforms would never be converted, so the block would be dead\ncode; and a member matching nothing on the interface promises nothing —\nan `extension` adds inherent members instead.\n\n## Example\n\n```by\nclass Concrete:\n    x: int\n\nimplementation Concrete for B:  # error: not an abstract class or protocol\n    override def f(self): ...\n```",
-          "default": "error",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
