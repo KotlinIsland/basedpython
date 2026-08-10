@@ -122,4 +122,14 @@ mod tests {
     fn nested_inside_optional() {
         check("a: dict[(int, str)] | None\n", "a: dict[int, str] | None\n");
     }
+
+    #[test]
+    fn recursive_tuple_growth_terminates() {
+        // asking for a type mid-walk enters inference at the scope this
+        // expression is in, so a recursive body's fixed point is reached from a
+        // different query than a whole-file check reaches it from. a body that
+        // concatenates onto its own result has to settle either way
+        let source = "def shape(tensor):\n    if not hasattr(tensor, '__iter__'):\n        return ()\n    seq = list(tensor)\n    return (len(seq),) + shape(seq[0])\n";
+        check(source, source);
+    }
 }

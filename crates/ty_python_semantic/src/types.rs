@@ -1,5 +1,5 @@
 use compact_str::{CompactString, ToCompactString};
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use ruff_diagnostics::{Edit, Fix};
 use rustc_hash::FxHashMap;
 
@@ -1428,6 +1428,55 @@ impl<'db> Type<'db> {
             UnionType::from_elements_cycle_recovery(db, [previous, self])
         }
         .recursive_type_normalized(db, cycle)
+        .without_growing_tuple_lengths(db, previous)
+    }
+
+    /// The elements of `self` when it is a union, and `self` itself otherwise.
+    fn union_elements(self, db: &'db dyn Db) -> impl Iterator<Item = Type<'db>> + 'db {
+        match self {
+            Type::Union(union) => Either::Left(union.elements(db).iter().copied()),
+            _ => Either::Right(std::iter::once(self)),
+        }
+    }
+
+    /// basedpython: `self`, with a family of tuple lengths the fixed-point iteration is growing
+    /// collapsed into a single variable-length tuple.
+    ///
+    /// A value built out of the very value being inferred — `return (x,) + f(...)` — gains an
+    /// element on every round, so unioning the rounds enumerates every length and never settles
+    /// on one. That length is the iteration's own artefact: a round only adds an element because
+    /// the round before it did, and nothing in the program says where the recursion stops. So the
+    /// moment the lengths are seen to grow they are given up, and what is kept is the element
+    /// type — which the program really does determine.
+    ///
+    /// Only exact tuples are collapsed. A named tuple is a class whose length its author wrote
+    /// down.
+    fn without_growing_tuple_lengths(self, db: &'db dyn Db, previous: Self) -> Self {
+        let longest_tuple = |ty: Self| {
+            ty.union_elements(db)
+                .filter_map(|element| Some(element.exact_tuple_instance_spec(db)?.len().minimum()))
+                .max()
+        };
+        let (Some(before), Some(after)) = (longest_tuple(previous), longest_tuple(self)) else {
+            return self;
+        };
+        if after <= before {
+            return self;
+        }
+
+        let mut rest = Vec::new();
+        let mut elements = Vec::new();
+        for element in self.union_elements(db) {
+            match element.exact_tuple_instance_spec(db) {
+                Some(spec) => elements.push(spec.homogeneous_element_type(db)),
+                None => rest.push(element),
+            }
+        }
+        rest.push(Type::homogeneous_tuple(
+            db,
+            UnionType::from_elements_cycle_recovery(db, elements),
+        ));
+        UnionType::from_elements_cycle_recovery(db, rest)
     }
 
     pub fn is_none(&self, db: &'db dyn Db) -> bool {
