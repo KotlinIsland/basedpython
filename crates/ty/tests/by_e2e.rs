@@ -1360,6 +1360,95 @@ fn run_resolves_a_src_layout_entry_point() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "src layout");
 }
 
+/// the emit target defaults to the version the project configures, so the two
+/// halves of the toolchain agree about which python this project targets — a
+/// 3.13 project was getting `typing_extensions` shims it does not need and
+/// cannot import
+#[test]
+fn build_targets_the_configured_python_version() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nrequires-python = \">=3.13\"\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.by"), "type X = int\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    let emitted = fs::read_to_string(dir.path().join("out/main.py")).unwrap();
+    assert!(
+        !emitted.contains("typing_extensions"),
+        "a 3.13 target needs no shim:\n{emitted}"
+    );
+    assert!(emitted.contains("type X = int"), "got:\n{emitted}");
+}
+
+/// a build is not all-or-nothing: a file mid-edit must not take down the build
+/// of every unrelated module, which is exactly when a code generator or a test
+/// runner is reached for
+#[test]
+fn build_emits_every_file_it_can_past_a_broken_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("good.by"), "print(1)\n").unwrap();
+    fs::write(dir.path().join("broken.by"), "x = (\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        dir.path().join("out/good.py").exists(),
+        "the parseable file must still be emitted:\n{stderr}"
+    );
+    assert!(
+        !output.status.success(),
+        "the broken file still fails the build:\n{stderr}"
+    );
+    assert!(stderr.contains("broken.by"), "got:\n{stderr}");
+}
+
+/// `by build` walks the project's own file set, so `src.exclude` applies to it
+/// exactly as it does to `by check`
+#[test]
+fn build_honours_src_exclude() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n\
+         \n[tool.basedpython.src]\nexclude = [\"tests/negative\"]\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.by"), "print(1)\n").unwrap();
+    let negative = dir.path().join("tests").join("negative");
+    fs::create_dir_all(&negative).unwrap();
+    fs::write(negative.join("bad.by"), "def f(:\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert!(
+        !stderr.contains("bad.by"),
+        "excluded file checked:\n{stderr}"
+    );
+    assert!(dir.path().join("out/main.py").exists());
+    assert!(!dir.path().join("out/tests").exists());
+}
+
 #[test]
 fn transpile_proceeds_past_non_syntax_errors() {
     // type errors are surfaced as diagnostics but don't block transpile —

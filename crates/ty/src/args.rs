@@ -88,8 +88,9 @@ pub(crate) enum Command {
     /// Transpile all .by files and write them to out/.
     Build {
         /// minimum Python version the output must run on
-        #[arg(long, value_name = "VERSION", default_value = "3.10")]
-        min_version: String,
+        /// [default: the project's configured python version]
+        #[arg(long, value_name = "VERSION")]
+        min_version: Option<String>,
         #[command(flatten)]
         lowering: LoweringArgs,
     },
@@ -127,8 +128,9 @@ pub(crate) enum Command {
         #[arg(long)]
         reverse: bool,
         /// minimum Python version the output must run on
-        #[arg(long, value_name = "VERSION", default_value = "3.10")]
-        min_version: String,
+        /// [default: the project's configured python version]
+        #[arg(long, value_name = "VERSION")]
+        min_version: Option<String>,
         #[command(flatten)]
         lowering: LoweringArgs,
     },

@@ -18,6 +18,37 @@ use walkdir::WalkDir;
 use crate::ExitStatus;
 use crate::args::LoweringArgs;
 
+/// The python version the emitted code must run on when `--min-version` is not
+/// given: the one the project configures (`environment.python-version`, else the
+/// `requires-python` lower bound), so the checker and the emitter agree about
+/// which python this project targets. Falls back to the transpiler's own default
+/// outside a project, or when the configuration names no version.
+fn configured_min_version(cwd: &Path) -> PythonVersion {
+    let Some(sys_cwd) = SystemPath::from_std_path(cwd) else {
+        return Config::default().min_version;
+    };
+    let system = OsSystem::new(sys_cwd);
+    let Ok(metadata) = ProjectMetadata::discover(sys_cwd, &system) else {
+        return Config::default().min_version;
+    };
+    let db = ProjectDatabase::use_defaults(metadata, system);
+    ruff_db::Db::python_version(&db)
+        .to_string()
+        .parse()
+        .unwrap_or_else(|_| Config::default().min_version)
+}
+
+/// The transpile config for a command whose `--min-version` is optional.
+fn version_config(min_version: Option<&str>, cwd: &Path) -> anyhow::Result<Config> {
+    match min_version {
+        Some(spelled) => parse_version(spelled),
+        None => Ok(Config {
+            min_version: configured_min_version(cwd),
+            ..Config::default()
+        }),
+    }
+}
+
 pub(crate) fn parse_version(s: &str) -> anyhow::Result<Config> {
     let version = s
         .parse::<PythonVersion>()
@@ -117,13 +148,11 @@ pub(crate) fn cmd_run(
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let tmp = tempfile::TempDir::new().context("failed to create temp directory")?;
 
-    let files = bpy_files(&cwd);
-    if files.is_empty() {
+    let (db, handles, rebuilder) = build_project_db(&cwd)?;
+    if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Failure);
     }
-
-    let (db, handles, rebuilder) = build_project_db(&cwd, &files)?;
     let roots = module_roots(&db, &cwd);
 
     // an explicit module always wins; otherwise the project's configured entry
@@ -238,19 +267,21 @@ fn detect_python_version(python: &str) -> Option<PythonVersion> {
 // ── build ────────────────────────────────────────────────────────────────────
 
 #[allow(clippy::print_stderr)]
-pub(crate) fn cmd_build(min_version: &str, lowering: &LoweringArgs) -> anyhow::Result<ExitStatus> {
-    let mut config = parse_version(min_version)?;
-    lowering.apply(&mut config)?;
+pub(crate) fn cmd_build(
+    min_version: Option<&str>,
+    lowering: &LoweringArgs,
+) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let mut config = version_config(min_version, &cwd)?;
+    lowering.apply(&mut config)?;
     let out = cwd.join("out");
-    let files = bpy_files(&cwd);
 
-    if files.is_empty() {
+    let (db, handles, rebuilder) = build_project_db(&cwd)?;
+    if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Success);
     }
-
-    let (db, handles, rebuilder) = build_project_db(&cwd, &files)?;
+    let file_count = handles.len();
     let roots = module_roots(&db, &cwd);
     if !render_check_and_transpile(
         &db,
@@ -269,7 +300,7 @@ pub(crate) fn cmd_build(min_version: &str, lowering: &LoweringArgs) -> anyhow::R
         return Ok(ExitStatus::Failure);
     }
 
-    eprintln!("\nbuild complete ({} files)", files.len());
+    eprintln!("\nbuild complete ({file_count} files)");
     Ok(ExitStatus::Success)
 }
 
@@ -279,10 +310,11 @@ pub(crate) fn cmd_build(min_version: &str, lowering: &LoweringArgs) -> anyhow::R
 pub(crate) fn cmd_transpile(
     file: Option<&PathBuf>,
     reverse: bool,
-    min_version: &str,
+    min_version: Option<&str>,
     lowering: &LoweringArgs,
 ) -> anyhow::Result<ExitStatus> {
-    let mut config = parse_version(min_version)?;
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let mut config = version_config(min_version, &cwd)?;
     lowering.apply(&mut config)?;
 
     // a directory argument transpiles the whole tree in place: forward turns
@@ -460,13 +492,12 @@ fn reverse_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
 /// build`, but written in place rather than to `out/`).
 #[allow(clippy::print_stderr)]
 fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
-    let files = bpy_files(dir);
-    if files.is_empty() {
+    let (db, handles, rebuilder) = build_project_db(dir)?;
+    if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Success);
     }
 
-    let (db, handles, rebuilder) = build_project_db(dir, &files)?;
     let ok = render_check_and_transpile(
         &db,
         &handles,
@@ -642,16 +673,6 @@ main()
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-fn bpy_files(root: &Path) -> Vec<PathBuf> {
-    WalkDir::new(root)
-        .into_iter()
-        .filter_entry(may_contain_sources)
-        .filter_map(Result::ok)
-        .filter(|e| e.path().extension().is_some_and(|x| x == "by"))
-        .map(walkdir::DirEntry::into_path)
-        .collect()
-}
-
 /// Everything needed to build a project db a second time.
 ///
 /// The transpiler asks for one when a pre-pass rewrites the source it hands to
@@ -683,11 +704,24 @@ type ProjectBuild = (
     Rebuilder,
 );
 
-/// Build a project db rooted at `cwd` with every `.by` file under it set as
-/// an included path, returning the db alongside `(source_path, File)` pairs
-/// in the same order as the input slice, and the means to build the same
-/// project again.
-fn build_project_db(cwd: &Path, files: &[PathBuf]) -> anyhow::Result<ProjectBuild> {
+/// Whether `path` sits inside a hidden or build-output directory under `root`.
+fn is_hidden_within(path: &Path, root: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    relative
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .filter_map(|component| component.as_os_str().to_str())
+        .any(|name| name.starts_with('.') || NON_SOURCE_DIRS.contains(&name))
+}
+
+/// Build a project db rooted at `cwd`, returning it alongside the
+/// `(source_path, File)` pair for every basedpython source the *project* claims
+/// — the same set `by check` walks, so `src.exclude` and the ignore files it
+/// honours apply here too — and the means to build the same project again.
+fn build_project_db(cwd: &Path) -> anyhow::Result<ProjectBuild> {
     // the project root must be canonicalized the same way the included files
     // are (below) so it stays a path *prefix* of them: otherwise a file's
     // search path isn't recognized as first-party and boundary diagnostics
@@ -701,26 +735,39 @@ fn build_project_db(cwd: &Path, files: &[PathBuf]) -> anyhow::Result<ProjectBuil
     let project_metadata = ProjectMetadata::discover(sys_cwd, &system)
         .with_context(|| format!("failed to discover project at {sys_cwd}"))?;
     let metadata = project_metadata.clone();
-    let mut db = ProjectDatabase::use_defaults(project_metadata, system);
+    let db = ProjectDatabase::use_defaults(project_metadata, system);
 
-    let mut handles = Vec::with_capacity(files.len());
-    let mut included = Vec::with_capacity(files.len());
-    for bpy in files {
-        let abs = std::fs::canonicalize(bpy).with_context(|| format!("{}", bpy.display()))?;
-        let sys_path = SystemPath::from_std_path(&abs)
-            .with_context(|| format!("non-utf8 path: {}", abs.display()))?;
-        included.push(sys_path.to_path_buf());
-        let f = system_path_to_file(&db, sys_path)
-            .with_context(|| format!("file not found in db: {sys_path}"))?;
-        handles.push((bpy.clone(), f));
-    }
+    // the project's own file set — the one `by check` walks, so `src.exclude`
+    // and the ignore files it honours apply here too. a build that disagreed
+    // with the check about which files are in the project reports errors for
+    // files the project deliberately excludes, and (before this) wrote nothing
+    let mut sources: Vec<(PathBuf, ruff_db::files::File)> = db
+        .project()
+        .files(&db)
+        .into_iter()
+        .filter(|file| matches!(file.path(&db).extension(), Some("by" | "byi")))
+        .filter_map(|file| {
+            let path = file.path(&db).as_system_path()?;
+            Some((path.as_std_path().to_path_buf(), file))
+        })
+        // a hidden directory (`.claude/worktrees`, `.venv`, …) holds copies and
+        // dependencies, not this project's sources — emitting them would write
+        // a parallel tree nobody asked for
+        .filter(|(path, _)| !is_hidden_within(path, &canonical_cwd))
+        .collect();
+    // the walk is over a hash set, so order is arbitrary; emit deterministically
+    sources.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    let included: Vec<SystemPathBuf> = sources
+        .iter()
+        .filter_map(|(path, _)| SystemPath::from_std_path(path).map(SystemPath::to_path_buf))
+        .collect();
     let rebuilder = Rebuilder {
         metadata,
         root: sys_cwd.to_path_buf(),
-        included: included.clone(),
+        included,
     };
-    db.project().set_included_paths(&mut db, included);
-    Ok((db, handles, rebuilder))
+    Ok((db, sources, rebuilder))
 }
 
 /// How much of the check outcome blocks emitting output.
@@ -749,36 +796,48 @@ fn render_check_and_transpile(
     mut consume: impl FnMut(&Path, &str, &[Option<u32>]) -> anyhow::Result<()>,
 ) -> anyhow::Result<bool> {
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
-    let mut blocked = false;
+    let mut unparsable: Vec<ruff_db::files::File> = Vec::new();
 
     for (_, file) in handles {
         let diags = db.check_file(*file);
         if diags.iter().any(is_parse_error) {
-            blocked = true;
+            unparsable.push(*file);
         }
         all_diagnostics.extend(diags);
     }
-    if gate == CheckGate::AllErrors
-        && all_diagnostics
-            .iter()
-            .any(|d| d.severity() >= Severity::Error)
-    {
-        blocked = true;
-    }
+    // running a program is all-or-nothing: a module that does not check would
+    // be imported by one that does. producing artifacts is not — a file mid-edit
+    // must not take down the build of every unrelated module, which is exactly
+    // when a code generator or a test runner is reached for
+    let blocked = match gate {
+        CheckGate::AllErrors => {
+            !unparsable.is_empty()
+                || all_diagnostics
+                    .iter()
+                    .any(|d| d.severity() >= Severity::Error)
+        }
+        CheckGate::ParseErrorsOnly => false,
+    };
 
     if blocked {
         render_diagnostics(db, &all_diagnostics)?;
         return Ok(false);
     }
 
+    let mut ok = unparsable.is_empty();
     let rebuild = || Some(rebuilder.rebuild());
     for (bpy, file) in handles {
+        if unparsable.contains(file) {
+            continue;
+        }
         match by_transforms::transpile_typed_with_map(db, *file, config, Some(&rebuild)) {
             Ok((out, line_map)) => consume(bpy, &out, &line_map)?,
             Err(e) => {
                 all_diagnostics.push(transpile_bug_diagnostic(*file, &e));
-                render_diagnostics(db, &all_diagnostics)?;
-                return Ok(false);
+                ok = false;
+                if gate == CheckGate::AllErrors {
+                    break;
+                }
             }
         }
     }
@@ -786,7 +845,7 @@ fn render_check_and_transpile(
     if !all_diagnostics.is_empty() {
         render_diagnostics(db, &all_diagnostics)?;
     }
-    Ok(true)
+    Ok(ok)
 }
 
 fn is_parse_error(d: &Diagnostic) -> bool {

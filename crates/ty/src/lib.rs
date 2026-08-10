@@ -88,13 +88,13 @@ where
         Command::Build {
             min_version,
             lowering,
-        } => by_commands::cmd_build(&min_version, &lowering),
+        } => by_commands::cmd_build(min_version.as_deref(), &lowering),
         Command::Transpile {
             file,
             reverse,
             min_version,
             lowering,
-        } => by_commands::cmd_transpile(file.as_ref(), reverse, &min_version, &lowering),
+        } => by_commands::cmd_transpile(file.as_ref(), reverse, min_version.as_deref(), &lowering),
         Command::GenerateApiFile {
             output,
             stdout,

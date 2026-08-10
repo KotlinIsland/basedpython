@@ -360,9 +360,15 @@ pub fn transpile_typed_with_map(
     } else {
         phase0_map
     };
+    // the module docstring stays first, so the generated lines land after it —
+    // its lines keep their own mapping ahead of the `None`s
+    let kept =
+        newline_count(&final_output[..transforms::source_util::docstring_end(&final_output)])
+            .min(composed.len());
     let mut line_map: Vec<Option<u32>> = Vec::with_capacity(prepended + composed.len());
+    line_map.extend(composed[..kept].iter().copied());
     line_map.extend(std::iter::repeat_n(None, prepended));
-    line_map.extend(composed);
+    line_map.extend(composed[kept..].iter().copied());
 
     // verify last: on failure, map the generated span back to a `.by` range
     if let Err(mut err) = verify_syntax(&final_output) {
@@ -444,7 +450,7 @@ fn run_anon_named_tuple_cleanup(mut source: String, config: &Config) -> Result<S
         source = if preamble.is_empty() {
             body
         } else {
-            format!("{preamble}{body}")
+            splice_preamble(&body, &preamble)
         };
 
         let _ = config;
@@ -514,13 +520,17 @@ fn run_lazy_import_phase(source: String, config: &Config) -> String {
     let (body, _) = apply_transforms_once(src, lazy.edits);
     if preamble.is_empty() {
         body
-    } else if let Some(rest) = body.strip_prefix("from __future__ import annotations\n") {
-        // a `from __future__` line MUST come first in the file. main lowering
-        // emits it; splice the polyfill preamble in *after* so both stay valid
-        format!("from __future__ import annotations\n{preamble}{rest}")
     } else {
-        format!("{preamble}{body}")
+        splice_preamble(&body, &preamble)
     }
+}
+
+/// Splice `preamble` into `body` where generated lines belong: after the module
+/// docstring and any `from __future__ import`, each of which is only valid
+/// where it already is.
+fn splice_preamble(body: &str, preamble: &str) -> String {
+    let at = transforms::source_util::preamble_offset(body);
+    format!("{}{preamble}{}", &body[..at], &body[at..])
 }
 
 /// Re-parse the transpiled source as **python** (`.py`) and surface any parse
