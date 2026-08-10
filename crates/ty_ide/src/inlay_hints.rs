@@ -648,15 +648,23 @@ pub struct InlayHintSettings {
     /// ```
     pub revealed_types: bool,
 
-    /// basedpython: whether to show the parameters a construct binds but the
-    /// source never spells — a trailing lambda's `it`, an `init(...)` or
-    /// property accessor's `self`.
+    /// basedpython: whether to show the parameters a trailing lambda binds but
+    /// the source never spells — `it`, and the receiver spelled `self`.
     ///
     /// ```by
     /// f(2)"it: int":
     ///     print(it)
     /// ```
     pub implicit_parameters: bool,
+
+    /// basedpython: whether to show the `self` an `init(...)` binds without
+    /// spelling it.
+    ///
+    /// ```by
+    /// class C:
+    ///     init("self, "a: int)
+    /// ```
+    pub implicit_self: bool,
 
     /// Whether to show the inferred type of an unannotated lambda parameter.
     ///
@@ -709,6 +717,7 @@ impl InlayHintSettings {
             numeric_promotions: false,
             revealed_types: false,
             implicit_parameters: false,
+            implicit_self: false,
             lambda_parameter_types: false,
             implicit_arguments: false,
             template_binding_types: false,
@@ -729,6 +738,7 @@ impl InlayHintSettings {
             numeric_promotions,
             revealed_types,
             implicit_parameters,
+            implicit_self,
             lambda_parameter_types,
             implicit_arguments,
             template_binding_types,
@@ -746,6 +756,7 @@ impl InlayHintSettings {
             || numeric_promotions
             || revealed_types
             || implicit_parameters
+            || implicit_self
             || lambda_parameter_types
             || implicit_arguments
             || template_binding_types
@@ -767,6 +778,7 @@ impl Default for InlayHintSettings {
             numeric_promotions: true,
             revealed_types: true,
             implicit_parameters: true,
+            implicit_self: true,
             lambda_parameter_types: true,
             implicit_arguments: true,
             template_binding_types: true,
@@ -1135,13 +1147,15 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         ));
     }
 
-    /// basedpython: hint a parameter the source never spells. The parser gives
-    /// those an empty range at the position they would occupy.
-    fn add_implicit_parameter(&mut self, parameter: &ast::Parameter) {
-        if !self.settings.implicit_parameters
-            || !self.is_basedpython()
-            || !parameter.range().is_empty()
-        {
+    /// basedpython: hint the `self` an `init(...)` binds without spelling it.
+    /// The parser gives such a parameter an empty range at the position it
+    /// would occupy.
+    ///
+    /// A property accessor binds one too, but its whole header is synthesized
+    /// and skipped before this is reached — the construct is hinted at its
+    /// head instead.
+    fn add_implicit_self(&mut self, parameter: &ast::Parameter) {
+        if !self.settings.implicit_self || !self.is_basedpython() || !parameter.range().is_empty() {
             return;
         }
 
@@ -1363,7 +1377,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
 
     fn visit_parameter(&mut self, parameter: &'a ast::Parameter) {
         if self.enter_node(parameter.into()).is_traverse() {
-            self.add_implicit_parameter(parameter);
+            self.add_implicit_self(parameter);
             self.add_lambda_parameter_type(parameter);
         }
 
@@ -9932,6 +9946,37 @@ Source with applied edits:
 
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
             implicit_parameters: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// The `self` an `init(...)` binds is hinted under its own setting, so it
+    /// can be turned off without losing a trailing lambda's `it`. A property
+    /// accessor's synthesized header is not hinted at all.
+    #[test]
+    fn basedpython_implicit_self() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def apply(fn: (int) -> None) -> None:
+                fn(1)
+
+            class C:
+                init(a: int)
+
+            class D:
+                init()
+
+            class E:
+                var x: int = 0
+                    get() = field
+
+            apply:
+                print(it)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            implicit_self: true,
             ..InlayHintSettings::none()
         }));
     }

@@ -125,6 +125,12 @@ the guard is suppressed in three cases:
 - `main` has a required parameter the command line can't supply, so calling it
     would raise `TypeError`
 
+## completion
+
+at module level, completing `main` writes the whole definition rather than the
+name — there is only one thing a top-level `main` can be. once the module has
+one, the name completes to it like any other
+
 ## why
 
 most scripts end with the same boilerplate guard. naming the entry point

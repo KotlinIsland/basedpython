@@ -28,6 +28,7 @@ Settings: WorkspaceSettings {
         numeric_promotions: true,
         revealed_types: true,
         implicit_parameters: true,
+        implicit_self: true,
         lambda_parameter_types: true,
         implicit_arguments: true,
         template_binding_types: true,

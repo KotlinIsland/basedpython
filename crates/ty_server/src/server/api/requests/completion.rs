@@ -166,6 +166,7 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
                     label_details,
                     insert_text,
                     insert_text_format,
+                    filter_text: comp.filter.map(String::from),
                     text_edit,
                     additional_text_edits: import_edit.map(|edit| vec![edit]),
                     documentation,
