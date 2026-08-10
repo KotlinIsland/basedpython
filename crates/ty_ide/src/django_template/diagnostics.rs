@@ -33,7 +33,7 @@ use ty_python_semantic::types::ide_support::{
     TemplateLookup, callable_needs_arguments, template_lookup,
 };
 
-use crate::code_action::QuickFix;
+use crate::code_action::{FileEdit, QuickFix};
 
 use super::TEMPLATE_DIRECTORY;
 use super::completion::{load_edit_for, loaded_libraries};
@@ -1045,10 +1045,13 @@ pub(crate) fn code_actions(
 
     actions.push(QuickFix {
         title: format!("Ignore '{}' for this line", lint.name()),
-        edits: vec![Edit::insertion(
-            format!(" {{# ty: ignore[{}] #}}", lint.name()),
-            line_end(source, range.start()),
-        )],
+        edits: vec![FileEdit {
+            file,
+            edit: Edit::insertion(
+                format!(" {{# ty: ignore[{}] #}}", lint.name()),
+                line_end(source, range.start()),
+            ),
+        }],
         preferred: false,
         create: None,
     });

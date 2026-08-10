@@ -157,74 +157,85 @@ pub enum ImportStanding<'a> {
 /// available everywhere — under-eager, but never wrong.
 pub fn available_groups<'db>(db: &'db dyn Db, file: File) -> AvailableGroups<'db> {
     let Some(manifest) = db.dependency_manifest(file) else {
-        return AvailableGroups::Everything;
+        return AvailableGroups::Unknown;
     };
 
     let settings = db.analysis_settings(file);
-    if let Some(selected) = settings.dependency_groups.as_deref() {
-        return AvailableGroups::Named {
-            manifest,
-            selected: selected.to_vec(),
-        };
-    }
-
-    if is_shipped(db, file, manifest, settings.shipped_modules.as_deref()) {
-        AvailableGroups::ShippedOnly { manifest }
+    let allowed = if let Some(selected) = settings.dependency_groups.as_deref() {
+        AllowedGroups::Named(selected.to_vec())
+    } else if is_shipped(db, file, manifest, settings.shipped_modules.as_deref()) {
+        AllowedGroups::Shipped
     } else {
-        AvailableGroups::Everything
-    }
+        AllowedGroups::All
+    };
+
+    AvailableGroups::Known { manifest, allowed }
 }
 
 /// The groups a file may import from, as [`available_groups`] worked them out.
 #[derive(Clone, Debug)]
 pub enum AvailableGroups<'db> {
-    /// Every declared group, which is also the answer whenever nothing is known.
-    Everything,
-    /// Only groups installed for everyone who installs the project: the main
-    /// dependency list and the extras.
-    ShippedOnly {
+    /// The project declares nothing, so nothing can be out of place.
+    ///
+    /// This is distinct from a manifest that allows every group: there, a
+    /// distribution declared in no group at all is still undeclared.
+    Unknown,
+    Known {
         manifest: &'db DependencyManifest,
-    },
-    Named {
-        manifest: &'db DependencyManifest,
-        selected: Vec<Box<str>>,
+        allowed: AllowedGroups,
     },
 }
 
-impl<'db> AvailableGroups<'db> {
-    fn manifest(&self) -> Option<&'db DependencyManifest> {
-        match self {
-            AvailableGroups::Everything => None,
-            AvailableGroups::ShippedOnly { manifest }
-            | AvailableGroups::Named { manifest, .. } => Some(manifest),
-        }
-    }
+/// Which of a manifest's groups a file may import from.
+#[derive(Clone, Debug)]
+pub enum AllowedGroups {
+    /// Every group the project declares.
+    All,
+    /// Only what is installed for everyone who installs the project: the main
+    /// dependency list and the extras.
+    Shipped,
+    /// Exactly the groups named, or every group if one of them is `*`.
+    Named(Vec<Box<str>>),
+}
 
+impl AllowedGroups {
     fn allows(&self, group: &GroupName) -> bool {
         match self {
-            AvailableGroups::Everything => true,
+            AllowedGroups::All => true,
             // an extra is not installed unless it is asked for, but the code
             // that guards an optional import is shipped code too. treating an
             // extra as unavailable would report every one of those, so what an
             // extra needs is a check that the import is guarded — a separate
             // question from this one
-            AvailableGroups::ShippedOnly { .. } => {
-                matches!(group, GroupName::Project | GroupName::Extra(_))
-            }
-            AvailableGroups::Named { selected, .. } => selected
+            AllowedGroups::Shipped => matches!(group, GroupName::Project | GroupName::Extra(_)),
+            AllowedGroups::Named(selected) => selected
                 .iter()
                 .any(|name| &**name == group.as_str() || &**name == "*"),
         }
     }
+}
+
+impl<'db> AvailableGroups<'db> {
+    pub fn manifest(&self) -> Option<&'db DependencyManifest> {
+        match self {
+            AvailableGroups::Unknown => None,
+            AvailableGroups::Known { manifest, .. } => Some(manifest),
+        }
+    }
 
     /// Whether `distribution` may be imported here.
+    ///
+    /// A distribution the manifest does not declare at all is never allowed,
+    /// however permissive the group selection: importing something only because
+    /// a dependency happens to install it is wrong everywhere, not only in
+    /// shipped code.
     pub fn allows_distribution(&self, distribution: &DistributionName) -> bool {
-        let Some(manifest) = self.manifest() else {
-            return true;
-        };
-        manifest
-            .groups_declaring(distribution)
-            .any(|group| self.allows(group))
+        match self {
+            AvailableGroups::Unknown => true,
+            AvailableGroups::Known { manifest, allowed } => manifest
+                .groups_declaring(distribution)
+                .any(|group| allowed.allows(group)),
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::add_dependency;
 use crate::completion;
 use crate::django_template::django_template_code_actions;
 
@@ -9,24 +10,40 @@ use ruff_text_size::TextRange;
 use ty_project::Db;
 use ty_python_semantic::lint::LintId;
 use ty_python_semantic::suppress_single;
-use ty_python_semantic::types::{UNDEFINED_REVEAL, UNRESOLVED_REFERENCE};
+use ty_python_semantic::types::{
+    MISPLACED_DEPENDENCY, UNDECLARED_DEPENDENCY, UNDEFINED_REVEAL, UNRESOLVED_IMPORT,
+    UNRESOLVED_REFERENCE,
+};
 
 /// A `QuickFix` Code Action
 #[derive(Debug, Clone)]
 pub struct QuickFix {
     pub title: String,
-    pub edits: Vec<Edit>,
+    pub edits: Vec<FileEdit>,
     pub preferred: bool,
     /// A file the action creates, for a fix to a reference to something that
     /// isn't there yet.
     pub create: Option<SystemPathBuf>,
 }
 
+/// An edit and the file it applies to.
+///
+/// An action is offered against one file's diagnostic but does not have to change
+/// that file: declaring a missing dependency edits `pyproject.toml`.
+#[derive(Debug, Clone)]
+pub struct FileEdit {
+    pub file: File,
+    pub edit: Edit,
+}
+
 impl QuickFix {
-    fn new(title: String, edits: Vec<Edit>, preferred: bool) -> Self {
+    fn new(title: String, file: File, edits: Vec<Edit>, preferred: bool) -> Self {
         Self {
             title,
-            edits,
+            edits: edits
+                .into_iter()
+                .map(|edit| FileEdit { file, edit })
+                .collect(),
             preferred,
             create: None,
         }
@@ -65,9 +82,19 @@ pub fn code_actions(
         actions.extend(import_quick_fix);
     }
 
+    // An import of something the project does not depend on is fixed by
+    // declaring it, which is an edit to a different file than the diagnostic's.
+    if lint_id == LintId::of(&UNDECLARED_DEPENDENCY)
+        || lint_id == LintId::of(&MISPLACED_DEPENDENCY)
+        || lint_id == LintId::of(&UNRESOLVED_IMPORT)
+    {
+        actions.extend(add_dependency::code_actions(db, file, diagnostic_range));
+    }
+
     // Suggest just suppressing the lint (always a valid option, but never ideal)
     actions.push(QuickFix::new(
         format!("Ignore '{}' for this line", lint_id.name()),
+        file,
         suppress_single(db, file, lint_id, diagnostic_range).into_edits(),
         false,
     ));
@@ -87,7 +114,7 @@ fn unresolved_fixes(
     Some(
         completion::unresolved_fixes(db, file, &parsed, symbol, node)
             .into_iter()
-            .map(|import| QuickFix::new(import.label, vec![import.edit], true)),
+            .map(move |import| QuickFix::new(import.label, file, vec![import.edit], true)),
     )
 }
 
@@ -993,7 +1020,7 @@ mod tests {
 
             // every fixture this harness writes is python; the template actions
             // have their own tests
-            for mut action in code_actions(
+            for action in code_actions(
                 &self.db,
                 self.file,
                 self.diagnostic_range,
@@ -1006,8 +1033,15 @@ mod tests {
                     action.title,
                 );
 
+                // an action's edits are all in one file, which is not
+                // necessarily the file the diagnostic is in
+                let edited = action
+                    .edits
+                    .first()
+                    .map_or(self.file, |edit: &crate::FileEdit| edit.file);
+
                 diagnostic.annotate(Annotation::primary(
-                    Span::from(self.file).with_range(self.diagnostic_range),
+                    Span::from(edited).with_range(self.diagnostic_range),
                 ));
 
                 if action.preferred {
@@ -1017,8 +1051,10 @@ mod tests {
                     ));
                 }
 
-                let first_edit = action.edits.remove(0);
-                diagnostic.set_fix(Fix::safe_edits(first_edit, action.edits));
+                let mut edits = action.edits.into_iter().map(|edit| edit.edit);
+                if let Some(first) = edits.next() {
+                    diagnostic.set_fix(Fix::safe_edits(first, edits));
+                }
 
                 write!(buf, "{}", diagnostic.display(&self.db, &config)).unwrap();
             }

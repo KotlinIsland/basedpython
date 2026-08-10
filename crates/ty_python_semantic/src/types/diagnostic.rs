@@ -190,6 +190,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNKNOWN_ARGUMENT);
     registry.register_lint(&PYDANTIC_DISCARDED_EXTRA_ARGUMENT);
     registry.register_lint(&POSITIONAL_ONLY_PARAMETER_AS_KWARG);
+    registry.register_lint(&UNDECLARED_DEPENDENCY);
+    registry.register_lint(&MISPLACED_DEPENDENCY);
     registry.register_lint(&UNRESOLVED_ATTRIBUTE);
     registry.register_lint(&UNRESOLVED_IMPORT);
     registry.register_lint(&UNRESOLVED_REFERENCE);
@@ -2375,8 +2377,26 @@ declare_lint! {
 }
 
 declare_lint! {
+    #[doc = include_str!("../../resources/lint_docs/undeclared-dependency.md")]
+    pub static UNDECLARED_DEPENDENCY = {
+        summary: "detects imports of a distribution the project does not depend on",
+        status: LintStatus::stable("0.0.1-alpha.39"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    #[doc = include_str!("../../resources/lint_docs/misplaced-dependency.md")]
+    pub static MISPLACED_DEPENDENCY = {
+        summary: "detects shipped code importing a dependency group",
+        status: LintStatus::stable("0.0.1-alpha.39"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
     #[doc = include_str!("../../resources/lint_docs/unresolved-import.md")]
-    pub(crate) static UNRESOLVED_IMPORT = {
+    pub static UNRESOLVED_IMPORT = {
         summary: "detects unresolved imports",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,

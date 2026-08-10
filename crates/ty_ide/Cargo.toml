@@ -27,6 +27,7 @@ ruff_python_stdlib = { workspace = true }
 ruff_python_trivia = { workspace = true }
 ruff_source_file = { workspace = true }
 ruff_text_size = { workspace = true }
+toml_edit = { workspace = true }
 ty_module_resolver = { workspace = true }
 ty_project = { workspace = true }
 ty_python_semantic = { workspace = true }

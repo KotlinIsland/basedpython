@@ -7,6 +7,7 @@ use ty_module_resolver::{
 
 use crate::{
     Program, TypeQualifiers, add_inferred_python_version_hint_to_diagnostic,
+    dependencies::{self, GroupName, ImportStanding},
     place::{
         DefinedPlace, Definedness, Place, PlaceAndQualifiers, TypeOrigin,
         basedpython_typing_added_in, basedpython_warnings_added_in, typing_extensions_symbol,
@@ -15,7 +16,8 @@ use crate::{
         ModuleLiteralType, Type, TypeAndQualifiers,
         dedicated::EXTERNALLY_STUBBED_FRAMEWORKS,
         diagnostic::{
-            MISSING_FRAMEWORK_STUBS, POSSIBLY_MISSING_IMPORT, PRIVATE_IMPORT, UNRESOLVED_IMPORT,
+            MISPLACED_DEPENDENCY, MISSING_FRAMEWORK_STUBS, POSSIBLY_MISSING_IMPORT, PRIVATE_IMPORT,
+            UNDECLARED_DEPENDENCY, UNRESOLVED_IMPORT,
             hint_if_stdlib_attribute_exists_on_other_versions,
             hint_if_stdlib_submodule_exists_on_other_versions,
         },
@@ -199,6 +201,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
 
         self.check_framework_stubs(alias.range(), &full_module_name);
+        self.check_dependency_declaration(alias.range(), &full_module_name);
 
         let binding_ty = if asname.is_some() {
             // If we are renaming the imported module via an `as` clause, then we bind the resolved
@@ -311,6 +314,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.report_unresolved_import(module_ref.range(), *level, module, Some(&module_name));
         } else {
             self.check_framework_stubs(module_ref.range(), &module_name);
+            self.check_dependency_declaration(module_ref.range(), &module_name);
         }
     }
 
@@ -340,6 +344,56 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
     /// Warn when a framework that needs an external PEP 561 stubs package
     /// resolves from its untyped runtime package instead of the stubs.
+    /// Report an import of a distribution this file is not entitled to import.
+    ///
+    /// Only ever reports about a resolved import of installed third-party code
+    /// whose distribution the project's manifest has something to say about.
+    /// Everything else — first-party code, the standard library, an editable
+    /// install, a project that declares nothing — is silence.
+    fn check_dependency_declaration(&self, range: TextRange, module_name: &ModuleName) {
+        let db = self.db();
+
+        let Some(module) = resolve_module(db, self.file(), module_name) else {
+            return;
+        };
+
+        match dependencies::import_standing(db, self.file(), module) {
+            ImportStanding::Unknown | ImportStanding::Available => {}
+
+            ImportStanding::Undeclared { distribution } => {
+                let Some(builder) = self.context.report_lint(&UNDECLARED_DEPENDENCY, range) else {
+                    return;
+                };
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`{root}` comes from `{distribution}`, which this project does not depend on",
+                    root = module_name.first_component(),
+                ));
+                diagnostic.info(format_args!(
+                    "It is only installed because something else depends on it; \
+                     add `{distribution}` to the project's dependencies"
+                ));
+            }
+
+            ImportStanding::Misplaced {
+                distribution,
+                declared_in,
+            } => {
+                let Some(builder) = self.context.report_lint(&MISPLACED_DEPENDENCY, range) else {
+                    return;
+                };
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`{root}` comes from `{distribution}`, which is declared in {groups}",
+                    root = module_name.first_component(),
+                    groups = format_groups(&declared_in),
+                ));
+                diagnostic.info(
+                    "Nothing installs a dependency group alongside the project, \
+                     so this import fails for everyone who installs it",
+                );
+            }
+        }
+    }
+
     fn check_framework_stubs(&self, range: TextRange, module_name: &ModuleName) {
         let db = self.db();
 
@@ -750,6 +804,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             module,
         );
     }
+}
+
+/// The groups a distribution is declared in, as a diagnostic reads them.
+fn format_groups(groups: &[&GroupName]) -> String {
+    let mut names = groups.iter().map(ToString::to_string);
+    let mut formatted = names.next().unwrap_or_default();
+    for name in names {
+        formatted.push_str(" and ");
+        formatted.push_str(&name);
+    }
+    formatted
 }
 
 fn format_import_from_module(level: u32, module: Option<&str>) -> String {

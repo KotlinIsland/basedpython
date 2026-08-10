@@ -693,6 +693,7 @@ pub(crate) mod testing {
     use ty_module_resolver::SearchPathSettings;
     use ty_python_core::platform::PythonPlatform;
     use ty_python_core::program::{FallibleStrategy, Program, ProgramSettings};
+    use ty_python_semantic::dependencies::DependencyManifest;
     use ty_python_semantic::lint::{LintRegistry, RuleSelection};
     use ty_python_semantic::{AnalysisSettings, PythonVersionWithSource};
 
@@ -881,6 +882,12 @@ pub(crate) mod testing {
 
         fn project_declares_conformances(&self) -> bool {
             *super::project_declares_conformances(self, self.project())
+        }
+
+        fn dependency_manifest(&self, file: File) -> Option<&DependencyManifest> {
+            super::script_dependency_manifest(self, file)
+                .as_ref()
+                .or_else(|| super::project_dependency_manifest(self, self.project()).as_ref())
         }
 
         fn dyn_clone(&self) -> Box<dyn ty_python_semantic::Db> {

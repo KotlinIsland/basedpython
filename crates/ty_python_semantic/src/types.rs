@@ -27,7 +27,10 @@ pub(crate) use self::callable::UpcastPolicy;
 pub use self::cyclic::CycleDetector;
 pub(crate) use self::cyclic::{ActiveRecursionDetector, TypeTransformer};
 pub(crate) use self::diagnostic::register_lints;
-pub use self::diagnostic::{TypeCheckDiagnostics, UNDEFINED_REVEAL, UNRESOLVED_REFERENCE};
+pub use self::diagnostic::{
+    MISPLACED_DEPENDENCY, TypeCheckDiagnostics, UNDECLARED_DEPENDENCY, UNDEFINED_REVEAL,
+    UNRESOLVED_IMPORT, UNRESOLVED_REFERENCE,
+};
 pub(crate) use self::infer::{
     InferredDeclaration, TypeContext, infer_complete_scope_types, infer_deferred_types,
     infer_definition_types, infer_expression_type, infer_expression_types,

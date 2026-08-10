@@ -130,6 +130,48 @@ Defaults to `true`.
 
 ---
 
+### `dependency-groups`
+
+The requirement groups the matching files may import from.
+
+`project` names `[project].dependencies`, an extra or a PEP 735 dependency group
+is named by its own name, and `*` names every group.
+
+When this is unset, a file may import from every group unless it is part of what
+the project ships — the modules named by `shipped-modules` — in which case it may
+import only `project` and the extras. Nothing the project ships can import a
+dependency group, because nothing installs one alongside the project.
+
+**Default value**: `null`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    [[tool.ty.overrides]]
+    include = ["tests/**"]
+
+    [tool.ty.overrides.analysis]
+    dependency-groups = ["project", "dev", "test"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    [[overrides]]
+    include = ["tests/**"]
+
+    [overrides.analysis]
+    dependency-groups = ["project", "dev", "test"]
+    ```
+
+---
+
 ### `disable-fluid-specializations`
 
 Whether to disable "fluid specializations", a basedpython feature that widens the
@@ -488,6 +530,36 @@ Defaults to `true`.
     [analysis]
     # Disable support for `type: ignore` comments
     respect-type-ignore-comments = false
+    ```
+
+---
+
+### `shipped-modules`
+
+The top-level modules the project ships.
+
+Defaults to the module named after `[project].name`: a project named `my-lib`
+ships `my_lib`. Only a project that ships several unrelated modules, or one whose
+module is not named after it, needs to say.
+
+**Default value**: `null`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    shipped-modules = ["foo", "foo_plugins"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    shipped-modules = ["foo", "foo_plugins"]
     ```
 
 ---
@@ -1118,6 +1190,48 @@ Defaults to `true`.
 
 ---
 
+#### `dependency-groups`
+
+The requirement groups the matching files may import from.
+
+`project` names `[project].dependencies`, an extra or a PEP 735 dependency group
+is named by its own name, and `*` names every group.
+
+When this is unset, a file may import from every group unless it is part of what
+the project ships — the modules named by `shipped-modules` — in which case it may
+import only `project` and the extras. Nothing the project ships can import a
+dependency group, because nothing installs one alongside the project.
+
+**Default value**: `null`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    [[tool.ty.overrides]]
+    include = ["tests/**"]
+
+    [tool.ty.overrides.analysis]
+    dependency-groups = ["project", "dev", "test"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    [[overrides]]
+    include = ["tests/**"]
+
+    [overrides.analysis]
+    dependency-groups = ["project", "dev", "test"]
+    ```
+
+---
+
 #### `disable-fluid-specializations`
 
 Whether to disable "fluid specializations", a basedpython feature that widens the
@@ -1476,6 +1590,36 @@ Defaults to `true`.
     [overrides.analysis]
     # Disable support for `type: ignore` comments
     respect-type-ignore-comments = false
+    ```
+
+---
+
+#### `shipped-modules`
+
+The top-level modules the project ships.
+
+Defaults to the module named after `[project].name`: a project named `my-lib`
+ships `my_lib`. Only a project that ships several unrelated modules, or one whose
+module is not named after it, needs to say.
+
+**Default value**: `null`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    shipped-modules = ["foo", "foo_plugins"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    shipped-modules = ["foo", "foo_plugins"]
     ```
 
 ---
