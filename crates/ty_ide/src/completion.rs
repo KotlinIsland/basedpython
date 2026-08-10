@@ -21,6 +21,7 @@ use rustc_hash::FxHashSet;
 use ty_module_resolver::{KnownModule, Module, ModuleName};
 use ty_python_semantic::HasType;
 use ty_python_semantic::types::format::{SpecLanguage, spec_language};
+use ty_python_semantic::types::ide_support::is_awaitable;
 use ty_python_semantic::types::{SpecialFormType, UnionType};
 use ty_python_semantic::{
     Completion as SemanticCompletion, NameKind, SemanticModel,
@@ -78,7 +79,7 @@ pub fn completion<'db>(
     let query = UserQuery::fuzzy(context.cursor.typed);
     let mut completions = Completions::new(
         db,
-        context.collection_context(db, &model, settings, capabilities),
+        context.collection_context(db, &model, settings, capabilities, source_type),
         query,
     );
     match context.kind {
@@ -86,6 +87,11 @@ pub fn completion<'db>(
             for &keyword in keywords {
                 completions
                     .add(CompletionBuilder::keyword(keyword.as_str()).context_specific(true));
+            }
+        }
+        ContextKind::TypeParamModifiers(modifiers) => {
+            for &modifier in modifiers {
+                completions.add(CompletionBuilder::keyword(modifier).context_specific(true));
             }
         }
         ContextKind::Import(ref import) => {
@@ -98,8 +104,10 @@ pub fn completion<'db>(
                     expr,
                     &context.cursor,
                     &model,
+                    &parsed,
                     source_type,
                     &source,
+                    capabilities,
                     &mut completions,
                 );
             }
@@ -116,6 +124,12 @@ pub fn completion<'db>(
                     );
                 }
                 add_keyword_completions(db, &mut completions);
+                add_type_keyword_completions(
+                    &context.cursor,
+                    &model,
+                    source_type,
+                    &mut completions,
+                );
                 add_compound_keyword_completions(&context.cursor, source_type, &mut completions);
                 add_main_completion(
                     &parsed,
@@ -776,6 +790,9 @@ struct Context<'m> {
 #[derive(Debug)]
 enum ContextKind<'m> {
     Keywords(&'static [ContextualKeyword]),
+    /// basedpython: the modifiers a type parameter opens with. A type
+    /// parameter is being named, so nothing else is valid there.
+    TypeParamModifiers(&'static [&'static str]),
     Import(ImportStatement<'m>),
     NonImport(ContextNonImport<'m>),
 }
@@ -836,6 +853,8 @@ impl<'m> Context<'m> {
 
         let kind = if let Some(keywords) = cursor.incomplete_keywords() {
             ContextKind::Keywords(keywords)
+        } else if let Some(modifiers) = cursor.type_param_modifiers(file.source_type(db)) {
+            ContextKind::TypeParamModifiers(modifiers)
         } else if cursor.is_in_definition_place() {
             return None;
         } else if let Some(import) = ImportStatement::detect(db, file, &cursor) {
@@ -856,9 +875,12 @@ impl<'m> Context<'m> {
         model: &SemanticModel<'db>,
         settings: &CompletionSettings,
         capabilities: CompletionCapabilities,
+        source_type: PySourceType,
     ) -> CollectionContext<'db> {
         match self.kind {
-            ContextKind::Keywords(_) | ContextKind::Import(_) => CollectionContext::none(),
+            ContextKind::Keywords(_)
+            | ContextKind::TypeParamModifiers(_)
+            | ContextKind::Import(_) => CollectionContext::none(),
             ContextKind::NonImport(_) => {
                 let exception_ty = self.cursor.exception_ty(db);
                 let complete_callable_parentheses = settings.complete_function_parentheses
@@ -881,7 +903,7 @@ impl<'m> Context<'m> {
                         && existing_class_bases.is_none()
                         && !self.cursor.suppress_class_parentheses(model),
                     existing_class_bases,
-                    valid_keywords: self.cursor.valid_keywords(),
+                    valid_keywords: self.cursor.valid_keywords(model, source_type),
                     complete_function_and_method_parentheses: complete_callable_parentheses,
                     capabilities,
                 }
@@ -1088,6 +1110,49 @@ impl<'m> ContextCursor<'m> {
     /// Whether the cursor sits in a position the grammar reads as a type,
     /// where a value-level suggestion means nothing.
     fn is_in_type_expression(&self, model: &SemanticModel<'_>) -> bool {
+        if self.covers_a_type_expression(model) {
+            return true;
+        }
+        // a type that has only been opened is not a node covering the cursor:
+        // `a: ` parks an empty annotation on the colon and the statement ends
+        // there, so the cursor falls outside everything. the token that opened
+        // the type still says what is being written
+        self.typed.is_none() && self.opens_a_type_expression()
+    }
+
+    /// Whether the token before the cursor opens a type that has not been
+    /// written yet.
+    fn opens_a_type_expression(&self) -> bool {
+        let Some(token) = self
+            .tokens_before
+            .iter()
+            .rev()
+            .find(|token| !token.kind().is_trivia())
+        else {
+            return false;
+        };
+        if !matches!(token.kind(), TokenKind::Colon | TokenKind::Rarrow) {
+            return false;
+        }
+        self.covering_node(token.range())
+            .ancestors()
+            .any(|node| match node {
+                // `a: <CURSOR>` — the colon between a target and its annotation
+                ast::AnyNodeRef::StmtAnnAssign(stmt) => {
+                    stmt.target.range().end() <= token.start()
+                        && stmt.annotation.range().start() >= token.end()
+                }
+                // `def f() -> <CURSOR>` — the arrow before a return type
+                ast::AnyNodeRef::StmtFunctionDef(stmt) => {
+                    token.kind() == TokenKind::Rarrow
+                        && stmt.parameters.range().end() <= token.start()
+                }
+                _ => false,
+            })
+    }
+
+    /// Whether a node covering the cursor reads it as part of a type.
+    fn covers_a_type_expression(&self, model: &SemanticModel<'_>) -> bool {
         let contains = |expr: &ast::Expr| expr.range().contains_range(self.range);
 
         self.covering_node.ancestors().any(|node| match node {
@@ -1464,11 +1529,25 @@ impl<'m> ContextCursor<'m> {
     ///
     /// Returns None if no context-based exclusions can
     /// be identified. Meaning that all keywords are valid.
-    fn valid_keywords(&self) -> Option<FxHashSet<&'static str>> {
+    fn valid_keywords(
+        &self,
+        model: &SemanticModel<'_>,
+        source_type: PySourceType,
+    ) -> Option<FxHashSet<&'static str>> {
         if self.is_in_decorator_name() {
             return Some(FxHashSet::from_iter(["lambda"]));
         }
-        self.covering_node.ancestors().find_map(|node| {
+        // a type has only just been opened, so a type is the only thing that
+        // can follow — not a statement, and not a `lambda` either
+        if self.typed.is_none() && self.opens_a_type_expression() {
+            let mut keywords = FxHashSet::from_iter(TYPE_EXPRESSION_KEYWORDS.iter().copied());
+            if source_type.is_basedpython() {
+                keywords.extend(TYPE_KEYWORDS.iter().copied());
+                keywords.insert("not");
+            }
+            return Some(keywords);
+        }
+        let mut keywords = self.covering_node.ancestors().find_map(|node| {
             self.is_in_for_statement_iterable(node)
                 .then(|| FxHashSet::from_iter(["yield", "lambda", "await"]))
                 .or_else(|| {
@@ -1479,7 +1558,54 @@ impl<'m> ContextCursor<'m> {
                         ])
                     })
                 })
-        })
+        });
+        // further into a type, basedpython's type words are valid alongside
+        // whatever the position already admits — `Annotated`'s metadata is an
+        // ordinary expression, so nothing is taken away here
+        if source_type.is_basedpython()
+            && let Some(keywords) = keywords.as_mut()
+            && self.is_in_type_expression(model)
+        {
+            keywords.extend(TYPE_KEYWORDS.iter().copied());
+        }
+        keywords
+    }
+
+    /// The modifiers valid where the cursor sits, when it sits at the start of
+    /// a basedpython type parameter.
+    ///
+    /// A type parameter is a name being bound, so completion otherwise offers
+    /// nothing there — but the name may be preceded by a modifier, and that is
+    /// worth suggesting. After `in`, only `out` can follow, completing the
+    /// two-word invariant marker.
+    fn type_param_modifiers(&self, source_type: PySourceType) -> Option<&'static [&'static str]> {
+        const AFTER_IN: &[&str] = &["out"];
+
+        if !source_type.is_basedpython() || !self.is_in_type_params() {
+            return None;
+        }
+        let preceding = match self.typed {
+            Some(_) => &self.tokens_before[..self.tokens_before.len().saturating_sub(1)],
+            None => self.tokens_before,
+        };
+        let token = preceding
+            .iter()
+            .rev()
+            .find(|token| !token.kind().is_trivia())?;
+        match token.kind() {
+            // the start of the list, or of a parameter after the first
+            TokenKind::Lsqb | TokenKind::Comma => Some(TYPE_PARAM_MODIFIERS),
+            // `in <CURSOR>` can still become the `in out` marker
+            TokenKind::In => Some(AFTER_IN),
+            _ => None,
+        }
+    }
+
+    /// Whether the cursor sits inside a type parameter list.
+    fn is_in_type_params(&self) -> bool {
+        self.covering_node
+            .ancestors()
+            .any(|node| matches!(node, ast::AnyNodeRef::TypeParams(_)))
     }
 
     /// Whether the cursor opens a statement, rather than continuing one.
@@ -1537,6 +1663,20 @@ impl<'m> ContextCursor<'m> {
                 _ => None,
             })
             .unwrap_or(false)
+    }
+
+    /// The statement `expr` makes up the whole of, when it does.
+    ///
+    /// A statement-shaped postfix rewrite replaces a statement, so it is only
+    /// offered where the expression it is written on is one — `x.print` at the
+    /// start of a line, not the `x.print` inside `f(x.print)`.
+    fn statement_expression(&self, expr: &ast::ExprAttribute) -> Option<TextRange> {
+        self.covering_node.ancestors().find_map(|node| {
+            let ast::AnyNodeRef::StmtExpr(statement) = node else {
+                return node.is_statement().then_some(None)?;
+            };
+            (statement.value.range() == expr.range()).then(|| statement.range())
+        })
     }
 
     /// Whether the cursor sits at module level, outside every class and
@@ -2308,6 +2448,38 @@ fn add_keyword_completions<'db>(db: &'db dyn Db, completions: &mut Completions<'
     }
 }
 
+/// The keywords a type expression admits in any python file. A type is not an
+/// expression, so none of the statement keywords read there.
+const TYPE_EXPRESSION_KEYWORDS: &[&str] = &["None", "True", "False"];
+
+/// basedpython's type-expression keywords — the words a type may open with
+/// that python has no keyword for.
+const TYPE_KEYWORDS: &[&str] = &["literal", "final", "dynamic", "some", "protocol", "typeof"];
+
+/// The modifiers a basedpython type parameter may open with, before its name.
+///
+/// `in out` is the two-word invariant marker, offered whole for the same
+/// reason a compound statement keyword is.
+const TYPE_PARAM_MODIFIERS: &[&str] = &["in", "out", "in out", "overlapping", "reified"];
+
+/// basedpython: adds the type keywords, where a type is what is being written.
+///
+/// These are not python keywords, so unlike `not` they have to be offered
+/// rather than merely left in.
+fn add_type_keyword_completions(
+    cursor: &ContextCursor<'_>,
+    model: &SemanticModel<'_>,
+    source_type: PySourceType,
+    completions: &mut Completions<'_>,
+) {
+    if !source_type.is_basedpython() || !cursor.is_in_type_expression(model) {
+        return;
+    }
+    for &keyword in TYPE_KEYWORDS {
+        completions.add(CompletionBuilder::keyword(keyword).context_specific(true));
+    }
+}
+
 /// A statement opener spelled with more than one keyword.
 ///
 /// Each word of one is a keyword the completion list already carries on its
@@ -2352,7 +2524,62 @@ const COMPOUND_KEYWORDS: &[CompoundKeyword] = &[
         basedpython: true,
     },
     CompoundKeyword {
+        text: "frozen data class",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
         text: "enum class",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "final class",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "abstract class",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "open class",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "sealed class",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "private class",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "export class",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "public class",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "private def",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "export def",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "public def",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
@@ -2364,6 +2591,41 @@ const COMPOUND_KEYWORDS: &[CompoundKeyword] = &[
     CompoundKeyword {
         text: "static def",
         position: KeywordPosition::ClassBody,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "override def",
+        position: KeywordPosition::ClassBody,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "abstract def",
+        position: KeywordPosition::ClassBody,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "final def",
+        position: KeywordPosition::ClassBody,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "static var",
+        position: KeywordPosition::ClassBody,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "static let",
+        position: KeywordPosition::ClassBody,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "late var",
+        position: KeywordPosition::ClassBody,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "private type",
+        position: KeywordPosition::Anywhere,
         basedpython: true,
     },
 ];
@@ -2395,7 +2657,9 @@ fn add_compound_keyword_completions(
 /// basedpython: adds the whole entry point as a completion for `main`.
 ///
 /// A module-level `def main` is where the program starts, so writing the name
-/// says everything the definition needs.
+/// says everything the definition needs. The async form is offered beside it:
+/// the transpiler drives it through `asyncio.run`, so it is as much an entry
+/// point as the sync one.
 fn add_main_completion(
     parsed: &ParsedModuleRef,
     source: &SourceText,
@@ -2405,9 +2669,10 @@ fn add_main_completion(
     completions: &mut Completions<'_>,
 ) {
     const MAIN: &str = "main";
+    const ASYNC_MAIN: &str = "async main";
 
     if !source_type.is_basedpython()
-        || !completions.query.is_match(MAIN)
+        || !(completions.query.is_match(MAIN) || completions.query.is_match(ASYNC_MAIN))
         || !cursor.is_at_statement_start()
         || !cursor.is_at_module_level()
     {
@@ -2421,71 +2686,279 @@ fn add_main_completion(
     }
 
     let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str());
-    let body = format!("def {MAIN}():\n{}", stylist.indentation().as_str());
-    let builder = Completion::builder(MAIN)
-        .kind(CompletionKind::Snippet)
-        .label(MAIN)
-        .detail("entry point")
-        .documentation(
+    let indent = stylist.indentation().as_str();
+    for (name, prefix, documentation) in [
+        (
+            MAIN,
+            "",
             "the module-level `main` a basedpython program starts from. \
              its parameters become the command line interface",
-        );
-    completions.add(if capabilities.snippets {
-        builder.snippet(format!("{body}$0"))
-    } else {
-        builder.insert(body)
-    });
+        ),
+        (
+            ASYNC_MAIN,
+            "async ",
+            "an asynchronous entry point. the transpiler drives it through \
+             `asyncio.run` and adds the import",
+        ),
+    ] {
+        let body = format!("{prefix}def {MAIN}():\n{indent}");
+        let builder = Completion::builder(name)
+            .kind(CompletionKind::Snippet)
+            .label(name)
+            .detail("entry point")
+            .documentation(documentation);
+        completions.add(if capabilities.snippets {
+            builder.snippet(format!("{body}$0"))
+        } else {
+            builder.insert(body)
+        });
+    }
+}
+
+/// A postfix template: written after an expression's `.`, selecting one
+/// rewrites the whole `expr.name` rather than reading as attribute access.
+///
+/// basedpython's `.await` is not one of these — it is real syntax, and so
+/// completes as an ordinary word.
+#[derive(Clone, Copy)]
+enum Postfix {
+    Print,
+    Not,
+    Type,
+    Repr,
+    List,
+    Par,
+    Return,
+    Raise,
+    If,
+    Let,
+    Var,
+    For,
+    Match,
+}
+
+impl Postfix {
+    const ALL: &'static [Postfix] = &[
+        Postfix::Print,
+        Postfix::Not,
+        Postfix::Type,
+        Postfix::Repr,
+        Postfix::List,
+        Postfix::Par,
+        Postfix::Return,
+        Postfix::Raise,
+        Postfix::If,
+        Postfix::Let,
+        Postfix::Var,
+        Postfix::For,
+        Postfix::Match,
+    ];
+
+    const fn name(self) -> &'static str {
+        match self {
+            Postfix::Print => "print",
+            Postfix::Not => "not",
+            Postfix::Type => "type",
+            Postfix::Repr => "repr",
+            Postfix::List => "list",
+            Postfix::Par => "par",
+            Postfix::Return => "return",
+            Postfix::Raise => "raise",
+            Postfix::If => "if",
+            Postfix::Let => "let",
+            Postfix::Var => "var",
+            Postfix::For => "for",
+            Postfix::Match => "match",
+        }
+    }
+
+    /// Whether the rewrite is a statement, and so is only offered where the
+    /// expression is the whole statement.
+    const fn is_statement(self) -> bool {
+        matches!(
+            self,
+            Postfix::Return
+                | Postfix::Raise
+                | Postfix::If
+                | Postfix::Let
+                | Postfix::Var
+                | Postfix::For
+                | Postfix::Match
+        )
+    }
+
+    /// Whether the rewrite spells basedpython-only syntax. The rest are valid
+    /// python, and are offered in a `.py` file too.
+    const fn is_basedpython(self) -> bool {
+        matches!(self, Postfix::Let | Postfix::Var)
+    }
+
+    /// Whether the rewrite leaves somewhere for the cursor to go — a name to
+    /// fill in, or a suite to write.
+    const fn has_tab_stops(self) -> bool {
+        matches!(
+            self,
+            Postfix::If | Postfix::Let | Postfix::Var | Postfix::For | Postfix::Match
+        )
+    }
+
+    const fn documentation(self) -> &'static str {
+        match self {
+            Postfix::Print => "print the expression",
+            Postfix::Not => "negate the expression",
+            Postfix::Type => "the expression's runtime type",
+            Postfix::Repr => "the expression's `repr`",
+            Postfix::List => "collect the expression into a `list`",
+            Postfix::Par => "wrap the expression in parentheses",
+            Postfix::Return => "return the expression",
+            Postfix::Raise => "raise the expression",
+            Postfix::If => "branch on the expression",
+            Postfix::Let => "bind the expression to a `let`",
+            Postfix::Var => "bind the expression to a `var`",
+            Postfix::For => "loop over the expression",
+            Postfix::Match => "match on the expression",
+        }
+    }
+
+    /// The text this rewrites `expr` into.
+    ///
+    /// `indent` is the indentation a line the rewrite opens takes. Tab stops
+    /// are only written when the client takes snippets; otherwise they
+    /// collapse to their default text.
+    fn expand(self, expr: &str, indent: &str, snippets: bool) -> String {
+        let expr = if snippets {
+            escape_snippet(expr)
+        } else {
+            expr.to_string()
+        };
+        let stop = |number: u32, text: &str| {
+            if snippets {
+                format!("${{{number}:{text}}}")
+            } else {
+                text.to_string()
+            }
+        };
+        let end = if snippets { "$0" } else { "" };
+        match self {
+            Postfix::Print => format!("print({expr})"),
+            Postfix::Not => format!("not {expr}"),
+            Postfix::Type => format!("type({expr})"),
+            Postfix::Repr => format!("repr({expr})"),
+            Postfix::List => format!("list({expr})"),
+            Postfix::Par => format!("({expr})"),
+            Postfix::Return => format!("return {expr}"),
+            Postfix::Raise => format!("raise {expr}"),
+            Postfix::If => format!("if {expr}:\n{indent}{end}"),
+            Postfix::Let => format!("let {} = {expr}{end}", stop(1, "name")),
+            Postfix::Var => format!("var {} = {expr}{end}", stop(1, "name")),
+            Postfix::For => format!("for {} in {expr}:\n{indent}{end}", stop(1, "item")),
+            Postfix::Match => format!("match {expr}:\n{indent}case {end}"),
+        }
+    }
+}
+
+/// Escapes the characters [snippet syntax] gives a meaning to, so an
+/// expression spliced into a snippet reads as itself.
+///
+/// [snippet syntax]: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#snippet_syntax
+fn escape_snippet(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        if matches!(character, '\\' | '$' | '}') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}
+
+/// The indentation of the line `offset` sits on, when the line opens with it.
+///
+/// A statement written after something else on its line (`if a: x.print`) has
+/// no indentation of its own to continue from.
+fn line_indentation(source: &str, offset: TextSize) -> &str {
+    let start = source[..offset.to_usize()]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let before = &source[start..offset.to_usize()];
+    if before.trim().is_empty() { before } else { "" }
 }
 
 /// Adds the postfix constructs written after an expression's `.`.
 ///
 /// `.await` is real basedpython syntax, so it completes as an ordinary word.
-/// `.print` is not: selecting it rewrites the whole `x.print` into `print(x)`,
-/// which is why it spells out the range it replaces.
+/// A [`Postfix`] template is not: selecting `.print` rewrites the whole
+/// `x.print` into `print(x)`, which is why each spells out the range it
+/// replaces and the text that range will read as.
 fn add_postfix_completions<'db>(
     expr: &ast::ExprAttribute,
     cursor: &ContextCursor<'_>,
     model: &SemanticModel<'db>,
+    parsed: &ParsedModuleRef,
     source_type: PySourceType,
     source: &SourceText,
+    capabilities: CompletionCapabilities,
     completions: &mut Completions<'db>,
 ) {
-    if !source_type.is_basedpython()
-        || expr.ctx.is_store()
-        || expr.ctx.is_del()
-        || cursor.is_in_type_expression(model)
-    {
+    if expr.ctx.is_store() || expr.ctx.is_del() || cursor.is_in_type_expression(model) {
         return;
     }
 
-    let value = expr.value.range();
-    if !value.is_empty()
-        && let Some(text) = source.get(value.start().to_usize()..value.end().to_usize())
+    // basedpython's postfix `await`, which is written rather than rewritten
+    if source_type.is_basedpython()
+        && cursor.is_in_async_function()
+        // an expression whose type cannot be read says nothing either way, and
+        // a half-written line often has one
+        && expr
+            .value
+            .inferred_type(model)
+            .is_none_or(|ty| is_awaitable(model.db(), ty))
     {
-        completions.add(
-            Completion::builder("print")
-                .kind(CompletionKind::Snippet)
-                .insert(format!("print({text})"))
-                // the client's own idea of the word under the cursor is the
-                // attribute alone, but the rewrite consumes the expression it
-                // is written on as well
-                .replace(TextRange::new(
-                    value.start(),
-                    expr.range().end().max(cursor.offset),
-                ))
-                // and so the client matches what the user types against the
-                // whole of that span, not against the attribute alone
-                .filter_text(format!("{text}.print"))
-                .detail("postfix")
-                .documentation("wrap the expression in a `print(...)` call"),
-        );
-    }
-
-    if cursor.is_in_async_function() {
         completions.add(
             CompletionBuilder::keyword("await")
                 .documentation("await the expression, as a postfix operator"),
         );
+    }
+
+    let value = expr.value.range();
+    if value.is_empty() {
+        return;
+    }
+    let Some(text) = source.get(value.start().to_usize()..value.end().to_usize()) else {
+        return;
+    };
+    // the client's own idea of the word under the cursor is the attribute
+    // alone, but a rewrite consumes the expression it is written on as well
+    let replace = TextRange::new(value.start(), expr.range().end().max(cursor.offset));
+    // a statement-shaped rewrite needs a line of its own to continue onto
+    let indent = cursor.statement_expression(expr).map(|statement| {
+        let own = line_indentation(source.as_str(), statement.start());
+        let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str());
+        format!("{own}{}", stylist.indentation().as_str())
+    });
+
+    for &postfix in Postfix::ALL {
+        if postfix.is_basedpython() && !source_type.is_basedpython() {
+            continue;
+        }
+        let indent = match (postfix.is_statement(), indent.as_deref()) {
+            (true, None) => continue,
+            (true, Some(indent)) => indent,
+            (false, _) => "",
+        };
+        let snippets = capabilities.snippets && postfix.has_tab_stops();
+        let insert = postfix.expand(text, indent, snippets);
+        let builder = Completion::builder(postfix.name())
+            .kind(CompletionKind::Snippet)
+            .replace(replace)
+            .filter_text(format!("{text}.{}", postfix.name()))
+            .detail("postfix")
+            .documentation(postfix.documentation());
+        completions.add(if snippets {
+            builder.snippet(insert)
+        } else {
+            builder.insert(insert)
+        });
     }
 }
 
@@ -5128,6 +5601,20 @@ quux.<CURSOR>
         bar :: int
         baz :: int
         foo :: int
+        for item in quux:
+             :: postfix
+        if quux:
+             :: postfix
+        list(quux) :: postfix
+        match quux:
+            case  :: postfix
+        not quux :: postfix
+        (quux) :: postfix
+        print(quux) :: postfix
+        raise quux :: postfix
+        repr(quux) :: postfix
+        return quux :: postfix
+        type(quux) :: postfix
         __annotations__ :: dict[str, Any]
         __class__ :: type[Quux]
         __delattr__ :: bound method Quux.__delattr__(name: str, /)
@@ -5196,8 +5683,22 @@ C.<CURSOR>
 
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
+        for item in C:
+             :: postfix
+        if C:
+             :: postfix
+        list(C) :: postfix
+        match C:
+            case  :: postfix
         meta_attr :: int
         mro :: bound method <class 'C'>.mro() -> list[type]
+        not C :: postfix
+        (C) :: postfix
+        print(C) :: postfix
+        raise C :: postfix
+        repr(C) :: postfix
+        return C :: postfix
+        type(C) :: postfix
         __annotate__ :: (() -> dict[str, AnnotationForm]) | None
         __annotations__ :: dict[str, Any]
         __base__ :: type | None
@@ -5268,8 +5769,22 @@ Meta.<CURSOR>
             {
                 assert_snapshot!(
                     builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
+                for item in Meta:
+                     :: postfix
+                if Meta:
+                     :: postfix
+                list(Meta) :: postfix
+                match Meta:
+                    case  :: postfix
                 meta_attr :: property
                 mro :: def mro(self) -> list[type]
+                not Meta :: postfix
+                (Meta) :: postfix
+                print(Meta) :: postfix
+                raise Meta :: postfix
+                repr(Meta) :: postfix
+                return Meta :: postfix
+                type(Meta) :: postfix
                 __base__ :: type | None
                 __bases__ :: tuple[type, ...]
                 __basicsize__ :: int
@@ -5332,6 +5847,20 @@ class Quux:
         bar
         baz
         foo
+        for item in self:
+                    
+        if self:
+                    
+        list(self)
+        match self:
+                    case 
+        not self
+        (self)
+        print(self)
+        raise self
+        repr(self)
+        return self
+        type(self)
         __annotations__
         __class__
         __delattr__
@@ -5391,12 +5920,26 @@ Quux.<CURSOR>
 
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
+        for item in Quux:
+             :: postfix
+        if Quux:
+             :: postfix
+        list(Quux) :: postfix
+        match Quux:
+            case  :: postfix
         mro :: bound method <class 'Quux'>.mro() -> list[type]
+        not Quux :: postfix
+        (Quux) :: postfix
+        print(Quux) :: postfix
+        raise Quux :: postfix
+        repr(Quux) :: postfix
+        return Quux :: postfix
         some_attribute :: int
         some_class_method :: bound method <class 'Quux'>.some_class_method() -> int
         some_method :: def some_method(self) -> int
         some_property :: property
         some_static_method :: def some_static_method(self) -> int
+        type(Quux) :: postfix
         __annotate__ :: (() -> dict[str, AnnotationForm]) | None
         __annotations__ :: dict[str, Any]
         __base__ :: type | None
@@ -5466,8 +6009,22 @@ Answer.<CURSOR>
                     builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @"
                 NO :: Literal[Answer.NO]
                 YES :: Literal[Answer.YES]
+                for item in Answer:
+                     :: postfix
+                if Answer:
+                     :: postfix
+                list(Answer) :: postfix
+                match Answer:
+                    case  :: postfix
                 mro :: bound method <class 'Answer'>.mro() -> list[type]
                 name :: enum.property
+                not Answer :: postfix
+                (Answer) :: postfix
+                print(Answer) :: postfix
+                raise Answer :: postfix
+                repr(Answer) :: postfix
+                return Answer :: postfix
+                type(Answer) :: postfix
                 value :: enum.property
                 __annotations__ :: dict[str, Any]
                 __base__ :: type | None
@@ -5553,7 +6110,21 @@ quux.<CURSOR>
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
         count :: bound method Quux.count(value: Any, /) -> int
+        for item in quux:
+             :: postfix
+        if quux:
+             :: postfix
         index :: bound method Quux.index(value: Any, start: SupportsIndex = 0, stop: SupportsIndex = ..., /) -> int
+        list(quux) :: postfix
+        match quux:
+            case  :: postfix
+        not quux :: postfix
+        (quux) :: postfix
+        print(quux) :: postfix
+        raise quux :: postfix
+        repr(quux) :: postfix
+        return quux :: postfix
+        type(quux) :: postfix
         x :: int
         y :: str
         __add__ :: Overload[(value: tuple[int | str, ...], /) -> tuple[int | str, ...], [T](value: tuple[T, ...], /) -> tuple[int | str | T, ...]]
@@ -6162,7 +6733,23 @@ b.a.<CURSOR>
         );
 
         assert_snapshot!(builder.skip_dunders().build().snapshot(),
-        @"x");
+        @"
+        for item in b.a:
+            
+        if b.a:
+            
+        list(b.a)
+        match b.a:
+            case 
+        not b.a
+        (b.a)
+        print(b.a)
+        raise b.a
+        repr(b.a)
+        return b.a
+        type(b.a)
+        x
+        ");
     }
 
     #[test]
@@ -6358,6 +6945,20 @@ q<CURSOR>.foo.xyz
         );
 
         assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"
+        for item in ...:
+            
+        if ...:
+            
+        list(...)
+        match ...:
+            case 
+        not ...
+        (...)
+        print(...)
+        raise ...
+        repr(...)
+        return ...
+        type(...)
         __annotations__
         __class__
         __delattr__
@@ -10244,6 +10845,19 @@ if foo:
             .not_contains("main");
     }
 
+    /// The async entry point sits beside the sync one.
+    #[test]
+    fn basedpython_async_main_completion() {
+        let builder = CursorTest::builder()
+            .source("main.by", "mai<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import();
+        assert_eq!(
+            inserted_text(&builder.build(), "async main"),
+            "async def main():\n    "
+        );
+    }
+
     #[test]
     fn basedpython_compound_keywords_at_module_level() {
         CursorTest::builder()
@@ -10264,12 +10878,64 @@ if foo:
             .source("main.by", "class C:\n    stat<CURSOR>")
             .completion_test_builder()
             .build()
-            .contains("static def");
+            .contains("static def")
+            .contains("static var")
+            .contains("static let");
         CursorTest::builder()
             .source("main.by", "class C:\n    clas<CURSOR>")
             .completion_test_builder()
             .build()
             .contains("class def");
+        CursorTest::builder()
+            .source("main.by", "class C:\n    ov<CURSOR>")
+            .completion_test_builder()
+            .build()
+            .contains("override def");
+    }
+
+    /// The class and visibility modifiers read on a definition anywhere one is
+    /// valid; the method modifiers only inside a class body.
+    #[test]
+    fn basedpython_compound_keywords_cover_the_modifiers() {
+        let builder = CursorTest::builder()
+            .source("main.by", "x = 1\n<CURSOR>")
+            .completion_test_builder();
+        let test = builder.build();
+        let offered: Vec<&str> = test
+            .completions()
+            .iter()
+            .filter(|c| c.name.contains(' '))
+            .map(|c| c.name.as_str())
+            .collect();
+        for expected in [
+            "final class",
+            "abstract class",
+            "open class",
+            "sealed class",
+            "data class",
+            "frozen data class",
+            "enum class",
+            "private class",
+            "export class",
+            "public class",
+            "private def",
+            "export def",
+            "public def",
+            "private type",
+            "async def",
+        ] {
+            assert!(
+                offered.contains(&expected),
+                "expected `{expected}` among {offered:?}"
+            );
+        }
+        // a method modifier is not offered at module level
+        for unexpected in ["class def", "static def", "static var", "late var"] {
+            assert!(
+                !offered.contains(&unexpected),
+                "did not expect `{unexpected}` among {offered:?}"
+            );
+        }
     }
 
     #[test]
@@ -10302,6 +10968,117 @@ if foo:
         completion_test_builder("x = <CURSOR>")
             .build()
             .not_contains("async def");
+    }
+
+    /// basedpython: a type is written with words python has no keyword for.
+    #[test]
+    fn basedpython_type_keywords() {
+        CursorTest::builder()
+            .source("main.by", "a: <CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import()
+            .build()
+            .contains("literal")
+            .contains("dynamic")
+            .contains("some")
+            .contains("protocol")
+            .contains("typeof")
+            .contains("not")
+            .contains("None");
+
+        // and after the arrow of a return type
+        CursorTest::builder()
+            .source("main.by", "def f() -> <CURSOR>: ...")
+            .completion_test_builder()
+            .skip_auto_import()
+            .build()
+            .contains("literal");
+
+        // and once the word has been started
+        CursorTest::builder()
+            .source("main.by", "a: lit<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import()
+            .build()
+            .contains("literal");
+    }
+
+    /// A type is not an expression, so the statement keywords do not read
+    /// there.
+    #[test]
+    fn type_expression_excludes_statement_keywords() {
+        completion_test_builder("a: <CURSOR>")
+            .skip_auto_import()
+            .build()
+            .contains("None")
+            .not_contains("class")
+            .not_contains("while")
+            .not_contains("return")
+            .not_contains("async def");
+    }
+
+    /// The type keywords are basedpython's; a `.py` annotation keeps python's.
+    #[test]
+    fn type_keywords_are_basedpython_only() {
+        completion_test_builder("a: <CURSOR>")
+            .skip_auto_import()
+            .build()
+            .not_contains("literal")
+            .not_contains("dynamic")
+            .not_contains("typeof");
+    }
+
+    /// A type parameter is a name being bound, so nothing was offered there
+    /// before — but a modifier may precede the name.
+    #[test]
+    fn basedpython_type_param_modifiers() {
+        CursorTest::builder()
+            .source("main.by", "class C[<CURSOR>]: ...")
+            .completion_test_builder()
+            .build()
+            .contains("out")
+            .contains("in")
+            .contains("in out")
+            .contains("overlapping")
+            .contains("reified");
+    }
+
+    /// After the first parameter, the modifiers open the next one.
+    #[test]
+    fn basedpython_type_param_modifiers_after_a_comma() {
+        CursorTest::builder()
+            .source("main.by", "class C[T, <CURSOR>]: ...")
+            .completion_test_builder()
+            .build()
+            .contains("out");
+    }
+
+    /// Only `out` can follow `in`, completing the two-word invariant marker.
+    #[test]
+    fn basedpython_type_param_modifiers_after_in() {
+        let snapshot = CursorTest::builder()
+            .source("main.by", "class C[in <CURSOR>]: ...")
+            .completion_test_builder()
+            .build()
+            .snapshot();
+        assert_snapshot!(snapshot, @"out");
+    }
+
+    /// Once the name is being written, the modifiers are behind the cursor.
+    #[test]
+    fn basedpython_type_param_modifiers_stop_at_the_name() {
+        CursorTest::builder()
+            .source("main.by", "class C[out T<CURSOR>]: ...")
+            .completion_test_builder()
+            .build()
+            .not_contains("out");
+    }
+
+    #[test]
+    fn type_param_modifiers_are_basedpython_only() {
+        completion_test_builder("class C[<CURSOR>]: ...")
+            .build()
+            .not_contains("out");
     }
 
     /// basedpython: `.print` is a postfix rewrite, so it replaces the
@@ -10351,18 +11128,151 @@ if foo:
             .not_contains("await");
     }
 
+    /// The python-valid postfixes are offered in a `.py` file too; only the
+    /// ones that spell basedpython syntax are held back.
     #[test]
-    fn postfix_print_is_basedpython_only() {
+    fn postfix_in_python() {
         completion_test_builder("x = 1\nx.<CURSOR>")
             .build()
-            .not_contains("print");
+            .contains("print")
+            .contains("if")
+            .contains("for")
+            .not_contains("let")
+            .not_contains("var")
+            .not_contains("await");
+    }
+
+    /// Every template, written on a whole statement so the statement-shaped
+    /// ones are offered as well.
+    ///
+    /// The expansions carry trailing indentation an inline snapshot would
+    /// trim, so the shapes are asserted one at a time below and this only
+    /// pins down which templates appear.
+    #[test]
+    fn basedpython_postfix_templates() {
+        let builder = CursorTest::builder()
+            .source("main.by", "x = [1]\nx.<CURSOR>")
+            .completion_test_builder()
+            .filter(|c| c.detail.as_deref() == Some("postfix"));
+        let test = builder.build();
+        let mut names: Vec<&str> = test
+            .completions()
+            .iter()
+            .map(|completion| completion.name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            [
+                "for", "if", "let", "list", "match", "not", "par", "print", "raise", "repr",
+                "return", "type", "var",
+            ]
+        );
+
+        assert_eq!(inserted_text(&test, "not"), "not x");
+        assert_eq!(inserted_text(&test, "type"), "type(x)");
+        assert_eq!(inserted_text(&test, "repr"), "repr(x)");
+        assert_eq!(inserted_text(&test, "list"), "list(x)");
+        assert_eq!(inserted_text(&test, "par"), "(x)");
+        assert_eq!(inserted_text(&test, "return"), "return x");
+        assert_eq!(inserted_text(&test, "raise"), "raise x");
+        assert_eq!(inserted_text(&test, "if"), "if x:\n    ");
+        assert_eq!(inserted_text(&test, "let"), "let name = x");
+        assert_eq!(inserted_text(&test, "var"), "var name = x");
+        assert_eq!(inserted_text(&test, "for"), "for item in x:\n    ");
+        assert_eq!(inserted_text(&test, "match"), "match x:\n    case ");
+    }
+
+    /// A statement-shaped rewrite continues onto a line of its own, indented
+    /// one level past the statement it replaces.
+    #[test]
+    fn basedpython_postfix_statement_indentation() {
+        let builder = CursorTest::builder()
+            .source(
+                "main.by",
+                "def f(x: list[int]):\n    if x:\n        x.<CURSOR>",
+            )
+            .completion_test_builder()
+            .filter(|c| c.name == "for");
+        assert_eq!(
+            inserted_text(&builder.build(), "for"),
+            "for item in x:\n            "
+        );
+    }
+
+    /// A statement-shaped rewrite has no statement to replace when the
+    /// expression is only part of one.
+    #[test]
+    fn basedpython_postfix_statement_shapes_need_a_statement() {
+        CursorTest::builder()
+            .source("main.by", "x = [1]\nprint(x.<CURSOR>)")
+            .completion_test_builder()
+            .build()
+            .contains("print")
+            .contains("list")
+            .not_contains("for")
+            .not_contains("return")
+            .not_contains("let");
+    }
+
+    /// A client that takes snippets gets tab stops for the name to bind and
+    /// the suite to write.
+    #[test]
+    fn basedpython_postfix_snippets() {
+        let builder = CursorTest::builder()
+            .source("main.by", "x = [1]\nx.<CURSOR>")
+            .completion_test_builder()
+            .snippets_support(true);
+        let test = builder.build();
+        assert_eq!(inserted_text(&test, "let"), "let ${1:name} = x$0");
+        assert_eq!(inserted_text(&test, "for"), "for ${1:item} in x:\n    $0");
+        // an expression-shaped rewrite has nowhere for the cursor to go, so it
+        // stays plain text and needs no escaping
+        assert_eq!(inserted_text(&test, "print"), "print(x)");
+    }
+
+    /// An expression spliced into a snippet reads as itself, whatever
+    /// punctuation it contains.
+    #[test]
+    fn basedpython_postfix_snippets_escape_the_expression() {
+        let builder = CursorTest::builder()
+            .source("main.by", "x = {'$a': 1}\nx['$a'].<CURSOR>")
+            .completion_test_builder()
+            .snippets_support(true)
+            .filter(|c| c.name == "let");
+        assert_eq!(
+            inserted_text(&builder.build(), "let"),
+            "let ${1:name} = x['\\$a']$0"
+        );
+    }
+
+    /// A receiver that is not a bare name still gets the rewrite.
+    #[test]
+    fn basedpython_postfix_on_computed_receivers() {
+        let builder = CursorTest::builder()
+            .source("main.by", "a = 1\nb = 2\n(a + b).<CURSOR>")
+            .completion_test_builder()
+            .filter(|c| c.name == "print");
+        assert_eq!(inserted_text(&builder.build(), "print"), "print(a + b)");
+
+        let builder = CursorTest::builder()
+            .source(
+                "main.by",
+                "def f(x: int) -> list[int]: ...\nf(1)[0].<CURSOR>",
+            )
+            .completion_test_builder()
+            .filter(|c| c.name == "print");
+        assert_eq!(inserted_text(&builder.build(), "print"), "print(f(1)[0])");
     }
 
     /// basedpython: `.await` is real syntax, so it completes as a word.
     #[test]
     fn basedpython_postfix_await() {
         CursorTest::builder()
-            .source("main.by", "async def f(x):\n    x.<CURSOR>")
+            .source(
+                "main.by",
+                "async def g() -> int: ...\nasync def f():\n    g().<CURSOR>",
+            )
             .completion_test_builder()
             .build()
             .contains("await");
@@ -10371,7 +11281,20 @@ if foo:
     #[test]
     fn basedpython_postfix_await_needs_an_async_function() {
         CursorTest::builder()
-            .source("main.by", "def f(x):\n    x.<CURSOR>")
+            .source(
+                "main.by",
+                "async def g() -> int: ...\ndef f():\n    g().<CURSOR>",
+            )
+            .completion_test_builder()
+            .build()
+            .not_contains("await");
+    }
+
+    /// `await` is only worth offering on something an `await` would accept.
+    #[test]
+    fn basedpython_postfix_await_needs_an_awaitable() {
+        CursorTest::builder()
+            .source("main.by", "async def f(x: int):\n    x.<CURSOR>")
             .completion_test_builder()
             .build()
             .not_contains("await");
@@ -11807,6 +12730,8 @@ def f(x: UnsafeUnion[int, str]):
         isspace
         istitle
         isupper
+        list(x)
+        raise x
         splitlines
         __annotations__
         __contains__
