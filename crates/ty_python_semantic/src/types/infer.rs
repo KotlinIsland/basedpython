@@ -222,6 +222,9 @@ pub(crate) struct FunctionDecoratorInference<'db> {
     bindings: Box<[(Definition<'db>, Type<'db>)]>,
     called_functions: Box<[FunctionType<'db>]>,
     known_decorators: FunctionDecorators,
+    /// basedpython: for a trailing lambda block, the type the call it stands for
+    /// produces — the value of a block written as a statement's value
+    trailing_lambda_return: Option<Type<'db>>,
     diagnostics: TypeCheckDiagnostics,
 }
 
@@ -251,6 +254,11 @@ impl<'db> FunctionDecoratorInference<'db> {
 
     pub(crate) fn known_decorators(&self) -> FunctionDecorators {
         self.known_decorators
+    }
+
+    /// basedpython: the type the call a trailing lambda block stands for produces.
+    pub(crate) fn trailing_lambda_return(&self) -> Option<Type<'db>> {
+        self.trailing_lambda_return
     }
 
     pub(crate) fn diagnostics(&self) -> &TypeCheckDiagnostics {

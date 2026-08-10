@@ -29,9 +29,9 @@ use super::{
     CollectionUseConstraints, DeferredAndUndecorated, DefinitionInference,
     DefinitionInferenceExtra, DefinitionTypes, ExpressionInference, ExpressionInferenceExtra,
     FrozenMap, FrozenSet, FrozenValueMap, FunctionDecoratorInference, InferenceRegion,
-    OtherDefinitionInferenceExtra, ScopeInference, ScopeInferenceExtra, infer_deferred_types,
-    infer_definition_types, infer_expression_types, infer_same_file_expression_type,
-    infer_unpack_types,
+    OtherDefinitionInferenceExtra, ScopeInference, ScopeInferenceExtra, function_known_decorators,
+    infer_deferred_types, infer_definition_types, infer_expression_types,
+    infer_same_file_expression_type, infer_unpack_types,
 };
 use crate::diagnostic::format_enumeration;
 use crate::place::{
@@ -400,6 +400,11 @@ pub(super) struct TypeInferenceBuilder<'db, 'ast> {
     /// Expected types for expression nodes tracked for IDE completion.
     expected_types: FxHashMap<ExpressionNodeKey, Type<'db>>,
 
+    /// basedpython: the type the call a trailing lambda block stands for produces.
+    /// Only set when this region is that block's decorators region, where the call
+    /// is checked; a block written as a statement's value takes its type from here.
+    trailing_lambda_return: Option<Type<'db>>,
+
     /// The scope this region is part of.
     scope: ScopeId<'db>,
 
@@ -596,6 +601,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             string_annotations: FxHashSet::default(),
             unsolved_typevar_calls: FxHashSet::default(),
             expected_types: FxHashMap::default(),
+            trailing_lambda_return: None,
             bindings: VecMap::default(),
             declarations: VecMap::default(),
             typevar_binding_context: None,
@@ -1596,6 +1602,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         if marker_call.is_some() {
             self.store_expression_type(expression, return_ty);
         }
+        // a block written as a statement's value takes this as its type; the bare
+        // callee form has no call node of its own to read it back from
+        self.trailing_lambda_return = Some(return_ty);
     }
 
     fn infer_region_deferred(&mut self, definition: Definition<'db>) {
@@ -9300,6 +9309,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// a value that is possibly undefined at this read means some path completes
     /// the statement without producing one.
     fn infer_statement_expression(&mut self, statement: &ast::ExprStatement) -> Type<'db> {
+        // basedpython: a trailing lambda block's value is the call it stands for,
+        // not a union of tail expressions, so it is neither collected nor subject
+        // to the exhaustiveness check. the call is checked in the block's
+        // decorators region, which records the type it produces
+        if let Some(function) = statement.trailing_lambda() {
+            let definition = self.index.expect_single_definition(function);
+            self.infer_statement(&statement.stmt);
+            return function_known_decorators(self.db(), definition)
+                .trailing_lambda_return()
+                .unwrap_or_else(Type::unknown);
+        }
+
         self.infer_statement(&statement.stmt);
 
         // `raise` and `return` never complete, so they have no value position to
@@ -14286,6 +14307,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             string_annotations,
             unsolved_typevar_calls,
             expected_types,
+            trailing_lambda_return: _,
             scope,
             bindings,
             declarations,
@@ -14355,6 +14377,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             mut collection_use_constraints,
             string_annotations,
             expected_types,
+            trailing_lambda_return: _,
             scope,
             bindings,
             declarations,
@@ -14483,6 +14506,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             string_annotations: _,
             unsolved_typevar_calls: _,
             expected_types: _,
+            trailing_lambda_return,
             return_types_and_ranges: _,
             fluid_creation: _,
             fluid_timeline: _,
@@ -14510,6 +14534,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             known_decorators,
+            trailing_lambda_return,
             diagnostics,
         }
     }
@@ -14531,6 +14556,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             mut collection_use_constraints,
             string_annotations,
             expected_types,
+            trailing_lambda_return: _,
             scope,
             bindings,
             declarations,
@@ -14673,6 +14699,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             string_annotations,
             unsolved_typevar_calls: _,
             expected_types,
+            trailing_lambda_return: _,
             type_expression_flags,
             fluid_creation: _,
             fluid_timeline: _,
@@ -14772,6 +14799,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             string_annotations: _,
             unsolved_typevar_calls: _,
             expected_types: _,
+            trailing_lambda_return: _,
             scope: _,
             bindings: _,
             declarations: _,
@@ -14829,6 +14857,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             string_annotations,
             unsolved_typevar_calls,
             expected_types,
+            trailing_lambda_return: _,
             scope,
             bindings,
             declarations,

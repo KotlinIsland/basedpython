@@ -1353,12 +1353,18 @@ impl RecoveryContextKind {
                     .then_some(ListTerminatorKind::Regular)
             }
             RecoveryContextKind::AssignmentTargets => {
+                // basedpython: a `:` closes the chain too — no assignment value
+                // is followed by one, so it opens a trailing lambda block whose
+                // suite is the chain's value (`x = y = f:`). whether a suite
+                // really follows is decided where that value is parsed
+
                 // test_ok assign_targets_terminator
                 // x = y = z = 1; a, b
                 // x = y = z = 1
                 // a, b
-                matches!(p.current_token_kind(), TokenKind::Newline | TokenKind::Semi)
-                    .then_some(ListTerminatorKind::Regular)
+                (matches!(p.current_token_kind(), TokenKind::Newline | TokenKind::Semi)
+                    || (p.options.is_basedpython && p.at(TokenKind::Colon)))
+                .then_some(ListTerminatorKind::Regular)
             }
 
             // Tokens other than `]` are for better error recovery. For example, recover when we

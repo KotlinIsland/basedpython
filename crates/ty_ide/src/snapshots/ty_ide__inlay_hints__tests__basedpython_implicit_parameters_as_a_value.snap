@@ -1,0 +1,35 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{\n    implicit_parameters: true, variable_types: true,\n    ..InlayHintSettings::none()\n})"
+---
+
+def apply(fn: (int) -> None) -> str:
+    fn(1)
+    return 'done'
+
+result[: str] = apply:[it: int]
+    print(it)
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class str(Sequence[str]):
+   |       ^^^
+   |
+info: Source
+  --> main2.py:LL:10
+   |
+LL | result[: str] = apply:[it: int]
+   |          ^^^
+   |
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+  |
+5 |
+  - result = apply:
+6 + result: str = apply:
+7 |     print(it)
+  |

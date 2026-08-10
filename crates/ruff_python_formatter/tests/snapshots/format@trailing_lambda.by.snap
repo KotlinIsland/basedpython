@@ -33,6 +33,23 @@ f(2):  # end-of-line on the header
     # own-line inside the block
     print(it)
     # own-line at the end of the block
+
+
+# a block standing as a statement's value prints verbatim too, and the
+# assignment around it is normalised as usual
+a = f(2):
+    print(it)
+b: int = f:
+    print(it)
+c    =    f( 2 ):  # end-of-line on the header
+    # own-line inside the block
+    print(it)
+
+
+def wrapper():
+    inner   = f:
+        print(it)
+    return inner
 ```
 
 ## Output
@@ -66,4 +83,21 @@ f(2):  # end-of-line on the header
     # own-line inside the block
     print(it)
     # own-line at the end of the block
+
+
+# a block standing as a statement's value prints verbatim too, and the
+# assignment around it is normalised as usual
+a      = f(2):
+    print(it)
+b: int = f:
+    print(it)
+c      = f( 2 ):  # end-of-line on the header
+    # own-line inside the block
+    print(it)
+
+
+def wrapper():
+    inner = f:
+        print(it)
+    return inner
 ```

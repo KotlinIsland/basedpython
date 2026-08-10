@@ -2636,11 +2636,24 @@ pub fn trailing_lambda_implicit_parameters<'db>(
     else {
         return Vec::new();
     };
-    let it = crate::types::trailing_lambda::trailing_lambda_it_type(db, callee);
+    // a block declares `it` only when its callback passes one, so read that off
+    // the binding the block actually made rather than deciding it again here
+    let binds_it = function.parameters.args.first().is_some_and(|it| {
+        semantic_index(db, model.file())
+            .try_definition(&it.parameter)
+            .is_some()
+    });
+    let it = binds_it
+        .then(|| crate::types::trailing_lambda::trailing_lambda_it_type(db, callee))
+        .flatten();
 
     let Some(receiver) = crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee)
     else {
-        return vec![("it", it)];
+        return if binds_it {
+            vec![("it", it)]
+        } else {
+            Vec::new()
+        };
     };
     let mut parameters = vec![("self", Some(receiver))];
     parameters.extend(it.map(|it| ("it", Some(it))));

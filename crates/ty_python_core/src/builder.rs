@@ -1486,6 +1486,14 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         expr: &'ast ast::Expr,
         statement: &'ast ast::ExprStatement,
     ) {
+        // basedpython: a trailing lambda block produces no tail values — its
+        // value is the call it stands for, which the type checker reads off the
+        // block's own inference — so it needs no synthetic place to collect them
+        if statement.is_trailing_lambda() {
+            self.visit_stmt(&statement.stmt);
+            return;
+        }
+
         let place = self
             .add_symbol(Name::new(format!(
                 "<statement-expression:{}>",
@@ -1971,30 +1979,72 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
     /// unresolved name — is conservatively *not* `once`, which keeps the write a
     /// union (a sound over-approximation; never a spurious definite narrowing).
     fn trailing_lambda_callee_is_once(&self, callee: &ast::Expr) -> bool {
+        let source = self.source_text().as_str();
+        self.callee_definition(callee)
+            .and_then(|def| last_bound_parameter(&def.parameters))
+            .is_some_and(|last| parameter_modifiers(source, last).once)
+    }
+
+    /// basedpython: whether a trailing-lambda block declares `it` — it does when
+    /// its callback passes an argument for it, the one after any receiver the
+    /// callback declares.
+    ///
+    /// A callback that passes nothing is invoked as `a()`, so a block that
+    /// declared `it` anyway would resolve a name the callee never fills. Leaving
+    /// it undeclared makes `it` an ordinary unresolved name there, which is what
+    /// it is — the same rule as kotlin's, where `it` exists exactly when the
+    /// lambda takes one parameter.
+    ///
+    /// Resolved syntactically, like [`trailing_lambda_callee_is_once`]: the
+    /// callback's declared type has to be an arrow written at the callee's `def`.
+    /// Anything this cannot see through — an import, a method, a `Callable[...]`
+    /// spelling, a gradual `(...) -> None` — declares `it` conservatively, since
+    /// an `it` that resolves to nothing is the safer miss of the two.
+    ///
+    /// [`trailing_lambda_callee_is_once`]: Self::trailing_lambda_callee_is_once
+    fn trailing_lambda_declares_it(&self, callee: &ast::Expr) -> bool {
+        let Some(def) = self.callee_definition(callee) else {
+            return true;
+        };
+        let Some(annotation) =
+            last_bound_parameter(&def.parameters).and_then(|last| last.annotation.as_deref())
+        else {
+            return true;
+        };
+        let ast::Expr::CallableType(callback) = annotation else {
+            return true;
+        };
+        // the receiver is bound implicitly and is not `it`; `args` holds what the
+        // callback passes, and a gradual `(...)` is one of them
+        !callback.args.is_empty()
+    }
+
+    /// basedpython: the `def` a trailing-lambda callee names, for the parts of a
+    /// block that are settled before type inference runs.
+    ///
+    /// The nearest enclosing `def` of the name decides. A name bound some other
+    /// way — an import, a reassignment, a method, a non-`Name` callee — answers
+    /// `None`, and each caller says what it assumes in that case.
+    fn callee_definition(&self, callee: &ast::Expr) -> Option<&'ast ast::StmtFunctionDef> {
         let ast::Expr::Name(name) = callee else {
-            return false;
+            return None;
         };
         let target = name.id.as_str();
-        let source = self.source_text().as_str();
         for scope in self.scope_stack.iter().rev() {
             let body = match self.scopes[scope.file_scope_id].node() {
                 NodeWithScopeKind::Function(func) => &func.node(self.module).body,
                 NodeWithScopeKind::Module => &self.module.syntax().body,
                 _ => continue,
             };
-            // the nearest enclosing `def` of this name decides; a name bound
-            // some other way (import, reassignment) is left conservatively
-            // non-`once`
             for stmt in body {
                 if let ast::Stmt::FunctionDef(def) = stmt
                     && def.name.as_str() == target
                 {
-                    return last_bound_parameter(&def.parameters)
-                        .is_some_and(|last| parameter_modifiers(source, last).once);
+                    return Some(def);
                 }
             }
         }
-        false
+        None
     }
 
     /// basedpython: whether every path through `body` diverges (a `return` /
@@ -3488,6 +3538,15 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     self.visit_expr(default);
                 }
 
+                // basedpython: a trailing lambda block's whole parameter list is
+                // the implicit `it`, and it declares that only when its callback
+                // passes one. resolved out here, where the callee's enclosing
+                // scopes are still on the stack
+                let declares_parameters = !*is_trailing_lambda
+                    || function_def
+                        .trailing_lambda_callee()
+                        .is_none_or(|callee| self.trailing_lambda_declares_it(callee));
+
                 let (nested_bindings, block_scope) = self.with_type_params(
                     NodeWithScopeRef::FunctionTypeParameters(function_def),
                     type_params.as_deref(),
@@ -3505,7 +3564,9 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         builder.push_scope(NodeWithScopeRef::Function(function_def));
                         let block_scope = builder.current_scope();
 
-                        builder.declare_parameters(parameters);
+                        if declares_parameters {
+                            builder.declare_parameters(parameters);
+                        }
 
                         let mut first_parameter_name = parameters
                             .iter_non_variadic_params()
@@ -3998,7 +4059,11 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 self.visit_expr(&node.annotation);
                 if let Some(value) = &node.value {
                     self.visit_expr(value);
-                    if self.is_method_or_eagerly_executed_in_method().is_some() {
+                    // basedpython: a trailing lambda block defines a function,
+                    // which a standalone expression cannot own
+                    if self.is_method_or_eagerly_executed_in_method().is_some()
+                        && !is_trailing_lambda_value(value)
+                    {
                         // Record the right-hand side of the assignment as a standalone expression
                         // if we're inside a method. This allows type inference to infer the type
                         // of the value for annotated assignments like `self.CONSTANT: Final = 1`,
@@ -5912,6 +5977,19 @@ struct CurrentStatement<'ast, 'db> {
         TextRange,
         Box<[TextRange]>,
     )>,
+}
+
+/// basedpython: whether `value` is a [trailing lambda block] standing as a
+/// statement's value. Such a value may not be made a standalone expression: the
+/// block's suite defines a function, and an expression region cannot own a
+/// definition. The parser restricts the block to the assignment shapes whose
+/// value is inferred with the target's own definition instead.
+///
+/// [trailing lambda block]: ast::ExprStatement::trailing_lambda
+fn is_trailing_lambda_value(value: &ast::Expr) -> bool {
+    value
+        .as_statement_expr()
+        .is_some_and(ast::ExprStatement::is_trailing_lambda)
 }
 
 /// Whether constraints learned at a fluid-candidate use in this statement can be read
