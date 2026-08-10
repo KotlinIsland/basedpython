@@ -195,7 +195,7 @@ class TestRenderDiffReport:
         )
         body, clean = render_diff_report(results, "base", "head")
         assert len(body) < COMMENT_CHAR_LIMIT
-        assert clean is True  # error changes don't fail the check
+        assert clean  # error changes don't fail the check
         assert "<!-- by-ecosystem-roundtrip -->" in body
         assert "error changes: 23" in body
         # a report this size fits whole — nothing should need dropping
@@ -212,7 +212,7 @@ class TestRenderDiffReport:
         results.append(project("critical", "broken", "build: boom"))
         body, clean = render_diff_report(results, "base", "head")
         assert len(body) <= _COMMENT_BUDGET
-        assert clean is False
+        assert not clean
         assert "critical" in body
         assert "finding(s) omitted" in body
 
@@ -237,7 +237,7 @@ class TestRenderDiffReport:
     def test_a_clean_report_lists_skipped_projects(self):
         results = [ProjectDiff("spack", 0, [], "skipped: known to OOM the runner")]
         body, clean = render_diff_report(results, "base", "head")
-        assert clean is True
+        assert clean
         assert "no round-trip differences" in body
         assert "spack" in body
         assert "known to OOM" in body
@@ -256,7 +256,7 @@ class TestRenderDiffReport:
             )
         ]
         body, clean = render_diff_report(results, "base", "head")
-        assert clean is True  # not a regression: it failed on base too
+        assert clean  # not a regression: it failed on base too
         assert "1 project(s) fail to round-trip" in body
         assert "- `mypy`: reverse: panicked at execute.rs:731:9: " in body
         # one line, not a 100KB backtrace dump
@@ -270,7 +270,7 @@ class TestRenderDiffReport:
             for i in range(22)
         ]
         body, clean = render_diff_report(results, "base", "head")
-        assert clean is True
+        assert clean
         assert "22 project(s) fail to round-trip" in body
         assert (
             "no round-trip differences" in body
