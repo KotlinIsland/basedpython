@@ -233,12 +233,23 @@ fn module_roots(db: &ProjectDatabase, cwd: &Path) -> Vec<PathBuf> {
 /// `pkg/main.py`. Mirroring the directory instead emits `src/pkg/main.py`,
 /// whose module is `src.pkg.main` — a name nothing imports, and one `run.main`
 /// cannot sensibly be set to.
-fn module_relative_path(roots: &[PathBuf], cwd: &Path, bpy: &Path) -> PathBuf {
-    roots
+fn module_relative_path(roots: &[PathBuf], root: &Path, bpy: &Path) -> PathBuf {
+    let relative = roots
         .iter()
-        .find_map(|root| bpy.strip_prefix(root).ok())
-        .or_else(|| bpy.strip_prefix(cwd).ok())
-        .unwrap_or(bpy)
+        .find_map(|candidate| bpy.strip_prefix(candidate).ok())
+        .or_else(|| bpy.strip_prefix(root).ok())
+        .unwrap_or(bpy);
+    // whatever happened above, the result has to be *relative*: joined onto the
+    // output directory an absolute path replaces it outright, so every emitted
+    // file would land outside the output tree. keeping only the named components
+    // also drops any `..`, which would climb back out of it
+    relative
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect::<PathBuf>()
         .with_extension("py")
 }
 
@@ -914,4 +925,60 @@ pub(crate) fn cmd_version_by(output_format: crate::args::HelpFormat) -> ExitStat
         crate::args::HelpFormat::Json => println!("{{\"version\":\"{version}\"}}"),
     }
     ExitStatus::Success
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_hidden_within, module_relative_path};
+    use std::path::{Path, PathBuf};
+
+    /// the output tree mirrors the module tree, so a src-layout project's source
+    /// root is stripped rather than mirrored
+    #[test]
+    fn a_module_root_is_stripped() {
+        let roots = vec![PathBuf::from("/p/src"), PathBuf::from("/p")];
+        assert_eq!(
+            module_relative_path(&roots, Path::new("/p"), Path::new("/p/src/pkg/main.by")),
+            PathBuf::from("pkg/main.py")
+        );
+    }
+
+    /// the deepest root wins: a file under `src` is `pkg.main`, not `src.pkg.main`
+    #[test]
+    fn the_deepest_root_wins() {
+        let roots = vec![PathBuf::from("/p/src"), PathBuf::from("/p")];
+        assert_eq!(
+            module_relative_path(&roots, Path::new("/p"), Path::new("/p/top.by")),
+            PathBuf::from("top.py")
+        );
+    }
+
+    /// a root that shares no prefix with the file — which is what `canonicalize`
+    /// and `current_dir` disagreeing produced on windows — must not leave the
+    /// path absolute: joining that onto the output directory discards the output
+    /// directory entirely, so every emitted file lands outside it
+    #[test]
+    fn a_root_that_does_not_match_still_yields_a_relative_path() {
+        let unrelated = vec![PathBuf::from("/other/src")];
+        let emitted =
+            module_relative_path(&unrelated, Path::new("/other"), Path::new("/p/pkg/main.by"));
+        assert!(
+            emitted.is_relative(),
+            "an absolute result escapes the output directory: {}",
+            emitted.display()
+        );
+    }
+
+    #[test]
+    fn a_hidden_directory_is_not_project_source() {
+        let root = Path::new("/p");
+        assert!(is_hidden_within(
+            Path::new("/p/.claude/worktrees/x/junk.by"),
+            root
+        ));
+        assert!(is_hidden_within(Path::new("/p/out/main.by"), root));
+        assert!(!is_hidden_within(Path::new("/p/src/pkg/main.by"), root));
+        // the file's own name is not a directory component
+        assert!(!is_hidden_within(Path::new("/p/.hidden.by"), root));
+    }
 }
