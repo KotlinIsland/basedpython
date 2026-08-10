@@ -37,6 +37,9 @@ pub enum Linter {
     /// [Airflow](https://pypi.org/project/apache-airflow/)
     #[prefix = "AIR"]
     Airflow,
+    /// basedpython-specific rules
+    #[prefix = "BY"]
+    Basedpython,
     /// [eradicate](https://pypi.org/project/eradicate/)
     #[prefix = "ERA"]
     Eradicate,

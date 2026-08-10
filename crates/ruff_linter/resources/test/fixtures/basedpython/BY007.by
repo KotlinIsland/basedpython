@@ -1,0 +1,15 @@
+from typing import Any
+
+
+def annotated(payload: Any) -> Any: ...
+
+
+values: list[Any] = []
+mapping: dict[str, Any] = {}
+alias = Any
+
+
+def value_position(x: object) -> object:
+    # in a value position `Any` is an ordinary name with no keyword spelling
+    print(Any)
+    return Any

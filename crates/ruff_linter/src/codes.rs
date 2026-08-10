@@ -1145,6 +1145,21 @@ pub fn code_to_rule(linter: Linter, code: &str) -> Option<(RuleGroup, Rule)> {
         (Flake8Todos, "006") => rules::flake8_todos::rules::InvalidTodoCapitalization,
         (Flake8Todos, "007") => rules::flake8_todos::rules::MissingSpaceAfterTodoColon,
 
+        // basedpython
+        (Basedpython, "001") => rules::basedpython::rules::ManualNoneCoalesce,
+        (Basedpython, "002") => rules::basedpython::rules::ManualOptionalChain,
+        (Basedpython, "003") => rules::basedpython::rules::ManualIsinstance,
+        (Basedpython, "004") => rules::basedpython::rules::ManualSuperCall,
+        (Basedpython, "007") => rules::basedpython::rules::ManualAnyAnnotation,
+        (Basedpython, "009") => rules::basedpython::rules::ManualUnpackAnnotation,
+        (Basedpython, "010") => rules::basedpython::rules::ManualTypeofAnnotation,
+        (Basedpython, "011") => rules::basedpython::rules::ManualReExport,
+        (Basedpython, "012") => rules::basedpython::rules::RedundantTypingImport,
+        (Basedpython, "017") => rules::basedpython::rules::UnnecessaryStubBody,
+        (Basedpython, "019") => rules::basedpython::rules::ManualSentinel,
+        (Basedpython, "020") => rules::basedpython::rules::ManualCastCall,
+        (Basedpython, "101") => rules::basedpython::rules::RedundantNoneCoalesce,
+
         // airflow
         (Airflow, "001") => rules::airflow::rules::AirflowVariableNameTaskIdMismatch,
         (Airflow, "002") => rules::airflow::rules::AirflowDagNoScheduleArgument,

@@ -1,0 +1,36 @@
+def f(x, t):
+    # both polarities
+    if isinstance(x, int):
+        ...
+    if not isinstance(x, str):
+        ...
+
+    # the class may be any expression
+    _ = isinstance(x, t)
+    _ = isinstance(x, x.__class__)
+
+    # `and` / `or` bind looser than a comparison, so no parentheses are needed
+    _ = isinstance(x, int) and isinstance(x, str)
+
+    # a comma-delimited position takes a comparison as it is
+    print(isinstance(x, int))
+    _ = [isinstance(x, int)]
+
+    # anywhere else the comparison has to be parenthesized — a comparison
+    # *chains*, so a bare one would silently mean something else
+    _ = isinstance(x, int) == True
+    _ = isinstance(x, int).__class__
+    _ = -isinstance(x, int)
+
+
+def not_rewritable(x, t):
+    # a tuple in the class position reads as a tuple type
+    _ = isinstance(x, (int, str))
+
+    # keyword arguments are not the two-argument form
+    _ = isinstance(x, t, extra=1)
+    _ = isinstance(x)
+
+    # a shadowed `isinstance` is not the builtin
+    isinstance = lambda a, b: True
+    _ = isinstance(x, t)

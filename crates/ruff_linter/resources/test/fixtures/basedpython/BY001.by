@@ -1,0 +1,44 @@
+def f(a, b, mapping):
+    # both orderings of the guard
+    _ = a if a is not None else b
+    _ = b if a is None else a
+
+    # a compound left operand is fine as long as evaluating it does nothing
+    _ = a.b if a.b is not None else b
+    _ = b if a.b is None else a.b
+
+    # the default may mention the left operand
+    _ = a if a is not None else a.b
+
+    # the default keeps whatever it was
+    _ = a if a is not None else b or 1
+    _ = a if a is not None else (b if b is not None else 1)
+
+    # already an operator
+    _ = a ?? b
+
+
+def not_coalescing(a, b, c):
+    # the guard and the value are different expressions
+    _ = a if b is not None else c
+    _ = a.b if a.c is not None else c
+
+    # a falsiness test is not the same test
+    _ = a if a else b
+
+    # not a `None` comparison
+    _ = a if a is not b else b
+    _ = a if a == None else b
+
+    # a chained comparison guards more than one thing
+    _ = a if a is not None is not b else b
+
+    # the left operand has to be evaluated twice to write it this way, so it
+    # cannot be anything that runs code — a subscription included
+    _ = a() if a() is not None else b
+    _ = mapping["k"] if mapping["k"] is not None else b
+
+
+def optional_chain(a, b):
+    # BY002's shape, not this one
+    _ = a.b if a is not None else None

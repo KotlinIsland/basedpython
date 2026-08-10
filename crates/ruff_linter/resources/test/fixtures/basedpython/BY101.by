@@ -1,0 +1,11 @@
+def f(a, b, lookup):
+    _ = a ?? None
+    _ = a ?? a
+    _ = a.b ?? a.b
+
+    # the fallback can change the result
+    _ = a ?? b
+    _ = a ?? a.b
+
+    # evaluating the left operand twice is not free, so this one does not collapse
+    _ = lookup() ?? lookup()

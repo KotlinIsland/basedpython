@@ -1,0 +1,14 @@
+from typing import Unpack
+
+
+def f(*args: Unpack[tuple[int, ...]]): ...
+
+
+def g(**kwargs: Unpack[dict[str, int]]): ...
+
+
+coords: tuple[Unpack[tuple[int, str]]]
+
+
+def value_position() -> object:
+    return Unpack

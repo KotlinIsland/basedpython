@@ -1,0 +1,190 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY003 [*] `isinstance` call can be written as `is`
+ --> BY003.by:3:8
+  |
+1 | def f(x, t):
+2 |     # both polarities
+3 |     if isinstance(x, int):
+  |        ^^^^^^^^^^^^^^^^^^
+4 |         ...
+5 |     if not isinstance(x, str):
+  |
+help: Replace with `is`
+  |
+2 |     # both polarities
+  -     if isinstance(x, int):
+3 +     if x is int:
+4 |         ...
+  |
+
+BY003 [*] `isinstance` call can be written as `is`
+ --> BY003.by:5:12
+  |
+3 |     if isinstance(x, int):
+4 |         ...
+5 |     if not isinstance(x, str):
+  |            ^^^^^^^^^^^^^^^^^^
+6 |         ...
+  |
+help: Replace with `is`
+  |
+4 |         ...
+  -     if not isinstance(x, str):
+5 +     if x is not str:
+6 |         ...
+  |
+
+BY003 [*] `isinstance` call can be written as `is`
+  --> BY003.by:9:9
+   |
+ 8 |     # the class may be any expression
+ 9 |     _ = isinstance(x, t)
+   |         ^^^^^^^^^^^^^^^^
+10 |     _ = isinstance(x, x.__class__)
+   |
+help: Replace with `is`
+   |
+8  |     # the class may be any expression
+   -     _ = isinstance(x, t)
+9  +     _ = x is t
+10 |     _ = isinstance(x, x.__class__)
+   |
+
+BY003 [*] `isinstance` call can be written as `is`
+  --> BY003.by:10:9
+   |
+ 8 |     # the class may be any expression
+ 9 |     _ = isinstance(x, t)
+10 |     _ = isinstance(x, x.__class__)
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+11 |
+12 |     # `and` / `or` bind looser than a comparison, so no parentheses are needed
+   |
+help: Replace with `is`
+   |
+9  |     _ = isinstance(x, t)
+   -     _ = isinstance(x, x.__class__)
+10 +     _ = x is x.__class__
+11 |
+   |
+
+BY003 [*] `isinstance` call can be written as `is`
+  --> BY003.by:13:9
+   |
+12 |     # `and` / `or` bind looser than a comparison, so no parentheses are needed
+13 |     _ = isinstance(x, int) and isinstance(x, str)
+   |         ^^^^^^^^^^^^^^^^^^
+14 |
+15 |     # a comma-delimited position takes a comparison as it is
+   |
+help: Replace with `is`
+   |
+12 |     # `and` / `or` bind looser than a comparison, so no parentheses are needed
+   -     _ = isinstance(x, int) and isinstance(x, str)
+13 +     _ = x is int and isinstance(x, str)
+14 |
+   |
+
+BY003 [*] `isinstance` call can be written as `is`
+  --> BY003.by:13:32
+   |
+12 |     # `and` / `or` bind looser than a comparison, so no parentheses are needed
+13 |     _ = isinstance(x, int) and isinstance(x, str)
+   |                                ^^^^^^^^^^^^^^^^^^
+14 |
+15 |     # a comma-delimited position takes a comparison as it is
+   |
+help: Replace with `is`
+   |
+12 |     # `and` / `or` bind looser than a comparison, so no parentheses are needed
+   -     _ = isinstance(x, int) and isinstance(x, str)
+13 +     _ = isinstance(x, int) and x is str
+14 |
+   |
+
+BY003 [*] `isinstance` call can be written as `is`
+  --> BY003.by:16:11
+   |
+15 |     # a comma-delimited position takes a comparison as it is
+16 |     print(isinstance(x, int))
+   |           ^^^^^^^^^^^^^^^^^^
+17 |     _ = [isinstance(x, int)]
+   |
+help: Replace with `is`
+   |
+15 |     # a comma-delimited position takes a comparison as it is
+   -     print(isinstance(x, int))
+16 +     print(x is int)
+17 |     _ = [isinstance(x, int)]
+   |
+
+BY003 [*] `isinstance` call can be written as `is`
+  --> BY003.by:17:10
+   |
+15 |     # a comma-delimited position takes a comparison as it is
+16 |     print(isinstance(x, int))
+17 |     _ = [isinstance(x, int)]
+   |          ^^^^^^^^^^^^^^^^^^
+18 |
+19 |     # anywhere else the comparison has to be parenthesized — a comparison
+   |
+help: Replace with `is`
+   |
+16 |     print(isinstance(x, int))
+   -     _ = [isinstance(x, int)]
+17 +     _ = [x is int]
+18 |
+   |
+
+BY003 [*] `isinstance` call can be written as `is`
+  --> BY003.by:21:9
+   |
+19 |     # anywhere else the comparison has to be parenthesized — a comparison
+20 |     # *chains*, so a bare one would silently mean something else
+21 |     _ = isinstance(x, int) == True
+   |         ^^^^^^^^^^^^^^^^^^
+22 |     _ = isinstance(x, int).__class__
+23 |     _ = -isinstance(x, int)
+   |
+help: Replace with `is`
+   |
+20 |     # *chains*, so a bare one would silently mean something else
+   -     _ = isinstance(x, int) == True
+21 +     _ = (x is int) == True
+22 |     _ = isinstance(x, int).__class__
+   |
+
+BY003 [*] `isinstance` call can be written as `is`
+  --> BY003.by:22:9
+   |
+20 |     # *chains*, so a bare one would silently mean something else
+21 |     _ = isinstance(x, int) == True
+22 |     _ = isinstance(x, int).__class__
+   |         ^^^^^^^^^^^^^^^^^^
+23 |     _ = -isinstance(x, int)
+   |
+help: Replace with `is`
+   |
+21 |     _ = isinstance(x, int) == True
+   -     _ = isinstance(x, int).__class__
+22 +     _ = (x is int).__class__
+23 |     _ = -isinstance(x, int)
+   |
+
+BY003 [*] `isinstance` call can be written as `is`
+  --> BY003.by:23:10
+   |
+21 |     _ = isinstance(x, int) == True
+22 |     _ = isinstance(x, int).__class__
+23 |     _ = -isinstance(x, int)
+   |          ^^^^^^^^^^^^^^^^^^
+   |
+help: Replace with `is`
+   |
+22 |     _ = isinstance(x, int).__class__
+   -     _ = -isinstance(x, int)
+23 +     _ = -(x is int)
+24 |
+   |

@@ -1,0 +1,62 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY010 [*] `TypeOf[…]` can be written as `typeof`
+ --> BY010.by:5:4
+  |
+3 | b: int = 1
+4 |
+5 | a: TypeOf[b] = 1
+  |    ^^^^^^^^^
+6 | maybe: TypeOf[b] | None = None
+  |
+help: Replace with `typeof`
+  |
+4 |
+  - a: TypeOf[b] = 1
+5 + a: typeof b = 1
+6 | maybe: TypeOf[b] | None = None
+  |
+
+BY010 [*] `TypeOf[…]` can be written as `typeof`
+ --> BY010.by:6:8
+  |
+5 | a: TypeOf[b] = 1
+6 | maybe: TypeOf[b] | None = None
+  |        ^^^^^^^^^
+  |
+help: Replace with `typeof`
+  |
+5 | a: TypeOf[b] = 1
+  - maybe: TypeOf[b] | None = None
+6 + maybe: typeof b | None = None
+7 |
+  |
+
+BY010 [*] `TypeOf[…]` can be written as `typeof`
+ --> BY010.by:9:10
+  |
+9 | def f(x: TypeOf[b]) -> TypeOf[b]: ...
+  |          ^^^^^^^^^
+  |
+help: Replace with `typeof`
+   |
+8  |
+   - def f(x: TypeOf[b]) -> TypeOf[b]: ...
+9  + def f(x: typeof b) -> TypeOf[b]: ...
+10 |
+   |
+
+BY010 [*] `TypeOf[…]` can be written as `typeof`
+ --> BY010.by:9:24
+  |
+9 | def f(x: TypeOf[b]) -> TypeOf[b]: ...
+  |                        ^^^^^^^^^
+  |
+help: Replace with `typeof`
+   |
+8  |
+   - def f(x: TypeOf[b]) -> TypeOf[b]: ...
+9  + def f(x: TypeOf[b]) -> typeof b: ...
+10 |
+   |

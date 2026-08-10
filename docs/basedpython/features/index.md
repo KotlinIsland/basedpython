@@ -39,6 +39,8 @@ features that apply to a project rather than to a file
 - [api lockfile (`api.lock`)](api-lock.md)
 - [editor support](editor.md) — postfix templates, completions, inlay hints
     and the outline
+- [linting](linter.md) — the `BY` rules, and how ruff's own rules read `.by`
+    source
 
 </div>
 

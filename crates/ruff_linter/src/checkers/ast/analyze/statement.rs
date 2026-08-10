@@ -7,11 +7,12 @@ use crate::checkers::ast::Checker;
 use crate::preview::is_standalone_mock_non_existent_enabled;
 use crate::registry::Rule;
 use crate::rules::{
-    airflow, fastapi, flake8_async, flake8_bandit, flake8_boolean_trap, flake8_bugbear,
-    flake8_builtins, flake8_debugger, flake8_django, flake8_errmsg, flake8_import_conventions,
-    flake8_pie, flake8_pyi, flake8_pytest_style, flake8_raise, flake8_return, flake8_simplify,
-    flake8_slots, flake8_tidy_imports, flake8_type_checking, mccabe, pandas_vet, pep8_naming,
-    perflint, pycodestyle, pyflakes, pygrep_hooks, pylint, pyupgrade, refurb, ruff, tryceratops,
+    airflow, basedpython, fastapi, flake8_async, flake8_bandit, flake8_boolean_trap,
+    flake8_bugbear, flake8_builtins, flake8_debugger, flake8_django, flake8_errmsg,
+    flake8_import_conventions, flake8_pie, flake8_pyi, flake8_pytest_style, flake8_raise,
+    flake8_return, flake8_simplify, flake8_slots, flake8_tidy_imports, flake8_type_checking,
+    mccabe, pandas_vet, pep8_naming, perflint, pycodestyle, pyflakes, pygrep_hooks, pylint,
+    pyupgrade, refurb, ruff, tryceratops,
 };
 use ruff_python_ast::PythonVersion;
 
@@ -69,6 +70,9 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
             // that judge a declared name would be judging machinery
             let declares_name = !function_def.is_trailing_lambda;
 
+            if checker.is_rule_enabled(Rule::UnnecessaryStubBody) && declares_name {
+                basedpython::rules::unnecessary_stub_body(checker, stmt);
+            }
             if checker.is_rule_enabled(Rule::DjangoNonLeadingReceiverDecorator) {
                 flake8_django::rules::non_leading_receiver_decorator(checker, decorator_list);
             }
@@ -402,6 +406,9 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
             // rules that judge a declared name have nothing to judge
             let declares_name = !class_def.is_extension();
 
+            if checker.is_rule_enabled(Rule::UnnecessaryStubBody) && declares_name {
+                basedpython::rules::unnecessary_stub_body(checker, stmt);
+            }
             if checker.is_rule_enabled(Rule::NoClassmethodDecorator) {
                 pylint::rules::no_classmethod_decorator(checker, stmt);
             }
@@ -733,6 +740,12 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
         ) => {
             let level = *level;
             let module = module.as_deref();
+            if checker.is_rule_enabled(Rule::ManualReExport) {
+                basedpython::rules::manual_re_export(checker, import_from);
+            }
+            if checker.is_rule_enabled(Rule::RedundantTypingImport) {
+                basedpython::rules::redundant_typing_import(checker, import_from);
+            }
             if checker.is_rule_enabled(Rule::ModuleImportNotAtTopOfFile) {
                 pycodestyle::rules::module_import_not_at_top_of_file(checker, stmt);
             }
@@ -1433,6 +1446,9 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
             }
         }
         Stmt::Assign(assign @ ast::StmtAssign { targets, value, .. }) => {
+            if checker.is_rule_enabled(Rule::ManualSentinel) {
+                basedpython::rules::manual_sentinel(checker, assign);
+            }
             if checker.is_rule_enabled(Rule::SelfOrClsAssignment) {
                 for target in targets {
                     pylint::rules::self_or_cls_assignment(checker, target);

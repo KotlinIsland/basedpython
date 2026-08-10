@@ -87,6 +87,7 @@ features = [
   { "project-level" = [
     { "api lockfile" = "features/api-lock.md" },
     { "editor support" = "features/editor.md" },
+    { "linting" = "features/linter.md" },
   ] },
   { "standard library" = [
     { "typeshed improvements" = "features/typeshed.md" },

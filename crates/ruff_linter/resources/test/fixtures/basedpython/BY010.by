@@ -1,0 +1,13 @@
+from ty_extensions import TypeOf
+
+b: int = 1
+
+a: TypeOf[b] = 1
+maybe: TypeOf[b] | None = None
+
+
+def f(x: TypeOf[b]) -> TypeOf[b]: ...
+
+
+def value_position() -> object:
+    return TypeOf

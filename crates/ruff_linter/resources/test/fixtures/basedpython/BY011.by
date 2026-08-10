@@ -1,0 +1,13 @@
+from .models import Widget as Widget
+from . import helpers as helpers
+from collections.abc import Sequence as Sequence, Mapping as Mapping
+from ..pkg.deep import Thing as Thing
+
+
+# not every name is self-aliased, so `export` cannot say it
+from .models import Widget as W
+from .models import Widget
+from .models import Widget as Widget, Other
+
+# already an export
+from .models export Other

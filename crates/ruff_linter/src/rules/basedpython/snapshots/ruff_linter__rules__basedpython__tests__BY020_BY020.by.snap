@@ -1,0 +1,74 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY020 [*] `cast` call can be written as the `cast` keyword
+ --> BY020.by:5:9
+  |
+4 | def f(value: object) -> int:
+5 |     n = cast(int, value)
+  |         ^^^^^^^^^^^^^^^^
+6 |     print(cast(str, value))
+7 |     _ = cast(int, value) + 1
+  |
+help: Replace with `cast`
+  |
+4 | def f(value: object) -> int:
+  -     n = cast(int, value)
+5 +     n = value cast int
+6 |     print(cast(str, value))
+  |
+note: This is an unsafe fix and may change runtime behavior
+
+BY020 [*] `cast` call can be written as the `cast` keyword
+ --> BY020.by:6:11
+  |
+4 | def f(value: object) -> int:
+5 |     n = cast(int, value)
+6 |     print(cast(str, value))
+  |           ^^^^^^^^^^^^^^^^
+7 |     _ = cast(int, value) + 1
+8 |     return n
+  |
+help: Replace with `cast`
+  |
+5 |     n = cast(int, value)
+  -     print(cast(str, value))
+6 +     print(value cast str)
+7 |     _ = cast(int, value) + 1
+  |
+note: This is an unsafe fix and may change runtime behavior
+
+BY020 [*] `cast` call can be written as the `cast` keyword
+ --> BY020.by:7:9
+  |
+5 |     n = cast(int, value)
+6 |     print(cast(str, value))
+7 |     _ = cast(int, value) + 1
+  |         ^^^^^^^^^^^^^^^^
+8 |     return n
+  |
+help: Replace with `cast`
+  |
+6 |     print(cast(str, value))
+  -     _ = cast(int, value) + 1
+7 +     _ = (value cast int) + 1
+8 |     return n
+  |
+note: This is an unsafe fix and may change runtime behavior
+
+BY020 [*] `cast` call can be written as the `cast` keyword
+  --> BY020.by:14:12
+   |
+12 |     import typing
+13 |
+14 |     return typing.cast(object, value)
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: Replace with `cast`
+   |
+13 |
+   -     return typing.cast(object, value)
+14 +     return value cast object
+15 |
+   |
+note: This is an unsafe fix and may change runtime behavior

@@ -34,12 +34,12 @@ structural protocol. it includes the ABCs (`Sequence`, `Mapping`,
 helpers (`Optional`, `Union`, `Type`, `Annotated`), narrowing
 (`TypeGuard`), version-specific names (`Self`, `LiteralString`, `Never`,
 `Required`, `NotRequired`, `ReadOnly`), and the `Supports*` /
-`AsyncContext*` family
+`AsyncContext*` family. `Callable` is implicit too, though
+[callable arrow syntax](callable.md) is the spelling to reach for
 
 names whose role is covered by dedicated basedpython syntax are **not** in
 the implicit set — referencing them does not auto-import:
 
-- `Callable` — use [callable arrow syntax](callable.md)
 - `Final`, `ClassVar`, `NewType`, `final`, `override` — use [modifiers](modifiers.md)
 - `Literal` — see [literal types](literal-types.md)
 - `Protocol`, `Generic` — use `protocol class` / [generic class syntax](generics.md)

@@ -1,0 +1,16 @@
+from typing_extensions import Sentinel
+
+MISSING = Sentinel("MISSING")
+UNSET = Sentinel("UNSET")
+
+# the binding and the reported name already disagree — leave it to a reader
+OTHER = Sentinel("SOMETHING_ELSE")
+
+# not the single-string form
+DYNAMIC = Sentinel(name)
+EXTRA = Sentinel("EXTRA", repr="EXTRA")
+
+
+def scoped() -> None:
+    # `sentinel` declares a module-level name
+    LOCAL = Sentinel("LOCAL")

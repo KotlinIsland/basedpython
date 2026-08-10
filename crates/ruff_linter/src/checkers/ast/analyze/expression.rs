@@ -13,12 +13,13 @@ use crate::preview::{
 };
 use crate::registry::Rule;
 use crate::rules::{
-    airflow, flake8_2020, flake8_async, flake8_bandit, flake8_boolean_trap, flake8_bugbear,
-    flake8_builtins, flake8_comprehensions, flake8_datetimez, flake8_debugger, flake8_django,
-    flake8_future_annotations, flake8_gettext, flake8_implicit_str_concat, flake8_logging,
-    flake8_logging_format, flake8_pie, flake8_print, flake8_pyi, flake8_pytest_style, flake8_self,
-    flake8_simplify, flake8_tidy_imports, flake8_type_checking, flake8_use_pathlib, flynt, numpy,
-    pandas_vet, pep8_naming, pycodestyle, pyflakes, pylint, pyupgrade, refurb, ruff,
+    airflow, basedpython, flake8_2020, flake8_async, flake8_bandit, flake8_boolean_trap,
+    flake8_bugbear, flake8_builtins, flake8_comprehensions, flake8_datetimez, flake8_debugger,
+    flake8_django, flake8_future_annotations, flake8_gettext, flake8_implicit_str_concat,
+    flake8_logging, flake8_logging_format, flake8_pie, flake8_print, flake8_pyi,
+    flake8_pytest_style, flake8_self, flake8_simplify, flake8_tidy_imports, flake8_type_checking,
+    flake8_use_pathlib, flynt, numpy, pandas_vet, pep8_naming, pycodestyle, pyflakes, pylint,
+    pyupgrade, refurb, ruff,
 };
 use ruff_python_ast::PythonVersion;
 
@@ -26,6 +27,12 @@ use ruff_python_ast::PythonVersion;
 pub(crate) fn expression(expr: &Expr, checker: &Checker) {
     match expr {
         Expr::Subscript(subscript @ ast::ExprSubscript { value, slice, .. }) => {
+            if checker.is_rule_enabled(Rule::ManualUnpackAnnotation) {
+                basedpython::rules::manual_unpack_annotation(checker, subscript);
+            }
+            if checker.is_rule_enabled(Rule::ManualTypeofAnnotation) {
+                basedpython::rules::manual_typeof_annotation(checker, subscript);
+            }
             // Ex) Optional[...], Union[...]
             if checker.any_rule_enabled(&[
                 Rule::FutureRewritableTypeAnnotation,
@@ -250,6 +257,9 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
         ) => {
             match ctx {
                 ExprContext::Load => {
+                    if checker.is_rule_enabled(Rule::ManualAnyAnnotation) {
+                        basedpython::rules::manual_any_annotation(checker, expr);
+                    }
                     if checker.is_rule_enabled(Rule::TypingTextStrAlias) {
                         pyupgrade::rules::typing_text_str_alias(checker, expr);
                     }
@@ -410,6 +420,9 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
             }
         }
         Expr::Attribute(attribute) => {
+            if checker.is_rule_enabled(Rule::ManualSuperCall) {
+                basedpython::rules::manual_super_call(checker, attribute);
+            }
             if attribute.ctx == ExprContext::Load {
                 if checker.any_rule_enabled(&[
                     Rule::SuspiciousPickleUsage,
@@ -555,6 +568,12 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
                 is_string_tag: _,
             },
         ) => {
+            if checker.is_rule_enabled(Rule::ManualIsinstance) {
+                basedpython::rules::manual_isinstance(checker, call);
+            }
+            if checker.is_rule_enabled(Rule::ManualCastCall) {
+                basedpython::rules::manual_cast_call(checker, call);
+            }
             if checker.any_rule_enabled(&[
                 // pylint
                 Rule::BadStringFormatCharacter,
@@ -1450,6 +1469,16 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
                 }
             }
         }
+        Expr::BinOp(
+            binary @ ast::ExprBinOp {
+                op: Operator::Coalesce,
+                ..
+            },
+        ) => {
+            if checker.is_rule_enabled(Rule::RedundantNoneCoalesce) {
+                basedpython::rules::redundant_none_coalesce(checker, binary);
+            }
+        }
         Expr::BinOp(ast::ExprBinOp {
             left,
             op: Operator::RShift,
@@ -1790,6 +1819,12 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
             }
             if checker.is_rule_enabled(Rule::IfExprMinMax) {
                 refurb::rules::if_expr_min_max(checker, if_exp);
+            }
+            if checker.is_rule_enabled(Rule::ManualNoneCoalesce) {
+                basedpython::rules::manual_none_coalesce(checker, if_exp);
+            }
+            if checker.is_rule_enabled(Rule::ManualOptionalChain) {
+                basedpython::rules::manual_optional_chain(checker, if_exp);
             }
             if checker.is_rule_enabled(Rule::IfExpInsteadOfOrOperator) {
                 refurb::rules::if_exp_instead_of_or_operator(checker, if_exp);

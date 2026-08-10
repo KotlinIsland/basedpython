@@ -1,0 +1,52 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY004 [*] `super()` call can be written as `super`
+  --> BY004.by:8:16
+   |
+ 6 | class B(A):
+ 7 |     def greet(self) -> str:
+ 8 |         return super().greet()
+   |                ^^^^^^^
+ 9 |
+10 |     def chained(self) -> int:
+   |
+help: Remove the parentheses
+  |
+7 |     def greet(self) -> str:
+  -         return super().greet()
+8 +         return super.greet()
+9 |
+  |
+
+BY004 [*] `super()` call can be written as `super`
+  --> BY004.by:11:16
+   |
+10 |     def chained(self) -> int:
+11 |         return super().greet().__len__()
+   |                ^^^^^^^
+12 |
+13 |     def attribute(self) -> object:
+   |
+help: Remove the parentheses
+   |
+10 |     def chained(self) -> int:
+   -         return super().greet().__len__()
+11 +         return super.greet().__len__()
+12 |
+   |
+
+BY004 [*] `super()` call can be written as `super`
+  --> BY004.by:14:16
+   |
+13 |     def attribute(self) -> object:
+14 |         return super().__class__
+   |                ^^^^^^^
+   |
+help: Remove the parentheses
+   |
+13 |     def attribute(self) -> object:
+   -         return super().__class__
+14 +         return super.__class__
+15 |
+   |
