@@ -63,9 +63,22 @@ and `build` alike
 ## `by build`
 
 ```sh
-by build                            # transpile every .by/.byi under the project root
+by build                            # transpile every .by/.byi the project claims
 by build --min-version 3.12         # target a specific runtime python version
 ```
+
+`by build` walks the project's *own* file set — the one `by check` walks — so
+`src.exclude` and the ignore files it honours apply here too, and the two halves
+of the toolchain never disagree about which files are in the project. hidden
+directories (`.claude`, `.git`, `.venv`, …) and build outputs are skipped
+
+without `--min-version` the emit target is the project's configured python
+version (`environment.python-version`, else the `requires-python` lower bound),
+so the checker and the emitter agree about which python this project targets
+
+a file that fails to parse fails the build, but only for itself: every other
+module is still written. a code generator and a test runner are exactly what you
+reach for when one file is mid-edit
 
 writes the transpiled python to `./out/` mirroring the *module* tree. a
 src-layout project's `src/package_name/main.by` is the module

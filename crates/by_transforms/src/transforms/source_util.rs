@@ -17,6 +17,59 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 ///
 /// The parser's destructuring binder is a dunder for the same reason — see
 /// [`destructure_binder_name`](ruff_python_ast::destructure_binder_name).
+/// The byte offset a module docstring ends at, including the newline that ends
+/// its line — the BOM's length when the module has none.
+///
+/// A docstring is only a docstring while it is the module's *first* statement,
+/// so anything generated ahead of one silently empties the built module's
+/// `__doc__`.
+pub(crate) fn docstring_end(text: &str) -> usize {
+    let bom = usize::from(ruff_source_file::LineRanges::bom_start_offset(text));
+    let parsed = ruff_python_parser::parse_unchecked_source(
+        &text[bom..],
+        ruff_python_ast::PySourceType::Python,
+    );
+    let Some(Stmt::Expr(first)) = parsed.suite().first() else {
+        return bom;
+    };
+    if !first.value.is_string_literal_expr() {
+        return bom;
+    }
+    line_end(&text[bom..], usize::from(first.range().end())) + bom
+}
+
+/// The byte offset generated lines must be spliced at: past the BOM, the module
+/// docstring, and any `from __future__ import` — each of which is only valid
+/// where it already is.
+pub(crate) fn preamble_offset(text: &str) -> usize {
+    let mut at = docstring_end(text);
+    let parsed = ruff_python_parser::parse_unchecked_source(
+        &text[at..],
+        ruff_python_ast::PySourceType::Python,
+    );
+    for stmt in parsed.suite() {
+        let Stmt::ImportFrom(import) = stmt else {
+            break;
+        };
+        if import
+            .module
+            .as_ref()
+            .is_none_or(|m| m.as_str() != "__future__")
+        {
+            break;
+        }
+        at += line_end(&text[at..], usize::from(import.range().end()));
+    }
+    at
+}
+
+/// the offset just past the end of the line `end` falls on
+fn line_end(text: &str, end: usize) -> usize {
+    text[end..]
+        .find('\n')
+        .map_or(text.len(), |newline| end + newline + 1)
+}
+
 pub(crate) fn temporary_name(kind: &str, index: impl Display) -> String {
     format!("__by_{kind}_{index}__")
 }

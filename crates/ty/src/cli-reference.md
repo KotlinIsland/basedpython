@@ -45,6 +45,9 @@ generated `.py` files are ordinary Python — run them with any Python tool
 by build --min-version 3.10
 ```
 
+without the flag the target is the project's configured python version, so the
+emitted code matches what `by check` assumed.
+
 ## `by transpile`
 
 low-level single-file transpilation. reads a file (or stdin) and writes the

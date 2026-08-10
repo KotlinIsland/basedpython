@@ -30,9 +30,10 @@ use ruff_python_ast::visitor::transformer::Transformer;
 use ruff_python_ast::{Expr, ModModule, PySourceType, Stmt};
 use ruff_python_codegen::{Generator, Indentation, Mode};
 use ruff_python_parser::parse_unchecked_source;
-use ruff_source_file::{LineEnding, LineRanges};
+use ruff_source_file::LineEnding;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
+use super::source_util::preamble_offset;
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
     coalesce_chain, compat, context_params, conversion, decl_site_variance, decorator_keyword,
@@ -1139,31 +1140,31 @@ pub(crate) fn run_against_source<'a>(
         .iter()
         .map(|imp| crate::newline_count(imp) + 1)
         .sum();
-    let mut table: Vec<Option<u32>> = Vec::with_capacity(prefix_lines + body_table.len());
-    table.extend(std::iter::repeat_n(None, prefix_lines));
-    table.extend(body_table);
     let mut preamble_end = 0usize;
+    // lines of `out` the preamble is spliced *after*, which therefore keep their
+    // own source mapping ahead of the preamble's `None`s
+    let mut kept_before_preamble = 0usize;
     if !ctx.required_imports.is_empty() {
         let mut prefix = String::new();
         for imp in &ctx.required_imports {
             prefix.push_str(imp);
             prefix.push('\n');
         }
-        // a BOM and a `from __future__ import …` line both have to stay first —
-        // the BOM is only a BOM at offset 0, and the future import is a syntax
-        // error anywhere else — so splice required imports in after them.
-        // every leading line here maps to `None`, so the order among them
-        // doesn't affect the line table built above
-        let future = "from __future__ import annotations\n";
-        let bom = usize::from(out.bom_start_offset());
-        let at = if out[bom..].starts_with(future) {
-            bom + future.len()
-        } else {
-            bom
-        };
+        // a BOM, the module docstring and a `from __future__ import …` line all
+        // have to stay first — the BOM is only a BOM at offset 0, a docstring
+        // pushed down by the preamble stops being one (leaving the built
+        // module's `__doc__` empty), and the future import is a syntax error
+        // anywhere else. so splice required imports in after all three
+        let at = preamble_offset(&out);
+        kept_before_preamble = crate::newline_count(&out[..at]);
         out.insert_str(at, &prefix);
         preamble_end = at + prefix.len();
     }
+    let mut table: Vec<Option<u32>> = Vec::with_capacity(prefix_lines + body_table.len());
+    let kept = kept_before_preamble.min(body_table.len());
+    table.extend(body_table[..kept].iter().copied());
+    table.extend(std::iter::repeat_n(None, prefix_lines));
+    table.extend(body_table[kept..].iter().copied());
     if !ctx.epilogue.is_empty() {
         if !out.ends_with('\n') {
             out.push('\n');
@@ -1203,6 +1204,29 @@ mod driver_tests {
         let src = "x = None\na = x ?? x ?? \"fallback\"\n";
         let (out, _, _) = run_against_source(src, &Config::test_default(), None);
         assert!(!out.contains("??"), "still has ??: {out}");
+    }
+
+    /// a docstring is only a docstring while it is the module's first statement,
+    /// so anything generated ahead of one empties the built module's `__doc__`
+    #[test]
+    fn generated_lines_follow_the_module_docstring() {
+        let src = "\"\"\"a module docstring.\"\"\"\n\nlet LIMIT = 10\n";
+        let out = crate::transpile(src, &Config::test_default()).unwrap();
+        assert!(
+            out.starts_with("\"\"\"a module docstring.\"\"\"\n"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("from typing import Final"), "got:\n{out}");
+    }
+
+    #[test]
+    fn generated_lines_follow_a_future_import_under_the_docstring() {
+        let src = "\"\"\"doc.\"\"\"\nfrom __future__ import annotations\n\nlet LIMIT = 10\n";
+        let out = crate::transpile(src, &Config::test_default()).unwrap();
+        assert!(
+            out.starts_with("\"\"\"doc.\"\"\"\nfrom __future__ import annotations\n"),
+            "got:\n{out}"
+        );
     }
 
     /// a zero-width insertion exactly at a `Src` span's end must be emitted
