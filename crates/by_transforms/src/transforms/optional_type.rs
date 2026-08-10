@@ -233,6 +233,40 @@ class Optional:
         check("x: int?\n", "x: int | None\n");
     }
 
+    /// a declaration modifier wraps the annotation in a synthetic marker whose
+    /// range spans the whole declaration. re-emitting the annotation from that
+    /// range wrote over the name being declared — `var a: str? = None` became
+    /// `var [str | None] = None`, valid python that `NameError`s at runtime
+    #[test]
+    fn a_declaration_modifier_keeps_its_name_around_an_optional() {
+        check("var a: str? = None\n", "a: str | None = None\n");
+        check(
+            "var b: dict[str, str]? = None\n",
+            "b: dict[str, str] | None = None\n",
+        );
+        check("private var c: int? = None\n", "c: int | None = None\n");
+    }
+
+    #[test]
+    fn a_declaration_modifier_keeps_its_name_in_every_scope() {
+        check(
+            indoc! {"
+                class C:
+                    var attr: str? = None
+
+                def f():
+                    var local: str? = None
+            "},
+            indoc! {"
+                class C:
+                    attr: str | None = None
+
+                def f():
+                    local: str | None = None
+            "},
+        );
+    }
+
     #[test]
     fn py39_target_defers_annotation_evaluation() {
         // below 3.10 the runtime cannot evaluate the pep 604 union this very

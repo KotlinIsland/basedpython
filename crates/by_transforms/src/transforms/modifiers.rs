@@ -27,11 +27,39 @@
 use std::collections::HashMap;
 
 use ruff_diagnostics::{Edit, Fix};
+use ruff_python_ast::helpers::is_immutable_scalar_default;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef, StmtTypeAlias};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
+
+/// whether a dataclass field's default is already a field specifier —
+/// `field(...)` / `dataclasses.field(...)` — which carries its own factory
+fn is_field_specifier(default: &Expr) -> bool {
+    let Expr::Call(call) = default else {
+        return false;
+    };
+    match call.func.as_ref() {
+        Expr::Name(name) => name.id.as_str() == "field",
+        Expr::Attribute(attribute) => attribute.attr.as_str() == "field",
+        _ => false,
+    }
+}
+
+/// whether an annotation declares `ClassVar[...]`, which `dataclasses` treats
+/// as class state rather than a field
+fn is_class_var(annotation: &Expr) -> bool {
+    let head = match annotation {
+        Expr::Subscript(subscript) => subscript.value.as_ref(),
+        other => other,
+    };
+    match head {
+        Expr::Name(name) => name.id.as_str() == "ClassVar",
+        Expr::Attribute(attribute) => attribute.attr.as_str() == "ClassVar",
+        _ => false,
+    }
+}
 
 /// Returns the head identifier of a base-class expression: `A` for `A`, and
 /// `A` for the generic form `A[int]`. Other base shapes have no simple name.
@@ -57,6 +85,8 @@ pub(crate) struct Modifiers<'src> {
     pub(crate) needs_abstractmethod: bool,
     pub(crate) needs_override: bool,
     pub(crate) needs_dataclass: bool,
+    /// a mutable field default was rewritten to a `default_factory`
+    pub(crate) needs_dataclass_field: bool,
     pub(crate) needs_protocol: bool,
     pub(crate) needs_classvar: bool,
     pub(crate) needs_newtype: bool,
@@ -92,6 +122,7 @@ impl<'src> Modifiers<'src> {
             needs_abstractmethod: false,
             needs_override: false,
             needs_dataclass: false,
+            needs_dataclass_field: false,
             needs_protocol: false,
             needs_classvar: false,
             needs_newtype: false,
@@ -128,6 +159,43 @@ impl<'src> Modifiers<'src> {
             Some(n.id.as_str())
         } else {
             None
+        }
+    }
+
+    /// `dataclasses` rejects a mutable field default outright — `tags: list[str]
+    /// = []` raises `ValueError` when the class body runs — so every non-scalar
+    /// default becomes a `default_factory`, re-evaluated per instance.
+    ///
+    /// This is the same rule [default re-evaluation](super::mutable_defaults)
+    /// applies to function parameters, and the same reading: a default written
+    /// in the source is written per call, not once.
+    fn wrap_mutable_field_defaults(&mut self, class: &StmtClassDef) {
+        for stmt in &class.body {
+            let Stmt::AnnAssign(field) = stmt else {
+                continue;
+            };
+            let Some(default) = field.value.as_deref() else {
+                continue;
+            };
+            if is_immutable_scalar_default(default) || is_field_specifier(default) {
+                continue;
+            }
+            // a `ClassVar` is shared class state, not a field — `dataclasses`
+            // leaves it alone, and so must we
+            if is_class_var(&field.annotation) {
+                continue;
+            }
+            self.needs_dataclass_field = true;
+            // two insertions rather than a replacement, so the lowerings written
+            // inside the default still apply to it where it now sits
+            self.edits.push(Fix::safe_edit(Edit::insertion(
+                "field(default_factory=lambda: ".to_owned(),
+                default.range().start(),
+            )));
+            self.edits.push(Fix::safe_edit(Edit::insertion(
+                ")".to_owned(),
+                default.range().end(),
+            )));
         }
     }
 
@@ -178,6 +246,7 @@ impl<'src> Modifiers<'src> {
                         format!("@dataclass(slots=True)\n{indent}"),
                         dec.range(),
                     )));
+                    self.wrap_mutable_field_defaults(class);
                 }
                 "frozen_data_class" => {
                     self.needs_dataclass = true;
@@ -185,6 +254,7 @@ impl<'src> Modifiers<'src> {
                         format!("@dataclass(frozen=True, slots=True)\n{indent}"),
                         dec.range(),
                     )));
+                    self.wrap_mutable_field_defaults(class);
                 }
                 "protocol_class" => {
                     self.needs_protocol = true;
@@ -622,6 +692,10 @@ impl AstPass for ModifiersPass<'_> {
             ctx.required_imports
                 .push("from dataclasses import dataclass".to_owned());
         }
+        if inner.needs_dataclass_field {
+            ctx.required_imports
+                .push("from dataclasses import field".to_owned());
+        }
         if inner.needs_protocol {
             ctx.required_imports
                 .push("from typing import Protocol".to_owned());
@@ -860,6 +934,58 @@ mod tests {
                 from dataclasses import dataclass
                 @dataclass(slots=True)
                 class Point: ...
+            "},
+        );
+    }
+
+    /// `dataclasses` raises `ValueError` for a mutable field default when the
+    /// class body runs, so the default has to become a factory — the same
+    /// per-use re-evaluation a function parameter's default already gets
+    #[test]
+    fn a_mutable_field_default_becomes_a_factory() {
+        check(
+            indoc! {"
+                data class Config:
+                    tags: list[str] = []
+                    opts: dict[str, int] = {}
+            "},
+            indoc! {"
+                from dataclasses import dataclass, field
+                @dataclass(slots=True)
+                class Config:
+                    tags: list[str] = field(default_factory=lambda: [])
+                    opts: dict[str, int] = field(default_factory=lambda: {})
+            "},
+        );
+    }
+
+    /// a scalar default is what `dataclasses` accepts as written, an explicit
+    /// `field(...)` already carries its own factory, and a `ClassVar` is class
+    /// state rather than a field — none of the three is rewritten
+    #[test]
+    fn only_a_mutable_field_default_is_rewritten() {
+        check(
+            indoc! {"
+                from typing import ClassVar
+                from dataclasses import field
+
+                frozen data class Config:
+                    name: str = \"x\"
+                    count: int = 0
+                    explicit: list[int] = field(default_factory=list)
+                    registry: ClassVar[list[str]] = []
+            "},
+            indoc! {"
+                from dataclasses import dataclass
+                from typing import ClassVar
+                from dataclasses import field
+
+                @dataclass(frozen=True, slots=True)
+                class Config:
+                    name: str = \"x\"
+                    count: int = 0
+                    explicit: list[int] = field(default_factory=list)
+                    registry: ClassVar[list[str]] = []
             "},
         );
     }

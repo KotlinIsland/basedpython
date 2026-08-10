@@ -1338,6 +1338,38 @@ pub fn if_let_keyword_range(
         .map(|token| token.range)
 }
 
+/// basedpython: the synthetic markers a declaration modifier (`let`, `var`,
+/// `final`, `private`, `abstract`, a visibility keyword) wraps its annotation in.
+/// The declared type rides in the subscript slice.
+const DECLARATION_ANNOTATION_MARKERS: [&str; 6] = [
+    "__let__",
+    "__final__",
+    "__modifier_annot__",
+    "__private_annot__",
+    "__visibility_annot__",
+    "__abstract_annot__",
+];
+
+/// basedpython: the *declared type* inside a declaration marker, if `annotation`
+/// is one — `let a: T` parses as `a: __let__[T]`, and `T` is what a reader of the
+/// annotation actually wants.
+///
+/// A marker's source range spans the whole declaration (`let a: T`), with the
+/// target name sitting between the marker's own range and the slice's. Anything
+/// that re-emits an annotation from its range therefore has to peel the marker
+/// first, or it swallows the name it was declaring.
+pub fn declaration_annotation_type(annotation: &Expr) -> Option<&Expr> {
+    let Expr::Subscript(subscript) = annotation else {
+        return None;
+    };
+    let Expr::Name(marker) = subscript.value.as_ref() else {
+        return None;
+    };
+    DECLARATION_ANNOTATION_MARKERS
+        .contains(&marker.id.as_str())
+        .then(|| subscript.slice.as_ref())
+}
+
 /// basedpython: detect `local` / `once` modifiers on `param`, read from `source`
 /// (the file the parameter was parsed from).
 ///
