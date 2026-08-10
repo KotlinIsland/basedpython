@@ -35,3 +35,45 @@ y = """
     already
     indented
     """
+
+# a dedented body is reindented to the block it is written in
+def reindent():
+    z = """
+  under
+  indented
+  """
+    return z
+
+# the closing quotes are indented past the content, which has no consistent
+# dedent depth — left for the transpiler to reject
+def closing_past_the_content():
+    return """
+  a
+    """
+
+# the closing quotes share a line with content, so nothing is dedented and
+# nothing may be reindented
+def closing_on_the_content_line():
+    return """
+        a
+        b"""
+
+# a body that is only whitespace is its own value
+blank = """
+    """
+
+# a declaration's docstring opens on the quote line, so it keeps the indentation
+# it was written with
+type Alias = str | int
+"""one line.
+
+a second paragraph that is flush left.
+"""
+
+
+class C:
+    var size: int = 0
+    """one line.
+
+    a second paragraph, indented to the member.
+    """
