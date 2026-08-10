@@ -395,13 +395,12 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
                 body,
                 range: _,
                 node_index: _,
-                implementation: _,
             },
         ) => {
-            // basedpython: an `extension T:` / `implementation I for T:` header names a
-            // type that is declared elsewhere, so `name` is a reference rather than a
-            // declaration and the rules that judge a declared name have nothing to judge
-            let declares_name = !(class_def.is_extension() || class_def.is_implementation());
+            // basedpython: an `extension T:` header names a type that is declared
+            // elsewhere, so `name` is a reference rather than a declaration and the
+            // rules that judge a declared name have nothing to judge
+            let declares_name = !class_def.is_extension();
 
             if checker.is_rule_enabled(Rule::NoClassmethodDecorator) {
                 pylint::rules::no_classmethod_decorator(checker, stmt);

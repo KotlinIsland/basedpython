@@ -255,10 +255,6 @@ const TYPE_PARAM_MODIFIERS: &[&str] = &["reified", "in", "out"];
 /// and the mapping it ranges over.
 const TYPE_MAPPING: &[&str] = &["in"];
 
-/// The keyword introducing an `implementation A for B` block, written ahead of the
-/// interface the block implements.
-const IMPLEMENTATION: &[&str] = &["implementation"];
-
 /// The visibility keyword a private type alias carries. `type` itself is python's
 /// own soft keyword, highlighted lexically like every other one.
 const PRIVATE_TYPE_ALIAS: &[&str] = &["private"];
@@ -1536,34 +1532,12 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     self.visit_decorator(decorator);
                 }
 
-                // basedpython `implementation A for B as W:` parses as the class it
-                // implements for, with the interface and witness on the side. The
-                // keyword and the interface are written ahead of that class' name
-                let implementation = class.implementation.as_ref();
-                if let Some(header) = implementation {
-                    self.add_consumed_keywords(
-                        class.range().start(),
-                        header.interface.range().start(),
-                        IMPLEMENTATION,
-                    );
-                    self.visit_annotation(&header.interface);
-                }
-
                 // Class name
                 self.add_token(
                     class.name.range(),
                     SemanticTokenType::Class,
                     SemanticTokenModifier::DEFINITION,
                 );
-
-                // the witness names a class of its own, written after the `as`
-                if let Some(witness) = implementation.and_then(|header| header.witness.as_ref()) {
-                    self.add_token(
-                        witness.range(),
-                        SemanticTokenType::Class,
-                        SemanticTokenModifier::DEFINITION,
-                    );
-                }
 
                 // Type parameters (Python 3.12+ syntax)
                 if let Some(type_params) = &class.type_params {
@@ -6066,6 +6040,41 @@ enum class Color:
     }
 
     #[test]
+    fn semantic_tokens_conformance_extension() {
+        // the `extension` keyword highlights through its `extension_def` marker,
+        // and the conformance list rides in the class's argument list — so its
+        // interfaces highlight as the classes they name
+        let test = SemanticTokenTest::new_by(
+            "
+protocol Show:
+    def show(self) -> str
+
+extension str(Show):
+    override def show(self) -> str:
+        return self
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "protocol" @ 1..9: Keyword
+        "Show" @ 10..14: Class [definition]
+        "show" @ 24..28: Method [definition]
+        "self" @ 29..33: SelfParameter [definition]
+        "str" @ 38..41: Class
+        "extension" @ 43..52: Keyword
+        "str" @ 53..56: Class [definition]
+        "Show" @ 57..61: Class
+        "override" @ 68..76: Keyword
+        "show" @ 81..85: Method [definition]
+        "self" @ 86..90: SelfParameter [definition]
+        "str" @ 95..98: Class
+        "self" @ 115..119: Parameter
+        "#);
+    }
+
+    #[test]
     fn semantic_tokens_dynamic_keyword() {
         let test = SemanticTokenTest::new_by(
             "
@@ -6555,37 +6564,6 @@ class C(B):
         "int" @ 244..247: Class
         "get" @ 256..259: Keyword
         "1" @ 282..283: Number
-        "#);
-    }
-
-    #[test]
-    fn semantic_tokens_implementation_block() {
-        // `implementation A for B as W` parses as the class it implements for, so
-        // the keyword, the interface and the witness are all off to the side of the
-        // name — and every one of them is written before or after it
-        let test = SemanticTokenTest::new_by(
-            "
-class A: ...
-
-class B: ...
-
-implementation A for B as BAsA:
-    def f(self) -> None: ...
-",
-        );
-
-        let tokens = test.highlight_file();
-
-        assert_snapshot!(test.to_snapshot(&tokens), @r#"
-        "A" @ 7..8: Class [definition]
-        "B" @ 21..22: Class [definition]
-        "implementation" @ 29..43: Keyword
-        "A" @ 44..45: Class
-        "B" @ 50..51: Class [definition]
-        "BAsA" @ 55..59: Class [definition]
-        "f" @ 69..70: Method [definition]
-        "self" @ 71..75: SelfParameter [definition]
-        "None" @ 80..84: BuiltinConstant
         "#);
     }
 

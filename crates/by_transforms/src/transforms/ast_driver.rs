@@ -36,17 +36,17 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use super::source_util::preamble_offset;
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
-    coalesce_chain, compat, context_params, conversion, decl_site_variance, decorator_keyword,
-    dedent_string, destructure, django_lookup, dynamic_keyword, empty_declarations, export_import,
-    extension, float_const, force_unwrap, frameworks, generic_call, generics, grapheme_string,
-    identity_swap, if_let, implementation, implicit_receiver, implicit_typing, inferred_annotation,
-    init_method, just_float, kw_subscript, literal_string, literal_types, local_once,
-    main_function, match_type, modifiers, mutable_defaults, none_chain, optional_type, overload,
-    parametric_is, postfix_await, propagate, properties, protocol_type, raises_clause,
-    reified_generic, repeated_underscore, sentinel, some_ctor, soundness, statement_expression,
-    string_tag, super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_fn,
-    type_is, type_reification, typed_dict_literal, typed_lambda, typeof_keyword,
-    unique_loop_bindings, unpack, use_site_variance,
+    coalesce_chain, compat, conformance, context_params, conversion, decl_site_variance,
+    decorator_keyword, dedent_string, destructure, django_lookup, dynamic_keyword,
+    empty_declarations, export_import, extension, float_const, force_unwrap, frameworks,
+    generic_call, generics, grapheme_string, identity_swap, if_let, implicit_receiver,
+    implicit_typing, inferred_annotation, init_method, just_float, kw_subscript, literal_string,
+    literal_types, local_once, main_function, match_type, modifiers, mutable_defaults, none_chain,
+    optional_type, overload, parametric_is, postfix_await, propagate, properties, protocol_type,
+    raises_clause, reified_generic, repeated_underscore, sentinel, some_ctor, soundness,
+    statement_expression, string_tag, super_keyword, symbolic_type_op, top_star, trailing_lambda,
+    tuple_index, type_fn, type_is, type_reification, typed_dict_literal, typed_lambda,
+    typeof_keyword, unique_loop_bindings, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -564,7 +564,7 @@ pub(crate) fn run_against_source<'a>(
     let context_params_pass = context_params::ContextParamsPass::new(source_ref);
     let extension_block_pass = extension::ExtensionBlockPass::new(source_ref);
     let extension_call_pass = extension::ExtensionCallPass;
-    let implementation_block_pass = implementation::ImplementationBlockPass::new(source_ref);
+    let witness_dispatch_pass = conformance::WitnessDispatchPass;
     let conversion_pass = conversion::ConversionPass::new(source_ref);
     let implicit_receiver_pass = implicit_receiver::ImplicitReceiverPass;
     let django_lookup_pass = django_lookup::DjangoLookupPass;
@@ -700,11 +700,15 @@ pub(crate) fn run_against_source<'a>(
         // type-directed rewrite of attribute accesses ty resolved to
         // extension members (`xs.second()` → `_by_ext__list__second(xs)`)
         &extension_call_pass,
-        // `implementation` blocks lower to witness classes, and every conversion
-        // site the checker accepted wraps its value in one. both read source
-        // ranges, so they run alongside the extension passes and before the
-        // AST-mutating ones
-        &implementation_block_pass,
+        // a protocol *requirement* read off an interface-typed receiver goes
+        // through the witness table its conformance registered, since the value
+        // may carry no such attribute of its own. disjoint from the extension
+        // rewrite above, which only fires where normal member lookup found
+        // nothing — a requirement is a member of the interface
+        &witness_dispatch_pass,
+        // every conversion site the checker accepted wraps its value. reads
+        // source ranges, so it runs alongside the extension passes and before
+        // the AST-mutating ones
         &conversion_pass,
         // implicit receivers: `x.fn()` → `fn(x)` for a receiver callable in
         // scope, and a trailing lambda block's `self` / unqualified receiver

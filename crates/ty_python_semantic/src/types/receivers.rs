@@ -154,7 +154,7 @@ pub(crate) fn is_implicit_receiver_attribute<'db>(
 }
 
 /// whether any link of the attribute spine `expr` is an optional access
-fn spine_has_optional(expr: &Expr) -> bool {
+pub(crate) fn spine_has_optional(expr: &Expr) -> bool {
     match expr {
         Expr::Attribute(attribute) => attribute.optional || spine_has_optional(&attribute.value),
         Expr::Subscript(subscript) => spine_has_optional(&subscript.value),
@@ -164,7 +164,7 @@ fn spine_has_optional(expr: &Expr) -> bool {
 }
 
 /// basedpython: `ty` without the `None` an optional chain unions in
-fn strip_none<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
+pub(crate) fn strip_none<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
     let Type::Union(union) = ty else {
         return ty;
     };

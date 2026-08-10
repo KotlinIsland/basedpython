@@ -44,7 +44,6 @@ use crate::{
             is_implicit_staticmethod,
         },
         generics::Specialization,
-        implementations,
         infer::{infer_unpack_types, original_class_type},
         infer_expression_type, inferred_declaration,
         known_instance::{DeprecatedInstance, FieldInstance},
@@ -137,12 +136,6 @@ bitflags::bitflags! {
         /// than declaring a class, its members resolve on receivers of that
         /// type, and it binds only a mangled module symbol.
         const IS_EXTENSION = 1 << 6;
-        /// basedpython: whether this "class" is an `implementation A for B:`
-        /// declaration — the witness class that makes `B` usable as `A`. Its name
-        /// references the implemented type rather than declaring a class, it
-        /// derives the interface, and its members may resolve on the implemented
-        /// type as well as on the interface.
-        const IS_IMPLEMENTATION = 1 << 7;
     }
 }
 
@@ -177,11 +170,6 @@ impl<'db> StaticClassLiteral<'db> {
 
     pub(crate) fn is_extension(self, db: &'db dyn Db) -> bool {
         self.flags(db).contains(ClassLiteralFlags::IS_EXTENSION)
-    }
-
-    pub(crate) fn is_implementation(self, db: &'db dyn Db) -> bool {
-        self.flags(db)
-            .contains(ClassLiteralFlags::IS_IMPLEMENTATION)
     }
 }
 
@@ -525,28 +513,12 @@ impl<'db> StaticClassLiteral<'db> {
         index.expect_single_definition(body_scope.node(db).expect_class())
     }
 
-    /// basedpython: for an `implementation A for B:` witness class, the name of
-    /// the type it implements *for* (the `B`). The header's `name` is a reference
-    /// to an existing declaration rather than this class's own name, which is
-    /// taken from the `as` clause instead.
-    ///
-    /// Tracked because it reads the class's AST node.
-    #[salsa::tracked]
-    pub(crate) fn implemented_type_name(self, db: &'db dyn Db) -> Option<Name> {
-        if !self.is_implementation(db) {
-            return None;
-        }
-        let module = parsed_module(db, self.file(db)).load(db);
-        Some(self.node(db, &module).name.id.clone())
-    }
-
-    /// basedpython: the names an interface's class body *declares without a
-    /// value* — an annotation with no assignment (`label: str`).
+    /// basedpython: the names a class body *declares without a value* — an
+    /// annotation with no assignment (`label: str`).
     ///
     /// Such a name has no runtime existence on the class: it only becomes real
-    /// when something assigns it, conventionally the constructor. A witness class
-    /// never runs the interface's constructor, so anything in this list must be
-    /// supplied by the implementation block or the witness is incomplete.
+    /// when something assigns it, conventionally the constructor. A conformance
+    /// extension has to supply such a member itself, since nothing else will.
     ///
     /// Tracked because it reads the class's AST node.
     #[salsa::tracked(returns(deref), heap_size = ruff_memory_usage::heap_size)]
@@ -562,23 +534,6 @@ impl<'db> StaticClassLiteral<'db> {
                 _ => None,
             })
             .collect()
-    }
-
-    /// basedpython: whether an `implementation A for B as N:` header spelled an
-    /// `as` name — in which case this class's own name is that name, rather than
-    /// the descriptive name an anonymous witness carries.
-    ///
-    /// Tracked because it reads the class's AST node.
-    #[salsa::tracked]
-    pub(crate) fn witness_is_named(self, db: &'db dyn Db) -> bool {
-        if !self.is_implementation(db) {
-            return false;
-        }
-        let module = parsed_module(db, self.file(db)).load(db);
-        self.node(db, &module)
-            .implementation
-            .as_deref()
-            .is_some_and(|header| header.witness.is_some())
     }
 
     pub(crate) fn apply_specialization(
@@ -1564,31 +1519,6 @@ impl<'db> StaticClassLiteral<'db> {
         inherited_generic_context: Option<GenericContext<'db>>,
         name: &str,
     ) -> Option<Type<'db>> {
-        // basedpython: a witness class holds the implemented value and nothing
-        // else, so its constructor takes exactly that value. this is what a named
-        // implementation is called explicitly with (`BAsA(b)`) and what the
-        // transpiler emits at every conversion site
-        if name == "__init__"
-            && self.is_implementation(db)
-            && let Some(implemented) = implementations::witness_constructor_parameter(db, self)
-        {
-            let self_param = Parameter::positional_only(Some(Name::new_static("self")))
-                .with_annotated_type(Type::instance(db, self.unknown_specialization(db)));
-            let implemented_param = Parameter::positional_or_keyword(Name::new_static(
-                implementations::IMPLEMENTED_ATTRIBUTE,
-            ))
-            .with_annotated_type(implemented);
-            return Some(Type::Callable(CallableType::new(
-                db,
-                CallableSignature::single(Signature::new(
-                    Parameters::standard([self_param, implemented_param]),
-                    Type::none(db),
-                )),
-                CallableTypeKind::FunctionLike,
-                CallableFunctionProvenance::None,
-            )));
-        }
-
         // basedpython: a `sealed` class exposes `__sealed_members__`, a tuple of
         // its same-module direct subclasses (matching the runtime transform).
         if name == "__sealed_members__" && self.is_sealed(db) {
@@ -3717,7 +3647,7 @@ pub(crate) fn expanded_class_base_entries<'a, 'db>(
         _ => {
             let mut expanded_bases = Vec::with_capacity(class_stmt.bases().len() + 1);
 
-            for base_node in class_stmt.base_exprs() {
+            for base_node in class_stmt.bases() {
                 if let Some(tuple) =
                     expanded_fixed_length_starred_class_base_tuple(db, class_definition, base_node)
                 {
@@ -4183,7 +4113,7 @@ fn explicit_bases_cycle_initial<'db>(
     // Try to produce a list of `Divergent` types of the right length. However, if one or more of
     // the bases is a starred expression, we don't know how many entries that will eventually
     // expand to.
-    vec![Type::divergent(id); class_stmt.base_exprs().count()].into_boxed_slice()
+    vec![Type::divergent(id); class_stmt.bases().len()].into_boxed_slice()
 }
 
 fn explicit_bases_cycle_fn<'db>(

@@ -44,7 +44,7 @@ a conversion is a *call*, not a subtype relation. if `Celsius` were assignable t
 element back would hand out a value no one converted. so the relation stays out
 of the type lattice entirely, and lives only at the positions where the
 transpiler can materialize the call — the same rule
-[implementations](implementations.md) are built on:
+[conformances](extensions.md#conformance) are built on:
 
 > a conversion site is any expression that the type checker checks against a
 > declared type context
@@ -148,8 +148,8 @@ both spellings declares both.
 
 ## conversion sites
 
-exactly the positions [implementations](implementations.md#conversion-sites)
-repair, for the same reason — the transpiler has to be able to wrap the
+exactly the positions a [conformance](extensions.md#conformance) repairs, for the
+same reason — the transpiler has to be able to wrap the
 expression where it stands:
 
 ```by
@@ -223,7 +223,7 @@ that already fits is left alone, so no existing code changes meaning.
 
 a conversion site resolves to exactly one call. when more than one route applies
 — two dunders, or a dunder and an in-scope
-[implementation](implementations.md) — that is `ambiguous-conversion`, not a
+[conformance](extensions.md#conformance) — that is `ambiguous-conversion`, not a
 precedence rule:
 
 ```by

@@ -130,19 +130,12 @@ impl<'a> ClauseHeader<'a> {
             ClauseHeader::Class(StmtClassDef {
                 type_params,
                 arguments,
-                implementation,
                 range: _,
                 node_index: _,
                 decorator_list: _,
                 name: _,
                 body: _,
             }) => {
-                // basedpython: the interface of an `implementation A for B:`
-                // header sits in the header, so comments attach to it there
-                if let Some(header) = implementation.as_deref() {
-                    visit(&header.interface, visitor);
-                }
-
                 if let Some(type_params) = type_params.as_deref() {
                     visit(type_params, visitor);
                 }

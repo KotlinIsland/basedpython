@@ -14,7 +14,6 @@ use crate::types::{
     special_form::TypeQualifier,
 };
 use ruff_python_ast::{self as ast, helpers::any_over_expr};
-use ruff_text_size::Ranged;
 use ty_module_resolver::{KnownModule, file_to_module};
 use ty_python_core::{definition::Definition, scope::NodeWithScopeRef};
 
@@ -46,7 +45,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // in `class C[T](Base, extra_items=T)`.
             let mut is_typed_dict = false;
 
-            for base in class.base_exprs() {
+            for base in class.bases() {
                 let ty = if let ast::Expr::Starred(starred) = base {
                     let ty = self.infer_expression(&starred.value, TypeContext::default());
                     self.store_expression_type(base, ty);
@@ -93,7 +92,6 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             decorator_list,
             arguments: _,
             body: _,
-            implementation: _,
         } = class_node;
         let db = self.db();
 
@@ -203,28 +201,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         );
         class_flags.set(ClassLiteralFlags::IS_EXTENSION, class_node.is_extension());
         class_flags.set(
-            ClassLiteralFlags::IS_IMPLEMENTATION,
-            class_node.is_implementation(),
-        );
-        class_flags.set(
             ClassLiteralFlags::HAS_EXPLICIT_METACLASS,
             has_explicit_metaclass,
         );
-        // basedpython: an implementation's `name` is the *implemented* type, so the
-        // witness class it declares is named after its `as` clause. an anonymous
-        // implementation has no name to take, so it is named for what it is —
-        // which is what `reveal_type` shows at a conversion site
-        let class_name = match class_node.implementation.as_deref() {
-            Some(header) => match &header.witness {
-                Some(witness) => witness.id.clone(),
-                None => ruff_python_ast::name::Name::new(format!(
-                    "implementation {} for {}",
-                    &source[header.interface.range()],
-                    name.id
-                )),
-            },
-            None => name.id.clone(),
-        };
+        let class_name = name.id.clone();
         let infer_original_class_ty = |deprecated,
                                        type_check_only,
                                        dataclass_params,
@@ -491,7 +471,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             } else {
                 let previous_typevar_binding_context =
                     self.typevar_binding_context.replace(definition);
-                for base in class_node.base_exprs() {
+                for base in class_node.bases() {
                     self.infer_expression(base, TypeContext::default());
                 }
                 self.typevar_binding_context = previous_typevar_binding_context;
@@ -514,7 +494,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             .context
             .inference_flags
             .replace(InferenceFlags::IN_TYPE_EXPRESSION, true);
-        for base in class.base_exprs() {
+        for base in class.bases() {
             if defer_class_args {
                 self.infer_expression_with_state(
                     base,

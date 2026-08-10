@@ -100,6 +100,171 @@ impl<'db> SemanticModel<'db> {
         )
     }
 
+    /// basedpython: the runtime registrations a conformance extension
+    /// (`extension str(A):`) emits — one per interface in its header.
+    ///
+    /// A registration maps each requirement an extension supplies to the backing
+    /// function that answers it, so a call through an interface-typed receiver
+    /// reaches the conformance's own member rather than an attribute the value
+    /// does not have. A requirement the conforming type already carries is
+    /// deliberately absent: the dispatcher falls back to the attribute
+    pub fn conformance_registrations(
+        &self,
+        class_def: &ast::StmtClassDef,
+    ) -> Vec<crate::types::conformance::ConformanceRegistration> {
+        use crate::types::conformance;
+
+        let db = self.db;
+        let Some(crate::types::ClassLiteral::Static(extension)) = class_def
+            .inferred_type(self)
+            .and_then(super::types::Type::as_class_literal)
+        else {
+            return Vec::new();
+        };
+        let mut registrations = Vec::new();
+        // resolved per base, not by indexing a filtered list: a base that does
+        // not resolve to a class is dropped from `declared_conformances`, which
+        // would slide every later interface onto the wrong anchor
+        for anchor in class_def.bases() {
+            let Some(interface) = anchor
+                .inferred_type(self)
+                .and_then(|ty| ty.to_class_type(db))
+            else {
+                continue;
+            };
+            let Ok((spelling, import)) =
+                crate::types::conversions::class_reference(db, self.file, self, anchor, interface)
+            else {
+                continue;
+            };
+            let table = conformance::witness_table(db, self.file, extension, interface);
+            let mut imports = Vec::new();
+            let mut entries = Vec::new();
+            for entry in table {
+                if let Some(module) = &entry.import_from {
+                    imports.push(format!("from {module} import {}", entry.function));
+                }
+                entries.push((entry.member, entry.function));
+            }
+            registrations.push(conformance::ConformanceRegistration {
+                interface: spelling,
+                import,
+                entries,
+                imports,
+            });
+        }
+        registrations
+    }
+
+    /// basedpython: the modules this file imports that must be imported
+    /// *eagerly*, because they (or something they reach) declare a conformance.
+    ///
+    /// A conformance exists at runtime only because the declaring module's
+    /// registration ran, so deferring that module's execution defers the
+    /// conformance out of existence
+    pub fn eagerly_imported_modules(&self) -> Vec<String> {
+        crate::types::conformance::eagerly_imported_modules(self.db, self.file)
+    }
+
+    /// basedpython: when an attribute access reads a *requirement* off an
+    /// interface-typed receiver, how it dispatches through the witness table.
+    ///
+    /// Only a requirement needs this, and only while some conformance is
+    /// visible: everything else on an interface-typed value is either an
+    /// inherent extension member (statically resolved like any other) or an
+    /// attribute the value provably carries
+    pub fn witness_dispatch(
+        &self,
+        attribute: &ast::ExprAttribute,
+    ) -> Option<crate::types::conformance::WitnessDispatch> {
+        use crate::types::conformance;
+
+        let db = self.db;
+        if !self.file.source_type(db).is_basedpython() {
+            return None;
+        }
+        let receiver_ty = attribute.value.inferred_type(self)?;
+        // an optional-chain link resolves against the chain's *present* type —
+        // the `None` it short-circuits with is not part of the receiver. without
+        // this the whole lookup fails on a `Show?` receiver, and the transpiler's
+        // "not through an optional chain" guard could never fire: it would emit a
+        // plain attribute access instead of the error it promises
+        let receiver_ty = if attribute.optional
+            || crate::types::receivers::spine_has_optional(&attribute.value)
+        {
+            crate::types::receivers::strip_none(db, receiver_ty)
+        } else {
+            receiver_ty
+        };
+        let interface = receiver_ty.erase_restriction(db).nominal_class(db)?;
+        let member = attribute.attr.as_str();
+        if !conformance::requires_witness_dispatch(db, interface, member) {
+            return None;
+        }
+        let (spelling, import) = crate::types::conversions::class_reference(
+            db,
+            self.file,
+            self,
+            &attribute.value,
+            interface,
+        )
+        .ok()?;
+        // how the receiver reaches the witness: a `class def` takes the class,
+        // a data member is read, anything else is fetched and called by the
+        // parentheses that already follow the access
+        let member_ty = Type::instance(db, interface)
+            .member(db, member)
+            .place
+            .ignore_possibly_undefined();
+        let kind = match member_ty {
+            Some(Type::FunctionLiteral(function)) if function.is_classmethod(db) => {
+                conformance::WitnessKind::ClassMethod
+            }
+            Some(Type::BoundMethod(method)) if method.function(db).is_classmethod(db) => {
+                conformance::WitnessKind::ClassMethod
+            }
+            Some(Type::BoundMethod(_) | Type::FunctionLiteral(_) | Type::Callable(_)) => {
+                conformance::WitnessKind::Method
+            }
+            _ => conformance::WitnessKind::Property,
+        };
+        Some(conformance::WitnessDispatch {
+            interface: spelling,
+            import,
+            member: member.to_owned(),
+            kind,
+        })
+    }
+
+    /// basedpython: how `x is <interface>` is answered once conformances are in
+    /// play. `None` when the target is not an interface anything conforms to
+    /// here, where the ordinary `isinstance` lowering is still right
+    pub fn conformance_test(
+        &self,
+        target: &ast::Expr,
+    ) -> Option<crate::types::conformance::ConformanceTest> {
+        use crate::types::conformance;
+
+        let db = self.db;
+        if !self.file.source_type(db).is_basedpython() {
+            return None;
+        }
+        let interface = target.inferred_type(self)?.to_class_type(db)?;
+        if !conformance::visible_conformances(db, self.file)
+            .iter()
+            .any(|(_, declared)| declared.class_literal(db) == interface.class_literal(db))
+        {
+            return None;
+        }
+        let members = Some(
+            conformance::interface_requirements(db, interface)
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        );
+        Some(conformance::ConformanceTest { members })
+    }
+
     /// basedpython: when an attribute access resolves to an `extension`
     /// member (this module's, or one from a module imported with a plain
     /// `import mod`), the backing-function rewrite the transpiler applies.
@@ -202,7 +367,7 @@ impl<'db> SemanticModel<'db> {
             // module name can be one the interpreter cannot resolve (a file under a
             // directory that is not an importable package), and a relative import has
             // no absolute spelling at all
-            Some(crate::types::implementations::imported_module_spelling(
+            Some(crate::types::conversions::imported_module_spelling(
                 db,
                 self.file,
                 extension_file,
@@ -223,16 +388,16 @@ impl<'db> SemanticModel<'db> {
     /// basedpython: the conversions a call's arguments need, as
     /// `(argument range, conversion)` pairs.
     ///
-    /// An `implementation A for B:` in scope, a `__from__` / `__of__` on the
-    /// parameter type or an `__into__` on the argument's own type all make an
-    /// argument acceptable where it otherwise is not; the transpiler wraps it in
+    /// A conformance in scope, a `__from__` / `__of__` on the parameter type or
+    /// an `__into__` on the argument's own type all make an argument acceptable
+    /// where it otherwise is not; the transpiler wraps it in
     /// the call the checker resolved. The checker accepts exactly the same set —
     /// both sides ask `repair_conversion` with the argument's type and the
     /// parameter type of the single matching overload, and both decline when the
     /// callee is overloaded or a union, where no single parameter type is
     /// well-defined.
     ///
-    /// Unlike an implementation, a conversion dunder travels with the type rather
+    /// Unlike a conformance, a conversion dunder travels with the type rather
     /// than with imports, so there is no registry of applicable ones to check
     /// first — that is the cost of the dunders being a property of the type they
     /// convert to. `call_may_convert` is what keeps it off the hot path instead.
@@ -257,7 +422,7 @@ impl<'db> SemanticModel<'db> {
         }
         let arguments: Vec<ast::ArgOrKeyword> = call.arguments.iter_source_order().collect();
         let Some(parameter_types) =
-            crate::types::implementations::call_parameter_types(self, callable_ty, call)
+            crate::types::conversions::call_parameter_types(self, callable_ty, call)
         else {
             return Vec::new();
         };
@@ -293,12 +458,12 @@ impl<'db> SemanticModel<'db> {
     /// almost no call in almost any file converts anything. This answers off
     /// cached signatures instead: a conversion needs a parameter type that
     /// declares `__from__` / `__of__`, an argument whose own type declares
-    /// `__into__`, or an implementation in scope. Anything it cannot read
+    /// `__into__`, or a conformance in scope. Anything it cannot read
     /// falls through to the full check, so the gate can only save work — it can
     /// never change an answer.
     fn call_may_convert(&self, call: &ast::ExprCall, callable_ty: Type<'db>) -> bool {
         let db = self.db;
-        if !crate::types::implementations::applicable_implementations(db, self.file).is_empty() {
+        if !crate::types::conformance::visible_conformances(db, self.file).is_empty() {
             return true;
         }
         for argument in call.arguments.iter_source_order() {
@@ -431,7 +596,7 @@ impl<'db> SemanticModel<'db> {
         if function.is_async || file_scope.is_generator_function(index) {
             return None;
         }
-        crate::types::implementations::function_declared_return_type(db, self.file, function)
+        crate::types::conversions::function_declared_return_type(db, self.file, function)
     }
 
     /// basedpython: whether subscripting `value` is a runtime `__getitem__`

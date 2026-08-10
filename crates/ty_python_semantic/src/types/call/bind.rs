@@ -8207,7 +8207,7 @@ impl<'db> BindingError<'db> {
                 let range = Self::get_node(node, *argument_index);
 
                 // basedpython: a call argument is a conversion site — an in-scope
-                // `implementation A for B:`, a `__from__` / `__of__` on the parameter
+                // a conformance, a `__from__` / `__of__` on the parameter
                 // type or an `__into__` on the argument's own type makes it
                 // acceptable, and the transpiler emits the conversion the checker
                 // resolved. None of them is a subtype relation, so only the positions

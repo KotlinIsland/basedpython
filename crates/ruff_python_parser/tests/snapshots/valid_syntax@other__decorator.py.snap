@@ -91,7 +91,6 @@ Module(
                             },
                         ),
                     ],
-                    implementation: None,
                 },
             ),
             FunctionDef(
@@ -426,7 +425,6 @@ Module(
                             },
                         ),
                     ],
-                    implementation: None,
                 },
             ),
             FunctionDef(

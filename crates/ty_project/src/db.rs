@@ -592,6 +592,10 @@ impl SemanticDb for ProjectDatabase {
         self.project_checker()?.django_settings_file(self)
     }
 
+    fn project_declares_conformances(&self) -> bool {
+        *project_declares_conformances(self, self.project())
+    }
+
     fn dyn_clone(&self) -> Box<dyn SemanticDb> {
         Box::new(self.clone())
     }
@@ -862,6 +866,10 @@ pub(crate) mod testing {
             super::is_open_file_impl(self, file)
         }
 
+        fn project_declares_conformances(&self) -> bool {
+            *super::project_declares_conformances(self, self.project())
+        }
+
         fn dyn_clone(&self) -> Box<dyn ty_python_semantic::Db> {
             Box::new(self.clone())
         }
@@ -969,4 +977,18 @@ mod tests {
 
         Ok(())
     }
+}
+
+/// basedpython: does any file in the project declare a protocol conformance?
+///
+/// Dispatching a protocol requirement through the witness table is a
+/// whole-program decision (see [`ty_python_semantic::Db::project_declares_conformances`]),
+/// and the project is the only thing that can see every file. Tracked, so that
+/// adding the first conformance invalidates the call sites that read this.
+#[salsa::tracked]
+fn project_declares_conformances(db: &dyn Db, project: Project) -> bool {
+    project
+        .files(db)
+        .iter()
+        .any(|file| *ty_python_semantic::declares_conformances(db, *file))
 }

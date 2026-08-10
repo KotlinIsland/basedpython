@@ -402,7 +402,7 @@ def use(s: str, b: bytes) -> None:
 ## conversion dunders travel with the type, not with imports
 
 A conversion is a property of the type it converts to, so it applies wherever that type reaches —
-unlike an `implementation`, which is scoped to the modules that can see it.
+unlike a conformance, which is scoped to the modules that can see it.
 
 `temps.by`:
 

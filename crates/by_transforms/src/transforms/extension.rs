@@ -58,6 +58,24 @@ pub(crate) fn backing_name(target: &str, ordinal: usize, member: &str) -> String
     }
 }
 
+/// one line of whatever came in: runs of whitespace (including newlines) become
+/// a single space, and none is left against a bracket or a comma. a marker
+/// comment has to be one line, and the source it quotes need not be
+fn collapse_whitespace(header: &str) -> String {
+    let mut out = String::with_capacity(header.len());
+    for word in header.split_whitespace() {
+        let joins_left = out.ends_with(['(', '[']) || out.is_empty();
+        let joins_right = word.starts_with([')', ']', ',']);
+        if !joins_left && !joins_right {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    // a trailing comma before the closing bracket is the formatter's magic
+    // trailing comma, not part of the header's meaning
+    out.replace(",)", ")").replace(",]", "]")
+}
+
 /// the spelled member kind, syntactically: a real `@property` decorator or a
 /// synthetic `static` / `classmethod` modifier marker
 fn member_kind(func: &ast::StmtFunctionDef, source: &str) -> ExtensionMemberKind {
@@ -182,17 +200,36 @@ impl<'a> ExtensionBlockPass<'a> {
     /// finished `def`s are later hoisted to the module top by
     /// [`hoist_backing_functions`], because a member may be called before the
     /// block's source position
-    fn lower_block(&self, class: &ast::StmtClassDef, ordinal: usize, ctx: &mut PassContext) {
+    fn lower_block(
+        &self,
+        class: &ast::StmtClassDef,
+        ordinal: usize,
+        types: &dyn TypeInfo,
+        ctx: &mut PassContext,
+    ) {
         let source = self.source;
         let target = class.name.as_str();
-        // the header spelling between `extension ` and `:`, bounds included —
-        // carried on each backing function so the reverse transform can
-        // re-sugar the block (and its bounds) faithfully
+        // the header spelling between `extension ` and `:`, bounds and
+        // conformance list included — carried on each backing function so the
+        // reverse transform can re-sugar the block faithfully
         let header_end = class
-            .type_params
+            .arguments
             .as_deref()
-            .map_or(class.name.range().end(), |params| params.range.end());
-        let header = &source[usize::from(class.name.range().start())..usize::from(header_end)];
+            .map(Ranged::end)
+            .or_else(|| {
+                class
+                    .type_params
+                    .as_deref()
+                    .map(|params| params.range.end())
+            })
+            .unwrap_or_else(|| class.name.range().end());
+        // collapsed to one line: the header goes into a `#` comment, and the
+        // formatter wraps a long conformance list across lines all by itself —
+        // splicing that in verbatim produced output that would not parse
+        let header = collapse_whitespace(
+            &source[usize::from(class.name.range().start())..usize::from(header_end)],
+        );
+        let header = header.as_str();
 
         let mut fragments: Vec<Fragment> = Vec::new();
         let mut first_member = true;
@@ -284,12 +321,22 @@ impl<'a> ExtensionBlockPass<'a> {
             }
         }
 
+        // a conformance extension also registers its witness table, after the
+        // backing functions its entries name
+        super::conformance::registration_fragments(
+            class,
+            types,
+            ctx,
+            &mut fragments,
+            !first_member,
+        );
+
         ctx.template_edits.push((class.range, fragments));
     }
 }
 
 impl TypeAwarePass for ExtensionBlockPass<'_> {
-    fn run(&self, stmts: &[Stmt], _types: &dyn TypeInfo, ctx: &mut PassContext) {
+    fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         // occurrence index per target name, module-wide — the mangle
         // discriminator shared with ty's `backing_function_name`
         let mut ordinals: HashMap<&str, usize> = HashMap::new();
@@ -304,7 +351,7 @@ impl TypeAwarePass for ExtensionBlockPass<'_> {
                 .entry(class.name.as_str())
                 .and_modify(|n| *n += 1)
                 .or_insert(0);
-            self.lower_block(class, ordinal, ctx);
+            self.lower_block(class, ordinal, types, ctx);
         }
     }
 }

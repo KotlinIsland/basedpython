@@ -89,9 +89,6 @@ pub(crate) use crate::types::generics::GenericContext;
 use crate::types::generics::{
     ApplySpecialization, InferableTypeVars, Specialization, bind_typevar,
 };
-pub use crate::types::implementations::{
-    witness_class_name_of as implementation_witness_name, witness_delegated_dunders,
-};
 use crate::types::infer::InferenceFlags;
 use crate::types::known_instance::{
     InternedConstraintSet, InternedType, SentinelInstance, UnionTypeInstance,
@@ -160,6 +157,7 @@ mod callable;
 pub mod character;
 mod class;
 mod class_base;
+pub(crate) mod conformance;
 mod constraints;
 mod context;
 mod context_manager;
@@ -179,7 +177,6 @@ pub mod format;
 pub(crate) mod function;
 mod generics;
 pub mod ide_support;
-pub(crate) mod implementations;
 mod infer;
 pub(crate) mod inferred_signature;
 mod instance;
@@ -4294,20 +4291,6 @@ impl<'db> Type<'db> {
                 }
 
                 let result = this.fallback_to_getattr(db, name, result, key.policy(db));
-                // basedpython: a witness forwards a member it does not itself
-                // define to the object it wraps — the type-level counterpart of
-                // the `__getattr__` forwarding the emitted witness class does.
-                //
-                // this sits on the deep recursion of nested-expression inference, so
-                // the branch is taken before the call rather than inside it: a
-                // defined member (the overwhelmingly common case, and every dunder
-                // lookup in a long binary-operator chain) must not pay a stack frame
-                // for a fallback it cannot need
-                let result = if result.place.is_undefined() {
-                    implementations::witness_member_forward(db, this, name_str, result)
-                } else {
-                    result
-                };
                 // An inferred attribute accessed through an instance can resolve to an override
                 // on a subclass, so an exact class object is not a safe public type here.
                 let result = result.map_type(|ty| ty.bind_self_typevars(db, receiver));

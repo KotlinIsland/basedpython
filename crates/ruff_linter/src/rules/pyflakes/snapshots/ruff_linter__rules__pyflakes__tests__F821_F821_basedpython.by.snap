@@ -168,51 +168,51 @@ F821 Undefined name `UndefinedPattern`
     |
 
 F821 Undefined name `UndefinedInterface`
-   --> F821_basedpython.by:193:16
+   --> F821_basedpython.by:192:32
     |
-191 | # looked up rather than resolved, so an undefined one is a known gap here — `by
-192 | # check` reports it as an unresolved type
-193 | implementation UndefinedInterface for UndefinedImplemented:  # F821
-    |                ^^^^^^^^^^^^^^^^^^
-194 |     pass
+190 | # the extended type is looked up rather than resolved, so an undefined one is a
+191 | # known gap here — `by check` reports it as an unresolved type
+192 | extension UndefinedImplemented(UndefinedInterface):  # F821
+    |                                ^^^^^^^^^^^^^^^^^^
+193 |     pass
     |
 
 F821 Undefined name `bare_name`
-   --> F821_basedpython.by:213:21
+   --> F821_basedpython.by:212:21
     |
-212 | # but the suppression is only for that shape, so each of these is still reported
-213 | Book.objects.filter(bare_name)  # F821
+211 | # but the suppression is only for that shape, so each of these is still reported
+212 | Book.objects.filter(bare_name)  # F821
     |                     ^^^^^^^^^
-214 | Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
-215 | Book.objects.filter(data[undefined_index] == 1)  # F821
+213 | Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
+214 | Book.objects.filter(data[undefined_index] == 1)  # F821
     |
 
 F821 Undefined name `not_a_lookup_method`
-   --> F821_basedpython.by:214:23
+   --> F821_basedpython.by:213:23
     |
-212 | # but the suppression is only for that shape, so each of these is still reported
-213 | Book.objects.filter(bare_name)  # F821
-214 | Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
+211 | # but the suppression is only for that shape, so each of these is still reported
+212 | Book.objects.filter(bare_name)  # F821
+213 | Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
     |                       ^^^^^^^^^^^^^^^^^^^
-215 | Book.objects.filter(data[undefined_index] == 1)  # F821
-216 | Book.objects.filter(no_lookup_for_ne != 1)  # F821
+214 | Book.objects.filter(data[undefined_index] == 1)  # F821
+215 | Book.objects.filter(no_lookup_for_ne != 1)  # F821
     |
 
 F821 Undefined name `undefined_index`
-   --> F821_basedpython.by:215:26
+   --> F821_basedpython.by:214:26
     |
-213 | Book.objects.filter(bare_name)  # F821
-214 | Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
-215 | Book.objects.filter(data[undefined_index] == 1)  # F821
+212 | Book.objects.filter(bare_name)  # F821
+213 | Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
+214 | Book.objects.filter(data[undefined_index] == 1)  # F821
     |                          ^^^^^^^^^^^^^^^
-216 | Book.objects.filter(no_lookup_for_ne != 1)  # F821
+215 | Book.objects.filter(no_lookup_for_ne != 1)  # F821
     |
 
 F821 Undefined name `no_lookup_for_ne`
-   --> F821_basedpython.by:216:21
+   --> F821_basedpython.by:215:21
     |
-214 | Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
-215 | Book.objects.filter(data[undefined_index] == 1)  # F821
-216 | Book.objects.filter(no_lookup_for_ne != 1)  # F821
+213 | Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
+214 | Book.objects.filter(data[undefined_index] == 1)  # F821
+215 | Book.objects.filter(no_lookup_for_ne != 1)  # F821
     |                     ^^^^^^^^^^^^^^^^
     |

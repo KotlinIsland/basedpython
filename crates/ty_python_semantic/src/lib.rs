@@ -42,6 +42,10 @@ pub use ty_site_packages::{
     PythonEnvironment, PythonVersionFileSource, PythonVersionSource, PythonVersionWithSource,
     SitePackagesPaths, SysPrefixPathOrigin,
 };
+pub use types::conformance::declares_conformances;
+pub use types::conformance::{
+    ConformanceRegistration, ConformanceTest, WitnessDispatch, WitnessKind,
+};
 pub use types::conversions::{ConversionImport, ConversionInfo};
 pub use types::extensions::{ExtensionAttributeInfo, ExtensionMemberKind};
 pub use types::ide_support::{

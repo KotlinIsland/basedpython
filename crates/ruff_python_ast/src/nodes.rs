@@ -59,21 +59,6 @@ impl StmtClassDef {
         }
     }
 
-    /// Return an iterator over the class's base expressions, including the
-    /// interface of a basedpython `implementation A for B:` header — the witness
-    /// class the header declares derives that interface, so every consumer that
-    /// resolves, infers, or checks bases must see it.
-    ///
-    /// The two are mutually exclusive in valid source: the parser rejects a base
-    /// list on an implementation.
-    pub fn base_exprs(&self) -> impl Iterator<Item = &Expr> {
-        self.implementation
-            .as_deref()
-            .map(|header| &header.interface)
-            .into_iter()
-            .chain(self.bases())
-    }
-
     /// Return an iterator over the metaclass keywords of the class.
     pub fn keywords(&self) -> &[Keyword] {
         match &self.arguments {
@@ -100,16 +85,14 @@ impl StmtClassDef {
     }
 
     /// True when basedpython gives this class a base its header does not spell:
-    /// an implementation's interface, a based enum's `Enum`, a variant's
-    /// enclosing enum, and the classes the `enum_class` / `protocol_class`
-    /// markers stand for.
+    /// a based enum's `Enum`, a variant's enclosing enum, and the classes the
+    /// `enum_class` / `protocol_class` markers stand for.
     ///
     /// Anything keyed on "does this class have bases at all" has to account for
     /// them, or it reads an injected base as no base — which is how a based
     /// enum came to have `type` for its metaclass rather than `EnumMeta`.
     pub fn has_injected_base(&self) -> bool {
-        self.is_implementation()
-            || self.is_based_enum()
+        self.is_based_enum()
             || self.is_enum_variant()
             || self.has_synthetic_marker("enum_class")
             || self.has_synthetic_marker("protocol_class")
@@ -121,15 +104,6 @@ impl StmtClassDef {
     /// extension def never introduces a binding for it.
     pub fn is_extension(&self) -> bool {
         self.has_synthetic_marker("extension_def")
-    }
-
-    /// True for an implementation declaration (`implementation A for B:`) — a
-    /// retroactive statement that `B` satisfies `A`. As for an extension, the
-    /// class name is a *reference* to the implemented type rather than a new
-    /// binding; the binding an implementation introduces is its `as` witness
-    /// name, when it has one.
-    pub fn is_implementation(&self) -> bool {
-        self.implementation.is_some()
     }
 
     /// True for a based-enum variant (`Circle(radius: float)`, `Empty`) — the
@@ -3440,22 +3414,6 @@ impl TypeParam {
     }
 }
 
-/// basedpython: the header of an `implementation A for B as N:` declaration —
-/// the interface being implemented and the optional name its witness class
-/// binds to. Held behind one pointer on [`StmtClassDef`] so that a construct
-/// only basedpython files can spell does not grow `Stmt` for every statement in
-/// every file.
-#[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
-pub struct ImplementationHeader {
-    /// The interface (`A`), which the witness class derives.
-    pub interface: Expr,
-    /// The `as N` name the witness class binds to, when the implementation is
-    /// named. An anonymous implementation's witness is reachable only through
-    /// the conversions the transpiler inserts.
-    pub witness: Option<Identifier>,
-}
-
 /// See also [decorator](https://docs.python.org/3/library/ast.html#ast.decorator)
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
@@ -4394,13 +4352,12 @@ mod tests {
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn size() {
-        // basedpython: `StmtFunctionDef` carries a `raises` clause and
-        // `StmtClassDef` one boxed pointer for the `implementation A for B as N:`
-        // header, so both are a pointer wider than upstream. `Stmt` still packs
-        // its discriminant into the niche, so it matches the widest of them
+        // basedpython: `StmtFunctionDef` carries a `raises` clause, so it is a
+        // pointer wider than upstream. `Stmt` still packs its discriminant into
+        // the niche, so it matches the widest of them
         assert_eq!(std::mem::size_of::<Stmt>(), 96);
         assert_eq!(std::mem::size_of::<StmtFunctionDef>(), 96);
-        assert_eq!(std::mem::size_of::<StmtClassDef>(), 88);
+        assert_eq!(std::mem::size_of::<StmtClassDef>(), 80);
         assert_eq!(std::mem::size_of::<StmtTry>(), 64);
         assert_eq!(std::mem::size_of::<Mod>(), 32);
         assert_eq!(std::mem::size_of::<Pattern>(), 72);

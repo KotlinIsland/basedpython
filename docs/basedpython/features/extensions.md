@@ -1,8 +1,8 @@
 # extensions
 
 an extension adds methods and computed properties to an existing type without
-subclassing it or touching its definition (to make a type satisfy an *interface*
-from the outside, see [implementations](implementations.md)):
+subclassing it or touching its definition, and declares the interfaces that type
+[conforms to](#conformance):
 
 ```by
 extension list:
@@ -175,11 +175,113 @@ chain binds — the same precedence every other extension lookup follows. this i
 what lets a third party add builders to a type from their own package and have
 them resolve inside a block
 
+## conformance
+
+an argument list on an extension declares that the extended type *conforms* to
+those interfaces. the block supplies whatever the interface asks for and the
+type does not already answer:
+
+```by
+protocol Show:
+    def show(self) -> str
+
+extension str(Show):
+    override def show(self) -> str:
+        return self
+
+def render(value: Show) -> str:
+    return value.show()
+
+render("hi")
+```
+
+neither side has to be yours. the interface may come from one dependency and the
+type from another, and the conformance lives in your module
+
+the interface must be a **protocol**. an abstract class carries concrete methods
+a conformance could never answer — nothing would put them in the witness table —
+and it already has inheritance and `register` for the job
+
+### what has to be supplied
+
+every member the interface declares, unless something else already answers it:
+
+- a member of the conformance block itself
+- a default on an [extension of the interface](#extending-an-interface)
+- a member the type already has
+
+anything left over is `invalid-conformance`, reported at the header — a
+requirement nothing answers is an `AttributeError` the first time something
+dispatches through the conformance
+
+a conformance block may also add members that are *not* interface members. they
+are inherent members of the extended type like any other extension's, and the
+interface knows nothing about them
+
+### extending an interface
+
+an extension of a protocol adds members to every type that conforms to it:
+
+```by
+protocol Show:
+    def show(self) -> str
+
+extension Show:
+    def shout(self) -> str:
+        return self.show().upper()
+
+extension str(Show):
+    override def show(self) -> str:
+        return self
+
+"hi".shout()        # `str` conforms, so it has `shout`
+```
+
+a member here whose name matches a requirement is the *default* for it: a
+conformance that does not supply that member inherits this one
+
+### the type test
+
+`is` answers from the conformances in scope, so a conforming value tests
+positive even though it is not a subclass of anything:
+
+```by
+def describe(value: object) -> str:
+    if value is Show:
+        return value.shout()
+    return ""
+
+describe("hi")
+```
+
+nothing is wrapped. the value inside the branch is the value that went in — same
+identity, same `type()`, same hash — so a conformance costs nothing at the
+boundary and mutation through it is mutation of the object itself
+
+### what a conformance may not do
+
+three shapes are rejected rather than half-supported, because nothing in the
+lowering could carry them:
+
+- **a bracket bound.** conformance is registered per class, so a bound could not
+    be checked where a value is dispatched on — `list[str]` would be handed the
+    `list[int]` witness. declare the members in a bounded `extension` and conform
+    the type unconditionally
+- **supplying a dunder.** an ordinary extension may supply an
+    [operator's](#operators) dunder, because that rewrite happens at the use site
+    from the *concrete* operand type — but a requirement is reached through the
+    interface, where the concrete type is precisely what is unknown, and python
+    resolves a dunder on the type rather than through an attribute access. a type
+    that *already* has the dunder needs no witness for it and conforms fine
+- **naming a type declared further down the file.** a conformance registers
+    itself where it is written, so both the protocol and the type have to exist
+    by then
+
 ## implicit imports
 
-importing a module makes its extensions applicable — there is no per-extension
-import. a plain `import mod` is enough for the type checker to consider every
-extension `mod` defines:
+importing a module makes its extensions and conformances applicable — there is
+no per-extension import. either import form is enough for the type checker to
+consider everything `mod` defines:
 
 ```by
 import textwrap
@@ -187,6 +289,27 @@ import textwrap
 # textwrap's extensions on `str` are now in scope
 greeting.dedented()
 ```
+
+naming what a module declares is the usual way a file depends on it — a
+conformance is written against an interface imported by name — so
+`from mod import Show` carries `mod`'s extensions too. requiring a separate
+`import mod` whose symbols were never used would leave an import that reads as
+removable to anyone tidying the file, silently withdrawing conformance
+
+nothing is registered globally and nothing is monkeypatched, so two dependencies
+cannot fight over the same pair: their conformances are simply not visible to
+each other
+
+two conformances of the same pair *reaching one file* is an error, reported at
+the declaration that brings the second into view — which witness table survived
+would otherwise depend on import order
+
+a module *declaring* a conformance is imported eagerly even where imports are
+otherwise deferred: the registration is the point of that import, and deferring
+it would defer the conformance out of existence. nothing else gives up laziness
+— a module carrying only ordinary extensions is resolved at transpile time and
+needs nothing to have run, and a module that merely imports a conforming one is
+not somewhere any conformance is applicable
 
 the transpiler wires up the runtime side automatically (see below), so
 `import mod` carries the extensions without `from mod import dedented` ever
@@ -274,6 +397,62 @@ _by_ext__str__dedented(greeting)
 so the surface stays `import textwrap`, and only the functions actually used are
 imported — the implicit-import convenience costs nothing at runtime
 
+### conformance, lowered
+
+a conformance is the one part that needs a runtime: `str` cannot be
+monkey-patched, and nothing about the value records what it conforms to. so the
+block registers a *witness table* — each requirement mapped to the function that
+answers it — against the pair, when its module is imported. the registry is one
+per process, so a conformance registered by any module is visible to every
+other:
+
+```by
+extension str(Show):
+    override def show(self) -> str:
+        return self
+```
+
+→
+
+```python
+def _by_ext__str__show(self):  # basedpython: extension method str(Show)
+    return self
+
+_by_conform(Show, str, {"show": _by_ext__str__show})
+```
+
+a requirement the type already answers is left out of the table, and a
+requirement answered by a default on the interface's own extension maps to that
+extension's backing function
+
+the table is read at exactly two places. a requirement accessed on a receiver
+the checker typed as the *interface* cannot be a plain attribute — the value may
+be a conforming type that carries no such member — so it always goes through the
+dispatcher, which falls back to the attribute when nothing registered one. it
+dispatches whether or not a conformance is visible *here*, because a conformance
+is written in the module that imports the interface and so is never visible to
+the module that declares the function using it:
+
+```by
+def render(value: Show) -> str:
+    return value.show()
+```
+
+→
+
+```python
+def render(value):
+    return _by_witness(value, Show, "show")()
+```
+
+and `value is Show` answers from the table first, falling back to checking that
+the value carries the requirements
+
+everything else stays static. a member reached on a receiver whose concrete type
+the checker knows — `"hi".show()` — is the same direct call to the backing
+function any other extension member lowers to, with no lookup at all, and so is
+an inherent member of an interface's extension
+
 ## round-tripping
 
 the reverse transpiler re-sugars both halves from the marker-comment
@@ -284,7 +463,9 @@ call of a same-file backing function becomes receiver-method form —
 bare attributes, `functools.partial(…, xs)` references to `xs.second`.
 backing-shaped functions and calls written by hand without the marker are
 left as ordinary python, and a call of a backing function *imported* from
-another module conservatively stays as the explicit call
+another module conservatively stays as the explicit call. a witness-table
+registration is dropped: it is the lowering of the conformance list the marker's
+header already carries
 
 ## current limitations
 
@@ -298,3 +479,15 @@ another module conservatively stays as the explicit call
 - an extension supplies only the [operator](#operators) dunders; every other
     dunder is reachable by name but not through the syntax that invokes it, and
     a comparison chain is not rewritten
+- a conformance repairs an assignment at the positions the type checker checks
+    a value against a declared type — an argument, an annotated assignment, a
+    `return`, an element of a collection literal. it does not reach inside an
+    already-constructed generic, so a `list[str]` is not a `list[Show]` even
+    where `str` conforms; write the conversion where it happens
+- a conflict between two conformances neither of which can see the other — two
+    dependencies conforming the same pair, brought together by a third file —
+    is not reported yet, and the last module imported wins at runtime
+- a requirement cannot be reached through an optional chain (`value?.show()`)
+    or assigned through the interface; both are reported rather than lowered
+- an unused `import` that carries a conformance is still reported by `F401`,
+    whose autofix would remove it and silently withdraw the conformance

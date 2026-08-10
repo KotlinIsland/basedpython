@@ -1,5 +1,5 @@
-"""an `extension` / `implementation` header names a type declared elsewhere, so
-there is no declared name for the naming rule to judge"""
+"""an `extension` header names a type declared elsewhere, so there is no declared
+name for the naming rule to judge"""
 
 
 protocol Greeter:
@@ -11,7 +11,7 @@ extension list:
         return 1
 
 
-implementation Greeter for list:
+extension list(Greeter):
     override def greet(self) -> str:
         return "hi"
 

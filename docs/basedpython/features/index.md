@@ -176,9 +176,8 @@ syntax inside a function body
 - [repeated `_` parameters](repeated-underscore.md)
 - [lazy imports](lazy-imports.md)
 - [export imports](export-imports.md) — `from x export y`
-- [extensions](extensions.md)
-- [implementations (`implementation A for B`)](implementations.md) — declare that
-    an existing type satisfies an existing interface
+- [extensions](extensions.md) — add members to an existing type, and declare that
+    it conforms to an existing protocol
 - [conversions (`__from__` / `__into__` / `__of__`)](conversions.md)
 - [context parameters](context-parameters.md)
 - [local lifetimes (`local` / `once`)](local-lifetimes.md)

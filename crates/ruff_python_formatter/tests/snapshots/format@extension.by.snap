@@ -38,6 +38,29 @@ extension str:
 extension dict:
     def get_or[R](self, key: Key, default: R) -> Value | R:
         return self[key] if key in self else default
+
+
+# a conformance list rides where a class's bases do
+protocol Show:
+    def show(self) -> str
+
+
+protocol Size:
+    def size(self) -> int
+
+
+extension str(Show):
+    override def show(self) -> str:
+        return self
+
+
+# a bracket bound and a conformance list together
+extension list[Element: int](Show, Size):
+    override def show(self) -> str:
+        return ", ".join(str(x) for x in self)
+
+    override def size(self) -> int:
+        return len(self)
 ```
 
 ## Output
@@ -78,4 +101,27 @@ extension str:
 extension dict:
     def get_or[R](self, key: Key, default: R) -> Value | R:
         return self[key] if key in self else default
+
+
+# a conformance list rides where a class's bases do
+protocol Show:
+    def show(self) -> str
+
+
+protocol Size:
+    def size(self) -> int
+
+
+extension str(Show):
+    override def show(self) -> str:
+        return self
+
+
+# a bracket bound and a conformance list together
+extension list[Element: int](Show, Size):
+    override def show(self) -> str:
+        return ", ".join(str(x) for x in self)
+
+    override def size(self) -> int:
+        return len(self)
 ```

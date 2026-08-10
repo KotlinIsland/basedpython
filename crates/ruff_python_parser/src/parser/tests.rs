@@ -561,22 +561,61 @@ fn basedpython_extension_with_bounds_parses_type_params() {
 }
 
 #[test]
-fn basedpython_extension_rejects_base_classes() {
-    let parsed = crate::Parser::new(
-        "extension list(Sequence):\n    def second(self): ...\n",
-        ParseOptions::from(Mode::Module).with_basedpython(true),
-    )
-    .parse()
-    .try_into_module()
-    .unwrap();
+fn basedpython_extension_conformances_parse_as_bases() {
+    // the conformance list rides where a class's bases do, so the extension
+    // literal derives the interfaces it declares conformance to
+    let parsed = parse_basedpython_module(
+        "extension list[Element: int](Show, Size):\n    override def show(self): ...\n",
+    );
     assert!(
-        parsed
-            .errors()
-            .iter()
-            .any(|e| e.to_string().contains("cannot have base classes")),
-        "expected a base-class error, got: {:?}",
+        parsed.errors().is_empty(),
+        "unexpected parse errors: {:?}",
         parsed.errors()
     );
+    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single ClassDef");
+    };
+    assert_eq!(class.name.as_str(), "list");
+    assert!(class.is_extension());
+    assert!(class.type_params.is_some());
+    let bases: Vec<&str> = class
+        .bases()
+        .iter()
+        .filter_map(|base| base.as_name_expr().map(|name| name.id.as_str()))
+        .collect();
+    assert_eq!(bases, ["Show", "Size"]);
+}
+
+#[test]
+fn basedpython_extension_conformance_list_rejects_keywords_and_unpacking() {
+    // a conformance list names interfaces; a keyword has no meaning there, and
+    // an unpacking cannot be resolved to the interfaces to register under
+    for (source, expected) in [
+        (
+            "extension str(metaclass=type):\n    def f(self): ...\n",
+            "not keyword arguments",
+        ),
+        (
+            "extension str(*bases):\n    def f(self): ...\n",
+            "cannot be unpacked",
+        ),
+    ] {
+        let parsed = crate::Parser::new(
+            source,
+            ParseOptions::from(Mode::Module).with_basedpython(true),
+        )
+        .parse()
+        .try_into_module()
+        .unwrap();
+        assert!(
+            parsed
+                .errors()
+                .iter()
+                .any(|e| e.to_string().contains(expected)),
+            "expected {expected:?} for {source:?}, got: {:?}",
+            parsed.errors()
+        );
+    }
 }
 
 #[test]
@@ -602,157 +641,6 @@ fn basedpython_extension_soft_keyword_stays_a_name() {
             "{source:?} must not parse as an extension declaration"
         );
     }
-}
-
-#[test]
-fn basedpython_implementation_parses_interface_and_target() {
-    let parsed = parse_basedpython_module(
-        "implementation A for B:\n    override def f(self):\n        print(self.a)\n",
-    );
-    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
-        panic!("expected a single ClassDef");
-    };
-    // the name is the *implemented* type; the interface rides in its own field
-    assert_eq!(class.name.as_str(), "B");
-    assert!(class.is_implementation());
-    assert!(class.arguments.is_none());
-    let header = class
-        .implementation
-        .as_deref()
-        .expect("expected an implementation header");
-    assert!(header.witness.is_none());
-    let interface = &header.interface;
-    assert_eq!(
-        interface.as_name_expr().map(|name| name.id.as_str()),
-        Some("A")
-    );
-    assert!(matches!(class.body.as_slice(), [Stmt::FunctionDef(f)] if f.name.as_str() == "f"));
-}
-
-#[test]
-fn basedpython_implementation_binds_a_witness_name() {
-    let parsed = parse_basedpython_module(
-        "implementation A for B as BAsA:\n    override def f(self): ...\n",
-    );
-    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
-        panic!("expected a single ClassDef");
-    };
-    assert_eq!(
-        class
-            .implementation
-            .as_deref()
-            .and_then(|header| header.witness.as_ref())
-            .map(ruff_python_ast::Identifier::as_str),
-        Some("BAsA")
-    );
-}
-
-#[test]
-fn basedpython_implementation_accepts_a_specialized_interface() {
-    let parsed = parse_basedpython_module(
-        "implementation Container[int] for B:\n    override def __contains__(self, x): ...\n",
-    );
-    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
-        panic!("expected a single ClassDef");
-    };
-    let interface = &class
-        .implementation
-        .as_deref()
-        .expect("expected an implementation header")
-        .interface;
-    assert!(interface.is_subscript_expr(), "got {interface:?}");
-}
-
-#[test]
-fn basedpython_implementation_target_bounds_parse_as_type_params() {
-    let parsed = parse_basedpython_module(
-        "implementation Show for list[Element: Show]:\n    override def show(self): ...\n",
-    );
-    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
-        panic!("expected a single ClassDef");
-    };
-    assert_eq!(class.name.as_str(), "list");
-    let type_params = class.type_params.as_ref().expect("expected type params");
-    let param = type_params.type_params[0]
-        .as_type_var()
-        .expect("expected a plain TypeVar param");
-    assert_eq!(param.name.as_str(), "Element");
-    assert!(param.bound.is_some());
-}
-
-#[test]
-fn basedpython_implementation_reports_a_missing_for() {
-    let parsed = crate::Parser::new(
-        "implementation A B:\n    def f(self): ...\n",
-        ParseOptions::from(Mode::Module).with_basedpython(true),
-    )
-    .parse()
-    .try_into_module()
-    .unwrap();
-    assert!(
-        parsed
-            .errors()
-            .iter()
-            .any(|e| e.to_string().contains("Expected `for`")),
-        "expected a missing-`for` error, got: {:?}",
-        parsed.errors()
-    );
-}
-
-#[test]
-fn basedpython_implementation_rejects_base_classes() {
-    let parsed = crate::Parser::new(
-        "implementation A for B(C):\n    def f(self): ...\n",
-        ParseOptions::from(Mode::Module).with_basedpython(true),
-    )
-    .parse()
-    .try_into_module()
-    .unwrap();
-    assert!(
-        parsed
-            .errors()
-            .iter()
-            .any(|e| e.to_string().contains("cannot have base classes")),
-        "expected a base-class error, got: {:?}",
-        parsed.errors()
-    );
-}
-
-#[test]
-fn basedpython_implementation_soft_keyword_stays_a_name() {
-    // `implementation` only introduces a declaration when followed by a name
-    for source in [
-        "implementation = 1",
-        "implementation(x)",
-        "implementation[0]",
-        "print(implementation)",
-        "implementation.field = 2",
-        "implementation: int = 3",
-    ] {
-        let parsed = parse_basedpython_module(source);
-        assert!(
-            parsed.errors().is_empty(),
-            "unexpected parse errors in {source:?}: {:?}",
-            parsed.errors()
-        );
-        assert!(
-            !matches!(parsed.syntax().body.as_slice(), [Stmt::ClassDef(_)]),
-            "{source:?} must not parse as an implementation declaration"
-        );
-    }
-}
-
-#[test]
-fn implementation_rejected_in_py_file() {
-    // the `implementation` introducer is basedpython-only
-    let has_error = match parse(
-        "implementation A for B:\n    def f(self): ...\n",
-        ParseOptions::from(Mode::Module),
-    ) {
-        Ok(parsed) => !parsed.errors().is_empty(),
-        Err(_) => true,
-    };
-    assert!(has_error, "`implementation` must be rejected in a .py file");
 }
 
 #[test]

@@ -21,6 +21,7 @@ use crate::{
             AbstractMethod, CodeGeneratorKind, FieldKind, MetaclassErrorKind,
             expanded_class_base_entries,
         },
+        conformance,
         context::InferContext,
         definition_expression_type,
         diagnostic::{
@@ -45,7 +46,6 @@ use crate::{
         extensions,
         function::KnownFunction,
         generics::enclosing_generic_contexts,
-        implementations,
         infer::builder::post_inference::typed_dict::validate_typed_dict_class,
         infer_definition_types,
         mro::StaticMroErrorKind,
@@ -94,15 +94,8 @@ pub(crate) fn check_static_class_definitions<'db>(
     // checks below apply (it has no bases by construction)
     if class.is_extension(db) {
         extensions::validate_extension_declaration(context, class, class_node);
+        conformance::validate_conformance_declaration(context, class, class_node);
         return;
-    }
-
-    // basedpython: an `implementation` declaration gets its own validation on top
-    // of the ordinary class checks — it *is* a class (the witness), so the
-    // inheritance-based checks below still apply and catch an unimplemented
-    // abstract member or a bad `override` for free
-    if class.is_implementation(db) {
-        implementations::validate_implementation_declaration(context, class, class_node);
     }
 
     // basedpython: the conversion dunders have to have the shape their lowered
