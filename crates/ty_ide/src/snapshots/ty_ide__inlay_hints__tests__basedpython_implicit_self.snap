@@ -1,0 +1,20 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ implicit_self: true, ..InlayHintSettings::none() })"
+---
+
+def apply(fn: (int) -> None) -> None:
+    fn(1)
+
+class C:
+    init([self, ]a: int)
+
+class D:
+    init([self])
+
+class E:
+    var x: int = 0
+        get() = field
+
+apply:
+    print(it)

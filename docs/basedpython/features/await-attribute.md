@@ -42,6 +42,11 @@ subscript:
 | `g().await[0]`          | `(await g())[0]`        |
 | `g().await + h().await` | `await g() + await h()` |
 
+## completion
+
+inside an `async def`, `await` is offered after a `.` alongside the object's
+real members, so the postfix form is reachable the same way an attribute is
+
 ## prefix `await` still works
 
 the postfix form is additive — a prefix `await expr` is left untouched. mix

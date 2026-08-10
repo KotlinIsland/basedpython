@@ -10,7 +10,7 @@ use ruff_python_ast::find_node::{CoveringNode, covering_node};
 use ruff_python_ast::name::{Name, UnqualifiedName};
 use ruff_python_ast::str::Quote;
 use ruff_python_ast::token::{Token, TokenKind, Tokens};
-use ruff_python_ast::{self as ast, AnyNodeRef};
+use ruff_python_ast::{self as ast, AnyNodeRef, PySourceType};
 use ruff_python_codegen::Stylist;
 use ruff_python_literal::escape::{Escape, UnicodeEscape};
 use ruff_python_literal::format::FormatSpec;
@@ -43,6 +43,7 @@ pub fn completion<'db>(
 ) -> Vec<Completion<'db>> {
     let parsed = parsed_module(db, file).load(db);
     let source = source_text(db, file);
+    let source_type = file.source_type(db);
 
     let Some(context) = Context::new(db, file, &parsed, &source, offset) else {
         return vec![];
@@ -93,6 +94,14 @@ pub fn completion<'db>(
         ContextKind::NonImport(ref non_import) => match non_import.target {
             CompletionTargetAst::ObjectDot { expr } => {
                 completions.extend(model.attribute_completions(expr));
+                add_postfix_completions(
+                    expr,
+                    &context.cursor,
+                    &model,
+                    source_type,
+                    &source,
+                    &mut completions,
+                );
             }
             CompletionTargetAst::Scoped(scoped) => {
                 for semantic_completion in model.scoped_completions(scoped.node) {
@@ -107,6 +116,15 @@ pub fn completion<'db>(
                     );
                 }
                 add_keyword_completions(db, &mut completions);
+                add_compound_keyword_completions(&context.cursor, source_type, &mut completions);
+                add_main_completion(
+                    &parsed,
+                    &source,
+                    &context.cursor,
+                    source_type,
+                    capabilities,
+                    &mut completions,
+                );
                 add_argument_completions(db, &model, &context.cursor, &mut completions);
                 if settings.auto_import {
                     add_unimported_completions(
@@ -319,6 +337,13 @@ pub struct Completion<'db> {
     /// cursor would be wrong, as it is for a django template path or a
     /// namespaced url name.
     pub replace: Option<TextRange>,
+    /// The text the client should match the user's typing against, when
+    /// [`Self::label`] is not it.
+    ///
+    /// A client matches against the text spanned by [`Self::replace`], so a
+    /// completion that replaces more than the word under the cursor has to say
+    /// what that whole span will read as.
+    pub filter: Option<CompactString>,
     /// The type of this completion, if available.
     ///
     /// Generally speaking, this is always available
@@ -397,9 +422,12 @@ impl<'db> Completion<'db> {
 struct CompletionBuilder<'db> {
     // See comments on `Completion` for the meaning of fields.
     name: CompactString,
+    label: Option<CompactString>,
     qualified: Option<CompactString>,
     insert: Option<CompactString>,
+    insert_text_format: CompletionInsertTextFormat,
     replace: Option<TextRange>,
+    filter: Option<CompactString>,
     ty: Option<Type<'db>>,
     kind: Option<CompletionKind>,
     module_name: Option<&'db ModuleName>,
@@ -422,9 +450,12 @@ impl<'db> CompletionBuilder<'db> {
     fn new(name: impl Into<CompactString>) -> CompletionBuilder<'db> {
         CompletionBuilder {
             name: name.into(),
+            label: None,
             qualified: None,
             insert: None,
+            insert_text_format: CompletionInsertTextFormat::PlainText,
             replace: None,
+            filter: None,
             ty: None,
             kind: None,
             module_name: None,
@@ -535,7 +566,7 @@ impl<'db> CompletionBuilder<'db> {
                 )
             }
         } else {
-            (None, self.insert, CompletionInsertTextFormat::PlainText)
+            (self.label, self.insert, self.insert_text_format)
         };
         Completion {
             name: self.name,
@@ -544,6 +575,7 @@ impl<'db> CompletionBuilder<'db> {
             insert,
             insert_text_format,
             replace: self.replace,
+            filter: self.filter,
             ty: self.ty,
             kind,
             module_name: self.module_name,
@@ -558,6 +590,21 @@ impl<'db> CompletionBuilder<'db> {
         }
     }
 
+    /// The text shown to the user, when it differs from what gets inserted.
+    fn label(mut self, label: impl Into<CompactString>) -> CompletionBuilder<'db> {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Insert [snippet syntax] rather than plain text.
+    ///
+    /// [snippet syntax]: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#snippet_syntax
+    fn snippet(mut self, insert: impl Into<CompactString>) -> CompletionBuilder<'db> {
+        self.insert = Some(insert.into());
+        self.insert_text_format = CompletionInsertTextFormat::Snippet;
+        self
+    }
+
     fn qualified(mut self, qualified: impl Into<CompactString>) -> CompletionBuilder<'db> {
         self.qualified = Some(qualified.into());
         self
@@ -570,6 +617,12 @@ impl<'db> CompletionBuilder<'db> {
 
     fn replace(mut self, range: TextRange) -> CompletionBuilder<'db> {
         self.replace = Some(range);
+        self
+    }
+
+    /// The text the client matches the user's typing against.
+    fn filter_text(mut self, filter: impl Into<CompactString>) -> CompletionBuilder<'db> {
+        self.filter = Some(filter.into());
         self
     }
 
@@ -1029,6 +1082,12 @@ impl<'m> ContextCursor<'m> {
     }
 
     fn suppress_class_parentheses(&self, model: &SemanticModel<'_>) -> bool {
+        self.is_in_type_expression(model)
+    }
+
+    /// Whether the cursor sits in a position the grammar reads as a type,
+    /// where a value-level suggestion means nothing.
+    fn is_in_type_expression(&self, model: &SemanticModel<'_>) -> bool {
         let contains = |expr: &ast::Expr| expr.range().contains_range(self.range);
 
         self.covering_node.ancestors().any(|node| match node {
@@ -1420,6 +1479,76 @@ impl<'m> ContextCursor<'m> {
                         ])
                     })
                 })
+        })
+    }
+
+    /// Whether the cursor opens a statement, rather than continuing one.
+    ///
+    /// A construct spelled with more than one keyword is only offered whole
+    /// here: once `async ` is written, the plain `def` keyword completes the
+    /// rest, and offering `async def` again would repeat the word.
+    fn is_at_statement_start(&self) -> bool {
+        let preceding = match self.typed {
+            // the typed text is the start of the statement being written, so
+            // what precedes it is the token before that
+            Some(_) => &self.tokens_before[..self.tokens_before.len().saturating_sub(1)],
+            None => self.tokens_before,
+        };
+        preceding
+            .iter()
+            .rev()
+            .find(|token| !token.kind().is_trivia())
+            .is_none_or(|token| {
+                matches!(
+                    token.kind(),
+                    TokenKind::Newline
+                        | TokenKind::Indent
+                        | TokenKind::Dedent
+                        | TokenKind::Colon
+                        | TokenKind::Semi
+                )
+            })
+    }
+
+    /// Whether the cursor sits in the body of an `async def`, where `await`,
+    /// `async for` and `async with` are valid.
+    ///
+    /// A `lambda` in between rules it out: its body is a scope of its own, and
+    /// it cannot be asynchronous.
+    fn is_in_async_function(&self) -> bool {
+        self.covering_node
+            .ancestors()
+            .find_map(|node| match node {
+                ast::AnyNodeRef::StmtFunctionDef(function) => Some(function.is_async),
+                ast::AnyNodeRef::ExprLambda(_) => Some(false),
+                _ => None,
+            })
+            .unwrap_or(false)
+    }
+
+    /// Whether the cursor sits directly in a class body, where a method
+    /// modifier can be written.
+    fn is_in_class_body(&self) -> bool {
+        self.covering_node
+            .ancestors()
+            .find_map(|node| match node {
+                ast::AnyNodeRef::StmtClassDef(_) => Some(true),
+                ast::AnyNodeRef::StmtFunctionDef(_) | ast::AnyNodeRef::ExprLambda(_) => Some(false),
+                _ => None,
+            })
+            .unwrap_or(false)
+    }
+
+    /// Whether the cursor sits at module level, outside every class and
+    /// function.
+    fn is_at_module_level(&self) -> bool {
+        !self.covering_node.ancestors().any(|node| {
+            matches!(
+                node,
+                ast::AnyNodeRef::StmtClassDef(_)
+                    | ast::AnyNodeRef::StmtFunctionDef(_)
+                    | ast::AnyNodeRef::ExprLambda(_)
+            )
         })
     }
 
@@ -2176,6 +2305,187 @@ fn add_keyword_completions<'db>(db: &'db dyn Db, completions: &mut Completions<'
     ];
     for name in keywords {
         completions.add(CompletionBuilder::keyword(name));
+    }
+}
+
+/// A statement opener spelled with more than one keyword.
+///
+/// Each word of one is a keyword the completion list already carries on its
+/// own, so the pair is only worth offering where the whole construct is valid.
+struct CompoundKeyword {
+    text: &'static str,
+    /// Where the construct it opens may be written.
+    position: KeywordPosition,
+    /// Whether the construct is basedpython syntax.
+    basedpython: bool,
+}
+
+/// The positions a [`CompoundKeyword`] is offered in.
+enum KeywordPosition {
+    /// Wherever a statement may start.
+    Anywhere,
+    /// Directly in a class body.
+    ClassBody,
+    /// In the body of an `async def`.
+    AsyncFunction,
+}
+
+const COMPOUND_KEYWORDS: &[CompoundKeyword] = &[
+    CompoundKeyword {
+        text: "async def",
+        position: KeywordPosition::Anywhere,
+        basedpython: false,
+    },
+    CompoundKeyword {
+        text: "async for",
+        position: KeywordPosition::AsyncFunction,
+        basedpython: false,
+    },
+    CompoundKeyword {
+        text: "async with",
+        position: KeywordPosition::AsyncFunction,
+        basedpython: false,
+    },
+    CompoundKeyword {
+        text: "data class",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "enum class",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "class def",
+        position: KeywordPosition::ClassBody,
+        basedpython: true,
+    },
+    CompoundKeyword {
+        text: "static def",
+        position: KeywordPosition::ClassBody,
+        basedpython: true,
+    },
+];
+
+/// Adds the statement openers spelled with more than one keyword.
+fn add_compound_keyword_completions(
+    cursor: &ContextCursor<'_>,
+    source_type: PySourceType,
+    completions: &mut Completions<'_>,
+) {
+    if !cursor.is_at_statement_start() {
+        return;
+    }
+    for keyword in COMPOUND_KEYWORDS {
+        if keyword.basedpython && !source_type.is_basedpython() {
+            continue;
+        }
+        let valid = match keyword.position {
+            KeywordPosition::Anywhere => true,
+            KeywordPosition::ClassBody => cursor.is_in_class_body(),
+            KeywordPosition::AsyncFunction => cursor.is_in_async_function(),
+        };
+        if valid {
+            completions.add(CompletionBuilder::keyword(keyword.text));
+        }
+    }
+}
+
+/// basedpython: adds the whole entry point as a completion for `main`.
+///
+/// A module-level `def main` is where the program starts, so writing the name
+/// says everything the definition needs.
+fn add_main_completion(
+    parsed: &ParsedModuleRef,
+    source: &SourceText,
+    cursor: &ContextCursor<'_>,
+    source_type: PySourceType,
+    capabilities: CompletionCapabilities,
+    completions: &mut Completions<'_>,
+) {
+    const MAIN: &str = "main";
+
+    if !source_type.is_basedpython()
+        || !completions.query.is_match(MAIN)
+        || !cursor.is_at_statement_start()
+        || !cursor.is_at_module_level()
+    {
+        return;
+    }
+    // the module already has an entry point, so the name is a reference to it
+    if parsed.syntax().body.iter().any(
+        |stmt| matches!(stmt, ast::Stmt::FunctionDef(function) if function.name.as_str() == MAIN),
+    ) {
+        return;
+    }
+
+    let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str());
+    let body = format!("def {MAIN}():\n{}", stylist.indentation().as_str());
+    let builder = Completion::builder(MAIN)
+        .kind(CompletionKind::Snippet)
+        .label(MAIN)
+        .detail("entry point")
+        .documentation(
+            "the module-level `main` a basedpython program starts from. \
+             its parameters become the command line interface",
+        );
+    completions.add(if capabilities.snippets {
+        builder.snippet(format!("{body}$0"))
+    } else {
+        builder.insert(body)
+    });
+}
+
+/// Adds the postfix constructs written after an expression's `.`.
+///
+/// `.await` is real basedpython syntax, so it completes as an ordinary word.
+/// `.print` is not: selecting it rewrites the whole `x.print` into `print(x)`,
+/// which is why it spells out the range it replaces.
+fn add_postfix_completions<'db>(
+    expr: &ast::ExprAttribute,
+    cursor: &ContextCursor<'_>,
+    model: &SemanticModel<'db>,
+    source_type: PySourceType,
+    source: &SourceText,
+    completions: &mut Completions<'db>,
+) {
+    if !source_type.is_basedpython()
+        || expr.ctx.is_store()
+        || expr.ctx.is_del()
+        || cursor.is_in_type_expression(model)
+    {
+        return;
+    }
+
+    let value = expr.value.range();
+    if !value.is_empty()
+        && let Some(text) = source.get(value.start().to_usize()..value.end().to_usize())
+    {
+        completions.add(
+            Completion::builder("print")
+                .kind(CompletionKind::Snippet)
+                .insert(format!("print({text})"))
+                // the client's own idea of the word under the cursor is the
+                // attribute alone, but the rewrite consumes the expression it
+                // is written on as well
+                .replace(TextRange::new(
+                    value.start(),
+                    expr.range().end().max(cursor.offset),
+                ))
+                // and so the client matches what the user types against the
+                // whole of that span, not against the attribute alone
+                .filter_text(format!("{text}.print"))
+                .detail("postfix")
+                .documentation("wrap the expression in a `print(...)` call"),
+        );
+    }
+
+    if cursor.is_in_async_function() {
+        completions.add(
+            CompletionBuilder::keyword("await")
+                .documentation("await the expression, as a postfix operator"),
+        );
     }
 }
 
@@ -3400,6 +3710,7 @@ mod tests {
     use ruff_python_ast::helpers::is_dunder;
     use ruff_python_ast::token::{TokenKind, Tokens};
     use ruff_python_parser::{Mode, ParseOptions};
+    use ruff_text_size::{TextRange, TextSize};
     use ty_module_resolver::ModuleName;
 
     use crate::CompletionCapabilities;
@@ -3520,6 +3831,7 @@ mod tests {
         as
         assert
         async
+        async def
         await
         break
         case
@@ -9859,6 +10171,210 @@ if foo:
             .snapshot();
 
         assert_snapshot!(snapshot, @"Zqzq_open");
+    }
+
+    /// The text a completion of `name` inserts, for the cases where it is
+    /// several lines and a snapshot would lose its trailing indentation.
+    #[track_caller]
+    fn inserted_text(test: &CompletionTest<'_>, name: &str) -> String {
+        let completion = test
+            .completions()
+            .iter()
+            .find(|completion| completion.name == name)
+            .unwrap_or_else(|| panic!("expected a completion named `{name}`"));
+        completion
+            .insert
+            .as_deref()
+            .unwrap_or_else(|| completion.label())
+            .to_string()
+    }
+
+    /// basedpython: `main` completes to the whole entry point, since a
+    /// module-level `def main` is where the program starts.
+    #[test]
+    fn basedpython_main_completion() {
+        let builder = CursorTest::builder()
+            .source("main.by", "mai<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import();
+        assert_eq!(inserted_text(&builder.build(), "main"), "def main():\n    ");
+    }
+
+    /// A client that takes snippets gets the cursor placed in the body.
+    #[test]
+    fn basedpython_main_completion_snippet() {
+        let builder = CursorTest::builder()
+            .source("main.by", "mai<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import()
+            .snippets_support(true);
+        assert_eq!(
+            inserted_text(&builder.build(), "main"),
+            "def main():\n    $0"
+        );
+    }
+
+    /// The entry point is a basedpython construct; python has its own idiom.
+    #[test]
+    fn main_completion_is_basedpython_only() {
+        completion_test_builder("mai<CURSOR>")
+            .skip_auto_import()
+            .build()
+            .not_contains("main");
+    }
+
+    /// Once the module has an entry point, `main` is a reference to it.
+    #[test]
+    fn basedpython_main_completion_skipped_when_defined() {
+        let builder = CursorTest::builder()
+            .source("main.by", "def main():\n    pass\nmai<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import();
+        assert_eq!(inserted_text(&builder.build(), "main"), "main");
+    }
+
+    /// Only a module-level `main` is the entry point.
+    #[test]
+    fn basedpython_main_completion_only_at_module_level() {
+        CursorTest::builder()
+            .source("main.by", "def f():\n    mai<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import()
+            .build()
+            .not_contains("main");
+    }
+
+    #[test]
+    fn basedpython_compound_keywords_at_module_level() {
+        CursorTest::builder()
+            .source("main.by", "<CURSOR>")
+            .completion_test_builder()
+            .build()
+            .contains("data class")
+            .contains("enum class")
+            .contains("async def")
+            .not_contains("class def")
+            .not_contains("static def")
+            .not_contains("async for");
+    }
+
+    #[test]
+    fn basedpython_compound_keywords_in_class_body() {
+        CursorTest::builder()
+            .source("main.by", "class C:\n    stat<CURSOR>")
+            .completion_test_builder()
+            .build()
+            .contains("static def");
+        CursorTest::builder()
+            .source("main.by", "class C:\n    clas<CURSOR>")
+            .completion_test_builder()
+            .build()
+            .contains("class def");
+    }
+
+    #[test]
+    fn basedpython_compound_keywords_in_async_function() {
+        CursorTest::builder()
+            .source("main.by", "async def f():\n    asyn<CURSOR>")
+            .completion_test_builder()
+            .build()
+            .contains("async for")
+            .contains("async with")
+            .not_contains("class def");
+    }
+
+    #[test]
+    fn compound_keywords_are_python_only_where_python_has_them() {
+        completion_test_builder("<CURSOR>")
+            .build()
+            .contains("async def")
+            .not_contains("data class")
+            .not_contains("enum class");
+    }
+
+    /// A construct spelled with two keywords is only offered whole. After
+    /// `async ` the plain `def` keyword completes the rest.
+    #[test]
+    fn compound_keywords_only_open_a_statement() {
+        completion_test_builder("async <CURSOR>")
+            .build()
+            .not_contains("async def");
+        completion_test_builder("x = <CURSOR>")
+            .build()
+            .not_contains("async def");
+    }
+
+    /// basedpython: `.print` is a postfix rewrite, so it replaces the
+    /// expression it is written on rather than reading as an attribute.
+    #[test]
+    fn basedpython_postfix_print() {
+        let builder = CursorTest::builder()
+            .source("main.by", "x = 1\nx.<CURSOR>")
+            .completion_test_builder()
+            .filter(|c| c.name == "print");
+        let test = builder.build();
+        assert_snapshot!(test.snapshot(), @"print(x)");
+
+        let completion = test
+            .completions()
+            .first()
+            .expect("expected a `print` completion");
+        // the replaced span covers the expression as well as the attribute, so
+        // the client is told what that whole span reads as
+        assert_eq!(completion.filter.as_deref(), Some("x.print"));
+        assert_eq!(
+            completion.replace,
+            Some(TextRange::new(TextSize::new(6), TextSize::new(8)))
+        );
+    }
+
+    #[test]
+    fn basedpython_postfix_print_on_a_chain() {
+        let snapshot = CursorTest::builder()
+            .source("main.by", "x = 'a'\nx.upper().<CURSOR>")
+            .completion_test_builder()
+            .filter(|c| c.name == "print")
+            .build()
+            .snapshot();
+
+        assert_snapshot!(snapshot, @"print(x.upper())");
+    }
+
+    /// A type expression has no use for a value-level rewrite.
+    #[test]
+    fn basedpython_postfix_not_in_a_type_expression() {
+        CursorTest::builder()
+            .source("main.by", "import os\nasync def f(x: os.<CURSOR>): ...")
+            .completion_test_builder()
+            .build()
+            .not_contains("print")
+            .not_contains("await");
+    }
+
+    #[test]
+    fn postfix_print_is_basedpython_only() {
+        completion_test_builder("x = 1\nx.<CURSOR>")
+            .build()
+            .not_contains("print");
+    }
+
+    /// basedpython: `.await` is real syntax, so it completes as a word.
+    #[test]
+    fn basedpython_postfix_await() {
+        CursorTest::builder()
+            .source("main.by", "async def f(x):\n    x.<CURSOR>")
+            .completion_test_builder()
+            .build()
+            .contains("await");
+    }
+
+    #[test]
+    fn basedpython_postfix_await_needs_an_async_function() {
+        CursorTest::builder()
+            .source("main.by", "def f(x):\n    x.<CURSOR>")
+            .completion_test_builder()
+            .build()
+            .not_contains("await");
     }
 
     #[test]

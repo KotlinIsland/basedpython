@@ -13,10 +13,10 @@ def against_with(fn: str.(int) -> None) -> None:
     'a'.fn(1)
 
 class C:
-    init([self, ]a: int)
+    init(a: int)
 
 class D:
-    init([self])
+    init()
 
 apply:[it: int]
     print(it)
