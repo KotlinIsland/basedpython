@@ -469,6 +469,12 @@ fn cmd_transpile_dir(dir: &Path, reverse: bool, config: &Config) -> anyhow::Resu
 /// Reverse every `.py`/`.pyi` under `dir` into a `.by`/`.byi` in place,
 /// deleting the original. Reverse transforms are single-file, so no project db
 /// is needed.
+///
+/// A source the transpiler cannot read is reported and skipped rather than
+/// taking the project down with it — the same way ruff reports an unreadable
+/// file as an `IOError` diagnostic and lints the rest. Each file's original is
+/// removed only once its replacement is on disk, so nothing is ever left both
+/// deleted and unconverted.
 #[allow(clippy::print_stderr)]
 fn reverse_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
     let files = py_source_files(dir);
@@ -478,8 +484,18 @@ fn reverse_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
     }
 
     let mut count = 0usize;
+    let mut skipped: Vec<(&Path, String)> = Vec::new();
     for py in &files {
-        let source = fs::read_to_string(py).with_context(|| format!("{}", py.display()))?;
+        // a source that is not valid utf-8 is still valid python — PEP 263 lets
+        // a file declare its own encoding — but the transpiler only speaks
+        // utf-8, so such a file is left exactly as it was found
+        let source = match fs::read_to_string(py) {
+            Ok(source) => source,
+            Err(e) => {
+                skipped.push((py.as_path(), e.to_string()));
+                continue;
+            }
+        };
         let is_stub = py.extension().and_then(OsStr::to_str) == Some("pyi");
         let file_config = Config {
             is_python: true,
@@ -494,8 +510,15 @@ fn reverse_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
         count += 1;
     }
 
+    for (py, message) in &skipped {
+        eprintln!("skipped {}: {message}", py.display());
+    }
     eprintln!("reversed {count} file(s) to basedpython");
-    Ok(ExitStatus::Success)
+    if skipped.is_empty() {
+        return Ok(ExitStatus::Success);
+    }
+    eprintln!("skipped {} file(s)", skipped.len());
+    Ok(ExitStatus::Failure)
 }
 
 /// Forward-transpile every `.by` under `dir` into a `.py` next to it, using one
@@ -814,12 +837,12 @@ fn render_check_and_transpile(
     mut consume: impl FnMut(&Path, &str, &[Option<u32>]) -> anyhow::Result<()>,
 ) -> anyhow::Result<bool> {
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
-    let mut unparsable: Vec<ruff_db::files::File> = Vec::new();
+    let mut unusable: Vec<ruff_db::files::File> = Vec::new();
 
     for (_, file) in handles {
         let diags = db.check_file(*file);
-        if diags.iter().any(is_parse_error) {
-            unparsable.push(*file);
+        if diags.iter().any(is_unusable_source) {
+            unusable.push(*file);
         }
         all_diagnostics.extend(diags);
     }
@@ -829,7 +852,7 @@ fn render_check_and_transpile(
     // when a code generator or a test runner is reached for
     let blocked = match gate {
         CheckGate::AllErrors => {
-            !unparsable.is_empty()
+            !unusable.is_empty()
                 || all_diagnostics
                     .iter()
                     .any(|d| d.severity() >= Severity::Error)
@@ -842,10 +865,10 @@ fn render_check_and_transpile(
         return Ok(false);
     }
 
-    let mut ok = unparsable.is_empty();
+    let mut ok = unusable.is_empty();
     let rebuild = || Some(rebuilder.rebuild());
     for (bpy, file) in handles {
-        if unparsable.contains(file) {
+        if unusable.contains(file) {
             continue;
         }
         match by_transforms::transpile_typed_with_map(db, *file, config, Some(&rebuild)) {
@@ -866,8 +889,13 @@ fn render_check_and_transpile(
     Ok(ok)
 }
 
-fn is_parse_error(d: &Diagnostic) -> bool {
-    matches!(d.id(), DiagnosticId::InvalidSyntax) && d.severity() >= Severity::Error
+/// Whether this diagnostic says the file has no source to transpile: it could
+/// not be parsed, or it could not be read at all (an encoding ty does not speak,
+/// a permission error). Either way the transpiler sees an empty module, so
+/// emitting for it would write an empty file over the real one.
+fn is_unusable_source(d: &Diagnostic) -> bool {
+    matches!(d.id(), DiagnosticId::InvalidSyntax | DiagnosticId::Io)
+        && d.severity() >= Severity::Error
 }
 
 /// Render diagnostics to stderr in the same format as `by check`. The
@@ -929,7 +957,9 @@ pub(crate) fn cmd_version_by(output_format: crate::args::HelpFormat) -> ExitStat
 
 #[cfg(test)]
 mod tests {
-    use super::{is_hidden_within, module_relative_path};
+    use super::{is_hidden_within, module_relative_path, reverse_dir};
+    use crate::ExitStatus;
+    use by_transforms::config::Config;
     use std::path::{Path, PathBuf};
 
     /// the output tree mirrors the module tree, so a src-layout project's source
@@ -980,5 +1010,29 @@ mod tests {
         assert!(!is_hidden_within(Path::new("/p/src/pkg/main.by"), root));
         // the file's own name is not a directory component
         assert!(!is_hidden_within(Path::new("/p/.hidden.by"), root));
+    }
+
+    /// a source the transpiler cannot decode must not take the project down
+    /// with it: everything else still converts, the undecodable file is left
+    /// exactly as it was found, and the exit status still says something did
+    /// not convert
+    #[test]
+    fn a_source_that_is_not_utf8_is_skipped_not_fatal() -> anyhow::Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        let good = dir.path().join("good.py");
+        std::fs::write(&good, "x = 1\n")?;
+        // PEP 263: a declared latin-1 encoding, and a byte no utf-8 decoder accepts
+        let latin1 = dir.path().join("latin_1.py");
+        std::fs::write(&latin1, b"# -*- coding: latin-1 -*-\ns = '\xdf'\n")?;
+
+        let status = reverse_dir(dir.path(), &Config::default())?;
+
+        assert!(matches!(status, ExitStatus::Failure));
+        assert!(dir.path().join("good.by").is_file());
+        assert!(!good.exists());
+        // untouched: neither converted nor deleted
+        assert!(latin1.is_file());
+        assert!(!dir.path().join("latin_1.by").exists());
+        Ok(())
     }
 }
