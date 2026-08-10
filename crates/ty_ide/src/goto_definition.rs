@@ -1320,6 +1320,79 @@ a = Test()
         ");
     }
 
+    /// basedpython: an operator whose dunder an `extension` supplies. The
+    /// operand's own type has no such member, so the ordinary dunder lookup
+    /// finds nothing — without the extension fallback there is no goto target
+    /// for an operator the checker accepts.
+    #[test]
+    fn goto_definition_unary_operator_from_an_extension() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+extension str:
+    def __invert__(self) -> str:
+        return self
+
+a = \"asdf\"
+
+<CURSOR>~a
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.by:8:1
+          |
+        8 | ~a
+          | ^ Clicking here
+          |
+        info: Found 1 definition
+         --> main.by:3:9
+          |
+        3 |     def __invert__(self) -> str:
+          |         ----------
+          |
+        ");
+    }
+
+    #[test]
+    fn goto_definition_binary_operator_from_an_extension() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+class Money: ...
+
+extension Money:
+    def __add__(self, other: Money) -> Money:
+        return self
+
+a = Money()
+b = Money()
+
+a <CURSOR>+ b
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+          --> main.by:11:3
+           |
+        11 | a + b
+           |   ^ Clicking here
+           |
+        info: Found 1 definition
+         --> main.by:5:9
+          |
+        5 |     def __add__(self, other: Money) -> Money:
+          |         -------
+          |
+        ");
+    }
+
     /// We jump to the `__invert__` definition here even though its signature is incorrect.
     #[test]
     fn goto_definition_unary_operator_with_bad_dunder_definition() {

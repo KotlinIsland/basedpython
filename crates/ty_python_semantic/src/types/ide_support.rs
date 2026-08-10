@@ -1111,7 +1111,24 @@ pub fn definitions_for_bin_op<'db>(
     let right_ty = binary_op.right.inferred_type(model)?;
 
     let Ok(bindings) = Type::try_call_bin_op(model.db(), left_ty, binary_op.op, right_ty) else {
-        return None;
+        // basedpython: an applicable extension may supply the dunder
+        let operator = crate::types::extensions::binary_extension_operator(
+            model.db(),
+            model.file(),
+            left_ty,
+            binary_op.op,
+            right_ty,
+        )?;
+        let argument = if operator.reflected {
+            left_ty
+        } else {
+            right_ty
+        };
+        return Some(extension_operator_definitions(
+            model,
+            operator,
+            &CallArguments::positional([argument]),
+        ));
     };
 
     let callable_type = promote_for_self(model.db(), bindings.callable_type());
@@ -1168,7 +1185,20 @@ pub fn definitions_for_unary_op<'db>(
                 ) => *bindings,
             }
         }
-        Err(CallDunderError::MethodNotAvailable) => return None,
+        Err(CallDunderError::MethodNotAvailable) => {
+            // basedpython: an applicable extension may supply the dunder
+            let operator = crate::types::extensions::unary_extension_operator(
+                model.db(),
+                model.file(),
+                unary_op.op,
+                operand_ty,
+            )?;
+            return Some(extension_operator_definitions(
+                model,
+                operator,
+                &CallArguments::none(),
+            ));
+        }
         Err(
             CallDunderError::PossiblyUnbound { bindings, .. }
             | CallDunderError::CallError(_, bindings, _),
@@ -1188,6 +1218,35 @@ pub fn definitions_for_unary_op<'db>(
         .collect();
 
     Some((definitions, callable_type))
+}
+
+/// basedpython: the definitions and callable type of an operator whose dunder
+/// an `extension` supplies. An operator never goes through attribute lookup, so
+/// the ordinary dunder call above finds nothing for one — without this, goto
+/// definition and hover are silent on an operator the checker accepts.
+fn extension_operator_definitions<'db>(
+    model: &SemanticModel<'db>,
+    operator: crate::types::extensions::ExtensionOperator<'db>,
+    arguments: &CallArguments<'_, 'db>,
+) -> (Vec<ResolvedDefinition<'db>>, Type<'db>) {
+    let db = model.db();
+    // a call that does not check still names the member the operator resolved
+    // to, which is what the IDE is being asked for
+    let bindings = match operator.resolution.ty.try_call(db, arguments) {
+        Ok(bindings) => bindings,
+        Err(error) => *error.into_bindings(),
+    };
+    let callable_type = promote_for_self(db, bindings.callable_type());
+    let definitions = bindings
+        .iter_flat()
+        .flatten()
+        .filter_map(|binding| {
+            Some(ResolvedDefinition::Definition(
+                binding.signature.definition?,
+            ))
+        })
+        .collect();
+    (definitions, callable_type)
 }
 
 /// Promotes types in `self` positions.
