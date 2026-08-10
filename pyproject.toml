@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "basedpython"
-version = "0.0.1a8"
+version = "0.0.1a9"
 description = "a transpiler for both Python and basedpython"
 authors = [{ name = "Astral Software Inc.", email = "hey@astral.sh" }]
 readme = "README.md"

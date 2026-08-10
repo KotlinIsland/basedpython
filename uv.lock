@@ -53,7 +53,7 @@ wheels = [
 
 [[package]]
 name = "basedpython"
-version = "0.0.1a8"
+version = "0.0.1a9"
 source = { editable = "." }
 
 [package.dev-dependencies]
