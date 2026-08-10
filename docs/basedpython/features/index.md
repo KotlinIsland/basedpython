@@ -37,6 +37,8 @@ features that apply to a project rather than to a file
 <div class="by-index" markdown>
 
 - [api lockfile (`api.lock`)](api-lock.md)
+- [editor support](editor.md) — postfix templates, completions, inlay hints
+    and the outline
 
 </div>
 

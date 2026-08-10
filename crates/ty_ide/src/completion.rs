@@ -1556,7 +1556,8 @@ impl<'m> ContextCursor<'m> {
         // a type has only just been opened, so a type is the only thing that
         // can follow — not a statement, and not a `lambda` either
         if self.typed.is_none() && self.opens_a_type_expression() {
-            let mut keywords = FxHashSet::from_iter(TYPE_EXPRESSION_KEYWORDS.iter().copied());
+            let mut keywords: FxHashSet<&'static str> =
+                TYPE_EXPRESSION_KEYWORDS.iter().copied().collect();
             if source_type.is_basedpython() {
                 keywords.extend(TYPE_KEYWORDS.iter().copied());
                 keywords.insert("not");
@@ -3058,6 +3059,7 @@ fn line_indentation(source: &str, offset: TextSize) -> &str {
 /// A [`Postfix`] template is not: selecting `.print` rewrites the whole
 /// `x.print` into `print(x)`, which is why each spells out the range it
 /// replaces and the text that range will read as.
+#[expect(clippy::too_many_arguments)] // every one of them is a distinct input
 fn add_postfix_completions<'db>(
     expr: &ast::ExprAttribute,
     cursor: &ContextCursor<'_>,
