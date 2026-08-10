@@ -1,0 +1,34 @@
+def f(user, index):
+    # both orderings of the guard
+    _ = None if user is None else user.name
+    _ = user.name if user is not None else None
+
+    # the chain runs out through every trailer that follows the first `.`
+    _ = None if user is None else user.address.city
+    _ = None if user is None else user.profile.display_name()
+    _ = None if user is None else user.orders[index].total()
+
+    # a compound receiver is fine as long as evaluating it does nothing
+    _ = None if user.parent is None else user.parent.name
+
+    # already an operator
+    _ = user?.name
+
+
+def not_a_chain(user, other, index):
+    # the guard and the receiver are different expressions
+    _ = None if other is None else user.name
+
+    # the chain has to start at an attribute — `?` has nowhere else to go
+    _ = None if user is None else user[index]
+    _ = None if user is None else user()
+
+    # the other branch has to be `None`
+    _ = other if user is None else user.name
+
+    # the receiver would have to be evaluated twice to write it this way, so it
+    # cannot be a call
+    _ = None if user() is None else user().name
+
+    # a receiver written apart from its access leaves nowhere to put the `?`
+    _ = None if user is None else (user).name

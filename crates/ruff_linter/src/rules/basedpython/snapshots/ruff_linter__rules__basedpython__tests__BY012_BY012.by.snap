@@ -1,0 +1,29 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY012 [*] `typing` members are implicitly available
+ --> BY012.by:1:1
+  |
+1 | from typing import Sequence
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2 | from typing import Mapping, Iterator
+  |
+help: Remove the import
+  |
+  - from typing import Sequence
+1 | from typing import Mapping, Iterator
+  |
+
+BY012 [*] `typing` members are implicitly available
+ --> BY012.by:2:1
+  |
+1 | from typing import Sequence
+2 | from typing import Mapping, Iterator
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+help: Remove the import
+  |
+1 | from typing import Sequence
+  - from typing import Mapping, Iterator
+2 |
+  |

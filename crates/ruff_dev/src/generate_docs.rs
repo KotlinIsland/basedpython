@@ -32,25 +32,32 @@ pub(crate) fn main(args: &Args) -> Result<()> {
 
             let _ = writeln!(&mut output, "# {} ({})", rule.name(), rule.noqa_code());
 
+            let (linter, _) = Linter::parse_code(&rule.noqa_code().to_string()).unwrap();
+            // a basedpython-specific rule ships in basedpython's releases and lives
+            // in its repository, so every link about it belongs there
+            let repository = if linter == Linter::Basedpython {
+                "https://github.com/KotlinIsland/basedpython"
+            } else {
+                "https://github.com/astral-sh/ruff"
+            };
+
             let status_text = match rule.group() {
                 RuleGroup::Stable { since } => {
-                    format!(
-                        r#"Added in <a href="https://github.com/astral-sh/ruff/releases/tag/{since}">{since}</a>"#
-                    )
+                    format!(r#"Added in <a href="{repository}/releases/tag/{since}">{since}</a>"#)
                 }
                 RuleGroup::Preview { since } => {
                     format!(
-                        r#"Preview (since <a href="https://github.com/astral-sh/ruff/releases/tag/{since}">{since}</a>)"#
+                        r#"Preview (since <a href="{repository}/releases/tag/{since}">{since}</a>)"#
                     )
                 }
                 RuleGroup::Deprecated { since } => {
                     format!(
-                        r#"Deprecated (since <a href="https://github.com/astral-sh/ruff/releases/tag/{since}">{since}</a>)"#
+                        r#"Deprecated (since <a href="{repository}/releases/tag/{since}">{since}</a>)"#
                     )
                 }
                 RuleGroup::Removed { since } => {
                     format!(
-                        r#"Removed (since <a href="https://github.com/astral-sh/ruff/releases/tag/{since}">{since}</a>)"#
+                        r#"Removed (since <a href="{repository}/releases/tag/{since}">{since}</a>)"#
                     )
                 }
             };
@@ -59,8 +66,8 @@ pub(crate) fn main(args: &Args) -> Result<()> {
                 &mut output,
                 r#"<small>
 {status_text} ·
-<a href="https://github.com/astral-sh/ruff/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20(%27{encoded_name}%27%20OR%20{rule_code})" target="_blank">Related issues</a> ·
-<a href="https://github.com/astral-sh/ruff/blob/main/{file}#L{line}" target="_blank">View source</a>
+<a href="{repository}/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20(%27{encoded_name}%27%20OR%20{rule_code})" target="_blank">Related issues</a> ·
+<a href="{repository}/blob/main/{file}#L{line}" target="_blank">View source</a>
 </small>
 
 "#,
@@ -73,7 +80,6 @@ pub(crate) fn main(args: &Args) -> Result<()> {
                         .collect::<String>(),
                 line = rule.line(),
             );
-            let (linter, _) = Linter::parse_code(&rule.noqa_code().to_string()).unwrap();
             if linter.url().is_some() {
                 let common_prefix: String = match linter.common_prefix() {
                     "" => linter

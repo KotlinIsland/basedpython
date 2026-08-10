@@ -1,0 +1,67 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY011 [*] `import name as name` can be written as `export`
+ --> BY011.by:1:1
+  |
+1 | from .models import Widget as Widget
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2 | from . import helpers as helpers
+3 | from collections.abc import Sequence as Sequence, Mapping as Mapping
+  |
+help: Replace with `export`
+  |
+  - from .models import Widget as Widget
+1 + from .models export Widget
+2 | from . import helpers as helpers
+  |
+
+BY011 [*] `import name as name` can be written as `export`
+ --> BY011.by:2:1
+  |
+1 | from .models import Widget as Widget
+2 | from . import helpers as helpers
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3 | from collections.abc import Sequence as Sequence, Mapping as Mapping
+4 | from ..pkg.deep import Thing as Thing
+  |
+help: Replace with `export`
+  |
+1 | from .models import Widget as Widget
+  - from . import helpers as helpers
+2 + from . export helpers
+3 | from collections.abc import Sequence as Sequence, Mapping as Mapping
+  |
+
+BY011 [*] `import name as name` can be written as `export`
+ --> BY011.by:3:1
+  |
+1 | from .models import Widget as Widget
+2 | from . import helpers as helpers
+3 | from collections.abc import Sequence as Sequence, Mapping as Mapping
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4 | from ..pkg.deep import Thing as Thing
+  |
+help: Replace with `export`
+  |
+2 | from . import helpers as helpers
+  - from collections.abc import Sequence as Sequence, Mapping as Mapping
+3 + from collections.abc export Sequence, Mapping
+4 | from ..pkg.deep import Thing as Thing
+  |
+
+BY011 [*] `import name as name` can be written as `export`
+ --> BY011.by:4:1
+  |
+2 | from . import helpers as helpers
+3 | from collections.abc import Sequence as Sequence, Mapping as Mapping
+4 | from ..pkg.deep import Thing as Thing
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+help: Replace with `export`
+  |
+3 | from collections.abc import Sequence as Sequence, Mapping as Mapping
+  - from ..pkg.deep import Thing as Thing
+4 + from ..pkg.deep export Thing
+5 |
+  |

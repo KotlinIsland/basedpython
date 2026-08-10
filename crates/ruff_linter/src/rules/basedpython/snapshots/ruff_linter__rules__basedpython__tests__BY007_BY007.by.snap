@@ -1,0 +1,62 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY007 [*] `Any` can be written as `dynamic`
+ --> BY007.by:4:24
+  |
+4 | def annotated(payload: Any) -> Any: ...
+  |                        ^^^
+  |
+help: Replace with `dynamic`
+  |
+3 |
+  - def annotated(payload: Any) -> Any: ...
+4 + def annotated(payload: dynamic) -> Any: ...
+5 |
+  |
+
+BY007 [*] `Any` can be written as `dynamic`
+ --> BY007.by:4:32
+  |
+4 | def annotated(payload: Any) -> Any: ...
+  |                                ^^^
+  |
+help: Replace with `dynamic`
+  |
+3 |
+  - def annotated(payload: Any) -> Any: ...
+4 + def annotated(payload: Any) -> dynamic: ...
+5 |
+  |
+
+BY007 [*] `Any` can be written as `dynamic`
+ --> BY007.by:7:14
+  |
+7 | values: list[Any] = []
+  |              ^^^
+8 | mapping: dict[str, Any] = {}
+9 | alias = Any
+  |
+help: Replace with `dynamic`
+  |
+6 |
+  - values: list[Any] = []
+7 + values: list[dynamic] = []
+8 | mapping: dict[str, Any] = {}
+  |
+
+BY007 [*] `Any` can be written as `dynamic`
+ --> BY007.by:8:20
+  |
+7 | values: list[Any] = []
+8 | mapping: dict[str, Any] = {}
+  |                    ^^^
+9 | alias = Any
+  |
+help: Replace with `dynamic`
+  |
+7 | values: list[Any] = []
+  - mapping: dict[str, Any] = {}
+8 + mapping: dict[str, dynamic] = {}
+9 | alias = Any
+  |

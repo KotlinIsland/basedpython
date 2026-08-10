@@ -1,0 +1,90 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY017 [*] Declaration body of `...` is unnecessary
+ --> BY017.by:1:12
+  |
+1 | class Empty: ...
+  |            ^^^^^
+  |
+help: Remove the body
+  |
+  - class Empty: ...
+1 + class Empty
+2 |
+  |
+
+BY017 [*] Declaration body of `...` is unnecessary
+ --> BY017.by:4:18
+  |
+4 | class Stub(Empty): ...
+  |                  ^^^^^
+  |
+help: Remove the body
+  |
+3 |
+  - class Stub(Empty): ...
+4 + class Stub(Empty)
+5 |
+  |
+
+BY017 [*] Declaration body of `...` is unnecessary
+ --> BY017.by:7:24
+  |
+7 | def stub(x: int) -> int: ...
+  |                        ^^^^^
+  |
+help: Remove the body
+  |
+6 |
+  - def stub(x: int) -> int: ...
+7 + def stub(x: int) -> int
+8 |
+  |
+
+BY017 [*] Declaration body of `...` is unnecessary
+  --> BY017.by:10:31
+   |
+10 | async def async_stub() -> None: ...
+   |                               ^^^^^
+   |
+help: Remove the body
+   |
+9  |
+   - async def async_stub() -> None: ...
+10 + async def async_stub() -> None
+11 |
+   |
+
+BY017 [*] Declaration body of `...` is unnecessary
+  --> BY017.by:14:28
+   |
+13 | class Holder:
+14 |     def method(self) -> int: ...
+   |                            ^^^^^
+15 |
+16 |     class Nested: ...
+   |
+help: Remove the body
+   |
+13 | class Holder:
+   -     def method(self) -> int: ...
+14 +     def method(self) -> int
+15 |
+   |
+
+BY017 [*] Declaration body of `...` is unnecessary
+  --> BY017.by:16:17
+   |
+14 |     def method(self) -> int: ...
+15 |
+16 |     class Nested: ...
+   |                 ^^^^^
+   |
+help: Remove the body
+   |
+15 |
+   -     class Nested: ...
+16 +     class Nested
+17 |
+   |

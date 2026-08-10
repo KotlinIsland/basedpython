@@ -1,0 +1,19 @@
+from typing import cast
+
+
+def f(value: object) -> int:
+    n = cast(int, value)
+    print(cast(str, value))
+    _ = cast(int, value) + 1
+    return n
+
+
+def qualified(value: object) -> object:
+    import typing
+
+    return typing.cast(object, value)
+
+
+def not_rewritable(value: object) -> object:
+    # not the two-argument form
+    return cast(int, value, extra=1)

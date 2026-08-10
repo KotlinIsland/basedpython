@@ -1,0 +1,25 @@
+class A:
+    def greet(self) -> str:
+        return "a"
+
+
+class B(A):
+    def greet(self) -> str:
+        return super().greet()
+
+    def chained(self) -> int:
+        return super().greet().__len__()
+
+    def attribute(self) -> object:
+        return super().__class__
+
+
+class NotRewritable(A):
+    def bound(self) -> object:
+        # a bare `super()` has no keyword spelling — `super` alone names the class
+        s = super()
+        return s.greet()
+
+    def explicit(self) -> str:
+        # the two-argument form says which class to start after
+        return super(B, self).greet()

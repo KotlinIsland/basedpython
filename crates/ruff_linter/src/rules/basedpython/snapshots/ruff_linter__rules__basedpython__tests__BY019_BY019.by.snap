@@ -1,0 +1,36 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY019 [*] `Sentinel` assignment can be written as `sentinel`
+ --> BY019.by:3:1
+  |
+1 | from typing_extensions import Sentinel
+2 |
+3 | MISSING = Sentinel("MISSING")
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4 | UNSET = Sentinel("UNSET")
+  |
+help: Replace with `sentinel`
+  |
+2 |
+  - MISSING = Sentinel("MISSING")
+3 + sentinel MISSING
+4 | UNSET = Sentinel("UNSET")
+  |
+
+BY019 [*] `Sentinel` assignment can be written as `sentinel`
+ --> BY019.by:4:1
+  |
+3 | MISSING = Sentinel("MISSING")
+4 | UNSET = Sentinel("UNSET")
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+5 |
+6 | # the binding and the reported name already disagree — leave it to a reader
+  |
+help: Replace with `sentinel`
+  |
+3 | MISSING = Sentinel("MISSING")
+  - UNSET = Sentinel("UNSET")
+4 + sentinel UNSET
+5 |
+  |

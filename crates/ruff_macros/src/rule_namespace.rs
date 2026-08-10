@@ -21,9 +21,13 @@ pub(crate) fn derive_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenS
     let mut parsed = Vec::new();
 
     let mut common_prefix_match_arms = quote!();
-    let mut name_match_arms =
-        quote!(Self::Ruff => "Ruff-specific rules", Self::Numpy => "NumPy-specific rules", );
-    let mut url_match_arms = quote!(Self::Ruff => None, Self::Numpy => None, );
+    let mut name_match_arms = quote!(
+        Self::Ruff => "Ruff-specific rules",
+        Self::Numpy => "NumPy-specific rules",
+        Self::Basedpython => "basedpython-specific rules",
+    );
+    let mut url_match_arms =
+        quote!(Self::Ruff => None, Self::Numpy => None, Self::Basedpython => None, );
 
     let mut all_prefixes = HashSet::new();
 
@@ -69,7 +73,13 @@ pub(crate) fn derive_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenS
 
         let variant_ident = variant.ident;
 
-        if variant_ident != "Ruff" && variant_ident != "Numpy" {
+        // these three name a body of rules of our own rather than an upstream
+        // linter, so they have no name to parse out of the doc comment and no
+        // project to link to
+        if !matches!(
+            variant_ident.to_string().as_str(),
+            "Ruff" | "Numpy" | "Basedpython"
+        ) {
             let (name, url) = parse_doc_attr(doc_attr)?;
             name_match_arms.extend(quote! {Self::#variant_ident => #name,});
             url_match_arms.extend(quote! {Self::#variant_ident => Some(#url),});

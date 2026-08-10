@@ -1,0 +1,18 @@
+from typing import Sequence
+from typing import Mapping, Iterator
+
+
+def f(a: Mapping[str, int], b: Sequence[int]) -> Iterator[int]: ...
+
+
+# a name with dedicated basedpython syntax is not implicitly available
+from typing import Final, Protocol
+
+# an alias binds a name nothing else would
+from typing import Sequence as Seq
+
+# an export is a deliberate part of this module's api
+from typing export Optional
+
+# a submodule import is a different statement
+import typing

@@ -135,9 +135,11 @@ fn parse_attr<'a, const LEN: usize>(
 fn parse_version(meta: &ParseNestedMeta) -> syn::Result<LitStr> {
     /// Match either a semantic version with an optional `v` prefix for versions before 0.5.0
     /// (`v0.2.3`, `0.12.34`) or the special `NEXT_RUFF_VERSION` placeholder that is updated by
-    /// rooster in releases.
-    static VERSION: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^(v0.[0-4].\d+|\d+\.\d+\.\d+|NEXT_RUFF_VERSION)$").unwrap());
+    /// rooster in releases. A basedpython-specific rule is versioned by basedpython's own
+    /// releases instead, which carry an alpha suffix (`0.0.1-a10`).
+    static VERSION: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(v0.[0-4].\d+|\d+\.\d+\.\d+(-a\d+)?|NEXT_RUFF_VERSION)$").unwrap()
+    });
 
     let lit: LitStr = meta.value()?.parse()?;
     let value = lit.value();

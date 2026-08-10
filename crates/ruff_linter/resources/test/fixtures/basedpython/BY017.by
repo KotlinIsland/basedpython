@@ -1,0 +1,30 @@
+class Empty: ...
+
+
+class Stub(Empty): ...
+
+
+def stub(x: int) -> int: ...
+
+
+async def async_stub() -> None: ...
+
+
+class Holder:
+    def method(self) -> int: ...
+
+    class Nested: ...
+
+
+# a body that says something stays
+class Documented:
+    """a docstring is a body"""
+
+
+def commented() -> None:
+    # a comment needs a body to live in
+    ...
+
+
+def real() -> int:
+    return 1

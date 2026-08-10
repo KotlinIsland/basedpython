@@ -1,0 +1,106 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY002 [*] Conditional expression can be written as `?.`
+ --> BY002.by:3:9
+  |
+1 | def f(user, index):
+2 |     # both orderings of the guard
+3 |     _ = None if user is None else user.name
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4 |     _ = user.name if user is not None else None
+  |
+help: Replace with `?.`
+  |
+2 |     # both orderings of the guard
+  -     _ = None if user is None else user.name
+3 +     _ = user?.name
+4 |     _ = user.name if user is not None else None
+  |
+
+BY002 [*] Conditional expression can be written as `?.`
+ --> BY002.by:4:9
+  |
+2 |     # both orderings of the guard
+3 |     _ = None if user is None else user.name
+4 |     _ = user.name if user is not None else None
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+5 |
+6 |     # the chain runs out through every trailer that follows the first `.`
+  |
+help: Replace with `?.`
+  |
+3 |     _ = None if user is None else user.name
+  -     _ = user.name if user is not None else None
+4 +     _ = user?.name
+5 |
+  |
+
+BY002 [*] Conditional expression can be written as `?.`
+ --> BY002.by:7:9
+  |
+6 |     # the chain runs out through every trailer that follows the first `.`
+7 |     _ = None if user is None else user.address.city
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+8 |     _ = None if user is None else user.profile.display_name()
+9 |     _ = None if user is None else user.orders[index].total()
+  |
+help: Replace with `?.`
+  |
+6 |     # the chain runs out through every trailer that follows the first `.`
+  -     _ = None if user is None else user.address.city
+7 +     _ = user?.address.city
+8 |     _ = None if user is None else user.profile.display_name()
+  |
+
+BY002 [*] Conditional expression can be written as `?.`
+ --> BY002.by:8:9
+  |
+6 |     # the chain runs out through every trailer that follows the first `.`
+7 |     _ = None if user is None else user.address.city
+8 |     _ = None if user is None else user.profile.display_name()
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+9 |     _ = None if user is None else user.orders[index].total()
+  |
+help: Replace with `?.`
+  |
+7 |     _ = None if user is None else user.address.city
+  -     _ = None if user is None else user.profile.display_name()
+8 +     _ = user?.profile.display_name()
+9 |     _ = None if user is None else user.orders[index].total()
+  |
+
+BY002 [*] Conditional expression can be written as `?.`
+  --> BY002.by:9:9
+   |
+ 7 |     _ = None if user is None else user.address.city
+ 8 |     _ = None if user is None else user.profile.display_name()
+ 9 |     _ = None if user is None else user.orders[index].total()
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+10 |
+11 |     # a compound receiver is fine as long as evaluating it does nothing
+   |
+help: Replace with `?.`
+   |
+8  |     _ = None if user is None else user.profile.display_name()
+   -     _ = None if user is None else user.orders[index].total()
+9  +     _ = user?.orders[index].total()
+10 |
+   |
+
+BY002 [*] Conditional expression can be written as `?.`
+  --> BY002.by:12:9
+   |
+11 |     # a compound receiver is fine as long as evaluating it does nothing
+12 |     _ = None if user.parent is None else user.parent.name
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+13 |
+14 |     # already an operator
+   |
+help: Replace with `?.`
+   |
+11 |     # a compound receiver is fine as long as evaluating it does nothing
+   -     _ = None if user.parent is None else user.parent.name
+12 +     _ = user.parent?.name
+13 |
+   |

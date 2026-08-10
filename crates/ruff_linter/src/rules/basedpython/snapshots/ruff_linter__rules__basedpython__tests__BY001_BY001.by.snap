@@ -1,0 +1,140 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY001 [*] Conditional expression can be written as `??`
+ --> BY001.by:3:9
+  |
+1 | def f(a, b, mapping):
+2 |     # both orderings of the guard
+3 |     _ = a if a is not None else b
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+4 |     _ = b if a is None else a
+  |
+help: Replace with `??`
+  |
+2 |     # both orderings of the guard
+  -     _ = a if a is not None else b
+3 +     _ = a ?? b
+4 |     _ = b if a is None else a
+  |
+
+BY001 [*] Conditional expression can be written as `??`
+ --> BY001.by:4:9
+  |
+2 |     # both orderings of the guard
+3 |     _ = a if a is not None else b
+4 |     _ = b if a is None else a
+  |         ^^^^^^^^^^^^^^^^^^^^^
+5 |
+6 |     # a compound left operand is fine as long as evaluating it does nothing
+  |
+help: Replace with `??`
+  |
+3 |     _ = a if a is not None else b
+  -     _ = b if a is None else a
+4 +     _ = a ?? b
+5 |
+  |
+
+BY001 [*] Conditional expression can be written as `??`
+ --> BY001.by:7:9
+  |
+6 |     # a compound left operand is fine as long as evaluating it does nothing
+7 |     _ = a.b if a.b is not None else b
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+8 |     _ = b if a.b is None else a.b
+  |
+help: Replace with `??`
+  |
+6 |     # a compound left operand is fine as long as evaluating it does nothing
+  -     _ = a.b if a.b is not None else b
+7 +     _ = a.b ?? b
+8 |     _ = b if a.b is None else a.b
+  |
+
+BY001 [*] Conditional expression can be written as `??`
+  --> BY001.by:8:9
+   |
+ 6 |     # a compound left operand is fine as long as evaluating it does nothing
+ 7 |     _ = a.b if a.b is not None else b
+ 8 |     _ = b if a.b is None else a.b
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+ 9 |
+10 |     # the default may mention the left operand
+   |
+help: Replace with `??`
+  |
+7 |     _ = a.b if a.b is not None else b
+  -     _ = b if a.b is None else a.b
+8 +     _ = a.b ?? b
+9 |
+  |
+
+BY001 [*] Conditional expression can be written as `??`
+  --> BY001.by:11:9
+   |
+10 |     # the default may mention the left operand
+11 |     _ = a if a is not None else a.b
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+12 |
+13 |     # the default keeps whatever it was
+   |
+help: Replace with `??`
+   |
+10 |     # the default may mention the left operand
+   -     _ = a if a is not None else a.b
+11 +     _ = a ?? a.b
+12 |
+   |
+
+BY001 [*] Conditional expression can be written as `??`
+  --> BY001.by:14:9
+   |
+13 |     # the default keeps whatever it was
+14 |     _ = a if a is not None else b or 1
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+15 |     _ = a if a is not None else (b if b is not None else 1)
+   |
+help: Replace with `??`
+   |
+13 |     # the default keeps whatever it was
+   -     _ = a if a is not None else b or 1
+14 +     _ = a ?? b or 1
+15 |     _ = a if a is not None else (b if b is not None else 1)
+   |
+
+BY001 [*] Conditional expression can be written as `??`
+  --> BY001.by:15:9
+   |
+13 |     # the default keeps whatever it was
+14 |     _ = a if a is not None else b or 1
+15 |     _ = a if a is not None else (b if b is not None else 1)
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16 |
+17 |     # already an operator
+   |
+help: Replace with `??`
+   |
+14 |     _ = a if a is not None else b or 1
+   -     _ = a if a is not None else (b if b is not None else 1)
+15 +     _ = a ?? (b if b is not None else 1)
+16 |
+   |
+
+BY001 [*] Conditional expression can be written as `??`
+  --> BY001.by:15:34
+   |
+13 |     # the default keeps whatever it was
+14 |     _ = a if a is not None else b or 1
+15 |     _ = a if a is not None else (b if b is not None else 1)
+   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+16 |
+17 |     # already an operator
+   |
+help: Replace with `??`
+   |
+14 |     _ = a if a is not None else b or 1
+   -     _ = a if a is not None else (b if b is not None else 1)
+15 +     _ = a if a is not None else (b ?? 1)
+16 |
+   |
