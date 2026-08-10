@@ -488,6 +488,13 @@ impl<'db> SemanticModel<'db> {
             crate::types::receivers::ImplicitReceiverName::Member(_) => {
                 ImplicitReceiverReference::Member
             }
+            crate::types::receivers::ImplicitReceiverName::ExtensionMember {
+                resolution, ..
+            } => ImplicitReceiverReference::ExtensionMember(self.extension_rewrite(
+                &resolution,
+                name.id.as_str(),
+                false,
+            )?),
         })
     }
 
@@ -1220,12 +1227,16 @@ pub struct DjangoLookupArgument {
 
 /// basedpython: what a bare name inside a trailing lambda block resolves to
 /// through the block's callback receiver
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ImplicitReceiverReference {
     /// `self` — the receiver itself
     Receiver,
     /// a member read off the receiver
     Member,
+    /// a member an applicable `extension` supplies for the receiver, which
+    /// lowers to its backing function bound to the receiver rather than to an
+    /// attribute read
+    ExtensionMember(crate::types::extensions::ExtensionAttributeInfo),
 }
 
 /// A classification of symbol names.

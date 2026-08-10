@@ -154,6 +154,27 @@ preserves what the syntax means:
 each of those keeps reporting the operator as unsupported, so the checker and
 the runtime never disagree. write the call out, or the two comparisons
 
+## unqualified inside a block
+
+a [trailing lambda](trailing-lambdas.md) block whose callback declares an
+[implicit receiver](implicit-receivers.md) puts that receiver's members in scope
+unqualified. an extension of the receiver's type supplies members too, so they
+resolve there the same way:
+
+```by
+extension Tag:
+    def p(self, block: Tag.() -> None): ...
+
+doc.div:
+    p:                  # the extension's member, reached with no `self.`
+        text("hello")
+```
+
+reached last, after the receiver's own members and after anything the lexical
+chain binds — the same precedence every other extension lookup follows. this is
+what lets a third party add builders to a type from their own package and have
+them resolve inside a block
+
 ## implicit imports
 
 importing a module makes its extensions applicable — there is no per-extension
