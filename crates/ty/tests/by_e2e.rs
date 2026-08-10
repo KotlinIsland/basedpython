@@ -947,6 +947,45 @@ main()
 }
 
 #[test]
+fn build_skips_a_source_it_cannot_read() {
+    // a source ty cannot decode reads as an empty module, so emitting for it
+    // would write an empty `.py` over the real one. it is reported and skipped
+    // instead, and every other module still builds
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("good.by"), "x = 1\n").unwrap();
+    // PEP 263: a declared latin-1 encoding, and a byte no utf-8 decoder accepts
+    fs::write(
+        dir.path().join("bad.by"),
+        b"# -*- coding: latin-1 -*-\ns = '\xdf'\n".as_slice(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["build", "--min-version", "3.12"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a module that did not build must not report success:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("valid UTF-8"),
+        "the skipped file must be reported:\n{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("out/good.py")).unwrap(),
+        "x = 1\n"
+    );
+    assert!(
+        !dir.path().join("out/bad.py").exists(),
+        "an unreadable source must not be emitted as an empty module"
+    );
+}
+
+#[test]
 fn parenthesized_tuple_subscript_unchanged() {
     // Subscript normalization is shelved: tuple keys pass through verbatim.
     assert_eq!(transpile("x = {}\nx[(a, b)]\n"), "x = {}\nx[(a, b)]\n");

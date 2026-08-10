@@ -325,7 +325,12 @@ async def roundtrip_project(
         mem_limit_bytes=build_mem_limit_bytes,
         timeout=build_timeout,
     )
-    if rc != 0:
+    # exit 1 means the reverse ran and reported per-file problems (a source that
+    # isn't valid utf-8, say) while converting everything else — the project is
+    # still worth building, and the files it skipped simply won't appear in the
+    # output. an invocation error (2), a panic (101) or a watchdog kill is a
+    # genuine failure
+    if rc not in (0, 1):
         msg = err.decode(errors="replace").strip()
         return ProjectOutcome(error=f"reverse: {msg}", outputs={})
 
