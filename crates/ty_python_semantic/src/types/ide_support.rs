@@ -2502,6 +2502,15 @@ pub fn iterable_element_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Type
     Some(ty.try_iterate(db).ok()?.homogeneous_element_type(db))
 }
 
+/// Whether `ty` can be awaited.
+///
+/// Written for basedpython's postfix `await`, which an IDE offers among an
+/// object's members: `x.await` is only worth suggesting on something an
+/// `await` would accept.
+pub fn is_awaitable<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    ty.try_await(db).is_ok()
+}
+
 /// What calling `ty` with no arguments gives, or `None` when it can't be called
 /// that way.
 ///
