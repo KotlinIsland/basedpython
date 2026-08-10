@@ -7,8 +7,7 @@ a python type checker and a python-like language that transpiles to pure python
     checks like ordinary code
 - **basedpython, a python-like language that builds into python wheels**
 - **compiles into high performance python extension modules**
-- **a language server, formatter and linter** — `by server` drives the editor,
-    and `buff` is the basedpython build of ruff
+- **a language server, formatter and linter** — high performance and feature rich tooling
 
 ```by
 enum class Shape:
