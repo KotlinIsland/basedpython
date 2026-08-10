@@ -21,7 +21,9 @@ use ruff_db::system::{SystemPath, SystemPathBuf};
 use ruff_python_ast::PythonVersion;
 use ruff_python_ast::script::ScriptTag;
 use serde::{Deserialize, Serialize};
+use ty_module_resolver::DistributionName;
 use ty_python_core::platform::PythonPlatform;
+use ty_python_semantic::dependencies::{DependencyGroup, DependencyManifest, GroupName};
 use ty_python_semantic::lint::Level;
 
 #[derive(Deserialize, Debug, Default, Clone)]
@@ -42,6 +44,13 @@ pub(crate) struct MarkdownTestConfig {
 
     /// Project configuration for installing external dependencies.
     pub(crate) project: Option<Project>,
+
+    /// What the project under test declares it depends on.
+    ///
+    /// This stands in for a `pyproject.toml`, which mdtest has no way to hand to
+    /// the type checker. Entries are bare distribution names: reading PEP 508
+    /// requirement strings is `ty_project`'s job and is tested there.
+    pub(crate) dependencies: Option<Dependencies>,
 
     /// Simulate the use passing `-v` on the command line,
     /// which can be used to show more information in test diagnostics.
@@ -76,6 +85,60 @@ impl MarkdownTestConfig {
     pub(crate) fn verbose(&self) -> bool {
         self.verbose.unwrap_or_default()
     }
+
+    pub(crate) fn dependency_manifest(&self) -> Option<DependencyManifest> {
+        let declared = self.dependencies.as_ref()?;
+
+        let names = |requirements: &[String]| {
+            requirements
+                .iter()
+                .map(|name| DistributionName::new(name))
+                .collect()
+        };
+
+        let mut groups = vec![DependencyGroup {
+            name: GroupName::Project,
+            requirements: names(declared.project.as_deref().unwrap_or(&[])),
+        }];
+
+        for (extra, requirements) in &declared.extras {
+            groups.push(DependencyGroup {
+                name: GroupName::Extra(Box::from(&**extra)),
+                requirements: names(requirements),
+            });
+        }
+
+        for (group, requirements) in &declared.groups {
+            groups.push(DependencyGroup {
+                name: GroupName::Group(Box::from(&**group)),
+                requirements: names(requirements),
+            });
+        }
+
+        Some(DependencyManifest::new(
+            declared.name.as_deref().map(DistributionName::new),
+            groups,
+        ))
+    }
+}
+
+/// What the project under test declares it depends on.
+#[derive(Deserialize, Debug, Default, Clone)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub(crate) struct Dependencies {
+    /// `[project].name`, which is what decides the modules the project ships.
+    pub(crate) name: Option<String>,
+
+    /// `[project].dependencies`.
+    pub(crate) project: Option<Vec<String>>,
+
+    /// `[project.optional-dependencies]`.
+    #[serde(default)]
+    pub(crate) extras: BTreeMap<String, Vec<String>>,
+
+    /// `[dependency-groups]`.
+    #[serde(default)]
+    pub(crate) groups: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -176,6 +239,10 @@ pub(crate) struct Analysis {
     pub(crate) implicit_object_repr_exempt_types: Option<Vec<String>>,
 
     pub(crate) implicit_object_repr_report_types: Option<Vec<String>>,
+
+    pub(crate) dependency_groups: Option<Vec<String>>,
+
+    pub(crate) shipped_modules: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

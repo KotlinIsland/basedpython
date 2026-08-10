@@ -63,6 +63,7 @@ pub use types::{DisplaySettings, TypeQualifiers};
 
 pub mod api_lockfile;
 mod db;
+pub mod dependencies;
 pub mod django_settings;
 pub mod django_template;
 mod dunder_all;
@@ -128,6 +129,19 @@ pub struct AnalysisSettings {
     pub allowed_unresolved_imports: ModuleGlobSet,
 
     pub replace_imports_with_any: ModuleGlobSet,
+
+    /// The requirement groups this file may import from, by name, or `None` to
+    /// derive it from whether the file is part of what the project ships.
+    ///
+    /// `project` names `[project].dependencies` and `*` names every group. See
+    /// [`crate::dependencies::available_groups`].
+    pub dependency_groups: Option<Box<[Box<str>]>>,
+
+    /// The top-level modules the project ships, or `None` to derive them from
+    /// the name the project gives itself.
+    ///
+    /// Only a project that ships several unrelated modules needs to say.
+    pub shipped_modules: Option<Box<[Box<str>]>>,
 
     /// Whether the basedpython "fluid specializations" feature is disabled.
     ///
@@ -258,6 +272,8 @@ impl Default for AnalysisSettings {
             respect_type_ignore_comments: true,
             allowed_unresolved_imports: ModuleGlobSet::empty(),
             replace_imports_with_any: ModuleGlobSet::empty(),
+            dependency_groups: None,
+            shipped_modules: None,
             disable_fluid_specializations: false,
             sound_types: false,
             infer_unannotated_signatures: true,

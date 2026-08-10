@@ -17,6 +17,7 @@ use tempfile::TempDir;
 use ty_module_resolver::{ModuleGlobSetBuilder, SearchPaths};
 use ty_python_core::Db as _;
 use ty_python_core::program::Program;
+use ty_python_semantic::dependencies::DependencyManifest;
 use ty_python_semantic::lint::{LintRegistry, RuleSelection};
 use ty_python_semantic::{
     AnalysisSettings, Db as SemanticDb, check_file_unwrap, default_lint_registry, django_settings,
@@ -77,6 +78,13 @@ impl Db {
         let settings = self.settings();
         if settings.analysis(self) != &analysis {
             settings.set_analysis(self).to(analysis);
+        }
+    }
+
+    pub(crate) fn update_dependency_manifest(&mut self, manifest: Option<DependencyManifest>) {
+        let settings = self.settings();
+        if settings.dependency_manifest(self) != &manifest {
+            settings.set_dependency_manifest(self).to(manifest);
         }
     }
 
@@ -181,6 +189,10 @@ impl SemanticDb for Db {
         file_settings(self, file).analysis(self)
     }
 
+    fn dependency_manifest(&self, _file: File) -> Option<&DependencyManifest> {
+        self.settings().dependency_manifest(self).as_ref()
+    }
+
     fn dyn_clone(&self) -> Box<dyn SemanticDb> {
         Box::new(self.clone())
     }
@@ -251,6 +263,11 @@ struct Settings {
     #[default]
     #[returns(ref)]
     project_files: Vec<File>,
+    /// What the test says the project declares it depends on, standing in for a
+    /// `pyproject.toml` mdtest has no way to hand to the type checker.
+    #[default]
+    #[returns(ref)]
+    dependency_manifest: Option<DependencyManifest>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -290,6 +307,8 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
             overlapping_condition_assume_truthy_instances_default,
         implicit_object_repr_exempt_types: implicit_object_repr_exempt_types_default,
         implicit_object_repr_report_types: implicit_object_repr_report_types_default,
+        dependency_groups: dependency_groups_default,
+        shipped_modules: shipped_modules_default,
     } = AnalysisSettings::default();
 
     let allowed_unresolved_imports =
@@ -358,6 +377,21 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
             .as_deref()
             .map(|types| types.iter().map(|name| Box::from(&**name)).collect())
             .unwrap_or(implicit_object_repr_report_types_default),
+        dependency_groups: options
+            .dependency_groups
+            .as_deref()
+            .map(|groups| groups.iter().map(|name| Box::from(&**name)).collect())
+            .or(dependency_groups_default),
+        shipped_modules: options
+            .shipped_modules
+            .as_deref()
+            .map(|modules| {
+                modules
+                    .iter()
+                    .map(|name| Box::from(&**name))
+                    .collect::<Box<[Box<str>]>>()
+            })
+            .or(shipped_modules_default),
     }
 }
 

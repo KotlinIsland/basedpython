@@ -1916,6 +1916,44 @@ pub struct AnalysisOptions {
         "#
     )]
     pub replace_imports_with_any: Option<Vec<RangedValue<String>>>,
+
+    /// The requirement groups the matching files may import from.
+    ///
+    /// `project` names `[project].dependencies`, an extra or a PEP 735 dependency group
+    /// is named by its own name, and `*` names every group.
+    ///
+    /// When this is unset, a file may import from every group unless it is part of what
+    /// the project ships — the modules named by `shipped-modules` — in which case it may
+    /// import only `project` and the extras. Nothing the project ships can import a
+    /// dependency group, because nothing installs one alongside the project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"null"#,
+        value_type = "list[str]",
+        example = r#"
+            [[tool.ty.overrides]]
+            include = ["tests/**"]
+
+            [tool.ty.overrides.analysis]
+            dependency-groups = ["project", "dev", "test"]
+        "#
+    )]
+    pub dependency_groups: Option<Vec<RangedValue<String>>>,
+
+    /// The top-level modules the project ships.
+    ///
+    /// Defaults to the module named after `[project].name`: a project named `my-lib`
+    /// ships `my_lib`. Only a project that ships several unrelated modules, or one whose
+    /// module is not named after it, needs to say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"null"#,
+        value_type = "list[str]",
+        example = r#"
+            shipped-modules = ["foo", "foo_plugins"]
+        "#
+    )]
+    pub shipped_modules: Option<Vec<RangedValue<String>>>,
 }
 
 impl AnalysisOptions {
@@ -1938,6 +1976,8 @@ impl AnalysisOptions {
             overlapping_condition_assume_truthy_instances,
             implicit_object_repr_exempt_types,
             implicit_object_repr_report_types,
+            dependency_groups,
+            shipped_modules,
         } = self;
 
         let AnalysisSettings {
@@ -1955,6 +1995,8 @@ impl AnalysisOptions {
                 overlapping_condition_assume_truthy_instances_default,
             implicit_object_repr_exempt_types: implicit_object_repr_exempt_types_default,
             implicit_object_repr_report_types: implicit_object_repr_report_types_default,
+            dependency_groups: dependency_groups_default,
+            shipped_modules: shipped_modules_default,
         } = AnalysisSettings::default();
 
         let allowed_unresolved_imports =
@@ -2031,6 +2073,19 @@ impl AnalysisOptions {
                     )
                 })
                 .unwrap_or(implicit_object_repr_report_types_default),
+            dependency_groups: dependency_groups
+                .as_ref()
+                .map(|groups| groups.iter().map(|group| Box::from(&***group)).collect())
+                .or(dependency_groups_default),
+            shipped_modules: shipped_modules
+                .as_ref()
+                .map(|modules| {
+                    modules
+                        .iter()
+                        .map(|module| Box::from(&***module))
+                        .collect::<Box<[Box<str>]>>()
+                })
+                .or(shipped_modules_default),
         }
     }
 }

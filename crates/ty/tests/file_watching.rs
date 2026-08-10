@@ -185,11 +185,11 @@ impl TestCase {
         std::fs::write(
             self.project_path("pyproject.toml").as_std_path(),
             toml::to_string(&PyProject {
-                project: None,
                 tool: Some(Tool {
                     ty: Some(options),
-                    basedpython: None,
+                    ..Tool::default()
                 }),
+                ..PyProject::default()
             })
             .context("Failed to serialize options")?,
         )
@@ -443,11 +443,11 @@ where
         std::fs::write(
             project_path.join("pyproject.toml").as_std_path(),
             toml::to_string(&PyProject {
-                project: None,
                 tool: Some(Tool {
                     ty: Some(options),
-                    basedpython: None,
+                    ..Tool::default()
                 }),
+                ..PyProject::default()
             })
             .context("Failed to serialize options")?,
         )

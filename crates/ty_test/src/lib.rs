@@ -320,6 +320,7 @@ fn run_test(
 
     Program::init_or_update(db, settings);
     db.update_analysis_options(configuration.analysis.as_ref());
+    db.update_dependency_manifest(configuration.dependency_manifest());
     db.update_mdtest_rule_selection(configuration.rules.as_ref(), options.default_error_rule);
     db.set_verbosity(test.configuration().verbose());
 
