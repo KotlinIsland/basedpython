@@ -149,7 +149,20 @@ pub(crate) fn infer_narrowing_constraints<'db>(
 /// A call whose arguments are unpacked (`*args` / `**kwargs`) doesn't say which argument
 /// reaches the parameter, and an overloaded callable doesn't say which signature applies, so
 /// neither narrows anything.
-#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+///
+/// Resolving the callee's signature infers a type, and inferring that type can reach a place
+/// load this very call narrows, so the query can be asked while it is already being answered.
+/// It starts such a cycle at "this call narrows nothing", which is the answer that assumes
+/// the least: no narrowing leaves every place at its widest, so a provisional read can never
+/// justify a narrowing the settled answer wouldn't. Iteration then recovers the precision.
+/// Beyond the callee's type the targets are read off the call's syntax and the guards off the
+/// callee's signature, so this converges as soon as the callee's type does, and adds no
+/// oscillation of its own.
+#[salsa::tracked(
+    returns(ref),
+    cycle_initial=|_, _, _, _| Box::default(),
+    heap_size=ruff_memory_usage::heap_size,
+)]
 fn asserts_guard_targets<'db>(
     db: &'db dyn Db,
     callable: Expression<'db>,
