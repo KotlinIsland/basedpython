@@ -16,6 +16,7 @@ use ruff_db::files::File;
 use crate::Db;
 use crate::place::{Place, explicit_global_symbol};
 use crate::types::instance::Protocol;
+use crate::types::literal::LiteralValueTypeKind;
 use crate::types::reified_infer::{
     ArgVariance, parametric_soundness_spelling, protocol_structural_members,
 };
@@ -57,6 +58,82 @@ pub enum CastCheck {
     /// residue exists, so the checked cast degrades to an unchecked
     /// `typing.cast` rather than a crashing `isinstance`
     Unchecked,
+    /// basedpython: a `Literal` target, checked by *membership* — the strings
+    /// are the python spellings of the admissible values. a `Literal` is a set
+    /// of values rather than a class, so `isinstance` cannot test one at all
+    /// (`isinstance(v, Literal["a"])` raises), and promoting it to the values'
+    /// class would accept every other value of that class
+    Members(Vec<String>),
+}
+
+/// basedpython: the python spellings of the values a `Literal` target admits,
+/// when every arm of `ty` is a literal whose value has one.
+///
+/// An enum member is deliberately excluded: its spelling depends on the enum's
+/// name being bound in the emitting module, which the shallow `isinstance`
+/// against the enum class already covers.
+fn literal_members<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Vec<String>> {
+    fn collect<'db>(db: &'db dyn Db, ty: Type<'db>, out: &mut Vec<String>) -> bool {
+        match ty {
+            Type::TypeAlias(alias) => collect(db, alias.value_type(db), out),
+            Type::Union(union) => union
+                .elements(db)
+                .iter()
+                .all(|element| collect(db, *element, out)),
+            _ if ty.is_none(db) => {
+                out.push("None".to_owned());
+                true
+            }
+            Type::LiteralValue(literal) => match literal.kind() {
+                LiteralValueTypeKind::Bool(value) => {
+                    out.push(if value { "True" } else { "False" }.to_owned());
+                    true
+                }
+                LiteralValueTypeKind::Int(value) => {
+                    out.push(value.as_i64().to_string());
+                    true
+                }
+                LiteralValueTypeKind::String(value) => {
+                    out.push(python_string_literal(value.value(db)));
+                    true
+                }
+                // a bytes literal only has a faithful spelling when every byte
+                // is ascii; anything else would need an escape table this does
+                // not carry, and falls back to the ordinary plan
+                LiteralValueTypeKind::Bytes(value) => match str::from_utf8(value.value(db)) {
+                    Ok(text) if text.is_ascii() => {
+                        out.push(format!("b{}", python_string_literal(text)));
+                        true
+                    }
+                    _ => false,
+                },
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    let mut members = Vec::new();
+    (collect(db, ty, &mut members) && !members.is_empty()).then_some(members)
+}
+
+/// a python string literal spelling `value`, double-quoted, with the characters
+/// python needs escaped escaped
+fn python_string_literal(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// The runtime check a checked `cast` / `cast?` applies to validate its value
@@ -77,6 +154,9 @@ pub fn cast_check_plan<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Optio
         // a protocol with a method member, an unspellable data member, or a
         // synthesized structural protocol has no annotation to check against
         return Some(CastCheck::Unchecked);
+    }
+    if let Some(members) = literal_members(db, ty) {
+        return Some(CastCheck::Members(members));
     }
     runtime_check_plan(db, file, ty).map(CastCheck::Kind)
 }

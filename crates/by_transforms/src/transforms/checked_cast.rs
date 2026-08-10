@@ -204,6 +204,17 @@ impl<'a> CastLower<'a> {
             Some(CastCheck::Kind(SoundnessCheck::Isinstance(target))) => {
                 (helper, vec![Fragment::Lit(target)])
             }
+            // a `Literal` is a set of values, not a class: `isinstance` against
+            // one raises, and testing the values' class would accept every other
+            // value of it. the check is membership
+            Some(CastCheck::Members(members)) => (
+                helper.as_predicate(),
+                vec![Fragment::Lit(format!(
+                    "lambda {CAST_VALUE_PARAM}: {CAST_VALUE_PARAM} in ({}{})",
+                    members.join(", "),
+                    if members.len() == 1 { "," } else { "" },
+                ))],
+            ),
             _ => (helper, vec![Fragment::Src(type_arg.range())]),
         }
     }
@@ -366,6 +377,59 @@ mod tests {
     fn try_cast_to_union() {
         let out = check("def f(a: object):\n    b = a cast? int | str\n");
         assert!(out.contains("b = _try_cast(a, (int, str))"), "got:\n{out}");
+    }
+
+    /// a `Literal` is a set of values, not a class: `isinstance(v, Literal[…])`
+    /// raises, and testing the values' class would accept every other value of
+    /// it. the check is membership
+    #[test]
+    fn literal_target_checks_membership() {
+        let out = check(
+            "from typing import Literal\n\ndef f(a: object):\n    b = a cast Literal[\"x\", \"y\"]\n",
+        );
+        assert!(
+            out.contains(
+                "b = _checked_cast_pred(a, lambda _by_cast_value: _by_cast_value in (\"x\", \"y\"))"
+            ),
+            "got:\n{out}"
+        );
+        assert!(!out.contains("isinstance"), "got:\n{out}");
+    }
+
+    #[test]
+    fn literal_target_through_an_alias_checks_membership() {
+        let out = check(
+            "from typing import Literal\n\ntype Target = Literal[\"x\", \"y\"]\n\ndef f(a: object):\n    b = a cast? Target\n",
+        );
+        assert!(
+            out.contains(
+                "b = _try_cast_pred(a, lambda _by_cast_value: _by_cast_value in (\"x\", \"y\"))"
+            ),
+            "got:\n{out}"
+        );
+    }
+
+    /// a one-value `Literal` still needs the trailing comma, or the parens are
+    /// grouping rather than a tuple and `in` tests the value itself
+    #[test]
+    fn single_literal_target_spells_a_tuple() {
+        let out =
+            check("from typing import Literal\n\ndef f(a: object):\n    b = a cast? Literal[7]\n");
+        assert!(
+            out.contains("lambda _by_cast_value: _by_cast_value in (7,)"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn literal_none_and_bool_targets_spell_their_values() {
+        let out = check(
+            "from typing import Literal\n\ndef f(a: object):\n    b = a cast? Literal[True] | None\n",
+        );
+        assert!(
+            out.contains("lambda _by_cast_value: _by_cast_value in (True, None)"),
+            "got:\n{out}"
+        );
     }
 
     /// a user generic's instances carry `__orig_class__`, so the cast can

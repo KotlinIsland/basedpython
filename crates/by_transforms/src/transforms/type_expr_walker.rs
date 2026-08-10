@@ -33,6 +33,7 @@
 //! 10. `Callable[[P1, P2], R]` parameter list elements + return type
 //! 12. class base list
 
+use ruff_python_ast::helpers::declaration_annotation_type;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Operator, Parameters, Stmt, TypeParam, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
@@ -297,7 +298,14 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         match stmt {
             Stmt::AnnAssign(a) => {
-                self.visit_type_expr(&a.annotation, TypePos::Root);
+                // basedpython: a declaration modifier wraps the annotation in a
+                // synthetic marker whose range spans the whole declaration, with
+                // the target name inside it. hand visitors the declared type, or
+                // one that re-emits an annotation from its range writes over the
+                // name being declared (`var a: str?` → `var [str | None]`)
+                let annotation =
+                    declaration_annotation_type(&a.annotation).unwrap_or(&a.annotation);
+                self.visit_type_expr(annotation, TypePos::Root);
                 if let Some(v) = &a.value {
                     self.visit_expr(v);
                 }
