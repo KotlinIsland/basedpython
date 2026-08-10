@@ -2,6 +2,7 @@
     clippy::disallowed_methods,
     reason = "Prefer System trait methods over std methods in ty crates"
 )]
+mod add_dependency;
 mod all_symbols;
 mod call_hierarchy;
 mod code_action;
@@ -35,7 +36,7 @@ pub use all_symbols::{AllSymbolInfo, all_symbols};
 pub use call_hierarchy::incoming_calls::{IncomingCall, incoming_calls};
 pub use call_hierarchy::outgoing_calls::{OutgoingCall, outgoing_calls};
 pub use call_hierarchy::{CallHierarchyItem, prepare_call_hierarchy};
-pub use code_action::{QuickFix, code_actions};
+pub use code_action::{FileEdit, QuickFix, code_actions};
 pub use completion::{
     Completion, CompletionCapabilities, CompletionInsertTextFormat, CompletionKind,
     CompletionSettings, completion,

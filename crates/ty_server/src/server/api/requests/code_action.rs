@@ -2,10 +2,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use lsp_types::{self as types, Code, CodeActionRequest, CodeActionResponse, TextEdit, Uri};
-use ruff_db::files::File;
-use ruff_diagnostics::Edit;
 use ruff_text_size::Ranged;
-use ty_ide::code_actions;
+use ty_ide::{FileEdit, code_actions};
 use ty_project::ProjectDatabase;
 use types::CodeActionKind;
 
@@ -126,7 +124,7 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
                         edit: Some(lsp_types::WorkspaceEdit {
                             changes: document_changes
                                 .is_none()
-                                .then(|| to_lsp_edits(db, file, encoding, action.edits))
+                                .then(|| to_lsp_edits(db, encoding, action.edits))
                                 .flatten(),
                             document_changes,
                             change_annotations: None,
@@ -149,15 +147,19 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
     }
 }
 
+/// The edits of an action, in the files they belong to.
+///
+/// An action can change a file other than the one its diagnostic is in — adding a
+/// missing dependency edits `pyproject.toml` — so each edit carries its own file
+/// rather than being resolved against the diagnostic's.
 fn to_lsp_edits(
     db: &dyn Db,
-    file: File,
     encoding: PositionEncoding,
-    edits: Vec<Edit>,
+    edits: Vec<FileEdit>,
 ) -> Option<HashMap<Uri, Vec<TextEdit>>> {
     let mut lsp_edits: HashMap<Uri, Vec<lsp_types::TextEdit>> = HashMap::new();
 
-    for edit in edits {
+    for FileEdit { file, edit } in edits {
         let location = edit
             .range()
             .to_lsp_range(db, file, encoding)?
