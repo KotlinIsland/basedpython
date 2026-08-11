@@ -173,7 +173,10 @@ impl<'db> Type<'db> {
         M: IntoIterator<Item = (&'a str, Type<'db>)>,
     {
         Self::ProtocolInstance(ProtocolInstanceType::synthesized(
-            SynthesizedProtocolType::new(ProtocolInterface::with_property_members(db, members)),
+            SynthesizedProtocolType::stated(
+                db,
+                ProtocolInterface::with_property_members(db, members),
+            ),
         ))
     }
 
@@ -183,8 +186,26 @@ impl<'db> Type<'db> {
         M: IntoIterator<Item = (&'a str, CallableType<'db>)>,
     {
         Self::ProtocolInstance(ProtocolInstanceType::synthesized(
-            SynthesizedProtocolType::new(ProtocolInterface::with_methods(db, methods)),
+            SynthesizedProtocolType::stated(db, ProtocolInterface::with_methods(db, methods)),
         ))
+    }
+
+    /// basedpython: whether `self` mentions a shape
+    /// [signature recovery](crate::types::inferred_signature) invented.
+    ///
+    /// Such a shape is the bound of a hole that analysis is in the middle of writing, so it says
+    /// nothing a call site could fail. Every other structural protocol — one written as
+    /// `protocol(...)`, or one a narrowing established — is a requirement like any other.
+    pub(super) fn mentions_recovered_protocol(self, db: &'db dyn Db) -> bool {
+        super::visitor::any_over_type(db, self, false, |ty| {
+            matches!(
+                ty,
+                Type::ProtocolInstance(ProtocolInstanceType {
+                    inner: Protocol::Synthesized(protocol),
+                    ..
+                }) if protocol.is_recovered(db)
+            )
+        })
     }
 
     /// basedpython: synthesize the protocol instance type an inline `protocol(...)` type
@@ -197,9 +218,27 @@ impl<'db> Type<'db> {
         M: IntoIterator<Item = (Name, InlineProtocolMember<'db>)>,
     {
         Self::ProtocolInstance(ProtocolInstanceType::synthesized(
-            SynthesizedProtocolType::new(ProtocolInterface::with_inline_members(
-                db, members, packs,
-            )),
+            SynthesizedProtocolType::stated(
+                db,
+                ProtocolInterface::with_inline_members(db, members, packs),
+            ),
+        ))
+    }
+
+    /// basedpython: the same protocol [`Type::inline_protocol`] denotes, marked as a shape
+    /// [signature recovery](crate::types::inferred_signature) invented rather than one the
+    /// program states.
+    ///
+    /// See [`Type::mentions_recovered_protocol`], which is the only thing the mark is read by.
+    pub(super) fn recovered_protocol<M>(db: &'db dyn Db, members: M) -> Self
+    where
+        M: IntoIterator<Item = (Name, InlineProtocolMember<'db>)>,
+    {
+        Self::ProtocolInstance(ProtocolInstanceType::synthesized(
+            SynthesizedProtocolType::recovered(
+                db,
+                ProtocolInterface::with_inline_members(db, members, Box::default()),
+            ),
         ))
     }
 }
@@ -1109,7 +1148,7 @@ pub(super) fn walk_protocol_instance_type<'db, V: super::visitor::TypeVisitor<'d
                 }
             }
             Protocol::Synthesized(synthesized) => {
-                walk_protocol_interface(db, synthesized.interface(), visitor);
+                walk_protocol_interface(db, synthesized.interface(db), visitor);
             }
         }
     }
@@ -1249,7 +1288,9 @@ impl<'db> ProtocolInstanceType<'db> {
     pub(crate) fn instance_member(self, db: &'db dyn Db, name: &str) -> PlaceAndQualifiers<'db> {
         match self.inner {
             Protocol::FromClass(class) => class.instance_member(db, name),
-            Protocol::Synthesized(synthesized) => synthesized.interface().instance_member(db, name),
+            Protocol::Synthesized(synthesized) => {
+                synthesized.interface(db).instance_member(db, name)
+            }
         }
     }
 
@@ -1311,7 +1352,7 @@ impl<'db> Protocol<'db> {
     fn interface(self, db: &'db dyn Db) -> ProtocolInterface<'db> {
         match self {
             Self::FromClass(class) => class.interface(db),
-            Self::Synthesized(synthesized) => synthesized.interface(),
+            Self::Synthesized(synthesized) => synthesized.interface(db),
         }
     }
 
@@ -1358,12 +1399,36 @@ mod synthesized_protocol {
     use ty_python_core::definition::Definition;
 
     /// A "synthesized" protocol type that is dissociated from a class definition in source code.
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, get_size2::GetSize, salsa::SalsaValue)]
-    pub(in crate::types) struct SynthesizedProtocolType<'db>(ProtocolInterface<'db>);
+    #[salsa::interned(debug, heap_size=ruff_memory_usage::heap_size)]
+    pub(in crate::types) struct SynthesizedProtocolType<'db> {
+        #[returns(copy)]
+        pub(in crate::types) interface: ProtocolInterface<'db>,
+
+        /// basedpython: whether [signature
+        /// recovery](crate::types::inferred_signature) invented this shape, rather than the
+        /// program stating it with a written `protocol(...)` or a narrowing.
+        ///
+        /// Nothing but that analysis reads this: not a relation, not the display, and not the
+        /// interface the members are looked up through. The two are the same type, and only that
+        /// analysis needs to know which of its own inventions it is looking at.
+        #[returns(copy)]
+        pub(in crate::types) is_recovered: bool,
+    }
+
+    impl get_size2::GetSize for SynthesizedProtocolType<'_> {}
 
     impl<'db> SynthesizedProtocolType<'db> {
-        pub(super) fn new(interface: ProtocolInterface<'db>) -> Self {
-            Self(interface)
+        pub(super) fn stated(db: &'db dyn Db, interface: ProtocolInterface<'db>) -> Self {
+            Self::new(db, interface, false)
+        }
+
+        pub(super) fn recovered(db: &'db dyn Db, interface: ProtocolInterface<'db>) -> Self {
+            Self::new(db, interface, true)
+        }
+
+        /// The same protocol, with `interface` in place of this one's.
+        fn with_interface(self, db: &'db dyn Db, interface: ProtocolInterface<'db>) -> Self {
+            Self::new(db, interface, self.is_recovered(db))
         }
 
         pub(super) fn apply_type_mapping_impl<'a>(
@@ -1373,8 +1438,9 @@ mod synthesized_protocol {
             tcx: TypeContext<'db>,
             visitor: &ApplyTypeMappingVisitor<'db>,
         ) -> Self {
-            Self(
-                self.0
+            self.with_interface(
+                db,
+                self.interface(db)
                     .apply_type_mapping_impl(db, type_mapping, tcx, visitor),
             )
         }
@@ -1386,12 +1452,8 @@ mod synthesized_protocol {
             typevars: &mut FxOrderSet<BoundTypeVarInstance<'db>>,
             visitor: &FindLegacyTypeVarsVisitor<'db>,
         ) {
-            self.0
+            self.interface(db)
                 .find_legacy_typevars_impl(db, binding_context, typevars, visitor);
-        }
-
-        pub(in crate::types) fn interface(self) -> ProtocolInterface<'db> {
-            self.0
         }
 
         pub(in crate::types) fn recursive_type_normalized_impl(
@@ -1400,9 +1462,13 @@ mod synthesized_protocol {
             div: Type<'db>,
             nested: bool,
         ) -> Option<Self> {
-            Some(Self(
-                self.0.recursive_type_normalized_impl(db, div, nested)?,
-            ))
+            Some(
+                self.with_interface(
+                    db,
+                    self.interface(db)
+                        .recursive_type_normalized_impl(db, div, nested)?,
+                ),
+            )
         }
     }
 
@@ -1412,7 +1478,7 @@ mod synthesized_protocol {
             db: &'db dyn Db,
             typevar: BoundTypeVarIdentity<'db>,
         ) -> TypeVarVariance {
-            self.0.variance_of(db, typevar)
+            self.interface(db).variance_of(db, typevar)
         }
     }
 }

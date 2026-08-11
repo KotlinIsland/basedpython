@@ -589,7 +589,7 @@ fn path_bounds<'db>(
                     (name, member)
                 })
                 .collect();
-            bound = bound.add_positive(Type::inline_protocol(db, members, Box::default()));
+            bound = bound.add_positive(Type::recovered_protocol(db, members));
             constrained = true;
         }
         for value in path_uses.value {
@@ -689,9 +689,20 @@ where
     /// body. Anything mentioning a type variable — another hole, or the callee's own
     /// generics — would either escape its binding context or make two holes depend on each
     /// other, so it contributes nothing and the position stays gradual.
+    ///
+    /// A shape this analysis itself invented is ruled out for the same reason, one step on.
+    /// A hole's own bound is such a shape, so the moment the body reads a member off a hole the
+    /// type variable is gone and only that shape is left. Recording it would say nothing a
+    /// caller could fail — the requirement is on the very type being written — and it would
+    /// never settle, since each round nests the round before it one level deeper. A protocol the
+    /// *program* states, written as `protocol(...)` or established by a narrowing, is a
+    /// requirement like any other and stays.
     fn portable(&self, ty: Type<'db>) -> Option<Type<'db>> {
-        (!ty.has_typevar_or_typevar_instance(self.db) && !ty.is_dynamic() && !ty.is_object())
-            .then_some(ty)
+        (!ty.has_typevar_or_typevar_instance(self.db)
+            && !ty.is_dynamic()
+            && !ty.is_object()
+            && !ty.mentions_recovered_protocol(self.db))
+        .then_some(ty)
     }
 
     /// Record that the value at `path` has to have a member called `name`, shaped like

@@ -365,7 +365,7 @@ fn structural_interface<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<ProtocolI
         Type::ProtocolInstance(ProtocolInstanceType {
             inner: Protocol::Synthesized(protocol),
             ..
-        }) => Some(protocol.interface()),
+        }) => Some(protocol.interface(db)),
         Type::TypeVar(bound_typevar) => {
             structural_interface(db, bound_typevar.typevar(db).upper_bound(db)?)
         }

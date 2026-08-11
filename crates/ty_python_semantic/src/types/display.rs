@@ -1219,7 +1219,7 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                     if basedpython_display_enabled()
                         && let Some(inline) = DisplayInlineProtocol::new(
                             self.db,
-                            synthetic.interface(),
+                            synthetic.interface(self.db),
                             self.settings.clone(),
                         )
                     {
@@ -1229,7 +1229,7 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                     f.write_char('<')?;
                     f.with_type(Type::SpecialForm(SpecialFormType::Protocol))
                         .write_str("Protocol")?;
-                    let interface = synthetic.interface();
+                    let interface = synthetic.interface(self.db);
                     let member_list = interface.members(self.db);
                     let num_members = member_list.len();
                     if num_members == 0 && interface.pending_packs(self.db).is_empty() {
