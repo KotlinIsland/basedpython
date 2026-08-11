@@ -157,6 +157,12 @@ _NOTICE_RESERVE = 250
 # a project that fails identically on both binaries gets one line, not a dump
 _SUMMARY_CHARS = 200
 
+# a bare leading line (`by failed`) hides its reason on the lines below it, and a
+# build's first diagnostic is often a warning rather than what stopped it
+_SUMMARY_SCAN_LINES = 60
+_SUMMARY_REASONS = 3
+_REASON_LINE_RE = re.compile(r"^\s*(Cause:|error\[)")
+
 _SKIPPED_HEADING = "### ⏭️ skipped"
 
 # directories that aren't first-party source (skipped when sizing a project)
@@ -556,14 +562,26 @@ def _one_line(text: str) -> str:
 
 def _error_summary(err: str) -> str:
     """One line naming how a project failed. A project that fails the same way
-    on both binaries isn't a finding, so it gets a line rather than a dump."""
+    on both binaries isn't a finding, so it gets a line rather than a dump.
+
+    The first line alone is not enough. `by failed` keeps what actually went
+    wrong on the `Cause:` lines beneath it, and a build that leads with a
+    warning can name the error that stopped it much further down. So the
+    leading line is kept, and the lines that carry a reason are pulled up next
+    to it."""
     phase, _, rest = err.partition(": ")
-    m = re.search(r"panicked at ([^\n]*?):\n([^\n]*)", err)
-    if m:
-        summary = f"panicked at {m.group(1).rsplit('/', 1)[-1]}: {m.group(2)}"
-    else:
-        summary = next((x for x in rest.splitlines() if x.strip()), rest)
-    return _one_line(f"{phase}: {summary}")
+    if m := re.search(r"panicked at ([^\n]*?):\n([^\n]*)", err):
+        return _one_line(
+            f"{phase}: panicked at {m.group(1).rsplit('/', 1)[-1]}: {m.group(2)}"
+        )
+
+    lines = [line for line in rest.splitlines() if line.strip()]
+    if not lines:
+        return _one_line(f"{phase}: {rest}")
+    reasons = [
+        line for line in lines[1:_SUMMARY_SCAN_LINES] if _REASON_LINE_RE.match(line)
+    ]
+    return _one_line(" ".join([f"{phase}: {lines[0]}", *reasons[:_SUMMARY_REASONS]]))
 
 
 def _details_entry(

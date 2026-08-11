@@ -1,0 +1,119 @@
+name: PR comment (ecosystem)
+
+# In-repo equivalent of the external bot upstream uses: react to the CI run,
+# download the `ecosystem-result` artifact its `ecosystem` job uploaded, and post
+# it as a sticky PR comment. Runs as a privileged `workflow_run` job so it can
+# comment on fork PRs (where the `pull_request` token is read-only).
+#
+# The `ecosystem` job fails when a project errors, but it uploads the report
+# first, so this still runs and still comments — a red check and a readable
+# report are not mutually exclusive.
+#
+# astral plans to open source astral-sh-bot
+# (https://astral.sh/blog/open-source-security-at-astral). once it's available
+# and installed on this repo, this workflow can be removed in favour of the bot
+# consuming the `ecosystem-result` artifact directly, same as upstream.
+
+permissions: {}
+
+on: # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      workflow_run_id:
+        description: The CI run whose ecosystem result to post
+        required: true
+
+jobs:
+  comment:
+    name: Post ecosystem comment
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'pull_request'
+    permissions:
+      pull-requests: write
+    steps:
+      # the `ecosystem` job is skipped unless the PR touches the linter or the
+      # formatter, so a missing artifact is the normal case, not an error
+      - name: Download ecosystem result
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ecosystem-result
+          run-id: ${{ github.event.workflow_run.id || github.event.inputs.workflow_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post or update PR comment
+        if: steps.download.outcome == 'success'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require("fs");
+
+            // the artifact comes from a (possibly fork) PR, so treat it as
+            // untrusted: a symlinked file could exfiltrate a runner secret into
+            // a public comment. refuse anything but a plain file.
+            for (const f of ["ecosystem-result", "pr-number.txt"]) {
+              if (fs.existsSync(f) && fs.lstatSync(f).isSymbolicLink()) {
+                core.setFailed(`${f} must not be a symlink`);
+                return;
+              }
+            }
+
+            if (!fs.existsSync("ecosystem-result") || !fs.existsSync("pr-number.txt")) {
+              core.info("no ecosystem artifact; nothing to post");
+              return;
+            }
+
+            const prNumber = parseInt(fs.readFileSync("pr-number.txt", "utf8").trim(), 10);
+            if (!Number.isInteger(prNumber)) {
+              core.info("no PR number; nothing to post");
+              return;
+            }
+
+            const marker = "<!-- ruff-ecosystem -->";
+            const report = fs.readFileSync("ecosystem-result", "utf8");
+
+            // ruff-ecosystem renders the sections but no title, and the report
+            // is unbounded — a large one would 422 on GitHub's comment limit
+            const LIMIT = 65536;
+            const notice =
+              "\n\n_report truncated to fit GitHub's comment size limit; " +
+              "see the `ecosystem-result` artifact of the run for the full text._\n";
+
+            let body = `## ecosystem check\n\n${marker}\n\n${report}`;
+            const chars = Array.from(body);
+            if (chars.length > LIMIT) {
+              body = chars.slice(0, LIMIT - notice.length).join("") + notice;
+            }
+
+            const { owner, repo } = context.repo;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (c) => c.body && c.body.includes(marker),
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
