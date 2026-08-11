@@ -29,7 +29,7 @@ pub struct PyProject {
     ///
     /// A `pyproject.toml` has no top-level `dependencies` key. This is only ever
     /// set when the file being read is a script's inline metadata block, which
-    /// this type doubles as — see [`crate::metadata::script::script_metadata`].
+    /// this type doubles as — see `metadata::script::script_metadata`.
     pub dependencies: Option<Vec<String>>,
 }
 
@@ -89,7 +89,6 @@ impl PyProject {
         }
 
         if let Some(project) = &self.project {
-
             for (extra, requirements) in project.optional_dependencies.iter().flatten() {
                 groups.push(DependencyGroup {
                     name: GroupName::Extra(Box::from(&**extra)),
