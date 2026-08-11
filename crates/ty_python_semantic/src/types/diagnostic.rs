@@ -2377,7 +2377,45 @@ declare_lint! {
 }
 
 declare_lint! {
-    #[doc = include_str!("../../resources/lint_docs/undeclared-dependency.md")]
+    /// ## What it does
+    ///
+    /// Checks for imports of an installed distribution the project never declared
+    /// a dependency on.
+    ///
+    /// ## Why is this bad?
+    ///
+    /// The import only works because something else the project depends on
+    /// happened to pull the distribution in. Nothing keeps that true: the
+    /// dependency that brought it can drop it, or move to a version that no longer
+    /// needs it, and then the import fails for everyone installing the project
+    /// fresh — while continuing to work in the environment it was written in.
+    ///
+    /// Depending on something means saying so.
+    ///
+    /// ## Examples
+    ///
+    /// `requests` installs `charset_normalizer`, but a project that only declares
+    /// `requests` has not declared `charset_normalizer`:
+    ///
+    /// ```toml
+    /// [project]
+    /// name = "my-lib"
+    /// dependencies = ["requests"]
+    /// ```
+    ///
+    /// ```python
+    /// import charset_normalizer  # error: [undeclared-dependency]
+    /// ```
+    ///
+    /// Adding it to `[project].dependencies` fixes the import. In an editor this
+    /// is offered as a quick fix.
+    ///
+    /// ## Configuration
+    ///
+    /// The check is only made when the project says what it depends on: a project
+    /// with no `[project]` table, an environment with no install metadata, and a
+    /// module ty cannot attribute to a distribution are all cases where nothing is
+    /// reported.
     pub static UNDECLARED_DEPENDENCY = {
         summary: "detects imports of a distribution the project does not depend on",
         status: LintStatus::stable("0.0.1-alpha.39"),
@@ -2386,7 +2424,59 @@ declare_lint! {
 }
 
 declare_lint! {
-    #[doc = include_str!("../../resources/lint_docs/misplaced-dependency.md")]
+    /// ## What it does
+    ///
+    /// Checks for imports, from code the project ships, of a distribution declared
+    /// only in a dependency group.
+    ///
+    /// ## Why is this bad?
+    ///
+    /// A dependency group is for the people working on the project, not the people
+    /// installing it. Nothing installs one alongside the project, so an import of
+    /// one from shipped code raises `ModuleNotFoundError` for every user — and
+    /// never for the person who wrote it, whose environment has the whole group.
+    ///
+    /// ## Examples
+    ///
+    /// ```toml
+    /// [project]
+    /// name = "my-lib"
+    /// dependencies = ["requests"]
+    ///
+    /// [dependency-groups]
+    /// dev = ["pytest"]
+    /// ```
+    ///
+    /// ```python
+    /// # src/my_lib/fixtures.py
+    /// import pytest  # error: [misplaced-dependency]
+    /// ```
+    ///
+    /// The same import from `tests/` is fine: tests are not shipped.
+    ///
+    /// ## Configuration
+    ///
+    /// Which files ship is derived from the name the project gives itself — a
+    /// project named `my-lib` ships the module `my_lib` — and can be stated
+    /// outright when that is not right:
+    ///
+    /// ```toml
+    /// [tool.ty.analysis]
+    /// shipped-modules = ["my_lib", "my_lib_plugins"]
+    /// ```
+    ///
+    /// A file's groups can also be set directly, which overrides the derivation:
+    ///
+    /// ```toml
+    /// [[tool.ty.overrides]]
+    /// include = ["src/my_lib/_dev_only/**"]
+    ///
+    /// [tool.ty.overrides.analysis]
+    /// dependency-groups = ["*"]
+    /// ```
+    ///
+    /// A project that does not name itself ships nothing this check can identify,
+    /// and nothing is reported.
     pub static MISPLACED_DEPENDENCY = {
         summary: "detects shipped code importing a dependency group",
         status: LintStatus::stable("0.0.1-alpha.39"),

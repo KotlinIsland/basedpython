@@ -18,11 +18,11 @@ use ruff_db::system::System;
 use ruff_db::vendored::VendoredFileSystem;
 use ruff_ranged_value::ValueSource;
 use salsa::{Database, Event, Setter};
-use ty_python_semantic::dependencies::DependencyManifest;
 use ty_module_resolver::SearchPaths;
 use ty_python_core::program::{
     FallibleStrategy, MisconfigurationStrategy, Program, UseDefaultStrategy,
 };
+use ty_python_semantic::dependencies::DependencyManifest;
 use ty_python_semantic::lint::{LintRegistry, RuleSelection};
 use ty_python_semantic::{AnalysisSettings, Db as SemanticDb};
 
