@@ -298,6 +298,43 @@ class TestRenderDiffReport:
         body, _ = render_diff_report(results, "base", "head")
         assert "error changes:" not in body
 
+    def test_a_bare_failure_line_carries_its_cause(self):
+        # the real shape from parso and sphinx: `by failed` says nothing on its
+        # own, and the reason is on the lines beneath it
+        err = (
+            "reverse: by failed\n"
+            "  Cause: ./test/normalizer_issue_files/latin-1.py\n"
+            "  Cause: stream did not contain valid UTF-8"
+        )
+        results = [project("parso", "error-unchanged", err)]
+        body, _ = render_diff_report(results, "base", "head")
+        (item,) = [x for x in body.splitlines() if x.startswith("- `parso`")]
+        assert "stream did not contain valid UTF-8" in item
+        assert "latin-1.py" in item
+
+    def test_an_error_is_surfaced_past_a_leading_warning(self):
+        err = (
+            "build: warning[redundant-return-annotation]: Redundant -> None\n"
+            " --> m.by:1:36\n"
+            "  |\n"
+            "error[unresolved-reference]: Name some used when not defined"
+        )
+        results = [project("beartype", "error-unchanged", err)]
+        body, _ = render_diff_report(results, "base", "head")
+        (item,) = [x for x in body.splitlines() if x.startswith("- `beartype`")]
+        assert "unresolved-reference" in item
+
+    def test_a_panic_still_wins_over_the_line_scan(self):
+        results = [
+            project(
+                "mypy", "error-unchanged", panic(thread=1, first_line=1, frames=900)
+            )
+        ]
+        body, _ = render_diff_report(results, "base", "head")
+        (item,) = [x for x in body.splitlines() if x.startswith("- `mypy`")]
+        assert "panicked at execute.rs:731:9" in item
+        assert "stack backtrace" not in item
+
     def test_summarises_a_non_panic_failure_too(self):
         results = [
             project(
