@@ -694,6 +694,129 @@ unaffected(Conv())  # ok
 unaffected(1)  # error: [invalid-argument-type]
 ```
 
+## a shape this analysis invented is not a requirement
+
+```toml
+[environment]
+python-version = "3.13"
+
+[analysis]
+infer-unannotated-signatures = true
+```
+
+reading a member off a hole leaves the shape this analysis invented for that member, and no type
+variable to recognise it by. passing it back in says nothing a caller could fail — the requirement
+would be on the very type being written — so the position it lands in stays gradual:
+
+```py
+class Inner:
+    def b(self, other: int) -> None: ...
+
+class Outer:
+    a: Inner
+
+def f(x):
+    x.a.b(x.a)
+
+f(Outer())  # ok
+f(1)  # error: [invalid-argument-type]
+```
+
+a value that reaches the argument through a call carries that shape just as much:
+
+```py
+def identity(t):
+    return t
+
+def g(x):
+    x.a.b(identity(x.a))
+
+g(Outer())  # ok
+g(1)  # error: [invalid-argument-type]
+```
+
+## a shape the program states is a requirement
+
+```toml
+[environment]
+python-version = "3.13"
+
+[analysis]
+infer-unannotated-signatures = true
+```
+
+only the shapes this analysis invents for itself are ruled out. a structural protocol the *program*
+supplies is a requirement a call site can fail, so it bounds a hole like any other type — however it
+is spelled, and whether it was written down or established by a narrowing
+
+### written as a class
+
+```by
+from typing import Protocol
+
+class P(Protocol):
+    a: int
+
+def takes(v: P) -> None: ...
+
+def f(y):
+    takes(y)
+
+reveal_type(f)  # revealed: def f(y: some P)
+```
+
+### written inline
+
+the same shape in basedpython's own notation says exactly as much
+
+```by
+def takes(v: protocol(a: int)) -> None: ...
+
+def f(y):
+    takes(y)
+
+reveal_type(f)  # revealed: def f(y: some protocol(a: int))
+```
+
+### established by `hasattr`
+
+```by
+def f(x, y: object):
+    if hasattr(y, "a"):
+        x.b(y)
+
+# revealed: def f(x: some protocol(def b(self, protocol(a: object), /) -> object), y: object)
+reveal_type(f)
+```
+
+### established by a sequence pattern
+
+```by
+def f(x, y: object):
+    match y:
+        case [_]:
+            x.b(y)
+
+# revealed: def f(x: some protocol(def b(self, Sequence[object] & protocol(def __getitem__(self, index: 0, /) -> object; def __len__(self, /) -> 1 | True) & not str & not bytes & not bytearray, /) -> object), y: object)
+reveal_type(f)
+```
+
+### established by a key-membership test
+
+```by
+from typing import TypedDict
+
+class T(TypedDict):
+    k: int
+
+def f(x, y: T | dict[str, int]):
+    if "k" in y:
+        x.b(y)
+
+# revealed: def f(x: some protocol(def b(self, T | (dict[str, int] & protocol(def __contains__(self, key: "k", /) -> True)), /) -> object), y: T | dict[str, int])
+reveal_type(f)
+```
+
 ## an `async` override is wrapped once
 
 ```toml

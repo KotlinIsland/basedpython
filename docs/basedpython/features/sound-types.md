@@ -197,6 +197,23 @@ did and its call sites stay unchecked. a forwarded type that mentions a type var
 too: it is bound to the callee's own scope, and the same rule stops two functions that forward into
 each other from each defining the other
 
+a value the body reached *through* a parameter is left out on the same grounds. reading a member
+off one leaves the shape this analysis invented for that member, so requiring a method to accept it
+would be requiring something of the very type being written
+
+```python
+class Inner:
+    def b(self, other: int) -> None: ...
+
+class Outer:
+    a: Inner
+
+def f(x):
+    x.a.b(x.a)
+
+f(Outer())  # ok — nothing was required of `b`'s parameter
+```
+
 requirements that cannot all hold fall back to gradual as well. a bound of `Never` would report the
 contradiction at every call site and never where it lives
 

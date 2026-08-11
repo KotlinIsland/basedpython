@@ -4632,7 +4632,7 @@ impl<'db> Type<'db> {
                     inner: Protocol::Synthesized(protocol),
                     ..
                 }) if policy.mro_no_object_fallback()
-                    && !protocol.interface().includes_member(db, name_str) =>
+                    && !protocol.interface(db).includes_member(db, name_str) =>
                 {
                     Place::Undefined.into()
                 }
