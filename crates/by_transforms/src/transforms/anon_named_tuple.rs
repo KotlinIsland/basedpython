@@ -131,6 +131,11 @@ pub(crate) struct AnonNamedTuple<'src> {
     /// Set when at least one anonymous named tuple was seen, so the preamble
     /// emits the `NamedTuple` import.
     pub(crate) needs_import: bool,
+    /// Modules a field type names that the source never imported. A shape is
+    /// built through `&self`, so this collects behind a cell
+    pub(crate) type_only_imports: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    /// `typing` names a field type reads that the source never imported
+    pub(crate) typing_names: std::cell::RefCell<std::collections::BTreeSet<&'static str>>,
     /// Active function-scope return-annotation shape stack. Empty when not
     /// inside a function. The innermost (last) entry governs how a `return`
     /// statement inside the current function is coerced.
@@ -170,6 +175,8 @@ impl<'src> AnonNamedTuple<'src> {
             range_to_class: Vec::new(),
             range_to_value_render: Vec::new(),
             needs_import: false,
+            type_only_imports: std::cell::RefCell::default(),
+            typing_names: std::cell::RefCell::default(),
             return_shape_stack: Vec::new(),
             typevar_rename_stack: Vec::new(),
             aliases: HashMap::new(),
@@ -410,7 +417,9 @@ impl<'src> AnonNamedTuple<'src> {
                 let Some(d) = self.types.promoted_type_display(value_expr) else {
                     return Ok(None);
                 };
-                d
+                self.type_only_imports.borrow_mut().extend(d.modules);
+                self.typing_names.borrow_mut().extend(d.typing_names);
+                d.text
             };
             fields.push((name, type_display));
         }
@@ -882,6 +891,20 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
         }
         ctx.required_imports
             .extend(inner.callable.take_import_lines());
+        ctx.type_only_imports.extend(
+            inner
+                .type_only_imports
+                .borrow()
+                .iter()
+                .map(|module| format!("import {module}")),
+        );
+        ctx.type_only_imports.extend(
+            inner
+                .typing_names
+                .borrow()
+                .iter()
+                .map(|name| format!("from typing import {name}")),
+        );
         for fix in std::mem::take(&mut inner.edits) {
             for edit in fix.edits() {
                 let range = edit.range();

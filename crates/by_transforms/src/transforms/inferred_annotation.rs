@@ -12,11 +12,15 @@
 //!
 //! only a bare `<name> = <value>` directly in a class body is rewritten.
 //! multi-target (`a = b = 1`) and unpacking (`a, b = ...`) assignments are
-//! left alone, as are assignments whose value has no faithful annotation
-//! (an `Unknown` / `Any` part). classes where an annotation would change
-//! runtime semantics — dataclasses, framework models, `NamedTuple`s,
-//! `TypedDict`s, enums — are skipped entirely: in those a bare assignment is
-//! a class variable or member, and annotating it would turn it into a field.
+//! left alone, as are assignments whose value has no faithful annotation: one
+//! with an `Unknown` / `Any` part, and one whose type python cannot spell in a
+//! type expression, such as a module or a callable. classes where an annotation
+//! would change runtime semantics — dataclasses, framework models,
+//! `NamedTuple`s, `TypedDict`s, enums — are skipped entirely: in those a bare
+//! assignment is a class variable or member, and annotating it would turn it
+//! into a field.
+
+use std::collections::BTreeSet;
 
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtAssign, StmtClassDef};
@@ -38,17 +42,31 @@ impl TypeAwarePass for InferredAnnotationPass {
         let mut state = State {
             types,
             edits: Vec::new(),
+            modules: BTreeSet::new(),
+            typing_names: BTreeSet::new(),
         };
         for stmt in stmts {
             state.visit_stmt(stmt);
         }
         ctx.text_edits.extend(state.edits);
+        ctx.type_only_imports
+            .extend(state.modules.into_iter().map(|m| format!("import {m}")));
+        ctx.type_only_imports.extend(
+            state
+                .typing_names
+                .into_iter()
+                .map(|name| format!("from typing import {name}")),
+        );
     }
 }
 
 struct State<'a> {
     types: &'a dyn TypeInfo,
     edits: Vec<(TextRange, String)>,
+    /// modules a synthesized annotation names but the source never imported
+    modules: BTreeSet<String>,
+    /// `typing` names it reads that the source never imported either
+    typing_names: BTreeSet<&'static str>,
 }
 
 impl State<'_> {
@@ -80,7 +98,9 @@ impl State<'_> {
         };
         let pos = name.range().end();
         self.edits
-            .push((TextRange::new(pos, pos), format!(": {annotation}")));
+            .push((TextRange::new(pos, pos), format!(": {}", annotation.text)));
+        self.modules.extend(annotation.modules);
+        self.typing_names.extend(annotation.typing_names);
     }
 }
 
@@ -168,6 +188,144 @@ mod tests {
                     b: B = B()
             "},
         );
+    }
+
+    #[test]
+    fn class_object_attribute() {
+        // the class object's own type has no annotation form; `type[int]` is
+        // what ty reads back off the undeclared attribute
+        check(
+            indoc! {"
+                class A:
+                    x = int
+            "},
+            indoc! {"
+                class A:
+                    x: type[int] = int
+            "},
+        );
+    }
+
+    #[test]
+    fn nested_class_object_attribute() {
+        check(
+            indoc! {"
+                class A:
+                    x = (int, 1)
+            "},
+            indoc! {"
+                class A:
+                    x: tuple[type[int], int] = (int, 1)
+            "},
+        );
+    }
+
+    #[test]
+    fn class_object_in_invariant_position_left_bare() {
+        // `list` is invariant, so ty keeps the class object precise
+        // (`list[<class 'int'>]`) — a type with no python spelling
+        unchanged(indoc! {"
+            class A:
+                xs = [int]
+        "});
+    }
+
+    #[test]
+    fn a_class_the_file_does_not_bind_is_qualified() {
+        // `Decimal` is bound here as `Dec`, so the bare name ty displays would
+        // be unresolved in the output — the spelling names the module instead,
+        // and the module is imported for the checker that reads it
+        check(
+            indoc! {"
+                from decimal import Decimal as Dec
+                class A:
+                    d = Dec(1)
+            "},
+            indoc! {"
+                from typing import TYPE_CHECKING
+                if TYPE_CHECKING:
+                    import decimal
+                from decimal import Decimal as Dec
+                class A:
+                    d: decimal.Decimal = Dec(1)
+            "},
+        );
+    }
+
+    #[test]
+    fn a_class_shadowed_by_its_own_module_is_qualified() {
+        // `datetime` names the *module* in the output, so the bare display would
+        // read as a module in a type expression. no import is added: the source
+        // already reaches the module under that name
+        check(
+            indoc! {"
+                import datetime
+                class A:
+                    d = datetime.datetime.now()
+            "},
+            indoc! {"
+                import datetime
+                class A:
+                    d: datetime.datetime = datetime.datetime.now()
+            "},
+        );
+    }
+
+    #[test]
+    fn a_typing_name_the_source_never_wrote_is_imported() {
+        // the implicit-typing pass only sees names written in the source, and a
+        // synthesized annotation is not in it
+        check(
+            indoc! {"
+                def boom():
+                    raise ValueError
+                class A:
+                    n = boom()
+            "},
+            // the import redirect retargets `Never` for the 3.10 default
+            indoc! {"
+                from typing import TYPE_CHECKING
+                if TYPE_CHECKING:
+                    from typing_extensions import Never
+                def boom():
+                    raise ValueError
+                class A:
+                    n: Never = boom()
+            "},
+        );
+    }
+
+    #[test]
+    fn a_class_local_to_a_function_is_left_bare() {
+        // its qualified name is not a dotted path, so it has no spelling at all
+        unchanged(indoc! {"
+            def outer():
+                class Local: ...
+                return Local()
+            class A:
+                l = outer()
+        "});
+    }
+
+    #[test]
+    fn module_attribute_left_bare() {
+        unchanged(indoc! {"
+            import os
+            class A:
+                m = os
+        "});
+    }
+
+    #[test]
+    fn function_attribute_left_bare() {
+        // a function's promoted type renders in arrow form, which is not a
+        // python type expression
+        unchanged(indoc! {"
+            def g(a: int) -> str:
+                return \"\"
+            class A:
+                f = g
+        "});
     }
 
     #[test]

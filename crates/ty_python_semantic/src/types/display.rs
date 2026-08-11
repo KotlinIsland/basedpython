@@ -20,7 +20,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::file_to_module;
 
 use crate::Db;
-use crate::place::{DefinedPlace, Place};
+use crate::place::{DefinedPlace, Place, builtins_symbol, global_symbol};
 use crate::types::callable::CallableTypeKind;
 use crate::types::class::{ClassLiteral, ClassType, DynamicNamedTupleAnchor, GenericAlias};
 use crate::types::constraints::ConstraintSetBuilder;
@@ -858,6 +858,190 @@ fn fmt_file_location<'db>(
     let LineColumn { line, column } = line_index.line_column(offset, &source_text(db, file));
     f.set_invalid_type_annotation();
     write!(f, " @ {path}:{line}:{column}")
+}
+
+/// basedpython: a type rendered as python source that resolves inside a particular file.
+///
+/// ty's ordinary display names a class by its bare name whatever the reading file binds
+/// that name to, which is right for a diagnostic and wrong for source the transpiler
+/// emits: `datetime` there is the *module*, and a class the file never imported is not
+/// bound at all. See [`Type::source_spelling_in`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSpelling {
+    /// the type expression
+    pub text: String,
+    /// modules the spelling needs, each as an `import <module>` target
+    pub modules: Vec<String>,
+}
+
+/// Collects every class a type names, so each can be spelled for a particular file.
+struct ClassCollector<'a, 'db> {
+    env: &'a ProgramEnvironment<'db>,
+    visited_types: RefCell<FxHashSet<Type<'db>>>,
+    classes: RefCell<Vec<ClassLiteral<'db>>>,
+}
+
+impl<'db> ClassCollector<'_, 'db> {
+    fn record(&self, class: ClassLiteral<'db>) {
+        self.classes.borrow_mut().push(class);
+    }
+}
+
+impl<'db> TypeVisitor<'db> for ClassCollector<'_, 'db> {
+    fn program_environment(&self) -> &ProgramEnvironment<'db> {
+        self.env
+    }
+
+    fn should_visit_lazy_type_attributes(&self) -> bool {
+        false
+    }
+
+    fn visit_type(&self, db: &'db dyn Db, ty: Type<'db>) {
+        match ty {
+            Type::ClassLiteral(class) => self.record(class),
+            Type::LiteralValue(literal) => {
+                if let LiteralValueTypeKind::Enum(literal) = literal.kind() {
+                    self.record(literal.enum_class(db));
+                }
+            }
+            Type::GenericAlias(alias) => self.record(ClassLiteral::Static(alias.origin(db))),
+            Type::ProtocolInstance(protocol) if let Some(class) = protocol.class_origin(db) => {
+                return self.visit_type(db, Type::from(class));
+            }
+            Type::TypeVar(_) => return,
+            _ => {}
+        }
+
+        if let visitor::TypeKind::NonAtomic(t) = visitor::TypeKind::from(ty) {
+            if !self.visited_types.borrow_mut().insert(ty) {
+                return;
+            }
+            visitor::walk_non_atomic_type(db, t, self);
+        }
+    }
+}
+
+impl<'db> Type<'db> {
+    /// basedpython: spell this type as a python type expression that resolves inside `file`,
+    /// along with the modules that spelling needs imported.
+    ///
+    /// A class `file` already binds under its own name — one it defines, one it imported, a
+    /// builtin — is written bare, so an ordinary annotation comes out exactly as ty displays
+    /// it. Any other class is written module-qualified (`decimal.Decimal`) and its module
+    /// reported, because the bare name would be unbound there, or bound to something else.
+    /// `None` when a class has no spelling at all: one local to a function, whose qualified
+    /// name is not a dotted path.
+    #[must_use]
+    pub fn source_spelling_in(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        file: ProgramFile<'db>,
+        settings: DisplaySettings<'db>,
+    ) -> Option<SourceSpelling> {
+        let collector = ClassCollector {
+            env,
+            visited_types: RefCell::default(),
+            classes: RefCell::default(),
+        };
+        collector.visit_type(db, self);
+
+        let classes = collector.classes.borrow();
+        let mut qualified = FxHashMap::default();
+        for class in classes.iter().copied() {
+            let name = class.name(db);
+            if !file_binds_class(db, env, file, name, class) {
+                qualified.insert(&**name, QualificationLevel::ModuleName);
+            }
+        }
+        // qualification is keyed by name, so one class forces every same-named
+        // class in the type to be written qualified too — each of those needs
+        // its module just as much
+        let mut modules = std::collections::BTreeSet::new();
+        for class in classes.iter().copied() {
+            if !qualified.contains_key(&**class.name(db)) {
+                continue;
+            }
+            let module = importable_module_of(db, env, class)?;
+            match file_binds_module(db, file, &module) {
+                // the file already reaches the module under that name, so the
+                // qualified spelling resolves as it stands
+                ModuleBinding::Same => {}
+                ModuleBinding::Absent => {
+                    modules.insert(module);
+                }
+                // importing it would rebind a name the file uses for something
+                // else, so this class cannot be spelled here at all
+                ModuleBinding::Other => return None,
+            }
+        }
+
+        let settings = DisplaySettings {
+            qualified: Rc::new(qualified),
+            ..settings
+        };
+        Some(SourceSpelling {
+            text: self.display_with(db, env, settings).to_string(),
+            modules: modules.into_iter().collect(),
+        })
+    }
+}
+
+/// Whether `name` reaches `class` from `file`'s module scope — a class the file defines or
+/// imports, or a builtin, all of which a bare name spells correctly there.
+fn file_binds_class<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: ProgramFile<'db>,
+    name: &str,
+    class: ClassLiteral<'db>,
+) -> bool {
+    let binds = |place: Place<'db>| matches!(place, Place::Defined(defined) if defined.ty == Type::ClassLiteral(class));
+    binds(global_symbol(db, file, name).place) || binds(builtins_symbol(db, env, name).place)
+}
+
+/// What a file's module scope already binds the leading name of a qualified spelling to.
+enum ModuleBinding {
+    /// the module itself — the spelling resolves with no import
+    Same,
+    /// nothing — the import can be added
+    Absent,
+    /// something else entirely — an import would collide with it
+    Other,
+}
+
+/// How `file` binds the name a spelling of `module` reads first (`a` in `a.b.C`).
+fn file_binds_module<'db>(db: &'db dyn Db, file: ProgramFile<'db>, module: &str) -> ModuleBinding {
+    let root = module.split('.').next().unwrap_or(module);
+    match global_symbol(db, file, root).place {
+        Place::Defined(defined) => match defined.ty {
+            Type::ModuleLiteral(literal) if literal.module(db).name(db) == module => {
+                ModuleBinding::Same
+            }
+            _ => ModuleBinding::Other,
+        },
+        Place::Undefined => ModuleBinding::Absent,
+    }
+}
+
+/// The module to import so that `class`'s qualified name resolves, or `None` when the class
+/// has no importable spelling — it is local to a function, so its qualified name carries a
+/// `<locals of …>` component that is not a python path.
+fn importable_module_of<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: ClassLiteral<'db>,
+) -> Option<String> {
+    let file = ProgramFile::new(db, class.file(db), env.program(db));
+    let module = file_to_module(db, file.resolver_file(db))?;
+    let components = class.qualified_name(db).components_excluding_self();
+    if !components
+        .iter()
+        .all(|component| ruff_python_stdlib::identifiers::is_identifier(component))
+    {
+        return None;
+    }
+    Some(module.name(db).as_str().to_owned())
 }
 
 /// Returns the qualified name components for a scope, excluding the item itself.

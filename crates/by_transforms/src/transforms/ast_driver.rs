@@ -25,6 +25,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 
 use ruff_python_ast::visitor::transformer::Transformer;
 use ruff_python_ast::{Expr, ModModule, PySourceType, Stmt};
@@ -114,6 +115,13 @@ pub(crate) struct PassContext {
     /// Lines to append AFTER the spliced body (e.g. modifiers' auto-
     /// generated `__all__ = [...]`). Driver emits each as its own line
     pub(crate) epilogue: Vec<String>,
+    /// Import lines a *synthesized* type expression needs that the source never
+    /// wrote (`import decimal` for an inferred `decimal.Decimal` annotation).
+    /// The driver emits these under `if TYPE_CHECKING:` — the output always
+    /// carries `from __future__ import annotations`, so the name is only ever
+    /// read by a checker, and a runtime import here would add an import edge the
+    /// source does not have
+    pub(crate) type_only_imports: BTreeSet<String>,
     /// Source ranges of operations that `symbolic_type_op` resolved up front
     /// (e.g. `1 + 1` → `Literal[2]`). Type-aware passes skip these via
     /// [`walk_type_positions_skipping`](super::type_expr_walker::walk_type_positions_skipping)
@@ -852,6 +860,20 @@ pub(crate) fn run_against_source<'a>(
     if literal_string_rewrites.needs_import {
         ctx.required_imports
             .push("from typing import LiteralString".to_owned());
+    }
+
+    // a synthesized annotation may name a class the source never imported. the
+    // import goes under `if TYPE_CHECKING:` as one block: every such annotation
+    // is a string at runtime (the lowering always emits the `__future__` import),
+    // so only a checker ever reads the name, and a real import would give the
+    // output an import edge — and a possible cycle — the source never had
+    if !ctx.type_only_imports.is_empty() {
+        let mut block = String::from("from typing import TYPE_CHECKING\nif TYPE_CHECKING:");
+        for line in std::mem::take(&mut ctx.type_only_imports) {
+            block.push_str("\n    ");
+            block.push_str(&line);
+        }
+        ctx.required_imports.push(block);
     }
 
     ctx.required_imports.sort();

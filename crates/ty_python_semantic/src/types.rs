@@ -84,7 +84,7 @@ use crate::types::diagnostic::{
     AttributeAccessMethod, INVALID_AWAIT, INVALID_TYPE_FORM, report_bad_attribute_access_call,
     report_bad_dunder_get_call,
 };
-pub use crate::types::display::{DisplaySettings, TypeDetail, TypeDisplayDetails};
+pub use crate::types::display::{DisplaySettings, SourceSpelling, TypeDetail, TypeDisplayDetails};
 pub use crate::types::enums::basedpython_is_keeps_identity;
 pub(crate) use crate::types::enums::{EnumClassLiteral, EnumComplementType, enum_metadata};
 pub(crate) use crate::types::equality::{ComparisonSoundnessPolicy, equality_truthiness};
@@ -3147,7 +3147,12 @@ impl<'db> Type<'db> {
     /// This is intentionally separate from regular promotion. Applying it during collection
     /// inference would lose useful precision for local and module-level collections of class
     /// objects.
-    fn promote_class_literals(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
+    #[must_use]
+    pub fn promote_class_literals(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Type<'db> {
         self.apply_type_mapping(
             db,
             env,
