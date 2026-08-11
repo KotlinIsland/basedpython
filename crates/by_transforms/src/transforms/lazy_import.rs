@@ -10,6 +10,8 @@
 //! Both modes skip:
 //!   - `from __future__ import ...` — compiler directive
 //!   - `from x import *` — `lazy` is not allowed with star imports
+//!   - `TYPE_CHECKING` — a flag read statically, whose name may only ever be
+//!     bound to `False`
 //!
 //! The polyfill additionally skips forms it can't safely rewrite:
 //!   - relative imports (`from .pkg import x`)
@@ -189,6 +191,19 @@ impl<'src> LazyImport<'src> {
             .as_ref()
             .is_some_and(|m| m.id.as_str() == "__future__");
         let is_star = node.names.iter().any(|a| a.name.id.as_str() == "*");
+        // `TYPE_CHECKING` is a flag a checker reads statically, not an ordinary
+        // binding: deferring it rebinds the name to a proxy, and the name may
+        // only ever be bound to `False`
+        let binds_type_checking = node
+            .names
+            .iter()
+            .any(|a| a.asname.is_none() && a.name.id.as_str() == "TYPE_CHECKING");
+        if binds_type_checking {
+            if node.is_lazy {
+                self.strip_lazy_keyword(node.range());
+            }
+            return;
+        }
 
         // a module whose execution is the point of the import is never deferred
         if node
@@ -326,6 +341,16 @@ impl<'src> LazyImport<'src> {
     }
 }
 
+/// whether `test` is the `TYPE_CHECKING` flag, spelled bare or through the module it
+/// comes from
+fn is_type_checking_test(test: &ruff_python_ast::Expr) -> bool {
+    match test {
+        ruff_python_ast::Expr::Name(name) => name.id.as_str() == "TYPE_CHECKING",
+        ruff_python_ast::Expr::Attribute(attr) => attr.attr.as_str() == "TYPE_CHECKING",
+        _ => false,
+    }
+}
+
 impl<'ast> Visitor<'ast> for LazyImport<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         match stmt {
@@ -348,6 +373,14 @@ impl<'ast> Visitor<'ast> for LazyImport<'_> {
                 }
             }
             Stmt::FunctionDef(_) | Stmt::ClassDef(_) | Stmt::Try(_) => {
+                let outer = std::mem::replace(&mut self.at_module_level, false);
+                walk_stmt(self, stmt);
+                self.at_module_level = outer;
+            }
+            // an `if TYPE_CHECKING:` body never runs, so an import inside it has
+            // no execution to defer — and deferring it would rebind the name to
+            // a proxy, which is the one thing a type expression cannot read
+            Stmt::If(node) if is_type_checking_test(&node.test) => {
                 let outer = std::mem::replace(&mut self.at_module_level, false);
                 walk_stmt(self, stmt);
                 self.at_module_level = outer;
@@ -588,6 +621,16 @@ mod tests {
     }
 
     #[test]
+    fn keyword_type_checking_unchanged() {
+        // deferring the flag would rebind the name to a proxy; a checker only
+        // ever accepts it bound to `False`
+        check(
+            "from typing import TYPE_CHECKING\n",
+            "from typing import TYPE_CHECKING\n",
+        );
+    }
+
+    #[test]
     fn keyword_relative_lazified() {
         check("from .pkg import x\n", "lazy from .pkg import x\n");
     }
@@ -653,6 +696,14 @@ mod tests {
     #[test]
     fn polyfill_import_as() {
         check_polyfill_body("import os as o\n", "o = _lazy_module(\"os\")\n");
+    }
+
+    #[test]
+    fn polyfill_type_checking_stays_eager() {
+        check_polyfill_body(
+            "from typing import TYPE_CHECKING\nimport other\n",
+            "from typing import TYPE_CHECKING\nother = _lazy_module(\"other\")\n",
+        );
     }
 
     #[test]

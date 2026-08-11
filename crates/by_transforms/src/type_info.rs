@@ -2,6 +2,8 @@
 
 use ruff_python_ast::helpers::is_dotted_name;
 use ruff_python_ast::{Expr, ExprCall, ExprName, ExprRef, Stmt, StmtClassDef};
+use ruff_python_parser::parse_expression;
+use ruff_python_stdlib::basedpython::IMPLICIT_TYPING_NAMES;
 use ruff_text_size::TextRange;
 use ty_python_core::scope::ScopeKind;
 use ty_python_core::{global_scope, place_table, semantic_index};
@@ -42,6 +44,19 @@ pub(crate) enum UnpackedKwargsLowering {
     /// keyword-only `(name, rendered type)` parameters; python cannot spell the protocol
     /// itself in the `**` position
     Protocol(Vec<(String, String)>),
+}
+
+/// A type spelled as source for the *emitted* file, with the imports that spelling needs.
+/// Produced by [`spell_for_python`], which never returns one whose text names something the
+/// output cannot resolve
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SynthesizedType {
+    /// the type expression
+    pub(crate) text: String,
+    /// modules a qualified class name needs — `decimal` for `decimal.Decimal`
+    pub(crate) modules: Vec<String>,
+    /// `typing` names the file does not already bind
+    pub(crate) typing_names: Vec<&'static str>,
 }
 
 /// How an assignment inside a trailing-lambda block reaches an enclosing scope,
@@ -283,11 +298,13 @@ pub(crate) trait TypeInfo {
     fn shares_a_cell_scope(&self, reference: &ExprName, anchor: &Expr) -> bool;
 
     /// rendered inferred (literal-promoted) type of `expr`, or `None` when ty
-    /// cannot resolve a type (unresolved import, parse error, etc.).
+    /// cannot resolve a type (unresolved import, parse error, etc.) or the type
+    /// it resolves to has no python type-expression spelling the emitted file
+    /// can resolve.
     /// example: a literal `20` inferred as `Literal[20]` is promoted to
     /// `"int"` here so two value-forms with structurally compatible fields
     /// hash to the same class shape.
-    fn promoted_type_display(&self, expr: &Expr) -> Option<String>;
+    fn promoted_type_display(&self, expr: &Expr) -> Option<SynthesizedType>;
 
     /// whether `expr` is an application of a `type def` — `F[bool]` where `F` is
     /// a type function. such an application lowers to the type the type function
@@ -461,10 +478,12 @@ pub(crate) trait TypeInfo {
 
     /// the inferred annotation to synthesize for a bare class-body assignment
     /// `<name> = <value>` — the promoted display of `value`'s type (`1` →
-    /// `"int"`, `[1]` → `"list[int]"`), or `None` when ty resolves no concrete
-    /// type or the promoted type carries a dynamic part (`Unknown` / `Any`)
-    /// with no faithful spelling
-    fn inferred_annotation(&self, expr: &Expr) -> Option<String>;
+    /// `"int"`, `[1]` → `"list[int]"`, `int` → `"type[int]"`), with the modules
+    /// that spelling needs imported. `None` when ty resolves no concrete type,
+    /// the promoted type carries a dynamic part (`Unknown` / `Any`), or it has
+    /// no python type-expression spelling (a module, a callable in arrow form,
+    /// a class local to a function)
+    fn inferred_annotation(&self, expr: &Expr) -> Option<SynthesizedType>;
 
     /// whether adding a type annotation to a bare `name = value` assignment in
     /// `class_def`'s body would change the class's runtime semantics — true for
@@ -824,15 +843,12 @@ impl TypeInfo for SemanticModel<'_> {
             })
     }
 
-    fn promoted_type_display(&self, expr: &Expr) -> Option<String> {
+    fn promoted_type_display(&self, expr: &Expr) -> Option<SynthesizedType> {
+        let db = self.db();
+        let env = self.program_environment();
         let ty = expr.inferred_type(self)?;
-        let promoted = ty.promote(self.db(), &self.program_environment());
-        let rendered = display_for_python(self.db(), &self.program_environment(), promoted);
-        // ty's default display tags type variables with their binding scope
-        // for disambiguation (e.g. `T@render`); that suffix is not valid in
-        // emitted Python source. strip it before returning so the rendered
-        // type is a syntactically valid type expression
-        Some(strip_binding_context_suffix(&rendered))
+        let promoted = ty.promote(db, &env).promote_class_literals(db, &env);
+        spell_for_python(db, &env, self, promoted)
     }
 
     fn template_literal_strings(&self, expr: &Expr) -> Option<Vec<String>> {
@@ -1119,19 +1135,20 @@ impl TypeInfo for SemanticModel<'_> {
         ty_python_semantic::types::class_framework_role(self.db(), class)
     }
 
-    fn inferred_annotation(&self, expr: &Expr) -> Option<String> {
+    fn inferred_annotation(&self, expr: &Expr) -> Option<SynthesizedType> {
+        let db = self.db();
+        let env = self.program_environment();
         let ty = expr.inferred_type(self)?;
         // a dynamic part (`Unknown` from an empty `[]`, an unresolved import,
         // `Any`) has no faithful annotation — leave the assignment bare
-        if ty.has_dynamic(self.db(), &self.program_environment()) {
+        if ty.has_dynamic(db, &env) {
             return None;
         }
-        let promoted = ty.promote(self.db(), &self.program_environment());
-        Some(strip_binding_context_suffix(&display_for_python(
-            self.db(),
-            &self.program_environment(),
-            promoted,
-        )))
+        // a class object's own type has no annotation form (`int` reads as
+        // `<class 'int'>`); `type[int]` is its promoted form, and the type ty
+        // itself reads back off the undeclared attribute through an instance
+        let promoted = ty.promote(db, &env).promote_class_literals(db, &env);
+        spell_for_python(db, &env, self, promoted)
     }
 
     fn class_body_annotation_is_semantic(&self, class_def: &StmtClassDef) -> bool {
@@ -1166,6 +1183,61 @@ fn display_for_python<'db>(
         DisplaySettings::default().with_reduced_symbolic_operations(),
     )
     .to_string()
+}
+
+/// Spell `ty` as a type expression the *emitted* file can resolve, or `None` when it has
+/// no such spelling.
+///
+/// Two things can go wrong with a raw display. It may not be a type expression at all — a
+/// module, a callable in arrow form — which the reparse rejects. Or it may parse while
+/// naming something the output does not bind: a class the file never imported, a class
+/// whose bare name is taken there by the module it lives in (`datetime`), a `typing` name
+/// the source never mentions. [`Type::source_spelling_in`] settles the classes by
+/// qualifying them and reporting the module to import; the `typing` names ride the same
+/// table [`implicit_typing`](super::transforms::implicit_typing) uses for names the source
+/// does write, which never sees a synthesized annotation.
+fn spell_for_python<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    model: &SemanticModel<'db>,
+    ty: Type<'db>,
+) -> Option<SynthesizedType> {
+    let spelling = ty.source_spelling_in(
+        db,
+        env,
+        model.program_file(),
+        DisplaySettings::default().with_reduced_symbolic_operations(),
+    )?;
+    let text = strip_binding_context_suffix(&spelling.text);
+    let parsed = parse_expression(&text).ok()?;
+
+    let mut names = NameCollector(Vec::new());
+    ruff_python_ast::visitor::Visitor::visit_expr(&mut names, parsed.expr());
+    let typing_names = names
+        .0
+        .into_iter()
+        .filter(|name| !model.is_bound_globally(name))
+        .filter_map(|name| IMPLICIT_TYPING_NAMES.iter().copied().find(|n| *n == name))
+        .collect();
+
+    Some(SynthesizedType {
+        text,
+        modules: spelling.modules,
+        typing_names,
+    })
+}
+
+/// The names a spelled type reads at its roots — `decimal` in `decimal.Decimal`, `Never`
+/// in `Never | None`. An attribute's member is not a `Name`, so only roots are collected
+struct NameCollector(Vec<String>);
+
+impl<'ast> ruff_python_ast::visitor::Visitor<'ast> for NameCollector {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if let Expr::Name(name) = expr {
+            self.0.push(name.id.to_string());
+        }
+        ruff_python_ast::visitor::walk_expr(self, expr);
+    }
 }
 
 /// Strip ty's `@<scope>` binding-context suffix from type variable display
