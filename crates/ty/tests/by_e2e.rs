@@ -49,6 +49,57 @@ fn run_transpile(source: &str, extra_args: &[&str]) -> String {
 }
 
 #[test]
+fn compile_transpiles_the_fallback_with_the_lowering_options_it_was_given() {
+    // a declined function *runs* from the embedded source, so `by compile` has to
+    // transpile it with the same options a `by transpile` would use. the library
+    // has always taken them; until this reached the cli there was no way to say so,
+    // and every compile silently used the defaults
+    //
+    // `except*` has no lowering, so this declines and the fallback is what runs
+    let source = "\
+def total(s: str, n: int) -> int:
+    try:
+        pass
+    except* ValueError:
+        pass
+    return len(s) + n
+";
+    let dir = std::env::temp_dir().join("by_cli_soundness");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("sound.by");
+    std::fs::write(&file, source).unwrap();
+
+    let emitted = |spec: &str| -> String {
+        let out = dir.join(spec);
+        let status = Command::new(env!("CARGO_BIN_EXE_by"))
+            .args(["compile"])
+            .arg(&file)
+            .arg("-o")
+            .arg(&out)
+            .args(["--emit-c-only", "--soundness", spec])
+            .current_dir(&dir)
+            .output()
+            .expect("failed to spawn by");
+        assert!(
+            status.status.success(),
+            "by exited with error:\n{}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+        std::fs::read_to_string(out.join("sound.c")).expect("the C is readable")
+    };
+
+    assert!(
+        emitted("all").contains("_soundness_check"),
+        "`all` puts the entry checks in the fallback"
+    );
+    assert!(
+        !emitted("none").contains("_soundness_check"),
+        "`none` leaves them out, so the flag is what made the difference"
+    );
+}
+
+#[test]
 fn run_executes_module() {
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(dir.path().join("main.by"), "print('hello from by run')\n").unwrap();

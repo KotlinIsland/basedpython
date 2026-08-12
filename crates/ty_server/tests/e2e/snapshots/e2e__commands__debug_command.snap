@@ -189,6 +189,7 @@ Settings: Settings {
         },
         dependency_groups: None,
         shipped_modules: None,
+        strict_float: false,
         disable_fluid_specializations: false,
         sound_types: false,
         infer_unannotated_signatures: true,

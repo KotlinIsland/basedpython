@@ -24,7 +24,11 @@ doctest = false
 
 [dependencies]
 ruff_db = { workspace = true, features = ["os", "cache", "junit"] }
+ruff_text_size = { workspace = true }
 ruff_diagnostics = { workspace = true }
+by_build = { workspace = true }
+by_ir = { workspace = true }
+by_irbuild = { workspace = true }
 by_transforms = { workspace = true }
 ruff_ranged_value = { workspace = true }
 ty_combine = { workspace = true }

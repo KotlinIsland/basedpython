@@ -726,6 +726,45 @@ def narrow_match(x: str) -> None:
 
 ---
 
+### `strict-float`
+
+Whether `float` and `complex` annotations mean *only* themselves. This is a
+basedpython feature.
+
+The typing spec's special case says an `int` is acceptable wherever a `float` is
+asked for, so `x: float` really declares `int | float`. A `.by` file opts out of
+that already; this makes the same model available to a `.py` one, per module.
+
+It is not only a checking question. The wider annotation is why a `.py`
+`list[float]` cannot be laid out as an unboxed buffer and a `.py` class cannot
+have `double` fields, so `by compile` reads this to choose a representation.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # `float` means float, so a numeric module compiles to unboxed doubles
+    strict-float = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # `float` means float, so a numeric module compiles to unboxed doubles
+    strict-float = true
+    ```
+
+---
+
 ## `environment`
 
 ### `extra-paths`
@@ -1782,6 +1821,45 @@ def narrow_match(x: str) -> None:
     [overrides.analysis]
     # Preserve broad builtin types instead of narrowing them to literals
     strict-equality-semantics = true
+    ```
+
+---
+
+#### `strict-float`
+
+Whether `float` and `complex` annotations mean *only* themselves. This is a
+basedpython feature.
+
+The typing spec's special case says an `int` is acceptable wherever a `float` is
+asked for, so `x: float` really declares `int | float`. A `.by` file opts out of
+that already; this makes the same model available to a `.py` one, per module.
+
+It is not only a checking question. The wider annotation is why a `.py`
+`list[float]` cannot be laid out as an unboxed buffer and a `.py` class cannot
+have `double` fields, so `by compile` reads this to choose a representation.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # `float` means float, so a numeric module compiles to unboxed doubles
+    strict-float = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # `float` means float, so a numeric module compiles to unboxed doubles
+    strict-float = true
     ```
 
 ---
