@@ -1247,6 +1247,34 @@ fn object_type_form(db: &dyn Db) -> Type<'_> {
     TypeFormType::from_type_expression(db, Type::object())
 }
 
+const NESTING_LIMIT: usize = 8;
+
+/// how deeply `ty` nests generic instances inside one another, saturating at `limit`
+fn nesting_depth<'db>(db: &'db dyn Db, ty: Type<'db>, limit: usize) -> usize {
+    if limit == 0 {
+        return 0;
+    }
+    if let Type::Union(union) = ty {
+        return union
+            .elements(db)
+            .iter()
+            .map(|element| nesting_depth(db, *element, limit))
+            .max()
+            .unwrap_or(0);
+    }
+    let Some(instance) = ty.as_nominal_instance() else {
+        return 0;
+    };
+    let argument = match instance.tuple_spec(db) {
+        Some(spec) => spec.homogeneous_element_type(db),
+        None => match instance.class(db).class_literal_and_specialization(db).1 {
+            Some(specialization) => UnionType::from_elements(db, specialization.types(db)),
+            None => return 1,
+        },
+    };
+    1 + nesting_depth(db, argument, limit - 1)
+}
+
 #[salsa::tracked]
 impl<'db> Type<'db> {
     pub(crate) const fn any() -> Self {
@@ -1428,7 +1456,8 @@ impl<'db> Type<'db> {
             // where the order of union types is different between the previous and current cycle.
             // We should use the previous union type as the base and only add new element types in
             // this cycle, if any.
-            UnionType::from_elements_cycle_recovery(db, [previous, self])
+            let unioned = UnionType::from_elements_cycle_recovery(db, [previous, self]);
+            unioned.collapse_tuple_lengths(db)
         }
         .recursive_type_normalized(db, cycle)
         .without_growing_tuple_lengths(db, previous)
@@ -1480,6 +1509,59 @@ impl<'db> Type<'db> {
             UnionType::from_elements_cycle_recovery(db, elements),
         ));
         UnionType::from_elements_cycle_recovery(db, rest)
+    }
+
+    /// collapse a union that is accumulating one tuple per *length* into a single
+    /// variable-length tuple
+    ///
+    /// a tuple grown in a loop — `key += (x,)` — gives the fixpoint `tuple[T]`, then
+    /// `tuple[T] | tuple[T, T]`, then one more member every iteration. that union has no
+    /// fixed point: it is one element longer each time round, and the cycle runs until
+    /// salsa gives up. `tuple[T, ...]` *is* one, it is a supertype of every member, and
+    /// it is what upstream infers for the same loop.
+    ///
+    /// only fixed-length members are folded, and only when there are several: two
+    /// tuples of different length in a union is an ordinary type a program can mean,
+    /// while a growing run of them is the shape that does not converge
+    fn collapse_tuple_lengths(self, db: &'db dyn Db) -> Self {
+        const GROWING: usize = 3;
+        let Type::Union(union) = self else {
+            return self;
+        };
+        let elements = union.elements(db);
+        let fixed = elements
+            .iter()
+            .filter(|element| {
+                element
+                    .as_nominal_instance()
+                    .and_then(|instance| instance.tuple_spec(db))
+                    .is_some_and(|spec| spec.as_fixed_length().is_some())
+            })
+            .count();
+        if fixed < GROWING {
+            return self;
+        }
+        let mut kept: Vec<Type<'db>> = Vec::with_capacity(elements.len() - fixed + 1);
+        let mut element_types: Vec<Type<'db>> = Vec::new();
+        for element in elements {
+            match element
+                .as_nominal_instance()
+                .and_then(|instance| instance.tuple_spec(db))
+                .filter(|spec| spec.as_fixed_length().is_some())
+            {
+                Some(spec) => element_types.push(spec.homogeneous_element_type(db)),
+                None => kept.push(*element),
+            }
+        }
+        let element = UnionType::from_elements(db, element_types);
+        kept.push(Type::tuple(Some(
+            crate::types::tuple::TupleType::homogeneous(db, element),
+        )));
+        UnionType::from_elements(db, kept)
+    }
+
+    pub(crate) fn is_deeply_nested(self, db: &'db dyn Db) -> bool {
+        nesting_depth(db, self, NESTING_LIMIT) == NESTING_LIMIT
     }
 
     pub fn is_none(&self, db: &'db dyn Db) -> bool {
@@ -1582,6 +1664,66 @@ impl<'db> Type<'db> {
             // Once generic NewType is officially specified, handle it.
             _ => false,
         }
+    }
+
+    /// Whether this type has a *member* that is gradual, without being gradual itself.
+    ///
+    /// A gradual type is assignable to and from everything, so a set-theoretic type with
+    /// one in it answers "yes" to every question about what it can hold. Anything that
+    /// decides a representation from an assignability test has to rule this out first,
+    /// or `Unknown | None` reads as `None` and `Unknown & None` reads the same way.
+    ///
+    /// Only the *positive* members of an intersection are consulted: a negative one says
+    /// what the type is not, which constrains rather than widens what it can hold.
+    ///
+    /// The whole set-theoretic structure is walked, not just its outermost level: a
+    /// gradual member widens the type it sits in, and that widening carries out through
+    /// every enclosing union and intersection. `(Unknown & A) | (Unknown & B)` is as
+    /// assignable to `None` as `Unknown` itself is. Only unions and intersections are
+    /// descended into — a generic argument is not a member, so `list[Unknown]` is still a
+    /// proof that the value is a `list`.
+    ///
+    /// basedpython: a type variable is answered by its upper bound, because that is what
+    /// every assignability test about it consults. The common one is the hole
+    /// `infer-unannotated-signatures` opens for an unannotated parameter: nothing in the
+    /// body bounded it, so it is `Unknown` wearing a name and it proves exactly as little.
+    pub fn has_gradual_member(self, db: &'db dyn Db) -> bool {
+        self.has_gradual_member_impl(db, true)
+    }
+
+    /// `descend_typevars` is spent on the way into a bound, so a bound that mentions its own
+    /// type variable — `T: T | int` — is walked once rather than for ever.
+    fn has_gradual_member_impl(self, db: &'db dyn Db, descend_typevars: bool) -> bool {
+        let gradual = |element: Type<'db>| {
+            element.is_dynamic() || element.has_gradual_member_impl(db, descend_typevars)
+        };
+        match self {
+            Type::Union(union) => union.elements(db).iter().copied().any(gradual),
+            Type::Intersection(intersection) => {
+                intersection.positive_elements_or_object(db).any(gradual)
+            }
+            Type::TypeVar(bound_typevar) if descend_typevars => bound_typevar
+                .typevar(db)
+                .upper_bound(db)
+                .is_some_and(|bound| {
+                    bound.is_dynamic() || bound.has_gradual_member_impl(db, false)
+                }),
+            _ => false,
+        }
+    }
+
+    /// Whether this type is a class whose metaclass is exactly `type`.
+    ///
+    /// A C extension type built with `PyType_FromSpecWithBases` gets `type` as its
+    /// metaclass, so a base with any other one — `ABCMeta`, most commonly — is a
+    /// metaclass conflict that CPython rejects when the module is imported.
+    pub fn has_default_metaclass(self, db: &'db dyn Db) -> bool {
+        self.to_class_type(db).is_some_and(|class| {
+            class
+                .metaclass(db)
+                .as_class_literal()
+                .is_some_and(|meta| meta.is_known(db, KnownClass::Type))
+        })
     }
 
     pub const fn is_dynamic(&self) -> bool {
@@ -2472,6 +2614,30 @@ impl<'db> Type<'db> {
         self.apply_type_mapping(
             db,
             &TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular),
+            TypeContext::default(),
+        )
+    }
+
+    /// As [`Type::promote`], but honouring the numeric model of the file the type came from.
+    ///
+    /// An *inferred* type is widened through the same promotion that applies the numeric
+    /// special case, so a module that opted out of the special case in its annotations would
+    /// otherwise get it back through inference — `self.x = x` with `x: float` would declare
+    /// the attribute `int | float` however strict the parameter was.
+    ///
+    /// A `.by` file has that model by definition rather than by configuration, so it takes
+    /// the strict path whatever `strict-float` says.
+    #[must_use]
+    pub(crate) fn promote_in(self, db: &'db dyn Db, file: ruff_db::files::File) -> Type<'db> {
+        let kind =
+            if file.source_type(db).is_basedpython() || db.analysis_settings(file).strict_float {
+                PromotionKind::RegularStrictNumeric
+            } else {
+                PromotionKind::Regular
+            };
+        self.apply_type_mapping(
+            db,
+            &TypeMapping::Promote(PromotionMode::On, kind),
             TypeContext::default(),
         )
     }
@@ -6674,11 +6840,17 @@ impl<'db> Type<'db> {
                     return Ok(union);
                 }
                 let is_by_ext = |ext: Option<&str>| matches!(ext, Some("by" | "byi"));
-                let (is_by, is_vendored) = match scope_id.file(db).path(db) {
+                let file = scope_id.file(db);
+                let (is_by, is_vendored) = match file.path(db) {
                     ruff_db::files::FilePath::System(p) => (is_by_ext(p.extension()), false),
                     ruff_db::files::FilePath::SystemVirtual(p) => (is_by_ext(p.extension()), false),
                     ruff_db::files::FilePath::Vendored(_) => (false, true),
                 };
+                // `strict-float` asks a `.py` module for the same numeric model a
+                // `.by` file has: `float` means float. it is not only a checking
+                // question — the wider annotation is why a `.py` `list[float]` cannot
+                // be an unboxed buffer, so this is what the compiler reads too
+                let is_by = is_by || (!is_vendored && db.analysis_settings(file).strict_float);
                 // the promotion is a rule about what a position *accepts*: an
                 // `int` is acceptable where a `float` is asked for. a *return*
                 // annotation accepts nothing, and `float.__mul__` returns a
@@ -6988,6 +7160,51 @@ impl<'db> Type<'db> {
                 )],
                 fallback_type: Type::unknown(),
             }),
+        }
+    }
+
+    /// basedpython: the name of the class this type is an instance of, when it is
+    /// a nominal instance of exactly one class.
+    ///
+    /// The native compiler needs it to decide whether a value has a class whose
+    /// layout it emitted, and so whether an attribute read can be a field read at
+    /// a compile-time offset rather than a `PyObject_GetAttr`.
+    pub fn nominal_class_name(self, db: &'db dyn Db) -> Option<&'db str> {
+        match self {
+            Type::NominalInstance(instance) => Some(instance.class(db).name(db).as_str()),
+            _ => None,
+        }
+    }
+
+    /// basedpython: the element type of a `list[T]`, when this is one
+    ///
+    /// a consumer that compiles container operations needs the element to decide a
+    /// representation for the buffer, which the class name alone does not give
+    pub fn list_element_type(self, db: &'db dyn Db) -> Option<Type<'db>> {
+        let Type::NominalInstance(instance) = self else {
+            return None;
+        };
+        let class = instance.class(db);
+        if class.name(db).as_str() != "list" {
+            return None;
+        }
+        let alias = class.into_generic_alias()?;
+        match alias.specialization(db).types(db) {
+            [element] => Some(*element),
+            _ => None,
+        }
+    }
+
+    /// whether nothing can be a subclass of this instance's nominal class
+    ///
+    /// only `@final`. **not** `sealed`, which closes the world *outside* the
+    /// declaring module and says nothing about a subclass inside it — a consumer
+    /// that compiles a method call needs to know no override exists anywhere, and
+    /// sealing licenses a switch over the known subclasses rather than a direct call
+    pub fn nominal_class_is_exact(self, db: &'db dyn Db) -> bool {
+        match self {
+            Type::NominalInstance(instance) => instance.class(db).is_final(db),
+            _ => false,
         }
     }
 
@@ -7352,6 +7569,8 @@ impl<'db> Type<'db> {
                 method.self_instance(db).apply_type_mapping_impl(db, type_mapping, tcx, visitor),
             )),
 
+            // `RegularStrictNumeric` is deliberately absent: it promotes everything
+            // else and leaves `float` and `complex` exact
             Type::NominalInstance(instance) if matches!(type_mapping, TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular | PromotionKind::RegularKeepingLiterals)) => {
                 match instance.known_class(db) {
                     Some(KnownClass::Complex) => KnownUnion::Complex.to_type(db),
@@ -7620,7 +7839,10 @@ impl<'db> Type<'db> {
                     PromotionMode::On,
                     PromotionKind::ClassLiteralsOnly | PromotionKind::SingletonsOnly,
                 ) => self,
-                TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular) => self.promote_impl(db),
+                TypeMapping::Promote(
+                    PromotionMode::On,
+                    PromotionKind::Regular | PromotionKind::RegularStrictNumeric,
+                ) => self.promote_impl(db),
                 TypeMapping::Promote(PromotionMode::On, PromotionKind::RegularKeepingLiterals) => {
                     self.promote_impl_keeping_literals(db)
                 }
@@ -8622,6 +8844,12 @@ pub enum PromotionKind {
     /// This is what a covariant type argument gets: widening it is sound, but nothing reads a
     /// different type back out of that position, so the literal it was inferred from stands.
     RegularKeepingLiterals,
+    /// Like [`PromotionKind::Regular`], but `float` and `complex` are left exact.
+    ///
+    /// Widening a literal is one thing; widening `float` to `int | float` is the typing spec's
+    /// numeric special case, and a module that set `strict-float` has opted out of it. The two
+    /// travel together in [`PromotionKind::Regular`] because they are usually wanted together.
+    RegularStrictNumeric,
     /// Promote class literals recursively without promoting other literal types.
     ClassLiteralsOnly,
     /// Singleton-only promotion recursively descends through nominal instances

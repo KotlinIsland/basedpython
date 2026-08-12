@@ -10,6 +10,7 @@ use crate::types::deferred::{is_integer_operand, is_symbolic_operand};
 use crate::types::diagnostic::{
     DIVISION_BY_ZERO, report_unsupported_augmented_assignment, report_unsupported_binary_operation,
 };
+use crate::types::inferred_signature::gradual_hole;
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::tuple::Tuple;
 use crate::types::typevar::TypeVarConstraints;
@@ -413,6 +414,26 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     )
                 })
             }
+            // basedpython: a hole nothing in the body bounded is the gradual type it replaced,
+            // so an operation on it answers what that gradual type answered. resolving the
+            // dunder against the hole instead lets the *other* operand decide the result —
+            // `int * <hole>` reads as `int`, which `scale(3, 1.5)` disproves at runtime
+            (left, right, _)
+                if gradual_hole(db, left).is_some() || gradual_hole(db, right).is_some() =>
+            {
+                visitor.visit(db, (left_ty, op, right_ty), || {
+                    self.infer_binary_expression_type_impl(
+                        node,
+                        emitted_division_by_zero_diagnostic,
+                        gradual_hole(db, left).unwrap_or(left),
+                        gradual_hole(db, right).unwrap_or(right),
+                        op,
+                        visitor,
+                        tcx,
+                    )
+                })
+            }
+
             // basedpython: arithmetic on a type parameter names a value that depends on the
             // specialization, so evaluating it through the bound's `__add__` would answer
             // `int` and throw that away. build the same symbolic operation the annotation
@@ -1475,7 +1496,13 @@ pub(crate) fn literal_binary_op<'db>(
                     // result mirrors how `float` / `complex` annotations are
                     // interpreted in `.py` files (`int | float`,
                     // `int | float | complex`). this gives callers something
-                    // they can use without losing all type info
+                    // they can use without losing all type info.
+                    //
+                    // this does *not* consult `strict-float`, and an audit found no
+                    // way to reach it from source with a result the union would be
+                    // wrong for: the only producers are literal divisions by zero,
+                    // which are diagnosed before the type is used, and the deferred
+                    // path, which already passes `is_basedpython: true`
                     let widened = if complex_involved {
                         crate::types::set_theoretic::KnownUnion::Complex.to_type(db)
                     } else {

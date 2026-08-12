@@ -153,6 +153,10 @@ struct Soundness<'a> {
     /// force-unwrap — wrapping them directly would splice the check's second
     /// argument into `_force_unwrap`'s call parens
     consumed: Vec<TextRange>,
+    /// spans whose *source text* is user-visible, so nothing may be inserted into
+    /// them: an f-string's `{expr=}` renders the text between the braces, and a
+    /// check wrapped there would print itself
+    verbatim: Vec<TextRange>,
     /// declared-return-type check plans of the enclosing functions (innermost
     /// last); `None` when a function has no annotation or an uncheckable one
     return_targets: Vec<Option<SoundnessCheck>>,
@@ -174,6 +178,7 @@ impl<'a> Soundness<'a> {
             edits: Vec::new(),
             guards: Vec::new(),
             consumed: Vec::new(),
+            verbatim: Vec::new(),
             return_targets: Vec::new(),
             used_iter: false,
             used_aiter: false,
@@ -483,6 +488,25 @@ impl<'ast> Visitor<'ast> for Soundness<'_> {
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
+        // `f"{x=}"` renders the source between the braces, so a check inserted
+        // there would show up in the output. nothing inside one is wrapped
+        if let Expr::FString(fstring) = expr {
+            for element in fstring.value.elements() {
+                if let ruff_python_ast::InterpolatedStringElement::Interpolation(part) = element
+                    && part.debug_text.is_some()
+                {
+                    self.verbatim.push(part.expression.range());
+                }
+            }
+        }
+        if self
+            .verbatim
+            .iter()
+            .any(|span| span.contains_range(expr.range()))
+        {
+            walk_expr(self, expr);
+            return;
+        }
         if let Expr::UnaryOp(unary) = expr
             && unary.op == UnaryOp::Force
         {
@@ -664,6 +688,24 @@ mod tests {
         let out = check("def f(d: dict[str, int]):\n    v = d.get(\"k\")\n");
         assert!(
             out.contains("v = _soundness_check(d.get(\"k\"), (int, type(None)))"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_debug_interpolation_is_left_verbatim() {
+        // `f"{x=}"` renders the source between the braces, so a check inserted
+        // there would print itself
+        let out = check("def f(d: dict[str, int]):\n    return f\"{d.get('k')=}\"\n");
+        assert!(!out.contains("_soundness_check"), "got:\n{out}");
+        assert!(out.contains("f\"{d.get('k')=}\""), "got:\n{out}");
+    }
+
+    #[test]
+    fn an_ordinary_interpolation_is_still_checked() {
+        let out = check("def f(d: dict[str, int]):\n    return f\"{d.get('k')}\"\n");
+        assert!(
+            out.contains("_soundness_check(d.get('k'), (int, type(None)))"),
             "got:\n{out}"
         );
     }

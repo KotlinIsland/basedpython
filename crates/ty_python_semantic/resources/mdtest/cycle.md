@@ -454,3 +454,64 @@ reveal_mro(GenericBase["Foo", "Bar"])
 class Foo: ...
 class Bar: ...
 ```
+
+## a tuple grown in a loop widens rather than diverging
+
+`key += (x,)` makes the tuple one element longer on every trip, so the fixpoint sees `tuple[T]`,
+then `tuple[T] | tuple[T, T]`, then one more union member each iteration — a sequence with no fixed
+point, which used to run until salsa gave up. a variable-length tuple *is* one, and it is a
+supertype of every member.
+
+```py
+def bounded() -> None:
+    key = (1,)
+    for _ in range(3):
+        key += (2,)
+    reveal_type(key)  # revealed: tuple[Literal[1, 2], ...]
+
+def unbounded(n: int) -> object:
+    key = (1,)
+    while True:
+        key += (2,)
+        if len(key) > n:
+            return key
+
+def two_lengths(flag: bool) -> None:
+    # *two* tuples of different length in a union is an ordinary type a program can
+    # mean, and stays one — only a growing run of them is folded
+    pair = (1, 2) if flag else (1, 2, 3)
+    reveal_type(pair)  # revealed: tuple[Literal[1], Literal[2]] | tuple[Literal[1], Literal[2], Literal[3]]
+```
+
+## a container that nests itself in a loop widens rather than diverging
+
+`stack.append((stack.pop(), a, b))` makes the element type one level *deeper* on every trip, so the
+fixpoint sees `list[tuple[T, T, T]]`, then `list[tuple[tuple[T, T, T], T, T]]`, and one more level
+each iteration. the type it is reaching for is recursive and cannot be written down, so the
+supertype to settle on is the container with its arguments unknown — which is what a checker without
+flow-sensitive specializations infers for the same loop.
+
+two things had to hold for this to converge. a type built entirely out of `Unknown` never acquires a
+divergence marker, so depth is the only signal that it is still growing; and the event timeline of a
+fluid specialization has to be *retained* rather than replaced when an iteration produces fewer
+events than the last, or the two alternate forever.
+
+```py
+def walk(dirs, nondirs, top):
+    stack = [top]
+    while stack:
+        top = stack.pop()
+        stack.append((top, dirs, nondirs))
+
+def nested_dict(key: str) -> None:
+    seen = {}
+    while key:
+        seen[key] = seen
+        key = key[1:]
+
+def shallow_nesting() -> None:
+    # nesting a program actually writes is left alone: this is three levels, not a run
+    # that gains one on every trip
+    boxed: list[list[list[int]]] = [[[1]]]
+    reveal_type(boxed)  # revealed: list[list[list[int]]]
+```

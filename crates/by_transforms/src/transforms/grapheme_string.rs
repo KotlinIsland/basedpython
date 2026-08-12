@@ -627,6 +627,25 @@ def _by_suffix(_text, _n):
     }
 
     #[test]
+    fn a_narrowed_dynamic_receiver_is_untouched_too() {
+        // narrowing a gradual value leaves an intersection whose *positive* member is
+        // still gradual, and a gradual member is assignable to `str` exactly as readily
+        // as the whole type would be. so this asked "is it string-like?", got yes, and
+        // rewrote a list's attribute access into a grapheme count.
+        //
+        // it has to go through `check` rather than `unchanged`: the latter transpiles as
+        // *python*, where this surface does not exist and nothing would have fired either
+        // way
+        let source = indoc! {"
+            def f(x):
+                if not isinstance(x, int):
+                    return x.character_count
+                return 0
+        "};
+        check(source, source);
+    }
+
+    #[test]
     fn character_receiver() {
         check(
             indoc! {"

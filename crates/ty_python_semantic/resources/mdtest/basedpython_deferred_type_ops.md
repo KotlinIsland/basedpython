@@ -394,3 +394,35 @@ unprovable assignment uses.
 def from_len[I: int](i: I, xs: list[int]) -> I + 1:
     return len(xs) cast I + 1
 ```
+
+## an operation nested past the limit stands for its reduced form
+
+keeping an operation symbolic is worth it for a relationship somebody wrote down, and those are one
+or two operations deep. past a fixed depth the operation reads as the type it already reads as
+everywhere but under type-mapping, so the chain stops growing.
+
+```by
+def near[I: int](i: I) -> I + 1 + 1 + 1:
+    return i + 1 + 1 + 1
+
+reveal_type(near(10))  # revealed: 13
+
+def past[I: int](i: I) -> int:
+    return i + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
+
+reveal_type(past(10))  # revealed: int
+```
+
+## arithmetic accumulated by a loop terminates
+
+a loop that adds to a value typed by an unannotated parameter's hole builds one more operation every
+time round the fixpoint. the depth limit is what gives that a fixed point instead of running the
+checker out of cycle iterations.
+
+```by
+def count_up(start=1):
+    i = start
+    while True:
+        reveal_type(i)  # revealed: int
+        i += 1
+```

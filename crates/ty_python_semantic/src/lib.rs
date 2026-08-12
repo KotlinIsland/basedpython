@@ -143,6 +143,19 @@ pub struct AnalysisSettings {
     /// Only a project that ships several unrelated modules needs to say.
     pub shipped_modules: Option<Box<[Box<str>]>>,
 
+    /// Whether `float` and `complex` annotations mean *only* themselves, rather than
+    /// admitting the wider numeric types the typing spec's special case allows.
+    ///
+    /// The special case says an `int` is acceptable wherever a `float` is asked for, so
+    /// `x: float` really declares `int | float`. That is what a `.by` file opts out of
+    /// already; this makes the same model available to a `.py` one, per module.
+    ///
+    /// It is not only a checking question. The wider annotation is why a `.py`
+    /// `list[float]` cannot be laid out as an unboxed buffer and a `.py` class cannot
+    /// have `double` fields — an element or a field has to be able to hold either type.
+    /// So this is the setting the native compiler reads to choose a representation.
+    pub strict_float: bool,
+
     /// Whether the basedpython "fluid specializations" feature is disabled.
     ///
     /// When disabled, inferred generic specializations are not widened flow-sensitively by
@@ -274,6 +287,7 @@ impl Default for AnalysisSettings {
             replace_imports_with_any: ModuleGlobSet::empty(),
             dependency_groups: None,
             shipped_modules: None,
+            strict_float: false,
             disable_fluid_specializations: false,
             sound_types: false,
             infer_unannotated_signatures: true,
