@@ -6459,6 +6459,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         fn add_overloads_from_binding<'a, 'db>(
             db: &'db dyn Db,
+            file: ruff_db::files::File,
             overloads_with_binding: &mut OverloadsWithBinding<'a, 'db>,
             binding: &'a CallableBinding<'db>,
             constraints: &ConstraintSetBuilder<'db>,
@@ -6469,6 +6470,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 overloads_with_binding.extend(matching_overloads.map(|(_, overload)| {
                     let specialization = overload.argument_type_context_specialization(
                         db,
+                        file,
                         constraints,
                         call_expression_tcx,
                     );
@@ -6478,6 +6480,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             } else if let Some(overload) = binding.best_failing_overload() {
                 let specialization = overload.argument_type_context_specialization(
                     db,
+                    file,
                     constraints,
                     call_expression_tcx,
                 );
@@ -6489,6 +6492,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         let db = self.db();
+        let file = self.file();
 
         // Collect the set of candidate overloads and bindings.
         let mut overloads_with_binding: OverloadsWithBinding = Vec::new();
@@ -6496,6 +6500,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             bindings.visit_overload_set(candidates, &mut |overload, binding| {
                 let specialization = overload.argument_type_context_specialization(
                     db,
+                    file,
                     constraints,
                     call_expression_tcx,
                 );
@@ -6506,6 +6511,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             bindings.visit_type_context_callables(&mut |binding| {
                 add_overloads_from_binding(
                     db,
+                    file,
                     &mut overloads_with_binding,
                     binding,
                     constraints,
@@ -8627,12 +8633,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     tuple_size_promotion_constraints.record_unpromotable_type(
                         self.db(),
                         key_ty.identity(self.db()),
-                        unpacked_key_ty.promote(self.db()),
+                        unpacked_key_ty.promote_in(self.db(), self.file()),
                     );
                     tuple_size_promotion_constraints.record_unpromotable_type(
                         self.db(),
                         value_ty.identity(self.db()),
-                        unpacked_value_ty.promote(self.db()),
+                        unpacked_value_ty.promote_in(self.db(), self.file()),
                     );
 
                     builder.infer(Type::TypeVar(key_ty), unpacked_key_ty).ok()?;
@@ -8689,7 +8695,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let inferred_elt_ty = if fluid_def.is_some() {
                     inferred_elt_ty
                 } else {
-                    inferred_elt_ty.promote(self.db())
+                    // an *element* type is exactly what a container's layout is chosen
+                    // from, so a module that asked for strict numerics has to get one
+                    // here too — otherwise appending a `float` infers `list[int | float]`
+                    // and the buffer is lost
+                    inferred_elt_ty.promote_in(self.db(), self.file())
                 };
 
                 let inferred_type_for_typevar = if elt.is_starred_expr() {
@@ -8737,8 +8747,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     let lower = if is_empty_collection_type_context(tcx) {
                         // Constraints learned from later collection uses follow the same promotion
                         // policy as literal elements: promote element literal types in invariant
-                        // position unless an explicit annotation made them unpromotable.
-                        lower.promote(self.db())
+                        // position unless an explicit annotation made them unpromotable — and,
+                        // like them, follow the file's numeric model, or a `float` element
+                        // widens back to `int | float` and the buffer is lost
+                        lower.promote_in(self.db(), self.file())
                     } else {
                         lower
                     };

@@ -1643,6 +1643,29 @@ pub struct AnalysisOptions {
     )]
     pub disable_fluid_specializations: Option<bool>,
 
+    /// Whether `float` and `complex` annotations mean *only* themselves. This is a
+    /// basedpython feature.
+    ///
+    /// The typing spec's special case says an `int` is acceptable wherever a `float` is
+    /// asked for, so `x: float` really declares `int | float`. A `.by` file opts out of
+    /// that already; this makes the same model available to a `.py` one, per module.
+    ///
+    /// It is not only a checking question. The wider annotation is why a `.py`
+    /// `list[float]` cannot be laid out as an unboxed buffer and a `.py` class cannot
+    /// have `double` fields, so `by compile` reads this to choose a representation.
+    ///
+    /// Defaults to `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"false"#,
+        value_type = "bool",
+        example = r#"
+        # `float` means float, so a numeric module compiles to unboxed doubles
+        strict-float = true
+        "#
+    )]
+    pub strict_float: Option<bool>,
+
     /// Whether to infer sound (non-gradual) types wherever a precise type is available. This is a
     /// basedpython feature.
     ///
@@ -1967,6 +1990,7 @@ impl AnalysisOptions {
             respect_type_ignore_comments,
             allowed_unresolved_imports,
             replace_imports_with_any,
+            strict_float,
             disable_fluid_specializations,
             sound_types,
             infer_unannotated_signatures,
@@ -1985,6 +2009,7 @@ impl AnalysisOptions {
             respect_type_ignore_comments: respect_type_ignore_default,
             allowed_unresolved_imports: allowed_unresolved_imports_default,
             replace_imports_with_any: replace_imports_with_any_default,
+            strict_float: strict_float_default,
             disable_fluid_specializations: disable_fluid_specializations_default,
             sound_types: sound_types_default,
             infer_unannotated_signatures: infer_unannotated_signatures_default,
@@ -2028,6 +2053,7 @@ impl AnalysisOptions {
                 .unwrap_or(respect_type_ignore_default),
             allowed_unresolved_imports,
             replace_imports_with_any,
+            strict_float: strict_float.unwrap_or(strict_float_default),
             disable_fluid_specializations: disable_fluid_specializations
                 .unwrap_or(disable_fluid_specializations_default),
             sound_types: sound_types.unwrap_or(sound_types_default),

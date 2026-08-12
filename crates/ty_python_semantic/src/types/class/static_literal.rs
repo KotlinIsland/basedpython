@@ -3248,7 +3248,7 @@ impl<'db> StaticClassLiteral<'db> {
                 Place::bound(
                     union_of_inferred_types
                         .build()
-                        .promote(db)
+                        .promote_in(db, class_body_scope.file(db))
                         .promote_singletons(db),
                 )
                 .with_provenance(provenance)

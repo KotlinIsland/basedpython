@@ -142,6 +142,77 @@ fn todo_types() {
 }
 
 #[test]
+fn a_gradual_member_is_visible_through_a_union_or_an_intersection() {
+    let db = setup_db();
+    let int = KnownClass::Int.to_instance(&db);
+    let str_ = KnownClass::Str.to_instance(&db);
+    let unknown = Type::unknown();
+
+    // a gradual type is assignable both ways to everything, so a set-theoretic type
+    // holding one answers yes to every question about what it can hold. anything
+    // deciding a representation from an assignability test has to see that first
+    assert!(UnionType::from_elements(&db, [unknown, int]).has_gradual_member(&db));
+    assert!(
+        IntersectionBuilder::new(&db)
+            .add_positive(unknown)
+            .add_negative(str_)
+            .build()
+            .has_gradual_member(&db)
+    );
+
+    // a set-theoretic type of ordinary members hides nothing
+    assert!(!UnionType::from_elements(&db, [int, str_]).has_gradual_member(&db));
+    assert!(
+        !IntersectionBuilder::new(&db)
+            .add_positive(int)
+            .add_negative(str_)
+            .build()
+            .has_gradual_member(&db)
+    );
+
+    // a union of *narrowed* alternatives is the shape a `x if isinstance(x, C) else y`
+    // over an unannotated parameter produces, and the gradual member is one level down
+    let narrowed = UnionType::from_elements(
+        &db,
+        [
+            IntersectionBuilder::new(&db)
+                .add_positive(unknown)
+                .add_positive(int)
+                .build(),
+            IntersectionBuilder::new(&db)
+                .add_positive(unknown)
+                .add_negative(int)
+                .build(),
+        ],
+    );
+    assert!(narrowed.has_gradual_member(&db));
+
+    // and the predicate is about a *member*: a type that is itself gradual has none
+    assert!(!unknown.has_gradual_member(&db));
+
+    // a generic argument is not a member — `list[Unknown]` is still every bit a `list`
+    assert!(
+        !KnownClass::List
+            .to_specialized_instance(&db, &[unknown])
+            .has_gradual_member(&db)
+    );
+
+    // a type variable is answered by its upper bound, because that is what every
+    // assignability test about it consults. the hole an unannotated parameter opens
+    // when nothing bounded it carries a gradual one, and proves exactly as little
+    let bounded_by = |bound| {
+        Type::TypeVar(BoundTypeVarInstance::synthetic_self(
+            &db,
+            bound,
+            BindingContext::Synthetic,
+        ))
+    };
+    assert!(bounded_by(unknown).has_gradual_member(&db));
+    assert!(bounded_by(UnionType::from_elements(&db, [unknown, int])).has_gradual_member(&db));
+    assert!(!bounded_by(int).has_gradual_member(&db));
+}
+
+#[test]
 fn divergent_type() {
     let db = setup_db();
     let div = Type::divergent(salsa::plumbing::Id::from_bits(1));

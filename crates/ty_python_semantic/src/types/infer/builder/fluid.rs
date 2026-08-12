@@ -93,7 +93,7 @@ pub(crate) struct FluidTimeline<'db> {
     events: Box<[FluidEvent<'db>]>,
 }
 
-#[derive(Debug, PartialEq, Eq, salsa::SalsaValue, get_size2::GetSize)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::SalsaValue, get_size2::GetSize)]
 struct FluidEvent<'db> {
     /// the use expression this event is anchored at: the use whose processing
     /// produced the event (for statement constraints, the first
@@ -139,21 +139,43 @@ impl<'db> FluidTimeline<'db> {
         }
     }
 
-    /// normalize the timeline's types during cycle recovery. only types that
-    /// actually contain divergent parts are normalized: normalization is lossy
-    /// (e.g. it drops materializations)
+    /// normalize the timeline's types during cycle recovery. only types that are
+    /// actually diverging are normalized — normalization is lossy (e.g. it drops
+    /// materializations) — and a type says so either by carrying a divergent part or by
+    /// nesting deeper than anything written by hand
     pub(crate) fn cycle_normalized(
         mut self,
         db: &'db dyn Db,
         previous: Option<&FluidTimeline<'db>>,
         cycle: &salsa::Cycle,
     ) -> Self {
+        // an event list that shrank did not learn anything: a dependency answered with
+        // its cycle-initial this time round, so the events it would have produced are
+        // simply absent. replacing the longer list with it discards what the previous
+        // iteration had settled, and the two then alternate forever — keeping the longer
+        // one is what makes the timeline monotonic, for the same reason the
+        // collection-use constraints are retained rather than replaced — including the
+        // iteration gate, because an event resolved in the first couple of iterations
+        // still says `Divergent` and pinning that would lose the answer for good
+        if cycle.iteration() > crate::TAINTED_CYCLES
+            && let Some(previous) = previous
+            && previous.events.len() > self.events.len()
+        {
+            self.events.clone_from(&previous.events);
+        }
+
         let matching_events = previous
             .filter(|previous| previous.events.len() == self.events.len())
             .map(|previous| &previous.events);
 
         let normalize = |ty: &mut Type<'db>, previous_ty: Option<Type<'db>>| {
-            if !any_over_type(db, *ty, false, |inner| inner.is_divergent()) {
+            // a marker is one way a type says it is diverging; nesting a level deeper
+            // every iteration is another, and one a type built entirely out of `Unknown`
+            // never acquires a marker for. skipping either stores the value raw, which
+            // un-widens whatever the last iteration had settled
+            if !any_over_type(db, *ty, false, |inner| inner.is_divergent())
+                && !ty.is_deeply_nested(db)
+            {
                 return;
             }
             *ty = match previous_ty {
@@ -206,6 +228,8 @@ struct FluidFold<'db, 'c> {
     builder: SpecializationBuilder<'db, 'c>,
     identity_instance: Type<'db>,
     generic_context: GenericContext<'db>,
+    /// the file being inferred, so a solved element type can honour `strict-float`
+    file: ruff_db::files::File,
     /// whether an earlier constraint failed to fold: every solution from that
     /// point on is `None`, as it would be for a from-scratch solve
     poisoned: bool,
@@ -245,12 +269,16 @@ impl<'db> FluidFold<'db, '_> {
     /// build the cumulative solution, matching the promotion policy of
     /// [`TypeInferenceBuilder::solve_fluid_specialization`]
     fn build(&mut self, db: &'db dyn Db, promote: bool) -> Type<'db> {
+        let file = self.file;
         let specialization = self
             .builder
             .build_with(self.generic_context, |typevar, bounds| {
                 let lower = bounds?.lower?;
                 Some(if promote && typevar.widens_literal_solutions(db) {
-                    lower.promote(db).promote_singletons_recursively(db)
+                    // see the note in `solve_fluid_specialization`
+                    lower
+                        .promote_in(db, file)
+                        .promote_singletons_recursively(db)
                 } else {
                     lower
                 })
@@ -682,6 +710,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             builder: SpecializationBuilder::new(db, &constraint_sets, inferable),
             identity_instance,
             generic_context,
+            file: self.file(),
             poisoned: false,
             events: Vec::new(),
         };
@@ -963,13 +992,20 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             builder.infer(identity_instance, constraint).ok()?;
         }
 
+        let file = self.file();
         let specialization = builder.build_with(generic_context, |typevar, bounds| {
             let lower = bounds?.lower?;
             Some(if promote && typevar.widens_literal_solutions(db) {
                 // Match the promotion policy of collection-literal inference: promote
                 // literal types in invariant position, and promote singleton types to
                 // `T | Unknown` (e.g. `[None]` is inferred as `list[None | Unknown]`).
-                lower.promote(db).promote_singletons_recursively(db)
+                //
+                // `promote_in` rather than `promote`: this solution *is* a container's
+                // element type, which is what a layout is chosen from, so a module that
+                // asked for strict numerics has to get one here too.
+                lower
+                    .promote_in(db, file)
+                    .promote_singletons_recursively(db)
             } else {
                 lower
             })

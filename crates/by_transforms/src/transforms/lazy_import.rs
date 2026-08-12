@@ -387,7 +387,19 @@ const LAZY_ATTR_PROXY: &str = r#"class _LazyAttr:
         object.__setattr__(self, "_by_has", False)
     def _by_resolve(self):
         if not self._by_has:
-            object.__setattr__(self, "_by_val", getattr(_lazy_module(self._by_mod), self._by_attr))
+            m = _lazy_module(self._by_mod)
+            try:
+                v = getattr(m, self._by_attr)
+            except AttributeError:
+                # a submodule rather than an attribute: `urllib/__init__.py` never
+                # imports `parse`, and cpython binds it only because `__import__` is
+                # handed a fromlist. reading the attribute alone never triggers that
+                try:
+                    v = _by_il.import_module(self._by_mod + "." + self._by_attr)
+                except ImportError:
+                    raise ImportError("cannot import name " + repr(self._by_attr) +
+                                      " from " + repr(self._by_mod), name=self._by_mod) from None
+            object.__setattr__(self, "_by_val", v)
             object.__setattr__(self, "_by_has", True)
         return self._by_val
     @property
@@ -496,9 +508,16 @@ pub(crate) fn polyfill_preamble(
         out.push_str("        raise ImportError(f\"No module named {name!r}\", name=name)\n");
         out.push_str("    spec.loader = _by_iu.LazyLoader(spec.loader)\n");
         out.push_str("    mod = _by_iu.module_from_spec(spec)\n");
-        out.push_str("    _by_sys.modules[name] = mod\n");
+        // publishing before `exec_module` leaves a module nothing has executed
+        // in `sys.modules`, and `exec_module` is not quiet: it opens with
+        // `import threading`, which through 3.12 reached `functools` and its
+        // `from collections import namedtuple`. lazifying `collections` then
+        // handed that shell back and the import failed. which stdlib module
+        // sits in the window is an accident of the version, so the name is
+        // claimed only once the module really is lazy, and `setdefault` yields
+        // to whoever imported it for real while the window was open
         out.push_str("    spec.loader.exec_module(mod)\n");
-        out.push_str("    return mod\n");
+        out.push_str("    return _by_sys.modules.setdefault(name, mod)\n");
     } else if needs_character_class {
         // the `Character` registry reads `sys.modules`, so `sys` must be bound
         // even when no import was lazified

@@ -168,6 +168,16 @@ impl<'db> DeferredType<'db> {
             .iter()
             .any(|operand| operand_is_symbolic(db, *operand))
         {
+            // an operation nested deeper than anything a type expression could spell is not a
+            // relationship anybody wrote down: it is a value a loop is accumulating, one layer
+            // per turn round the loop, and a union of those has no fixed point. past the limit
+            // the operation stands for the type it already reads as everywhere but under
+            // type-mapping, which is what makes the accumulation stop
+            if operands.iter().any(|operand| {
+                deferral_depth(db, *operand, DEFERRAL_DEPTH_LIMIT) >= DEFERRAL_DEPTH_LIMIT
+            }) {
+                return reduce(db, operation, &operands);
+            }
             return Type::Deferred(Self::new(db, operation.clone(), operands));
         }
         evaluate(db, operation, &operands).unwrap_or_else(Type::unknown)
@@ -187,52 +197,7 @@ impl<'db> DeferredType<'db> {
     /// delegates here, so a deferred operation is indistinguishable from its reduced
     /// form everywhere except under type-mapping.
     pub(crate) fn reduced(self, db: &'db dyn Db) -> Type<'db> {
-        // a `type def` cannot be reduced by substituting bounds: running the body is
-        // the only way to learn its result, and running it against a bound would
-        // answer a question nobody asked. its declared return type is the reduced
-        // form, which is why annotating a type function is what makes generic code
-        // using it checkable
-        // a match type has no bound to substitute either: every case body is a different
-        // type, and picking one is the whole question. an unresolved application is gradual
-        if matches!(self.operation(db), DeferredOperation::MatchType) {
-            return Type::unknown();
-        }
-
-        if matches!(self.operation(db), DeferredOperation::TypeFn) {
-            let [Type::FunctionLiteral(function), ..] = self.operands(db) else {
-                return Type::unknown();
-            };
-            return declared_return_type(db, *function).unwrap_or_else(Type::unknown);
-        }
-
-        let operands: Box<[Type<'db>]> = self
-            .operands(db)
-            .iter()
-            .map(|operand| operand.reduce_deferred(db))
-            .collect();
-
-        // an attribute type is the one operation whose receiver has to be substituted rather
-        // than merely reduced: looking the member up on the type parameter itself is what
-        // *produces* this very deferral for a structural bound, so the reduction would answer
-        // with the question. the bound is what the parameter stands for before specialization
-        if let DeferredOperation::Attribute(name) = self.operation(db) {
-            let [receiver] = &*operands else {
-                return Type::unknown();
-            };
-            let receiver = match receiver.as_typevar() {
-                Some(bound_typevar) => bound_typevar
-                    .typevar(db)
-                    .require_bound_or_constraints(db)
-                    .as_type(db),
-                None => *receiver,
-            };
-            return receiver
-                .member(db, name)
-                .ignore_possibly_undefined()
-                .unwrap_or_else(Type::unknown);
-        }
-
-        evaluate(db, self.operation(db), &operands).unwrap_or_else(Type::unknown)
+        reduce(db, self.operation(db), self.operands(db))
     }
 
     /// Re-evaluate the operation against operands to which a type-mapping has already
@@ -432,6 +397,83 @@ impl<'db> Type<'db> {
             _ => self,
         }
     }
+}
+
+/// How deeply deferred operations nest inside one another in `ty`, saturating at `limit`.
+fn deferral_depth<'db>(db: &'db dyn Db, ty: Type<'db>, limit: usize) -> usize {
+    let Type::Deferred(deferred) = ty else {
+        return 0;
+    };
+    if limit <= 1 {
+        return 1;
+    }
+    1 + deferred
+        .operands(db)
+        .iter()
+        .map(|operand| deferral_depth(db, *operand, limit - 1))
+        .max()
+        .unwrap_or(0)
+}
+
+/// The deepest an operation may nest and still be worth keeping symbolic.
+///
+/// Hand-written type-level arithmetic is one or two operations deep — `Array[Dim + 1]`,
+/// `Array[Dim * 2 + 1]`. Anything far past that was built a layer at a time by inference
+/// rather than written by anybody.
+const DEFERRAL_DEPTH_LIMIT: usize = 8;
+
+/// The non-symbolic meaning of an operation over `operands`: what the result would be if
+/// each operand were replaced by its upper bound.
+fn reduce<'db>(
+    db: &'db dyn Db,
+    operation: &DeferredOperation,
+    operands: &[Type<'db>],
+) -> Type<'db> {
+    // a `type def` cannot be reduced by substituting bounds: running the body is
+    // the only way to learn its result, and running it against a bound would
+    // answer a question nobody asked. its declared return type is the reduced
+    // form, which is why annotating a type function is what makes generic code
+    // using it checkable
+    // a match type has no bound to substitute either: every case body is a different
+    // type, and picking one is the whole question. an unresolved application is gradual
+    if matches!(operation, DeferredOperation::MatchType) {
+        return Type::unknown();
+    }
+
+    if matches!(operation, DeferredOperation::TypeFn) {
+        let [Type::FunctionLiteral(function), ..] = operands else {
+            return Type::unknown();
+        };
+        return declared_return_type(db, *function).unwrap_or_else(Type::unknown);
+    }
+
+    let operands: Box<[Type<'db>]> = operands
+        .iter()
+        .map(|operand| operand.reduce_deferred(db))
+        .collect();
+
+    // an attribute type is the one operation whose receiver has to be substituted rather
+    // than merely reduced: looking the member up on the type parameter itself is what
+    // *produces* this very deferral for a structural bound, so the reduction would answer
+    // with the question. the bound is what the parameter stands for before specialization
+    if let DeferredOperation::Attribute(name) = operation {
+        let [receiver] = &*operands else {
+            return Type::unknown();
+        };
+        let receiver = match receiver.as_typevar() {
+            Some(bound_typevar) => bound_typevar
+                .typevar(db)
+                .require_bound_or_constraints(db)
+                .as_type(db),
+            None => *receiver,
+        };
+        return receiver
+            .member(db, name)
+            .ignore_possibly_undefined()
+            .unwrap_or_else(Type::unknown);
+    }
+
+    evaluate(db, operation, &operands).unwrap_or_else(Type::unknown)
 }
 
 /// Evaluate a deferred operation against operands that no longer mention a type

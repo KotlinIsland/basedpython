@@ -7054,6 +7054,7 @@ impl<'db> Binding<'db> {
     pub(crate) fn argument_type_context_specialization(
         &self,
         db: &'db dyn Db,
+        file: ruff_db::files::File,
         constraints: &ConstraintSetBuilder<'db>,
         call_expression_tcx: TypeContext<'db>,
     ) -> Option<Specialization<'db>> {
@@ -7104,7 +7105,10 @@ impl<'db> Binding<'db> {
                     .specialization(db)
                     .and_then(|specialization| specialization.get(db, typevar))
                     .filter(|ty| !ty.has_dynamic(db))
-                    .map(|ty| ty.promote(db));
+                    // the *argument's* file: this widens a solution inferred from
+                    // one, and a caller whose numeric model is strict must not get
+                    // `int | float` back as the context its argument is read against
+                    .map(|ty| ty.promote_in(db, file));
 
                 // TODO: We should similarly combine both the call expression and argument constraints
                 // here. We currently only rely on argument constraints when there is no explicit declared

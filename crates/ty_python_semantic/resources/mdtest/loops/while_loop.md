@@ -659,5 +659,30 @@ while True:
     break
 ```
 
+## A nested loop whose outer local feeds the inner arithmetic
+
+The flow fixpoint runs over both back edges and the `break` edge together. This shape once did not
+converge at all — the check never finished and grew to several gigabytes — so it is here as much for
+terminating as for what it reveals. Each of its pieces alone is fine: `cr` as a parameter, no
+`break`, `cr` out of the inner arithmetic, or the loops un-nested.
+
+```py
+def escaped(limit: int) -> int:
+    px = 0
+    while px < 20:
+        cr = px * 0.15
+        zr = 0.0
+        k = 0
+        while k < limit:
+            if zr > 4.0:
+                break
+            zr = zr * zr + cr
+            k = k + 1
+            reveal_type(k)  # revealed: int
+        px = px + 1
+        reveal_type(px)  # revealed: int
+    return px
+```
+
 [divergent_debugging]: https://github.com/astral-sh/ruff/pull/22794#issuecomment-3852095578
 [real cases]: https://github.com/Finistere/antidote/blob/7d64ff76b7e283e5d9593ca09ea7a52b9b054957/src/antidote/_internal/localns.py#L34-L35

@@ -117,6 +117,66 @@ assert made_here.__class__.__name__ == "Character", "still named Character"
 print("ok")
 "#;
 
+/// `from pkg import sub` where `sub` is a *submodule* rather than an attribute of the
+/// package. `urllib/__init__.py` does not import `parse`, so a plain attribute read
+/// finds nothing — cpython binds it only because `__import__` is handed a fromlist and
+/// `_handle_fromlist` imports the submodule on the package's behalf
+const SUBMODULE_MAIN: &str = r#"
+from urllib import parse
+from urllib import by_not_there as missing
+
+assert parse.quote("a b") == "a%20b", "a submodule resolves through the proxy"
+assert parse.urlparse("http://h/p").path == "/p", "and keeps working after the first use"
+
+try:
+    missing.anything
+except ImportError as e:
+    assert "by_not_there" in str(e), "names the attribute that was not found"
+except AttributeError:
+    raise AssertionError("a name that is neither attribute nor submodule is an ImportError")
+else:
+    raise AssertionError("a missing name must raise")
+print("ok")
+"#;
+
+/// a module the watcher below lazifies. it has to be a real file for
+/// `find_spec` to reach the `LazyLoader` path at all
+const WATCHED_MODULE: &str = r#"
+val: int = 7
+"#;
+
+/// making a module lazy is not a quiet operation: through 3.12
+/// `LazyLoader.exec_module` opens with `import threading`, which reaches
+/// `functools`, which asks `from collections import namedtuple`. anything the
+/// name is claimed for before that runs is visible to those imports as a module
+/// nothing has executed, and lazifying `collections` used to hand exactly that
+/// shell back — `ImportError: cannot import name 'namedtuple'`
+///
+/// so the name must not be in `sys.modules` yet when `exec_module` is called,
+/// and it must be the module we made once it returns
+const WINDOW_MAIN: &str = r#"
+import sys
+import importlib.util as ilu
+
+_claimed: list[bool] = []
+_real = ilu.LazyLoader.exec_module
+
+
+def _watch(loader, module) -> object:
+    _claimed.append(module.__spec__.name in sys.modules)
+    return _real(loader, module)
+
+
+ilu.LazyLoader.exec_module = _watch
+
+import by_watched_mod
+
+assert _claimed == [False], "a module nothing has executed was published: " + repr(_claimed)
+assert sys.modules["by_watched_mod"] === by_watched_mod, "the name must end up bound to the module we made"
+assert by_watched_mod.val == 7, "and it still resolves"
+print("ok")
+"#;
+
 /// an interpreter to run the transpiled output on. `$PYTHON` first, then the
 /// usual names; `None` (test skips) when none is found
 fn python() -> Option<String> {
@@ -203,5 +263,28 @@ fn import_stays_lazy_until_first_use() {
         "lazy_defer",
         &[("by_lazy_mod", LAZY_MODULE), ("main", LAZY_MAIN)],
     );
+    run_main(&python, &dir);
+}
+
+#[test]
+fn a_name_is_claimed_only_once_the_module_is_lazy() {
+    let Some(python) = python() else {
+        eprintln!("skipping lazy-import runtime test: no python interpreter found");
+        return;
+    };
+    let dir = build_case(
+        "lazy_window",
+        &[("by_watched_mod", WATCHED_MODULE), ("main", WINDOW_MAIN)],
+    );
+    run_main(&python, &dir);
+}
+
+#[test]
+fn a_submodule_resolves_through_the_proxy() {
+    let Some(python) = python() else {
+        eprintln!("skipping lazy-import runtime test: no python interpreter found");
+        return;
+    };
+    let dir = build_case("lazy_submodule", &[("main", SUBMODULE_MAIN)]);
     run_main(&python, &dir);
 }

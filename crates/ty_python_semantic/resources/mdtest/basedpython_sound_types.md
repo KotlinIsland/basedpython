@@ -530,6 +530,27 @@ def f(x):
 f("anything")  # ok
 ```
 
+### an operation on a hole nothing bounded answers gradually
+
+a hole nothing bounded is the gradual type it replaced, so it proves no more than that type did.
+resolving the operator against it would let the *other* operand decide the result — `int * x` would
+read as `int`, which `scale(3, 1.5)` disproves
+
+```py
+def scale(n: int, x):
+    reveal_type(n * x)  # revealed: Unknown
+    return n * x
+
+reveal_type(scale(3, 1.5))  # revealed: Unknown
+```
+
+a hole the body *did* bound is a type like any other, and the operator resolves against it
+
+```py
+def twice(n=1):
+    reveal_type(n * 2)  # revealed: int
+```
+
 ### a name that was reassigned is no longer the parameter
 
 uses are recognised by type, not by spelling

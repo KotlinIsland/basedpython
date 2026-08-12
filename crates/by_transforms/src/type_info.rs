@@ -1035,7 +1035,12 @@ impl TypeInfo for SemanticModel<'_> {
             return false;
         };
         let db = self.db();
-        !ty.is_dynamic() && ty.is_assignable_to(db, KnownClass::Str.to_instance(db))
+        // a gradual *member* is assignable to `str` as readily as the whole type is, so
+        // `Unknown & ~int` would answer yes here and have the rewrite applied to a value
+        // that is not a string at all
+        !ty.is_dynamic()
+            && !ty.has_gradual_member(db)
+            && ty.is_assignable_to(db, KnownClass::Str.to_instance(db))
     }
 
     fn annotation_is_character(&self, annotation: &Expr) -> bool {

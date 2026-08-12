@@ -302,6 +302,7 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
         respect_type_ignore_comments: respect_type_ignore_comments_default,
         allowed_unresolved_imports: allowed_unresolved_imports_default,
         replace_imports_with_any: replace_imports_with_any_default,
+        strict_float: strict_float_default,
         disable_fluid_specializations: disable_fluid_specializations_default,
         sound_types: sound_types_default,
         infer_unannotated_signatures: infer_unannotated_signatures_default,
@@ -351,6 +352,7 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
             .unwrap_or(respect_type_ignore_comments_default),
         allowed_unresolved_imports,
         replace_imports_with_any,
+        strict_float: options.strict_float.unwrap_or(strict_float_default),
         disable_fluid_specializations: options
             .disable_fluid_specializations
             .unwrap_or(disable_fluid_specializations_default),

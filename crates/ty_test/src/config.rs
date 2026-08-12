@@ -222,6 +222,9 @@ pub(crate) struct Analysis {
 
     pub(crate) replace_imports_with_any: Option<Vec<String>>,
 
+    /// see [`ty_python_semantic::AnalysisSettings::strict_float`]
+    pub(crate) strict_float: Option<bool>,
+
     pub(crate) disable_fluid_specializations: Option<bool>,
 
     pub(crate) sound_types: Option<bool>,
