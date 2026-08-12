@@ -15,6 +15,7 @@ in addition to the cli provided by `ty`, `by` includes:
 | ------------------- | ------------------------------------------------------------------ |
 | `run`               | transpile and run a module with `python -m <module>`               |
 | `build`             | transpile every `.by`/`.byi` file and write to `out/`              |
+| `compile`           | compile `.by` files to native CPython extension modules            |
 | `generate-api-file` | write a public-api lockfile (see [api-lock](features/api-lock.md)) |
 | `transpile`         | transpile a single file to stdout (reads stdin if no file)         |
 
@@ -87,6 +88,67 @@ directory you can put on `sys.path` as it stands, and `run.main` names a module
 the same way an import does. the `out/` directory is **not** considered
 first-party source for `by check` or `by generate-api-file` — it is regenerated
 on every build
+
+## `by compile`
+
+> **status: early.** integer, float and bool arithmetic, control flow, and calls
+> within a module compile natively. everything else falls back to the interpreted
+> definition — see [native compilation](development/compilation/index.md)
+
+```sh
+by compile                      # every .by file under the project root → out/
+by compile hot.by               # one file
+by compile -o build hot.by      # a different output directory
+by compile --verbose            # report every function left interpreted, and why
+by compile --emit-c-only        # write the generated C without compiling it
+by compile --no-any             # refuse to leave a gradual-typed function interpreted
+by compile --require-native     # refuse to leave *any* function interpreted
+```
+
+`--no-any` buys no speed on its own — it is a **predictability contract**. a
+gradual type is the commonest reason a function silently stays interpreted, and a
+decline is invisible unless you look for it, so a module that means to be fully
+compiled can say so and be held to it:
+
+```console
+$ by compile app.by --no-any
+error: could not compile app.by
+
+Caused by:
+    `no-any` is on and 1 function(s) could not be compiled because a type was gradual:
+      loose: a gradual type has no known representation
+```
+
+`--require-native` asks a different, stricter question. `--no-any` asks *is this
+module fully typed*; `--require-native` asks *does this module compile
+entirely*, and so also fails on a type that is perfectly precise but that the
+compiler does not represent yet:
+
+```console
+$ by compile app.by --require-native
+error: could not compile app.by
+
+Caused by:
+    `require-native` is on and 1 function(s) were left interpreted:
+      describe: `list[int]` has no native representation yet
+```
+
+a function the compiler cannot lower natively is **not** an error: the module's
+transpiled python is embedded in the extension and executed at import, so
+declined functions still exist and module-level code still runs. the natively
+compiled functions are installed over the top
+
+```console
+$ by compile hot.by --verbose
+hot.by -> out/hot.cpython-313-darwin.so
+  declined describe: `list[int]` has no native representation yet
+
+compiled 1 module(s)
+1 function(s) left to the interpreted definition
+```
+
+the C toolchain and the cpython headers come from the interpreter named by
+`PYTHON` (default `python3`), which must have development headers available
 
 ## `by generate-api-file`
 

@@ -26,6 +26,7 @@ jod = "jod" # e.g., `jod-thread`
 Numer = "Numer" # Library name 'NumerBlox' in "Who's Using Ruff?"
 CPY = "CPY"  # it's a Ruff rule category
 aadd = "aadd"  # django's async `add`, alongside `acreate`, `aset` and the rest
+asend = "asend"  # python's async-generator `asend`, not `ascend`
 
 [default]
 extend-ignore-re = [

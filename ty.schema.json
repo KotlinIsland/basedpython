@@ -208,6 +208,13 @@
             "boolean",
             "null"
           ]
+        },
+        "strict-float": {
+          "description": "Whether `float` and `complex` annotations mean *only* themselves. This is a\nbasedpython feature.\n\nThe typing spec's special case says an `int` is acceptable wherever a `float` is\nasked for, so `x: float` really declares `int | float`. A `.by` file opts out of\nthat already; this makes the same model available to a `.py` one, per module.\n\nIt is not only a checking question. The wider annotation is why a `.py`\n`list[float]` cannot be laid out as an unboxed buffer and a `.py` class cannot\nhave `double` fields, so `by compile` reads this to choose a representation.\n\nDefaults to `false`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
