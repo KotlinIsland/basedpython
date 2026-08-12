@@ -132,6 +132,7 @@ use crate::types::soundness::{
 };
 use crate::types::special_form::TypeQualifier;
 use crate::types::subclass_of::SubclassOfInner;
+use crate::types::template::{Promotable, TemplateLiteralType, TemplatePart};
 use crate::types::trailing_lambda::trailing_lambda_keyword;
 use crate::types::tuple::promotion::TupleSizePromotionConstraints;
 use crate::types::tuple::{Tuple, TupleLength, TupleSpecBuilder, TupleType, VariableSegment};
@@ -7776,12 +7777,22 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             value,
         } = fstring;
 
+        // basedpython: an f-string is the pattern it spells, not `str` — the text
+        // between the holes is known, and each hole is `str(x)` over the type of
+        // what it interpolates. the result is promotable, so it widens to `str`
+        // wherever a string literal would (an element of a mutable list, say)
+        let mut template_parts: Option<Vec<TemplatePart<'db>>> =
+            self.is_basedpython_file().then(Vec::new);
+
         let mut collector = StringPartsCollector::new();
         for part in value {
             // Make sure we iter through every parts to infer all sub-expressions. The `collector`
             // struct ensures we don't allocate unnecessary strings.
             match part {
                 ast::FStringPart::Literal(literal) => {
+                    if let Some(parts) = template_parts.as_mut() {
+                        parts.push(TemplatePart::Text(CompactString::new(&literal.value)));
+                    }
                     collector.push_str(&literal.value);
                 }
                 ast::FStringPart::FString(fstring) => {
@@ -7816,8 +7827,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                     || !conversion.is_none()
                                     || format_spec.is_some()
                                 {
+                                    // what fills the hole is no longer `str(x)`
+                                    template_parts = None;
                                     collector.add_non_literal_string_expression();
                                 } else {
+                                    if let Some(parts) = template_parts.as_mut() {
+                                        parts.push(TemplatePart::Hole(ty));
+                                    }
                                     let str_ty = ty.str(db, env);
                                     if let Some(literal) = str_ty.as_string_literal() {
                                         collector.push_str(literal.value(self.db()));
@@ -7830,12 +7846,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                 }
                             }
                             ast::InterpolatedStringElement::Literal(literal) => {
+                                if let Some(parts) = template_parts.as_mut() {
+                                    parts.push(TemplatePart::Text(CompactString::new(
+                                        &literal.value,
+                                    )));
+                                }
                                 collector.push_str(&literal.value);
                             }
                         }
                     }
                 }
             }
+        }
+        if let Some(parts) = template_parts {
+            return TemplateLiteralType::from_parts(db, env, parts, Promotable::Yes);
         }
         collector.string_type(&self.context)
     }

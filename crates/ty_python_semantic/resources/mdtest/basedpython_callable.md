@@ -185,7 +185,7 @@ g: (a: int, b: str) -> bool = wrong
 a: (int, name: str) = (1, "x")
 b: (int, name: str) -> str = lambda x, name: f"{x}-{name}"
 reveal_type(a)  # revealed: (int, name: str)
-reveal_type(b(a[0], a.name))  # revealed: str
+reveal_type(b(a[0], a.name))  # revealed: f"{int}-{str}"
 ```
 
 ## unpacked `TypeVarTuple` as the whole parameter list

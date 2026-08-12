@@ -9,9 +9,20 @@
 //! - is a value already a `Character` instance (so wrapping it again would be
 //!   redundant)? ([`is_character_instance`])
 
+use unicode_segmentation::UnicodeSegmentation;
+
 use crate::Db;
 use crate::types::ProgramEnvironment;
 use crate::types::{KnownClass, Type};
+
+/// whether `value` is a single `Character` — exactly one extended grapheme
+/// cluster (UAX #29). counts graphemes, not code points, so a multi-scalar
+/// cluster like the US flag `"\u{1F1FA}\u{1F1F8}"` (two code points) is one
+/// `Character`
+pub(crate) fn is_single_grapheme(value: &str) -> bool {
+    let mut graphemes = value.graphemes(true);
+    graphemes.next().is_some() && graphemes.next().is_none()
+}
 
 /// whether `ty` denotes the `Character` type — its instance type (the meaning
 /// of a bare `Character` in an annotation position) or the class literal

@@ -2272,6 +2272,54 @@ Source with applied edits:
     }
 
     #[test]
+    fn template_literal_type_hints() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def route(path: f\"/{str}\"):
+                slug = path
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints(), @r#"
+
+        def route(path: f"/{str}"):
+            slug[: f"/{str}"] = path
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+        info: Source
+          --> main2.py:LL:14
+           |
+        LL |     slug[: f"/{str}"] = path
+           |              ^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+        info: Source
+          --> main2.py:LL:16
+           |
+        LL |     slug[: f"/{str}"] = path
+           |                ^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.by:1:1
+          |
+        2 | def route(path: f"/{str}"):
+          -     slug = path
+        3 +     slug: f"/{str}" = path
+          |
+        "#);
+    }
+
+    #[test]
     fn property_accessor_hints() {
         // an accessor's header is synthesized, so it takes no implicit-parameter
         // hint for the receiver it never spells nor for the name a `set` does; the

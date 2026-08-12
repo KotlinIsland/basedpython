@@ -217,6 +217,7 @@ pub mod soundness;
 mod special_form;
 mod string_annotation;
 mod subclass_of;
+pub(crate) mod template;
 #[cfg(test)]
 pub(crate) mod tests;
 pub(crate) mod trailing_lambda;
@@ -2748,7 +2749,7 @@ impl<'db> Type<'db> {
                 | LiteralValueTypeKind::Enum(_)
                 | LiteralValueTypeKind::Float(_)
                 | LiteralValueTypeKind::Complex(_) => true,
-                LiteralValueTypeKind::LiteralString => false,
+                LiteralValueTypeKind::LiteralString | LiteralValueTypeKind::Template(_) => false,
             },
             Type::NominalInstance(_) => {
                 self.is_none(db) || self.is_bool(db) || self.is_enum(db, env)
@@ -3466,6 +3467,7 @@ impl<'db> Type<'db> {
                 | LiteralValueTypeKind::String(..)
                 | LiteralValueTypeKind::Bytes(..)
                 | LiteralValueTypeKind::LiteralString
+                | LiteralValueTypeKind::Template(..)
                 | LiteralValueTypeKind::Float(..)
                 | LiteralValueTypeKind::Complex(..) => {
                     // Note: The literal types included in this pattern are not true singletons.
@@ -8277,9 +8279,9 @@ impl<'db> Type<'db> {
                     });
                     Type::ClassLiteral(variant_class.unwrap_or_else(|| enum_literal.enum_class(db)))
                 }
-                LiteralValueTypeKind::String(_) | LiteralValueTypeKind::LiteralString => {
-                    KnownClass::Str.to_class_literal(db, env)
-                }
+                LiteralValueTypeKind::String(_)
+                | LiteralValueTypeKind::LiteralString
+                | LiteralValueTypeKind::Template(_) => KnownClass::Str.to_class_literal(db, env),
                 LiteralValueTypeKind::Float(_) => KnownClass::Float.to_class_literal(db, env),
                 LiteralValueTypeKind::Complex(_) => KnownClass::Complex.to_class_literal(db, env),
             },
@@ -8455,7 +8457,6 @@ impl<'db> Type<'db> {
                 | Type::SpecialForm(_)
                 | Type::AlwaysTruthy
                 | Type::AlwaysFalsy
-                | Type::LiteralValue(_)
                 | Type::BoundSuper(_)
                 | Type::KnownInstance(
                     KnownInstanceType::SubscriptedProtocol(_)
@@ -8490,6 +8491,14 @@ impl<'db> Type<'db> {
                         | KnownBoundMethodType::ConstraintSetWithDetailedDisplay(_)
                 )
         ) {
+            return self;
+        }
+
+        // basedpython: a template is the one literal value whose payload is
+        // types, so it is the one that a specialization has to reach into
+        if let Type::LiteralValue(literal) = self
+            && literal.as_template().is_none()
+        {
             return self;
         }
 
@@ -8957,6 +8966,25 @@ impl<'db> Type<'db> {
                 }
             }
 
+            // basedpython: a template's holes are types of their own, so a
+            // mapping has to reach them — specializing `f"a{T}"` with
+            // `T = Literal[1]` collapses the whole pattern to `Literal["a1"]`.
+            // promotion is the exception: a template is always written down, never
+            // inferred from a value, so there is no literal here to widen
+            Type::LiteralValue(literal)
+                if !matches!(type_mapping, TypeMapping::Promote(..))
+                    && let Some(template) = literal.as_template() =>
+            {
+                let promotable = if literal.is_promotable() {
+                    crate::types::template::Promotable::Yes
+                } else {
+                    crate::types::template::Promotable::No
+                };
+                template.map_holes(db, env, promotable, |hole| {
+                    hole.apply_type_mapping_impl(db, env, type_mapping, tcx, visitor)
+                })
+            }
+
             Type::LiteralValue(_) => match type_mapping {
                 TypeMapping::ApplySpecialization(_)
                 | TypeMapping::ApplySpecializationWithMaterialization { .. }
@@ -9367,10 +9395,19 @@ impl<'db> Type<'db> {
             | Type::DataclassTransformer(_)
             | Type::ModuleLiteral(_)
             | Type::ClassLiteral(_)
-            | Type::LiteralValue(_)
             | Type::BoundSuper(_)
             | Type::SpecialForm(_)
             | Type::TypedDict(_) => {}
+
+            // basedpython: a template's holes are types, and a legacy typevar
+            // can be spelled in one
+            Type::LiteralValue(literal) => {
+                if let Some(template) = literal.as_template() {
+                    for hole in template.holes(db) {
+                        hole.find_legacy_typevars_impl(db, env, binding_context, typevars, visitor);
+                    }
+                }
+            }
         }
     }
 
@@ -9444,7 +9481,9 @@ impl<'db> Type<'db> {
         match self {
             Type::LiteralValue(literal) => match literal.kind() {
                 LiteralValueTypeKind::Int(_) | LiteralValueTypeKind::Bool(_) => self.repr(db, env),
-                LiteralValueTypeKind::String(_) | LiteralValueTypeKind::LiteralString => *self,
+                LiteralValueTypeKind::String(_)
+                | LiteralValueTypeKind::LiteralString
+                | LiteralValueTypeKind::Template(_) => *self,
                 LiteralValueTypeKind::Enum(enum_literal) => Type::string_literal(
                     db,
                     compact_str::format_compact!(
@@ -9993,6 +10032,13 @@ impl<'db> VarianceInferable<'db> for Type<'db> {
                 .collect(),
 
             Type::UnsafeUnion(unsafe_union) => unsafe_union.variance_of(db, env, typevar),
+
+            // basedpython: a template's holes each render through `str()`, which
+            // reads its argument and produces a fresh string — a covariant use
+            Type::LiteralValue(literal) if let Some(template) = literal.as_template() => template
+                .holes(db)
+                .map(|hole| hole.variance_of(db, env, typevar))
+                .collect(),
 
             // Products are covariant in their conjuncts. For negative
             // conjuncts, they're contravariant. To see this, suppose we have

@@ -38,7 +38,8 @@ use crate::types::{
     KnownBoundMethodType, KnownClass, KnownInstanceType, KnownUnion, LiteralValueType,
     LiteralValueTypeKind, MaterializationKind, ParamSpecAttrKind, PropertyInstanceType, Protocol,
     SpecialFormType, StringLiteralType, SubclassOfInner, SubclassOfType, Type, TypeAliasType,
-    TypeGuardLike, TypedDictModule, TypedDictType, UnionType, WrapperDescriptorKind, visitor,
+    TypeGuardLike, TypedDictModule, TypedDictType, UnionType, WrapperDescriptorKind,
+    template::TemplatePart, visitor,
 };
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::Definition;
@@ -1752,6 +1753,44 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'_, 'db> {
                         "{}",
                         enum_literal.name(db)
                     )
+                }
+                // basedpython: a template type is spelled the way it was written,
+                // as an f-string whose holes are the hole types.
+                //
+                // each run of fixed text is written in one go, and the quotes and
+                // braces carry no type at all: a `with_type` call is one
+                // navigable region in an editor, so writing per character would
+                // scatter the pattern into a region per character
+                LiteralValueTypeKind::Template(template) => {
+                    f.write_str("f\"")?;
+                    for part in template.parts(self.db) {
+                        match part {
+                            TemplatePart::Text(text) => {
+                                let mut escaped = String::with_capacity(text.len());
+                                for character in text.chars() {
+                                    match character {
+                                        '{' => escaped.push_str("{{"),
+                                        '}' => escaped.push_str("}}"),
+                                        '"' => escaped.push_str("\\\""),
+                                        '\\' => escaped.push_str("\\\\"),
+                                        _ => {
+                                            for escape in character.escape_debug() {
+                                                escaped.push(escape);
+                                            }
+                                        }
+                                    }
+                                }
+                                f.with_type(self.ty).write_str(&escaped)?;
+                            }
+                            TemplatePart::Hole(hole) => {
+                                f.write_char('{')?;
+                                hole.display_with(self.db, env, self.settings.clone())
+                                    .fmt_detailed(f)?;
+                                f.write_char('}')?;
+                            }
+                        }
+                    }
+                    f.write_char('"')
                 }
                 LiteralValueTypeKind::Float(v) => write!(f.with_type(self.ty), "{v}"),
                 LiteralValueTypeKind::Complex(c) => {

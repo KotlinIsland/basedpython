@@ -351,6 +351,15 @@ impl<'db> Type<'db> {
 
             Type::LiteralValue(literal) => match literal.kind() {
                 LiteralValueTypeKind::LiteralString => Truthiness::Ambiguous,
+                // a pattern with fixed text, or a hole that cannot render empty,
+                // can only produce non-empty strings
+                LiteralValueTypeKind::Template(template) => {
+                    if template.is_always_non_empty(db, env) {
+                        Truthiness::AlwaysTrue
+                    } else {
+                        Truthiness::Ambiguous
+                    }
+                }
                 LiteralValueTypeKind::Enum(enum_type) => enum_type
                     .enum_class_instance(db, env)
                     .try_bool_impl(db, env, allow_short_circuit, visitor)?,

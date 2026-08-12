@@ -6,6 +6,7 @@ use ruff_python_ast::name::Name;
 use crate::Db;
 use crate::types::enums::EnumClassLiteral;
 use crate::types::set_theoretic::RecursivelyDefined;
+use crate::types::template::TemplateLiteralType;
 use crate::types::{ClassLiteral, KnownClass, Type};
 use ty_python_core::definition::Definition;
 use ty_python_core::{place_table, use_def_map};
@@ -28,6 +29,7 @@ enum LiteralValueTypeInner<'db> {
     LiteralString(LiteralFlags),
     Float(FloatLiteralType, LiteralFlags),
     Complex(ComplexLiteralType<'db>, LiteralFlags),
+    Template(TemplateLiteralType<'db>, LiteralFlags),
 }
 
 bitflags! {
@@ -94,6 +96,9 @@ pub(crate) enum LiteralValueTypeKind<'db> {
     Float(FloatLiteralType),
     /// A complex literal (basedpython)
     Complex(ComplexLiteralType<'db>),
+    /// basedpython: the set of strings an f-string pattern produces, e.g.
+    /// `f"v{int}"`. See [`TemplateLiteralType`].
+    Template(TemplateLiteralType<'db>),
 }
 
 impl<'db> LiteralValueType<'db> {
@@ -117,7 +122,8 @@ impl<'db> LiteralValueType<'db> {
             | LiteralValueTypeInner::Bytes(_, f)
             | LiteralValueTypeInner::LiteralString(f)
             | LiteralValueTypeInner::Float(_, f)
-            | LiteralValueTypeInner::Complex(_, f) => f,
+            | LiteralValueTypeInner::Complex(_, f)
+            | LiteralValueTypeInner::Template(_, f) => f,
         }
     }
 
@@ -133,6 +139,7 @@ impl<'db> LiteralValueType<'db> {
             }
             LiteralValueTypeInner::Float(v, f) => LiteralValueTypeInner::Float(v, func(f)),
             LiteralValueTypeInner::Complex(v, f) => LiteralValueTypeInner::Complex(v, func(f)),
+            LiteralValueTypeInner::Template(v, f) => LiteralValueTypeInner::Template(v, func(f)),
         })
     }
 
@@ -156,6 +163,7 @@ impl<'db> LiteralValueType<'db> {
             LiteralValueTypeKind::LiteralString => LiteralValueTypeInner::LiteralString(flags),
             LiteralValueTypeKind::Float(v) => LiteralValueTypeInner::Float(v, flags),
             LiteralValueTypeKind::Complex(v) => LiteralValueTypeInner::Complex(v, flags),
+            LiteralValueTypeKind::Template(v) => LiteralValueTypeInner::Template(v, flags),
         })
     }
 
@@ -173,6 +181,7 @@ impl<'db> LiteralValueType<'db> {
             LiteralValueTypeKind::LiteralString => LiteralValueTypeInner::LiteralString(flags),
             LiteralValueTypeKind::Float(v) => LiteralValueTypeInner::Float(v, flags),
             LiteralValueTypeKind::Complex(v) => LiteralValueTypeInner::Complex(v, flags),
+            LiteralValueTypeKind::Template(v) => LiteralValueTypeInner::Template(v, flags),
         })
     }
 
@@ -197,6 +206,7 @@ impl<'db> LiteralValueType<'db> {
             LiteralValueTypeInner::LiteralString(_) => LiteralValueTypeKind::LiteralString,
             LiteralValueTypeInner::Float(v, _) => LiteralValueTypeKind::Float(v),
             LiteralValueTypeInner::Complex(v, _) => LiteralValueTypeKind::Complex(v),
+            LiteralValueTypeInner::Template(v, _) => LiteralValueTypeKind::Template(v),
         }
     }
 
@@ -264,15 +274,23 @@ impl<'db> LiteralValueType<'db> {
         matches!(self.kind(), LiteralValueTypeKind::Bytes(..))
     }
 
+    pub(crate) fn as_template(self) -> Option<TemplateLiteralType<'db>> {
+        if let LiteralValueTypeKind::Template(v) = self.kind() {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn fallback_instance(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
     ) -> Type<'db> {
         match self.kind() {
-            LiteralValueTypeKind::String(_) | LiteralValueTypeKind::LiteralString => {
-                KnownClass::Str.to_instance(db, env)
-            }
+            LiteralValueTypeKind::String(_)
+            | LiteralValueTypeKind::LiteralString
+            | LiteralValueTypeKind::Template(_) => KnownClass::Str.to_instance(db, env),
             LiteralValueTypeKind::Bool(_) => KnownClass::Bool.to_instance(db, env),
             LiteralValueTypeKind::Int(_) => KnownClass::Int.to_instance(db, env),
             LiteralValueTypeKind::Bytes(_) => KnownClass::Bytes.to_instance(db, env),

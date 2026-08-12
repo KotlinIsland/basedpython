@@ -3,19 +3,10 @@ use std::borrow::Cow;
 
 use itertools::Itertools;
 use rustc_hash::FxHashSet;
-use unicode_segmentation::UnicodeSegmentation;
-
-/// basedpython: whether `value` is a single `Character` — exactly
-/// one extended grapheme cluster (UAX #29). counts graphemes, not code points,
-/// so a multi-scalar cluster like the US flag `"\u{1F1FA}\u{1F1F8}"` (two code
-/// points) is one `Character`
-fn is_single_grapheme(value: &str) -> bool {
-    let mut graphemes = value.graphemes(true);
-    graphemes.next().is_some() && graphemes.next().is_none()
-}
 
 use crate::place::{DefinedPlace, Place};
 use crate::types::callable::CallableTypeKind;
+use crate::types::character::is_single_grapheme;
 use crate::types::constraints::{
     ConstraintSetBuilder, IteratorConstraintsExtension, OptionConstraintsExtension,
     OwnedConstraintSet,
@@ -2381,6 +2372,42 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                 self.check_known_bound_method_pair(db, source_method, target_method)
             }
 
+            // basedpython: a string literal inhabits a template exactly when the
+            // pattern produces it
+            (Type::LiteralValue(source), Type::LiteralValue(target))
+                if let Some(value) = source.as_string()
+                    && let Some(template) = target.as_template() =>
+            {
+                ConstraintSet::from_bool(
+                    self.constraints,
+                    template.matches_str(db, env, value.value(db)),
+                )
+            }
+
+            // basedpython: one template's strings are all another's when the two
+            // patterns align
+            (Type::LiteralValue(source), Type::LiteralValue(target))
+                if let Some(source_template) = source.as_template()
+                    && let Some(target_template) = target.as_template() =>
+            {
+                ConstraintSet::from_bool(
+                    self.constraints,
+                    target_template.contains(db, env, source_template),
+                )
+            }
+
+            // basedpython: a pattern built only out of literal text and holes
+            // that are themselves literal strings can only produce literal
+            // strings
+            (Type::LiteralValue(source), Type::LiteralValue(target))
+                if let Some(template) = source.as_template()
+                    && target.is_literal_string() =>
+            {
+                template.holes(db).when_all(db, self.constraints, |hole| {
+                    self.check_type_pair(db, hole, Type::literal_string())
+                })
+            }
+
             // All `StringLiteral` types are a subtype of `LiteralString`.
             (Type::LiteralValue(source), Type::LiteralValue(target))
                 if source.is_string() && target.is_literal_string() =>
@@ -3534,6 +3561,54 @@ impl<'a, 'c, 'db> DisjointnessChecker<'a, 'c, 'db> {
                 self.never()
             }
 
+            // basedpython: a string literal is disjoint from a template it does
+            // not inhabit
+            (Type::LiteralValue(left), Type::LiteralValue(right))
+                if let Some((value, template)) = left
+                    .as_string()
+                    .zip(right.as_template())
+                    .or_else(|| right.as_string().zip(left.as_template())) =>
+            {
+                ConstraintSet::from_bool(
+                    self.constraints,
+                    !template.matches_str(db, env, value.value(db)),
+                )
+            }
+
+            // basedpython: two templates are disjoint when their fixed ends
+            // cannot agree. anything subtler than that is reported as
+            // overlapping — a template pair that shares no string but shares an
+            // end is rare, and claiming disjointness wrongly loses arms from a
+            // union
+            (Type::LiteralValue(left), Type::LiteralValue(right))
+                if let (Some(left), Some(right)) = (left.as_template(), right.as_template()) =>
+            {
+                let ends_conflict = |left: Option<&str>, right: Option<&str>, prefix: bool| {
+                    let (Some(left), Some(right)) = (left, right) else {
+                        return false;
+                    };
+                    if prefix {
+                        !left.starts_with(right) && !right.starts_with(left)
+                    } else {
+                        !left.ends_with(right) && !right.ends_with(left)
+                    }
+                };
+                ConstraintSet::from_bool(
+                    self.constraints,
+                    ends_conflict(left.fixed_prefix(db), right.fixed_prefix(db), true)
+                        || ends_conflict(left.fixed_suffix(db), right.fixed_suffix(db), false),
+                )
+            }
+
+            // basedpython: a template and `LiteralString` share every literal
+            // string the pattern produces
+            (Type::LiteralValue(left), Type::LiteralValue(right))
+                if (left.as_template().is_some() && right.is_literal_string())
+                    || (right.as_template().is_some() && left.is_literal_string()) =>
+            {
+                self.never()
+            }
+
             (Type::LiteralValue(left), Type::LiteralValue(right)) => {
                 if let (Some(left), Some(right)) = (left.as_enum(), right.as_enum())
                     && left.enum_class_literal(db) == right.enum_class_literal(db)
@@ -3894,9 +3969,16 @@ impl<'a, 'c, 'db> DisjointnessChecker<'a, 'c, 'db> {
                         ),
                         // basedpython: single-grapheme literals (and `LiteralString`,
                         // which includes them) also inhabit `Character`, a proper subclass
-                        // of `str`
-                        LiteralValueTypeKind::LiteralString => KnownClass::Character
-                            .when_subclass_of(db, env, instance.class(db, env), self.constraints),
+                        // of `str`. a template's strings can be a single grapheme too
+                        // (`f"{int}"` produces `"5"`), so it reaches the same way
+                        LiteralValueTypeKind::LiteralString | LiteralValueTypeKind::Template(_) => {
+                            KnownClass::Character.when_subclass_of(
+                                db,
+                                env,
+                                instance.class(db, env),
+                                self.constraints,
+                            )
+                        }
                         LiteralValueTypeKind::String(value) => {
                             let literal_class = if is_single_grapheme(value.value(db)) {
                                 KnownClass::Character

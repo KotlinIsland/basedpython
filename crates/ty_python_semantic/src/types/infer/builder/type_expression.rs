@@ -1,3 +1,4 @@
+use compact_str::CompactString;
 use itertools::Either;
 use ruff_python_ast::helpers::{
     UseSiteVariance, is_dotted_name, is_top_star_marker, top_star_marker_ranges_in_slice,
@@ -23,6 +24,7 @@ use crate::types::infer::{InferenceFlags, TypeExpressionFlags};
 use crate::types::signatures::{ConcatenateTail, Signature};
 use crate::types::special_form::{AliasSpec, LegacyStdlibAlias};
 use crate::types::string_annotation::parse_string_annotation;
+use crate::types::template::{Promotable, TemplateLiteralType, TemplatePart};
 use crate::types::tuple::{TupleSpec, TupleSpecBuilder, TupleType};
 use crate::types::type_fn::{
     TypeFnArguments, TypeFnOutcome, arity_mismatch, declared_return_type, evaluate_type_fn,
@@ -1566,6 +1568,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 Type::unknown()
             }
 
+            // basedpython: an f-string in a type position is a template literal
+            // type — the set of strings its pattern produces
+            ast::Expr::FString(fstring) if self.is_basedpython_file() => {
+                self.infer_template_literal_type_expression(fstring)
+            }
+
             ast::Expr::FString(fstring) => {
                 if !self.in_string_annotation() {
                     self.infer_fstring_expression(fstring);
@@ -2354,6 +2362,57 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     }
 
     /// Infer the type of a string type expression.
+    /// basedpython: an f-string in a type position, read as the set of strings
+    /// its pattern produces.
+    ///
+    /// each interpolation is a type expression of its own — `f"v{int}"` has the
+    /// `int` *instance* in its hole, not `type[int]` — and each holds a place
+    /// that `str()` fills. a conversion or a format spec would change what fills
+    /// it, so both are rejected rather than quietly ignored.
+    fn infer_template_literal_type_expression(&mut self, fstring: &ast::ExprFString) -> Type<'db> {
+        let mut parts: Vec<TemplatePart<'db>> = Vec::new();
+        for part in &fstring.value {
+            match part {
+                ast::FStringPart::Literal(literal) => {
+                    parts.push(TemplatePart::Text(CompactString::new(&literal.value)));
+                }
+                ast::FStringPart::FString(nested) => {
+                    for element in &nested.elements {
+                        match element {
+                            ast::InterpolatedStringElement::Literal(literal) => {
+                                parts.push(TemplatePart::Text(CompactString::new(&literal.value)));
+                            }
+                            ast::InterpolatedStringElement::Interpolation(interpolation) => {
+                                let hole = self.infer_type_expression(&interpolation.expression);
+                                if interpolation.debug_text.is_some()
+                                    || !interpolation.conversion.is_none()
+                                    || interpolation.format_spec.is_some()
+                                {
+                                    self.report_invalid_type_expression(
+                                        interpolation,
+                                        format_args!(
+                                            "A hole in a template literal type cannot have \
+                                            a conversion or a format specifier"
+                                        ),
+                                    );
+                                    parts.push(TemplatePart::Hole(Type::unknown()));
+                                } else {
+                                    parts.push(TemplatePart::Hole(hole));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        TemplateLiteralType::from_parts(
+            self.db(),
+            self.program_environment(),
+            parts,
+            Promotable::No,
+        )
+    }
+
     pub(super) fn infer_string_type_expression(
         &mut self,
         string: &ast::ExprStringLiteral,
