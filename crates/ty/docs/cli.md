@@ -20,6 +20,7 @@ by <COMMAND>
 <dt><a href="#by-explain"><code>by explain</code></a></dt><dd><p>Explain rules and other parts of ty</p></dd>
 <dt><a href="#by-run"><code>by run</code></a></dt><dd><p>Transpile and run a module with <code>python -m &lt;module&gt;</code></p></dd>
 <dt><a href="#by-build"><code>by build</code></a></dt><dd><p>Transpile all .by files and write them to out/</p></dd>
+<dt><a href="#by-compile"><code>by compile</code></a></dt><dd><p>Compile .by and .py files to native CPython extension modules</p></dd>
 <dt><a href="#by-generate-api-file"><code>by generate-api-file</code></a></dt><dd><p>Generate an api lockfile (<code>api.lock</code>) summarising the public type-level surface of the project</p></dd>
 <dt><a href="#by-transpile"><code>by transpile</code></a></dt><dd><p>Transpile a file to stdout, or a whole directory in place (reads stdin if no path given)</p></dd>
 <dt><a href="#by-help"><code>by help</code></a></dt><dd><p>Print this message or the help of the given subcommand(s)</p></dd>
@@ -239,7 +240,10 @@ by run [OPTIONS] [MODULE] [ARGS]...
 
 <h3 class="cli-reference">Options</h3>
 
-<dl class="cli-reference"><dt id="by-run--help"><a href="#by-run--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help</p>
+<dl class="cli-reference"><dt id="by-run--compiled"><a href="#by-run--compiled"><code>--compiled</code></a></dt><dd><p>Compile every imported module to a native extension first.</p>
+<p>A function the compiler declines still runs — from the interpreted source embedded in the extension — so this changes speed, not behaviour. Needs a C toolchain and python development headers.</p>
+<p>The entry module itself stays interpreted: running something as <code>__main__</code> needs a code object, and an extension module has none.</p>
+</dd><dt id="by-run--help"><a href="#by-run--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help (see a summary with '-h')</p>
 </dd><dt id="by-run--min-version"><a href="#by-run--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the output must run on [default: the version of the interpreter that will run it]</p>
 </dd><dt id="by-run--no-checked-cast"><a href="#by-run--no-checked-cast"><code>--no-checked-cast</code></a></dt><dd><p>lower <code>&lt;value&gt; cast &lt;type&gt;</code> to an unchecked <code>typing.cast</code> instead of a runtime-checked cast that raises on a type mismatch (the <code>cast?</code> safe form is unaffected)</p>
 </dd><dt id="by-run--no-unique-loop-bindings"><a href="#by-run--no-unique-loop-bindings"><code>--no-unique-loop-bindings</code></a></dt><dd><p>leave a closure made inside a loop sharing the loop's one binding, as python does, instead of binding the values of the iteration it was made in</p>
@@ -266,6 +270,40 @@ by build [OPTIONS]
 </dd><dt id="by-build--runtime-raises-checks"><a href="#by-build--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
 </dd><dt id="by-build--soundness"><a href="#by-build--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
 <p>[default: default]</p></dd></dl>
+
+## by compile
+
+Compile .by and .py files to native CPython extension modules.
+
+A function the compiler cannot lower natively is left to its interpreted definition rather than failing the build, so compilation is always partial-credit. `--verbose` reports each one and why.
+
+<h3 class="cli-reference">Usage</h3>
+
+```
+by compile [OPTIONS] [FILE]...
+```
+
+<h3 class="cli-reference">Arguments</h3>
+
+<dl class="cli-reference"><dt id="by-compile--files"><a href="#by-compile--files"><code>FILES</code></a></dt><dd><p>Files to compile. Defaults to every <code>.by</code> and <code>.py</code> file under the project root</p>
+</dd></dl>
+
+<h3 class="cli-reference">Options</h3>
+
+<dl class="cli-reference"><dt id="by-compile--annotate"><a href="#by-compile--annotate"><code>--annotate</code></a></dt><dd><p>Write a <code>&lt;module&gt;.annotated</code> report next to the generated C: each function's BIR, whether it is infallible, and for every function left interpreted, the reason why</p>
+</dd><dt id="by-compile--emit-c-only"><a href="#by-compile--emit-c-only"><code>--emit-c-only</code></a></dt><dd><p>Emit the generated C without invoking the C compiler</p>
+</dd><dt id="by-compile--help"><a href="#by-compile--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help (see a summary with '-h')</p>
+</dd><dt id="by-compile--no-any"><a href="#by-compile--no-any"><code>--no-any</code></a></dt><dd><p>Fail the build when a function cannot be compiled because a type is gradual, instead of leaving it to its interpreted definition.</p>
+<p>A contract about predictability rather than a speed switch: a gradual type is the commonest reason a function silently stays interpreted.</p>
+</dd><dt id="by-compile--no-checked-cast"><a href="#by-compile--no-checked-cast"><code>--no-checked-cast</code></a></dt><dd><p>lower <code>&lt;value&gt; cast &lt;type&gt;</code> to an unchecked <code>typing.cast</code> instead of a runtime-checked cast that raises on a type mismatch (the <code>cast?</code> safe form is unaffected)</p>
+</dd><dt id="by-compile--no-unique-loop-bindings"><a href="#by-compile--no-unique-loop-bindings"><code>--no-unique-loop-bindings</code></a></dt><dd><p>leave a closure made inside a loop sharing the loop's one binding, as python does, instead of binding the values of the iteration it was made in</p>
+</dd><dt id="by-compile--output"><a href="#by-compile--output"><code>--output</code></a>, <code>-o</code> <i>dir</i></dt><dd><p>Where to write the generated C and the extension modules</p>
+<p>[default: out]</p></dd><dt id="by-compile--require-native"><a href="#by-compile--require-native"><code>--require-native</code></a></dt><dd><p>Fail the build if <em>any</em> function is left to its interpreted definition, whatever the reason.</p>
+<p>Stricter than <code>--no-any</code>, and a different question: <code>--no-any</code> asks whether the module is fully typed, this asks whether it compiles entirely.</p>
+</dd><dt id="by-compile--runtime-raises-checks"><a href="#by-compile--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
+</dd><dt id="by-compile--soundness"><a href="#by-compile--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
+<p>[default: default]</p></dd><dt id="by-compile--verbose"><a href="#by-compile--verbose"><code>--verbose</code></a></dt><dd><p>Report every function that was not lowered natively, with the reason</p>
+</dd></dl>
 
 ## by generate-api-file
 

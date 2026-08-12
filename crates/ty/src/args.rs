@@ -83,6 +83,16 @@ pub(crate) enum Command {
         min_version: Option<String>,
         #[command(flatten)]
         lowering: LoweringArgs,
+        /// Compile every imported module to a native extension first.
+        ///
+        /// A function the compiler declines still runs — from the interpreted
+        /// source embedded in the extension — so this changes speed, not
+        /// behaviour. Needs a C toolchain and python development headers.
+        ///
+        /// The entry module itself stays interpreted: running something as
+        /// `__main__` needs a code object, and an extension module has none.
+        #[arg(long)]
+        compiled: bool,
     },
 
     /// Transpile all .by files and write them to out/.
@@ -91,6 +101,57 @@ pub(crate) enum Command {
         /// [default: the project's configured python version]
         #[arg(long, value_name = "VERSION")]
         min_version: Option<String>,
+        #[command(flatten)]
+        lowering: LoweringArgs,
+    },
+
+    /// Compile .by and .py files to native CPython extension modules.
+    ///
+    /// A function the compiler cannot lower natively is left to its interpreted
+    /// definition rather than failing the build, so compilation is always
+    /// partial-credit. `--verbose` reports each one and why.
+    Compile {
+        /// Files to compile. Defaults to every `.by` and `.py` file under the
+        /// project root.
+        #[arg(value_name = "FILE")]
+        files: Vec<PathBuf>,
+        /// Where to write the generated C and the extension modules.
+        #[arg(short = 'o', long, value_name = "DIR", default_value = "out")]
+        output: PathBuf,
+        /// Report every function that was not lowered natively, with the reason.
+        #[arg(long)]
+        verbose: bool,
+        /// Emit the generated C without invoking the C compiler.
+        #[arg(long)]
+        emit_c_only: bool,
+        /// Fail the build when a function cannot be compiled because a type is
+        /// gradual, instead of leaving it to its interpreted definition.
+        ///
+        /// A contract about predictability rather than a speed switch: a
+        /// gradual type is the commonest reason a function silently stays
+        /// interpreted.
+        #[arg(long)]
+        no_any: bool,
+        /// Fail the build if *any* function is left to its interpreted
+        /// definition, whatever the reason.
+        ///
+        /// Stricter than `--no-any`, and a different question: `--no-any` asks
+        /// whether the module is fully typed, this asks whether it compiles
+        /// entirely.
+        #[arg(long)]
+        require_native: bool,
+        /// Write a `<module>.annotated` report next to the generated C: each
+        /// function's BIR, whether it is infallible, and for every function left
+        /// interpreted, the reason why.
+        #[arg(long)]
+        annotate: bool,
+        /// The lowering options a declined function's interpreted definition is
+        /// transpiled with.
+        ///
+        /// A declined function *runs* from that source, so these have to be the
+        /// same ones a `transpile` of the module would use or the two halves
+        /// disagree about what they check. `.py` sources are their own fallback
+        /// and are unaffected.
         #[command(flatten)]
         lowering: LoweringArgs,
     },
@@ -139,7 +200,7 @@ pub(crate) enum Command {
 /// How the transpiler lowers a program, shared by `run`, `build` and
 /// `transpile`. Every option here changes the emitted python, never the
 /// checker's verdict.
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, Default, Parser)]
 pub(crate) struct LoweringArgs {
     /// which runtime type-soundness checks to insert: `default`, `all`
     /// (adds the opt-in `parameters` entry checks), `none`, or a

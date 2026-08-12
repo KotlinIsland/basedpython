@@ -7,11 +7,12 @@ use std::process::Command;
 use anyhow::Context;
 use by_transforms::config::{Config, PythonVersion};
 use ruff_db::diagnostic::{
-    Annotation, Diagnostic, DiagnosticId, DisplayDiagnosticConfig, DisplayDiagnostics, Severity,
-    Span,
+    Annotation, Diagnostic, DiagnosticId, DisplayDiagnosticConfig, DisplayDiagnostics, LintName,
+    Severity, Span, SubDiagnostic, SubDiagnosticSeverity,
 };
 use ruff_db::files::system_path_to_file;
 use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
+use ruff_text_size::TextRange;
 use ty_project::{Db, ProjectDatabase, ProjectMetadata};
 use walkdir::WalkDir;
 
@@ -116,6 +117,7 @@ pub(crate) fn cmd_run(
     args: &[String],
     min_version: Option<&str>,
     lowering: &LoweringArgs,
+    compiled: bool,
 ) -> anyhow::Result<ExitStatus> {
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
     // `run` executes on a specific interpreter, so by default target *its*
@@ -148,7 +150,7 @@ pub(crate) fn cmd_run(
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let tmp = tempfile::TempDir::new().context("failed to create temp directory")?;
 
-    let (db, handles, rebuilder, root) = build_project_db(&cwd)?;
+    let (db, handles, rebuilder, root) = build_project_db(&cwd, BY_SOURCES)?;
     if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Failure);
@@ -192,6 +194,57 @@ pub(crate) fn cmd_run(
     )?;
     if !ok {
         return Ok(ExitStatus::Failure);
+    }
+
+    if compiled {
+        // the extension lands beside the generated `.py`, and python's finder
+        // prefers an extension to source — so an `import` picks the compiled
+        // module up with no path juggling. a declined function still runs, from
+        // the source embedded in the extension, which is why this is a speed
+        // switch and not a behaviour switch.
+        //
+        // the entry module is the exception, and it has to be: `runpy` needs a
+        // code object to run something as `__main__`, and an extension has none.
+        // so the entry stays interpreted and everything it imports is native
+        let options = by_build::Options {
+            fallback: Some(config),
+            language: by_irbuild::Language::default(),
+            ..by_build::Options::default()
+        };
+        let toolchain = by_build::Toolchain::probe(&python).with_context(|| {
+            format!(
+                "could not read `{python}`'s build configuration; \
+                 --compiled needs an interpreter with development headers"
+            )
+        })?;
+        let mut built = 0usize;
+        for entry in &traceback_entries {
+            let source = fs::read_to_string(&entry.by_path)
+                .with_context(|| format!("could not read {}", entry.by_path.display()))?;
+            let name = entry
+                .py_path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .context("a source file has no usable module name")?;
+            if name == module {
+                continue;
+            }
+            let dir = entry.py_path.parent().unwrap_or(tmp.path());
+            let mut lowered = by_irbuild::module_from_source(&source, name, options.language);
+            lowered.lines = Some(by_ir::function::LineTable::new(
+                entry.by_path.display().to_string(),
+                &source,
+            ));
+            by_build::build_lowered(lowered, &source, &toolchain, dir, &options)
+                .with_context(|| format!("could not compile {}", entry.by_path.display()))?;
+            built += 1;
+        }
+        if built == 0 {
+            eprintln!(
+                "note: `{module}` is the entry module, which has to run as `__main__` \
+                 from source — nothing else to compile"
+            );
+        }
     }
 
     write_traceback_runtime(tmp.path(), &traceback_entries)?;
@@ -287,7 +340,7 @@ pub(crate) fn cmd_build(
     lowering.apply(&mut config)?;
     let out = cwd.join("out");
 
-    let (db, handles, rebuilder, root) = build_project_db(&cwd)?;
+    let (db, handles, rebuilder, root) = build_project_db(&cwd, BY_SOURCES)?;
     if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Success);
@@ -312,6 +365,166 @@ pub(crate) fn cmd_build(
     }
 
     eprintln!("\nbuild complete ({file_count} files)");
+    Ok(ExitStatus::Success)
+}
+
+// ── compile ─────────────────────────────────────────────────────────────────
+
+/// How `by compile` was invoked.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CompileFlags {
+    pub(crate) verbose: bool,
+    pub(crate) emit_c_only: bool,
+    pub(crate) annotate: bool,
+    pub(crate) lowering: LoweringArgs,
+    pub(crate) options: by_build::Options,
+}
+
+#[allow(clippy::print_stderr)]
+/// Compile `.by` and `.py` files to native extension modules.
+///
+/// Every function the compiler declines is reported rather than silently
+/// dropped: the count of declines is the honest measure of how much of a project
+/// actually runs natively, so it is never hidden.
+pub(crate) fn cmd_compile(
+    files: &[PathBuf],
+    output: &Path,
+    flags: CompileFlags,
+) -> anyhow::Result<ExitStatus> {
+    let CompileFlags {
+        verbose,
+        emit_c_only,
+        annotate,
+        lowering,
+        mut options,
+    } = flags;
+    options.annotate = options.annotate || annotate;
+    // a declined function runs from the transpiled fallback, so it has to be
+    // transpiled with the same options a `transpile` of this module would use —
+    // otherwise the compiled half and the interpreted half check different things
+    let mut fallback = Config::default();
+    lowering.apply(&mut fallback)?;
+    options.fallback = Some(fallback);
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let sources: Vec<PathBuf> = if files.is_empty() {
+        compilable_files(&cwd)
+    } else {
+        files.to_vec()
+    };
+    if sources.is_empty() {
+        eprintln!("no .by or .py files found");
+        return Ok(ExitStatus::Success);
+    }
+
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
+    let toolchain = by_build::Toolchain::probe(&python).with_context(|| {
+        format!("could not read `{python}`'s build configuration; set PYTHON to an interpreter with development headers")
+    })?;
+
+    let out_dir = cwd.join(output);
+    let mut compiled = 0usize;
+    let mut declined_total = 0usize;
+
+    // one database for the whole project, so a type imported from a sibling module
+    // resolves. lowering each file on its own is sound — an unresolved class
+    // degrades to the object protocol — but it makes every imported type look
+    // gradual, and `--no-any` would then fail on noise
+    // `compile` embeds fallback source produced by the untyped transpile, which
+    // takes no db, so the rebuilder the other commands thread through is unused here
+    let (db, handles, _rebuilder, _root) = build_project_db(&cwd, COMPILABLE_SOURCES)?;
+
+    // a source with nothing to lower blocks, the way it does for `build` and
+    // `transpile` — it could not be parsed, or could not be read at all. a *type*
+    // diagnostic is advisory: many valid basedpython type forms still read as errors
+    // to ty, and the compiler degrades to the object protocol rather than being
+    // wrong about them
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    let mut blocked = false;
+    for (_, file) in &handles {
+        let found = db.check_file(*file);
+        if found.iter().any(is_unusable_source) {
+            blocked = true;
+        }
+        diagnostics.extend(found);
+    }
+    if blocked {
+        render_diagnostics(&db, &diagnostics)?;
+        return Ok(ExitStatus::Failure);
+    }
+    if !diagnostics.is_empty() {
+        render_diagnostics(&db, &diagnostics)?;
+    }
+
+    for (path, file) in &handles {
+        let source = fs::read_to_string(path)
+            .with_context(|| format!("could not read {}", path.display()))?;
+        let module = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .context("a source file has no usable module name")?;
+
+        let parsed = ruff_db::parsed::parsed_module(&db, *file).load(&db);
+        let model = ty_python_semantic::SemanticModel::new(&db, *file);
+        // a `.py` source needs no transpiling to be its own interpreted fallback
+        let mut options = options.clone();
+        if path.extension().is_some_and(|x| x == "py") {
+            options.language = by_irbuild::Language::Python;
+        }
+        let mut lowered = by_irbuild::build_module(
+            &db,
+            &model,
+            parsed.suite(),
+            module,
+            options.language.unique_loop_bindings(),
+        );
+        // the real path, so a `#line` in the generated C resolves for a debugger
+        let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        lowered.lines = Some(by_ir::function::LineTable::new(
+            absolute.display().to_string(),
+            &source,
+        ));
+
+        let built = if emit_c_only {
+            by_build::emit_lowered(lowered, &source, &out_dir, &options)
+        } else {
+            by_build::build_lowered(lowered, &source, &toolchain, &out_dir, &options).inspect(
+                |built| {
+                    eprintln!(
+                        "{} -> {}",
+                        path.display(),
+                        built.artifact.extension.display()
+                    );
+                },
+            )
+        }
+        .with_context(|| format!("could not compile {}", path.display()))?;
+
+        if let Some(annotation) = &built.artifact.annotation {
+            eprintln!("  annotated {}", annotation.display());
+        }
+        declined_total += built.declined.len();
+        if verbose {
+            // a decline is the compiler's report on the code it did *not* take, so
+            // it points at that code the way every other diagnostic does
+            let diagnostics: Vec<Diagnostic> = built
+                .declined
+                .iter()
+                .map(|declined| declined_diagnostic(*file, declined))
+                .collect();
+            render_diagnostics(&db, &diagnostics)?;
+        }
+        compiled += 1;
+    }
+
+    eprintln!("\ncompiled {compiled} module(s)");
+    if declined_total > 0 {
+        let hint = if verbose {
+            ""
+        } else {
+            " (--verbose to list them)"
+        };
+        eprintln!("{declined_total} function(s) left to the interpreted definition{hint}");
+    }
     Ok(ExitStatus::Success)
 }
 
@@ -526,7 +739,7 @@ fn reverse_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
 /// build`, but written in place rather than to `out/`).
 #[allow(clippy::print_stderr)]
 fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
-    let (db, handles, rebuilder, _root) = build_project_db(dir)?;
+    let (db, handles, rebuilder, _root) = build_project_db(dir, BY_SOURCES)?;
     if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Success);
@@ -720,6 +933,32 @@ struct Rebuilder {
     included: Vec<SystemPathBuf>,
 }
 
+/// every source under `root` the compiler can lower
+///
+/// it lowers the `.by` *and* the `.py` ast — one lowering, told apart by
+/// [`by_irbuild::Language`]. only the commands that *write beside* a source
+/// ([`cmd_transpile`]) are `.by`-only, because a `.py` there would be its own
+/// output
+fn compilable_files(root: &Path) -> Vec<PathBuf> {
+    source_files(root, &["by", "py"])
+}
+
+fn source_files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
+    WalkDir::new(root)
+        .into_iter()
+        .filter_entry(may_contain_sources)
+        .filter_map(Result::ok)
+        .filter(|e| {
+            !e.path_is_symlink()
+                && e.path()
+                    .extension()
+                    .and_then(OsStr::to_str)
+                    .is_some_and(|x| extensions.contains(&x))
+        })
+        .map(walkdir::DirEntry::into_path)
+        .collect()
+}
+
 impl Rebuilder {
     fn rebuild(&self) -> Box<dyn ty_python_semantic::Db> {
         let mut db =
@@ -745,6 +984,15 @@ type ProjectBuild = (
     PathBuf,
 );
 
+/// the sources `build`, `run` and `transpile` claim: a `.py` beside a `.by`
+/// is that file's own output, so writing beside it again would be circular
+const BY_SOURCES: &[&str] = &["by", "byi"];
+
+/// what `compile` claims. it lowers the `.by` *and* the `.py` ast — one
+/// lowering, told apart by [`by_irbuild::Language`] — and emits into an
+/// output directory rather than beside the source, so a `.py` is an input
+const COMPILABLE_SOURCES: &[&str] = &["by", "byi", "py"];
+
 /// Whether `path` sits inside a hidden or build-output directory under `root`.
 fn is_hidden_within(path: &Path, root: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {
@@ -759,10 +1007,11 @@ fn is_hidden_within(path: &Path, root: &Path) -> bool {
 }
 
 /// Build a project db rooted at `cwd`, returning it alongside the
-/// `(source_path, File)` pair for every basedpython source the *project* claims
+/// `(source_path, File)` pair for every source the *project* claims whose
+/// extension is in `extensions`
 /// — the same set `by check` walks, so `src.exclude` and the ignore files it
 /// honours apply here too — and the means to build the same project again.
-fn build_project_db(cwd: &Path) -> anyhow::Result<ProjectBuild> {
+fn build_project_db(cwd: &Path, extensions: &[&str]) -> anyhow::Result<ProjectBuild> {
     // the project root must be canonicalized the same way the included files
     // are (below) so it stays a path *prefix* of them: otherwise a file's
     // search path isn't recognized as first-party and boundary diagnostics
@@ -786,7 +1035,11 @@ fn build_project_db(cwd: &Path) -> anyhow::Result<ProjectBuild> {
         .project()
         .files(&db)
         .into_iter()
-        .filter(|file| matches!(file.path(&db).extension(), Some("by" | "byi")))
+        .filter(|file| {
+            file.path(&db)
+                .extension()
+                .is_some_and(|x| extensions.contains(&x))
+        })
         .filter_map(|file| {
             let path = file.path(&db).as_system_path()?;
             Some((path.as_std_path().to_path_buf(), file))
@@ -928,6 +1181,32 @@ fn render_diagnostics(db: &ProjectDatabase, diagnostics: &[Diagnostic]) -> anyho
 /// source. When the failure maps back to a `.by` range, attach it so the
 /// diagnostic renders with `--> file:line:col` and a source caret like any
 /// other; otherwise fall back to a bare message.
+/// a function left to its interpreted definition, as a diagnostic
+fn declined_diagnostic(
+    file: ruff_db::files::File,
+    declined: &by_ir::function::Declined,
+) -> Diagnostic {
+    let mut diagnostic = Diagnostic::new(
+        DiagnosticId::Lint(LintName::of("declined")),
+        Severity::Info,
+        format!("`{}` was left to its interpreted definition", declined.name),
+    );
+    if let Some((start, end)) = declined.range {
+        diagnostic.annotate(
+            Annotation::primary(
+                Span::from(file).with_range(TextRange::new(start.into(), end.into())),
+            )
+            .message(declined.reason.clone()),
+        );
+    } else {
+        diagnostic.sub(SubDiagnostic::new(
+            SubDiagnosticSeverity::Info,
+            declined.reason.clone(),
+        ));
+    }
+    diagnostic
+}
+
 fn transpile_bug_diagnostic(
     file: ruff_db::files::File,
     err: &by_transforms::TranspileError,
