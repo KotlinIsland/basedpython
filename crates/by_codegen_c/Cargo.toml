@@ -1,0 +1,21 @@
+[package]
+name = "by_codegen_c"
+version = "0.0.0"
+publish = false
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+documentation = { workspace = true }
+repository = { workspace = true }
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+by_ir = { workspace = true }
+
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false

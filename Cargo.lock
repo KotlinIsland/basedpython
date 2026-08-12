@@ -338,6 +338,53 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46c5e41b57b8bba42a04676d81cb89e9ee8e859a1a66f80a5a72e1cb76b34d43"
 
 [[package]]
+name = "by_build"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "by_codegen_c",
+ "by_ir",
+ "by_irbuild",
+ "by_opt",
+ "by_rt",
+ "by_transforms",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "by_codegen_c"
+version = "0.0.0"
+dependencies = [
+ "by_ir",
+]
+
+[[package]]
+name = "by_ir"
+version = "0.0.0"
+
+[[package]]
+name = "by_irbuild"
+version = "0.0.0"
+dependencies = [
+ "by_ir",
+ "ruff_db",
+ "ruff_python_ast",
+ "ruff_python_stdlib",
+ "ruff_text_size",
+ "thin-vec",
+ "ty_project",
+ "ty_python_semantic",
+]
+
+[[package]]
+name = "by_opt"
+version = "0.0.0"
+dependencies = [
+ "by_ir",
+]
+
+[[package]]
 name = "by_override_patch"
 version = "0.0.0"
 dependencies = [
@@ -348,6 +395,10 @@ dependencies = [
  "ty_python_semantic",
  "walkdir",
 ]
+
+[[package]]
+name = "by_rt"
+version = "0.0.0"
 
 [[package]]
 name = "by_transforms"
@@ -4674,6 +4725,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "argfile",
+ "by_build",
+ "by_ir",
+ "by_irbuild",
  "by_transforms",
  "clap",
  "clap_complete_command",
@@ -4694,6 +4748,7 @@ dependencies = [
  "ruff_python_ast",
  "ruff_python_trivia",
  "ruff_ranged_value",
+ "ruff_text_size",
  "salsa",
  "serde",
  "serde_json",

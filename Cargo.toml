@@ -17,6 +17,12 @@ authors = ["KotlinIsland"]
 license = "MIT"
 
 [workspace.dependencies]
+by_build = { path = "crates/by_build" }
+by_codegen_c = { path = "crates/by_codegen_c" }
+by_ir = { path = "crates/by_ir" }
+by_irbuild = { path = "crates/by_irbuild" }
+by_opt = { path = "crates/by_opt" }
+by_rt = { path = "crates/by_rt" }
 by_transforms = { path = "crates/by_transforms" }
 char_str = { version = "0.0.2" }
 ruff = { version = "0.15.22", path = "crates/ruff" }

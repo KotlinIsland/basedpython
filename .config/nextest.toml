@@ -58,3 +58,14 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [[profile.ci.overrides]]
 filter = 'test(linter_no_panic)'
 slow-timeout = { period = "60s", terminate-after = 3 }
+
+# The native backend's stdlib corpus compiles a real module end to end — lowering it,
+# emitting C, and running the C compiler and linker over it — in an unoptimized build.
+# A module to a test keeps each one attributable and lets them overlap, but even the
+# small ones take tens of seconds and `dataclasses` takes minutes, so the 60s cutoff
+# would kill the corpus outright: that is what it did on 2026-08-10, at 60.188s, for a
+# test that passes in 810s locally. Same reasoning as the three above — the limit is a
+# stop-gap for deadlock, not a runtime budget, and 20 minutes still catches one.
+[[profile.ci.overrides]]
+filter = 'test(compiles_without_a_hard_failure)'
+slow-timeout = { period = "60s", terminate-after = 20 }
