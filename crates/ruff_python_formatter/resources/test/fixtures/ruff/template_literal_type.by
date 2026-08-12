@@ -1,0 +1,20 @@
+# a template literal type is an ordinary f-string in a type position; the
+# formatter must leave the pattern spelled the way it was written
+a: f"asdf{int}fdsa" = "asdf5fdsa"
+b: f"v{int}.{int}"
+c: list[f"/{str}"]
+d: f"a{1 | 2}b"
+e: f"{{lit}}{int}"
+
+
+def route(path: f"/{str}", version: f"v{int}") -> f"{str}-ok":
+    return f"{path}-ok"
+
+
+type Slug = f"/{str}"
+
+
+class Route[T]:
+    label: f"a{T}b"
+
+    def render(self) -> f"a{T}b": ...

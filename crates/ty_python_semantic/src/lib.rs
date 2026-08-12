@@ -58,6 +58,7 @@ pub use types::ide_support::{
 pub use types::reified_infer::{
     ArgVariance, ErasedTargetReason, ErasedUnion, ParametricIsPlan, ProtocolMemberCheck,
 };
+pub use types::template::finite_string_set;
 pub use types::visibility::private_symbols;
 pub use types::{DisplaySettings, ProgramEnvironment, TypeQualifiers};
 

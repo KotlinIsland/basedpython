@@ -5256,6 +5256,32 @@ complex_fstring = f"User: {name.upper()}, Count: {len(data)}, Hex: {value:x}"
     }
 
     #[test]
+    fn template_literal_type_holes_are_types() {
+        let test = SemanticTokenTest::new_by(
+            r#"
+def route(path: f"/{str}", version: f"v{int}") -> f"{str}-ok":
+    return f"{path}-ok"
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "route" @ 5..10: Function [definition]
+        "path" @ 11..15: Parameter [definition]
+        "/" @ 19..20: String
+        "str" @ 21..24: Class
+        "version" @ 28..35: Parameter [definition]
+        "v" @ 39..40: String
+        "int" @ 41..44: Class
+        "str" @ 54..57: Class
+        "-ok" @ 58..61: String
+        "path" @ 78..82: Parameter
+        "-ok" @ 83..86: String
+        "#);
+    }
+
+    #[test]
     fn fstring_format_spec_clauses() {
         let test = SemanticTokenTest::new(
             r#"

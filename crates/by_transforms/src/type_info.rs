@@ -311,6 +311,12 @@ pub(crate) trait TypeInfo {
     /// source unchanged and ty's own diagnostic stands
     fn symbolic_type_fold(&self, expr: &Expr) -> Option<String>;
 
+    /// basedpython: the finite set of strings an f-string in a type position
+    /// denotes, when it denotes one — `f"a{1 | 2}b"` is `["a1b", "a2b"]`.
+    /// `None` when the pattern is still a pattern, or when ty resolved no type
+    /// at all; either way the annotation widens to `str`
+    fn template_literal_strings(&self, expr: &Expr) -> Option<Vec<String>>;
+
     /// names + rendered default types of the type parameters of the class
     /// referenced by `expr`. element is `(name, Some(default))` if the
     /// typevar has a declared default, `(name, None)` otherwise. returns
@@ -827,6 +833,11 @@ impl TypeInfo for SemanticModel<'_> {
         // emitted Python source. strip it before returning so the rendered
         // type is a syntactically valid type expression
         Some(strip_binding_context_suffix(&rendered))
+    }
+
+    fn template_literal_strings(&self, expr: &Expr) -> Option<Vec<String>> {
+        let ty = expr.inferred_type(self)?;
+        ty_python_semantic::finite_string_set(self.db(), ty)
     }
 
     fn symbolic_type_fold(&self, expr: &Expr) -> Option<String> {

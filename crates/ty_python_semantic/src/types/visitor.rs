@@ -28,6 +28,7 @@ use crate::types::{
     restricted::walk_restricted_type,
     set_theoretic::{walk_intersection_type, walk_union},
     subclass_of::walk_subclass_of_type,
+    template::TemplateLiteralType,
     type_alias::walk_type_alias_type,
     type_form::walk_typeform_type,
     typed_dict::walk_typed_dict_type,
@@ -151,6 +152,10 @@ pub(crate) trait TypeVisitor<'db> {
         walk_deferred_type(db, deferred, self);
     }
 
+    fn visit_template_literal_type(&self, db: &'db dyn Db, template: TemplateLiteralType<'db>) {
+        walk_template_literal_type(db, template, self);
+    }
+
     fn visit_typed_dict_type(&self, db: &'db dyn Db, typed_dict: TypedDictType<'db>) {
         walk_typed_dict_type(db, typed_dict, self);
     }
@@ -188,6 +193,7 @@ pub(super) enum NonAtomicType<'db> {
     TypeAlias(TypeAliasType<'db>),
     Deferred(DeferredType<'db>),
     NewTypeInstance(NewType<'db>),
+    Template(TemplateLiteralType<'db>),
 }
 
 pub(super) enum TypeKind<'db> {
@@ -198,6 +204,12 @@ pub(super) enum TypeKind<'db> {
 impl<'db> From<Type<'db>> for TypeKind<'db> {
     fn from(ty: Type<'db>) -> Self {
         match ty {
+            // basedpython: a template's holes are types, so a template is the
+            // one literal value that is not a leaf
+            Type::LiteralValue(literal) if let Some(template) = literal.as_template() => {
+                TypeKind::NonAtomic(NonAtomicType::Template(template))
+            }
+
             Type::AlwaysFalsy
             | Type::AlwaysTruthy
             | Type::Never
@@ -344,6 +356,19 @@ pub(super) fn walk_non_atomic_type<'db, V: TypeVisitor<'db> + ?Sized>(
         NonAtomicType::NewTypeInstance(newtype) => {
             visitor.visit_newtype_instance_type(db, newtype);
         }
+        NonAtomicType::Template(template) => {
+            visitor.visit_template_literal_type(db, template);
+        }
+    }
+}
+
+pub(crate) fn walk_template_literal_type<'db, V: TypeVisitor<'db> + ?Sized>(
+    db: &'db dyn Db,
+    template: TemplateLiteralType<'db>,
+    visitor: &V,
+) {
+    for hole in template.holes(db) {
+        visitor.visit_type(db, hole);
     }
 }
 

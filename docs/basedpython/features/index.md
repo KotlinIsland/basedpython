@@ -93,6 +93,7 @@ what a type is allowed to say
 - [strict `float` and `complex`](no-number-promotions.md)
 - [infinity and nan float literals](float-literals.md)
 - [literal type promotion](literal-types.md)
+- [template literal types](template-literal-types.md)
 - [use-site type modifiers (`literal T`, `final T`)](type-modifiers.md)
 - [symbolic operations in types](symbolic-type-ops.md)
 - [match types](match-types.md)

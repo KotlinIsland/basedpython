@@ -918,7 +918,9 @@ fn builtin_literals_equal_to<'db>(
         LiteralValueTypeKind::String(_) | LiteralValueTypeKind::Bytes(_) => {
             UnionBuilder::new(db, env).add(literal_type)
         }
-        LiteralValueTypeKind::LiteralString | LiteralValueTypeKind::Enum(_) => return None,
+        LiteralValueTypeKind::LiteralString
+        | LiteralValueTypeKind::Enum(_)
+        | LiteralValueTypeKind::Template(_) => return None,
         // basedpython float/complex literals: equality spans int/float/complex
         // (`1 == 1.0 == 1+0j`), so an exact exclusion set cannot be enumerated
         LiteralValueTypeKind::Float(_) | LiteralValueTypeKind::Complex(_) => return None,
@@ -1430,12 +1432,14 @@ fn narrow_literal_comparison<'db>(
     equality_is_positive: bool,
 ) -> ComparisonResult<'db> {
     match (left_literal, right_literal) {
-        (LiteralValueTypeKind::LiteralString, LiteralValueTypeKind::String(_)) => {
-            ComparisonResult::CanNarrow(right.negate_if(db, env, !equality_is_positive))
-        }
-        (LiteralValueTypeKind::String(_), LiteralValueTypeKind::LiteralString) => {
-            ComparisonResult::CanNarrow(left.negate_if(db, env, !equality_is_positive))
-        }
+        (
+            LiteralValueTypeKind::LiteralString | LiteralValueTypeKind::Template(_),
+            LiteralValueTypeKind::String(_),
+        ) => ComparisonResult::CanNarrow(right.negate_if(db, env, !equality_is_positive)),
+        (
+            LiteralValueTypeKind::String(_),
+            LiteralValueTypeKind::LiteralString | LiteralValueTypeKind::Template(_),
+        ) => ComparisonResult::CanNarrow(left.negate_if(db, env, !equality_is_positive)),
         (LiteralValueTypeKind::LiteralString, LiteralValueTypeKind::Enum(enum_literal)) => {
             narrow_literal_string_against_enum(db, env, enum_literal, equality_is_positive)
         }
@@ -1798,9 +1802,9 @@ impl KnownComparisonSemantics {
     ) -> Option<Self> {
         match literal {
             LiteralValueTypeKind::Int(_) | LiteralValueTypeKind::Bool(_) => Some(Self::Int),
-            LiteralValueTypeKind::String(_) | LiteralValueTypeKind::LiteralString => {
-                Some(Self::Str)
-            }
+            LiteralValueTypeKind::String(_)
+            | LiteralValueTypeKind::LiteralString
+            | LiteralValueTypeKind::Template(_) => Some(Self::Str),
             LiteralValueTypeKind::Bytes(_) => Some(Self::Bytes),
             LiteralValueTypeKind::Enum(enum_literal) => {
                 Self::of_instance(db, env, enum_literal.enum_class_instance(db, env), operator)
@@ -1968,6 +1972,13 @@ fn known_literal_equality<'db>(
         }
         (LiteralValueTypeKind::Bytes(left), LiteralValueTypeKind::Bytes(right)) => {
             Some(left.value(db) == right.value(db))
+        }
+        // basedpython: a string the pattern cannot produce is never equal to a
+        // value of that template type. one it can produce is undecided — the
+        // value may be some other string the pattern also produces
+        (LiteralValueTypeKind::Template(template), LiteralValueTypeKind::String(value))
+        | (LiteralValueTypeKind::String(value), LiteralValueTypeKind::Template(template)) => {
+            (!template.matches_str(db, env, value.value(db))).then_some(false)
         }
         (LiteralValueTypeKind::Enum(left), LiteralValueTypeKind::Enum(right)) => {
             let left_semantics = KnownComparisonSemantics::of_instance(
