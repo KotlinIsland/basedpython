@@ -1,0 +1,19 @@
+[package]
+name = "by_ir"
+version = "0.0.0"
+publish = false
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+documentation = { workspace = true }
+repository = { workspace = true }
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
