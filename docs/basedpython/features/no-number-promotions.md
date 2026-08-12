@@ -46,6 +46,51 @@ a `.py` file imported into a `.by` file keeps python's typing-spec meaning of
 `float` / `complex`. the strict basedpython meaning only applies inside `.by`
 files; consumers reading the transpiled `.py` output see the strict types too
 
+## asking for it in a `.py` file
+
+a `.py` module can opt out of the promotion too, per module:
+
+```toml
+[tool.ty.analysis]
+strict-float = true
+```
+
+it applies to `float` *and* `complex`, and it takes the ordinary `[[overrides]]`
+matching, so one numeric package can be strict while the rest of a codebase is not
+
+this is a **checking** change first. `f(3)` where `f` takes a `float` becomes an
+error the checker reports, rather than a value silently converted:
+
+```python
+def scale(x: float) -> float:
+    return x * 2.0
+
+scale(1.5)
+scale(1)  # error: [invalid-argument-type]
+```
+
+### why a compiler cares
+
+the promotion is a rule about what a position *accepts*, but a compiler has to
+choose a **representation**, and it cannot lay out something it can only describe as
+`int | float`. a field has to be a `double` or a `PyObject *`; a list element has to
+be unboxed or boxed. so `x: float` meaning `int | float` is the difference between a
+struct member and a pointer, and between an unboxed buffer and a list of boxed
+floats
+
+`by compile` reads the same setting. on the compiler's own benchmarks, turning it on
+took an object-heavy loop from 17.7ms to 3.4ms — past mypyc, which reaches similar
+speed by converting the `int` silently and diverging from python instead
+
+the setting is also read where a type is *inferred* rather than annotated, so an
+attribute assigned from a strict parameter stays strict:
+
+```python
+class Vec:
+    def __init__(self, x: float, y: float) -> None:
+        self.x = x  # `float`, so the field is a double
+```
+
 ## inlay hints
 
 in a `.py` file, where the promotion does apply, the extra arms are shown as an

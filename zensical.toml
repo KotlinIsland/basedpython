@@ -210,6 +210,15 @@ development = [
   { "sourcemaps" = "development/sourcemaps.md" },
   { "type functions" = "development/type-def-design.md" },
   { "typeshed patches" = "development/typeshed-patches.md" },
+  { "native compilation" = [
+    "development/compilation/index.md",
+    "development/compilation/technology.md",
+    "development/compilation/ir.md",
+    "development/compilation/optimizations.md",
+    "development/compilation/planned-features.md",
+    "development/compilation/runtime.md",
+    "development/compilation/plan.md",
+  ] },
 ]
 
 [[project.nav]]

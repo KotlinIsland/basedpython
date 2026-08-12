@@ -2,6 +2,8 @@ fail_fast: false
 
 exclude: |
   (?x)^(
+    scratch\..*|
+    \.claude/.*|
     .github/workflows/release.yml|
     crates/ty_vendored/vendor/.*|
     crates/ty_project/resources/.*|

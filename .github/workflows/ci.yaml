@@ -305,6 +305,48 @@ jobs:
   # transitive dep and fails on the api skew. the fork publishes only the
   # `basedpython` wheel to pypi, never these crates to crates.io
 
+  # the project supports 3.13 as well as `PYTHON_VERSION`, and the two differ in what a
+  # class does with its annotations and in the wording of several exceptions. a job of
+  # its own rather than a step on `cargo test (linux)`: as a step it pushed that job past
+  # its budget and the doctest and dogfood steps after it never ran at all
+  cargo-test-backend-other-python:
+    name: "cargo test (native backend, python 3.13)"
+    runs-on: ${{ github.repository == 'astral-sh/ruff' && 'depot-ubuntu-22.04-16' || 'ubuntu-latest' }}
+    needs: determine_changes
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-test') && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ruff-linux-debug
+          save-if: false
+      - name: "Install Rust toolchain"
+        run: rustup show
+      - name: "Install mold"
+        uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - name: "Install cargo nextest"
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: cargo-nextest
+      - name: "Install uv"
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
+          enable-cache: "true"
+      - name: "Pin the interpreter"
+        run: |
+          uv python install 3.13
+          echo "PYTHON=$(uv python find 3.13)" >> "$GITHUB_ENV"
+      - name: "Run the native backend"
+        run: |
+          cargo nextest run \
+            -p by_build -p by_ir -p by_irbuild -p by_opt -p by_codegen_c -p by_rt
+
   cargo-test-linux:
     name: "cargo test (linux)"
     runs-on: ${{ github.repository == 'astral-sh/ruff' && 'depot-ubuntu-22.04-16' || 'ubuntu-latest' }}
@@ -354,6 +396,17 @@ jobs:
         # Ignore errors if this step fails; we want to continue to later steps in the workflow anyway.
         # This step is just to get nice GitHub annotations on the PR diff in the files-changed tab.
         run: cargo test -p ty_python_semantic --test mdtest || true
+      # the native backend's tests run against whatever `python3` is first on `PATH`,
+      # which without this is whichever interpreter the runner image happens to ship —
+      # a 3.14 on macos and a 3.12 on linux, so the version under test moved with the
+      # image rather than with the project. `by compile` builds against the running
+      # interpreter's headers and has to answer as that interpreter does, so which one
+      # it is belongs in the workflow. the other platforms are deliberately left on the
+      # image's own interpreter: that is coverage on top of this, not instead of it
+      - name: "Pin the interpreter the native backend is tested against"
+        run: |
+          uv python install "${PYTHON_VERSION}"
+          echo "PYTHON=$(uv python find "${PYTHON_VERSION}")" >> "$GITHUB_ENV"
       - name: "Run tests"
         run: cargo insta test --all-features --unreferenced reject --test-runner nextest --disable-nextest-doctest
       - name: "Run doctests"
