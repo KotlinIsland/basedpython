@@ -1171,6 +1171,118 @@ main()
 }
 
 #[test]
+fn run_sourcemap_digests_match_the_files_they_describe() {
+    // `SOURCEMAP` describes a pair of files, and a consumer that reports a `.by`
+    // line from it is trusting that both are still the ones it was built from.
+    // `DIGESTS` is what makes that checkable, so it has to be over the bytes
+    // actually read and written — the debuggee recomputes both from disk here,
+    // then edits its own source to prove the digest discriminates at all
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import hashlib
+import importlib
+
+# imported dynamically: it is generated into the build dir, so there is nothing
+# for the checker to resolve at the time this file is checked
+sourcemap = importlib.import_module('_by_sourcemap')
+
+
+def digest_of(path: str) -> str:
+    with open(path, 'rb') as handle:
+        return 'sha256:' + hashlib.sha256(handle.read()).hexdigest()
+
+
+checked = 0
+for py_path, entry in sourcemap.SOURCEMAP.items():
+    by_path = entry[0]
+    digests = sourcemap.DIGESTS[py_path]
+    assert digest_of(by_path) == digests['by'], 'stale .by digest for ' + by_path
+    assert digest_of(py_path) == digests['py'], 'stale .py digest for ' + py_path
+    for path, side in ((by_path, 'by'), (py_path, 'py')):
+        with open(path, 'ab') as handle:
+            handle.write(b'# edited after the transpile\\n')
+        assert digest_of(path) != digests[side], 'an edited file still matched its digest'
+    checked += 1
+
+print('verified', checked)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "verified 1",
+        "every sourcemap entry should have been checked:\n{stderr}"
+    );
+}
+
+#[test]
+fn run_leaves_a_frame_generated_when_its_source_no_longer_matches() {
+    // the traceback shim is the digests' first consumer: once the `.by` has been
+    // saved over, its line table describes the file that was replaced, so a
+    // mapped frame would quote the *new* text at the *old* line numbers. it has
+    // to refuse the mapping and say why, rather than answer confidently wrong
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import importlib
+
+sourcemap = importlib.import_module('_by_sourcemap')
+
+
+def boom() -> None:
+    raise ValueError('bang')
+
+
+# stand a different file in the place of every source the map describes
+for entry in sourcemap.SOURCEMAP.values():
+    with open(entry[0], 'w') as handle:
+        handle.write('# not the file that was transpiled\\n')
+
+boom()
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(!output.status.success(), "expected a non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("no longer matches what it was transpiled from"),
+        "the refusal should be reported, not silent:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("main.by\", line"),
+        "no frame may claim a line in a .by the map no longer describes:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("main.py\", line"),
+        "frames should fall back to the generated python:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("ValueError"),
+        "exception type should be preserved:\n{stderr}"
+    );
+}
+
+#[test]
 fn build_skips_a_source_it_cannot_read() {
     // a source ty cannot decode reads as an empty module, so emitting for it
     // would write an empty `.py` over the real one. it is reported and skipped
@@ -1646,6 +1758,44 @@ fn build_mirrors_the_module_tree_not_the_directory_tree() {
     assert!(
         !out.join("src").exists(),
         "the source root must not appear in the output tree:\n{stderr}"
+    );
+}
+
+/// `out/` outlives the build that wrote it — a test runner, a debugger or an
+/// editor reads it later — so it is the tree where a `.by` really can be saved
+/// after the transpile, and the one that needs the digests to say so
+#[test]
+fn build_writes_a_sourcemap_beside_the_generated_python() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "print(\"built\")\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    let out = dir.path().join("out");
+    let map = fs::read_to_string(out.join("_by_sourcemap.py")).expect("sourcemap module");
+
+    // the paths in the map are the ones the build ran against, so a symlinked
+    // temp dir (`/tmp` on macOS) is spelled resolved there and has to be here
+    let resolved = fs::canonicalize(&out).expect("out directory");
+    let py_key = format!("{:?}", resolved.join("main.py").to_string_lossy());
+    assert!(
+        map.contains(&format!("SOURCEMAP = {{\n    {py_key}: (")),
+        "the generated module should be mapped by its own path:\n{map}"
+    );
+    assert!(
+        map.contains(&format!("    {py_key}: {{\"by\": \"sha256:")),
+        "and digested under the same key:\n{map}"
+    );
+    // the runner shim belongs to `by run`; a build output is not an entry point
+    assert!(
+        !out.join("_by_runner.py").exists(),
+        "the runner shim should not be written into a build output"
     );
 }
 

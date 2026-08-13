@@ -53,6 +53,7 @@ rayon = { workspace = true }
 salsa = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tempfile = { workspace = true }
 tracing = { workspace = true, features = ["release_max_level_debug"] }
 tracing-flame = { workspace = true }

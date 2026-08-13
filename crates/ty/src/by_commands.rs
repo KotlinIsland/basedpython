@@ -12,8 +12,10 @@ use ruff_db::diagnostic::{
     Severity, Span, SubDiagnostic, SubDiagnosticSeverity,
 };
 use ruff_db::files::system_path_to_file;
+use ruff_db::source::source_text;
 use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
 use ruff_text_size::TextRange;
+use sha2::{Digest, Sha256};
 use ty_project::{Db, ProjectDatabase, ProjectMetadata};
 use walkdir::WalkDir;
 
@@ -182,15 +184,11 @@ pub(crate) fn cmd_run(
         &config,
         CheckGate::AllErrors,
         &rebuilder,
-        |bpy, src, line_map| {
-            let py = tmp.path().join(module_relative_path(&roots, &root, bpy));
-            fs::create_dir_all(py.parent().unwrap())?;
-            fs::write(&py, src)?;
-            traceback_entries.push(TracebackEntry {
-                py_path: py,
-                by_path: fs::canonicalize(bpy).unwrap_or_else(|_| bpy.to_path_buf()),
-                line_map: line_map.to_vec(),
-            });
+        |emitted| {
+            let py = tmp
+                .path()
+                .join(module_relative_path(&roots, &root, emitted.by_path));
+            traceback_entries.push(write_module(py, emitted)?);
             Ok(())
         },
     )?;
@@ -221,8 +219,10 @@ pub(crate) fn cmd_run(
         })?;
         let mut built = 0usize;
         for entry in &traceback_entries {
-            let source = fs::read_to_string(&entry.by_path)
-                .with_context(|| format!("could not read {}", entry.by_path.display()))?;
+            // the text the transpile ran on, not a fresh read of the file: a
+            // `.by` saved between the two would give this native module a
+            // different source than the sourcemap and its digest describe
+            let source = &entry.by_source;
             // the generated tree *is* the module tree, so the dotted name is the
             // path within it — and it has to be dotted, because a class's
             // `__module__` is read off the front of its type's `tp_name`. a file
@@ -238,15 +238,15 @@ pub(crate) fn cmd_run(
             if name.dotted() == module {
                 continue;
             }
-            let mut lowered = by_irbuild::module_from_source(&source, name, options.language);
+            let mut lowered = by_irbuild::module_from_source(source, name, options.language);
             lowered.lines = Some(by_ir::function::LineTable::new(
                 entry.by_path.display().to_string(),
-                &source,
+                source,
             ));
             // the root of the generated tree, not the directory the `.py` landed
             // in: the build lays the extension out at its module's own place, and
             // handing it the leaf directory would nest the tree inside itself
-            by_build::build_lowered(lowered, &source, &toolchain, tmp.path(), &options)
+            by_build::build_lowered(lowered, source, &toolchain, tmp.path(), &options)
                 .with_context(|| format!("could not compile {}", entry.by_path.display()))?;
             built += 1;
         }
@@ -445,29 +445,38 @@ pub(crate) fn cmd_build(
     let file_count = handles.len();
     let roots = module_roots(&db, &root);
     let mut packages: BTreeSet<PathBuf> = BTreeSet::new();
+    // `out/` outlives the build that wrote it — it is what a test runner, a
+    // debugger or an editor plugin sees — so the sourcemap goes with it. this is
+    // the directory where a `.by` really can be saved after the transpile, which
+    // is what the digests beside the map are for
+    let mut entries: Vec<TracebackEntry> = Vec::new();
     if !render_check_and_transpile(
         &db,
         &handles,
         &config,
         CheckGate::ParseErrorsOnly,
         &rebuilder,
-        |bpy, src, _line_map| {
-            let relative = module_relative_path(&roots, &root, bpy);
+        |emitted| {
+            let relative = module_relative_path(&roots, &root, emitted.by_path);
             if relative.components().count() > 1
                 && let Some(package) = relative.components().next()
             {
                 packages.insert(out.join(package));
             }
 
-            let py = out.join(relative);
-            fs::create_dir_all(py.parent().unwrap())?;
-            fs::write(&py, src)?;
-            eprintln!("{} -> {}", bpy.display(), py.display());
+            let entry = write_module(out.join(relative), emitted)?;
+            eprintln!(
+                "{} -> {}",
+                emitted.by_path.display(),
+                entry.py_path.display()
+            );
+            entries.push(entry);
             Ok(())
         },
     )? {
         return Ok(ExitStatus::Failure);
     }
+    write_sourcemap_module(&out, &entries)?;
 
     write_markers(&db, &packages)?;
 
@@ -988,9 +997,9 @@ fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
         config,
         CheckGate::ParseErrorsOnly,
         &rebuilder,
-        |bpy, src, _line_map| {
-            let py = bpy.with_extension("py");
-            fs::write(&py, src).with_context(|| format!("{}", py.display()))?;
+        |emitted| {
+            let py = emitted.by_path.with_extension("py");
+            fs::write(&py, emitted.python).with_context(|| format!("{}", py.display()))?;
             Ok(())
         },
     )?;
@@ -1047,16 +1056,57 @@ struct TracebackEntry {
     py_path: PathBuf,
     by_path: PathBuf,
     line_map: Vec<Option<u32>>,
+    /// the `.by` text the transpile ran on, kept so nothing downstream has to
+    /// read the file a second time and risk reading a different one
+    by_source: String,
+    /// digest of the `.by` bytes the transpiler read
+    by_digest: String,
+    /// digest of the generated python bytes it wrote
+    py_digest: String,
 }
 
-/// Write the sourcemap module + runner shim into the build dir. The shim runs
-/// the target module and, on an uncaught exception, rewrites traceback frames
-/// in generated files back to their `.by` source location.
-fn write_traceback_runtime(dir: &Path, entries: &[TracebackEntry]) -> anyhow::Result<()> {
+/// write one emitted module out and describe it, in that order: the digests
+/// are over the bytes that just landed on disk
+fn write_module(py_path: PathBuf, emitted: &Transpiled<'_>) -> anyhow::Result<TracebackEntry> {
+    if let Some(parent) = py_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(&py_path, emitted.python)
+        .with_context(|| format!("failed to write {}", py_path.display()))?;
+    Ok(TracebackEntry {
+        py_path,
+        by_path: fs::canonicalize(emitted.by_path)
+            .unwrap_or_else(|_| emitted.by_path.to_path_buf()),
+        line_map: emitted.line_map.to_vec(),
+        by_source: emitted.by_source.to_owned(),
+        by_digest: content_digest(emitted.by_source.as_bytes()),
+        py_digest: content_digest(emitted.python.as_bytes()),
+    })
+}
+
+/// a content digest as `_by_sourcemap.py` spells it: `sha256:` then lowercase
+/// hex
+///
+/// the algorithm is named in the value so it can be changed later without
+/// breaking readers — a reader that meets an algorithm it does not know refuses
+/// the entry, instead of comparing a hex it could never have produced
+fn content_digest(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+/// write the sourcemap module beside the generated python it describes
+///
+/// both tables are keyed by the generated path exactly as written here. a
+/// consumer that normalises those keys — the runner shim resolves symlinks, for
+/// one — has to keep the original key to reach the entry's digests
+fn write_sourcemap_module(dir: &Path, entries: &[TracebackEntry]) -> anyhow::Result<()> {
     use std::fmt::Write as _;
 
     let mut map_src = String::from(
-        "# generated by `by run` — maps transpiled python frames to .by source\nSOURCEMAP = {\n",
+        "# generated by basedpython — maps transpiled python frames to .by source\n\
+         # the two tables share their keys: the generated path, spelled as it is here\n\
+         SOURCEMAP = {\n",
     );
     for e in entries {
         let elems: Vec<String> = e
@@ -1072,9 +1122,41 @@ fn write_traceback_runtime(dir: &Path, entries: &[TracebackEntry]) -> anyhow::Re
             elems.join(", "),
         );
     }
+    map_src.push_str("}\n\n");
+
+    // `SOURCEMAP` alone cannot be checked: a `.by` edited since the transpile
+    // leaves it describing a pair of files that no longer exists, and every line
+    // it then reports is wrong with total confidence. the digests are what a
+    // consumer recomputes from disk before trusting a mapped line. a separate
+    // table rather than a wider tuple, so a reader that predates it is unaffected
+    map_src.push_str(
+        "# sha-256 of the two files each SOURCEMAP entry describes, over the bytes\n\
+         # the transpiler read and wrote. recompute both from disk before trusting a\n\
+         # mapped line: a mismatch means the file is no longer the one mapped\n\
+         DIGESTS = {\n",
+    );
+    for e in entries {
+        let _ = writeln!(
+            map_src,
+            "    {}: {{\"by\": {}, \"py\": {}}},",
+            py_str_literal(&e.py_path.to_string_lossy()),
+            py_str_literal(&e.by_digest),
+            py_str_literal(&e.py_digest),
+        );
+    }
     map_src.push_str("}\n");
+
+    fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
     fs::write(dir.join(BY_SOURCEMAP_FILENAME), map_src)
         .with_context(|| "failed to write sourcemap module")?;
+    Ok(())
+}
+
+/// write the sourcemap module + runner shim into the run dir. the shim runs the
+/// target module and, on an uncaught exception, rewrites traceback frames in
+/// generated files back to their `.by` source location
+fn write_traceback_runtime(dir: &Path, entries: &[TracebackEntry]) -> anyhow::Result<()> {
+    write_sourcemap_module(dir, entries)?;
     fs::write(dir.join(BY_RUNNER_FILENAME), BY_RUNNER_SRC)
         .with_context(|| "failed to write runner shim")?;
     Ok(())
@@ -1098,16 +1180,67 @@ fn py_str_literal(s: &str) -> String {
 }
 
 const BY_RUNNER_SRC: &str = r#"# generated by `by run` — runs the target module with .by-aware tracebacks
+import hashlib
+import linecache
 import os
 import runpy
 import sys
 import traceback
 
-from _by_sourcemap import SOURCEMAP
+from _by_sourcemap import DIGESTS, SOURCEMAP
 
 # index the sourcemap by realpath so symlinked temp dirs (e.g. /tmp on macOS)
-# still match the filenames python reports in frames
-_BY_MAP = {os.path.realpath(py): info for py, info in SOURCEMAP.items()}
+# still match the filenames python reports in frames. the key the entry was
+# written under travels with it, because DIGESTS is keyed the unresolved way
+_BY_MAP = {os.path.realpath(py): (py, info) for py, info in SOURCEMAP.items()}
+
+# entries already checked against their digests, so each file is read at most
+# once no matter how many frames it contributes
+_CURRENT = set()
+_STALE = set()
+
+
+def _digest_matches(path, spec):
+    # the algorithm is named in the value, so one this reader does not know is a
+    # refusal rather than hex it could never have produced
+    algorithm, _, expected = spec.partition(":")
+    try:
+        digest = hashlib.new(algorithm)
+    except ValueError:
+        return False
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                digest.update(chunk)
+    except OSError:
+        return False
+    return digest.hexdigest() == expected
+
+
+def _is_current(key, by_path):
+    # the map describes a *pair* of files, and a .by line read out of it is only
+    # true while both are still the ones it was built from. a source saved since
+    # the transpile would otherwise be quoted at line numbers belonging to the
+    # file it replaced — a wrong answer, where leaving the frame generated is
+    # merely a worse one
+    if key in _CURRENT:
+        return True
+    if key in _STALE:
+        return False
+    digests = DIGESTS.get(key)
+    if (
+        digests is not None
+        and _digest_matches(by_path, digests["by"])
+        and _digest_matches(key, digests["py"])
+    ):
+        _CURRENT.add(key)
+        return True
+    _STALE.add(key)
+    sys.stderr.write(
+        f"note: {by_path} no longer matches what it was transpiled from — "
+        "its frames are left as generated python\n"
+    )
+    return False
 
 
 def _rewrite(frames):
@@ -1116,14 +1249,12 @@ def _rewrite(frames):
     frames = frames[first:] if first is not None else frames
     out = []
     for f in frames:
-        info = _BY_MAP.get(os.path.realpath(f.filename))
-        if info is not None and f.lineno is not None:
-            by_path, lines = info
+        entry = _BY_MAP.get(os.path.realpath(f.filename))
+        if entry is not None and f.lineno is not None:
+            key, (by_path, lines) = entry
             idx = f.lineno - 1
             mapped = lines[idx] if 0 <= idx < len(lines) else None
-            if mapped is not None:
-                import linecache
-
+            if mapped is not None and _is_current(key, by_path):
                 by_lineno = mapped + 1
                 text = linecache.getline(by_path, by_lineno).strip() or f.line
                 out.append(traceback.FrameSummary(by_path, by_lineno, f.name, line=text))
@@ -1337,6 +1468,23 @@ enum CheckGate {
     AllErrors,
 }
 
+/// one transpiled module, as [`render_check_and_transpile`] hands it over
+///
+/// the two texts are named rather than positional because a caller that mixes
+/// them up — hashing the python as if it were the `.by`, say — would still
+/// compile
+struct Transpiled<'a> {
+    by_path: &'a Path,
+    /// the `.by` text this transpile ran on. it is the same read, not a fresh
+    /// one: [`source_text()`] is memoized, so a digest taken here is over the
+    /// bytes that actually produced `python`
+    by_source: &'a str,
+    /// the generated python, exactly as the caller is expected to write it out
+    python: &'a str,
+    /// generated line (0-indexed) → the `.by` line it came from
+    line_map: &'a [Option<u32>],
+}
+
 /// Check every file, render diagnostics, then for each non-blocked file call
 /// `consume` with the transpiled Python. Returns `Ok(false)` if the check
 /// outcome blocks per `gate`, or a transpiler bug occurred (caller should
@@ -1347,7 +1495,7 @@ fn render_check_and_transpile(
     config: &Config,
     gate: CheckGate,
     rebuilder: &Rebuilder,
-    mut consume: impl FnMut(&Path, &str, &[Option<u32>]) -> anyhow::Result<()>,
+    mut consume: impl FnMut(&Transpiled<'_>) -> anyhow::Result<()>,
 ) -> anyhow::Result<bool> {
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
     let mut unusable: Vec<ruff_db::files::File> = Vec::new();
@@ -1385,7 +1533,15 @@ fn render_check_and_transpile(
             continue;
         }
         match by_transforms::transpile_typed_with_map(db, *file, config, Some(&rebuild)) {
-            Ok((out, line_map)) => consume(bpy, &out, &line_map)?,
+            Ok((out, line_map)) => {
+                let by_source = source_text(db, *file);
+                consume(&Transpiled {
+                    by_path: bpy,
+                    by_source: by_source.as_str(),
+                    python: &out,
+                    line_map: &line_map,
+                })?;
+            }
             Err(e) => {
                 all_diagnostics.push(transpile_bug_diagnostic(*file, &e));
                 ok = false;
@@ -1496,8 +1652,9 @@ pub(crate) fn cmd_version_by(output_format: crate::args::HelpFormat) -> ExitStat
 #[cfg(test)]
 mod tests {
     use super::{
-        dotted_module_name, is_hidden_within, module_relative_path, reverse_dir,
-        reverse_dir_converting,
+        BY_SOURCEMAP_FILENAME, TracebackEntry, content_digest, dotted_module_name,
+        is_hidden_within, module_relative_path, reverse_dir, reverse_dir_converting,
+        write_sourcemap_module,
     };
     use crate::ExitStatus;
     use by_transforms::config::Config;
@@ -1682,6 +1839,49 @@ mod tests {
         // left exactly as it was found: neither converted nor deleted
         assert!(exploding.is_file());
         assert!(!dir.path().join("exploding.by").exists());
+        Ok(())
+    }
+
+    /// the digest carries the algorithm that produced it, so a reader that does
+    /// not know one can refuse the entry rather than compare hex it could never
+    /// have produced
+    #[test]
+    fn a_digest_names_the_algorithm_before_the_hex() {
+        assert_eq!(
+            content_digest(b"abc"),
+            "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    /// `DIGESTS` is a second table keyed exactly as `SOURCEMAP` is — additive,
+    /// so a consumer that only knows the tuple reads the same file unchanged
+    #[test]
+    fn the_sourcemap_module_digests_both_files_of_every_entry() -> anyhow::Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        let entries = vec![TracebackEntry {
+            py_path: PathBuf::from("/build/demo.py"),
+            by_path: PathBuf::from("/src/demo.by"),
+            line_map: vec![None, Some(0)],
+            by_source: "the .by source".to_owned(),
+            by_digest: content_digest(b"the .by source"),
+            py_digest: content_digest(b"the generated python"),
+        }];
+
+        write_sourcemap_module(dir.path(), &entries)?;
+        let emitted = std::fs::read_to_string(dir.path().join(BY_SOURCEMAP_FILENAME))?;
+
+        assert!(
+            emitted.contains(r#"    "/build/demo.py": ("/src/demo.by", [None, 0]),"#),
+            "the existing entry shape is unchanged:\n{emitted}"
+        );
+        assert!(
+            emitted.contains(&format!(
+                r#"    "/build/demo.py": {{"by": "{}", "py": "{}"}},"#,
+                content_digest(b"the .by source"),
+                content_digest(b"the generated python"),
+            )),
+            "both digests are keyed by the generated path:\n{emitted}"
+        );
         Ok(())
     }
 }
