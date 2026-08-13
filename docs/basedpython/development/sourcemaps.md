@@ -31,6 +31,11 @@ a correct sourcemap is the single primitive all of these share
     1 applies no body edits and later phases only prepend). consumed by `by run`
     to rewrite tracebacks and by `by transpile` to map a transpiler-invalid-output
     span back to its `.by` line for a source-annotated diagnostic
+- `_by_sourcemap.py` carries two tables keyed by the generated `.py` path:
+    `SOURCEMAP`, the `.by` path and its line table, and `DIGESTS`, the sha-256 of
+    both files that entry describes. `by build` writes it into `out/` beside the
+    python it describes, and `by run` into the temporary tree it executes — where
+    it lives only as long as that run. see [staleness](#staleness) below
 
 ### limitations to remove
 
@@ -41,6 +46,59 @@ a correct sourcemap is the single primitive all of these share
 - **prepend-only assumption** — the composition trick assumes later phases never
     insert mid-body. true today; brittle as a contract
 - **untested arithmetic** — offset math has no property tests
+
+## staleness
+
+built, unlike the rest of this document
+
+a map describes a *pair* of files, and the lines it reports are only true while
+both are still the ones it was built from. an editor that saves the `.by` after
+the transpile leaves the map describing a pair that no longer exists — and it
+goes on resolving lines with total confidence. that is a wrong answer rather
+than a missing one, which is the failure a sourcemap exists to prevent
+
+so every entry carries a digest of both sides, and a consumer must recompute
+them from disk before it trusts a line:
+
+```python
+DIGESTS = {
+    "/tmp/.tmpXXXX/demo.py": {
+        "by": "sha256:…",  # the .by bytes the transpiler read
+        "py": "sha256:…",  # the python bytes it wrote
+    },
+}
+```
+
+three things that shape pins down:
+
+- **the bytes that were read and written** — both digests are taken in the
+    transpiling pass, over the source text it ran on and the python it produced.
+    hashing the files again afterwards would only be a second chance for them to
+    have changed
+- **raw bytes** — so a consumer recomputes with
+    `sha256(open(path, "rb").read())` and needs to know nothing about encoding or
+    line endings
+- **the algorithm named in the value** — it can be changed later without
+    breaking readers, and a reader that meets one it does not know refuses the
+    entry instead of comparing hex it could never have produced
+
+`DIGESTS` is a separate top-level name rather than a third element of the
+`SOURCEMAP` tuple: that tuple has consumers (the traceback shim, the pycharm
+plugin), a positional change would break every one of them, and a name they
+never read is invisible to them
+
+the traceback shim is the first consumer, and it shows what refusing looks like:
+when either digest disagrees it leaves the frame in the generated python and
+writes a note saying which file no longer matches. a frame pointing at
+`out/main.py` is a worse answer, but a frame quoting a `.by` that has been
+rewritten since is a false one
+
+both tables are keyed by the generated path exactly as the map spells it. the
+shim resolves symlinks before matching a frame's filename against it — a
+temporary tree under `/tmp` on macOS is reached by a different path than the one
+python reports — so it carries the original key alongside the resolved one. a
+consumer that normalises keys has to do the same, or its digest lookup misses
+and every entry reads as stale
 
 ## goals
 

@@ -183,6 +183,7 @@ serde = { version = "1.0.197", features = ["derive"] }
 serde-wasm-bindgen = { version = "0.6.4" }
 serde_json = { version = "1.0.113" }
 serde_test = { version = "1.0.152" }
+sha2 = { version = "0.10.9" }
 shellexpand = { version = "3.0.0" }
 similar = { version = "3.0.0", features = ["inline"] }
 smallvec = { version = "1.13.2", features = ["union", "const_generics", "const_new"] }

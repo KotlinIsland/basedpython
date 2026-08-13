@@ -89,6 +89,11 @@ the same way an import does. the `out/` directory is **not** considered
 first-party source for `by check` or `by generate-api-file` — it is regenerated
 on every build
 
+alongside the python it writes `out/_by_sourcemap.py`, mapping each generated
+line back to the `.by` line it came from, with a digest of both files so a tool
+reading it can tell whether it still describes what is on disk — see
+[sourcemaps](development/sourcemaps.md)
+
 ## `by compile`
 
 > **status: early.** integer, float and bool arithmetic, control flow, and calls
