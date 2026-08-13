@@ -6,7 +6,8 @@ for both type variable syntaxes.
 
 Unless otherwise specified, all quotations come from the [Generics] section of the typing spec.
 
-Diagnostics for invalid type variables are snapshotted in `diagnostics/legacy_typevars.md`.
+Additional diagnostics for invalid type variables are snapshotted in
+`diagnostics/legacy_typevars.md`.
 
 ## Type variables
 
@@ -612,8 +613,16 @@ reveal_type(S.__constraints__)  # revealed: tuple[int | float, str]
 ```py
 from typing import TypeVar
 
-# error: [invalid-legacy-type-variable]
+# snapshot: invalid-legacy-type-variable
 T = TypeVar("T", int)
+```
+
+```snapshot
+error[invalid-legacy-type-variable]: A `TypeVar` cannot have exactly one constraint
+ --> src/mdtest_snippet.py:4:18
+  |
+4 | T = TypeVar("T", int)
+  |                  ^^^
 ```
 
 ### Cannot have both bound and constraint
@@ -621,8 +630,16 @@ T = TypeVar("T", int)
 ```py
 from typing import TypeVar
 
-# error: [invalid-legacy-type-variable]
+# snapshot: invalid-legacy-type-variable
 T = TypeVar("T", int, str, bound=bytes)
+```
+
+```snapshot
+error[invalid-legacy-type-variable]: A `TypeVar` cannot have both a bound and constraints
+ --> src/mdtest_snippet.py:4:5
+  |
+4 | T = TypeVar("T", int, str, bound=bytes)
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 
 ### Cannot be both covariant and contravariant
@@ -634,8 +651,16 @@ T = TypeVar("T", int, str, bound=bytes)
 ```py
 from typing import TypeVar
 
-# error: [invalid-legacy-type-variable]
+# snapshot: invalid-legacy-type-variable
 T = TypeVar("T", covariant=True, contravariant=True)
+```
+
+```snapshot
+error[invalid-legacy-type-variable]: A `TypeVar` cannot be both covariant and contravariant
+ --> src/mdtest_snippet.py:4:5
+  |
+4 | T = TypeVar("T", covariant=True, contravariant=True)
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 
 ### Infer variance
@@ -722,7 +747,6 @@ error[invalid-legacy-type-variable]: A `TypeVar` cannot specify variance when `i
    |
 48 | CovariantAndInferred = TypeVar("CovariantAndInferred", covariant=True, infer_variance=True)
    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
 ```
 
 ### Boolean parameters must be unambiguous
@@ -733,14 +757,36 @@ from typing_extensions import TypeVar
 def cond() -> bool:
     return True
 
-# error: [invalid-legacy-type-variable]
+# snapshot: invalid-legacy-type-variable
 T = TypeVar("T", covariant=cond())
 
-# error: [invalid-legacy-type-variable]
+# snapshot: invalid-legacy-type-variable
 U = TypeVar("U", contravariant=cond())
 
-# error: [invalid-legacy-type-variable]
+# snapshot: invalid-legacy-type-variable
 V = TypeVar("V", infer_variance=cond())
+```
+
+```snapshot
+error[invalid-legacy-type-variable]: The `covariant` parameter of `TypeVar` cannot have an ambiguous truthiness
+ --> src/mdtest_snippet.py:7:28
+  |
+7 | T = TypeVar("T", covariant=cond())
+  |                            ^^^^^^
+
+
+error[invalid-legacy-type-variable]: The `contravariant` parameter of `TypeVar` cannot have an ambiguous truthiness
+  --> src/mdtest_snippet.py:10:32
+   |
+10 | U = TypeVar("U", contravariant=cond())
+   |                                ^^^^^^
+
+
+error[invalid-legacy-type-variable]: The `infer_variance` parameter of `TypeVar` cannot have an ambiguous truthiness
+  --> src/mdtest_snippet.py:13:33
+   |
+13 | V = TypeVar("V", infer_variance=cond())
+   |                                 ^^^^^^
 ```
 
 ### Invalid keyword arguments
@@ -998,6 +1044,73 @@ reveal_type(D().x)  # revealed: Unknown
 ```
 
 ## Regression
+
+### Specialization cycle recovery preserves concrete defaults
+
+When a generic call uses a type variable's default, cycle recovery must allow the initial `Unknown`
+specialization to resolve to the concrete default.
+
+```toml
+[environment]
+python-version = "3.14"
+```
+
+```py
+class C:
+    pass
+
+def f(a: T | None = None) -> T:
+    raise NotImplementedError
+
+if f():
+    pass
+
+if f():
+    sum()  # error: [no-matching-overload]
+else:
+    sum()  # error: [no-matching-overload]
+
+from typing import TypeVar
+
+T = TypeVar("T", default=C)
+
+reveal_type(f())  # revealed: C
+```
+
+### Specialization cycle recovery prevents oscillating defaults
+
+A type variable's default can depend on an overloaded call that itself uses the same type variable.
+Specialization must converge even when overload selection changes between cycle iterations.
+
+```toml
+[environment]
+python-version = "3.14"
+```
+
+```py
+from typing import TypeVar, overload
+
+@overload
+def choose(value: int) -> type[int]: ...
+@overload
+def choose(value: object) -> type[str]: ...
+def choose(value: object) -> type[int] | type[str]:
+    return str
+
+def f() -> T:
+    raise NotImplementedError
+
+if f():
+    Default = str
+else:
+    Default = choose(f())
+
+# one branch binds `Default` to a class object rather than to a type, which a default has to be
+# error: [invalid-type-form] "Variable of type `type[str]` is not allowed in a type expression"
+T = TypeVar("T", default=Default)
+
+reveal_type(f())  # revealed: Unknown | str
+```
 
 ### Use of typevar with default inside a function body that binds it
 

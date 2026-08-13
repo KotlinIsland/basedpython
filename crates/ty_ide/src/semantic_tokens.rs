@@ -28,7 +28,6 @@
 
 use crate::Db;
 use bitflags::bitflags;
-use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
 use ruff_python_ast::helpers::{
@@ -48,6 +47,7 @@ use ruff_python_literal::mini_language::FormatSpecComponent;
 use ruff_python_literal::strftime;
 use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 use std::ops::Deref;
+use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
 use ty_python_semantic::{
     HasType, ImportAliasResolution, ResolvedDefinition, SemanticModel, definitions_for_attribute,
@@ -201,7 +201,7 @@ pub struct SemanticTokens {
 
 impl SemanticTokens {
     /// Create a new `SemanticTokens` instance.
-    pub fn new(tokens: Vec<SemanticToken>) -> Self {
+    pub(crate) fn new(tokens: Vec<SemanticToken>) -> Self {
         Self { tokens }
     }
 }
@@ -216,10 +216,14 @@ impl Deref for SemanticTokens {
 
 /// Generates semantic tokens for a Python file within the specified range.
 /// Pass None to get tokens for the entire file.
-pub fn semantic_tokens(db: &dyn Db, file: File, range: Option<TextRange>) -> SemanticTokens {
-    let parsed = parsed_module(db, file).load(db);
+pub fn semantic_tokens(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    range: Option<TextRange>,
+) -> SemanticTokens {
+    let parsed = parsed_module(db, file.python_file(db)).load(db);
     let model = SemanticModel::new(db, file);
-    let source = source_text(db, file);
+    let source = source_text(db, file.file(db));
 
     let mut visitor = SemanticTokenVisitor::new(&model, &source, range);
     visitor.expecting_docstring = true;
@@ -674,8 +678,7 @@ impl<'db> SemanticTokenVisitor<'db> {
     ) -> Option<(SemanticTokenType, SemanticTokenModifier)> {
         let mut modifiers = SemanticTokenModifier::empty();
         let db = self.model.db();
-        let file = definition.file(db);
-        let model = SemanticModel::new(db, file);
+        let model = SemanticModel::new(db, definition.program_file(db));
 
         if model.is_type_alias_definition(definition) {
             return Some((SemanticTokenType::Class, modifiers));
@@ -700,7 +703,7 @@ impl<'db> SemanticTokenVisitor<'db> {
                 Some((SemanticTokenType::TypeParameter, modifiers))
             }
             DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(parameter)) => {
-                let parsed = parsed_module(db, file);
+                let parsed = parsed_module(db, definition.python_file(db));
                 let ty = parameter.node(&parsed.load(db)).inferred_type(&model);
 
                 if let Some(ty) = ty {
@@ -744,7 +747,7 @@ impl<'db> SemanticTokenVisitor<'db> {
 
                 let value_ty = match kind {
                     DefinitionKind::Assignment(assignment) => {
-                        let parsed = parsed_module(db, file).load(db);
+                        let parsed = parsed_module(db, definition.python_file(db)).load(db);
                         assignment.value(&parsed).inferred_type(&model)
                     }
                     _ => None,
@@ -2112,6 +2115,7 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
         &mut self,
         interpolated_string_element: &InterpolatedStringElement,
     ) {
+        let env = &self.model.program_environment();
         match interpolated_string_element {
             InterpolatedStringElement::Literal(literal) => {
                 // inside a format spec the literal text is a language of its
@@ -2140,7 +2144,7 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     self.in_format_spec = element
                         .expression
                         .inferred_type(self.model)
-                        .and_then(|ty| spec_language(self.model.db(), ty));
+                        .and_then(|ty| spec_language(self.model.db(), env, ty));
                     for part in &format_spec.elements {
                         self.visit_interpolated_string_element(part);
                     }
@@ -2342,7 +2346,7 @@ mod tests {
 
     use insta::assert_snapshot;
     use ruff_db::{
-        files::system_path_to_file,
+        files::{File, system_path_to_file},
         system::{DbWithWritableSystem, SystemPath, SystemPathBuf},
     };
     use ty_project::ProjectMetadata;
@@ -5812,6 +5816,16 @@ def f():
     }
 
     #[test]
+    fn private_builtin_helpers_do_not_receive_semantic_tokens() {
+        // Private helpers excluded from implicit builtin lookup must remain unresolved for IDE
+        // highlighting instead of receiving tokens from their typeshed definitions.
+        let test = SemanticTokenTest::new("_T_co\n_P\n");
+
+        let tokens = test.highlight_file();
+        assert_snapshot!(test.to_snapshot(&tokens), @"");
+    }
+
+    #[test]
     fn unresolved_attributes_do_not_receive_semantic_tokens() {
         let test = SemanticTokenTest::new(
             r#"
@@ -7107,8 +7121,8 @@ x = cast(int, "")
         "#);
     }
 
-    pub(super) struct SemanticTokenTest {
-        pub(super) db: ty_project::TestDb,
+    struct SemanticTokenTest {
+        db: ty_project::TestDb,
         file: File,
     }
 
@@ -7126,8 +7140,6 @@ x = cast(int, "")
             let mut db =
                 ty_project::TestDb::new(ProjectMetadata::new("test", SystemPathBuf::from("/")));
 
-            db.init_program().unwrap();
-
             let path = SystemPath::new(path);
             db.write_file(path, ruff_python_trivia::textwrap::dedent(source))
                 .expect("Write to memory file system to always succeed");
@@ -7139,12 +7151,28 @@ x = cast(int, "")
 
         /// Get semantic tokens for the entire file
         fn highlight_file(&self) -> SemanticTokens {
-            semantic_tokens(&self.db, self.file, None)
+            semantic_tokens(
+                &self.db,
+                ProgramFile::new(
+                    &self.db,
+                    self.file,
+                    self.db.program_environment().program(&self.db),
+                ),
+                None,
+            )
         }
 
         /// Get semantic tokens for a specific range in the file
         fn highlight_range(&self, range: TextRange) -> SemanticTokens {
-            semantic_tokens(&self.db, self.file, Some(range))
+            semantic_tokens(
+                &self.db,
+                ProgramFile::new(
+                    &self.db,
+                    self.file,
+                    self.db.program_environment().program(&self.db),
+                ),
+                Some(range),
+            )
         }
 
         /// Helper function to convert semantic tokens to a snapshot-friendly text format

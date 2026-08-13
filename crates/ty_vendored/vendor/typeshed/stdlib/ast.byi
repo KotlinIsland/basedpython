@@ -26,10 +26,10 @@ import builtins
 import os
 import sys
 import typing_extensions
-from _ast import (
-    PyCF_ALLOW_TOP_LEVEL_AWAIT as PyCF_ALLOW_TOP_LEVEL_AWAIT,
-    PyCF_ONLY_AST as PyCF_ONLY_AST,
-    PyCF_TYPE_COMMENTS as PyCF_TYPE_COMMENTS,
+from _ast export (
+    PyCF_ALLOW_TOP_LEVEL_AWAIT,
+    PyCF_ONLY_AST,
+    PyCF_TYPE_COMMENTS,
 )
 from _typeshed import ReadableBuffer, Unused
 from collections.abc import Iterable, Iterator, Sequence
@@ -38,7 +38,7 @@ from typing import ClassVar, Generic, Literal, TypedDict, TypeVar as _TypeVar, t
 from typing_extensions import Self, Unpack, deprecated, disjoint_base
 
 if sys.version_info >= (3, 13):
-    from _ast import PyCF_OPTIMIZED_AST as PyCF_OPTIMIZED_AST
+    from _ast export PyCF_OPTIMIZED_AST
 
 # Used for node end positions in constructor keyword arguments
 

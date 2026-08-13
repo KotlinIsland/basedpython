@@ -18,6 +18,7 @@ use ruff_python_ast::name::Name;
 use ty_module_resolver::{KnownModule, file_to_module};
 
 use crate::Db;
+use crate::types::ProgramEnvironment;
 use crate::types::instance::NominalInstanceType;
 use crate::types::typed_dict::{TypedDictFieldBuilder, TypedDictOpenness, TypedDictSchema};
 use crate::types::{
@@ -69,6 +70,7 @@ impl<'db> RegexGroups<'db> {
     fn resolve(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         any_str: Type<'db>,
         unset: Type<'db>,
         key: GroupKey<'_>,
@@ -88,7 +90,7 @@ impl<'db> RegexGroups<'db> {
         Ok(if group.definitely_set {
             any_str
         } else {
-            UnionType::from_two_elements(db, any_str, unset)
+            UnionType::from_two_elements(db, env, any_str, unset)
         })
     }
 }
@@ -173,31 +175,32 @@ impl MatchMember {
 /// the stubs gave the call.
 pub(crate) fn refined_return<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     call: RegexCall,
     groups: RegexGroups<'db>,
     any_str: Type<'db>,
     default: Type<'db>,
 ) -> Type<'db> {
     match call {
-        RegexCall::Compile | RegexCall::Match => attach_groups(db, default, groups),
+        RegexCall::Compile | RegexCall::Match => attach_groups(db, env, default, groups),
         RegexCall::Split => {
             // a split yields the text between matches plus every group; a group
             // that did not participate comes back as `None`
             let element = if groups.groups(db).iter().all(|group| group.definitely_set) {
                 any_str
             } else {
-                UnionType::from_two_elements(db, any_str, Type::none(db))
+                UnionType::from_two_elements(db, env, any_str, Type::none(db, env))
             };
-            KnownClass::List.to_specialized_instance(db, &[element])
+            KnownClass::List.to_specialized_instance(db, env, &[element])
         }
         RegexCall::FindAll => {
             // unlike everywhere else, `findall` reports a group that did not
             // participate as the empty string rather than `None`
             let element = match groups.groups(db).len() {
                 0 | 1 => any_str,
-                count => Type::heterogeneous_tuple(db, std::iter::repeat_n(any_str, count)),
+                count => Type::heterogeneous_tuple(db, env, std::iter::repeat_n(any_str, count)),
             };
-            KnownClass::List.to_specialized_instance(db, &[element])
+            KnownClass::List.to_specialized_instance(db, env, &[element])
         }
         RegexCall::Substitute => default,
     }
@@ -206,28 +209,31 @@ pub(crate) fn refined_return<'db>(
 /// the type of `m.group(key)` / `m[key]`
 pub(crate) fn group_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     groups: RegexGroups<'db>,
     any_str: Type<'db>,
     key: GroupKey<'_>,
 ) -> Result<Type<'db>, NoSuchGroup> {
-    groups.resolve(db, any_str, Type::none(db), key)
+    groups.resolve(db, env, any_str, Type::none(db, env), key)
 }
 
 /// the type of `m.groups()`, or of `m.groups(default)` when `unset` is given
 pub(crate) fn groups_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     groups: RegexGroups<'db>,
     any_str: Type<'db>,
     unset: Option<Type<'db>>,
 ) -> Type<'db> {
-    let unset = unset.unwrap_or_else(|| Type::none(db));
+    let unset = unset.unwrap_or_else(|| Type::none(db, env));
     Type::heterogeneous_tuple(
         db,
+        env,
         groups.groups(db).iter().map(|group| {
             if group.definitely_set {
                 any_str
             } else {
-                UnionType::from_two_elements(db, any_str, unset)
+                UnionType::from_two_elements(db, env, any_str, unset)
             }
         }),
     )
@@ -240,6 +246,7 @@ pub(crate) fn groups_type<'db>(
 /// costing the caller everything a `dict` can be passed to
 pub(crate) fn group_dict_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     groups: RegexGroups<'db>,
     any_str: Type<'db>,
     unset: Option<Type<'db>>,
@@ -247,7 +254,7 @@ pub(crate) fn group_dict_type<'db>(
     if groups.groups(db).iter().all(|group| group.name.is_none()) {
         return None;
     }
-    let unset = unset.unwrap_or_else(|| Type::none(db));
+    let unset = unset.unwrap_or_else(|| Type::none(db, env));
     let items: TypedDictSchema<'db> = groups
         .groups(db)
         .iter()
@@ -256,7 +263,7 @@ pub(crate) fn group_dict_type<'db>(
             let declared = if group.definitely_set {
                 any_str
             } else {
-                UnionType::from_two_elements(db, any_str, unset)
+                UnionType::from_two_elements(db, env, any_str, unset)
             };
             Some((
                 name,
@@ -280,11 +287,13 @@ pub(crate) fn group_dict_type<'db>(
 /// (`Match[str] | None`), or nested in another generic (`Iterator[Match[str]]`)
 pub(crate) fn attach_groups<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     ty: Type<'db>,
     groups: RegexGroups<'db>,
 ) -> Type<'db> {
     ty.apply_type_mapping(
         db,
+        env,
         &TypeMapping::AttachRegexGroups(groups),
         TypeContext::default(),
     )
@@ -325,9 +334,13 @@ pub(crate) fn is_pattern<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
 }
 
 /// the `str`/`bytes` a `re.Match` / `re.Pattern` instance is specialized over
-pub(crate) fn any_str_of<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Type<'db>> {
+pub(crate) fn any_str_of<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Option<Type<'db>> {
     regex_instance(db, ty)?
-        .class(db)
+        .class(db, env)
         .into_generic_alias()?
         .specialization(db)
         .types(db)
@@ -342,17 +355,21 @@ pub(crate) fn is_regex_class(known: Option<KnownClass>) -> bool {
 
 /// the pattern text of a literal `re` pattern argument, with the `str`/`bytes`
 /// type the resulting match is over
-pub(crate) fn pattern_source<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<(String, Type<'db>)> {
+pub(crate) fn pattern_source<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Option<(String, Type<'db>)> {
     match ty.as_literal_value_kind()? {
         LiteralValueTypeKind::String(literal) => Some((
             literal.value(db).to_string(),
-            KnownClass::Str.to_instance(db),
+            KnownClass::Str.to_instance(db, env),
         )),
         LiteralValueTypeKind::Bytes(literal) => {
             // read the bytes as latin-1 so one byte stays one character, which
             // keeps the offsets in python's own error messages right
             let text = literal.value(db).iter().copied().map(char::from).collect();
-            Some((text, KnownClass::Bytes.to_instance(db)))
+            Some((text, KnownClass::Bytes.to_instance(db, env)))
         }
         _ => None,
     }
@@ -377,7 +394,8 @@ pub(crate) fn flag_is_verbose<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<boo
 
 fn is_regex_flag_class<'db>(db: &'db dyn Db, class: ClassLiteral<'db>) -> bool {
     class.name(db) == "RegexFlag"
-        && file_to_module(db, class.file(db)).and_then(|module| module.known(db))
+        && file_to_module(db, class.program_file(db).resolver_file(db))
+            .and_then(|module| module.known(db))
             == Some(KnownModule::Re)
 }
 
@@ -389,6 +407,7 @@ fn is_regex_flag_class<'db>(db: &'db dyn Db, class: ClassLiteral<'db>) -> bool {
 /// collapse rather than accumulate two indistinguishable elements
 pub(crate) fn merge_differing_groups<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     left: Type<'db>,
     right: Type<'db>,
 ) -> Option<Type<'db>> {
@@ -396,6 +415,6 @@ pub(crate) fn merge_differing_groups<'db>(
     if left.regex_groups(db).is_none() && right.regex_groups(db).is_none() {
         return None;
     }
-    let class = left.class(db);
-    (class == right.class(db)).then(|| Type::instance(db, class))
+    let class = left.class(db, env);
+    (class == right.class(db, env)).then(|| Type::instance(db, env, class))
 }

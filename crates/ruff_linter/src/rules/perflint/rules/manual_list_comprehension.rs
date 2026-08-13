@@ -146,7 +146,7 @@ pub(crate) fn manual_list_comprehension(checker: &Checker, for_stmt: &ast::StmtF
                 range: _,
                 node_index: _,
             },
-        range,
+        range_start: _,
         node_index: _,
         is_cast: _,
         is_checked_cast: _,
@@ -155,6 +155,7 @@ pub(crate) fn manual_list_comprehension(checker: &Checker, for_stmt: &ast::StmtF
     else {
         return;
     };
+    let call_range = value.range();
 
     if !keywords.is_empty() {
         return;
@@ -342,7 +343,7 @@ pub(crate) fn manual_list_comprehension(checker: &Checker, for_stmt: &ast::StmtF
             is_async: for_stmt.is_async,
             comprehension_type: Some(comprehension_type),
         },
-        *range,
+        call_range,
     );
 
     // TODO: once this fix is stabilized, change the rule to always fixable

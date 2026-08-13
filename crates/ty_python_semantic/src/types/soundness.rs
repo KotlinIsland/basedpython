@@ -15,6 +15,7 @@ use ruff_db::files::File;
 
 use crate::Db;
 use crate::place::{Place, explicit_global_symbol};
+use crate::types::ProgramEnvironment;
 use crate::types::instance::Protocol;
 use crate::types::literal::LiteralValueTypeKind;
 use crate::types::reified_infer::{
@@ -144,10 +145,15 @@ fn python_string_literal(value: &str) -> String {
 /// protocol with no faithful check degrades to [`CastCheck::Unchecked`]. This
 /// keeps the emitted code from ever running `isinstance` against a subscripted
 /// or non-`@runtime_checkable` protocol, which raises at runtime.
-pub fn cast_check_plan<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<CastCheck> {
+pub fn cast_check_plan<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+) -> Option<CastCheck> {
     if let Type::ProtocolInstance(instance) = ty {
         if let Protocol::FromClass(protocol_class) = instance.inner
-            && protocol_structural_members(db, file, *protocol_class).is_some()
+            && protocol_structural_members(db, env, file, *protocol_class).is_some()
         {
             return Some(CastCheck::Protocol);
         }
@@ -158,7 +164,7 @@ pub fn cast_check_plan<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Optio
     if let Some(members) = literal_members(db, ty) {
         return Some(CastCheck::Members(members));
     }
-    runtime_check_plan(db, file, ty).map(CastCheck::Kind)
+    runtime_check_plan(db, env, file, ty).map(CastCheck::Kind)
 }
 
 /// whether a checked cast to `target` has no faithful runtime residue and must
@@ -167,11 +173,12 @@ pub fn cast_check_plan<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Optio
 /// transpiler emitting `isinstance(value, <protocol>)`, which raises at runtime
 pub fn cast_target_is_unverifiable_protocol<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     target: Type<'db>,
 ) -> bool {
     matches!(
-        cast_check_plan(db, file, target),
+        cast_check_plan(db, env, file, target),
         Some(CastCheck::Unchecked)
     )
 }
@@ -181,41 +188,56 @@ pub fn cast_target_is_unverifiable_protocol<'db>(
 /// (`def t[T]() -> T`), or the method is bound to a specialized generic
 /// instance (`dict[str, int].get`), where the specialization itself is an
 /// unverified annotation-level claim
-pub fn call_result_is_typevar_derived<'db>(db: &'db dyn Db, callee: Type<'db>) -> bool {
+pub fn call_result_is_typevar_derived<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    callee: Type<'db>,
+) -> bool {
     match callee {
-        Type::FunctionLiteral(function) => return_mentions_type_var(db, function),
+        Type::FunctionLiteral(function) => return_mentions_type_var(db, env, function),
         Type::BoundMethod(method) => {
-            is_specialized_generic_instance(db, method.self_instance(db))
-                || return_mentions_type_var(db, method.function(db))
+            is_specialized_generic_instance(db, env, method.self_instance(db))
+                || return_mentions_type_var(db, env, method.function(db))
         }
         _ => false,
     }
 }
 
-fn return_mentions_type_var<'db>(db: &'db dyn Db, function: FunctionType<'db>) -> bool {
+fn return_mentions_type_var<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    function: FunctionType<'db>,
+) -> bool {
     function
         .signature(db)
         .overloads
         .iter()
-        .any(|signature| mentions_type_var(db, signature.return_ty))
+        .any(|signature| mentions_type_var(db, env, signature.return_ty))
 }
 
-fn mentions_type_var<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
-    any_over_type(db, ty, false, |nested| matches!(nested, Type::TypeVar(_)))
+fn mentions_type_var<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> bool {
+    any_over_type(db, env, ty, false, |nested| {
+        matches!(nested, Type::TypeVar(_))
+    })
 }
 
 /// whether `ty` is an instance whose static shape includes a generic
 /// specialization — the runtime-unverifiable part of an annotation like
 /// `list[str]`. element projections out of such values (subscripts, method
 /// results, iteration) are where the specialization's claim is consumed
-pub fn is_specialized_generic_instance<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+pub fn is_specialized_generic_instance<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> bool {
     match ty {
         Type::NominalInstance(instance) => {
-            matches!(instance.class(db), ClassType::Generic(_))
+            matches!(instance.class(db, env), ClassType::Generic(_))
         }
         // a generic protocol instance (`Iterator[str]`, `Sequence[int]`)
         // carries the same annotation-level specialization claim
         Type::ProtocolInstance(instance) => match instance.inner {
+            Protocol::Materialized(_) => false,
             Protocol::FromClass(class) => matches!(*class, ClassType::Generic(_)),
             Protocol::Synthesized(_) => false,
         },
@@ -225,7 +247,7 @@ pub fn is_specialized_generic_instance<'db>(db: &'db dyn Db, ty: Type<'db>) -> b
         Type::Union(union) => union
             .elements(db)
             .iter()
-            .any(|element| is_specialized_generic_instance(db, *element)),
+            .any(|element| is_specialized_generic_instance(db, env, *element)),
         _ => false,
     }
 }
@@ -236,8 +258,13 @@ pub fn is_specialized_generic_instance<'db>(db: &'db dyn Db, ty: Type<'db>) -> b
 /// unsolved typevars) or its name cannot be resolved at module scope in
 /// `file`. the check is deliberately shallow: `list[str]` validates as
 /// `list` — the element claim is validated at its own projection sites
-pub fn runtime_check_target<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<String> {
-    target(db, file, ty, 0)
+pub fn runtime_check_target<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+) -> Option<String> {
+    target(db, env, file, ty, 0)
 }
 
 /// The runtime soundness check for a value whose declared type is `ty`.
@@ -247,14 +274,19 @@ pub fn runtime_check_target<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> 
 /// arguments are checkable at runtime); otherwise falls back to the shallow
 /// [`CheckKind::Isinstance`] of [`runtime_check_target`]. `None` when neither
 /// applies (no faithful runtime test).
-pub fn runtime_check_plan<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<CheckKind> {
-    if let Some((alias, variances)) = parametric_soundness_spelling(db, file, ty) {
+pub fn runtime_check_plan<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+) -> Option<CheckKind> {
+    if let Some((alias, variances)) = parametric_soundness_spelling(db, env, file, ty) {
         return Some(CheckKind::Parametric {
             alias,
             variances: variances.iter().copied().map(variance_code).collect(),
         });
     }
-    runtime_check_target(db, file, ty).map(CheckKind::Isinstance)
+    runtime_check_target(db, env, file, ty).map(CheckKind::Isinstance)
 }
 
 /// whether a runtime check against `ty` must silently drop a type-argument
@@ -262,10 +294,15 @@ pub fn runtime_check_plan<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Op
 /// erased at runtime, so only the origin class can be tested. this is what
 /// separates `list[int]` (a builtin, erased — only `list` is checkable) from
 /// `A[int]` (a user generic, whose instances carry `__orig_class__`)
-pub fn erases_type_arguments<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> bool {
+pub fn erases_type_arguments<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+) -> bool {
     match ty {
         Type::NominalInstance(instance) => {
-            let ClassType::Generic(alias) = instance.class(db) else {
+            let ClassType::Generic(alias) = instance.class(db, env) else {
                 return false;
             };
             // a bare `list` infers as `list[Unknown]`: no argument was written,
@@ -275,12 +312,12 @@ pub fn erases_type_arguments<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) ->
                 .types(db)
                 .iter()
                 .any(|argument| !argument.is_dynamic())
-                && parametric_soundness_spelling(db, file, ty).is_none()
+                && parametric_soundness_spelling(db, env, file, ty).is_none()
         }
         Type::Union(union) => union
             .elements(db)
             .iter()
-            .any(|element| erases_type_arguments(db, file, *element)),
+            .any(|element| erases_type_arguments(db, env, file, *element)),
         _ => false,
     }
 }
@@ -292,8 +329,13 @@ pub fn erases_type_arguments<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) ->
 /// arguments are erased, or a subscripted protocol (`Sequence[object]`) whose
 /// bare `isinstance` is itself a runtime error. gradual `Any`/`Unknown` values
 /// are *not* subtypes of a concrete target, so their checks are kept
-pub fn cast_is_redundant<'db>(db: &'db dyn Db, value_ty: Type<'db>, target: Type<'db>) -> bool {
-    value_ty.is_subtype_of(db, target)
+pub fn cast_is_redundant<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    value_ty: Type<'db>,
+    target: Type<'db>,
+) -> bool {
+    value_ty.is_subtype_of(db, env, target)
 }
 
 /// the runtime variance code the `_parametric_is` probe expects
@@ -306,19 +348,25 @@ fn variance_code(variance: ArgVariance) -> u8 {
     }
 }
 
-fn target<'db>(db: &'db dyn Db, file: File, ty: Type<'db>, depth: u8) -> Option<String> {
+fn target<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+    depth: u8,
+) -> Option<String> {
     if depth > 8 {
         return None;
     }
     // literals promote to their instance form (`Literal[3]` → `int`,
     // `LiteralString` → `str`, enum literals → the enum class)
-    let ty = ty.promote(db);
+    let ty = ty.promote(db, env);
     match ty {
         Type::NominalInstance(instance) => {
             if ty.is_none(db) {
                 return Some("type(None)".to_owned());
             }
-            let class = instance.class(db);
+            let class = instance.class(db, env);
             let literal = class.class_literal(db);
             // `object` always passes — a check would validate nothing
             if literal.is_known(db, KnownClass::Object) {
@@ -329,7 +377,7 @@ fn target<'db>(db: &'db dyn Db, file: File, ty: Type<'db>, depth: u8) -> Option<
         Type::Union(union) => {
             let mut parts: Vec<String> = Vec::new();
             for element in union.elements(db) {
-                let part = target(db, file, *element, depth + 1)?;
+                let part = target(db, env, file, *element, depth + 1)?;
                 if !parts.contains(&part) {
                     parts.push(part);
                 }
@@ -349,7 +397,7 @@ fn target<'db>(db: &'db dyn Db, file: File, ty: Type<'db>, depth: u8) -> Option<
             builtin_target(db, file, "type")
         }
         Type::TypeIs(_) | Type::TypeGuard(_) => builtin_target(db, file, "bool"),
-        Type::TypeAlias(alias) => target(db, file, alias.value_type(db), depth + 1),
+        Type::TypeAlias(alias) => target(db, env, file, alias.value_type(db), depth + 1),
         _ => None,
     }
 }
@@ -360,7 +408,7 @@ fn target<'db>(db: &'db dyn Db, file: File, ty: Type<'db>, depth: u8) -> Option<
 /// builtin so the bare name reaches it
 fn class_target<'db>(db: &'db dyn Db, file: File, literal: ClassLiteral<'db>) -> Option<String> {
     let name = literal.name(db).as_str();
-    match explicit_global_symbol(db, file, name).place {
+    match explicit_global_symbol(db, db.program_file(file), name).place {
         Place::Defined(defined) if defined.ty == Type::ClassLiteral(literal) => {
             Some(name.to_owned())
         }
@@ -370,14 +418,14 @@ fn class_target<'db>(db: &'db dyn Db, file: File, literal: ClassLiteral<'db>) ->
 }
 
 fn class_is_builtin<'db>(db: &'db dyn Db, literal: ClassLiteral<'db>) -> bool {
-    file_to_module(db, literal.file(db))
+    file_to_module(db, literal.program_file(db).resolver_file(db))
         .is_some_and(|module| module.is_known(db, KnownModule::Builtins))
 }
 
 /// a builtin referenced by bare name is only trustworthy when the module
 /// does not rebind that name
 fn builtin_target(db: &dyn Db, file: File, name: &str) -> Option<String> {
-    match explicit_global_symbol(db, file, name).place {
+    match explicit_global_symbol(db, db.program_file(file), name).place {
         Place::Undefined => Some(name.to_owned()),
         Place::Defined(_) => None,
     }
@@ -403,6 +451,7 @@ pub enum ArgSelector<'a> {
 /// a missed check is a no-op, a wrong one changes semantics
 pub fn parameter_check_plan<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     callee: Type<'db>,
     selector: ArgSelector<'_>,
@@ -419,7 +468,7 @@ pub fn parameter_check_plan<'db>(
     if parameter.is_variadic() || parameter.is_keyword_variadic() {
         return None;
     }
-    runtime_check_plan(db, file, parameter.annotated_type())
+    runtime_check_plan(db, env, file, parameter.annotated_type())
 }
 
 /// the sole overload of `callee`'s signature, or `None` if `callee` is not a

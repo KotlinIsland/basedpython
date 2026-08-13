@@ -16,7 +16,7 @@ pulldom -- DOM builder supporting on-demand tree-building for selected
 
 from typing import Final, Literal
 
-from .domreg import getDOMImplementation as getDOMImplementation, registerDOMImplementation as registerDOMImplementation
+from .domreg export getDOMImplementation, registerDOMImplementation
 
 class Node:
     """Class giving the NodeType constants."""

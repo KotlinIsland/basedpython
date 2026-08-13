@@ -8,7 +8,9 @@ use ty_python_core::{global_scope, place_table, semantic_index};
 use ty_python_semantic::types::{
     DisplaySettings, DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
 };
-use ty_python_semantic::{Db, HasType, ImplicitReceiverReference, SemanticModel};
+use ty_python_semantic::{
+    Db, HasType, ImplicitReceiverReference, ProgramEnvironment, SemanticModel,
+};
 
 /// How the postfix `^` / `!` operators test the "absent" arm of an operand's
 /// wrapped type. `T?` lowers to `T | None`, so its absent arm is `None`; a
@@ -542,6 +544,7 @@ impl TypeInfo for SemanticModel<'_> {
     ) -> Option<String> {
         ty_python_semantic::types::exceptions::declared_raises_runtime_target(
             self.db(),
+            &self.program_environment(),
             self.file(),
             function.inferred_type(self)?,
         )
@@ -583,7 +586,11 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn is_keeps_identity(&self, expr: &Expr) -> bool {
         expr.inferred_type(self).is_some_and(|ty| {
-            ty_python_semantic::types::basedpython_is_keeps_identity(self.db(), ty)
+            ty_python_semantic::types::basedpython_is_keeps_identity(
+                self.db(),
+                &self.program_environment(),
+                ty,
+            )
         })
     }
 
@@ -677,7 +684,7 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn is_unbound_at(&self, name: &str, anchor: &Expr) -> bool {
         let db = self.db();
-        let file = self.file();
+        let file = self.program_file();
         let index = semantic_index(db, file);
         let Some(scope_id) = index.try_expression_scope_id(anchor) else {
             return true;
@@ -696,7 +703,7 @@ impl TypeInfo for SemanticModel<'_> {
     }
 
     fn is_bound_globally(&self, name: &str) -> bool {
-        let global = global_scope(self.db(), self.file());
+        let global = global_scope(self.db(), self.program_file());
         let table = place_table(self.db(), global);
         table
             .symbol_by_name(name)
@@ -705,7 +712,7 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn trailing_block_capture(&self, name: &str, anchor: &Expr) -> Option<CaptureKind> {
         let db = self.db();
-        let file = self.file();
+        let file = self.program_file();
         let index = semantic_index(db, file);
         let block_scope = index.try_expression_scope_id(anchor)?;
         // walk outward from the block's own scope (skipped) to the nearest scope
@@ -731,7 +738,7 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn trailing_block_fresh_capture(&self, anchor: &Expr) -> Option<CaptureKind> {
         let db = self.db();
-        let file = self.file();
+        let file = self.program_file();
         let index = semantic_index(db, file);
         let block_scope = index.try_expression_scope_id(anchor)?;
         // the nearest function / module ancestor — where a fresh binding becomes
@@ -748,7 +755,7 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn reads_binding_of(&self, reference: &ExprName, anchor: &Expr) -> Option<CaptureKind> {
         let db = self.db();
-        let file = self.file();
+        let file = self.program_file();
         let index = semantic_index(db, file);
         let reference_scope = index.try_expression_scope_id(&ExprRef::from(reference))?;
         let target_scope = index.try_expression_scope_id(&ExprRef::from(anchor))?;
@@ -785,7 +792,7 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn shares_a_cell_scope(&self, reference: &ExprName, anchor: &Expr) -> bool {
         let db = self.db();
-        let index = semantic_index(db, self.file());
+        let index = semantic_index(db, self.program_file());
         let Some(reference_scope) = index.try_expression_scope_id(&ExprRef::from(reference)) else {
             return false;
         };
@@ -805,8 +812,8 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn promoted_type_display(&self, expr: &Expr) -> Option<String> {
         let ty = expr.inferred_type(self)?;
-        let promoted = ty.promote(self.db());
-        let rendered = display_for_python(self.db(), promoted);
+        let promoted = ty.promote(self.db(), &self.program_environment());
+        let rendered = display_for_python(self.db(), &self.program_environment(), promoted);
         // ty's default display tags type variables with their binding scope
         // for disambiguation (e.g. `T@render`); that suffix is not valid in
         // emitted Python source. strip it before returning so the rendered
@@ -827,6 +834,7 @@ impl TypeInfo for SemanticModel<'_> {
         // out as `Literal[..]` rather than bare — the transpiler emits python
         Some(strip_binding_context_suffix(&display_for_python(
             self.db(),
+            &self.program_environment(),
             ty,
         )))
     }
@@ -841,7 +849,7 @@ impl TypeInfo for SemanticModel<'_> {
                     let name = tv.name(self.db()).to_string();
                     let default = tv
                         .default_type(self.db())
-                        .map(|d| display_for_python(self.db(), d));
+                        .map(|d| display_for_python(self.db(), &self.program_environment(), d));
                     (name, default)
                 })
                 .collect(),
@@ -850,13 +858,14 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn unpacked_kwargs(&self, expr: &Expr) -> Option<UnpackedKwargsLowering> {
         let db = self.db();
+        let env = &self.program_environment();
         let ty = expr.inferred_type(self)?;
         // an unresolved name (but not an explicit `Any`) tells us nothing, so keep the
         // `ParamSpec` reading rather than committing to a shape from a type we don't have
         if ty.is_dynamic() && !matches!(ty, Type::Dynamic(DynamicType::Any)) {
             return Some(UnpackedKwargsLowering::ParameterPack);
         }
-        Some(match ty.unpacked_kwargs(db)? {
+        Some(match ty.unpacked_kwargs(db, env)? {
             UnpackedKwargs::ParameterPack => UnpackedKwargsLowering::ParameterPack,
             UnpackedKwargs::TypedDict => UnpackedKwargsLowering::TypedDict,
             UnpackedKwargs::Protocol(members) => UnpackedKwargsLowering::Protocol(
@@ -865,7 +874,7 @@ impl TypeInfo for SemanticModel<'_> {
                     .map(|(name, ty)| {
                         (
                             name.to_string(),
-                            strip_binding_context_suffix(&display_for_python(db, ty)),
+                            strip_binding_context_suffix(&display_for_python(db, env, ty)),
                         )
                     })
                     .collect(),
@@ -909,7 +918,7 @@ impl TypeInfo for SemanticModel<'_> {
         ) {
             return Some(AbsentTest::WrappedOptional);
         }
-        let base_exception = KnownClass::BaseException.to_instance(db);
+        let base_exception = KnownClass::BaseException.to_instance(db, &self.program_environment());
         let elements: Vec<Type> = match ty {
             Type::Union(union) => union.elements(db).to_vec(),
             other => vec![other],
@@ -917,10 +926,9 @@ impl TypeInfo for SemanticModel<'_> {
         // an exception arm wins over a `None` arm: a `T | E` (or a decomposed
         // `(T ? E)?` carrying both) propagates the error. `Any`/`Unknown` arms
         // are assignable to anything, so exclude them from the exception probe
-        if elements
-            .iter()
-            .any(|t| !t.is_dynamic() && t.is_assignable_to(db, base_exception))
-        {
+        if elements.iter().any(|t| {
+            !t.is_dynamic() && t.is_assignable_to(db, &self.program_environment(), base_exception)
+        }) {
             Some(AbsentTest::Result)
         } else if elements.iter().any(|t| t.is_none(db)) {
             Some(AbsentTest::Optional)
@@ -938,25 +946,39 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn call_result_is_typevar_derived(&self, callee: &Expr) -> bool {
         callee.inferred_type(self).is_some_and(|ty| {
-            ty_python_semantic::types::soundness::call_result_is_typevar_derived(self.db(), ty)
+            ty_python_semantic::types::soundness::call_result_is_typevar_derived(
+                self.db(),
+                &self.program_environment(),
+                ty,
+            )
         })
     }
 
     fn is_specialized_generic_instance(&self, expr: &Expr) -> bool {
         expr.inferred_type(self).is_some_and(|ty| {
-            ty_python_semantic::types::soundness::is_specialized_generic_instance(self.db(), ty)
+            ty_python_semantic::types::soundness::is_specialized_generic_instance(
+                self.db(),
+                &self.program_environment(),
+                ty,
+            )
         })
     }
 
     fn soundness_check_plan(&self, expr: &Expr) -> Option<SoundnessCheck> {
         let ty = expr.inferred_type(self)?;
-        ty_python_semantic::types::soundness::runtime_check_plan(self.db(), self.file(), ty)
+        ty_python_semantic::types::soundness::runtime_check_plan(
+            self.db(),
+            &self.program_environment(),
+            self.file(),
+            ty,
+        )
     }
 
     fn call_positional_param_plan(&self, callee: &Expr, index: usize) -> Option<SoundnessCheck> {
         let ty = callee.inferred_type(self)?;
         ty_python_semantic::types::soundness::parameter_check_plan(
             self.db(),
+            &self.program_environment(),
             self.file(),
             ty,
             ty_python_semantic::types::soundness::ArgSelector::Positional(index),
@@ -967,6 +989,7 @@ impl TypeInfo for SemanticModel<'_> {
         let ty = callee.inferred_type(self)?;
         ty_python_semantic::types::soundness::parameter_check_plan(
             self.db(),
+            &self.program_environment(),
             self.file(),
             ty,
             ty_python_semantic::types::soundness::ArgSelector::Keyword(name),
@@ -975,7 +998,12 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn cast_check_plan(&self, type_expr: &Expr) -> Option<CastCheck> {
         let ty = type_expr.inferred_type(self)?;
-        ty_python_semantic::types::soundness::cast_check_plan(self.db(), self.file(), ty)
+        ty_python_semantic::types::soundness::cast_check_plan(
+            self.db(),
+            &self.program_environment(),
+            self.file(),
+            ty,
+        )
     }
 
     fn cast_is_redundant(&self, value: &Expr, target: &Expr) -> bool {
@@ -984,7 +1012,12 @@ impl TypeInfo for SemanticModel<'_> {
         else {
             return false;
         };
-        ty_python_semantic::types::soundness::cast_is_redundant(self.db(), value_ty, target_ty)
+        ty_python_semantic::types::soundness::cast_is_redundant(
+            self.db(),
+            &self.program_environment(),
+            value_ty,
+            target_ty,
+        )
     }
 
     fn cast_target_is_unverifiable(&self, type_expr: &Expr) -> bool {
@@ -993,6 +1026,7 @@ impl TypeInfo for SemanticModel<'_> {
         };
         ty_python_semantic::types::soundness::cast_target_is_unverifiable_protocol(
             self.db(),
+            &self.program_environment(),
             self.file(),
             ty,
         )
@@ -1016,6 +1050,7 @@ impl TypeInfo for SemanticModel<'_> {
         };
         ty_python_semantic::types::context_params::implicit_context_arguments(
             self.db(),
+            &self.program_environment(),
             self.file(),
             callee,
             call,
@@ -1039,19 +1074,24 @@ impl TypeInfo for SemanticModel<'_> {
         // `Unknown & ~int` would answer yes here and have the rewrite applied to a value
         // that is not a string at all
         !ty.is_dynamic()
-            && !ty.has_gradual_member(db)
-            && ty.is_assignable_to(db, KnownClass::Str.to_instance(db))
+            && !ty.has_gradual_member(db, &self.program_environment())
+            && ty.is_assignable_to(
+                db,
+                &self.program_environment(),
+                KnownClass::Str.to_instance(db, &self.program_environment()),
+            )
     }
 
     fn annotation_is_character(&self, annotation: &Expr) -> bool {
-        annotation
-            .inferred_type(self)
-            .is_some_and(|ty| character::denotes_character(self.db(), ty))
+        annotation.inferred_type(self).is_some_and(|ty| {
+            character::denotes_character(self.db(), &self.program_environment(), ty)
+        })
     }
 
     fn is_character_instance(&self, expr: &Expr) -> bool {
-        expr.inferred_type(self)
-            .is_some_and(|ty| character::is_character_instance(self.db(), ty))
+        expr.inferred_type(self).is_some_and(|ty| {
+            character::is_character_instance(self.db(), &self.program_environment(), ty)
+        })
     }
 
     fn framework_class_role(&self, class_def: &StmtClassDef) -> Option<FrameworkRole> {
@@ -1064,12 +1104,13 @@ impl TypeInfo for SemanticModel<'_> {
         let ty = expr.inferred_type(self)?;
         // a dynamic part (`Unknown` from an empty `[]`, an unresolved import,
         // `Any`) has no faithful annotation — leave the assignment bare
-        if ty.has_dynamic(self.db()) {
+        if ty.has_dynamic(self.db(), &self.program_environment()) {
             return None;
         }
-        let promoted = ty.promote(self.db());
+        let promoted = ty.promote(self.db(), &self.program_environment());
         Some(strip_binding_context_suffix(&display_for_python(
             self.db(),
+            &self.program_environment(),
             promoted,
         )))
     }
@@ -1095,9 +1136,14 @@ impl TypeInfo for SemanticModel<'_> {
 /// diagnostic, where a symbolic arithmetic operation is shown as the expression it stands
 /// for (`I + 1`); emitting that would evaluate `_I + 1` on a `TypeVar` object at import, so
 /// the transpiler asks for the type it reduces to instead
-fn display_for_python<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
+fn display_for_python<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> String {
     ty.display_with(
         db,
+        env,
         DisplaySettings::default().with_reduced_symbolic_operations(),
     )
     .to_string()

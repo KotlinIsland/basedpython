@@ -11,6 +11,7 @@
 
 use by_ir::function::FieldDecl;
 use by_ir::rtype::RType;
+use ty_python_semantic::ProgramEnvironment;
 use ty_python_semantic::types::{KnownClass, Type};
 
 /// why a construct could not be lowered natively
@@ -43,6 +44,7 @@ pub type Layouts = std::collections::HashMap<String, Vec<FieldDecl>>;
 /// turns an attribute read into a field read at a compile-time offset
 pub fn map_type_with(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     ty: Type<'_>,
     layouts: &Layouts,
 ) -> Lowered<RType> {
@@ -52,7 +54,7 @@ pub fn map_type_with(
     // getting its own class's representation
     let bare = ty.erase_restriction(db);
     if !bare.is_dynamic()
-        && let Some(class) = bare.nominal_class_name(db)
+        && let Some(class) = bare.nominal_class_name(db, env)
         && layouts.contains_key(class)
     {
         return Ok(RType::Instance {
@@ -60,10 +62,10 @@ pub fn map_type_with(
             // a `@final` or `sealed` class admits no subclass, so a value of it is
             // exactly it — which is what re-licenses the direct method call on a
             // class that is otherwise open
-            exact: ty.nominal_class_is_exact(db),
+            exact: ty.nominal_class_is_exact(db, env),
         });
     }
-    map_type(db, ty)
+    map_type(db, env, ty)
 }
 
 /// the representation a *local* gets, which may be an unboxed array where an
@@ -75,17 +77,18 @@ pub fn map_type_with(
 /// would lose the list's *identity*, not just time
 pub fn map_local_type(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     ty: Type<'_>,
     layouts: &Layouts,
 ) -> Lowered<RType> {
-    if let Some(element) = ty.list_element_type(db)
-        && let Ok(element) = map_type_with(db, element, layouts)
+    if let Some(element) = ty.list_element_type(db, env)
+        && let Ok(element) = map_type_with(db, env, element, layouts)
         && element.is_unboxed()
         && !element.is_refcounted()
     {
         return Ok(RType::Array(Box::new(element)));
     }
-    map_type_with(db, ty, layouts)
+    map_type_with(db, env, ty, layouts)
 }
 
 /// the representation `ty` would have had, had python's numeric promotion not
@@ -96,23 +99,25 @@ pub fn map_local_type(
 /// what recovers it
 pub fn missed_representation(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     ty: Type<'_>,
     layouts: &Layouts,
 ) -> Option<RType> {
-    if is_promoted_float(db, ty) {
+    if is_promoted_float(db, env, ty) {
         return Some(RType::FLOAT);
     }
-    let element = ty.list_element_type(db)?;
+    let element = ty.list_element_type(db, env)?;
     // the element's *strict* representation, which is what a buffer needs
-    let strict = if is_promoted_float(db, element) {
+    let strict = if is_promoted_float(db, env, element) {
         RType::FLOAT
     } else {
-        map_type_with(db, element, layouts).ok()?
+        map_type_with(db, env, element, layouts).ok()?
     };
     // a list whose element is already unboxed is a buffer, so nothing was missed
     let missed = strict.is_unboxed()
         && !strict.is_refcounted()
-        && map_local_type(db, ty, layouts).is_ok_and(|rtype| !matches!(rtype, RType::Array(_)));
+        && map_local_type(db, env, ty, layouts)
+            .is_ok_and(|rtype| !matches!(rtype, RType::Array(_)));
     missed.then(|| RType::Array(Box::new(strict)))
 }
 
@@ -123,20 +128,25 @@ pub fn missed_representation(
 /// `float` is a union, and nothing about it proves a `double` representation —
 /// only the boundary can, one call at a time. `.by` opts out of the promotion, so
 /// this is never true there
-pub fn is_promoted_float(db: &dyn ty_python_semantic::Db, ty: Type<'_>) -> bool {
+pub fn is_promoted_float(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    ty: Type<'_>,
+) -> bool {
     let Some(union) = ty.as_union() else {
         return false;
     };
-    let int = KnownClass::Int.to_instance(db);
-    let float = KnownClass::Float.to_instance(db);
+    let int = KnownClass::Int.to_instance(db, env);
+    let float = KnownClass::Float.to_instance(db, env);
     if int.is_dynamic() || float.is_dynamic() {
         return false;
     }
-    let same = |a: Type<'_>, b: Type<'_>| a.is_assignable_to(db, b) && b.is_assignable_to(db, a);
+    let same =
+        |a: Type<'_>, b: Type<'_>| a.is_assignable_to(db, env, b) && b.is_assignable_to(db, env, a);
     // a *gradual* element is assignable both ways to everything, so one of them would
     // answer for both halves of this and any `Unknown | T` would read as the
     // promotion. gradual proves nothing, which is the rule the whole mapper rests on
-    if ty.has_gradual_member(db) {
+    if ty.has_gradual_member(db, env) {
         return false;
     }
     let elements = union.elements(db);
@@ -150,7 +160,11 @@ pub fn is_promoted_float(db: &dyn ty_python_semantic::Db, ty: Type<'_>) -> bool 
 /// the order of the checks matters: `bool` is a subclass of `int` in python, so
 /// it has to be recognized first or every `bool` would be given the tagged
 /// integer representation
-pub fn map_type(db: &dyn ty_python_semantic::Db, ty: Type<'_>) -> Lowered<RType> {
+pub fn map_type(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    ty: Type<'_>,
+) -> Lowered<RType> {
     // a gradual type is not a proof of anything, so it lands on the widest
     // representation. `object` assumes nothing, which is exactly why it needs no
     // check: the representation invariant only bites when *narrowing*
@@ -162,12 +176,12 @@ pub fn map_type(db: &dyn ty_python_semantic::Db, ty: Type<'_>) -> Lowered<RType>
     // `def f(x=None)` is the common way to meet the union half: its type is
     // `Unknown | None`, which read as `None` and made storing anything else into `x`
     // impossible. narrowing produces the intersection half, `Unknown & None`
-    if ty.has_gradual_member(db) {
+    if ty.has_gradual_member(db, env) {
         return Ok(RType::OBJECT);
     }
 
-    let none = Type::none(db);
-    if ty.is_assignable_to(db, none) {
+    let none = Type::none(db, env);
+    if ty.is_assignable_to(db, env, none) {
         return Ok(RType::NONE);
     }
     for (known, rtype) in [
@@ -176,8 +190,8 @@ pub fn map_type(db: &dyn ty_python_semantic::Db, ty: Type<'_>) -> Lowered<RType>
         (KnownClass::Float, RType::FLOAT),
         (KnownClass::Str, RType::STR),
     ] {
-        let instance = known.to_instance(db);
-        if !instance.is_dynamic() && ty.is_assignable_to(db, instance) {
+        let instance = known.to_instance(db, env);
+        if !instance.is_dynamic() && ty.is_assignable_to(db, env, instance) {
             return Ok(rtype);
         }
     }
@@ -205,14 +219,14 @@ mod tests {
             &format!(
                 "from typing import Any, Literal\ndef f(a: {annotation}) -> None:\n    pass\n"
             ),
-            |db, model, suite| {
+            |db, env, model, suite| {
                 let ruff_python_ast::Stmt::FunctionDef(function) = &suite[1] else {
                     return Err("not a function".to_string());
                 };
                 let parameter = &function.parameters.args[0].parameter;
                 let ty = ty_python_semantic::HasType::inferred_type(parameter, model)
                     .ok_or_else(|| "no inferred type".to_string())?;
-                map_type(db, ty).map_err(|decline| decline.reason)
+                map_type(db, env, ty).map_err(|decline| decline.reason)
             },
         )
     }
@@ -231,13 +245,13 @@ mod tests {
         crate::single_file::with_source_in(
             &format!("def f(a: {annotation}) -> None:\n    pass\n"),
             crate::Language::Python,
-            |db, model, suite| {
+            |db, env, model, suite| {
                 let ruff_python_ast::Stmt::FunctionDef(function) = &suite[0] else {
                     return false;
                 };
                 let parameter = &function.parameters.args[0].parameter;
                 ty_python_semantic::HasType::inferred_type(parameter, model)
-                    .is_some_and(|ty| is_promoted_float(db, ty))
+                    .is_some_and(|ty| is_promoted_float(db, env, ty))
             },
         )
     }
@@ -293,12 +307,12 @@ mod tests {
     /// over an *unannotated* `a` — the gradual value narrowing acts on
     fn about_returned<R>(
         expr: &str,
-        ask: impl FnOnce(&dyn ty_python_semantic::Db, Type<'_>) -> R,
+        ask: impl FnOnce(&dyn ty_python_semantic::Db, &ProgramEnvironment<'_>, Type<'_>) -> R,
     ) -> Result<R, String> {
         crate::single_file::with_source_in(
             &format!("def f(a):\n    return {expr}\n"),
             crate::Language::Python,
-            |db, model, suite| {
+            |db, env, model, suite| {
                 let ruff_python_ast::Stmt::FunctionDef(function) = &suite[0] else {
                     return Err("not a function".to_string());
                 };
@@ -311,7 +325,7 @@ mod tests {
                     .ok_or_else(|| "a bare return".to_string())?;
                 let ty = ty_python_semantic::HasType::inferred_type(value, model)
                     .ok_or_else(|| "no inferred type".to_string())?;
-                Ok(ask(db, ty))
+                Ok(ask(db, env, ty))
             },
         )
     }
@@ -329,9 +343,7 @@ mod tests {
         // the promotion asks the same question of the same shape, so it answers no here
         // for the same reason: `Unknown & int` is assignable both ways to `int`
         assert_eq!(
-            about_returned("a if isinstance(a, int) else 1.0", |db, ty| {
-                is_promoted_float(db, ty)
-            }),
+            about_returned("a if isinstance(a, int) else 1.0", is_promoted_float),
             Ok(false)
         );
     }

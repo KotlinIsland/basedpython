@@ -3,10 +3,10 @@
 import sys
 from _typeshed import ReadableBuffer, SupportsRead
 from collections.abc import Callable
-from pyexpat import errors as errors, model as model
+from pyexpat export errors, model
 from typing import Final, TypeAlias, final
 from typing_extensions import CapsuleType
-from xml.parsers.expat import ExpatError as ExpatError
+from xml.parsers.expat export ExpatError
 
 final EXPAT_VERSION: str  # undocumented
 version_info: (int, int, int)  # undocumented

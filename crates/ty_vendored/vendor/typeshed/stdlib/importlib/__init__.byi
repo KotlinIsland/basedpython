@@ -1,7 +1,7 @@
 """A pure Python implementation of import."""
 
 import sys
-from importlib._bootstrap import __import__ as __import__
+from importlib._bootstrap export __import__
 from importlib.abc import Loader
 from types import ModuleType
 from typing_extensions import deprecated

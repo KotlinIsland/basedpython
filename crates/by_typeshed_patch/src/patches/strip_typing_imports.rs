@@ -8,7 +8,9 @@
 //! (`TypeVar`, `ParamSpec`), and qualifiers (`ClassVar`) still need their import
 //!
 //! aliased imports (`Set as AbstractSet`) are left alone: the bound name may not
-//! match the implicit name's meaning
+//! match the implicit name's meaning, and so are re-exports (`from typing export
+//! Never`) — the name being implicit *here* says nothing about the module that
+//! imports it from this one
 
 use std::path::Path;
 
@@ -47,6 +49,11 @@ fn walk(body: &[Stmt], source: &str, edits: &mut Vec<Edit>) {
                     .map(ruff_python_ast::Identifier::as_str)
                     != Some("typing")
                 {
+                    continue;
+                }
+                // a re-export is what makes `from typing_extensions import Never` resolve
+                // at all, so it stays even though the name is implicit here
+                if import.is_export {
                     continue;
                 }
                 // an implicit name imported without an alias is redundant

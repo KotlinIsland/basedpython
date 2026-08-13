@@ -3,32 +3,32 @@ import enum
 import sys
 from _collections_abc import dict_items, dict_keys, dict_values
 from _typeshed import AnnotationForm, IdentityFunction, Incomplete, Unused
-from collections.abc import (
-    AsyncGenerator as AsyncGenerator,
-    AsyncIterable as AsyncIterable,
-    AsyncIterator as AsyncIterator,
-    Awaitable as Awaitable,
-    Collection as Collection,
-    Container as Container,
-    Coroutine as Coroutine,
-    Generator as Generator,
-    Hashable as Hashable,
-    ItemsView as ItemsView,
-    Iterable as Iterable,
-    Iterator as Iterator,
-    KeysView as KeysView,
-    Mapping as Mapping,
-    MappingView as MappingView,
-    MutableMapping as MutableMapping,
-    MutableSequence as MutableSequence,
-    MutableSet as MutableSet,
-    Reversible as Reversible,
-    Sequence as Sequence,
-    Sized as Sized,
-    ValuesView as ValuesView,
+from collections.abc export (
+    AsyncGenerator,
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Collection,
+    Container,
+    Coroutine,
+    Generator,
+    Hashable,
+    ItemsView,
+    Iterable,
+    Iterator,
+    KeysView,
+    Mapping,
+    MappingView,
+    MutableMapping,
+    MutableSequence,
+    MutableSet,
+    Reversible,
+    Sequence,
+    Sized,
+    ValuesView,
 )
 from contextlib import AbstractAsyncContextManager as AsyncContextManager, AbstractContextManager as ContextManager
-from re import Match as Match, Pattern as Pattern
+from re export Match, Pattern
 from types import GenericAlias, ModuleType, UnionType
 from typing import (  # noqa: Y022,Y037,Y038,Y039,UP035
     IO as IO,
@@ -463,7 +463,7 @@ OrderedDict = _Alias()
 """Deprecated alias to collections.OrderedDict."""
 
 if sys.version_info >= (3, 13):
-    from typing import get_type_hints as get_type_hints
+    from typing export get_type_hints
 else:
     def get_type_hints(
         obj: dynamic, globalns: dict[str, dynamic] | None = None, localns: Mapping[str, dynamic] | None = None, include_extras: bool = False
@@ -589,21 +589,21 @@ _AnnotatedAlias: dynamic  # undocumented
 
 # New and changed things in 3.11
 if sys.version_info >= (3, 11):
-    from typing import (
-        LiteralString as LiteralString,
-        NamedTuple as NamedTuple,
-        Never as Never,
-        NewType as NewType,
-        NotRequired as NotRequired,
-        Required as Required,
-        Self as Self,
-        Unpack as Unpack,
-        assert_never as assert_never,
-        assert_type as assert_type,
-        clear_overloads as clear_overloads,
-        dataclass_transform as dataclass_transform,
-        get_overloads as get_overloads,
-        reveal_type as reveal_type,
+    from typing export (
+        LiteralString,
+        NamedTuple,
+        Never,
+        NewType,
+        NotRequired,
+        Required,
+        Self,
+        Unpack,
+        assert_never,
+        assert_type,
+        clear_overloads,
+        dataclass_transform,
+        get_overloads,
+        reveal_type,
     )
 else:
     Self: _SpecialForm
@@ -797,7 +797,6 @@ else:
         kw_only_default: bool = False,
         frozen_default: bool = False,
         field_specifiers: (*: type[dynamic] | (...) -> dynamic) = (),
-        **kwargs: object,
     ) -> IdentityFunction:
         """Decorator that marks a function, class, or metaclass as providing
         dataclass-like behavior.
@@ -889,9 +888,9 @@ else:
         init(self, typename: str, fields: Iterable[(str, dynamic)] = ...)
         init(self, typename: str, fields: None = None, **kwargs: dynamic)
 
-        class def _make(cls, iterable: Iterable[dynamic]) -> Self
+        class def _make(cls, iterable: Iterable[dynamic]) -> Self  # ty:ignore[invalid-type-form]
         def _asdict(self) -> dict[str, dynamic]
-        def _replace(self, **kwargs: dynamic) -> Self
+        def _replace(self, **kwargs: dynamic) -> Self  # ty:ignore[invalid-type-form]
 
     class NewType:
         """NewType creates simple unique types with almost zero
@@ -915,17 +914,17 @@ else:
         __name__: str
 
 if sys.version_info >= (3, 12):
-    from collections.abc import Buffer as Buffer
-    from types import get_original_bases as get_original_bases
-    from typing import (
-        SupportsAbs as SupportsAbs,
-        SupportsBytes as SupportsBytes,
-        SupportsComplex as SupportsComplex,
-        SupportsFloat as SupportsFloat,
-        SupportsIndex as SupportsIndex,
-        SupportsInt as SupportsInt,
-        SupportsRound as SupportsRound,
-        override as override,
+    from collections.abc export Buffer
+    from types export get_original_bases
+    from typing export (
+        SupportsAbs,
+        SupportsBytes,
+        SupportsComplex,
+        SupportsFloat,
+        SupportsIndex,
+        SupportsInt,
+        SupportsRound,
+        override,
     )
 else:
     def override(arg: _F, /) -> _F:
@@ -1067,7 +1066,7 @@ else:
         def __round__(self, ndigits: int, /) -> _T_co
 
 if sys.version_info >= (3, 14):
-    from io import Reader as Reader, Writer as Writer
+    from io export Reader, Writer
 else:
     @runtime_checkable
     class Reader(Protocol[_T_co]):
@@ -1098,17 +1097,17 @@ else:
             """Write *data* to the output stream and return the number of items written."""
 
 if sys.version_info >= (3, 13):
-    from types import CapsuleType as CapsuleType
-    from typing import (
-        NoDefault as NoDefault,
-        ParamSpec as ParamSpec,
-        ReadOnly as ReadOnly,
-        TypeIs as TypeIs,
-        TypeVar as TypeVar,
-        get_protocol_members as get_protocol_members,
-        is_protocol as is_protocol,
+    from types export CapsuleType
+    from typing export (
+        NoDefault,
+        ParamSpec,
+        ReadOnly,
+        TypeIs,
+        TypeVar,
+        get_protocol_members,
+        is_protocol,
     )
-    from warnings import deprecated as deprecated
+    from warnings export deprecated
 else:
     def is_protocol(tp: type, /) -> bool:
         """Return True if the given type is a Protocol.
@@ -1198,10 +1197,10 @@ else:
 
         """
 
-        message: LiteralString
+        message: literal str
         category: type[Warning] | None
         stacklevel: int
-        init(self, message: LiteralString, /, *, category: type[Warning] | None = ..., stacklevel: int = 1)
+        init(self, message: literal str, /, *, category: type[Warning] | None = ..., stacklevel: int = 1)
         def __call__(self, arg: _T, /) -> _T
 
     final class TypeVar:
@@ -1309,7 +1308,7 @@ else:
 
     For example::
 
-        def is_awaitable(val: object) -> TypeIs[Awaitable[Any]]:
+        def is_awaitable(val: object) -> TypeIs[Awaitable[object]]:
             return hasattr(val, '__await__')
 
         def f(val: Union[int, Awaitable[int]]) -> int:
@@ -1323,7 +1322,7 @@ else:
     """
 
 if sys.version_info >= (3, 15):
-    from typing import TypeVarTuple as TypeVarTuple
+    from typing export TypeVarTuple
 else:
     final class TypeVarTuple:
         """Type variable tuple."""
@@ -1369,7 +1368,7 @@ else:
 
 # TypeAliasType was added in Python 3.12, but had significant changes in 3.14.
 if sys.version_info >= (3, 14):
-    from typing import TypeAliasType as TypeAliasType
+    from typing export TypeAliasType
 else:
     final class TypeAliasType:
         """Create named, parameterized type aliases.
@@ -1410,7 +1409,7 @@ else:
         let __module__: str | None
         # Returns typing._GenericAlias, which isn't stubbed.
         def __getitem__(self, parameters: Incomplete | (*: Incomplete)) -> AnnotationForm
-        def __init_subclass__(cls, *args: Unused, **kwargs: Unused) -> NoReturn
+        def __init_subclass__(cls, *args: Unused, **kwargs: Unused) -> Never
         def __or__(self, right: dynamic, /) -> _SpecialForm
         def __ror__(self, left: dynamic, /) -> _SpecialForm
 
@@ -1468,9 +1467,9 @@ See PEP 747 for more information.
 
 # PEP 649/749
 if sys.version_info >= (3, 14):
-    from typing import evaluate_forward_ref as evaluate_forward_ref
+    from typing export evaluate_forward_ref
 
-    from annotationlib import Format as Format, get_annotations as get_annotations, type_repr as type_repr
+    from annotationlib export Format, get_annotations, type_repr
 else:
     class Format(enum.IntEnum):
         """An enumeration."""
@@ -1604,7 +1603,7 @@ else:
 
 # PEP 661
 if sys.version_info >= (3, 15):
-    from builtins import sentinel as sentinel
+    from builtins export sentinel
 else:
     class sentinel:
         """Create a unique sentinel object.

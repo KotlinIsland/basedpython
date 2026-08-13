@@ -423,8 +423,8 @@ class RawConfigParser(_Parser):
 
     override def __len__(self) -> int
     override def __getitem__(self, key: _SectionName) -> SectionProxy
-    override def __setitem__(self, key: _SectionName, value: _Section) -> None
-    override def __delitem__(self, key: _SectionName) -> None
+    override def __setitem__(self, key: _SectionName, value: _Section)
+    override def __delitem__(self, key: _SectionName)
     override def __iter__(self) -> Iterator[str]
     override def __contains__(self, key: object) -> bool
     def defaults(self) -> _Section
@@ -618,8 +618,8 @@ class SectionProxy(MutableMapping[str, str]):
         """Creates a view on a section of the specified `name` in `parser`."""
 
     override def __getitem__(self, key: str) -> str
-    override def __setitem__(self, key: str, value: str) -> None
-    override def __delitem__(self, key: str) -> None
+    override def __setitem__(self, key: str, value: str)
+    override def __delitem__(self, key: str)
     override def __contains__(self, key: object) -> bool
     override def __len__(self) -> int
     override def __iter__(self) -> Iterator[str]
@@ -679,8 +679,8 @@ class ConverterMapping(MutableMapping[str, ConverterCallback | None]):
     GETTERCRE: ClassVar[Pattern[dynamic]]
     init(self, parser: RawConfigParser)
     override def __getitem__(self, key: str) -> ConverterCallback
-    override def __setitem__(self, key: str, value: ConverterCallback | None) -> None
-    override def __delitem__(self, key: str) -> None
+    override def __setitem__(self, key: str, value: ConverterCallback | None)
+    override def __delitem__(self, key: str)
     override def __iter__(self) -> Iterator[str]
     override def __len__(self) -> int
 

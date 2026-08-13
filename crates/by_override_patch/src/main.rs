@@ -32,7 +32,7 @@ use ruff_db::source::source_text;
 use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
 use ruff_ranged_value::RangedValue;
 use ty_project::metadata::options::{Options, Rules};
-use ty_project::{Db as _, ProjectDatabase, ProjectMetadata};
+use ty_project::{Db as _, ProjectDatabase, ProjectMetadata, SemanticDb as _};
 use ty_python_semantic::lint::Level;
 use ty_python_semantic::types::check_types;
 
@@ -145,7 +145,7 @@ fn mark_pass(stdlib_dir: &Path, typeshed_root: &Path) -> Result<(usize, usize)> 
     let mut methods_marked = 0_usize;
     for (path, file) in files {
         // offsets of the overriding method names ty flagged as missing `override`
-        let mut name_offsets: Vec<usize> = check_types(&db, file)
+        let mut name_offsets: Vec<usize> = check_types(&db, db.program_file(file))
             .into_iter()
             .filter(|diag| diag.id().is_lint_named(LINT))
             .filter_map(|diag| Some(diag.primary_span_ref()?.range()?.start().to_usize()))

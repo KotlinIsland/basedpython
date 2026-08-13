@@ -46,6 +46,7 @@ use ty_python_core::{
 use crate::Db;
 use crate::dunder_all::dunder_all_names;
 use crate::place::{place_from_bindings, place_from_declarations};
+use crate::types::ProgramEnvironment;
 use crate::types::enums::is_enum_class;
 use crate::types::function::{FunctionDecorators, FunctionType};
 use crate::types::type_alias::TypeAliasType;
@@ -69,7 +70,12 @@ const PUBLIC_MODULE_DUNDERS: &[&str] = &["__all__", "__author__", "__doc__", "__
 /// see what target the lockfile was generated against (typing constructs
 /// like `Self`, `Required`, `NotRequired` resolve differently per
 /// version)
-pub fn generate_api_lockfile<'db, I>(db: &'db dyn Db, files: I, python_version: &str) -> String
+pub fn generate_api_lockfile<'db, I>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    files: I,
+    python_version: &str,
+) -> String
 where
     I: IntoIterator<Item = File>,
 {
@@ -80,13 +86,20 @@ where
     let mut module_count: usize = 0;
 
     for file in files {
-        let Some(module) = file_to_module(db, file) else {
+        let Some(module) = file_to_module(db, db.program_file(file).resolver_file(db)) else {
             continue;
         };
 
         let module_name = module.name(db).as_str().to_string();
-        let scope = global_scope(db, file);
-        emit_module_scope(db, scope, &module_name, &mut lines, &mut visited_classes);
+        let scope = global_scope(db, db.program_file(file));
+        emit_module_scope(
+            db,
+            env,
+            scope,
+            &module_name,
+            &mut lines,
+            &mut visited_classes,
+        );
         module_count += 1;
     }
 
@@ -105,6 +118,7 @@ where
 
 fn emit_module_scope<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     scope: ScopeId<'db>,
     qualified_prefix: &str,
     lines: &mut Vec<String>,
@@ -113,7 +127,7 @@ fn emit_module_scope<'db>(
     let use_def_map = use_def_map(db, scope);
     let table = place_table(db, scope);
     let scope_file = scope.file(db);
-    let all_names = dunder_all_names(db, scope_file);
+    let all_names = dunder_all_names(db, db.program_file(scope_file));
 
     for (symbol_id, declarations, bindings) in use_def_map.all_reachable_symbols() {
         let symbol = table.symbol(symbol_id);
@@ -123,11 +137,11 @@ fn emit_module_scope<'db>(
         }
 
         let place_and_qualifiers =
-            place_from_declarations(db, declarations).ignore_conflicting_declarations();
+            place_from_declarations(db, env, declarations).ignore_conflicting_declarations();
         let declaration_ty = place_and_qualifiers.place.ignore_possibly_undefined();
         let qualifiers = place_and_qualifiers.qualifiers;
 
-        let binding_ty = place_from_bindings(db, bindings)
+        let binding_ty = place_from_bindings(db, env, bindings)
             .place
             .ignore_possibly_undefined();
 
@@ -143,11 +157,20 @@ fn emit_module_scope<'db>(
         if let Some(owning) = owning_file
             && owning != scope_file
         {
-            lines.push(format!("{qualified}:r={}", render_reexport(db, ty)));
+            lines.push(format!("{qualified}:r={}", render_reexport(db, env, ty)));
             continue;
         }
 
-        emit_symbol(db, &qualified, name, ty, qualifiers, lines, visited_classes);
+        emit_symbol(
+            db,
+            env,
+            &qualified,
+            name,
+            ty,
+            qualifiers,
+            lines,
+            visited_classes,
+        );
     }
 }
 
@@ -166,8 +189,10 @@ fn type_definition_file<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<File> {
     }
 }
 
+#[expect(clippy::too_many_arguments)]
 fn emit_symbol<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     qualified: &str,
     name: &Name,
     ty: Type<'db>,
@@ -176,20 +201,23 @@ fn emit_symbol<'db>(
     visited_classes: &mut FxHashSet<ClassLiteral<'db>>,
 ) {
     match ty {
-        Type::ClassLiteral(class) => emit_class(db, qualified, name, class, lines, visited_classes),
+        Type::ClassLiteral(class) => {
+            emit_class(db, env, qualified, name, class, lines, visited_classes);
+        }
         Type::GenericAlias(alias) => emit_class(
             db,
+            env,
             qualified,
             name,
             ClassLiteral::Static(alias.origin(db)),
             lines,
             visited_classes,
         ),
-        Type::FunctionLiteral(function) => emit_function(db, qualified, function, lines),
+        Type::FunctionLiteral(function) => emit_function(db, env, qualified, function, lines),
         Type::KnownInstance(KnownInstanceType::TypeAliasType(alias)) | Type::TypeAlias(alias) => {
-            emit_type_alias(db, qualified, alias, lines);
+            emit_type_alias(db, env, qualified, alias, lines);
         }
-        Type::PropertyInstance(property) => emit_property(db, qualified, property, lines),
+        Type::PropertyInstance(property) => emit_property(db, env, qualified, property, lines),
         Type::Union(union)
             if union
                 .elements(db)
@@ -197,7 +225,7 @@ fn emit_symbol<'db>(
                 .all(|t| matches!(t, Type::PropertyInstance(_))) =>
         {
             let merged = merge_property_union(db, union);
-            emit_property(db, qualified, merged, lines);
+            emit_property(db, env, qualified, merged, lines);
         }
         Type::ModuleLiteral(module_lit) => {
             let target = module_lit.module(db).name(db).as_str();
@@ -207,7 +235,7 @@ fn emit_symbol<'db>(
             lines.push(format!(
                 "{qualified}:v{}={}",
                 render_qualifiers(qualifiers),
-                render_type(db, ty)
+                render_type(db, env, ty)
             ));
         }
     }
@@ -215,6 +243,7 @@ fn emit_symbol<'db>(
 
 fn emit_class<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     qualified: &str,
     name: &Name,
     class: ClassLiteral<'db>,
@@ -231,7 +260,7 @@ fn emit_class<'db>(
         ClassLiteral::Static(static_class) => static_class
             .explicit_bases(db)
             .iter()
-            .map(|base| render_class_base(db, *base))
+            .map(|base| render_class_base(db, env, *base))
             .collect::<Vec<_>>()
             .join(","),
         _ => String::new(),
@@ -247,18 +276,20 @@ fn emit_class<'db>(
         let class_self_name = name.clone();
         emit_class_members(
             db,
+            env,
             body_scope,
             qualified,
             &class_self_name,
             lines,
             visited_classes,
         );
-        emit_instance_attributes(db, body_scope, qualified, lines);
+        emit_instance_attributes(db, env, body_scope, qualified, lines);
     }
 }
 
 fn emit_class_members<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     scope: ScopeId<'db>,
     qualified_prefix: &str,
     class_self_name: &Name,
@@ -279,11 +310,11 @@ fn emit_class_members<'db>(
         }
 
         let place_and_qualifiers =
-            place_from_declarations(db, declarations).ignore_conflicting_declarations();
+            place_from_declarations(db, env, declarations).ignore_conflicting_declarations();
         let declaration_ty = place_and_qualifiers.place.ignore_possibly_undefined();
         let qualifiers = place_and_qualifiers.qualifiers;
 
-        let binding_ty = place_from_bindings(db, bindings)
+        let binding_ty = place_from_bindings(db, env, bindings)
             .place
             .ignore_possibly_undefined();
 
@@ -292,7 +323,16 @@ fn emit_class_members<'db>(
         };
 
         let qualified = format!("{qualified_prefix}.{name}");
-        emit_symbol(db, &qualified, name, ty, qualifiers, lines, visited_classes);
+        emit_symbol(
+            db,
+            env,
+            &qualified,
+            name,
+            ty,
+            qualifiers,
+            lines,
+            visited_classes,
+        );
     }
 }
 
@@ -301,12 +341,13 @@ fn emit_class_members<'db>(
 /// bindings as fallback
 fn emit_instance_attributes<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     body_scope: ScopeId<'db>,
     qualified_prefix: &str,
     lines: &mut Vec<String>,
 ) {
     let file = body_scope.file(db);
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, db.program_file(file));
 
     let mut seen: FxHashSet<String> = FxHashSet::default();
     for function_scope_id in attribute_scopes(db, body_scope) {
@@ -322,14 +363,15 @@ fn emit_instance_attributes<'db>(
                 continue;
             }
 
-            let Some((ty, qualifiers)) = lookup_instance_attribute(db, body_scope, name) else {
+            let Some((ty, qualifiers)) = lookup_instance_attribute(db, env, body_scope, name)
+            else {
                 continue;
             };
             let qualified = format!("{qualified_prefix}.{name}");
             lines.push(format!(
                 "{qualified}:i{}={}",
                 render_qualifiers(qualifiers),
-                render_type(db, ty)
+                render_type(db, env, ty)
             ));
         }
     }
@@ -337,11 +379,12 @@ fn emit_instance_attributes<'db>(
 
 fn lookup_instance_attribute<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     class_body_scope: ScopeId<'db>,
     name: &str,
 ) -> Option<(Type<'db>, TypeQualifiers)> {
     let file = class_body_scope.file(db);
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, db.program_file(file));
 
     // try declarations first across all attribute scopes
     for function_scope_id in attribute_scopes(db, class_body_scope) {
@@ -351,7 +394,7 @@ fn lookup_instance_attribute<'db>(
         };
         let use_def = index.use_def_map(function_scope_id);
         let place_and_qualifiers =
-            place_from_declarations(db, use_def.reachable_member_declarations(member))
+            place_from_declarations(db, env, use_def.reachable_member_declarations(member))
                 .ignore_conflicting_declarations();
         if let Some(ty) = place_and_qualifiers.place.ignore_possibly_undefined() {
             return Some((ty, place_and_qualifiers.qualifiers));
@@ -365,7 +408,7 @@ fn lookup_instance_attribute<'db>(
             continue;
         };
         let use_def = index.use_def_map(function_scope_id);
-        let binding = place_from_bindings(db, use_def.reachable_member_bindings(member));
+        let binding = place_from_bindings(db, env, use_def.reachable_member_bindings(member));
         if let Some(ty) = binding.place.ignore_possibly_undefined() {
             return Some((ty, TypeQualifiers::empty()));
         }
@@ -376,6 +419,7 @@ fn lookup_instance_attribute<'db>(
 
 fn emit_function<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     qualified: &str,
     function: FunctionType<'db>,
     lines: &mut Vec<String>,
@@ -383,13 +427,14 @@ fn emit_function<'db>(
     let decorators = render_function_decorators(db, function);
     for signature in function.signature(db) {
         let typevars = render_signature_typevars(db, signature);
-        let body = render_signature_body(db, signature);
+        let body = render_signature_body(db, env, signature);
         lines.push(format!("{qualified}:d{decorators}{typevars}{body}"));
     }
 }
 
 fn emit_type_alias<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     qualified: &str,
     alias: TypeAliasType<'db>,
     lines: &mut Vec<String>,
@@ -403,7 +448,7 @@ fn emit_type_alias<'db>(
     };
     lines.push(format!(
         "{qualified}:t{typevars}={}",
-        render_type(db, alias.value_type(db))
+        render_type(db, env, alias.value_type(db))
     ));
 }
 
@@ -432,6 +477,7 @@ fn merge_property_union<'db>(db: &'db dyn Db, union: UnionType<'db>) -> Property
 
 fn emit_property<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     qualified: &str,
     property: PropertyInstanceType<'db>,
     lines: &mut Vec<String>,
@@ -456,7 +502,7 @@ fn emit_property<'db>(
     }
     let accessors_str = accessors.join(",");
     let type_str = return_ty
-        .map(|ty| format!("={}", render_type(db, ty)))
+        .map(|ty| format!("={}", render_type(db, env, ty)))
         .unwrap_or_default();
     lines.push(format!("{qualified}:p[{accessors_str}]{type_str}"));
 }
@@ -566,7 +612,11 @@ fn render_generic_args<'db>(db: &'db dyn Db, context: crate::types::GenericConte
     }
 }
 
-fn render_signature_body<'db>(db: &'db dyn Db, signature: &Signature<'db>) -> String {
+fn render_signature_body<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    signature: &Signature<'db>,
+) -> String {
     let parameters = signature.parameters();
     // ignore `self`/`cls`, which ty synthesises as positional-only — leaking
     // the `/` marker into the lockfile for every method is noise without
@@ -617,7 +667,7 @@ fn render_signature_body<'db>(db: &'db dyn Db, signature: &Signature<'db>) -> St
             emitted_kw_only_boundary = true;
         }
 
-        let annotation = render_type(db, parameter.annotated_type());
+        let annotation = render_type(db, env, parameter.annotated_type());
         let token = match parameter.kind() {
             ParameterKind::PositionalOnly { name, default_type } => {
                 let label = match name.as_ref() {
@@ -655,7 +705,7 @@ fn render_signature_body<'db>(db: &'db dyn Db, signature: &Signature<'db>) -> St
 
     out.push_str(&tokens.join(","));
     out.push(')');
-    write!(out, "->{}", render_type(db, signature.return_ty)).unwrap();
+    write!(out, "->{}", render_type(db, env, signature.return_ty)).unwrap();
     out
 }
 
@@ -664,7 +714,7 @@ fn render_signature_body<'db>(db: &'db dyn Db, signature: &Signature<'db>) -> St
 /// disambiguated even if two modules export classes with the same short name.
 /// unions and intersections are recursively walked so each member keeps its
 /// module prefix
-fn render_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
+fn render_type<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> String {
     if ty.is_none(db) {
         return "None".to_string();
     }
@@ -675,28 +725,28 @@ fn render_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
     }
     match ty {
         Type::NominalInstance(instance) => {
-            let class_name = instance.class_name(db).as_str().to_owned();
+            let class_name = instance.class_name(db, env).as_str().to_owned();
             // anonymous named-tuple types: render structurally so two
             // identically-shaped anon NTs share a lockfile representation
             // and the synthesized hash-suffixed class name doesn't leak
             if class_name.starts_with("_AnonNamedTuple_") {
-                if let Some(structural) = render_anon_named_tuple(db, instance) {
+                if let Some(structural) = render_anon_named_tuple(db, env, instance) {
                     return structural;
                 }
             }
             let module = instance
-                .class_module_name(db)
+                .class_module_name(db, env)
                 .map(|m| format!("{}.", m.as_str()))
                 .unwrap_or_default();
             let base = format!("{module}{class_name}");
             // surface generic args so `list[int]` and `list[str]` don't both
             // collapse to `builtins.list` in the lockfile
-            if let Some(alias) = instance.class(db).into_generic_alias() {
+            if let Some(alias) = instance.class(db, env).into_generic_alias() {
                 let args: Vec<String> = alias
                     .specialization(db)
                     .types(db)
                     .iter()
-                    .map(|arg| render_type(db, *arg))
+                    .map(|arg| render_type(db, env, *arg))
                     .collect();
                 if !args.is_empty() {
                     return format!("{base}[{}]", args.join(","));
@@ -711,7 +761,7 @@ fn render_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
                 .specialization(db)
                 .types(db)
                 .iter()
-                .map(|arg| render_type(db, *arg))
+                .map(|arg| render_type(db, env, *arg))
                 .collect();
             if args.is_empty() {
                 origin
@@ -730,7 +780,7 @@ fn render_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
                     has_none = true;
                 } else if t.as_literal_value_kind().is_some() {
                     // peel the `Literal[...]` wrapper if the display added it
-                    let rendered = render_type(db, *t);
+                    let rendered = render_type(db, env, *t);
                     let inner = rendered
                         .strip_prefix("Literal[")
                         .and_then(|s| s.strip_suffix(']'))
@@ -738,7 +788,7 @@ fn render_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
                         .unwrap_or(rendered);
                     literal_parts.push(inner);
                 } else {
-                    other_parts.push(render_type(db, *t));
+                    other_parts.push(render_type(db, env, *t));
                 }
             }
             literal_parts.sort();
@@ -765,11 +815,11 @@ fn render_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
         Type::Intersection(intersection) => {
             let mut positives: Vec<String> = intersection
                 .iter_positive(db)
-                .map(|t| render_type(db, t))
+                .map(|t| render_type(db, env, t))
                 .collect();
             let mut negatives: Vec<String> = intersection
                 .iter_negative(db)
-                .map(|t| render_type(db, t))
+                .map(|t| render_type(db, env, t))
                 .collect();
             positives.sort();
             negatives.sort();
@@ -778,7 +828,7 @@ fn render_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
             parts.extend(negatives.into_iter().map(|n| format!("~{n}")));
             parts.join(" & ")
         }
-        _ => ty.display(db).to_string(),
+        _ => ty.display(db, env).to_string(),
     }
 }
 
@@ -789,9 +839,10 @@ fn render_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
 /// source may not expose body declarations to ty).
 fn render_anon_named_tuple<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     instance: NominalInstanceType<'db>,
 ) -> Option<String> {
-    let class_literal = instance.class(db).class_literal(db);
+    let class_literal = instance.class(db, env).class_literal(db);
     if let ClassLiteral::Static(static_class) = class_literal {
         let body_scope = static_class.body_scope(db);
         let table = place_table(db, body_scope);
@@ -804,11 +855,11 @@ fn render_anon_named_tuple<'db>(
                 continue;
             }
             let place_and_qualifiers =
-                place_from_declarations(db, declarations).ignore_conflicting_declarations();
+                place_from_declarations(db, env, declarations).ignore_conflicting_declarations();
             let Some(decl_ty) = place_and_qualifiers.place.ignore_possibly_undefined() else {
                 continue;
             };
-            fields.push((name, render_type(db, decl_ty)));
+            fields.push((name, render_type(db, env, decl_ty)));
         }
         if !fields.is_empty() {
             let body = fields
@@ -821,20 +872,20 @@ fn render_anon_named_tuple<'db>(
     }
     // fall back to tuple-spec elements when body declarations aren't
     // available
-    let spec = instance.tuple_spec(db)?;
+    let spec = instance.tuple_spec(db, env)?;
     let elements: Vec<&Type<'db>> = spec.fixed_elements().collect();
     if elements.is_empty() {
         return None;
     }
     let body = elements
         .iter()
-        .map(|t| render_type(db, **t))
+        .map(|t| render_type(db, env, **t))
         .collect::<Vec<_>>()
         .join(", ");
     Some(format!("({body})"))
 }
 
-fn render_reexport<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
+fn render_reexport<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> String {
     match ty {
         Type::ClassLiteral(class) => qualified_class_name(db, class),
         Type::GenericAlias(alias) => {
@@ -843,7 +894,7 @@ fn render_reexport<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
                 .specialization(db)
                 .types(db)
                 .iter()
-                .map(|arg| render_type(db, *arg))
+                .map(|arg| render_type(db, env, *arg))
                 .collect();
             if args.is_empty() {
                 origin
@@ -852,7 +903,7 @@ fn render_reexport<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
             }
         }
         Type::FunctionLiteral(function) => {
-            let module = file_to_module(db, function.file(db))
+            let module = file_to_module(db, function.program_file(db).resolver_file(db))
                 .map(|m| format!("{}.", m.name(db).as_str()))
                 .unwrap_or_default();
             format!("{module}{}", function.name(db).as_str())
@@ -860,12 +911,12 @@ fn render_reexport<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
         Type::TypeAlias(TypeAliasType::PEP695(alias))
         | Type::KnownInstance(KnownInstanceType::TypeAliasType(TypeAliasType::PEP695(alias))) => {
             let file = alias.rhs_scope(db).file(db);
-            let module = file_to_module(db, file)
+            let module = file_to_module(db, db.program_file(file).resolver_file(db))
                 .map(|m| format!("{}.", m.name(db).as_str()))
                 .unwrap_or_default();
             format!("{module}{}", alias.name(db))
         }
-        _ => render_type(db, ty),
+        _ => render_type(db, env, ty),
     }
 }
 
@@ -927,7 +978,7 @@ fn is_named_tuple<'db>(db: &'db dyn Db, class: ClassLiteral<'db>) -> bool {
     }
 }
 
-fn render_class_base<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
+fn render_class_base<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> String {
     match ty {
         Type::ClassLiteral(class) => qualified_class_name(db, class),
         Type::GenericAlias(alias) => {
@@ -936,7 +987,7 @@ fn render_class_base<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
                 .specialization(db)
                 .types(db)
                 .iter()
-                .map(|arg| render_type(db, *arg))
+                .map(|arg| render_type(db, env, *arg))
                 .collect();
             if args.is_empty() {
                 origin
@@ -944,14 +995,14 @@ fn render_class_base<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
                 format!("{origin}[{}]", args.join(","))
             }
         }
-        _ => render_type(db, ty),
+        _ => render_type(db, env, ty),
     }
 }
 
 fn qualified_class_name<'db>(db: &'db dyn Db, class: ClassLiteral<'db>) -> String {
     let class_name = class.name(db).as_str();
     let class_file = class.file(db);
-    if let Some(module) = file_to_module(db, class_file) {
+    if let Some(module) = file_to_module(db, db.program_file(class_file).resolver_file(db)) {
         format!("{}.{}", module.name(db).as_str(), class_name)
     } else {
         class_name.to_string()

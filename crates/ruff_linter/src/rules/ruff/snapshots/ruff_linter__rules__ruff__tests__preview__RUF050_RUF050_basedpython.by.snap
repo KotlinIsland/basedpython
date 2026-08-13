@@ -8,7 +8,6 @@ RUF050 [*] Empty `if` statement
 18 | / if f():
 19 | |     pass
    | |________^
-   |
 help: Remove the `if` statement
    |
 17 | # a plain condition is still reported

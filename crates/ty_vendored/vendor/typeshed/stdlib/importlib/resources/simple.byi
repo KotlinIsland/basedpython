@@ -69,7 +69,7 @@ if sys.version_info >= (3, 11):
         def open(self, mode: "rb") -> BinaryIO
         def open(self, mode: str) -> IO[dynamic]
 
-        def joinpath(self, name: Never) -> NoReturn
+        def joinpath(self, name: Never) -> Never
 
     class ResourceContainer(Traversable, metaclass=abc.ABCMeta):
         """
@@ -81,7 +81,7 @@ if sys.version_info >= (3, 11):
         def is_dir(self) -> True
         def is_file(self) -> False
         def iterdir(self) -> Iterator[ResourceHandle | ResourceContainer]
-        def open(self, *args: Never, **kwargs: Never) -> NoReturn
+        def open(self, *args: Never, **kwargs: Never) -> Never
         if sys.version_info < (3, 12):
             def joinpath(self, *descendants: StrPath) -> Traversable
 

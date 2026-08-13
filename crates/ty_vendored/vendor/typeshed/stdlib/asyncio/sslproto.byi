@@ -157,7 +157,7 @@ class _SSLProtocolTransport(transports._FlowControlMixin, transports.Transport):
         """Get optional transport information."""
 
     let _protocol_paused: bool
-    override def write(self, data: bytes | bytearray | memoryview[dynamic]) -> None:  # any memoryview format or shape
+    override def write(self, data: bytes | bytearray | memoryview[dynamic]):  # any memoryview format or shape
         """Write some data bytes to the transport.
 
         This does not block; it buffers the data and arranges for it
@@ -258,7 +258,7 @@ class SSLProtocol(_SSLProtocolBase):
 
     def _set_app_protocol(self, app_protocol: protocols.BaseProtocol)
     def _wakeup_waiter(self, exc: BaseException | None = None)
-    override def connection_lost(self, exc: BaseException | None) -> None:
+    override def connection_lost(self, exc: BaseException | None):
         """Called when the low-level connection is lost or closed.
 
         The argument is an exception object or None (the latter
@@ -266,7 +266,7 @@ class SSLProtocol(_SSLProtocolBase):
         aborted or closed).
         """
 
-    override def eof_received(self) -> None:
+    override def eof_received(self):
         """Called when the other end of the low-level stream
         is half-closed.
 

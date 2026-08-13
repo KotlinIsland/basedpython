@@ -26,6 +26,6 @@ class FixImport(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     skip: bool
-    override def start_tree(self, tree: Node, name: StrPath) -> None
+    override def start_tree(self, tree: Node, name: StrPath)
     override def transform(self, node, results)
     def probably_a_local_import(self, imp_name)

@@ -7,7 +7,7 @@ time zone and DST data sources.
 import sys
 from time import struct_time
 from typing import ClassVar, Final, TypeAlias, final, type_check_only
-from typing_extensions import CapsuleType, Self, deprecated, disjoint_base
+from typing_extensions import CapsuleType, Never, Self, deprecated, disjoint_base
 
 if sys.version_info >= (3, 11):
     __all__ = ("date", "datetime", "time", "timedelta", "timezone", "tzinfo", "MINYEAR", "MAXYEAR", "UTC")
@@ -51,7 +51,7 @@ final class timezone(tzinfo):
     override def utcoffset(self, dt: datetime | None, /) -> timedelta:
         """Return fixed offset."""
 
-    override def dst(self, dt: datetime | None, /) -> None:
+    override def dst(self, dt: datetime | None, /):
         """Return None."""
 
     override def __hash__(self) -> int
@@ -174,7 +174,7 @@ class date:
     def __radd__(self, value: timedelta, /) -> Self:
         """Return value+self."""
 
-    def __sub__(self, value: datetime, /) -> NoReturn:
+    def __sub__(self, value: datetime, /) -> Never:
         """Return self-value."""
     def __sub__(self, value: Self, /) -> timedelta
     def __sub__(self, value: timedelta, /) -> Self

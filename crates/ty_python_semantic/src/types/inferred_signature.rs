@@ -31,6 +31,7 @@ use ty_python_core::{UseDefMap, semantic_index, use_def_map};
 
 use crate::Db;
 use crate::reachability::ReachabilityConstraintsExtension;
+use crate::types::ProgramEnvironment;
 use crate::types::call::CallArguments;
 use crate::types::callable::CallableType;
 use crate::types::constraints::ConstraintSetBuilder;
@@ -61,8 +62,9 @@ use crate::types::{
 #[salsa::tracked(
     returns(copy),
     cycle_initial = |_, id, _| Type::divergent(id),
-    cycle_fn = |db, cycle, previous: &Type<'db>, value: Type<'db>, _| {
-        value.cycle_normalized(db, *previous, cycle)
+    cycle_fn = |db, cycle, previous: &Type<'db>, value: Type<'db>, overload: OverloadLiteral<'db>| {
+        let env = &ProgramEnvironment::from_file(overload.program_file(db));
+        value.cycle_normalized(db, env, *previous, cycle)
     },
     heap_size = ruff_memory_usage::heap_size,
 )]
@@ -70,16 +72,18 @@ pub(crate) fn inferred_return_type<'db>(
     db: &'db dyn Db,
     overload: OverloadLiteral<'db>,
 ) -> Type<'db> {
+    let env = &ProgramEnvironment::from_file(overload.program_file(db));
     let file = overload.file(db);
-    let module = parsed_module(db, file).load(db);
+    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let node = overload.node(db, file, &module);
     let body_scope = overload.body_scope(db);
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, db.program_file(file));
     let file_scope_id = body_scope.file_scope_id(db);
     let inference = infer_scope_types(db, body_scope, TypeContext::default());
 
     return_type_from_body(
         db,
+        env,
         node,
         file_scope_id.is_generator_function(index),
         can_implicitly_return_none(db, index.use_def_map(file_scope_id)),
@@ -96,6 +100,7 @@ pub(crate) fn inferred_return_type<'db>(
 /// that advice silently change the function's type.
 pub(crate) fn return_type_from_body<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     node: &ast::StmtFunctionDef,
     is_generator: bool,
     can_implicitly_return_none: bool,
@@ -103,6 +108,7 @@ pub(crate) fn return_type_from_body<'db>(
 ) -> Type<'db> {
     let mut collector = BodyValueCollector {
         db,
+        env: env.clone(),
         expression_type,
         returns: Vec::new(),
         yields: Vec::new(),
@@ -111,11 +117,12 @@ pub(crate) fn return_type_from_body<'db>(
 
     let returned = UnionType::from_elements(
         db,
+        env,
         collector
             .returns
             .iter()
             .copied()
-            .chain(can_implicitly_return_none.then(|| Type::none(db))),
+            .chain(can_implicitly_return_none.then(|| Type::none(db, env))),
     );
 
     if !is_generator {
@@ -125,11 +132,15 @@ pub(crate) fn return_type_from_body<'db>(
     // what a generator's caller receives is the generator, not what the body
     // returns; the send type is the one thing the body does not determine, since
     // it is what the caller passes back in
-    let yielded = UnionType::from_elements(db, collector.yields.iter().copied());
+    let yielded = UnionType::from_elements(db, env, collector.yields.iter().copied());
     if node.is_async {
-        KnownClass::AsyncGeneratorType.to_specialized_instance(db, &[yielded, Type::unknown()])
+        KnownClass::AsyncGeneratorType.to_specialized_instance(db, env, &[yielded, Type::unknown()])
     } else {
-        KnownClass::GeneratorType.to_specialized_instance(db, &[yielded, Type::unknown(), returned])
+        KnownClass::GeneratorType.to_specialized_instance(
+            db,
+            env,
+            &[yielded, Type::unknown(), returned],
+        )
     }
 }
 
@@ -173,7 +184,11 @@ pub(crate) fn inferred_parameter_typevar<'db>(
 /// Anywhere that reads a *structure* out of a type rather than relating it to another — a class to
 /// subclass, a pivot for `super()` — has to see through it, or recovering the signature would
 /// report what the gradual type never did.
-pub(crate) fn gradual_hole<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Type<'db>> {
+pub(crate) fn gradual_hole<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Option<Type<'db>> {
     let Type::TypeVar(bound_typevar) = ty else {
         return None;
     };
@@ -181,7 +196,7 @@ pub(crate) fn gradual_hole<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Type<'
     if typevar.kind(db) != TypeVarKind::InferredParameter {
         return None;
     }
-    typevar.upper_bound(db).filter(Type::is_dynamic)
+    typevar.upper_bound(db, env).filter(Type::is_dynamic)
 }
 
 /// The type of `parameter`'s hole, bound to the function that declares it.
@@ -202,7 +217,7 @@ pub(crate) fn parameter_function_definition<'db>(
     parameter: Definition<'db>,
 ) -> Option<Definition<'db>> {
     let scope = parameter.scope(db);
-    let index = semantic_index(db, scope.file(db));
+    let index = semantic_index(db, scope.program_file(db));
     let function = index.scope(scope.file_scope_id(db)).node().as_function()?;
     Some(index.expect_single_definition(function))
 }
@@ -220,12 +235,13 @@ pub(crate) fn inferred_parameter_default<'db>(
     db: &'db dyn Db,
     parameter: Definition<'db>,
 ) -> Option<Type<'db>> {
+    let env = &ProgramEnvironment::from_definition(parameter);
     let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node)) =
         parameter.kind(db)
     else {
         return None;
     };
-    let module = parsed_module(db, parameter.file(db)).load(db);
+    let module = parsed_module(db, parameter.program_file(db).python_file(db)).load(db);
     let default = node.node(&module).default.as_deref()?;
     let function = parameter_function_definition(db, parameter)?;
 
@@ -234,7 +250,7 @@ pub(crate) fn inferred_parameter_default<'db>(
     Some(
         infer_deferred_types(db, function)
             .expression_type(default)
-            .replace_parameter_defaults(db),
+            .replace_parameter_defaults(db, env),
     )
 }
 
@@ -263,17 +279,18 @@ pub(crate) fn inferred_parameter_bound<'db>(
     db: &'db dyn Db,
     parameter: Definition<'db>,
 ) -> Type<'db> {
+    let env = &ProgramEnvironment::from_definition(parameter);
     // `None` is the sentinel every optional parameter is spelled with — it says the argument
     // may be left out, not that `None` is the kind of thing that belongs there. bounding by it
     // would reject every call that supplies one, which is what `def f(x=None)` exists for
     let from_default = inferred_parameter_default(db, parameter)
         .filter(|default| !default.is_none(db))
-        .map(|default| default.promote(db));
+        .map(|default| default.promote(db, env));
     let from_body = parameter_function_definition(db, parameter)
         .map(|function| body_parameter_constraints(db, function).get(parameter))
         .unwrap_or_default();
 
-    let mut bound = IntersectionBuilder::new(db);
+    let mut bound = IntersectionBuilder::new(db, env);
     let mut constrained = false;
     for constraint in from_default.into_iter().chain(from_body) {
         constrained = true;
@@ -306,16 +323,17 @@ pub(crate) fn body_parameter_constraints<'db>(
     db: &'db dyn Db,
     function: Definition<'db>,
 ) -> ParameterConstraints<'db> {
+    let env = &ProgramEnvironment::from_definition(function);
     let file = function.file(db);
-    let module = parsed_module(db, file).load(db);
-    let index = semantic_index(db, file);
+    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+    let index = semantic_index(db, db.program_file(file));
     let DefinitionKind::Function(function_kind) = function.kind(db) else {
         return ParameterConstraints::default();
     };
     let node = function_kind.node(&module);
     let Some(body_scope) = index
         .try_node_scope(NodeWithScopeRef::Function(node))
-        .map(|scope| scope.to_scope_id(db, file))
+        .map(|scope| scope.to_scope_id(db, db.program_file(file)))
     else {
         return ParameterConstraints::default();
     };
@@ -339,6 +357,7 @@ pub(crate) fn body_parameter_constraints<'db>(
 
     let mut collector = UseCollector {
         db,
+        env: env.clone(),
         file,
         use_def: use_def_map(db, body_scope),
         expression_type: |expr: &Expr| inference.expression_type(expr),
@@ -353,10 +372,18 @@ pub(crate) fn body_parameter_constraints<'db>(
     collector.visit_body(&node.body);
 
     let mut uses = collector.uses;
-    apply_asserted_local_types(db, index, body_scope, node, &collector.locals, &mut uses);
+    apply_asserted_local_types(
+        db,
+        env,
+        index,
+        body_scope,
+        node,
+        &collector.locals,
+        &mut uses,
+    );
 
-    let mut entries = path_bounds(db, uses);
-    entries.extend(asserted_parameter_types(db, index, body_scope, node));
+    let mut entries = path_bounds(db, env, uses);
+    entries.extend(asserted_parameter_types(db, env, index, body_scope, node));
 
     // a parameter a nested scope captured keeps nothing: that body is checked against this
     // bound, and this walk never saw what it does with the name
@@ -399,6 +426,7 @@ impl<'db> ParameterConstraints<'db> {
 /// statement later.
 fn apply_asserted_local_types<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     index: &ty_python_core::SemanticIndex<'db>,
     body_scope: ScopeId<'db>,
     node: &ast::StmtFunctionDef,
@@ -414,7 +442,7 @@ fn apply_asserted_local_types<'db>(
         let Some(place_id) = place_table.symbol_id(local.as_str()) else {
             continue;
         };
-        for asserted in asserted_types(db, index, node, place_id.into()) {
+        for asserted in asserted_types(db, env, index, node, place_id.into()) {
             uses.entry(path.clone()).or_default().value.push(asserted);
         }
     }
@@ -423,6 +451,7 @@ fn apply_asserted_local_types<'db>(
 /// The types an `assert` at the top level of `node`'s body narrows `place` to.
 fn asserted_types<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     index: &ty_python_core::SemanticIndex<'db>,
     node: &ast::StmtFunctionDef,
     place: ScopedPlaceId,
@@ -436,14 +465,14 @@ fn asserted_types<'db>(
             node: PredicateNode::Expression(expression),
             is_positive: true,
         };
-        let (Some(constraint), _) = infer_narrowing_constraints(db, predicate, place) else {
+        let (Some(constraint), _) = infer_narrowing_constraints(db, env, predicate, place) else {
             continue;
         };
         // narrowing `object` rather than the place's own type keeps a hole out of its own bound
         let narrowed = NarrowingConstraint::intersection(Type::object())
             .merge_constraint_and(constraint)
-            .evaluate_constraint_type(db);
-        if !narrowed.is_object() && !narrowed.is_never() && !narrowed.has_typevar(db) {
+            .evaluate_constraint_type(db, env);
+        if !narrowed.is_object() && !narrowed.is_never() && !narrowed.has_typevar(db, env) {
             asserted.push(narrowed);
         }
     }
@@ -458,6 +487,7 @@ fn asserted_types<'db>(
 /// to be reachable.
 fn asserted_parameter_types<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     index: &ty_python_core::SemanticIndex<'db>,
     body_scope: ScopeId<'db>,
     node: &ast::StmtFunctionDef,
@@ -489,14 +519,14 @@ fn asserted_parameter_types<'db>(
             is_positive: true,
         };
         for (place_id, definition) in &parameters {
-            let (Some(constraint), _) = infer_narrowing_constraints(db, predicate, *place_id)
+            let (Some(constraint), _) = infer_narrowing_constraints(db, env, predicate, *place_id)
             else {
                 continue;
             };
             // narrowing `object` rather than the hole keeps the hole out of its own bound
             let narrowed = NarrowingConstraint::intersection(Type::object())
                 .merge_constraint_and(constraint)
-                .evaluate_constraint_type(db);
+                .evaluate_constraint_type(db, env);
             if !narrowed.is_object() && !narrowed.is_never() {
                 asserted.push((*definition, narrowed));
             }
@@ -558,6 +588,7 @@ struct PathUses<'db> {
 /// bound intersects its protocol with the types it was forwarded into.
 fn path_bounds<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     uses: FxHashMap<MemberPath<'db>, PathUses<'db>>,
 ) -> Vec<(Definition<'db>, Type<'db>)> {
     let mut uses: Vec<_> = uses.into_iter().collect();
@@ -566,7 +597,7 @@ fn path_bounds<'db>(
     let mut resolved: FxHashMap<MemberPath<'db>, Type<'db>> = FxHashMap::default();
     let mut entries = Vec::new();
     for (path, path_uses) in uses {
-        let mut bound = IntersectionBuilder::new(db);
+        let mut bound = IntersectionBuilder::new(db, env);
         let mut constrained = false;
 
         if !path_uses.members.is_empty() {
@@ -589,7 +620,7 @@ fn path_bounds<'db>(
                     (name, member)
                 })
                 .collect();
-            bound = bound.add_positive(Type::recovered_protocol(db, members));
+            bound = bound.add_positive(Type::recovered_protocol(db, env, members));
             constrained = true;
         }
         for value in path_uses.value {
@@ -616,7 +647,7 @@ fn parameter_definition_name<'db>(db: &'db dyn Db, parameter: Definition<'db>) -
     else {
         return None;
     };
-    let module = parsed_module(db, parameter.file(db)).load(db);
+    let module = parsed_module(db, parameter.program_file(db).python_file(db)).load(db);
     Some(node.node(&module).parameter.name.id.clone())
 }
 
@@ -649,6 +680,7 @@ fn record_captured_names_in_expr(expr: &Expr, into: &mut FxHashSet<Name>) {
 /// that value, and is it narrowed — are asked of its bindings instead.
 struct UseCollector<'db, F> {
     db: &'db dyn Db,
+    env: ProgramEnvironment<'db>,
     file: File,
     use_def: &'db UseDefMap<'db>,
     expression_type: F,
@@ -698,10 +730,11 @@ where
     /// *program* states, written as `protocol(...)` or established by a narrowing, is a
     /// requirement like any other and stays.
     fn portable(&self, ty: Type<'db>) -> Option<Type<'db>> {
-        (!ty.has_typevar_or_typevar_instance(self.db)
+        let env = self.env.clone();
+        (!ty.has_typevar_or_typevar_instance(self.db, &env)
             && !ty.is_dynamic()
             && !ty.is_object()
-            && !ty.mentions_recovered_protocol(self.db))
+            && !ty.mentions_recovered_protocol(self.db, &env))
         .then_some(ty)
     }
 
@@ -783,6 +816,7 @@ where
     /// The value a *name* stands for: the parameter's own hole, or a local a value at some path
     /// was assigned to.
     fn name_path(&self, expr: &Expr) -> Option<MemberPath<'db>> {
+        let db = self.db;
         if let Some(parameter) = self.hole(expr) {
             return Some(MemberPath::parameter(parameter));
         }
@@ -798,7 +832,7 @@ where
         // the body being inferred would change from one round of this analysis to the next
         let mut bindings = self
             .use_def
-            .bindings_at_use(name.scoped_use_id(self.db, self.file));
+            .bindings_at_use(name.scoped_use_id(self.db, db.program_file(self.file)));
         let binding = bindings.next()?;
         (bindings.next().is_none()
             && binding.binding.definition().is_some()
@@ -833,6 +867,7 @@ where
     /// That parameter type serves twice: an argument that *is* a hole has to fit it, and an
     /// argument that reads a member off a hole makes that member's value have to fit it.
     fn visit_call_arguments(&mut self, call: &ast::ExprCall) {
+        let env = self.env.clone();
         // a splatted argument hands the callee its *elements*, or its values under their own
         // names, so the parameter it lands on says nothing about the argument itself. taking
         // that parameter as a requirement would bound a hole by what it is expected to contain
@@ -854,7 +889,7 @@ where
             .any(|(argument, splatted)| !splatted && self.path(argument).is_some());
         let parameter_types = if constrains_a_hole {
             let callee = (self.expression_type)(&call.func);
-            call_parameter_types(self.db, callee, &call.arguments, |expr| {
+            call_parameter_types(self.db, &env, callee, &call.arguments, |expr| {
                 (self.expression_type)(expr)
             })
             .unwrap_or_default()
@@ -984,16 +1019,18 @@ where
 /// argument is well-defined.
 fn call_parameter_types<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     callee: Type<'db>,
     arguments: &ast::Arguments,
     expression_type: impl Fn(&Expr) -> Type<'db>,
 ) -> Option<Vec<Option<Type<'db>>>> {
     let call_arguments = CallArguments::from_arguments_typed(arguments, expression_type);
     let bindings = callee
-        .bindings(db)
-        .match_parameters(db, &call_arguments)
+        .bindings(db, env)
+        .match_parameters(db, env, &call_arguments)
         .check_types(
             db,
+            env,
             &ConstraintSetBuilder::new(),
             &call_arguments,
             TypeContext::default(),
@@ -1022,6 +1059,7 @@ pub(crate) fn can_implicitly_return_none<'db>(db: &'db dyn Db, use_def: &UseDefM
 /// this never descends into one. A class body is skipped for the same reason.
 struct BodyValueCollector<'db, F> {
     db: &'db dyn Db,
+    env: ProgramEnvironment<'db>,
     expression_type: F,
     returns: Vec<Type<'db>>,
     yields: Vec<Type<'db>>,
@@ -1032,6 +1070,7 @@ where
     F: Fn(&Expr) -> Type<'db>,
 {
     fn visit_stmt(&mut self, stmt: &Stmt) {
+        let env = self.env.clone();
         match stmt {
             // a nested scope returns and yields on its own account. its
             // decorators, defaults and bases do run here, but none of them can
@@ -1044,7 +1083,7 @@ where
                         self.visit_expr(value);
                         (self.expression_type)(value)
                     }
-                    None => Type::none(self.db),
+                    None => Type::none(self.db, &env),
                 };
                 self.returns.push(returned);
             }
@@ -1054,6 +1093,7 @@ where
     }
 
     fn visit_expr(&mut self, expr: &Expr) {
+        let env = self.env.clone();
         match expr {
             // each of these opens a scope of its own, which cannot contain a
             // `return` and (since 3.8) cannot contain a `yield` either
@@ -1066,7 +1106,7 @@ where
             Expr::Yield(yield_expr) => {
                 self.yields.push(match yield_expr.value.as_deref() {
                     Some(value) => (self.expression_type)(value),
-                    None => Type::none(self.db),
+                    None => Type::none(self.db, &env),
                 });
             }
 
@@ -1074,8 +1114,8 @@ where
             Expr::YieldFrom(yield_from) => {
                 self.yields.push(
                     (self.expression_type)(&yield_from.value)
-                        .iterate(self.db)
-                        .homogeneous_element_type(self.db),
+                        .iterate(self.db, &env)
+                        .homogeneous_element_type(self.db, &env),
                 );
             }
 

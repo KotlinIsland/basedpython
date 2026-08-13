@@ -496,7 +496,7 @@ class Handler(Filterer):
 
     level: int  # undocumented
     formatter: Formatter | None  # undocumented
-    lock: threading.Lock | None  # undocumented
+    lock: threading.RLock | None  # undocumented
     name: str | None  # undocumented
     init(self, level: _Level = 0):
         """
@@ -872,7 +872,7 @@ class LogRecord:
         """
 
     # Allows setting contextual information on LogRecord objects as per the docs, see #7833
-    override def __setattr__(self, name: str, value: dynamic, /) -> None
+    override def __setattr__(self, name: str, value: dynamic, /)
 
 
 class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:

@@ -28,4 +28,3 @@ B018 Found useless expression. Either assign it to a variable or remove it.
 28 |     1  # B018
 29 |     x.attr  # B018
    |     ^^^^^^
-   |

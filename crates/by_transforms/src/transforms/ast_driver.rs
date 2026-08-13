@@ -397,8 +397,11 @@ pub(crate) fn run_against_source<'a>(
         SemDb::Project(db, f) => (*db, *f),
         SemDb::Local(db, f) => (db, *f),
     };
-    let parsed_handle = ruff_db::parsed::parsed_module(sem_db, sem_file).load(sem_db);
-    let semantic_model = ty_python_semantic::SemanticModel::new(sem_db, sem_file);
+    let parsed_handle =
+        ruff_db::parsed::parsed_module(sem_db, sem_db.program_file(sem_file).python_file(sem_db))
+            .load(sem_db);
+    let semantic_model =
+        ty_python_semantic::SemanticModel::new(sem_db, sem_db.program_file(sem_file));
 
     // identity line table for the no-change early returns: stripping variance
     // is within-line, so every line still maps to itself

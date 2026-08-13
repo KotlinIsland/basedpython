@@ -33,9 +33,15 @@ final-status-level = "slow"
 # well clear of the current cost rather than just above it. `type def` blocks are
 # the most expensive kind, because transpiling one evaluates its type functions,
 # and each evaluation spawns an interpreter.
+#
+# It had drifted back to "just above it": 279.6s on main and 284.0s after the
+# 2026-08-13 upstream merge, against a 360s ceiling. Runner speed varies by more
+# than the 21% of headroom that left, and the same commit timed out at 360s on two
+# runs out of three while passing at 284s on the third. 10 minutes puts the cost
+# back under half the ceiling and still catches a deadlock.
 [[profile.ci.overrides]]
 filter = 'test(clean_mdtest_blocks_run)'
-slow-timeout = { period = "60s", terminate-after = 6 }
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 # External-dependency mdtests provision a real virtualenv with `uv` (a network
 # install of the framework plus its stubs) before type-checking, so on the fork's

@@ -15,13 +15,11 @@ info[inlay-hint-location]: Inlay Hint Target
   |
 2 | def sql(query: str) -> int:
   |         ^^^^^
-  |
 info: Source
  --> main2.py:6:10
   |
 6 | b = sql([query=]"select")
   |          ^^^^^
-  |
 
 ---------------------------------------------
 info[inlay-hint-edit]: Inlay hint edits

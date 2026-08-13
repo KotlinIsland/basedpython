@@ -47,6 +47,7 @@ SECTIONS: list[Section] = [
     Section("Configuring Ruff", "configuration.md", generated=False),
     Section("Preview", "preview.md", generated=False),
     Section("Rules", "rules.md", generated=True),
+    Section("Default Rules", "default-rules.md", generated=True),
     Section("Settings", "settings.md", generated=True),
     Section("Versioning", "versioning.md", generated=False),
     Section("Integrations", "integrations.md", generated=False),
@@ -71,6 +72,7 @@ LINK_REWRITES: dict[str, str] = {
     # ),
     # "https://docs.astral.sh/ruff/installation/": "installation.md",
     # "https://docs.astral.sh/ruff/rules/": "rules.md",
+    # "https://docs.astral.sh/ruff/default-rules/": "default-rules.md",
     # "https://docs.astral.sh/ruff/settings/": "settings.md",
     # "#whos-using-ruff": "https://github.com/astral-sh/ruff#whos-using-ruff",
     # "https://docs.astral.sh/ruff/preview/": "preview.md",
@@ -212,6 +214,11 @@ def main():
             elif filename == "rules.md":
                 file_content = subprocess.check_output(
                     ["cargo", "dev", "generate-rules-table"],
+                    encoding="utf-8",
+                )
+            elif filename == "default-rules.md":
+                file_content = subprocess.check_output(
+                    ["cargo", "dev", "generate-default-rules"],
                     encoding="utf-8",
                 )
             else:

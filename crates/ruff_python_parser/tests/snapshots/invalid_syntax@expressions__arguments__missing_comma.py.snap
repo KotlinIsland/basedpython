@@ -65,4 +65,3 @@ Module(
   |
 1 | call(x y)
   |        ^ Syntax Error: Expected `,`, found name
-  |

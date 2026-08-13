@@ -1,11 +1,11 @@
 """A Future class similar to the one in PEP 3148."""
 
 import sys
-from _asyncio import Future as Future
+from _asyncio export Future
 from concurrent.futures._base import Future as _ConcurrentFuture
 from typing import TypeVar
 
-from .base_futures import isfuture as isfuture
+from .base_futures export isfuture
 from .events import AbstractEventLoop
 
 # Keep asyncio.__all__ updated with any changes to __all__ here

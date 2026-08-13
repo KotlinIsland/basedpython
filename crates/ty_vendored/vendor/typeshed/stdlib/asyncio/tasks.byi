@@ -2,12 +2,12 @@
 
 import concurrent.futures
 import sys
-from _asyncio import (
-    Task as Task,
-    _enter_task as _enter_task,
-    _leave_task as _leave_task,
-    _register_task as _register_task,
-    _unregister_task as _unregister_task,
+from _asyncio export (
+    Task,
+    _enter_task,
+    _leave_task,
+    _register_task,
+    _unregister_task,
 )
 from collections.abc import AsyncIterator, Awaitable, Coroutine, Generator, Iterable, Iterator
 from typing import Final, Literal, Protocol, TypeAlias, TypeVar, type_check_only
@@ -426,7 +426,7 @@ else:
         """
 
 if sys.version_info >= (3, 12):
-    from _asyncio import current_task as current_task
+    from _asyncio export current_task
 else:
     def current_task(loop: AbstractEventLoop | None = None) -> Task[dynamic] | None:
         """Return a currently executed task."""

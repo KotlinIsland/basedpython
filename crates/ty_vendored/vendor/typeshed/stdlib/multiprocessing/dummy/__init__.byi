@@ -3,19 +3,19 @@ import sys
 import threading
 import weakref
 from collections.abc import Iterable, Mapping, Sequence
-from queue import Queue as Queue
-from threading import (
-    Barrier as Barrier,
-    BoundedSemaphore as BoundedSemaphore,
-    Condition as Condition,
-    Event as Event,
-    Lock as Lock,
-    RLock as RLock,
-    Semaphore as Semaphore,
+from queue export Queue
+from threading export (
+    Barrier,
+    BoundedSemaphore,
+    Condition,
+    Event,
+    Lock,
+    RLock,
+    Semaphore,
 )
 from typing import Literal
 
-from .connection import Pipe as Pipe
+from .connection export Pipe
 
 __all__ = [
     "Process",
@@ -69,7 +69,7 @@ Process = DummyProcess
 class Namespace:
     init(self, **kwds: dynamic)
     def __getattr__(self, name: str, /) -> dynamic
-    override def __setattr__(self, name: str, value: dynamic, /) -> None
+    override def __setattr__(self, name: str, value: dynamic, /)
 
 class Value:
     _typecode: dynamic

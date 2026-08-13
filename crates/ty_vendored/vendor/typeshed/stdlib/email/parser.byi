@@ -3,7 +3,7 @@
 from _typeshed import SupportsRead
 from collections.abc import Callable
 from email._policybase import _MessageT
-from email.feedparser import BytesFeedParser as BytesFeedParser, FeedParser as FeedParser
+from email.feedparser export BytesFeedParser, FeedParser
 from email.message import Message
 from email.policy import Policy
 from io import _WrappedBuffer

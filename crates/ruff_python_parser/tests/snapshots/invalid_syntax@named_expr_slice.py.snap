@@ -269,7 +269,6 @@ Module(
 3 | lst[1:x:=1]
 4 | lst[1:3:x:=1]
   |          ^^ Syntax Error: Expected `]`, found `:=`
-  |
 
 
   |
@@ -277,7 +276,6 @@ Module(
 3 | lst[1:x:=1]
 4 | lst[1:3:x:=1]
   |             ^ Syntax Error: Expected a statement
-  |
 
 
   |
@@ -285,4 +283,3 @@ Module(
 3 | lst[1:x:=1]
 4 | lst[1:3:x:=1]
   |              ^ Syntax Error: Expected a statement
-  |

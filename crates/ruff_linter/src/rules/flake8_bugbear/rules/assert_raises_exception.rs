@@ -110,7 +110,7 @@ pub(crate) fn assert_raises_exception(checker: &Checker, items: &[WithItem]) {
         let Expr::Call(ast::ExprCall {
             func,
             arguments,
-            range: _,
+            range_start: _,
             node_index: _,
             is_cast: _,
             is_checked_cast: _,
@@ -133,18 +133,16 @@ pub(crate) fn assert_raises_exception(checker: &Checker, items: &[WithItem]) {
 }
 
 /// B017 (call form)
-pub(crate) fn assert_raises_exception_call(
-    checker: &Checker,
-    ast::ExprCall {
+pub(crate) fn assert_raises_exception_call(checker: &Checker, call: &ast::ExprCall) {
+    let ast::ExprCall {
         func,
         arguments,
-        range,
+        range_start: _,
         node_index: _,
         is_cast: _,
         is_checked_cast: _,
         is_string_tag: _,
-    }: &ast::ExprCall,
-) {
+    } = call;
     let semantic = checker.semantic();
 
     if arguments.args.len() < 2 && arguments.find_argument("func", 1).is_none() {
@@ -152,6 +150,6 @@ pub(crate) fn assert_raises_exception_call(
     }
 
     if let Some(exception) = detect_blind_exception(semantic, func.as_ref(), arguments) {
-        checker.report_diagnostic(AssertRaisesException { exception }, *range);
+        checker.report_diagnostic(AssertRaisesException { exception }, call.range());
     }
 }

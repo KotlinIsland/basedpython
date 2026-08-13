@@ -521,7 +521,6 @@ warning[overlapping-condition]: This condition does not distinguish between `Lit
   |
 5 |     if not a: ...
   |        ^^^^^
-  |
 info: `bool | None` is tested for falsiness
 help: Compare against the specific value instead of testing truthiness
 
@@ -531,7 +530,6 @@ warning[redundant-condition]: This condition is always true
   |
 9 |     if a: ...
   |        ^
-  |
 info: `Literal[True]` is always truthy
 
 
@@ -540,7 +538,6 @@ warning[redundant-boolean-comparison]: Comparison of a `bool` with `False` is re
    |
 13 |     if a == False: ...
    |        ^^^^^^^^^^
-   |
 info: `bool` already is the value this comparison produces
 help: Negate the operand with `not` instead
 ```

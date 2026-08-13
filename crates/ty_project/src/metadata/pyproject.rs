@@ -260,11 +260,11 @@ pub struct Project {
     ///
     /// Note: Intentionally option to be more permissive during deserialization.
     /// `PackageMetadata::from_pyproject` reports missing names.
-    pub name: Option<RangedValue<PackageName>>,
+    pub(crate) name: Option<RangedValue<PackageName>>,
     /// The version of the project
-    pub version: Option<RangedValue<Version>>,
+    pub(crate) version: Option<RangedValue<Version>>,
     /// The Python versions this project is compatible with.
-    pub requires_python: Option<RangedValue<VersionSpecifiers>>,
+    pub(crate) requires_python: Option<RangedValue<VersionSpecifiers>>,
     /// The requirements installed alongside the project.
     ///
     /// Kept as written rather than as parsed requirements: one entry ty cannot
@@ -395,7 +395,7 @@ pub struct PackageName(String);
 
 impl PackageName {
     /// Create a validated, normalized package name.
-    pub(crate) fn new(name: String) -> Result<Self, InvalidPackageNameError> {
+    fn new(name: String) -> Result<Self, InvalidPackageNameError> {
         if name.is_empty() {
             return Err(InvalidPackageNameError::Empty);
         }
@@ -448,7 +448,7 @@ impl PackageName {
     }
 
     /// Returns the underlying package name.
-    pub(crate) fn as_str(&self) -> &str {
+    fn as_str(&self) -> &str {
         &self.0
     }
 }

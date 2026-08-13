@@ -52,4 +52,8 @@ class Collector(ABC):
         """Collect data about a failed sample attempt."""
 
     abstract def export(self, filename: StrOrBytesPath):
-        """Export collected data to a file."""
+        """Export collected data.
+
+        Returns:
+            bool: True if output was generated, False if there was no data to export.
+        """

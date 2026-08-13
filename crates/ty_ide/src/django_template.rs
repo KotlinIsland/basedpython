@@ -60,6 +60,8 @@ use crate::semantic_tokens::SemanticTokens;
 use crate::{FoldingRange, InlayHintSettings, NavigationTargets, RangedValue, ReferenceTarget};
 
 use index::TemplateIndex;
+use ty_python_core::ProgramFile;
+use ty_python_semantic::ProgramEnvironment;
 
 /// how many `{% extends %}` hops a parent chain is followed
 const MAX_INHERITANCE_DEPTH: usize = 16;
@@ -222,8 +224,12 @@ pub fn django_template_diagnostics(db: &dyn Db, file: File) -> Vec<Diagnostic> {
 /// the file's suppression comments are deliberately *not* applied: these are
 /// folded into the type checker's own diagnostics, which is where a `ty: ignore`
 /// is honoured and counted used — see [`ty_python_semantic::check_file_with`].
-pub fn django_python_diagnostics(db: &dyn Db, file: File) -> Vec<Diagnostic> {
-    routes::diagnostics(db, file)
+pub fn django_python_diagnostics(
+    db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
+    file: File,
+) -> Vec<Diagnostic> {
+    routes::diagnostics(db, env, file)
 }
 
 /// django's checks, as something [`ty_project::Project::check`] can run
@@ -266,8 +272,9 @@ impl ty_project::ProjectChecker for DjangoChecker {
         django_template_diagnostics(db, file)
     }
 
-    fn check_python_file(&self, db: &dyn Db, file: File) -> Vec<Diagnostic> {
-        django_python_diagnostics(db, file)
+    fn check_python_file(&self, db: &dyn Db, file: ProgramFile<'_>) -> Vec<Diagnostic> {
+        let env = &ProgramEnvironment::from_file(file);
+        django_python_diagnostics(db, env, file.file(db))
     }
 
     fn django_settings_file(&self, db: &dyn Db) -> Option<File> {
@@ -339,16 +346,18 @@ pub fn django_references(
 /// template
 pub fn django_template_signature_help(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     file: File,
     offset: TextSize,
 ) -> Option<TemplateSignature> {
     let source = source_text(db, file);
-    signature_help::signature_help(db, template_index(db, file), source.as_str(), offset)
+    signature_help::signature_help(db, env, template_index(db, file), source.as_str(), offset)
 }
 
 /// the hints `range` of `file` shows, read as a django template
 pub fn django_template_inlay_hints(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     file: File,
     range: TextRange,
     settings: &InlayHintSettings,
@@ -356,6 +365,7 @@ pub fn django_template_inlay_hints(
     let source = source_text(db, file);
     inlay_hints::inlay_hints(
         db,
+        env,
         file,
         template_index(db, file),
         source.as_str(),
@@ -392,11 +402,19 @@ pub fn django_python_code_lenses(db: &dyn Db, file: File) -> Vec<DjangoCodeLens>
 /// the completions for `offset` in `file`, read as a django template
 pub fn django_template_completions(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     file: File,
     offset: TextSize,
 ) -> Vec<TemplateCompletion> {
     let source = source_text(db, file);
-    completion::completions(db, file, template_index(db, file), source.as_str(), offset)
+    completion::completions(
+        db,
+        env,
+        file,
+        template_index(db, file),
+        source.as_str(),
+        offset,
+    )
 }
 
 #[cfg(test)]
@@ -416,6 +434,7 @@ pub(crate) mod tests {
     use ty_python_core::program::{FallibleStrategy, Program, ProgramSettings};
     use ty_python_semantic::PythonVersionWithSource;
     use ty_python_semantic::lint::Level;
+    use ty_python_semantic::{Db as _, ProgramEnvironment};
 
     use crate::MarkupKind;
 
@@ -547,6 +566,11 @@ pub(crate) mod tests {
     }
 
     impl TemplateTest {
+        /// the environment the file under test is checked in
+        pub(crate) fn program_environment(&self) -> ProgramEnvironment<'_> {
+            ProgramEnvironment::from_file(self.db.program_file(self.file))
+        }
+
         /// build a project from `(path, contents)` pairs
         pub(crate) fn new(sources: &[(&str, &str)]) -> Self {
             let mut db = TestDb::new(ProjectMetadata::new("test", SystemPathBuf::from("/")));
@@ -617,14 +641,15 @@ pub(crate) mod tests {
             .to_search_paths(db.system(), db.vendored(), &FallibleStrategy)
             .expect("valid search paths");
 
-            Program::from_settings(
-                &db,
-                ProgramSettings {
-                    python_version: PythonVersionWithSource::default(),
-                    python_platform: PythonPlatform::default(),
-                    search_paths,
-                },
-            );
+            let settings = ProgramSettings {
+                python_version: PythonVersionWithSource::default(),
+                python_platform: PythonPlatform::default(),
+                search_paths,
+            };
+            Program::from_settings(&db, settings.clone());
+            // a project-level query (`has_django`) resolves against the project's own
+            // settings rather than a file's, so they have to carry the search paths too
+            ty_project::Db::project(&db).update_program(&mut db, settings);
 
             db.files().try_add_root(&db, &root, FileRootKind::Project);
             db.files()
@@ -692,9 +717,10 @@ pub(crate) mod tests {
         pub(crate) fn python_diagnostics(&self, path: &str) -> Vec<String> {
             let file = system_path_to_file(&self.db, self.root.join(path))
                 .expect("the file to have been written");
+            let env = &ProgramEnvironment::from_file(self.db.program_file(file));
             let source = ruff_db::source::source_text(&self.db, file);
 
-            django_python_diagnostics(&self.db, file)
+            django_python_diagnostics(&self.db, env, file)
                 .into_iter()
                 .map(|diagnostic| {
                     let range = diagnostic
@@ -706,7 +732,7 @@ pub(crate) mod tests {
                         "{} {:?}: {} [{}]",
                         diagnostic.id(),
                         diagnostic.severity(),
-                        diagnostic.primary_message(),
+                        diagnostic.headline_message(),
                         &source[range]
                     )
                 })
@@ -729,9 +755,10 @@ pub(crate) mod tests {
 
             let file = system_path_to_file(&self.db, self.root.join(path))
                 .expect("the file to have been written");
-            let external = django_python_diagnostics(&self.db, file);
+            let env = &ProgramEnvironment::from_file(self.db.program_file(file));
+            let external = django_python_diagnostics(&self.db, env, file);
 
-            ty_python_semantic::check_file_with(&self.db, file, external)
+            ty_python_semantic::check_file_with(&self.db, self.db.program_file(file), external)
                 .expect("the file to be readable")
                 .iter()
                 // the mock django the fixtures install is annotated no further than
@@ -743,7 +770,7 @@ pub(crate) mod tests {
                         .as_lint()
                         .is_some_and(|name| REPORTED.contains(&name.as_str()))
                 })
-                .map(|diagnostic| format!("{}: {}", diagnostic.id(), diagnostic.primary_message()))
+                .map(|diagnostic| format!("{}: {}", diagnostic.id(), diagnostic.headline_message()))
                 .collect()
         }
 
@@ -764,7 +791,7 @@ pub(crate) mod tests {
                         "{} {:?}: {} [{}]",
                         diagnostic.id(),
                         diagnostic.severity(),
-                        diagnostic.primary_message(),
+                        diagnostic.headline_message(),
                         &source[range]
                     )
                 })
@@ -795,7 +822,8 @@ pub(crate) mod tests {
 
         /// the labels of the completions at the cursor, in the order offered
         pub(crate) fn completions(&self) -> Vec<String> {
-            django_template_completions(&self.db, self.file, self.offset)
+            let env = &self.program_environment();
+            django_template_completions(&self.db, env, self.file, self.offset)
                 .into_iter()
                 .map(|completion| completion.label)
                 .collect()
@@ -803,7 +831,8 @@ pub(crate) mod tests {
 
         /// the labels of the completions at the cursor django will not render
         pub(crate) fn unusable(&self) -> Vec<String> {
-            django_template_completions(&self.db, self.file, self.offset)
+            let env = &self.program_environment();
+            django_template_completions(&self.db, env, self.file, self.offset)
                 .into_iter()
                 .filter(|completion| completion.unusable)
                 .map(|completion| completion.label)
@@ -812,7 +841,8 @@ pub(crate) mod tests {
 
         /// the completions at the cursor, rendered as `label — detail`
         pub(crate) fn detailed(&self) -> Vec<String> {
-            django_template_completions(&self.db, self.file, self.offset)
+            let env = &self.program_environment();
+            django_template_completions(&self.db, env, self.file, self.offset)
                 .into_iter()
                 .map(|completion| match completion.detail {
                     Some(detail) => format!("{} — {detail}", completion.label),
@@ -851,7 +881,9 @@ pub(crate) mod tests {
         /// the signature help at the cursor, as
         /// `label [parameter] — documentation`
         pub(crate) fn signature(&self) -> String {
-            let Some(signature) = django_template_signature_help(&self.db, self.file, self.offset)
+            let env = &self.program_environment();
+            let Some(signature) =
+                django_template_signature_help(&self.db, env, self.file, self.offset)
             else {
                 return "no signature".to_string();
             };
@@ -898,9 +930,10 @@ pub(crate) mod tests {
         }
 
         fn rendered_hints(&self, range: TextRange, settings: &InlayHintSettings) -> Vec<String> {
+            let env = &self.program_environment();
             let source = ruff_db::source::source_text(&self.db, self.file);
 
-            django_template_inlay_hints(&self.db, self.file, range, settings)
+            django_template_inlay_hints(&self.db, env, self.file, range, settings)
                 .into_iter()
                 .map(|hint| {
                     let line_start = source.as_str()[..usize::from(hint.position)]

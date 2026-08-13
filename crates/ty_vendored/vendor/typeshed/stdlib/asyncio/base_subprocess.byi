@@ -45,7 +45,7 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
     override def get_pid(self) -> int | None
     override def get_pipe_transport(self, fd: int) -> _File
     def _check_proc(self)  # undocumented
-    override def send_signal(self, signal: int) -> None
+    override def send_signal(self, signal: int)
     async def _connect_pipes(self, waiter: futures.Future[dynamic] | None) -> None  # undocumented
     def _call(self, cb: (...) -> object, *data: dynamic)  # undocumented
     def _pipe_connection_lost(self, fd: int, exc: BaseException | None)  # undocumented

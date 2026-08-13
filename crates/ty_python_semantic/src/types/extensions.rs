@@ -30,6 +30,7 @@ use ty_python_core::{global_scope, place_table, semantic_index};
 
 use crate::Db;
 use crate::place::{builtins_symbol, global_symbol};
+use crate::types::ProgramEnvironment;
 use crate::types::call::CallArguments;
 use crate::types::class::{ClassLiteral, ClassType, KnownClass, StaticClassLiteral};
 use crate::types::class_base::ClassBase;
@@ -41,6 +42,7 @@ use crate::types::generics::Specialization;
 use crate::types::member::class_member;
 use crate::types::typevar::{BoundTypeVarInstance, TypeVarBoundOrConstraints};
 use crate::types::{MemberLookupPolicy, Type};
+use ty_module_resolver::ImportingFile;
 
 /// the symbol-name prefix the semantic index gives extension declarations
 pub(crate) const EXTENSION_SYMBOL_PREFIX: &str = "<extension:";
@@ -56,7 +58,15 @@ const PRELUDE_MODULE: &str = "ty_extensions._prelude";
 /// when the vendored stub is unavailable
 pub(crate) fn prelude_file(db: &dyn Db, from_file: File) -> Option<File> {
     let name = ModuleName::new_static(PRELUDE_MODULE)?;
-    resolve_module(db, from_file, &name)?.file(db)
+    resolve_module(
+        db,
+        ImportingFile::File(
+            from_file,
+            db.program_file(from_file).resolver_environment(db),
+        ),
+        &name,
+    )?
+    .file(db)
 }
 
 /// whether `extension` is declared in the basedpython prelude. the transpiler
@@ -88,7 +98,7 @@ pub(crate) fn extensions_in_module(db: &dyn Db, file: File) -> Box<[StaticClassL
     if !file.source_type(db).is_basedpython() {
         return Box::default();
     }
-    let global = global_scope(db, file);
+    let global = global_scope(db, db.program_file(file));
     let mut extensions = Vec::new();
     for symbol in place_table(db, global).symbols() {
         if !symbol.name().starts_with(EXTENSION_SYMBOL_PREFIX) {
@@ -130,11 +140,15 @@ pub(crate) fn applicable_extensions(db: &dyn Db, file: File) -> Box<[StaticClass
     let mut extensions: Vec<StaticClassLiteral<'_>> = extensions_in_module(db, file).to_vec();
     // `imported_modules` deliberately records only `import mod` (see its docs),
     // so the `from mod import X` forms are collected from the file's own statements
-    let imported = semantic_index(db, file)
+    let imported = semantic_index(db, db.program_file(file))
         .imported_modules()
         .chain(crate::types::conversions::from_imported_modules(db, file));
     for module_name in imported {
-        let Some(module) = resolve_module(db, file, module_name) else {
+        let Some(module) = resolve_module(
+            db,
+            ImportingFile::File(file, db.program_file(file).resolver_environment(db)),
+            module_name,
+        ) else {
             continue;
         };
         let Some(module_file) = module.file(db) else {
@@ -226,12 +240,17 @@ pub(crate) fn extended_class<'db>(
     db: &'db dyn Db,
     extension: StaticClassLiteral<'db>,
 ) -> Option<ClassLiteral<'db>> {
+    let env = &ProgramEnvironment::from_file(extension.program_file(db));
     let name = extension.name(db);
     let file = extension.file(db);
-    let resolved = global_symbol(db, file, name)
+    let resolved = global_symbol(db, db.program_file(file), name)
         .place
         .ignore_possibly_undefined()
-        .or_else(|| builtins_symbol(db, name).place.ignore_possibly_undefined())?;
+        .or_else(|| {
+            builtins_symbol(db, env, name)
+                .place
+                .ignore_possibly_undefined()
+        })?;
     let literal = resolved.as_class_literal()?;
     // an extension of an extension makes no sense; the mangled binding makes
     // this unreachable in practice, but be explicit
@@ -361,11 +380,12 @@ pub(crate) struct ExtensionMemberResolution<'db> {
 /// members — the caller only asks after normal lookup came up undefined
 pub(crate) fn resolve_extension_member<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     receiver: Type<'db>,
     name: &str,
 ) -> Option<ExtensionMemberResolution<'db>> {
-    let mut resolutions = resolve_extension_members(db, file, receiver, name).into_iter();
+    let mut resolutions = resolve_extension_members(db, env, file, receiver, name).into_iter();
     let mut resolved = resolutions.next()?;
     resolved.ambiguous_with = resolutions.next().map(|other| other.extension);
     Some(resolved)
@@ -379,6 +399,7 @@ pub(crate) fn resolve_extension_member<'db>(
 /// extensions disagree — needs each one's own resolution
 pub(crate) fn resolve_extension_members<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     receiver: Type<'db>,
     name: &str,
@@ -394,7 +415,7 @@ pub(crate) fn resolve_extension_members<'db>(
 
     // an instance receiver serves every member kind; a class-object receiver
     // serves only `static def` / `class def` members
-    let (receiver_class, instance) = if let Some(class) = receiver.nominal_class(db) {
+    let (receiver_class, instance) = if let Some(class) = receiver.nominal_class(db, env) {
         (class, Some(receiver))
     } else {
         match receiver.to_class_type(db) {
@@ -408,21 +429,24 @@ pub(crate) fn resolve_extension_members<'db>(
     // class is not in the interface's lattice
     let bind = |member: Type<'db>, conformed_as: Option<ClassType<'db>>| {
         let bind_instance = match (conformed_as, instance) {
-            (Some(protocol), Some(_)) => Some(Type::instance(db, protocol)),
+            (Some(protocol), Some(_)) => Some(Type::instance(db, env, protocol)),
             (_, other) => other,
         };
         let owner = match bind_instance {
-            Some(instance_ty) => instance_ty.to_meta_type(db),
+            Some(instance_ty) => instance_ty.to_meta_type(db, env),
             None => receiver,
         };
         member
-            .try_call_dunder_get(db, bind_instance, owner)
-            .map_or(member, |(ty, _)| ty)
+            .try_call_dunder_get(db, env, bind_instance, owner)
+            .ok()
+            .flatten()
+            .map_or(member, |result| result.return_type)
     };
 
     let mut resolved = Vec::new();
     for &extension in candidates {
-        let Some(applicable) = applicable_member(db, file, extension, receiver_class, name) else {
+        let Some(applicable) = applicable_member(db, env, file, extension, receiver_class, name)
+        else {
             continue;
         };
         let member = applicable.member;
@@ -475,6 +499,7 @@ fn is_conformance<'db>(db: &'db dyn Db, extension: StaticClassLiteral<'db>) -> b
 /// nothing else does.
 pub(crate) fn extension_operator<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     receiver: Type<'db>,
     name: &str,
@@ -483,13 +508,13 @@ pub(crate) fn extension_operator<'db>(
     // instance fallback — so an extension answers exactly where that finds
     // nothing
     if !receiver
-        .member_lookup_with_policy(db, name, MemberLookupPolicy::NO_INSTANCE_FALLBACK)
+        .member_lookup_with_policy(db, env, name, MemberLookupPolicy::NO_INSTANCE_FALLBACK)
         .place
         .is_undefined()
     {
         return None;
     }
-    let resolution = resolve_extension_member(db, file, receiver, name)?;
+    let resolution = resolve_extension_member(db, env, file, receiver, name)?;
     // an operator is invoked, so only a method can answer one — a computed
     // property named `__pos__` would be read, not called
     matches!(resolution.kind, ExtensionMemberKind::Method).then_some(resolution)
@@ -518,19 +543,21 @@ impl<'db> ExtensionOperator<'db> {
     pub(crate) fn return_type(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         arguments: &CallArguments<'_, 'db>,
     ) -> Option<Type<'db>> {
         self.resolution
             .ty
-            .try_call(db, arguments)
+            .try_call(db, env, arguments)
             .ok()
-            .map(|bindings| bindings.return_type(db))
+            .map(|bindings| bindings.return_type(db, env))
     }
 }
 
 /// The extension supplying `op`'s dunder for a unary operator, if any.
 pub(crate) fn unary_extension_operator<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     op: ast::UnaryOp,
     operand: Type<'db>,
@@ -547,7 +574,7 @@ pub(crate) fn unary_extension_operator<'db>(
         | ast::UnaryOp::Force => return None,
     };
     Some(ExtensionOperator {
-        resolution: extension_operator(db, file, operand, dunder)?,
+        resolution: extension_operator(db, env, file, operand, dunder)?,
         member: dunder,
         reflected: false,
     })
@@ -558,19 +585,20 @@ pub(crate) fn unary_extension_operator<'db>(
 /// reflected one — the order python itself resolves in.
 pub(crate) fn binary_extension_operator<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     left: Type<'db>,
     op: ast::Operator,
     right: Type<'db>,
 ) -> Option<ExtensionOperator<'db>> {
-    extension_operator(db, file, left, op.dunder())
+    extension_operator(db, env, file, left, op.dunder())
         .map(|resolution| ExtensionOperator {
             resolution,
             member: op.dunder(),
             reflected: false,
         })
         .or_else(|| {
-            extension_operator(db, file, right, op.reflected_dunder()).map(|resolution| {
+            extension_operator(db, env, file, right, op.reflected_dunder()).map(|resolution| {
                 ExtensionOperator {
                     resolution,
                     member: op.reflected_dunder(),
@@ -585,6 +613,7 @@ pub(crate) fn binary_extension_operator<'db>(
 /// `b.__contains__(a)` — and an identity test has no dunder at all.
 pub(crate) fn comparison_extension_operator<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     left: Type<'db>,
     op: ast::CmpOp,
@@ -602,7 +631,7 @@ pub(crate) fn comparison_extension_operator<'db>(
     };
     let receiver = if reflected { right } else { left };
     Some(ExtensionOperator {
-        resolution: extension_operator(db, file, receiver, dunder)?,
+        resolution: extension_operator(db, env, file, receiver, dunder)?,
         member: dunder,
         reflected,
     })
@@ -646,6 +675,7 @@ impl<'db> ExtensionApplication<'db> {
 /// bound?
 pub(crate) fn extension_applies<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     extension: StaticClassLiteral<'db>,
     receiver_class: ClassType<'db>,
 ) -> Option<ExtensionApplication<'db>> {
@@ -657,13 +687,14 @@ pub(crate) fn extension_applies<'db>(
         ClassBase::Class(class) if class.class_literal(db) == target => Some(class),
         _ => None,
     })?;
-    applied_at(db, extension, target, target_class)
+    applied_at(db, env, extension, target, target_class)
 }
 
 /// [`extension_applies`] once the extended class has been located, with the
 /// specialization the receiver gives it
 pub(crate) fn applied_at<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     extension: StaticClassLiteral<'db>,
     target: ClassLiteral<'db>,
     target_class: ClassType<'db>,
@@ -685,7 +716,7 @@ pub(crate) fn applied_at<'db>(
             let receiver_argument = receiver_specialization
                 .and_then(|specialization| specialization.get(db, target_var))
                 .unwrap_or_else(Type::unknown);
-            if !satisfies_bound(db, receiver_argument, extension_var) {
+            if !satisfies_bound(db, env, receiver_argument, extension_var) {
                 return None;
             }
             bracket_substitution.push(receiver_argument);
@@ -724,12 +755,13 @@ struct ApplicableMember<'db> {
 /// reachable on a conforming type, exactly as they are on the protocol itself
 fn applicable_member<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     extension: StaticClassLiteral<'db>,
     receiver_class: ClassType<'db>,
     name: &str,
 ) -> Option<ApplicableMember<'db>> {
-    if let Some(application) = extension_applies(db, extension, receiver_class) {
+    if let Some(application) = extension_applies(db, env, extension, receiver_class) {
         let member = own_member(db, extension, name)?;
         return Some(ApplicableMember {
             member: application.apply(db, extension, member),
@@ -737,8 +769,8 @@ fn applicable_member<'db>(
         });
     }
     let target = extended_class(db, extension)?;
-    let conformed = conformance::conformance_for(db, file, receiver_class, target)?;
-    let application = applied_at(db, extension, target, conformed)?;
+    let conformed = conformance::conformance_for(db, env, file, receiver_class, target)?;
+    let application = applied_at(db, env, extension, target, conformed)?;
     let member = own_member(db, extension, name)?;
     Some(ApplicableMember {
         member: application.apply(db, extension, member),
@@ -749,16 +781,19 @@ fn applicable_member<'db>(
 /// does the receiver's type argument satisfy a bracket typevar's bound?
 fn satisfies_bound<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     argument: Type<'db>,
     extension_var: BoundTypeVarInstance<'db>,
 ) -> bool {
-    match extension_var.typevar(db).bound_or_constraints(db) {
+    match extension_var.typevar(db).bound_or_constraints(db, env) {
         None => true,
-        Some(TypeVarBoundOrConstraints::UpperBound(bound)) => argument.is_assignable_to(db, bound),
+        Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
+            argument.is_assignable_to(db, env, bound)
+        }
         Some(TypeVarBoundOrConstraints::Constraints(constraints)) => constraints
             .elements(db)
             .iter()
-            .any(|constraint| argument.is_assignable_to(db, *constraint)),
+            .any(|constraint| argument.is_assignable_to(db, env, *constraint)),
     }
 }
 

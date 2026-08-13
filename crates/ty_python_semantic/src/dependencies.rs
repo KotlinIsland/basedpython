@@ -250,7 +250,7 @@ pub fn import_standing<'db>(
         return ImportStanding::Unknown;
     };
 
-    let index = distribution_index(db);
+    let index = distribution_index(db, db.program_file(file).resolver_environment(db));
     if index.is_empty() {
         // nothing in the environment could be attributed to a distribution, so
         // an import being unattributable says nothing about the import
@@ -291,7 +291,9 @@ fn is_shipped(
     manifest: &DependencyManifest,
     shipped_modules: Option<&[Box<str>]>,
 ) -> bool {
-    let Some(module) = ty_module_resolver::file_to_module(db, file) else {
+    let Some(module) =
+        ty_module_resolver::file_to_module(db, db.program_file(file).resolver_file(db))
+    else {
         return false;
     };
     let Some(search_path) = module.search_path(db) else {

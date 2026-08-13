@@ -10,7 +10,6 @@ SIM103 [*] Return the condition `bool(a)` directly
 29 | |     else:
 30 | |         return False
    | |____________________^
-   |
 help: Replace with `return bool(a)`
    |
 26 | def f2():

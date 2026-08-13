@@ -514,7 +514,6 @@ Module(
 18 |
 19 | def multiple_commas_and_recovery[A,,100](): ...
    |                                    ^ Syntax Error: Expected a type parameter or the end of the type parameter list
-   |
 
 
    |
@@ -522,7 +521,6 @@ Module(
 18 |
 19 | def multiple_commas_and_recovery[A,,100](): ...
    |                                     ^^^ Syntax Error: Expected `]`, found int
-   |
 
 
    |
@@ -530,7 +528,6 @@ Module(
 18 |
 19 | def multiple_commas_and_recovery[A,,100](): ...
    |                                        ^ Syntax Error: Expected a statement
-   |
 
 
    |
@@ -538,4 +535,3 @@ Module(
 18 |
 19 | def multiple_commas_and_recovery[A,,100](): ...
    |                                         ^^ Syntax Error: Only single target (not tuple) can be annotated
-   |

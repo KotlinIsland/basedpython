@@ -15,11 +15,11 @@ class install_egg_info(Command):
     description: ClassVar[str]
     user_options: ClassVar[list[(str, str, str)]]
     install_dir: Incomplete
-    override def initialize_options(self) -> None
+    override def initialize_options(self)
     target: Incomplete
     outputs: Incomplete
-    override def finalize_options(self) -> None
-    override def run(self) -> None
+    override def finalize_options(self)
+    override def run(self)
     def get_outputs(self) -> list[str]
 
 def safe_name(name):

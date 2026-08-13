@@ -84,4 +84,3 @@ Module(
   |
 1 | type X[T: int..object] = int
   |              ^^ Syntax Error: type parameter bound ranges are not valid in `.py` files
-  |

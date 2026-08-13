@@ -30,12 +30,11 @@ from genericpath import (
 )
 
 if sys.version_info >= (3, 15):
-    from genericpath import ALL_BUT_LAST as ALL_BUT_LAST
+    from genericpath export ALL_BUT_LAST
 
 if sys.version_info >= (3, 13):
-    from genericpath import isdevdrive as isdevdrive
+    from genericpath export isdevdrive
 from os import PathLike
-from typing_extensions import LiteralString
 
 __all__ = [
     "normcase",
@@ -87,14 +86,14 @@ if sys.version_info >= (3, 13):
 
 supports_unicode_filenames: bool
 # aliases (also in os)
-curdir: LiteralString
-pardir: LiteralString
-sep: LiteralString
-altsep: LiteralString | None
-extsep: LiteralString
-pathsep: LiteralString
-defpath: LiteralString
-devnull: LiteralString
+curdir: literal str
+pardir: literal str
+sep: literal str
+altsep: literal str | None
+extsep: literal str
+pathsep: literal str
+defpath: literal str
+devnull: literal str
 
 # Overloads are necessary to work around python/mypy#17952 & python/mypy#11880
 def abspath(path: PathLike[AnyStr]) -> AnyStr:
@@ -143,7 +142,7 @@ def normpath(path: PathLike[AnyStr]) -> AnyStr:
     """Normalize path, eliminating double slashes, etc."""
 def normpath(path: AnyOrLiteralStr) -> AnyOrLiteralStr
 
-def commonpath(paths: Iterable[LiteralString]) -> LiteralString:
+def commonpath(paths: Iterable[literal str]) -> literal str:
     """Given a sequence of path names, returns the longest common sub-path."""
 def commonpath(paths: Iterable[StrPath]) -> str
 def commonpath(paths: Iterable[BytesPath]) -> bytes
@@ -151,7 +150,7 @@ def commonpath(paths: Iterable[BytesPath]) -> bytes
 # First parameter is not actually pos-only before Python 3.15,
 # but must be defined as pos-only in the stub or cross-platform code doesn't type-check,
 # as the parameter name is different in ntpath.join()
-def join(a: LiteralString, /, *paths: LiteralString) -> LiteralString:
+def join(a: literal str, /, *paths: literal str) -> literal str:
     """Join two or more pathname components, inserting '/' as needed.
     If any component is an absolute path, all previous path components
     will be discarded.  An empty last part will result in a path that
@@ -173,7 +172,7 @@ else:
         """
     def realpath(filename: AnyStr, *, strict: bool | _AllowMissingType = False) -> AnyStr
 
-def relpath(path: LiteralString, start: LiteralString | None = None) -> LiteralString:
+def relpath(path: literal str, start: literal str | None = None) -> literal str:
     """Return a relative version of a path"""
 def relpath(path: BytesPath, start: BytesPath | None = None) -> bytes
 def relpath(path: StrPath, start: StrPath | None = None) -> str

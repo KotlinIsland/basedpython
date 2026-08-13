@@ -32,6 +32,7 @@ use ty_python_core::{place_table, semantic_index};
 
 use crate::Db;
 use crate::place::{ConsideredDefinitions, symbol};
+use crate::types::ProgramEnvironment;
 use crate::types::class::{ClassLiteral, ClassType, based_enum_of_variant};
 use crate::types::class_base::ClassBase;
 use crate::types::literal::EnumLiteralType;
@@ -59,11 +60,16 @@ enum Search<'db> {
 }
 
 /// the enum member `name` names anywhere in the expected type
-fn search<'db>(db: &'db dyn Db, target: Type<'db>, name: &str) -> Search<'db> {
+fn search<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    target: Type<'db>,
+    name: &str,
+) -> Search<'db> {
     let mut found: Option<ContextSensitiveMember<'db>> = None;
     let mut ambiguous = None;
-    let _ = for_each_candidate(db, target, &mut |candidate| {
-        let Some(member) = member_of(db, candidate, name) else {
+    let _ = for_each_candidate(db, env, target, &mut |candidate| {
+        let Some(member) = member_of(db, env, candidate, name) else {
             return ControlFlow::Continue(());
         };
         match found {
@@ -91,6 +97,7 @@ fn search<'db>(db: &'db dyn Db, target: Type<'db>, name: &str) -> Search<'db> {
 /// context offers no unambiguous enum member of that name
 pub(crate) fn resolve_in_context<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     scope: ScopeId<'db>,
     tcx: TypeContext<'db>,
@@ -102,10 +109,10 @@ pub(crate) fn resolve_in_context<'db>(
     // scope binds at all — so a name the scope binds anywhere keeps its ordinary
     // meaning here too, or `a: Color = Red` followed by `Red = 1` would check
     // clean and `NameError` at runtime
-    if claimed_by_lexical_scope(db, file, scope, name) {
+    if claimed_by_lexical_scope(db, env, file, scope, name) {
         return None;
     }
-    let Search::Found(member) = search(db, target, name) else {
+    let Search::Found(member) = search(db, env, target, name) else {
         return None;
     };
     is_nameable(db, file, scope, member.enum_class).then_some(member)
@@ -127,15 +134,16 @@ pub(crate) enum Miss<'db> {
 
 pub(crate) fn explain_miss<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     scope: ScopeId<'db>,
     tcx: TypeContext<'db>,
     name: &str,
 ) -> Option<Miss<'db>> {
     let target = tcx.context_sensitive_target()?;
-    match search(db, target, name) {
+    match search(db, env, target, name) {
         Search::Ambiguous(first, second) => Some(Miss::Ambiguous(first, second)),
-        Search::Found(member) if claimed_by_lexical_scope(db, file, scope, name) => {
+        Search::Found(member) if claimed_by_lexical_scope(db, env, file, scope, name) => {
             Some(Miss::Shadowed(member.enum_class))
         }
         Search::Found(member) if !is_nameable(db, file, scope, member.enum_class) => {
@@ -150,20 +158,23 @@ pub(crate) fn explain_miss<'db>(
 /// its variants, and an optional enum is a union with `None`)
 pub(crate) fn for_each_candidate<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     target: Type<'db>,
     visit: &mut impl FnMut(ClassType<'db>) -> ControlFlow<()>,
 ) -> ControlFlow<()> {
     match target {
         Type::Union(union) => {
             for element in union.elements(db) {
-                for_each_candidate(db, *element, visit)?;
+                for_each_candidate(db, env, *element, visit)?;
             }
             ControlFlow::Continue(())
         }
-        Type::NominalInstance(instance) => visit(instance.class(db)),
-        Type::TypeAlias(alias) => for_each_candidate(db, alias.value_type(db), visit),
+        Type::NominalInstance(instance) => visit(instance.class(db, env)),
+        Type::TypeAlias(alias) => for_each_candidate(db, env, alias.value_type(db), visit),
         _ => match target.as_enum_literal() {
-            Some(literal) => for_each_candidate(db, literal.enum_class_instance(db), visit),
+            Some(literal) => {
+                for_each_candidate(db, env, literal.enum_class_instance(db, env), visit)
+            }
             None => ControlFlow::Continue(()),
         },
     }
@@ -173,6 +184,7 @@ pub(crate) fn for_each_candidate<'db>(
 /// variant reaches its enum's other variants through the enum base it subclasses
 fn member_of<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     class: ClassType<'db>,
     name: &str,
 ) -> Option<ContextSensitiveMember<'db>> {
@@ -189,7 +201,7 @@ fn member_of<'db>(
         }
         // a based enum's payload variant, whose class is declared in the enum body
         if let Some(ty) = base
-            .own_class_member(db, None, name)
+            .own_class_member(db, env, None, name)
             .ignore_possibly_undefined()
             && is_variant_class(db, ty)
         {
@@ -219,9 +231,9 @@ fn is_nameable<'db>(
     enum_class: ClassLiteral<'db>,
 ) -> bool {
     let name = enum_class.name(db);
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, db.program_file(file));
     for (ancestor_id, _) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
-        let ancestor_scope = ancestor_id.to_scope_id(db, file);
+        let ancestor_scope = ancestor_id.to_scope_id(db, db.program_file(file));
         let Some(place) = place_table(db, ancestor_scope).symbol_by_name(name) else {
             continue;
         };
@@ -253,6 +265,7 @@ fn is_nameable<'db>(
 /// its type belongs to, and can name that enum here, lowers to `<enum>.<name>`
 pub(crate) fn qualifier_for_unbound_name<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     scope: ScopeId<'db>,
     name: &str,
@@ -262,19 +275,19 @@ pub(crate) fn qualifier_for_unbound_name<'db>(
     // a builtin, keeps its ordinary spelling. checked before the name's type is
     // asked for, so a file that uses no context-sensitive name is never inferred
     // on its account
-    if claimed_by_lexical_scope(db, file, scope, name) {
+    if claimed_by_lexical_scope(db, env, file, scope, name) {
         return None;
     }
     // a trailing lambda block's receiver member answers *before* this fallback
     // does, so a receiver whose member happens to be an enum value keeps the
     // receiver-parameter lowering the checker resolved it to
-    if receivers::implicit_receiver_name(db, file, scope, name).is_some() {
+    if receivers::implicit_receiver_name(db, env, file, scope, name).is_some() {
         return None;
     }
     let enum_class = enum_class_of(db, resolved_type()?)?;
     // the spelling must be the enum's own member, not merely a value of that
     // enum's type reached under some other name
-    if !declares_member(db, enum_class, name) {
+    if !declares_member(db, env, enum_class, name) {
         return None;
     }
     is_nameable(db, file, scope, enum_class).then(|| enum_class.name(db))
@@ -291,7 +304,12 @@ fn enum_class_of<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<ClassLiteral<'db
 
 /// whether the enum declares `name` — an enum member (or one of its aliases), or
 /// a payload variant class
-fn declares_member<'db>(db: &'db dyn Db, enum_class: ClassLiteral<'db>, name: &str) -> bool {
+fn declares_member<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    enum_class: ClassLiteral<'db>,
+    name: &str,
+) -> bool {
     if enum_class
         .into_enum_class(db)
         .is_some_and(|enum_class| enum_class.resolve_member(db, &Name::new(name)).is_some())
@@ -300,7 +318,7 @@ fn declares_member<'db>(db: &'db dyn Db, enum_class: ClassLiteral<'db>, name: &s
     }
     enum_class
         .default_specialization(db)
-        .own_class_member(db, None, name)
+        .own_class_member(db, env, None, name)
         .ignore_possibly_undefined()
         .is_some_and(|ty| is_variant_class(db, ty))
 }

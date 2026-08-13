@@ -16,8 +16,8 @@ class install_headers(Command):
     install_dir: Incomplete
     force: int
     outfiles: Incomplete
-    override def initialize_options(self) -> None
-    override def finalize_options(self) -> None
-    override def run(self) -> None
+    override def initialize_options(self)
+    override def finalize_options(self)
+    override def run(self)
     def get_inputs(self)
     def get_outputs(self)

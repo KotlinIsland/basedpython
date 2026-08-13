@@ -22,7 +22,9 @@ use ty_module_resolver::{ModuleName, file_to_module, resolve_module};
 
 use crate::Db;
 use crate::place::imported_symbol;
+use crate::types::ProgramEnvironment;
 use crate::types::{ClassType, Type};
+use ty_module_resolver::ImportingFile;
 
 /// the environment variable a project names its settings module with
 const SETTINGS_MODULE_VARIABLE: &str = "DJANGO_SETTINGS_MODULE";
@@ -81,7 +83,15 @@ pub fn settings_file(db: &dyn Db, namings: &[SettingsNaming]) -> Option<File> {
         .find(|naming| is_entry_point(db, naming.file))
         .or_else(|| namings.first())?;
 
-    resolve_module(db, naming.file, &ModuleName::new(&naming.module)?)?.file(db)
+    resolve_module(
+        db,
+        ImportingFile::File(
+            naming.file,
+            db.program_file(naming.file).resolver_environment(db),
+        ),
+        &ModuleName::new(&naming.module)?,
+    )?
+    .file(db)
 }
 
 /// the naming that is django's own entry point, the script `manage.py test`,
@@ -112,7 +122,7 @@ pub fn settings_module_in_file(db: &dyn Db, file: File) -> Option<CompactString>
         return None;
     }
 
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let mut visitor = SettingsModuleVisitor { found: None };
     visitor.visit_body(parsed.suite());
 
@@ -157,16 +167,20 @@ impl<'ast> Visitor<'ast> for SettingsModuleVisitor {
 
 /// whether `ty` is `django.conf.settings` — the one object whose attributes are
 /// the project's settings
-pub(crate) fn is_settings_instance(db: &dyn Db, ty: Type<'_>) -> bool {
+pub(crate) fn is_settings_instance(
+    db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
+    ty: Type<'_>,
+) -> bool {
     // a `LazySettings()` built by hand is inferred exactly, and the restriction
     // says nothing about which class it is
     let Type::NominalInstance(instance) = ty.erase_restriction(db) else {
         return false;
     };
-    let class = instance.class(db).class_literal(db);
+    let class = instance.class(db, env).class_literal(db);
 
     class.name(db) == SETTINGS_CLASS
-        && file_to_module(db, class.file(db))
+        && file_to_module(db, class.program_file(db).resolver_file(db))
             .is_some_and(|module| module.name(db) == SETTINGS_MODULE)
 }
 
@@ -177,7 +191,11 @@ pub(crate) fn is_settings_instance(db: &dyn Db, ty: Type<'_>) -> bool {
 /// today — whenever the module cannot be reached, does not bind the name, or
 /// binds it to something whose type says less than it appears to. see
 /// [`describes_the_setting`].
-pub(crate) fn settings_member<'db>(db: &'db dyn Db, name: &Name) -> Option<Type<'db>> {
+pub(crate) fn settings_member<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    name: &Name,
+) -> Option<Type<'db>> {
     // django copies a name off the settings module only when `name.isupper()`,
     // so a module's `BASE_DIR` is a setting and its `os` is not
     if !is_setting_name(name) {
@@ -185,14 +203,14 @@ pub(crate) fn settings_member<'db>(db: &'db dyn Db, name: &Name) -> Option<Type<
     }
 
     let module = db.django_settings_file()?;
-    let member = imported_symbol(db, Some(module), name, None)
+    let member = imported_symbol(db, env, Some(db.program_file(module)), name, None)
         .place
         .ignore_possibly_undefined()?
         // the module assigns one deployment's value; what the setting *is* is the
         // type of that value, not the value
-        .promote(db);
+        .promote(db, env);
 
-    describes_the_setting(db, member).then_some(member)
+    describes_the_setting(db, env, member).then_some(member)
 }
 
 /// python's `str.isupper`, which is the test django copies a name by
@@ -218,15 +236,15 @@ fn is_setting_name(name: &Name) -> bool {
 /// carries no arguments has no such gap: `ROOT_URLCONF = "project.urls"` is a
 /// `str` and there is nothing about the string's contents to be too narrow
 /// about.
-fn describes_the_setting(db: &dyn Db, ty: Type<'_>) -> bool {
+fn describes_the_setting(db: &dyn Db, env: &ProgramEnvironment<'_>, ty: Type<'_>) -> bool {
     match ty {
         Type::NominalInstance(instance) => {
-            matches!(instance.class(db), ClassType::NonGeneric(_))
+            matches!(instance.class(db, env), ClassType::NonGeneric(_))
         }
         Type::Union(union) => union
             .elements(db)
             .iter()
-            .all(|element| describes_the_setting(db, *element)),
+            .all(|element| describes_the_setting(db, env, *element)),
         _ => false,
     }
 }

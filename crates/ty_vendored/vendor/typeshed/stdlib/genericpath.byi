@@ -9,7 +9,7 @@ import sys
 from _typeshed import BytesPath, FileDescriptorOrPath, StrOrBytesPath, StrPath, SupportsRichComparisonT
 from collections.abc import Sequence
 from typing import Literal, NewType
-from typing_extensions import LiteralString, deprecated
+from typing_extensions import deprecated
 
 __all__ = [
     "commonprefix",
@@ -37,7 +37,7 @@ if sys.version_info >= (3, 15):
 # type. But because this only works when T is str, we need Sequence[T] instead.
 if sys.version_info >= (3, 15):
     @deprecated("Deprecated since Python 3.15; use os.path.commonpath() for path prefixes.")
-    def commonprefix(m: Sequence[LiteralString], /) -> LiteralString:
+    def commonprefix(m: Sequence[literal str], /) -> literal str:
         """Given a list of pathnames, returns the longest common leading component"""
     @deprecated("Deprecated since Python 3.15; use os.path.commonpath() for path prefixes.")
     def commonprefix(m: Sequence[StrPath], /) -> str
@@ -48,7 +48,7 @@ if sys.version_info >= (3, 15):
     @deprecated("Deprecated since Python 3.15; use os.path.commonpath() for path prefixes.")
     def commonprefix(m: Sequence[(*: SupportsRichComparisonT)], /) -> Sequence[SupportsRichComparisonT]
 else:
-    def commonprefix(m: Sequence[LiteralString]) -> LiteralString:
+    def commonprefix(m: Sequence[literal str]) -> literal str:
         """Given a list of pathnames, returns the longest common leading component"""
     def commonprefix(m: Sequence[StrPath]) -> str
     def commonprefix(m: Sequence[BytesPath]) -> bytes | ""

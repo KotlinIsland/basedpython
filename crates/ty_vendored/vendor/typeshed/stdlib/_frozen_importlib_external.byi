@@ -313,7 +313,7 @@ class ExtensionFileLoader(FileLoader, _LoaderBasics, importlib.abc.ExecutionLoad
     override def create_module(self, spec: ModuleSpec) -> types.ModuleType:
         """Create an uninitialized extension module"""
 
-    override def exec_module(self, module: types.ModuleType) -> None:
+    override def exec_module(self, module: types.ModuleType):
         """Initialize an extension module"""
 
     def get_code(self, fullname: str):

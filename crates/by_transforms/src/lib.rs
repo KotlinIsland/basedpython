@@ -89,11 +89,11 @@ fn run_context_sensitive_phase<'a>(
     db: &dyn ty_python_semantic::Db,
     file: File,
 ) -> std::borrow::Cow<'a, str> {
-    let parsed = ruff_db::parsed::parsed_module(db, file).load(db);
+    let parsed = ruff_db::parsed::parsed_module(db, db.program_file(file).python_file(db)).load(db);
     if !parsed.errors().is_empty() {
         return std::borrow::Cow::Borrowed(source);
     }
-    let model = ty_python_semantic::SemanticModel::new(db, file);
+    let model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
     transforms::context_sensitive::qualify(source, parsed.suite(), &model)
 }
 
@@ -111,11 +111,11 @@ fn run_erased_union_phase<'a>(
     file: File,
     config: &Config,
 ) -> std::borrow::Cow<'a, str> {
-    let parsed = ruff_db::parsed::parsed_module(db, file).load(db);
+    let parsed = ruff_db::parsed::parsed_module(db, db.program_file(file).python_file(db)).load(db);
     if !parsed.errors().is_empty() {
         return std::borrow::Cow::Borrowed(source);
     }
-    let model = ty_python_semantic::SemanticModel::new(db, file);
+    let model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
     transforms::erased_union::reify(source, parsed.suite(), &model, config.min_version)
 }
 
@@ -179,8 +179,15 @@ pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
     let (db, file) = make_in_memory_db(source);
     let source_ref = ruff_db::source::source_text(&db, file);
     let src = source_ref.as_str();
-    let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
-    let model = ty_python_semantic::SemanticModel::new(&db, file);
+    let module = ruff_db::parsed::parsed_module(
+        &db,
+        ty_python_semantic::Db::program_file(&db, file).python_file(&db),
+    )
+    .load(&db);
+    let model = ty_python_semantic::SemanticModel::new(
+        &db,
+        ty_python_semantic::Db::program_file(&db, file),
+    );
     if let Some(err) = module.errors().iter().find(|e| e.is_basedpython_only()) {
         return Err(err.to_string());
     }
@@ -301,7 +308,8 @@ pub fn transpile_typed_with_map(
     };
     // which imports must stay eager, computed against the *project* db: a
     // single-file db cannot resolve the modules that declare the conformances
-    let eager_imports = ty_python_semantic::SemanticModel::new(db, file).eagerly_imported_modules();
+    let eager_imports = ty_python_semantic::SemanticModel::new(db, db.program_file(file))
+        .eagerly_imported_modules();
     let (spliced, ast_errors, phase0_map) =
         transforms::ast_driver::run_against_source(working_source, config, project);
     if let Some(first) = ast_errors.first() {
@@ -312,8 +320,15 @@ pub fn transpile_typed_with_map(
         let (local_db, local_file) = make_in_memory_db(&modified);
         let local_source_ref = ruff_db::source::source_text(&local_db, local_file);
         let src = local_source_ref.as_str();
-        let module = ruff_db::parsed::parsed_module(&local_db, local_file).load(&local_db);
-        let model = ty_python_semantic::SemanticModel::new(&local_db, local_file);
+        let module = ruff_db::parsed::parsed_module(
+            &local_db,
+            ty_python_semantic::Db::program_file(&local_db, local_file).python_file(&local_db),
+        )
+        .load(&local_db);
+        let model = ty_python_semantic::SemanticModel::new(
+            &local_db,
+            ty_python_semantic::Db::program_file(&local_db, local_file),
+        );
         let LoweringResult { output, errors } =
             run_lowering_phase(src, module.suite(), config, &model);
         (output, errors)
@@ -323,14 +338,22 @@ pub fn transpile_typed_with_map(
         let (local_db, local_file) = make_in_memory_db(working_source);
         let local_source_ref = ruff_db::source::source_text(&local_db, local_file);
         let src = local_source_ref.as_str();
-        let module = ruff_db::parsed::parsed_module(&local_db, local_file).load(&local_db);
-        let model = ty_python_semantic::SemanticModel::new(&local_db, local_file);
+        let module = ruff_db::parsed::parsed_module(
+            &local_db,
+            ty_python_semantic::Db::program_file(&local_db, local_file).python_file(&local_db),
+        )
+        .load(&local_db);
+        let model = ty_python_semantic::SemanticModel::new(
+            &local_db,
+            ty_python_semantic::Db::program_file(&local_db, local_file),
+        );
         let LoweringResult { output, errors } =
             run_lowering_phase(src, module.suite(), config, &model);
         (output, errors)
     } else {
-        let module = ruff_db::parsed::parsed_module(db, file).load(db);
-        let model = ty_python_semantic::SemanticModel::new(db, file);
+        let module =
+            ruff_db::parsed::parsed_module(db, db.program_file(file).python_file(db)).load(db);
+        let model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
         let LoweringResult { output, errors } =
             run_lowering_phase(original_source, module.suite(), config, &model);
         (output, errors)
@@ -399,8 +422,15 @@ fn run_anon_named_tuple_cleanup(mut source: String, config: &Config) -> Result<S
         let (db, file) = make_in_memory_db(&source);
         let source_ref = ruff_db::source::source_text(&db, file);
         let src = source_ref.as_str();
-        let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
-        let model = ty_python_semantic::SemanticModel::new(&db, file);
+        let module = ruff_db::parsed::parsed_module(
+            &db,
+            ty_python_semantic::Db::program_file(&db, file).python_file(&db),
+        )
+        .load(&db);
+        let model = ty_python_semantic::SemanticModel::new(
+            &db,
+            ty_python_semantic::Db::program_file(&db, file),
+        );
 
         let mut anon =
             transforms::anon_named_tuple::AnonNamedTuple::new(src, &model, config.clone());
@@ -468,7 +498,11 @@ fn run_import_redirect_phase(source: String, config: &Config) -> String {
     let (db, file) = make_in_memory_db(&source);
     let source_ref = ruff_db::source::source_text(&db, file);
     let src = source_ref.as_str();
-    let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
+    let module = ruff_db::parsed::parsed_module(
+        &db,
+        ty_python_semantic::Db::program_file(&db, file).python_file(&db),
+    )
+    .load(&db);
 
     let mut typing_redirect = transforms::typing_redirect::TypingRedirect::new(src, config.clone());
     for stmt in module.suite() {
@@ -503,7 +537,11 @@ fn run_lazy_import_phase(source: String, config: &Config, eager: &[String]) -> S
     let (db, file) = make_in_memory_db(&source);
     let source_ref = ruff_db::source::source_text(&db, file);
     let src = source_ref.as_str();
-    let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
+    let module = ruff_db::parsed::parsed_module(
+        &db,
+        ty_python_semantic::Db::program_file(&db, file).python_file(&db),
+    )
+    .load(&db);
 
     let keyword_supported = config.min_version >= ruff_python_ast::PythonVersion::from((3, 15));
     let mut lazy = transforms::lazy_import::LazyImport::new(src, keyword_supported, eager);
@@ -755,8 +793,15 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let (db, file) = make_in_memory_db(source);
     let source_ref = ruff_db::source::source_text(&db, file);
     let src = source_ref.as_str();
-    let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
-    let model = ty_python_semantic::SemanticModel::new(&db, file);
+    let module = ruff_db::parsed::parsed_module(
+        &db,
+        ty_python_semantic::Db::program_file(&db, file).python_file(&db),
+    )
+    .load(&db);
+    let model = ty_python_semantic::SemanticModel::new(
+        &db,
+        ty_python_semantic::Db::program_file(&db, file),
+    );
 
     let mut super_kw_rev = reverse_transforms::super_keyword::SuperKeywordReverse::new(src);
     let mut anon_named_tuple_rev =
@@ -993,7 +1038,11 @@ mod python_parse_errors {
         db.write_file("/input.py", source)
             .expect("write file failed");
         let file = ruff_db::files::system_path_to_file(&db, "/input.py").expect("file not in db");
-        let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
+        let module = ruff_db::parsed::parsed_module(
+            &db,
+            ty_python_semantic::Db::program_file(&db, file).python_file(&db),
+        )
+        .load(&db);
         module.errors().iter().map(ToString::to_string).collect()
     }
 
@@ -1055,7 +1104,11 @@ mod python_parse_errors {
     fn abstract_class_in_by_no_errors() {
         // .by files: basedpython syntax is valid — no parse errors
         let (db, file) = make_in_memory_db("abstract class A: ...\n");
-        let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
+        let module = ruff_db::parsed::parsed_module(
+            &db,
+            ty_python_semantic::Db::program_file(&db, file).python_file(&db),
+        )
+        .load(&db);
         assert!(
             module.errors().is_empty(),
             "unexpected parse errors in .by file: {:?}",
@@ -1167,7 +1220,11 @@ mod python_parse_errors {
     #[test]
     fn enum_sumtype_in_by_no_errors() {
         let (db, file) = make_in_memory_db("enum class Color:\n    case Red, Green\n");
-        let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
+        let module = ruff_db::parsed::parsed_module(
+            &db,
+            ty_python_semantic::Db::program_file(&db, file).python_file(&db),
+        )
+        .load(&db);
         assert!(
             module.errors().is_empty(),
             "unexpected parse errors in .by file: {:?}",
@@ -1189,7 +1246,11 @@ mod python_parse_errors {
     #[test]
     fn bare_class_in_by_no_errors() {
         let (db, file) = make_in_memory_db("class A\n");
-        let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
+        let module = ruff_db::parsed::parsed_module(
+            &db,
+            ty_python_semantic::Db::program_file(&db, file).python_file(&db),
+        )
+        .load(&db);
         assert!(
             module.errors().is_empty(),
             "unexpected parse errors in .by file: {:?}",
@@ -1226,7 +1287,11 @@ mod python_parse_errors {
     #[test]
     fn postfix_await_in_by_no_errors() {
         let (db, file) = make_in_memory_db("async def f():\n    g().await\n");
-        let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
+        let module = ruff_db::parsed::parsed_module(
+            &db,
+            ty_python_semantic::Db::program_file(&db, file).python_file(&db),
+        )
+        .load(&db);
         assert!(
             module.errors().is_empty(),
             "unexpected parse errors in .by file: {:?}",

@@ -29,6 +29,7 @@ use ruff_python_ast as ast;
 use ruff_db::parsed::parsed_module;
 
 use crate::Db;
+use crate::types::ProgramEnvironment;
 use crate::types::deferred::{DeferredOperation, DeferredType};
 use crate::types::generics::{ApplySpecialization, GenericContext};
 use crate::types::tuple::{Tuple, TupleType};
@@ -51,6 +52,7 @@ use ty_python_core::semantic_index;
 /// Returns `None` for an ordinary type alias.
 pub(crate) fn match_type_application<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     alias: TypeAliasType<'db>,
 ) -> Option<Type<'db>> {
     let pep695 = alias.as_pep_695_type_alias()?;
@@ -70,6 +72,7 @@ pub(crate) fn match_type_application<'db>(
 
     Some(DeferredType::build(
         db,
+        env,
         &DeferredOperation::MatchType,
         operands.into_boxed_slice(),
     ))
@@ -135,29 +138,30 @@ fn evaluate_match_type_cached<'db>(
     db: &'db dyn Db,
     alias: PEP695TypeAliasType<'db>,
 ) -> MatchTypeOutcome<'db> {
+    let env = &ProgramEnvironment::from_scope(alias.rhs_scope(db));
     let scope = alias.rhs_scope(db);
     let file = scope.file(db);
-    let module = parsed_module(db, file).load(db);
+    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let node = scope.node(db).expect_type_alias().node(&module);
 
     let definition = alias.definition(db);
     let subject = alias.apply_own_specialization(
         db,
-        subject_type(db, definition, &node.value).unwrap_or_else(Type::unknown),
+        subject_type(db, env, definition, &node.value).unwrap_or_else(Type::unknown),
     );
 
     // a subject that still mentions a type parameter cannot pick a case: `()` and
     // `(Dim, *Rest)` are both still possible
-    if subject.has_typevar(db) {
+    if subject.has_typevar(db, env) {
         return MatchTypeOutcome::Unresolved;
     }
-    if exceeds_budget(db, subject) {
+    if exceeds_budget(db, env, subject) {
         return MatchTypeOutcome::TooLarge;
     }
 
     for case in &node.cases {
         let mut bindings = Bindings::default();
-        match match_pattern(db, file, subject, &case.pattern, &mut bindings) {
+        match match_pattern(db, env, file, subject, &case.pattern, &mut bindings) {
             PatternMatch::NoMatch => continue,
             // an undecidable pattern stops the whole match: falling through to the next case
             // would let it answer a question this one could still have claimed
@@ -169,12 +173,12 @@ fn evaluate_match_type_cached<'db>(
         };
         let body =
             alias.apply_own_specialization(db, definition_expression_type(db, definition, body));
-        let value = bindings.apply(db, body);
+        let value = bindings.apply(db, env, body);
         // a body that names a capture the pattern did not bind — an or-pattern whose
         // alternatives bind different names, say — would otherwise leak that capture's type
         // variable into the alias's value, where it means nothing. the malformed pattern is
         // reported where the alias is written; here it simply has no value
-        if mentions_capture_of(db, value, definition) {
+        if mentions_capture_of(db, env, value, definition) {
             return MatchTypeOutcome::Unresolved;
         }
         return MatchTypeOutcome::Matched(value);
@@ -187,9 +191,9 @@ fn evaluate_match_type_cached<'db>(
 ///
 /// The walk short-circuits as soon as the budget runs out, so this costs at most the budget
 /// however large `ty` actually is.
-fn exceeds_budget<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+fn exceeds_budget<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> bool {
     let remaining = std::cell::Cell::new(MAX_SUBJECT_NODES);
-    any_over_type(db, ty, false, |_| match remaining.get() {
+    any_over_type(db, env, ty, false, |_| match remaining.get() {
         0 => true,
         budget => {
             remaining.set(budget - 1);
@@ -204,10 +208,11 @@ fn exceeds_budget<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
 /// a `case` capture that escaped its pattern.
 fn mentions_capture_of<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     ty: Type<'db>,
     alias_definition: Definition<'db>,
 ) -> bool {
-    any_over_type(db, ty, false, |ty| match ty {
+    any_over_type(db, env, ty, false, |ty| match ty {
         Type::TypeVar(bound_typevar) => {
             bound_typevar.binding_context(db) == BindingContext::Definition(alias_definition)
         }
@@ -232,6 +237,7 @@ fn case_body(case: &ast::MatchCase) -> Option<&ast::Expr> {
 /// pack spreads into. Any other subject is matched as itself.
 fn subject_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     definition: Definition<'db>,
     subject: &ast::Expr,
 ) -> Option<Type<'db>> {
@@ -247,6 +253,7 @@ fn subject_type<'db>(
     let bound_typevar = unpacked.as_typevar()?;
     Some(Type::tuple(Some(TupleType::unpacked_typevartuple(
         db,
+        env,
         bound_typevar,
     ))))
 }
@@ -308,12 +315,13 @@ impl<'db> Bindings<'db> {
     }
 
     /// Substitutes the captures into a case body's type.
-    fn apply(&self, db: &'db dyn Db, body: Type<'db>) -> Type<'db> {
+    fn apply(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>, body: Type<'db>) -> Type<'db> {
         if self.captures.is_empty() {
             return body;
         }
         let generic_context = GenericContext::from_typevar_instances(
             db,
+            env,
             self.captures.iter().map(|(typevar, _)| *typevar),
         );
         let specialization = generic_context.specialize(
@@ -326,9 +334,10 @@ impl<'db> Bindings<'db> {
         );
         body.apply_type_mapping_impl(
             db,
+            env,
             &TypeMapping::ApplySpecialization(ApplySpecialization::TypeAlias(specialization)),
             TypeContext::default(),
-            &ApplyTypeMappingVisitor::default(),
+            &ApplyTypeMappingVisitor::new(env),
         )
     }
 }
@@ -338,6 +347,7 @@ impl<'db> Bindings<'db> {
 /// `bindings` is only meaningful when the result is [`PatternMatch::Matched`].
 fn match_pattern<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: ruff_db::files::File,
     subject: Type<'db>,
     pattern: &ast::Pattern,
@@ -351,7 +361,7 @@ fn match_pattern<'db>(
             ..
         }) => {
             if let Some(inner) = inner.as_deref() {
-                match match_pattern(db, file, subject, inner, bindings) {
+                match match_pattern(db, env, file, subject, inner, bindings) {
                     PatternMatch::Matched => {}
                     other => return other,
                 }
@@ -369,7 +379,7 @@ fn match_pattern<'db>(
             let mut undecidable = false;
             for pattern in patterns {
                 let checkpoint = bindings.checkpoint();
-                match match_pattern(db, file, subject, pattern, bindings) {
+                match match_pattern(db, env, file, subject, pattern, bindings) {
                     PatternMatch::Matched => return PatternMatch::Matched,
                     PatternMatch::Undecidable => undecidable = true,
                     PatternMatch::NoMatch => {}
@@ -386,7 +396,7 @@ fn match_pattern<'db>(
         }
 
         ast::Pattern::MatchSequence(ast::PatternMatchSequence { patterns, .. }) => {
-            match_sequence(db, file, subject, patterns, bindings)
+            match_sequence(db, env, file, subject, patterns, bindings)
         }
 
         // `case 2:` — a literal in a shape. `Literal[2]` is what the subject element is, so
@@ -399,16 +409,16 @@ fn match_pattern<'db>(
                 // not a literal type at all — reported where the alias is written
                 return PatternMatch::Undecidable;
             };
-            decide(subject, subject.is_equivalent_to(db, expected))
+            decide(subject, subject.is_equivalent_to(db, env, expected))
         }
 
         ast::Pattern::MatchSingleton(ast::PatternMatchSingleton { value, .. }) => {
             let expected = match value {
-                ast::Singleton::None => Type::none(db),
+                ast::Singleton::None => Type::none(db, env),
                 ast::Singleton::True => Type::bool_literal(true),
                 ast::Singleton::False => Type::bool_literal(false),
             };
-            decide(subject, subject.is_equivalent_to(db, expected))
+            decide(subject, subject.is_equivalent_to(db, env, expected))
         }
 
         // a class or mapping pattern destructures a *value*; there is nothing at the type
@@ -425,7 +435,7 @@ fn match_pattern<'db>(
             let checkpoint = bindings.checkpoint();
             let mut undecidable = false;
             for pattern in patterns {
-                match match_pattern(db, file, subject, pattern, bindings) {
+                match match_pattern(db, env, file, subject, pattern, bindings) {
                     PatternMatch::Matched => {}
                     PatternMatch::Undecidable => undecidable = true,
                     PatternMatch::NoMatch => {
@@ -461,6 +471,7 @@ fn decide(subject: Type<'_>, matches: bool) -> PatternMatch {
 /// Matches a sequence pattern — `()`, `(A, B)`, `(A, *Rest)` — against a tuple subject.
 fn match_sequence<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: ruff_db::files::File,
     subject: Type<'db>,
     patterns: &[ast::Pattern],
@@ -482,7 +493,7 @@ fn match_sequence<'db>(
         if elements.len() != patterns.len() {
             return PatternMatch::NoMatch;
         }
-        return match_all(db, file, patterns, elements, bindings);
+        return match_all(db, env, file, patterns, elements, bindings);
     };
 
     let suffix_len = patterns.len() - star_index - 1;
@@ -492,11 +503,11 @@ fn match_sequence<'db>(
     let (prefix, rest) = elements.split_at(star_index);
     let (starred, suffix) = rest.split_at(rest.len() - suffix_len);
 
-    match match_all(db, file, &patterns[..star_index], prefix, bindings) {
+    match match_all(db, env, file, &patterns[..star_index], prefix, bindings) {
         PatternMatch::Matched => {}
         other => return other,
     }
-    match match_all(db, file, &patterns[star_index + 1..], suffix, bindings) {
+    match match_all(db, env, file, &patterns[star_index + 1..], suffix, bindings) {
         PatternMatch::Matched => {}
         other => return other,
     }
@@ -513,7 +524,7 @@ fn match_sequence<'db>(
     bindings.push(
         db,
         typevar,
-        Type::heterogeneous_tuple(db, starred.iter().copied()),
+        Type::heterogeneous_tuple(db, env, starred.iter().copied()),
     )
 }
 
@@ -521,13 +532,14 @@ fn match_sequence<'db>(
 /// that does not match or cannot be decided.
 fn match_all<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: ruff_db::files::File,
     patterns: &[ast::Pattern],
     elements: &[Type<'db>],
     bindings: &mut Bindings<'db>,
 ) -> PatternMatch {
     for (pattern, element) in std::iter::zip(patterns, elements) {
-        match match_pattern(db, file, *element, pattern, bindings) {
+        match match_pattern(db, env, file, *element, pattern, bindings) {
             PatternMatch::Matched => {}
             other => return other,
         }
@@ -571,7 +583,7 @@ fn capture_typevar<'db>(
     file: ruff_db::files::File,
     name: &ast::Identifier,
 ) -> Option<BoundTypeVarInstance<'db>> {
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, db.program_file(file));
     let definition = index.try_definition(name)?;
     let Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) = binding_type(db, definition)
     else {

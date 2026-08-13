@@ -22,6 +22,7 @@ use super::index::TemplateIndex;
 use super::lexer::{ConstructKind, Token, TokenKind, string_contents};
 use super::project::{self, RegistrationKind};
 use super::resolve::{self, Origin};
+use ty_python_semantic::ProgramEnvironment;
 
 /// the language a template construct is rendered as, for a client that knows it
 const DJANGO: &str = "django-html";
@@ -311,10 +312,12 @@ impl Site<'_> {
 
     /// the type of the path the name ends
     fn path_contents(&self) -> Vec<Content> {
+        let env = &ProgramEnvironment::from_file(self.db.program_file(self.file));
         let segments = path_up_to(self.source, self.tokens, self.token, true);
 
         if let Some(ty) = resolve::path_type(
             self.db,
+            env,
             self.file,
             self.index,
             self.source,
@@ -323,7 +326,7 @@ impl Site<'_> {
         ) {
             return vec![Content::Code {
                 language: "python",
-                text: format!("{}: {}", self.text(), ty.display(self.db)),
+                text: format!("{}: {}", self.text(), ty.display(self.db, env)),
             }];
         }
 

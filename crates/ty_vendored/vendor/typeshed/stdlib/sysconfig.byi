@@ -2,7 +2,7 @@
 
 import sys
 from typing import Literal
-from typing_extensions import LiteralString, deprecated
+from typing_extensions import deprecated
 
 __all__ = [
     "get_config_h_filename",
@@ -42,11 +42,11 @@ def get_config_vars(arg: str, /, *args: str) -> list[dynamic]
 def get_scheme_names() -> (*: str):
     """Return a tuple containing the schemes names."""
 
-def get_default_scheme() -> LiteralString
-def get_preferred_scheme(key: "prefix" | "home" | "user") -> LiteralString
+def get_default_scheme() -> literal str
+def get_preferred_scheme(key: "prefix" | "home" | "user") -> literal str
 
 # Documented -- see https://docs.python.org/3/library/sysconfig.html#sysconfig._get_preferred_schemes
-def _get_preferred_schemes() -> dict["prefix" | "home" | "user", LiteralString]
+def _get_preferred_schemes() -> dict["prefix" | "home" | "user", literal str]
 def get_path_names() -> (*: str):
     """Return a tuple containing the paths names."""
 
@@ -99,11 +99,11 @@ if sys.version_info >= (3, 15):
     def is_python_build() -> bool
 elif sys.version_info >= (3, 11):
     def is_python_build() -> bool
-    @deprecated("The `check_home` parameter is deprecated since Python 3.12; removed in Python 3.15.")
+    @deprecated("The `check_home` parameter is deprecated; removed in Python 3.15.")
     def is_python_build(check_home: object = None) -> bool
 else:
     def is_python_build() -> bool
-    @deprecated("The `check_home` parameter is deprecated since Python 3.12; removed in Python 3.15.")
+    @deprecated("The `check_home` parameter is deprecated; removed in Python 3.15.")
     def is_python_build(check_home: bool = False) -> bool
 
 def parse_config_h(fp: IO[dynamic], vars: dict[str, dynamic] | None = None) -> dict[str, dynamic]:

@@ -10,6 +10,7 @@
 //! `docs/basedpython/frameworks/sqlalchemy.md`
 
 use crate::Db;
+use crate::types::ProgramEnvironment;
 use crate::types::{ClassBase, KnownClass, StaticClassLiteral, Type};
 
 /// `class` is a sqlalchemy 2.0 declarative model: `DeclarativeBase` in its
@@ -38,10 +39,11 @@ pub(in crate::types) fn is_declarative(db: &dyn Db, class: StaticClassLiteral<'_
 /// and are therefore not fields
 pub(in crate::types) fn mapped_field_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     declared_ty: Type<'db>,
 ) -> Option<Type<'db>> {
-    let mapped = KnownClass::SqlalchemyMapped.try_to_class_literal(db)?;
-    let specialization = declared_ty.specialization_of(db, mapped)?;
+    let mapped = KnownClass::SqlalchemyMapped.try_to_class_literal(db, env)?;
+    let specialization = declared_ty.specialization_of(db, env, mapped)?;
     let [element] = specialization.types(db) else {
         return None;
     };

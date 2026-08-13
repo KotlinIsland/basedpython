@@ -34,8 +34,7 @@ use ruff_linter::settings::types::{
     RequiredVersion, UnsafeFixes,
 };
 use ruff_linter::settings::{
-    DEFAULT_SELECTORS, DUMMY_VARIABLE_RGX, LinterSettings, PREVIEW_DEFAULT_SELECTORS, TASK_TAGS,
-    TargetVersion,
+    DEFAULT_SELECTORS, DUMMY_VARIABLE_RGX, LinterSettings, TASK_TAGS, TargetVersion,
 };
 use ruff_linter::{
     RuleSelector, UnresolvedRuleSelector, fs, warn_user_once, warn_user_once_by_id,
@@ -180,6 +179,7 @@ pub struct Configuration {
     pub fix_only: Option<bool>,
     pub unsafe_fixes: Option<UnsafeFixes>,
     pub output_format: Option<OutputFormat>,
+    pub output_prefer_rule_codes: Option<bool>,
     pub preview: Option<PreviewMode>,
     pub required_version: Option<RequiredVersion>,
     pub extension: Option<ExtensionMapping>,
@@ -327,6 +327,7 @@ impl Configuration {
             fix_only: self.fix_only.unwrap_or(false),
             unsafe_fixes: self.unsafe_fixes.unwrap_or_default(),
             output_format: self.output_format.unwrap_or_default(),
+            output_prefer_rule_codes: self.output_prefer_rule_codes.unwrap_or_default(),
             show_fixes: self.show_fixes.unwrap_or(false),
 
             file_resolver: FileResolverSettings {
@@ -336,24 +337,20 @@ impl Configuration {
                 extend_exclude: FilePatternSet::try_from_iter(self.extend_exclude)?,
                 extend_include: FilePatternSet::try_from_iter(self.extend_include)?,
                 force_exclude: self.force_exclude.unwrap_or(false),
-                include: match global_preview {
-                    PreviewMode::Disabled => FilePatternSet::try_from_iter(
-                        self.include.unwrap_or_else(|| INCLUDE.to_vec()),
-                    )?,
-                    PreviewMode::Enabled => {
-                        FilePatternSet::try_from_iter(self.include.unwrap_or_else(|| {
-                            let mut patterns = INCLUDE_PREVIEW.to_vec();
-                            if let Some(extension_map) = &self.extension {
-                                patterns.extend(
-                                    extension_map
-                                        .extensions()
-                                        .map(|ext| FilePattern::Config(format!("*.{ext}"))),
-                                );
-                            }
-                            patterns
-                        }))?
+                include: FilePatternSet::try_from_iter(self.include.unwrap_or_else(|| {
+                    let mut patterns = match global_preview {
+                        PreviewMode::Disabled => INCLUDE.to_vec(),
+                        PreviewMode::Enabled => INCLUDE_PREVIEW.to_vec(),
+                    };
+                    if let Some(extension_map) = &self.extension {
+                        patterns.extend(
+                            extension_map
+                                .extensions()
+                                .map(|ext| FilePattern::Config(format!("*.{ext}"))),
+                        );
                     }
-                },
+                    patterns
+                }))?,
                 respect_gitignore: self.respect_gitignore.unwrap_or(true),
                 project_root: project_root.to_path_buf(),
             },
@@ -610,6 +607,7 @@ impl Configuration {
             fix_only: options.fix_only,
             unsafe_fixes: options.unsafe_fixes.map(UnsafeFixes::from),
             output_format: options.output_format,
+            output_prefer_rule_codes: options.output_prefer_rule_codes,
             force_exclude: options.force_exclude,
             line_length: options.line_length,
             indent_width: options.indent_width,
@@ -673,6 +671,9 @@ impl Configuration {
             fix_only: self.fix_only.or(config.fix_only),
             unsafe_fixes: self.unsafe_fixes.or(config.unsafe_fixes),
             output_format: self.output_format.or(config.output_format),
+            output_prefer_rule_codes: self
+                .output_prefer_rule_codes
+                .or(config.output_prefer_rule_codes),
             force_exclude: self.force_exclude.or(config.force_exclude),
             line_length: self.line_length.or(config.line_length),
             indent_width: self.indent_width.or(config.indent_width),
@@ -695,7 +696,7 @@ impl Configuration {
     }
 
     #[must_use]
-    pub fn apply_fallbacks(
+    pub(crate) fn apply_fallbacks(
         mut self,
         origin: ConfigurationOrigin,
         initial_config_path: &Path,
@@ -801,7 +802,11 @@ impl LintConfiguration {
         let ignore_init_module_imports = {
             if options.common.ignore_init_module_imports.is_some() {
                 warn_user_once!(
-                    "The `ignore-init-module-imports` option is deprecated and will be removed in a future release. Ruff's handling of imports in `__init__.py` files has been improved (in preview) and unused imports will always be flagged."
+                    "The `ignore-init-module-imports` option is deprecated \
+                    and will be removed in a future release. \
+                    Ruff's handling of imports in `__init__.py` files \
+                    has been improved (in preview) and unused imports \
+                    will always be flagged."
                 );
             }
             options.common.ignore_init_module_imports
@@ -902,14 +907,8 @@ impl LintConfiguration {
             require_explicit: self.explicit_preview_rules.unwrap_or_default(),
         };
 
-        let selectors = if preview.mode.is_enabled() {
-            PREVIEW_DEFAULT_SELECTORS
-        } else {
-            DEFAULT_SELECTORS
-        };
-
         // The select_set keeps track of which rules have been selected.
-        let mut select_set: RuleSet = selectors
+        let mut select_set: RuleSet = DEFAULT_SELECTORS
             .iter()
             .flat_map(|selector| selector.rules(&preview))
             .collect();
@@ -1180,11 +1179,15 @@ impl LintConfiguration {
                 [selection] => {
                     let (prefix, code) = selection.prefix_and_code();
                     return Err(anyhow!(
-                        "Selection of deprecated rule `{prefix}{code}` is not allowed when preview is enabled."
+                        "Selection of deprecated rule `{prefix}{code}` is not allowed when \
+                         preview is enabled."
                     ));
                 }
                 [..] => {
-                    let mut message = "Selection of deprecated rules is not allowed when preview is enabled. Remove selection of:".to_string();
+                    let mut message = "\
+                        Selection of deprecated rules is not allowed \
+                            when preview is enabled. Remove selection of:"
+                        .to_string();
                     for selection in deprecated_selectors {
                         let (prefix, code) = selection.prefix_and_code();
                         message.push_str("\n\t- ");
@@ -1238,7 +1241,7 @@ impl LintConfiguration {
     }
 
     #[must_use]
-    pub fn combine(self, config: Self) -> Self {
+    fn combine(self, config: Self) -> Self {
         let mut rule_selections = config.rule_selections;
         rule_selections.extend(self.rule_selections);
 
@@ -1372,7 +1375,7 @@ impl FormatConfiguration {
     }
 
     #[must_use]
-    pub fn combine(self, config: Self) -> Self {
+    fn combine(self, config: Self) -> Self {
         Self {
             exclude: self.exclude.or(config.exclude),
             preview: self.preview.or(config.preview),
@@ -1434,7 +1437,7 @@ impl AnalyzeConfiguration {
     }
 
     #[must_use]
-    pub fn combine(self, config: Self) -> Self {
+    fn combine(self, config: Self) -> Self {
         Self {
             exclude: self.exclude.or(config.exclude),
             preview: self.preview.or(config.preview),
@@ -1467,7 +1470,7 @@ impl<T: CombinePluginOptions> CombinePluginOptions for Option<T> {
 
 /// Given a list of source paths, which could include glob patterns, resolve the
 /// matching paths.
-pub fn resolve_src(src: &[String], project_root: &Path) -> Result<Vec<PathBuf>> {
+fn resolve_src(src: &[String], project_root: &Path) -> Result<Vec<PathBuf>> {
     let expansions = src
         .iter()
         .map(shellexpand::full)
@@ -1734,8 +1737,10 @@ fn warn_about_deprecated_top_level_lint_options(
     );
 
     warn_user_once_by_message!(
-        "The top-level linter settings are deprecated in favour of their counterparts in the `lint` section. \
-        Please update the following options in {thing_to_update}:\n  {options_mapping}",
+        "The top-level linter settings are deprecated \
+        in favour of their counterparts in the `lint` section. \
+        Please update the following options in {thing_to_update}:\n  \
+        {options_mapping}",
     );
 }
 
@@ -2122,7 +2127,7 @@ mod tests {
     fn select_linter_preview() -> Result<()> {
         let actual = resolve_rules(
             [RuleSelection {
-                select: Some(vec![UnresolvedRuleSelector::cli("CPY")]),
+                select: Some(vec![UnresolvedRuleSelector::cli("RUF91")]),
                 ..RuleSelection::default()
             }],
             Some(PreviewOptions {
@@ -2135,7 +2140,7 @@ mod tests {
 
         let actual = resolve_rules(
             [RuleSelection {
-                select: Some(vec![UnresolvedRuleSelector::cli("CPY")]),
+                select: Some(vec![UnresolvedRuleSelector::cli("RUF91")]),
                 ..RuleSelection::default()
             }],
             Some(PreviewOptions {
@@ -2143,7 +2148,7 @@ mod tests {
                 ..PreviewOptions::default()
             }),
         )?;
-        let expected = RuleSet::from_rule(Rule::MissingCopyrightNotice);
+        let expected = RuleSet::from_rule(Rule::PreviewTestRule);
         assert_eq!(actual, expected);
         Ok(())
     }
@@ -2152,7 +2157,7 @@ mod tests {
     fn select_prefix_preview() -> Result<()> {
         let actual = resolve_rules(
             [RuleSelection {
-                select: Some(vec![UnresolvedRuleSelector::cli("CPY0")]),
+                select: Some(vec![UnresolvedRuleSelector::cli("RUF91")]),
                 ..RuleSelection::default()
             }],
             Some(PreviewOptions {
@@ -2165,7 +2170,7 @@ mod tests {
 
         let actual = resolve_rules(
             [RuleSelection {
-                select: Some(vec![UnresolvedRuleSelector::cli("CPY0")]),
+                select: Some(vec![UnresolvedRuleSelector::cli("RUF91")]),
                 ..RuleSelection::default()
             }],
             Some(PreviewOptions {
@@ -2173,7 +2178,7 @@ mod tests {
                 ..PreviewOptions::default()
             }),
         )?;
-        let expected = RuleSet::from_rule(Rule::MissingCopyrightNotice);
+        let expected = RuleSet::from_rule(Rule::PreviewTestRule);
         assert_eq!(actual, expected);
         Ok(())
     }

@@ -31,7 +31,6 @@ fn respect_type_ignore_comments_is_turned_off() -> anyhow::Result<()> {
       |
     2 | y = a + 5  # type: ignore
       |     ^
-      |
 
     Found 1 diagnostic
 
@@ -81,7 +80,6 @@ fn overrides_basic() -> anyhow::Result<()> {
       |
     2 | print(x)  # type: ignore  # ignore not-respected (override)
       |       ^
-      |
 
     Found 1 diagnostic
 
@@ -137,7 +135,6 @@ fn overrides_precedence() -> anyhow::Result<()> {
       |
     2 | print(y)  # type: ignore (should be an error, because type ignores are disabled)
       |       ^
-      |
 
     Found 1 diagnostic
 
@@ -189,14 +186,12 @@ fn overrides_inherit_global() -> anyhow::Result<()> {
       |
     2 | print(y)  # type: ignore ignore not-respected (global)
       |       ^
-      |
 
     error[unresolved-reference]: Name `y` used when not defined
      --> tests/test_main.py:2:7
       |
     2 | print(y)  # type: ignore ignore respected (inherited from global)
       |       ^
-      |
 
     Found 2 diagnostics
 
@@ -272,13 +267,11 @@ fn sound_types_is_per_module() -> anyhow::Result<()> {
       |
     5 | f("wrong")
       |   ^^^^^^^ Argument type `Literal["wrong"]` does not satisfy `int`, inferred for parameter `a`
-      |
     info: Parameter declared here
      --> sound/lib.py:2:7
       |
     2 | def f(a=1): ...
       |       ^
-      |
 
     Found 1 diagnostic
 
@@ -343,7 +336,7 @@ fn precise_unsolved_typevars_is_per_module() -> anyhow::Result<()> {
         ),
     ])?;
 
-    assert_cmd_snapshot!(case.command(), @r"
+    assert_cmd_snapshot!(case.command(), @"
     success: true
     exit_code: 0
     ----- stdout -----
@@ -352,14 +345,12 @@ fn precise_unsolved_typevars_is_per_module() -> anyhow::Result<()> {
       |
     6 | reveal_type(f())
       |             ^^^ `Never`
-      |
 
     info[revealed-type]: Revealed type
      --> precise/main.py:6:13
       |
     6 | reveal_type(g())
       |             ^^^ `Unknown`
-      |
 
     Found 2 diagnostics
 
@@ -438,13 +429,12 @@ fn bivariant_private_attributes_is_per_module() -> anyhow::Result<()> {
     exit_code: 1
     ----- stdout -----
     error[invalid-assignment]: Object of type `Covariant[A]` is not assignable to `Covariant[B]`
-     --> bivariant/main.py:9:11
+     --> bivariant/main.py:9:26
       |
     9 | narrowed: Covariant[B] = Covariant[A]()
       |           ------------   ^^^^^^^^^^^^^^ Incompatible value of type `Covariant[A]`
       |           |
       |           Declared type
-      |
 
     Found 1 diagnostic
 
@@ -488,7 +478,6 @@ fn overlapping_condition_exempt_types_rejects_a_malformed_name() -> anyhow::Resu
     2 | [analysis]
     3 | overlapping-condition-exempt-types = ["int", "list[int]"]
       |                                              ^^^^^^^^^^^ Expected a bare or qualified class name, such as `int` or `decimal.Decimal`
-      |
     "#);
 
     Ok(())
@@ -525,7 +514,6 @@ fn overlapping_condition_exempt_types_accepts_an_unresolvable_name() -> anyhow::
       |
     3 |     if not a:
       |        ^^^^^
-      |
     info: `str | None` is tested for falsiness
     help: Compare against the specific value instead of testing truthiness
 
@@ -564,7 +552,6 @@ fn implicit_object_repr_report_types_rejects_a_malformed_name() -> anyhow::Resul
     2 | [analysis]
     3 | implicit-object-repr-report-types = ["types.FunctionType", "not a class"]
       |                                                            ^^^^^^^^^^^^^ Expected a bare or qualified class name, such as `int` or `decimal.Decimal`
-      |
     "#);
 
     Ok(())
@@ -603,7 +590,6 @@ fn implicit_object_repr_exempt_types_silences_a_default() -> anyhow::Result<()> 
       |
     5 | print(int)
       |       ^^^
-      |
     info: nothing in its hierarchy defines one, so the output is the interpreter's default, which identifies the class rather than the value
 
     Found 1 diagnostic
@@ -672,7 +658,6 @@ fn redundant_return_annotation_is_gated_on_infer_unannotated_signatures() -> any
       |
     2 | def f() -> None:
       |            ^^^^
-      |
     info: a `def` that leaves out its return type already returns `None`
     help: Remove the annotation
 
@@ -681,7 +666,6 @@ fn redundant_return_annotation_is_gated_on_infer_unannotated_signatures() -> any
       |
     2 | def s() -> None: ...
       |            ^^^^
-      |
     info: a `def` that leaves out its return type already returns `None`
     help: Remove the annotation
 

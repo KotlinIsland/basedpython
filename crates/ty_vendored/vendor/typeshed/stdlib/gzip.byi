@@ -225,8 +225,8 @@ class GzipFile(BaseStream):
         """
 
     def peek(self, n: int) -> bytes
-    override def close(self) -> None
-    override def flush(self, zlib_mode: int = 2) -> None
+    override def close(self)
+    override def flush(self, zlib_mode: int = 2)
     override def fileno(self) -> int:
         """Invoke the underlying file object's fileno() method.
 

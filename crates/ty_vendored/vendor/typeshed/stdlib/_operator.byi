@@ -20,7 +20,7 @@ from _typeshed import (
     SupportsSub,
 )
 from collections.abc import Callable, Container, Iterable, MutableMapping, MutableSequence, Sequence
-from operator import attrgetter as attrgetter, itemgetter as itemgetter, methodcaller as methodcaller
+from operator export attrgetter, itemgetter, methodcaller
 from typing import ParamSpec, Protocol, TypeAlias, TypeVar, type_check_only
 
 

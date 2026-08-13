@@ -7,7 +7,7 @@ use ty_ide::{
     HierarchicalSymbols, SymbolId, SymbolInfo, TemplateSymbol, django_template_document_symbols,
     document_symbols,
 };
-use ty_project::ProjectDatabase;
+use ty_project::{ProjectDatabase, SemanticDb as _};
 
 use crate::Db;
 use crate::document::{PositionEncoding, ToRangeExt};
@@ -60,7 +60,7 @@ impl BackgroundDocumentRequestHandler for DocumentSymbolRequestHandler {
             ));
         }
 
-        let symbols = document_symbols(db, file);
+        let symbols = document_symbols(db, db.program_file(file));
         if symbols.is_empty() {
             return Ok(None);
         }

@@ -25,7 +25,7 @@ impl FormatRuleWithOptions<ExprCall, PyFormatContext<'_>> for FormatExprCall {
 impl FormatNodeRule<ExprCall> for FormatExprCall {
     fn fmt_fields(&self, item: &ExprCall, f: &mut PyFormatter) -> FormatResult<()> {
         let ExprCall {
-            range: _,
+            range_start: _,
             node_index: _,
             is_cast,
             is_checked_cast,

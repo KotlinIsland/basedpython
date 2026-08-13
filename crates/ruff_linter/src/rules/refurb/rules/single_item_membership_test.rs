@@ -126,7 +126,7 @@ fn single_item<'a>(expr: &'a Expr, semantic: &'a SemanticModel) -> Option<&'a Ex
         Expr::Call(ast::ExprCall {
             func,
             arguments,
-            range: _,
+            range_start: _,
             node_index: _,
             is_cast: _,
             is_checked_cast: _,

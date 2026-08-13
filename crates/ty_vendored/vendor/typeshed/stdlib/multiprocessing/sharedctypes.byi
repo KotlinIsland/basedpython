@@ -119,7 +119,7 @@ class SynchronizedString(SynchronizedArray[bytes]):
     def __setitem__(self, i: SupportsIndex, value: bytes) -> None
 
     override def __getslice__(self, start: SupportsIndex, stop: SupportsIndex) -> bytes
-    override def __setslice__(self, start: SupportsIndex, stop: SupportsIndex, values: bytes) -> None
+    override def __setslice__(self, start: SupportsIndex, stop: SupportsIndex, values: bytes)
 
     value: bytes
     raw: bytes

@@ -9,4 +9,4 @@ final MAP: dict[str, str]
 class FixMethodattrs(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
-    override def transform(self, node, results) -> None
+    override def transform(self, node, results)

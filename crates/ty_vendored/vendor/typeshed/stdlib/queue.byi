@@ -1,7 +1,7 @@
 """A multi-producer, multi-consumer queue."""
 
 import sys
-from _queue import Empty as Empty, SimpleQueue as SimpleQueue
+from _queue export Empty, SimpleQueue
 from _typeshed import SupportsRichComparisonT
 from threading import Condition, Lock
 from types import GenericAlias

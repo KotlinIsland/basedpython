@@ -2,16 +2,16 @@ import sys
 from _typeshed import ReadableBuffer, StrOrBytesPath, Unused
 from collections.abc import Generator, MutableMapping
 from typing import Final, Literal, TypeAlias
-from typing_extensions import LiteralString, Self
+from typing_extensions import Self
 
-final BUILD_TABLE: LiteralString
-final GET_SIZE: LiteralString
-final LOOKUP_KEY: LiteralString
-final STORE_KV: LiteralString
-final DELETE_KEY: LiteralString
-final ITER_KEYS: LiteralString
+final BUILD_TABLE: literal str
+final GET_SIZE: literal str
+final LOOKUP_KEY: literal str
+final STORE_KV: literal str
+final DELETE_KEY: literal str
+final ITER_KEYS: literal str
 if sys.version_info >= (3, 15):
-    final REORGANIZE: LiteralString
+    final REORGANIZE: literal str
 
 private type SqliteData = str | ReadableBuffer | int | float
 
@@ -21,8 +21,8 @@ class _Database(MutableMapping[bytes, bytes]):
     init(self, path: StrOrBytesPath, /, *, flag: "r" | "w" | "c" | "n", mode: int)
     override def __len__(self) -> int
     override def __getitem__(self, key: SqliteData) -> bytes
-    override def __setitem__(self, key: SqliteData, value: SqliteData) -> None
-    override def __delitem__(self, key: SqliteData) -> None
+    override def __setitem__(self, key: SqliteData, value: SqliteData)
+    override def __delitem__(self, key: SqliteData)
     override def __iter__(self) -> Generator[bytes]
     def close(self)
     override def keys(self) -> list[bytes]

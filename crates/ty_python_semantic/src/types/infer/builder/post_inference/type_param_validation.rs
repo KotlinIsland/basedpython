@@ -49,7 +49,7 @@ pub(crate) fn check_single_typevar_tuple_pep695(
             "{owner_kind} `{owner_name}` cannot have multiple `TypeVarTuple` type parameters"
         ));
 
-        diagnostic.set_primary_message(format_args!(
+        diagnostic.set_primary_annotation_message(format_args!(
             "`{}` is an additional TypeVarTuple",
             typevar_tuple.name
         ));
@@ -80,6 +80,7 @@ pub(crate) fn check_declared_alias_variance<'db>(
     alias: TypeAliasType<'db>,
     type_params: &ast::TypeParams,
 ) {
+    let env = context.program_environment();
     let db = context.db();
     let Some(generic_context) = alias.generic_context(db) else {
         return;
@@ -95,7 +96,7 @@ pub(crate) fn check_declared_alias_variance<'db>(
             continue;
         };
 
-        let required = alias.variance_of(db, bound_typevar.identity(db));
+        let required = alias.variance_of(db, env, bound_typevar.identity(db));
         if declared.join(required) == declared {
             continue;
         }
@@ -169,7 +170,7 @@ pub(crate) fn check_no_default_after_typevar_tuple_pep695(
             typevar_tuple.name
         ));
 
-        diagnostic.set_primary_message(format_args!("`{single_name}` has a default"));
+        diagnostic.set_primary_annotation_message(format_args!("`{single_name}` has a default"));
     } else {
         let names = format_enumeration(params_with_defaults.iter().map(|p| p.name()));
 
@@ -178,7 +179,7 @@ pub(crate) fn check_no_default_after_typevar_tuple_pep695(
             typevar_tuple.name
         ));
 
-        diagnostic.set_primary_message(format_args!(
+        diagnostic.set_primary_annotation_message(format_args!(
             "`{}` has a default",
             params_with_defaults[0].name()
         ));

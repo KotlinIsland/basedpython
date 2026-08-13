@@ -20,7 +20,6 @@ BY012 [*] `typing` members are implicitly available
 1 | from typing import Sequence
 2 | from typing import Mapping, Iterator
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
 help: Remove the import
   |
 1 | from typing import Sequence

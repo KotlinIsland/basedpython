@@ -8,7 +8,8 @@ use ty_ide::{
     InlayHintKind, InlayHintLabel, InlayHintTextEdit, TemplateInlayHint, TemplateInlayHintKind,
     django_template_inlay_hints, inlay_hints,
 };
-use ty_project::ProjectDatabase;
+use ty_project::{ProjectDatabase, SemanticDb as _};
+use ty_python_semantic::ProgramEnvironment;
 
 use crate::PositionEncoding;
 use crate::document::{RangeExt, TextSizeExt, ToLink};
@@ -55,16 +56,26 @@ impl BackgroundDocumentRequestHandler for InlayHintRequestHandler {
         };
 
         if snapshot.is_django_template() {
-            let hints =
-                django_template_inlay_hints(db, file, range, workspace_settings.inlay_hints())
-                    .into_iter()
-                    .filter_map(|hint| template_inlay_hint(hint, db, file, snapshot.encoding()))
-                    .collect();
+            let hints = django_template_inlay_hints(
+                db,
+                &ProgramEnvironment::from_file(db.program_file(file)),
+                file,
+                range,
+                workspace_settings.inlay_hints(),
+            )
+            .into_iter()
+            .filter_map(|hint| template_inlay_hint(hint, db, file, snapshot.encoding()))
+            .collect();
 
             return Ok(Some(hints));
         }
 
-        let inlay_hints = inlay_hints(db, file, range, workspace_settings.inlay_hints());
+        let inlay_hints = inlay_hints(
+            db,
+            db.program_file(file),
+            range,
+            workspace_settings.inlay_hints(),
+        );
 
         let inlay_hints: Vec<lsp_types::InlayHint> = inlay_hints
             .into_iter()

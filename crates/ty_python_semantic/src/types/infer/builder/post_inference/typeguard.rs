@@ -25,6 +25,7 @@ pub(crate) fn check_type_guard_definition<'db>(
     };
 
     let db = context.db();
+    let env = context.program_environment();
 
     let overload = function.literal(db).last_definition;
     let signature = overload.signature(db);
@@ -101,15 +102,15 @@ pub(crate) fn check_type_guard_definition<'db>(
         // type it replaced and every narrowing fits it
         let param_ty = narrowed_param.annotated_type();
         let param_ty =
-            crate::types::inferred_signature::gradual_hole(db, param_ty).unwrap_or(param_ty);
-        if !narrowed_ty.is_assignable_to(db, param_ty)
+            crate::types::inferred_signature::gradual_hole(db, env, param_ty).unwrap_or(param_ty);
+        if !narrowed_ty.is_assignable_to(db, env, param_ty)
             && let Some(builder) = context.report_lint(&INVALID_TYPE_GUARD_DEFINITION, returns_expr)
         {
             builder.into_diagnostic(format_args!(
                 "Narrowed type `{narrowed}` is not assignable \
                     to the declared parameter type `{param}`",
-                narrowed = narrowed_ty.display(db),
-                param = param_ty.display(db)
+                narrowed = narrowed_ty.display(db, env),
+                param = param_ty.display(db, env)
             ));
         }
     }
@@ -135,13 +136,13 @@ fn check_guard_place_exists<'db>(
     // nothing — the name has to be bound or declared somewhere the guard can see
     let db = context.db();
     let file = context.file();
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, db.program_file(file));
     let root = PlaceExpr::from_symbol_with_members(&guard.name, &[]);
     let resolves = root.is_some_and(|root| {
         index
             .ancestor_scopes(context.scope().file_scope_id(db))
             .any(|(scope_id, _)| {
-                let places = place_table(db, scope_id.to_scope_id(db, file));
+                let places = place_table(db, scope_id.to_scope_id(db, db.program_file(file)));
                 places.place_id(&root).is_some_and(|place_id| {
                     let place = places.place(place_id);
                     place.is_bound() || place.is_declared()

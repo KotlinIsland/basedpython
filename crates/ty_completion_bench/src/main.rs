@@ -17,7 +17,7 @@ use ty_ide::{Completion, CompletionCapabilities};
 use ty_project::metadata::Options;
 use ty_project::metadata::options::EnvironmentOptions;
 use ty_project::metadata::value::RelativePathBuf;
-use ty_project::{ProjectDatabase, ProjectMetadata};
+use ty_project::{ProjectDatabase, ProjectMetadata, SemanticDb as _};
 
 #[derive(Debug, clap::Parser)]
 #[command(
@@ -138,11 +138,13 @@ fn get_completions<'db>(
     let file = system_path_to_file(db, path)
         .with_context(|| format!("failed to get database file for `{path}`"))?;
     let settings = ty_ide::CompletionSettings::default();
+    let program_file = db.program_file(file);
     Ok(ty_ide::completion(
         db,
+        &ty_ide::ProgramEnvironment::from_file(program_file),
         &settings,
         CompletionCapabilities::default(),
-        file,
+        program_file,
         offset,
     ))
 }

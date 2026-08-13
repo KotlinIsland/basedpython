@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use lsp_types::{self as types, Code, CodeActionRequest, CodeActionResponse, TextEdit, Uri};
 use ruff_text_size::Ranged;
 use ty_ide::{FileEdit, code_actions};
-use ty_project::ProjectDatabase;
+use ty_project::{ProjectDatabase, SemanticDb as _};
 use types::CodeActionKind;
 
 use crate::db::Db;
@@ -39,6 +39,7 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
         let Some(file) = snapshot.to_notebook_or_file(db) else {
             return Ok(None);
         };
+        let program_file = db.program_file(file);
         let mut actions = Vec::new();
 
         for mut diagnostic in diagnostics.into_iter().filter(|diagnostic| {
@@ -99,7 +100,7 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
             {
                 for action in code_actions(
                     db,
-                    file,
+                    program_file,
                     range,
                     &diagnostic_id,
                     snapshot.is_django_template(),

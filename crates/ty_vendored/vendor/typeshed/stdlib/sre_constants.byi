@@ -1,7 +1,7 @@
 """Internal support module for sre"""
 
 import sys
-from re import error as error
+from re export error
 from typing import Final
 from typing_extensions import Self, disjoint_base
 

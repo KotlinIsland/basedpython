@@ -307,14 +307,40 @@ If a typevar does not provide a default, we use `Unknown`:
 reveal_type(C())  # revealed: C[Unknown]
 ```
 
+## Calls within the generic class
+
+A call to a generic class from one of its own methods creates an independent generic occurrence. The
+enclosing class's type variable does not constrain the new instance.
+
+```py
+class C[T]:
+    def __init__(self) -> None: ...
+    def method(self) -> None:
+        reveal_type(C())  # revealed: C[Never]
+        contextual: C[int] = C()
+```
+
+The same applies when an explicit `__new__` is followed by a downstream `__init__`. Both bound
+receivers refer to the new generic occurrence.
+
+```py
+from typing import Self
+
+class D[T]:
+    def __new__(cls) -> Self:
+        return super().__new__(cls)
+
+    def __init__(self) -> None: ...
+    def method(self) -> None:
+        reveal_type(D())  # revealed: D[Never]
+        contextual: D[int] = D()
+```
+
 ## Inferring generic class parameters from constructors
 
 If the type of a constructor parameter is a class typevar, we can use that to infer the type
 parameter. The types inferred from a type context and from a constructor parameter must be
 consistent with each other.
-
-We have to add `x: T` to the classes to ensure they're not bivariant in `T` (__new__ and __init__
-signatures don't count towards variance).
 
 ### `__new__` only
 
@@ -322,8 +348,6 @@ signatures don't count towards variance).
 from ty_extensions._internal import generic_context, into_regular_callable
 
 class C[T]:
-    x: T
-
     def __new__(cls, x: T) -> "C[T]":
         return object.__new__(cls)
 
@@ -332,9 +356,9 @@ reveal_type(generic_context(C))
 # revealed: ty_extensions._internal.GenericContext[T@C]
 reveal_type(generic_context(into_regular_callable(C)))
 
-reveal_type(C(1))  # revealed: C[int]
+reveal_type(C(1))  # revealed: C[Literal[1]]
 
-# error: [invalid-assignment] "Object of type `C[str]` is not assignable to `C[int]`"
+# error: [invalid-assignment] "Object of type `C[Literal["five"]]` is not assignable to `C[int]`"
 wrong_innards: C[int] = C("five")
 ```
 
@@ -344,8 +368,6 @@ wrong_innards: C[int] = C("five")
 from ty_extensions._internal import generic_context, into_regular_callable
 
 class C[T]:
-    x: T
-
     def __init__(self, x: T) -> None: ...
 
 # revealed: ty_extensions._internal.GenericContext[T@C]
@@ -353,10 +375,61 @@ reveal_type(generic_context(C))
 # revealed: ty_extensions._internal.GenericContext[T@C]
 reveal_type(generic_context(into_regular_callable(C)))
 
-reveal_type(C(1))  # revealed: C[int]
+reveal_type(C(1))  # revealed: C[Literal[1]]
 
-# error: [invalid-assignment] "Object of type `C[str]` is not assignable to `C[int]`"
+# error: [invalid-assignment] "Object of type `C[Literal["five"]]` is not assignable to `C[int]`"
 wrong_innards: C[int] = C("five")
+```
+
+### Failed constructor inference
+
+A failed constructor call reports its argument error without exposing an unsolved class type
+parameter or producing an additional assignment error.
+
+```py
+from collections.abc import Callable
+
+class Animal: ...
+class Dog(Animal): ...
+
+class Consumer[T]:
+    def __init__(self, callback: Callable[[T], None]) -> None:
+        self.callback = callback
+
+def accepts_dog(value: Dog) -> None: ...
+
+consumer: Consumer[Animal] = Consumer(accepts_dog)  # error: [invalid-argument-type]
+```
+
+### Constructing the class from its own type variable
+
+A constructor call inside a generic class can use a value whose type is one of the class's type
+variables. The constructed instance keeps that type variable instead of falling back to `Unknown`,
+so an incompatible type context is rejected.
+
+```py
+class C[T]:
+    def __init__(self, value: T) -> None:
+        reveal_type(C(value))  # revealed: C[T@C]
+
+        # error: [invalid-assignment] "Object of type `C[T@C]` is not assignable to `C[int]`"
+        invalid: C[int] = C(value)
+
+    def from_union(self, value: T | list[T]) -> None:
+        reveal_type(C(value))  # revealed: C[T@C | list[T@C]]
+
+        # error: [invalid-assignment] "Object of type `C[T@C | list[T@C]]` is not assignable to `C[list[T@C]]`"
+        invalid_union: C[list[T]] = C(value)
+```
+
+A method's own type variable is independent of the class type variable and is preserved in the same
+way.
+
+```py
+class D[T]:
+    def __init__(self, value: T) -> None: ...
+    def method[S](self, value: S) -> None:
+        reveal_type(D(value))  # revealed: D[S@method]
 ```
 
 ### Identical `__new__` and `__init__` signatures
@@ -553,10 +626,6 @@ from typing import overload
 from ty_extensions._internal import generic_context, into_regular_callable
 
 class C[T]:
-    # we need to use the type variable or else the class is bivariant in T, and
-    # specializations become meaningless
-    x: T
-
     @overload
     def __init__(self: C[str], x: str) -> None: ...
     @overload
@@ -574,7 +643,7 @@ reveal_type(generic_context(into_regular_callable(C)))
 
 reveal_type(C("string"))  # revealed: C[str]
 reveal_type(C(b"bytes"))  # revealed: C[bytes]
-reveal_type(C(12))  # revealed: C[Unknown]
+reveal_type(C(12))  # revealed: C[Never]
 
 C[str]("string")
 C[str](b"bytes")  # error: [no-matching-overload]
@@ -593,10 +662,6 @@ C[None](b"bytes")  # error: [no-matching-overload]
 C[None](12)
 
 class D[T, U]:
-    # we need to use the type variable or else the class is bivariant in T, and
-    # specializations become meaningless
-    x: T
-
     @overload
     def __init__(self: "D[str, U]", u: U) -> None: ...
     @overload
@@ -610,7 +675,7 @@ reveal_type(generic_context(into_regular_callable(D)))
 
 reveal_type(D("string"))  # revealed: D[str, Literal["string"]]
 reveal_type(D(1))  # revealed: D[str, Literal[1]]
-reveal_type(D(1, "string"))  # revealed: D[int, Literal["string"]]
+reveal_type(D(1, "string"))  # revealed: D[Literal[1], Literal["string"]]
 ```
 
 ### Synthesized methods with dataclasses
@@ -932,6 +997,44 @@ class Impl[S, R](A[S, R]):
 reveal_type(generic_context(A.get))  # revealed: ty_extensions._internal.GenericContext[Self@get]
 reveal_type(generic_context(A.merge))  # revealed: ty_extensions._internal.GenericContext[Self@merge, R2@merge]
 reveal_type(generic_context(Impl.foo))  # revealed: ty_extensions._internal.GenericContext[Self@foo]
+```
+
+## Subscripting non-generic classes
+
+Subscripting a non-generic class in a type expression is an error. The invalid type expression
+recovers to `Unknown`.
+
+```py
+class NonGeneric: ...
+
+# error: [not-subscriptable] "Cannot subscript non-generic type `<class 'NonGeneric'>`"
+def direct(value: NonGeneric[int]) -> None:
+    reveal_type(value)  # revealed: Unknown
+```
+
+The same diagnostic applies when the specialization is nested inside `type[...]`.
+
+```py
+# error: [not-subscriptable] "Cannot subscript non-generic type `<class 'NonGeneric'>`"
+def nested(value: type[NonGeneric[int]]) -> None:
+    reveal_type(value)  # revealed: Unknown
+```
+
+Inheriting from a non-generic class, or from a specialization of a generic class, does not make the
+subclass generic.
+
+```py
+class Child(NonGeneric): ...
+class Generic[T, U = str]: ...
+class SpecializedChild(Generic[int]): ...
+
+# error: [not-subscriptable] "Cannot subscript non-generic type `<class 'Child'>`"
+def child(value: Child[str]) -> None:
+    reveal_type(value)  # revealed: Unknown
+
+# error: [not-subscriptable] "Cannot subscript non-generic type `<class 'SpecializedChild'>`"
+def specialized_child(value: SpecializedChild[bytes]) -> None:
+    reveal_type(value)  # revealed: Unknown
 ```
 
 ## Tuple as a PEP-695 generic class

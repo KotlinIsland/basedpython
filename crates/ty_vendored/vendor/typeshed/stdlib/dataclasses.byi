@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Mapping
 from types import GenericAlias
 from typing import Final, Generic, Literal, Protocol, TypeVar, type_check_only
 from typing_extensions import Never
+from ty_extensions import Top
 
 
 __all__ = [
@@ -384,22 +385,26 @@ def fields(class_or_instance: DataclassInstance | type[DataclassInstance]) -> (*
     """
 
 # HACK: `obj: Never` typing matches if object argument is using `Any` type.
-def is_dataclass(obj: Never) -> obj is DataclassInstance | type[DataclassInstance]:
+def is_dataclass(obj: Never) -> obj is Top[DataclassInstance | type[DataclassInstance]]:
     """Returns True if obj is a dataclass or an instance of a
     dataclass.
     """
-def is_dataclass(obj: type) -> obj is type[DataclassInstance]
-def is_dataclass(obj: object) -> obj is DataclassInstance | type[DataclassInstance]
+def is_dataclass(obj: type) -> obj is Top[type[DataclassInstance]]
+def is_dataclass(obj: object) -> obj is Top[DataclassInstance | type[DataclassInstance]]
 
 class FrozenInstanceError(AttributeError)
 
 class InitVar[in out Element]:
     __slots__ = ("type",)
-    type: Type[Element]
+    type: Type[Element]  # ty:ignore[unbound-type-variable]
     init(self, type: Type[Element])
 
-    def __class_getitem__(cls, type: Type[Element]) -> InitVar[Element]
-    def __class_getitem__(cls, type: dynamic) -> InitVar[dynamic]
+    def __class_getitem__(
+        cls, type: Type[Element]
+    ) -> InitVar[Element]
+    def __class_getitem__(
+        cls, type: dynamic
+    ) -> InitVar[dynamic]
 
 if sys.version_info >= (3, 14):
     def make_dataclass(

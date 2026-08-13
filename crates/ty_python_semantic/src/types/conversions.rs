@@ -31,6 +31,7 @@ use ty_python_core::semantic_index;
 
 use crate::Db;
 use crate::place::builtins_symbol;
+use crate::types::ProgramEnvironment;
 use crate::types::call::CallArguments;
 use crate::types::class::{ClassLiteral, ClassType, KnownClass, StaticClassLiteral};
 use crate::types::context::InferContext;
@@ -39,6 +40,7 @@ use crate::types::extensions::{self, ExtensionMemberKind, ExtensionMemberResolut
 use crate::types::function::FunctionType;
 use crate::types::signatures::Parameters;
 use crate::types::{MemberLookupPolicy, Type, TypeContext};
+use ty_module_resolver::ImportingFile;
 
 /// the classmethod on a target that converts a value of some other type
 pub(crate) const FROM: &str = "__from__";
@@ -83,7 +85,7 @@ pub(crate) enum Route<'db> {
 
 impl<'db> Route<'db> {
     /// how the route reads in a diagnostic
-    fn describe(self, db: &'db dyn Db) -> String {
+    fn describe(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> String {
         let dunder = |class: ClassType<'db>, source: DunderSource<'db>, dunder: &str| match source {
             DunderSource::Declared => format!("{}.{dunder}", class.name(db)),
             // two extensions supplying the same dunder read alike without this,
@@ -98,7 +100,7 @@ impl<'db> Route<'db> {
             Route::Conformance(protocol) => format!("conformance to `{}`", protocol.name(db)),
             Route::From(class, source) => dunder(class, source, FROM),
             Route::Of(class, source) => dunder(class, source, OF),
-            Route::Into(source) => format!("{}.{INTO}", source.display(db)),
+            Route::Into(source) => format!("{}.{INTO}", source.display(db, env)),
         }
     }
 }
@@ -124,6 +126,7 @@ pub(crate) struct ConversionRepair<'db> {
 /// generic can ask, which is why `list[Celsius]` is not a `list[Fahrenheit]`.
 pub(crate) fn repair_conversion<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     source: Type<'db>,
     target: Type<'db>,
@@ -134,7 +137,7 @@ pub(crate) fn repair_conversion<'db>(
     }
     // a conversion only ever *adds* an assignment that fails without it, so no
     // code that checks today changes meaning
-    if source.is_assignable_to(db, target) {
+    if source.is_assignable_to(db, env, target) {
         return None;
     }
     // the value being converted is an ordinary value of the type it was
@@ -142,10 +145,12 @@ pub(crate) fn repair_conversion<'db>(
     let source = source.erase_restriction(db);
 
     let mut routes: Vec<Route<'db>> = Vec::new();
-    if let Some(protocol) = super::conformance::repair_with_conformance(db, file, source, target) {
+    if let Some(protocol) =
+        super::conformance::repair_with_conformance(db, env, file, source, target)
+    {
         routes.push(Route::Conformance(protocol));
     }
-    dunder_routes(db, file, source, target, value, &mut routes);
+    dunder_routes(db, env, file, source, target, value, &mut routes);
 
     let mut routes = routes.into_iter();
     let route = routes.next()?;
@@ -159,6 +164,7 @@ pub(crate) fn repair_conversion<'db>(
 /// order so that an ambiguity reads the same way whichever site asks
 fn dunder_routes<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     source: Type<'db>,
     target: Type<'db>,
@@ -168,7 +174,7 @@ fn dunder_routes<'db>(
     let literal = value.is_some_and(is_literal_expression);
 
     for arm in union_arms(db, target) {
-        let Some(class) = arm.nominal_class(db) else {
+        let Some(class) = arm.nominal_class(db, env) else {
             continue;
         };
         for dunder in [FROM, OF] {
@@ -180,7 +186,7 @@ fn dunder_routes<'db>(
             let sources = std::iter::once(source).chain(
                 value
                     .filter(|_| dunder == OF)
-                    .and_then(|value| empty_display_type(db, value)),
+                    .and_then(|value| empty_display_type(db, env, value)),
             );
             let route = |dunder_source| {
                 if dunder == FROM {
@@ -194,9 +200,16 @@ fn dunder_routes<'db>(
             // unless the member really is a classmethod. resolving the route the
             // same way the declaration is validated keeps a malformed dunder
             // from converting anything
-            if conversion_classmethod(db, class, dunder).is_some() {
+            if conversion_classmethod(db, env, class, dunder).is_some() {
                 if sources.clone().any(|source| {
-                    converts(db, arm, dunder, CallArguments::positional([source]), target)
+                    converts(
+                        db,
+                        env,
+                        arm,
+                        dunder,
+                        CallArguments::positional([source]),
+                        target,
+                    )
                 }) {
                     routes.push(route(DunderSource::Declared));
                 }
@@ -205,10 +218,10 @@ fn dunder_routes<'db>(
             // a type that declares no conversion of its own may still be given
             // one from outside. `try_call_dunder` cannot see an extension
             // member, so it is resolved and called directly
-            for member in extension_classmethods(db, file, class, dunder) {
+            for member in extension_classmethods(db, env, file, class, dunder) {
                 if sources
                     .clone()
-                    .any(|source| calls_to(db, member.ty, source, target))
+                    .any(|source| calls_to(db, env, member.ty, source, target))
                 {
                     routes.push(route(DunderSource::Extension(member.extension)));
                 }
@@ -216,7 +229,8 @@ fn dunder_routes<'db>(
         }
     }
 
-    if source_declares_into(db, source) && converts(db, source, INTO, CallArguments::none(), target)
+    if source_declares_into(db, env, source)
+        && converts(db, env, source, INTO, CallArguments::none(), target)
     {
         routes.push(Route::Into(source));
     }
@@ -227,23 +241,38 @@ fn dunder_routes<'db>(
 /// and descriptor binding all come from it rather than being re-derived here
 fn converts<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     receiver: Type<'db>,
     dunder: &str,
     arguments: CallArguments<'_, 'db>,
     target: Type<'db>,
 ) -> bool {
     receiver
-        .try_call_dunder(db, dunder, arguments, TypeContext::default())
-        .is_ok_and(|bindings| bindings.return_type(db).is_assignable_to(db, target))
+        .try_call_dunder(db, env, dunder, arguments, TypeContext::default())
+        .is_ok_and(|bindings| {
+            bindings
+                .return_type(db, env)
+                .is_assignable_to(db, env, target)
+        })
 }
 
 /// the same question for an already-bound member: does calling it with `source`
 /// produce something the target accepts? An extension member does not live on
 /// the receiver's meta-type, so it is resolved first and called here
-fn calls_to<'db>(db: &'db dyn Db, member: Type<'db>, source: Type<'db>, target: Type<'db>) -> bool {
+fn calls_to<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    member: Type<'db>,
+    source: Type<'db>,
+    target: Type<'db>,
+) -> bool {
     member
-        .try_call(db, &CallArguments::positional([source]))
-        .is_ok_and(|bindings| bindings.return_type(db).is_assignable_to(db, target))
+        .try_call(db, env, &CallArguments::positional([source]))
+        .is_ok_and(|bindings| {
+            bindings
+                .return_type(db, env)
+                .is_assignable_to(db, env, target)
+        })
 }
 
 /// the `__from__` / `__of__` an `extension` supplies for `class`, bound to the
@@ -253,11 +282,12 @@ fn calls_to<'db>(db: &'db dyn Db, member: Type<'db>, source: Type<'db>, target: 
 /// the site reports the ambiguity rather than silently picking the first
 fn extension_classmethods<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     class: ClassType<'db>,
     dunder: &str,
 ) -> Vec<ExtensionMemberResolution<'db>> {
-    extensions::resolve_extension_members(db, file, Type::from(class), dunder)
+    extensions::resolve_extension_members(db, env, file, Type::from(class), dunder)
         .into_iter()
         .filter(|resolution| resolution.kind == ExtensionMemberKind::ClassMethod)
         .collect()
@@ -272,13 +302,17 @@ fn extension_classmethods<'db>(
 /// display and nothing else — and unlike ordinary inference it has the syntax in
 /// hand. Offered *beside* the widened type rather than replacing it, so a dunder
 /// that accepts `dict[str, int]` still takes `{}` the way it always has
-fn empty_display_type<'db>(db: &'db dyn Db, value: &ast::Expr) -> Option<Type<'db>> {
+fn empty_display_type<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    value: &ast::Expr,
+) -> Option<Type<'db>> {
     match value {
         ast::Expr::Dict(_) if is_empty_display(value) => {
-            Some(KnownClass::Dict.to_specialized_instance(db, &[Type::Never, Type::Never]))
+            Some(KnownClass::Dict.to_specialized_instance(db, env, &[Type::Never, Type::Never]))
         }
         ast::Expr::List(_) if is_empty_display(value) => {
-            Some(KnownClass::List.to_specialized_instance(db, &[Type::Never]))
+            Some(KnownClass::List.to_specialized_instance(db, env, &[Type::Never]))
         }
         _ => None,
     }
@@ -312,12 +346,16 @@ fn union_arms<'db>(db: &'db dyn Db, ty: Type<'db>) -> Vec<Type<'db>> {
 /// The lowered `x.__into__()` runs against whichever arm the value actually is,
 /// so one arm without it would be an `AttributeError` at runtime. Requiring all
 /// of them is what lets a union source convert at all
-fn source_declares_into<'db>(db: &'db dyn Db, source: Type<'db>) -> bool {
+fn source_declares_into<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    source: Type<'db>,
+) -> bool {
     let arms = union_arms(db, source);
     !arms.is_empty()
         && arms.iter().all(|arm| {
-            arm.nominal_class(db)
-                .is_some_and(|class| conversion_method(db, class).is_some())
+            arm.nominal_class(db, env)
+                .is_some_and(|class| conversion_method(db, env, class).is_some())
         })
 }
 
@@ -325,11 +363,12 @@ fn source_declares_into<'db>(db: &'db dyn Db, source: Type<'db>) -> bool {
 /// lowered call needs
 pub(crate) fn conversion_classmethod<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     class: ClassType<'db>,
     dunder: &str,
 ) -> Option<FunctionType<'db>> {
     match class
-        .class_member(db, dunder, MemberLookupPolicy::default())
+        .class_member(db, env, dunder, MemberLookupPolicy::default())
         .place
         .ignore_possibly_undefined()?
     {
@@ -343,10 +382,11 @@ pub(crate) fn conversion_classmethod<'db>(
 /// no target, so there would be nothing to dispatch on at runtime
 pub(crate) fn conversion_method<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     class: ClassType<'db>,
 ) -> Option<FunctionType<'db>> {
     match class
-        .class_member(db, INTO, MemberLookupPolicy::default())
+        .class_member(db, env, INTO, MemberLookupPolicy::default())
         .place
         .ignore_possibly_undefined()?
     {
@@ -369,10 +409,11 @@ pub(crate) fn conversion_method<'db>(
 /// binding the gate exists to avoid
 #[salsa::tracked(heap_size = ruff_memory_usage::heap_size)]
 fn class_declares_conversion<'db>(db: &'db dyn Db, class: StaticClassLiteral<'db>) -> bool {
+    let env = &ProgramEnvironment::from_file(class.program_file(db));
     let class = class.identity_specialization(db);
     CONVERSION_DUNDERS.iter().any(|dunder| {
         !class
-            .class_member(db, dunder, MemberLookupPolicy::default())
+            .class_member(db, env, dunder, MemberLookupPolicy::default())
             .place
             .is_undefined()
     })
@@ -381,9 +422,17 @@ fn class_declares_conversion<'db>(db: &'db dyn Db, class: StaticClassLiteral<'db
 /// might `ty` be one end of a conversion? the call gate's question, deliberately
 /// over-approximate in both directions: a `true` only costs the full check that
 /// would have run anyway, and anything this cannot classify answers `true`
-pub(crate) fn may_convert<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> bool {
+pub(crate) fn may_convert<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+) -> bool {
     union_arms(db, ty).iter().any(|arm| {
-        match arm.nominal_class(db).map(|class| class.class_literal(db)) {
+        match arm
+            .nominal_class(db, env)
+            .map(|class| class.class_literal(db))
+        {
             Some(ClassLiteral::Static(literal)) => {
                 *class_declares_conversion(db, literal)
                     || extensions::extension_converts_class(db, file, literal)
@@ -469,13 +518,23 @@ struct ImportSpelling<'a> {
 
 impl ImportSpelling<'_> {
     fn resolves(&self, name: &ModuleName) -> bool {
-        resolve_module(self.db, self.from_file, name).and_then(|module| module.file(self.db))
+        let db = self.db;
+        resolve_module(
+            self.db,
+            ImportingFile::File(
+                self.from_file,
+                db.program_file(self.from_file).resolver_environment(db),
+            ),
+            name,
+        )
+        .and_then(|module| module.file(self.db))
             == Some(self.target)
     }
 }
 
 impl<'ast> ast::visitor::Visitor<'ast> for ImportSpelling<'_> {
     fn visit_stmt(&mut self, stmt: &'ast ast::Stmt) {
+        let db = self.db;
         if self.found.is_some() {
             return;
         }
@@ -491,8 +550,14 @@ impl<'ast> ast::visitor::Visitor<'ast> for ImportSpelling<'_> {
                 }
             }
             ast::Stmt::ImportFrom(import) => {
-                if let Ok(name) = ModuleName::from_import_statement(self.db, self.from_file, import)
-                    && self.resolves(&name)
+                if let Ok(name) = ModuleName::from_import_statement(
+                    self.db,
+                    ImportingFile::File(
+                        self.from_file,
+                        db.program_file(self.from_file).resolver_environment(db),
+                    ),
+                    import,
+                ) && self.resolves(&name)
                 {
                     // keep the leading dots: a relative import is how this file
                     // addresses the module, and the absolute name may not resolve
@@ -522,7 +587,8 @@ pub(crate) fn imported_module_spelling(
     from_file: File,
     target: File,
 ) -> Option<String> {
-    let module = ruff_db::parsed::parsed_module(db, from_file).load(db);
+    let module =
+        ruff_db::parsed::parsed_module(db, db.program_file(from_file).python_file(db)).load(db);
     let mut spelling = ImportSpelling {
         db,
         from_file,
@@ -555,7 +621,16 @@ pub(crate) fn from_imported_modules(db: &dyn Db, file: File) -> Box<[ModuleName]
     impl<'ast> ast::visitor::Visitor<'ast> for Collector<'_> {
         fn visit_stmt(&mut self, stmt: &'ast ast::Stmt) {
             if let ast::Stmt::ImportFrom(import) = stmt
-                && let Ok(name) = ModuleName::from_import_statement(self.db, self.file, import)
+                && let Ok(name) = ModuleName::from_import_statement(
+                    self.db,
+                    ImportingFile::File(
+                        self.file,
+                        self.db
+                            .program_file(self.file)
+                            .resolver_environment(self.db),
+                    ),
+                    import,
+                )
                 && !self.modules.contains(&name)
             {
                 self.modules.push(name);
@@ -564,7 +639,7 @@ pub(crate) fn from_imported_modules(db: &dyn Db, file: File) -> Box<[ModuleName]
         }
     }
 
-    let module = ruff_db::parsed::parsed_module(db, file).load(db);
+    let module = ruff_db::parsed::parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let mut collector = Collector {
         db,
         file,
@@ -589,7 +664,7 @@ pub(crate) fn function_declared_return_type<'db>(
     file: File,
     function: &ast::StmtFunctionDef,
 ) -> Option<Type<'db>> {
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, db.program_file(file));
     let definition = index.expect_single_definition(function);
     let Type::FunctionLiteral(literal) = crate::types::binding_type(db, definition) else {
         return None;
@@ -636,14 +711,15 @@ pub(crate) fn addressable_elements(value: &ast::Expr) -> Option<Vec<&ast::Expr>>
 /// type, else what iterating the declared type yields
 pub(crate) fn declared_element_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     declared: Type<'db>,
 ) -> Option<Type<'db>> {
     // a mapping is keyed, and only its values sit at the literal's element
     // positions (`{"k": b}`); iterating one would give the *key* type
-    if let Some((_, value)) = declared.unpack_keys_and_items(db) {
+    if let Some((_, value)) = declared.unpack_keys_and_items(db, env) {
         return Some(value);
     }
-    let element = declared.iterate(db).homogeneous_element_type(db);
+    let element = declared.iterate(db, env).homogeneous_element_type(db, env);
     (!element.is_unknown() && !element.is_never()).then_some(element)
 }
 
@@ -659,6 +735,7 @@ pub(crate) fn call_parameter_types<'db>(
     call: &ast::ExprCall,
 ) -> Option<Vec<Option<Type<'db>>>> {
     use crate::types::constraints::ConstraintSetBuilder;
+    let env = &model.program_environment();
 
     let db = model.db();
     let arguments = CallArguments::from_arguments_typed(&call.arguments, |splatted_value| {
@@ -669,10 +746,16 @@ pub(crate) fn call_parameter_types<'db>(
     // suppresses its diagnostic rather than making the argument assignable — so
     // the parameter types have to be read out of either outcome
     let bindings = match callable_ty
-        .bindings(db)
-        .match_parameters(db, &arguments)
-        .check_types(db, &constraints, &arguments, TypeContext::default(), &[])
-    {
+        .bindings(db, env)
+        .match_parameters(db, env, &arguments)
+        .check_types(
+            db,
+            env,
+            &constraints,
+            &arguments,
+            TypeContext::default(),
+            &[],
+        ) {
         Ok(bindings) => bindings,
         Err(error) => *error.into_bindings(),
     };
@@ -687,6 +770,7 @@ pub(crate) fn report_ambiguous_conversion<'db>(
     node: impl Ranged,
     repair: &ConversionRepair<'db>,
 ) {
+    let env = context.program_environment();
     let db = context.db();
     if repair.ambiguous_with.is_empty() {
         return;
@@ -697,7 +781,7 @@ pub(crate) fn report_ambiguous_conversion<'db>(
     let mut diagnostic = builder.into_diagnostic("More than one conversion applies here");
     let names: Vec<String> = std::iter::once(repair.route)
         .chain(repair.ambiguous_with.iter().copied())
-        .map(|route| format!("`{}`", route.describe(db)))
+        .map(|route| format!("`{}`", route.describe(db, env)))
         .collect();
     diagnostic.info(format_args!("{} all convert this value", names.join(", ")));
     diagnostic.help("Remove all but one of them, or write the conversion you want explicitly");
@@ -718,6 +802,7 @@ pub(crate) fn report_ambiguous_conversion<'db>(
 ///   depends on ordering
 pub(crate) fn value_conversions<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     model: &crate::SemanticModel<'db>,
     value: &ast::Expr,
@@ -726,10 +811,10 @@ pub(crate) fn value_conversions<'db>(
     let Some(value_ty) = crate::HasType::inferred_type(value, model) else {
         return Vec::new();
     };
-    if let Some(repair) = repair_conversion(db, file, value_ty, declared, Some(value)) {
+    if let Some(repair) = repair_conversion(db, env, file, value_ty, declared, Some(value)) {
         return vec![(value.range(), repair)];
     }
-    element_conversions(db, file, model, value, declared)
+    element_conversions(db, env, file, model, value, declared)
 }
 
 /// the per-element conversions a collection literal needs to satisfy `declared`.
@@ -738,6 +823,7 @@ pub(crate) fn value_conversions<'db>(
 /// would leave the value unassignable, and the ordinary error is the right report
 fn element_conversions<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     model: &crate::SemanticModel<'db>,
     value: &ast::Expr,
@@ -746,10 +832,10 @@ fn element_conversions<'db>(
     let Some(elements) = addressable_elements(value) else {
         return Vec::new();
     };
-    let Some(element_target) = declared_element_type(db, declared) else {
+    let Some(element_target) = declared_element_type(db, env, declared) else {
         return Vec::new();
     };
-    if !display_kind_fits(db, model, value, declared) {
+    if !display_kind_fits(db, env, model, value, declared) {
         return Vec::new();
     }
     let mut conversions = Vec::new();
@@ -757,10 +843,10 @@ fn element_conversions<'db>(
         let Some(element_ty) = crate::HasType::inferred_type(element, model) else {
             return Vec::new();
         };
-        if element_ty.is_assignable_to(db, element_target) {
+        if element_ty.is_assignable_to(db, env, element_target) {
             continue;
         }
-        match repair_conversion(db, file, element_ty, element_target, Some(element)) {
+        match repair_conversion(db, env, file, element_ty, element_target, Some(element)) {
             Some(repair) => conversions.push((element.range(), repair)),
             // one element that neither fits nor converts sinks the whole value
             None => return Vec::new(),
@@ -780,13 +866,15 @@ fn element_conversions<'db>(
 /// `Unknown` because only the *kind* is in question here
 fn display_kind_fits<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     model: &crate::SemanticModel<'db>,
     value: &ast::Expr,
     declared: Type<'db>,
 ) -> bool {
     let erased = |ty: Type<'db>| {
-        ty.nominal_class(db)
-            .map(|class| Type::instance(db, class.class_literal(db).unknown_specialization(db)))
+        ty.nominal_class(db, env).map(|class| {
+            Type::instance(db, env, class.class_literal(db).unknown_specialization(db))
+        })
     };
     let Some(value_ty) = crate::HasType::inferred_type(value, model).and_then(erased) else {
         return true;
@@ -796,7 +884,7 @@ fn display_kind_fits<'db>(
     let Some(declared) = erased(declared) else {
         return true;
     };
-    value_ty.is_assignable_to(db, declared)
+    value_ty.is_assignable_to(db, env, declared)
 }
 
 /// the sub-expression of `value` covering exactly `range`.
@@ -856,6 +944,7 @@ pub enum ConversionInfo {
 /// wrapped, which decides what the emitted names have to resolve to
 pub(crate) fn conversion_info<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     from_file: File,
     model: &crate::SemanticModel<'db>,
     anchor: &ast::Expr,
@@ -880,10 +969,10 @@ pub(crate) fn conversion_info<'db>(
             imports: Vec::new(),
         },
         Route::From(class, source) => {
-            dunder_call_info(db, from_file, model, anchor, class, FROM, source)
+            dunder_call_info(db, env, from_file, model, anchor, class, FROM, source)
         }
         Route::Of(class, source) => {
-            dunder_call_info(db, from_file, model, anchor, class, OF, source)
+            dunder_call_info(db, env, from_file, model, anchor, class, OF, source)
         }
         // the receiver is the value itself, so nothing has to be named or
         // imported. the parentheses are what make it safe to wrap an operand of
@@ -905,8 +994,10 @@ pub(crate) fn conversion_info<'db>(
 /// whatever that extension lowers to: the target's own constructor for a prelude
 /// declaration (`{1}` in a `frozenset[int]` context is `frozenset({1})`), and
 /// the backing function for one a module declares
+#[expect(clippy::too_many_arguments)]
 fn dunder_call_info<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     from_file: File,
     model: &crate::SemanticModel<'db>,
     anchor: &ast::Expr,
@@ -917,7 +1008,7 @@ fn dunder_call_info<'db>(
     if let DunderSource::Extension(extension) = source
         && !extensions::is_prelude_extension(db, from_file, extension)
     {
-        return backing_call_info(db, from_file, model, anchor, class, extension, dunder);
+        return backing_call_info(db, env, from_file, model, anchor, class, extension, dunder);
     }
     // a prelude conversion means construction, so the emitted call is the class
     // itself — spelled, and shadow-checked, exactly as the dunder call would be
@@ -934,7 +1025,7 @@ fn dunder_call_info<'db>(
     // because construction *is* the conversion here — a real `T.__of__(x)` needs
     // its argument, and an empty display holds nothing another pass could edit
     let replaces_value = constructs && is_empty_display(anchor);
-    match class_reference(db, from_file, model, anchor, class) {
+    match class_reference(db, env, from_file, model, anchor, class) {
         Ok((name, import)) => ConversionInfo::Call {
             prefix: spelling(&name),
             suffix: ")".to_owned(),
@@ -954,8 +1045,10 @@ fn dunder_call_info<'db>(
 /// read off the class. The class is what the ordering check watches, because a
 /// `class` statement binds its name late while the backing function is hoisted
 /// above the module
+#[expect(clippy::too_many_arguments)]
 fn backing_call_info<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     from_file: File,
     model: &crate::SemanticModel<'db>,
     anchor: &ast::Expr,
@@ -980,7 +1073,7 @@ fn backing_call_info<'db>(
             alias: function.clone(),
         });
     }
-    let (receiver, class_import) = match class_reference(db, from_file, model, anchor, class) {
+    let (receiver, class_import) = match class_reference(db, env, from_file, model, anchor, class) {
         Ok(spelling) => spelling,
         Err(reason) => return ConversionInfo::Rejected(reason),
     };
@@ -1016,6 +1109,7 @@ fn conversion_alias(name: &str) -> String {
 /// an aliased import. `Err` when neither is possible
 pub(crate) fn class_reference<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     from_file: File,
     model: &crate::SemanticModel<'db>,
     anchor: &ast::Expr,
@@ -1027,7 +1121,7 @@ pub(crate) fn class_reference<'db>(
     let name = literal.name(db).to_string();
     // a builtin needs no import — the name is already there — but it can still
     // be shadowed by a local, which would send the emitted call elsewhere
-    if literal.file(db) != from_file && is_builtin_class(db, literal) {
+    if literal.file(db) != from_file && is_builtin_class(db, env, literal) {
         return if name_is_shadowed_at(db, from_file, model, anchor, &name) {
             Err(format!(
                 "the conversion this value needs goes through the builtin `{name}`, which is \
@@ -1073,8 +1167,12 @@ pub(crate) fn class_reference<'db>(
 /// rather than importing it under an alias. Asked by identity, not by module
 /// path: a class that merely *lives* in `builtins` but is shadowed there by
 /// something else is not what the bare name would reach
-fn is_builtin_class<'db>(db: &'db dyn Db, class: StaticClassLiteral<'db>) -> bool {
-    builtins_symbol(db, class.name(db))
+fn is_builtin_class<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: StaticClassLiteral<'db>,
+) -> bool {
+    builtins_symbol(db, env, class.name(db))
         .place
         .ignore_possibly_undefined()
         .and_then(Type::as_class_literal)
@@ -1097,7 +1195,7 @@ fn name_is_shadowed_at<'db>(
     let Some(scope) = model.scope(ast::AnyNodeRef::from(anchor)) else {
         return false;
     };
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, db.program_file(file));
     index.ancestor_scopes(scope).any(|(id, _)| {
         // a scope's place table holds every name the scope *mentions*, so
         // merely naming the class — which the annotation of the very assignment
@@ -1120,6 +1218,7 @@ pub(crate) fn validate_conversion_dunders<'db>(
     class: StaticClassLiteral<'db>,
     class_node: &ast::StmtClassDef,
 ) {
+    let env = context.program_environment();
     let db = context.db();
     // only basedpython has conversions. in a `.py` file `__from__` and friends
     // are ordinary method names that mean nothing to anyone, and inventing an
@@ -1144,7 +1243,7 @@ pub(crate) fn validate_conversion_dunders<'db>(
         }
         reported.push(name);
         let member = class_type
-            .class_member(db, name, MemberLookupPolicy::default())
+            .class_member(db, env, name, MemberLookupPolicy::default())
             .place
             .ignore_possibly_undefined();
         let Some(Type::FunctionLiteral(function)) = member else {
@@ -1183,6 +1282,7 @@ fn validate_from_or_of<'db>(
     function: FunctionType<'db>,
     function_node: &ast::StmtFunctionDef,
 ) {
+    let env = context.program_environment();
     let db = context.db();
     let name = function_node.name.as_str();
     if !function.is_classmethod(db) {
@@ -1197,7 +1297,7 @@ fn validate_from_or_of<'db>(
         }
         return;
     }
-    let instance = Type::instance(db, class);
+    let instance = Type::instance(db, env, class);
     for signature in function.signature(db) {
         let (required, takes_positional) = arity_after_receiver(signature.parameters());
         if required > 1 || !takes_positional {
@@ -1213,13 +1313,13 @@ fn validate_from_or_of<'db>(
             }
             return;
         }
-        if !signature.return_ty.is_assignable_to(db, instance) {
+        if !signature.return_ty.is_assignable_to(db, env, instance) {
             if let Some(builder) = context.report_lint(&INVALID_CONVERSION, &function_node.name) {
                 let mut diagnostic = builder
                     .into_diagnostic(format_args!("`{name}` must return `{}`", class.name(db)));
                 diagnostic.info(format_args!(
                     "it returns `{}`, so no conversion site would ever accept it",
-                    signature.return_ty.display(db),
+                    signature.return_ty.display(db, env),
                 ));
             }
             return;

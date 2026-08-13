@@ -28,9 +28,9 @@ class build(Command):
     force: int
     executable: Incomplete
     parallel: Incomplete
-    override def initialize_options(self) -> None
-    override def finalize_options(self) -> None
-    override def run(self) -> None
+    override def initialize_options(self)
+    override def finalize_options(self)
+    override def run(self)
     def has_pure_modules(self)
     def has_c_libraries(self)
     def has_ext_modules(self)

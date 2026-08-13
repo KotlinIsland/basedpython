@@ -108,8 +108,8 @@ class Shelf[in out Value](MutableMapping[str, Value]):
     def get[Element](self, key: str, default: Element) -> Value | Element
 
     override def __getitem__(self, key: str) -> Value
-    override def __setitem__(self, key: str, value: Value) -> None
-    override def __delitem__(self, key: str) -> None
+    override def __setitem__(self, key: str, value: Value)
+    override def __delitem__(self, key: str)
     override def __contains__(self, key: str) -> bool
     def __enter__(self) -> Self
     def __exit__(

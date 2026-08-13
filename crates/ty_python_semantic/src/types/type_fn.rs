@@ -41,6 +41,7 @@ use ruff_text_size::Ranged;
 
 use crate::Db;
 use crate::place::{builtins_symbol, imported_symbol};
+use crate::types::ProgramEnvironment;
 use crate::types::function::FunctionType;
 use crate::types::literal::LiteralValueTypeKind;
 use crate::types::tuple::TupleType;
@@ -85,6 +86,7 @@ pub(crate) fn evaluate_type_fn<'db>(
     function: FunctionType<'db>,
     arguments: TypeFnArguments<'db>,
 ) -> TypeFnOutcome<'db> {
+    let env = &ProgramEnvironment::from_definition(function.definition(db));
     let arguments = arguments.arguments(db);
     let file = function.file(db);
 
@@ -92,7 +94,7 @@ pub(crate) fn evaluate_type_fn<'db>(
         return TypeFnOutcome::Failed(refusal);
     }
 
-    let module = parsed_module(db, file).load(db);
+    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
 
     let Some(source) = type_fn_python_source(db, function, file, &module) else {
         return TypeFnOutcome::Failed("`type def` has no body to execute".to_string());
@@ -103,11 +105,11 @@ pub(crate) fn evaluate_type_fn<'db>(
         if i > 0 {
             argument_json.push(',');
         }
-        let Some(described) = describe_type(db, *argument, Some(i), 0) else {
+        let Some(described) = describe_type(db, env, *argument, Some(i), 0) else {
             return TypeFnOutcome::Failed(format!(
                 "cannot describe `{}` to a type function; the proof of concept \
                  only handles class instances, literals, unions and `None`",
-                argument.display(db)
+                argument.display(db, env)
             ));
         };
         argument_json.push_str(&described);
@@ -118,7 +120,7 @@ pub(crate) fn evaluate_type_fn<'db>(
 
     match run_python(&script) {
         Err(error) => TypeFnOutcome::Failed(error),
-        Ok(output) => interpret_result(db, arguments, &output),
+        Ok(output) => interpret_result(db, env, arguments, &output),
     }
 }
 
@@ -142,7 +144,7 @@ fn execution_is_permitted(db: &dyn Db, file: File) -> Result<(), String> {
         );
     }
 
-    let is_first_party = file_to_module(db, file)
+    let is_first_party = file_to_module(db, db.program_file(file).resolver_file(db))
         .and_then(|module| module.search_path(db).map(SearchPath::is_first_party))
         .unwrap_or(false);
 
@@ -199,6 +201,7 @@ pub(crate) fn arity_mismatch<'db>(
 /// outside its bound.
 pub(crate) fn first_bound_violation<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     function: FunctionType<'db>,
     arguments: &[Type<'db>],
 ) -> Option<(usize, Type<'db>, Type<'db>)> {
@@ -208,13 +211,13 @@ pub(crate) fn first_bound_violation<'db>(
         .zip(arguments.iter())
         .enumerate()
     {
-        let Some(bound) = typevar.typevar(db).upper_bound(db) else {
+        let Some(bound) = typevar.typevar(db).upper_bound(db, env) else {
             continue;
         };
         // the argument reads as a type expression, so compare the *instance* it
         // denotes against the bound's instance — `F[bool]` under `X: int` asks
         // whether `bool` is assignable to `int`
-        if !argument.is_assignable_to(db, bound) {
+        if !argument.is_assignable_to(db, env, bound) {
             return Some((index, *argument, bound));
         }
     }
@@ -274,6 +277,7 @@ fn type_fn_python_source<'db>(
 /// nominal relations are answerable.
 fn describe_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     ty: Type<'db>,
     handle: Option<usize>,
     depth: u32,
@@ -291,7 +295,7 @@ fn describe_type<'db>(
         Type::ClassLiteral(class) => {
             // `F[int]` passes the *instance* type, matching how `int` reads in a
             // type expression
-            Type::instance(db, class.default_specialization(db))
+            Type::instance(db, env, class.default_specialization(db))
         }
         Type::Union(union) => {
             let mut members = String::from("[");
@@ -299,7 +303,7 @@ fn describe_type<'db>(
                 if i > 0 {
                     members.push(',');
                 }
-                members.push_str(&describe_type(db, *member, None, depth + 1)?);
+                members.push_str(&describe_type(db, env, *member, None, depth + 1)?);
             }
             members.push(']');
             return Some(format!(
@@ -322,9 +326,9 @@ fn describe_type<'db>(
     // a literal is described by the class it falls back to (`Literal[9]` → `int`)
     // plus its value, so `X <= int` and `X.literal` both work
     let instance_class = match instance {
-        Type::NominalInstance(nominal) => nominal.class(db),
-        other => match other.literal_fallback_instance(db)? {
-            Type::NominalInstance(nominal) => nominal.class(db),
+        Type::NominalInstance(nominal) => nominal.class(db, env),
+        other => match other.literal_fallback_instance(db, env)? {
+            Type::NominalInstance(nominal) => nominal.class(db, env),
             _ => return None,
         },
     };
@@ -363,6 +367,7 @@ const RESULT_SENTINEL: &str = "\u{1}by-type-fn\u{1}";
 /// fail outright for anything that is not a builtin.
 fn interpret_result<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     arguments: &[Type<'db>],
     output: &str,
 ) -> TypeFnOutcome<'db> {
@@ -378,7 +383,7 @@ fn interpret_result<'db>(
 
     let (tag, payload) = line.split_once(' ').unwrap_or((line, ""));
     match tag {
-        "TYPE" => match resolve_graph(db, arguments, payload) {
+        "TYPE" => match resolve_graph(db, env, arguments, payload) {
             Ok(ty) => TypeFnOutcome::Type(ty),
             Err(error) => {
                 TypeFnOutcome::Failed(format!("type function returned an unusable type: {error}"))
@@ -422,6 +427,7 @@ fn unescape(payload: &str) -> String {
 /// spelling that would have lost it.
 fn resolve_graph<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     arguments: &[Type<'db>],
     encoded: &str,
 ) -> Result<Type<'db>, String> {
@@ -436,7 +442,7 @@ fn resolve_graph<'db>(
                 .and_then(|index| arguments.get(index).copied())
                 .ok_or_else(|| format!("unknown argument handle `{payload}`"))?,
             // a class object, resolved through ty's module resolver
-            "c" => resolve_qualified_name(db, payload)
+            "c" => resolve_qualified_name(db, env, payload)
                 .ok_or_else(|| format!("`{payload}` does not name a type"))?,
             "i" => payload
                 .parse::<i64>()
@@ -458,7 +464,7 @@ fn resolve_graph<'db>(
                     .next()
                     .ok_or_else(|| "empty generic form".to_string())??;
                 let arguments = parts.collect::<Result<Vec<_>, _>>()?;
-                specialize(db, origin, &arguments)?
+                specialize(db, env, origin, &arguments)?
             }
             "u" => {
                 let members = payload
@@ -471,7 +477,7 @@ fn resolve_graph<'db>(
                             .ok_or_else(|| "malformed union".to_string())
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                UnionType::from_elements(db, members)
+                UnionType::from_elements(db, env, members)
             }
             other => return Err(format!("unknown type form `{other}`")),
         };
@@ -486,6 +492,7 @@ fn resolve_graph<'db>(
 /// expression would.
 fn specialize<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     origin: Type<'db>,
     arguments: &[Type<'db>],
 ) -> Result<Type<'db>, String> {
@@ -493,13 +500,13 @@ fn specialize<'db>(
     // (`list` → `list[Unknown]`), so specializing one means going back to the class
     // it came from and applying the arguments to that
     let class_literal = match origin {
-        Type::NominalInstance(nominal) => nominal.class(db).class_literal(db),
+        Type::NominalInstance(nominal) => nominal.class(db, env).class_literal(db),
         Type::ClassLiteral(class) => class,
         Type::GenericAlias(alias) => alias.origin(db).into(),
         _ => {
             return Err(format!(
                 "`{}` cannot take type arguments",
-                origin.display(db)
+                origin.display(db, env)
             ));
         }
     };
@@ -509,6 +516,7 @@ fn specialize<'db>(
     if class_literal.is_known(db, KnownClass::Tuple) {
         return Ok(Type::tuple(TupleType::heterogeneous(
             db,
+            env,
             arguments.iter().copied(),
         )));
     }
@@ -516,29 +524,33 @@ fn specialize<'db>(
     let specialized = class_literal.apply_specialization(db, |generic_context| {
         generic_context.specialize_partial(db, arguments.iter().copied().map(Some))
     });
-    Ok(Type::instance(db, specialized))
+    Ok(Type::instance(db, env, specialized))
 }
 
 /// Resolves a dotted `module.Class` reference (or a bare builtin) to its instance
 /// type, through ty's module resolver.
-fn resolve_qualified_name<'db>(db: &'db dyn Db, qualname: &str) -> Option<Type<'db>> {
+fn resolve_qualified_name<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    qualname: &str,
+) -> Option<Type<'db>> {
     let qualname = qualname.trim();
     if matches!(qualname, "None" | "NoneType" | "builtins.NoneType") {
-        return Some(Type::none(db));
+        return Some(Type::none(db, env));
     }
 
     let place = match qualname.rsplit_once('.') {
-        None => builtins_symbol(db, qualname).place,
-        Some(("builtins", name)) => builtins_symbol(db, name).place,
+        None => builtins_symbol(db, env, qualname).place,
+        Some(("builtins", name)) => builtins_symbol(db, env, name).place,
         Some((module, name)) => {
             let module_name = ModuleName::new(module)?;
-            let module = resolve_module_confident(db, &module_name)?;
-            imported_symbol(db, Some(module.file(db)?), name, None).place
+            let module = resolve_module_confident(db, env.resolver_environment(db), &module_name)?;
+            imported_symbol(db, env, Some(db.program_file(module.file(db)?)), name, None).place
         }
     };
     match place.ignore_possibly_undefined() {
         Some(Type::ClassLiteral(class)) => {
-            Some(Type::instance(db, class.default_specialization(db)))
+            Some(Type::instance(db, env, class.default_specialization(db)))
         }
         _ => None,
     }

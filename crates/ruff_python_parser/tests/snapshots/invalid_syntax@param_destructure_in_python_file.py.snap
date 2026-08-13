@@ -124,16 +124,13 @@ Module(
   |
 1 | def foo(Point(x, y): Point): ...
   |              ^ Syntax Error: Expected `)`, found `(`
-  |
 
 
   |
 1 | def foo(Point(x, y): Point): ...
   |                           ^ Syntax Error: Expected a statement
-  |
 
 
   |
 1 | def foo(Point(x, y): Point): ...
   |                            ^ Syntax Error: Expected a statement
-  |

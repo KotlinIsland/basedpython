@@ -67,6 +67,117 @@ def f() -> list[Literal[1]]:
     return [1]
 ```
 
+## Loop-carried assignment context
+
+A declaration inside a loop provides context to assignments that reach it from an earlier iteration.
+
+### While loops
+
+A declaration inside a `while` loop applies to list literals assigned in each iteration.
+
+```py
+while True:
+    values: list[object]
+    values = [1]
+    reveal_type(values)  # revealed: list[object]
+```
+
+### For loops
+
+The same declaration context applies to assignments in a `for` loop.
+
+```py
+for _ in range(2):
+    values: list[object]
+    values = [1]
+    reveal_type(values)  # revealed: list[object]
+```
+
+### Nested dictionary values
+
+A declaration inside a loop also provides context for values nested within a dictionary literal.
+
+```py
+from typing import TypedDict
+
+class Record(TypedDict):
+    values: list[float]
+
+while True:
+    record: Record
+    record = {"values": [1]}
+    reveal_type(record)  # revealed: Record
+```
+
+### Invalid dictionary values
+
+An incompatible dictionary item is reported at the assignment, not at the declaration.
+
+```py
+from typing import TypedDict
+
+class Record(TypedDict):
+    value: int
+
+while True:
+    record: Record
+    record = {"value": "invalid"}  # error: [invalid-argument-type]
+    reveal_type(record)  # revealed: Record
+```
+
+### Stringified annotations
+
+String annotations provide their resolved type when a loop-carried assignment needs context.
+
+```py
+while True:
+    values: "list[object]"
+    values = [1]
+    reveal_type(values)  # revealed: list[object]
+```
+
+### Deferred forward references
+
+Deferred annotations resolve a `TypedDict` defined after the loop before inferring its dictionary
+assignments.
+
+```py
+from __future__ import annotations
+from typing import TypedDict
+
+for _ in range(2):
+    record: Record
+    record = {"value": 1}
+    reveal_type(record)  # revealed: Record
+
+    invalid: Record
+    invalid = {"value": "invalid"}  # error: [invalid-argument-type]
+
+class Record(TypedDict):
+    value: int
+```
+
+### Deferred forward references on Python 3.14
+
+Annotations are deferred by default in Python 3.14 and later.
+
+```toml
+[environment]
+python-version = "3.14"
+```
+
+```py
+from typing import TypedDict
+
+for _ in range(2):
+    record: Record
+    record = {"value": 1}
+    reveal_type(record)  # revealed: Record
+
+class Record(TypedDict):
+    value: int
+```
+
 ## Collection literals
 
 ### Basic
@@ -135,6 +246,95 @@ s = {1: 1, 2: 2, 3: 3}
 reveal_type(s)  # revealed: dict[int | str, int | str]
 (s := {1: 1, 2: 2, 3: 3})
 reveal_type(s)  # revealed: dict[int | str, int | str]
+```
+
+### Exact float types in covariant contexts
+
+A covariant collection context must preserve an exact float when numeric promotion would introduce
+an `int` that the expected element type rejects.
+
+```py
+from collections.abc import Iterable, Sequence
+from ty_extensions import JustFloat
+
+def takes_exact_sequence(values: Sequence[JustFloat]) -> None: ...
+def takes_exact_iterable(values: Iterable[JustFloat]) -> None: ...
+def takes_exact_list(values: list[JustFloat]) -> None: ...
+
+takes_exact_sequence([1.0])
+takes_exact_sequence((1.0,))
+takes_exact_sequence([1])  # error: [invalid-argument-type]
+
+takes_exact_iterable([1.0])
+takes_exact_iterable((1.0,))
+takes_exact_iterable([1])  # error: [invalid-argument-type]
+
+takes_exact_list([1.0])
+
+annotated: list[JustFloat] = [1.0]
+takes_exact_sequence(annotated)
+```
+
+Ordinary `float` contexts and unannotated mutable lists must retain numeric promotion.
+
+```py
+def takes_float_sequence(values: Sequence[float]) -> None: ...
+
+takes_float_sequence([1.0])
+takes_float_sequence([1])
+
+mutable_floats = [1.0]
+mutable_floats.append(1)
+reveal_type(mutable_floats)  # revealed: list[int | float]
+```
+
+### Exact complex types in covariant contexts
+
+The same contextual restriction applies when promoting an exact complex number would introduce `int`
+and `float`.
+
+```py
+from collections.abc import Sequence
+from ty_extensions import JustComplex
+
+def takes_exact_complexes(values: Sequence[JustComplex]) -> None: ...
+
+takes_exact_complexes([1j])
+takes_exact_complexes((1j,))
+takes_exact_complexes([1])  # error: [invalid-argument-type]
+takes_exact_complexes([1.0])  # error: [invalid-argument-type]
+```
+
+### Exact-type protocols in covariant contexts
+
+A writable `__class__` property allows an invariant protocol to distinguish a runtime float from an
+integer. A covariant sequence of a union containing this protocol must preserve that distinction.
+
+```py
+from collections.abc import Sequence
+from typing import Generic, Protocol, TypeVar
+
+T = TypeVar("T")
+
+class Just(Protocol, Generic[T]):
+    @property
+    def __class__(self, /) -> type[T]: ...
+    @__class__.setter
+    def __class__(self, value: type[T], /) -> None: ...
+
+def takes_exact_float(value: Just[float]) -> None: ...
+def takes_exact_values(values: Sequence[str | Just[float]]) -> None: ...
+
+takes_exact_float(1.0)
+takes_exact_float(1)  # error: [invalid-argument-type]
+
+takes_exact_values(["1", 1.0])
+takes_exact_values(["1", float("nan")])
+takes_exact_values(("1", 1.0))
+takes_exact_values(["1", 1])  # error: [invalid-argument-type]
+
+annotated: list[str | Just[float]] = ["1", 1.0]
+takes_exact_values(annotated)
 ```
 
 ### Optional unions
@@ -710,13 +910,14 @@ def _():
 ## Prefer the declared type of generic classes and callables
 
 When inferring a generic call, we only use the declared type as type context if it is in
-non-covariant position. The final annotated assignment binding still uses the declared type if the
-inferred and declared types are mutually assignable:
+non-covariant position. Unused type parameters are inferred as covariant. The final annotated
+assignment binding still uses the declared type if the inferred and declared types are mutually
+assignable:
 
 ```py
 from typing import Any
 
-class Bivariant[T]:
+class UnusedTypeParameter[T]:
     pass
 
 class Covariant[T]:
@@ -730,8 +931,8 @@ class Contravariant[T]:
 class Invariant[T]:
     x: T
 
-def bivariant[T](x: T) -> Bivariant[T]:
-    return Bivariant()
+def unused_type_parameter[T](x: T) -> UnusedTypeParameter[T]:
+    return UnusedTypeParameter()
 
 def covariant[T](x: T) -> Covariant[T]:
     return Covariant()
@@ -742,32 +943,32 @@ def contravariant[T](x: T) -> Contravariant[T]:
 def invariant[T](x: T) -> Invariant[T]:
     return Invariant()
 
-x1 = bivariant(1)
+x1 = unused_type_parameter(1)
 x2 = covariant(1)
 x3 = contravariant(1)
 x4 = invariant(1)
 
-reveal_type(x1)  # revealed: Bivariant[Literal[1]]
+reveal_type(x1)  # revealed: UnusedTypeParameter[Literal[1]]
 reveal_type(x2)  # revealed: Covariant[Literal[1]]
 reveal_type(x3)  # revealed: Contravariant[int]
 reveal_type(x4)  # revealed: Invariant[int]
 
-x5: Bivariant[int | None] = bivariant(1)
+x5: UnusedTypeParameter[int | None] = unused_type_parameter(1)
 x6: Covariant[int | None] = covariant(1)
 x7: Contravariant[int | None] = contravariant(1)
 x8: Invariant[int | None] = invariant(1)
 
-reveal_type(x5)  # revealed: Bivariant[int | None]
+reveal_type(x5)  # revealed: UnusedTypeParameter[Literal[1]]
 reveal_type(x6)  # revealed: Covariant[Literal[1]]
 reveal_type(x7)  # revealed: Contravariant[int | None]
 reveal_type(x8)  # revealed: Invariant[int | None]
 
-x9: Bivariant[Any] = bivariant(1)
+x9: UnusedTypeParameter[Any] = unused_type_parameter(1)
 x10: Covariant[Any] = covariant(1)
 x11: Contravariant[Any] = contravariant(1)
 x12: Invariant[Any] = invariant(1)
 
-reveal_type(x9)  # revealed: Bivariant[Any]
+reveal_type(x9)  # revealed: UnusedTypeParameter[Any]
 reveal_type(x10)  # revealed: Covariant[Any]
 reveal_type(x11)  # revealed: Contravariant[Any]
 reveal_type(x12)  # revealed: Invariant[Any]
@@ -1626,11 +1827,10 @@ reveal_type(f7)  # revealed: (*args) -> None
 f8: Callable[[int], None] = lambda *, x=1: None
 reveal_type(f8)  # revealed: (int, /) -> None
 
-# `Callable` annotations only describe positional parameters, so the keyword-only `x` is not
-# compatible with the positional suffix in the annotation.
-# error: [invalid-assignment]
+# An optional keyword-only parameter does not prevent `*args` from accepting the positional
+# suffix in a `Callable` annotation.
 f9: Callable[[*tuple[int, ...], int], None] = lambda *args, x=1: None
-reveal_type(f9)  # revealed: (*tuple[int, ...], int) -> None
+reveal_type(f9)  # revealed: (*args, *, x: int = 1) -> None
 
 f10: Callable[[str, int, str], tuple[str, int, str]] = lambda x, y, z: reveal_type((x, y, z))  # revealed: tuple[str, int, str]
 reveal_type(f10)  # revealed: (x: str, y: int, z: str) -> tuple[str, int, str]

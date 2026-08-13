@@ -92,7 +92,6 @@ error[unsupported-operator]: Unsupported `in` operation
    |              |    |
    |              |    Has type `list[int] | Literal[1]`
    |              Has type `Literal[1]`
-   |
 info: Operation fails because operator `in` is not supported between two objects of type `Literal[1]`
 ```
 
@@ -109,7 +108,6 @@ error[unsupported-operator]: Unsupported `in` operation
    |               -^^^^-
    |               |
    |               Both operands have type `list[int] | Literal[1]`
-   |
 ```
 
 ```py
@@ -125,7 +123,6 @@ error[unsupported-operator]: Unsupported `<` operation
    |               |    |
    |               |    Has type `tuple[str] | tuple[str, str]`
    |               Has type `tuple[int]`
-   |
 info: Operation fails because operator `<` is not supported between objects of type `int` and `str`
 ```
 
@@ -142,7 +139,6 @@ error[unsupported-operator]: Unsupported `<` operation
    |               |    |
    |               |    Has type `tuple[int]`
    |               Has type `tuple[str] | tuple[str, str]`
-   |
 info: Operation fails because operator `<` is not supported between objects of type `str` and `int`
 ```
 
@@ -159,6 +155,5 @@ error[unsupported-operator]: Unsupported `<` operation
    |               |    |
    |               |    Has type `tuple[str] | tuple[str, str]`
    |               Has type `tuple[int] | tuple[int, int]`
-   |
 info: Operation fails because operator `<` is not supported between objects of type `int` and `str`
 ```

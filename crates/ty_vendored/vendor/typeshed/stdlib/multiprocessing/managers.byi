@@ -30,7 +30,7 @@ __all__ = ["BaseManager", "SyncManager", "BaseProxy", "Token", "SharedMemoryMana
 class Namespace:
     init(self, **kwds: dynamic)
     def __getattr__(self, name: str, /) -> dynamic
-    override def __setattr__(self, name: str, value: dynamic, /) -> None
+    override def __setattr__(self, name: str, value: dynamic, /)
 
 type _Namespace = Namespace
 
@@ -138,8 +138,8 @@ else:
         __builtins__: ClassVar[dict[str, dynamic]]
         override def __len__(self) -> int
         override def __getitem__(self, key: Key, /) -> Value
-        override def __setitem__(self, key: Key, value: Value, /) -> None
-        override def __delitem__(self, key: Key, /) -> None
+        override def __setitem__(self, key: Key, value: Value, /)
+        override def __delitem__(self, key: Key, /)
         override def __iter__(self) -> Iterator[Key]
         def copy(self) -> dict[Key, Value]
 
@@ -204,7 +204,7 @@ class BaseListProxy[in out Element](BaseProxy, MutableSequence[Element]):
     __builtins__: ClassVar[dict[str, dynamic]]
     override def __len__(self) -> int
     def __add__(self, x: list[Element], /) -> list[Element]
-    override def __delitem__(self, i: SupportsIndex | slice[SupportsIndex | None], /) -> None
+    override def __delitem__(self, i: SupportsIndex | slice[SupportsIndex | None], /)
 
     override def __getitem__(self, i: SupportsIndex, /) -> Element
     def __getitem__(self, s: slice[SupportsIndex | None], /) -> list[Element]
@@ -216,13 +216,13 @@ class BaseListProxy[in out Element](BaseProxy, MutableSequence[Element]):
     def __rmul__(self, n: SupportsIndex, /) -> list[Element]
     def __imul__(self, value: SupportsIndex, /) -> Self
     override def __reversed__(self) -> Iterator[Element]
-    override def append(self, object: Element, /) -> None
-    override def extend(self, iterable: Iterable[Element], /) -> None
+    override def append(self, object: Element, /)
+    override def extend(self, iterable: Iterable[Element], /)
     override def pop(self, index: SupportsIndex = ..., /) -> Element
     override def index(self, value: Element, start: SupportsIndex = ..., stop: SupportsIndex = ..., /) -> int
     override def count(self, value: Element, /) -> int
-    override def insert(self, index: SupportsIndex, object: Element, /) -> None
-    override def remove(self, value: Element, /) -> None
+    override def insert(self, index: SupportsIndex, object: Element, /)
+    override def remove(self, value: Element, /)
     if sys.version_info >= (3, 14):
         # Next methods are copied from builtins.list
         def clear(self)

@@ -105,7 +105,7 @@ is destroyed.
 
 from _typeshed import Unused
 from typing import Final, Literal, NamedTuple, TypeAlias
-from typing_extensions import Self
+from typing_extensions import Never, Self
 
 type _File = str | IO[bytes]
 
@@ -153,7 +153,7 @@ class Au_read:
     def getcompname(self) -> str
     def getparams(self) -> _sunau_params
     def getmarkers(self)
-    def getmark(self, id: dynamic) -> NoReturn
+    def getmark(self, id: dynamic) -> Never
     def setpos(self, pos: int)
     def readframes(self, nframes: int) -> bytes | None
 

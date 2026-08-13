@@ -19,7 +19,6 @@ from _typeshed import StrOrLiteralStr
 from collections.abc import Iterable, Mapping, Sequence
 from re import Pattern, RegexFlag
 from typing import ClassVar, Final
-from typing_extensions import LiteralString
 
 __all__ = [
     "ascii_letters",
@@ -39,12 +38,12 @@ __all__ = [
 whitespace: Final = " \t\n\r\v\f"
 ascii_lowercase: Final = "abcdefghijklmnopqrstuvwxyz"
 ascii_uppercase: Final = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-final ascii_letters: LiteralString  # string too long
+final ascii_letters: literal str  # string too long
 digits: Final = "0123456789"
 hexdigits: Final = "0123456789abcdefABCDEF"
 octdigits: Final = "01234567"
 punctuation: Final = r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""
-final printable: LiteralString  # string too long
+final printable: literal str  # string too long
 
 def capwords(s: StrOrLiteralStr, sep: StrOrLiteralStr | None = None) -> StrOrLiteralStr:
     """capwords(s [,sep]) -> string
@@ -80,12 +79,12 @@ class Template:
 class Formatter:
     """See PEP 3101 for details and purpose of this class."""
 
-    def format(self, format_string: LiteralString, /, *args: LiteralString, **kwargs: LiteralString) -> LiteralString
+    def format(self, format_string: literal str, /, *args: literal str, **kwargs: literal str) -> literal str
     def format(self, format_string: str, /, *args: dynamic, **kwargs: dynamic) -> str
 
     def vformat(
-        self, format_string: LiteralString, args: Sequence[LiteralString], kwargs: Mapping[LiteralString, LiteralString]
-    ) -> LiteralString
+        self, format_string: literal str, args: Sequence[literal str], kwargs: Mapping[literal str, literal str]
+    ) -> literal str
     def vformat(self, format_string: str, args: Sequence[dynamic], kwargs: Mapping[str, dynamic]) -> str
 
     def _vformat(  # undocumented

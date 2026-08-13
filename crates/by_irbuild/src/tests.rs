@@ -24,8 +24,8 @@ fn has_op(function: &by_ir::function::Function, predicate: impl Fn(&Op) -> bool)
 
 /// lower `source` and render the module's IR, failing if it does not verify
 fn ir(source: &str) -> String {
-    with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         if let Err(errors) = verify_module(&module) {
             let detail = errors
                 .iter()
@@ -43,8 +43,8 @@ fn ir(source: &str) -> String {
 
 /// the reason the single function in `source` was declined
 fn decline(source: &str) -> String {
-    with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         assert!(
             module.functions.is_empty(),
             "expected the function to be declined, but it lowered:\n{}",
@@ -319,8 +319,8 @@ def part(s: str, a: int, b: int) -> str:
 def keyed(d: dict[str, int], k: str) -> int:
     return d[k]
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = |name: &str| {
                 module
@@ -367,8 +367,8 @@ def same(a: str, b: str) -> bool:
 def before(a: str, b: object) -> bool:
     return a < b
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = |name: &str| {
                 module
@@ -459,8 +459,8 @@ fn a_starred_display_is_built_in_runs() {
 def f(xs: list[int]) -> object:
     return [1, 2, *xs, 3]
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -491,8 +491,8 @@ fn a_dict_display_with_a_merge_updates_in_place() {
 def f(d: dict[str, int]) -> object:
     return {'a': 1, **d}
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -519,8 +519,8 @@ def add(a: int, b: int) -> int:
 def f(xs: list[int]) -> int:
     return add(*xs)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -548,8 +548,8 @@ fn a_signature_records_which_parameters_are_reachable_how() {
 def f(a: int, /, b: int, *, c: int) -> int:
     return a + b + c
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -576,8 +576,8 @@ fn a_comprehension_gives_each_for_its_own_header() {
 def f(rows: list[list[int]]) -> object:
     return [x for row in rows if len(row) > 1 for x in row]
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -604,8 +604,8 @@ def f(xs: list[int]) -> int:
     a, b = xs
     return a + b
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -635,8 +635,8 @@ def f(xs: list[int]) -> object:
     head, *tail = xs
     return tail
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -668,8 +668,8 @@ def f() -> int:
     a = b = side()
     return a + b
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -696,8 +696,8 @@ def f(xs: list[int]) -> int:
     a, b = xs
     return a + b
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let f = module
                 .all_functions()
                 .find(|function| function.name == "f")
@@ -725,8 +725,8 @@ def f(n: int) -> int:
     except (Custom, ValueError):
         return 0
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let f = module
                 .all_functions()
                 .find(|function| function.name == "f")
@@ -755,8 +755,8 @@ fn a_shadowed_error_class_is_not_the_builtin() {
 def f(ValueError: object) -> None:
     raise ValueError
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let f = module
                 .all_functions()
                 .find(|function| function.name == "f")
@@ -787,8 +787,8 @@ def f(n: int) -> int:
     except ValueError:
         return 0
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let f = module
                 .all_functions()
                 .find(|function| function.name == "f")
@@ -819,8 +819,8 @@ fn a_bare_raise_outside_a_handler_is_declined() {
 def f() -> None:
     raise
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             module
                 .declined
                 .iter()
@@ -841,8 +841,8 @@ fn a_function_that_never_returns_takes_its_representation_from_the_annotation() 
 def fail(reason: str) -> int:
     raise ValueError(reason)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let fail = module
                 .all_functions()
                 .find(|function| function.name == "fail")
@@ -862,8 +862,8 @@ class Custom(Exception): ...
 def f() -> None:
     raise Custom
 ";
-    with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         assert!(
             !module.declined.iter().any(|declined| declined.name == "f"),
             "{:?}",
@@ -892,8 +892,8 @@ data class Point:
     def total(self) -> int:
         return self.x + self.y
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let [class] = module.classes.as_slice() else {
                 panic!("one class");
@@ -919,8 +919,8 @@ fn a_class_with_no_constructor_lays_out_nothing() {
 class Point:
     x: int
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .classes
@@ -934,8 +934,8 @@ class Point:
 
 /// the class-level constants of one emitted class, in the order the body wrote them
 fn class_constants(source: &str, class: &str) -> Vec<String> {
-    with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         module
             .classes
@@ -1006,8 +1006,8 @@ fn an_annotated_attribute_of_a_data_class_is_a_field_rather_than_a_constant() {
 data class Point:
     x: int = 1
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let class = &module.classes[0];
             let fields: Vec<&str> = class.fields.iter().map(|f| f.name.as_str()).collect();
@@ -1092,8 +1092,8 @@ class Stream:
     def take(self) -> str:
         return self.__read()
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let class = &module.classes[0];
             let fields: Vec<&str> = class.fields.iter().map(|f| f.name.as_str()).collect();
@@ -1143,8 +1143,8 @@ class Stream:
     def each(self) -> object:
         return [self.__buffer for _ in range(1)]
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .classes
@@ -1172,8 +1172,8 @@ class Point:
     def __repr__(self) -> str:
         return \"p\"
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let names: Vec<&str> = module.classes[0]
                 .methods
@@ -1215,8 +1215,8 @@ class Thing:
         self.a = a
         self.b = b
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let [class] = module.classes.as_slice() else {
                 panic!("one class");
@@ -1407,8 +1407,8 @@ class Apart:
     def __init__(self, n: int) -> None:
         self.n = n
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .classes
@@ -1476,8 +1476,8 @@ class Both:
 class Private:
     __slots__ = ('__hidden',)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .classes
@@ -1717,8 +1717,8 @@ class BelowConstant(Constant):
     );
     // the base each subclass gets is the point: an `InModule` one would name a type
     // this module never emits
-    let bases = with_source(SOURCE, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    let bases = with_source(SOURCE, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         module
             .classes
             .iter()
@@ -1763,8 +1763,8 @@ def unproven(xs: list[float], n: int) -> float:
         i = i + 1
     return out
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let edition = |name: &str| {
                 module
                     .all_functions()
@@ -1805,8 +1805,8 @@ class Point:
         if x > 0:
             self.big = x
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .classes
@@ -1844,8 +1844,8 @@ class Point:
         else:
             self.small = 1
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             module
                 .classes
                 .iter()
@@ -1872,8 +1872,8 @@ class Point:
         self.x = x
         self.y = y
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let class = &module.classes[0];
             let fields: Vec<&str> = class.fields.iter().map(|f| f.name.as_str()).collect();
@@ -1895,8 +1895,8 @@ data class Shape:
 data class Circle(Shape):
     radius: float
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let circle = module
                 .classes
@@ -1937,8 +1937,8 @@ class Marker:
 
 Marker = Marker()
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let named = |name: &str| module.classes.iter().any(|class| class.name == name);
             (named("Marker"), named("Ready"))
         },
@@ -1961,8 +1961,8 @@ fn a_base_out_of_the_unit_may_add_storage_of_its_own() {
 data class Timed(Exception):
     at: int
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let declined = module
                 .declined
                 .iter()
@@ -1990,8 +1990,8 @@ class Timed(Exception):
     def label(self) -> str:
         return \"timed\"
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .classes
@@ -2033,8 +2033,8 @@ def through(s: Shape) -> str:
 def plain(p: Plain) -> int:
     return p.doubled()
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let ops = |name: &str| {
                 print_function(
@@ -2092,8 +2092,8 @@ def on_final_inherited(f: Fixed) -> int:
 def on_open(o: Open) -> int:
     return o.doubled()
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let ops = |name: &str| {
                 print_function(
@@ -2147,8 +2147,8 @@ data class Circle(Shape):
 def through(s: Shape) -> str:
     return s.describe()
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let through = print_function(
                 module
@@ -2189,8 +2189,8 @@ def loud(x: Loud) -> int:
 def quiet(x: Quiet) -> int:
     return x.doubled()
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let ops = |name: &str| {
                 let function = module
@@ -2233,8 +2233,8 @@ data class Point:
     def __init__(self, x: int) -> None:
         pass
 ";
-    let reason = with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    let reason = with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         module
             .declined
             .iter()
@@ -2289,8 +2289,8 @@ def deco(f: object) -> object:
 def f() -> None:
     pass
 ";
-    with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         let decorated = module
             .functions
@@ -2312,8 +2312,8 @@ def make(n: int) -> object:
 def f() -> None:
     pass
 ";
-    let reason = with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    let reason = with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         module
             .declined
             .iter()
@@ -2339,8 +2339,8 @@ fn variadic_parameters_hold_a_tuple_and_a_dict() {
 def both(a: int, *rest: int, **named: object) -> int:
     return a + len(rest) + len(named)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = &module.functions[0];
             assert!(function.vararg);
@@ -2565,8 +2565,8 @@ def bad(a: int) -> None:
     except* ValueError:
         pass
 ";
-    with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].name, "good");
         assert_eq!(module.declined.len(), 1);
@@ -2603,8 +2603,8 @@ data class Point:
 def sum_of(p: Point) -> int:
     return p.x + p.y
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             // the method reaches `self` through the forced receiver, the free
             // function through its annotation — both are field reads
@@ -2631,8 +2631,8 @@ data class Counter:
         self.n = self.n + by
         return self.n
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let method = &module.classes[0].methods[0];
             let text = print_function(method);
@@ -2665,8 +2665,8 @@ data class Point:
     x: int
     y: int
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let line = module
                 .classes
@@ -2704,8 +2704,8 @@ class Plain:
 def read(p: Plain) -> object:
     return p.x
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let read = &module.functions[0];
             assert!(
                 has_op(read, |op| matches!(op, Op::GetAttr { .. })),
@@ -2726,8 +2726,8 @@ frozen data class Point:
 data class Loose:
     y: int
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let frozen = |name: &str| {
                 module
                     .classes
@@ -2754,8 +2754,8 @@ data class Point:
 def diag(a: int) -> int:
     return Point(a, a).x
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let text = print_function(&module.functions[0]);
             assert!(
@@ -2788,8 +2788,8 @@ def helper(a: int) -> int:
 def caller(a: int) -> int:
     return helper(a)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let reason = |name: &str| {
                 module
                     .declined
@@ -2825,8 +2825,8 @@ def middle(a: int) -> int:
 def top(a: int) -> int:
     return middle(a)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.functions.is_empty(), "{:?}", module.functions);
             assert_eq!(module.declined.len(), 3);
         },
@@ -2853,8 +2853,8 @@ data class Point:
 def read(p: Point) -> int:
     return p.x
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.classes.is_empty(), "{:?}", module.classes);
             assert!(module.functions.is_empty(), "{:?}", module.functions);
             let reason = |name: &str| {
@@ -2893,8 +2893,8 @@ class Parser(Container):
     def __init__(self, tag: str) -> None:
         Container.__init__(self, tag)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.classes.is_empty(), "{:?}", module.classes);
             let reason = |name: &str| {
                 module
@@ -2932,8 +2932,8 @@ def caller(a: int) -> int:
 def alone(a: int) -> int:
     return a + 1
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let names: Vec<&str> = module
                 .functions
                 .iter()
@@ -2962,8 +2962,8 @@ data class Point:
 def use(p: Point) -> int:
     return p.scaled(3) + p.total()
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let scaled = module.classes[0]
                 .methods
@@ -2996,8 +2996,8 @@ data class Box:
 def use(b: Box) -> int:
     return b.add(2)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let text = print_function(&module.functions[0]);
             // no box on the way in and no unbox on the way out
             assert!(
@@ -3018,8 +3018,8 @@ fn a_method_call_on_a_boxed_receiver_still_uses_the_protocol() {
 def use(p: object) -> object:
     return p.total()
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(
                 has_op(&module.functions[0], |op| matches!(
                     op,
@@ -3050,8 +3050,8 @@ data class Point:
     def raw(self) -> int:
         return self.x
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let class = module
                 .classes
@@ -3085,8 +3085,8 @@ def slow(a: int) -> None:
     except* ValueError:
         pass
 ";
-    let range = with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    let range = with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         module
             .declined
             .iter()
@@ -3114,8 +3114,8 @@ def helper(a: int) -> int:
 def caller(a: int) -> int:
     return helper(a)
 ";
-    let range = with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    let range = with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         module
             .declined
             .iter()
@@ -3136,8 +3136,8 @@ def f(a: int) -> int:
         return a
     return 0
 ";
-    with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         let function = &module.functions[0];
         let (start, end) = function.range.expect("the function has a span");
         assert!(source[start as usize..end as usize].starts_with("def f"));
@@ -3164,8 +3164,8 @@ def f(a: int) -> int:
     c = b + 1
     return c
 ";
-    with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         let (start, _) = module.functions[0].blocks[0]
             .range
             .expect("the entry block has a span");
@@ -3185,8 +3185,8 @@ fn calling_a_callable_held_in_a_parameter_reads_the_register() {
 def apply(f: object, a: int) -> object:
     return f(a)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = &module.functions[0];
             assert!(
@@ -3207,8 +3207,8 @@ def pick(flag: bool) -> object:
     fn = len
     return fn(\"abc\")
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let function = &module.functions[0];
             assert!(
                 has_op(function, |op| matches!(op, Op::CallValue { .. })),
@@ -3226,8 +3226,8 @@ fn calling_a_name_this_frame_does_not_bind_still_resolves_as_a_global() {
 def use(a: int) -> object:
     return print(a)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let function = &module.functions[0];
             assert!(
                 has_op(function, |op| matches!(op, Op::CallPython { .. })),
@@ -3247,8 +3247,8 @@ fn a_shadowed_builtin_is_not_the_builtin() {
 def use(len: object, s: str) -> object:
     return len(s)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let function = &module.functions[0];
             assert!(
                 has_op(function, |op| matches!(op, Op::CallValue { .. })),
@@ -3269,8 +3269,8 @@ LIMIT = 10
 def limit() -> object:
     return LIMIT
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let function = &module.functions[0];
             assert!(
                 has_op(function, |op| matches!(op, Op::LoadGlobal { .. })),
@@ -3290,8 +3290,8 @@ def make_adder(n: int) -> object:
         return a + n
     return add
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let environment = module
                 .classes
@@ -3345,8 +3345,8 @@ def counter() -> (() -> int):
     n = 1
     return get
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let environment = &module.classes[0];
             // a cell is always `object`: it starts unset, and NULL has to be
@@ -3383,8 +3383,8 @@ def bumper() -> (() -> int):
         return n
     return bump
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let bump = &module.classes[0].methods[0];
             let text = print_function(bump);
@@ -3415,8 +3415,8 @@ def prefix(n: int) -> float:
         out = out + x
     return out
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let prefix = module
                 .all_functions()
@@ -3453,8 +3453,8 @@ def each(xs: list[int]) -> list[object]:
         out.append(lambda: i)
     return out
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let each = module
                 .all_functions()
@@ -3504,8 +3504,8 @@ def each(xs: list[int]) -> list[object]:
         out.append(lambda: i)
     return out
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", false);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", false);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let each = module
                 .all_functions()
@@ -3541,8 +3541,8 @@ def each(xs: list[int]) -> list[object]:
     total = 200
     return out
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let field = |class: &str, name: &str| {
                 module
@@ -3581,8 +3581,8 @@ fn a_comprehension_target_is_a_local_a_closure_can_capture() {
 def each(xs: list[int]) -> list[object]:
     return [lambda: i for i in xs]
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let inner = module
                 .all_functions()
@@ -3613,8 +3613,8 @@ def loop_closures() -> list[object]:
         i = i + 1
     return out
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let outer = print_function(&module.functions[0]);
             // one allocation, before the loop — not one per iteration
@@ -3633,8 +3633,8 @@ def outer(n: int) -> object:
         return n
     return bump
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             module
                 .declined
                 .iter()
@@ -3659,8 +3659,8 @@ def outer(a: int) -> object:
         return inner
     return middle
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let field = |class: &str, name: &str| {
                 module
@@ -3701,8 +3701,8 @@ def outer(a: int) -> object:
         return inner
     return middle
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let inner = module
                 .all_functions()
@@ -3749,8 +3749,8 @@ def outer() -> object:
     n = 1
     return middle
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let holders: Vec<&str> = module
                 .classes
@@ -3776,8 +3776,8 @@ def helper(a: int) -> int:
         return x * 2
     return double(a)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let environment = module
                 .classes
@@ -3801,8 +3801,8 @@ def twice(f: object) -> object:
         return f(n) * 2
     return wrapper
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let method = &module.classes[0].methods[0];
             let text = print_function(method);
@@ -3833,8 +3833,8 @@ def run(times: int, k: int) -> int:
         total = step(total)
     return total
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let outer = &module.functions[0];
             let text = print_function(outer);
@@ -3861,8 +3861,8 @@ def early(a: int) -> int:
         return x * 2
     return helper(a)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             module
                 .declined
                 .iter()
@@ -3883,8 +3883,8 @@ def counted(n: int) -> object:
         yield i
         i = i + 1
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let state = &module.classes[0];
             assert_eq!(state.name, "counted$gen");
@@ -4041,8 +4041,8 @@ async def summed(n: int) -> int:
         i = i + 1
     return total
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let state = module
                 .classes
@@ -4081,8 +4081,8 @@ def each(words: list[str]) -> object:
     for w in words:
         yield w
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let state = &module.classes[0];
             // one reserved field per `for`, because the iterator has no source name
@@ -4105,8 +4105,8 @@ def guarded(log: list[str], n: int) -> object:
     finally:
         log.append(\"closed\")
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let state = &module.classes[0];
             // the exception rides in a field, checked at every resumption point
@@ -4143,8 +4143,8 @@ def outer(n: int) -> object:
     got = yield from inner(n)
     yield got
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let outer = module
                 .classes
@@ -4177,8 +4177,8 @@ async def plain(n: int) -> int:
 async def chained(n: int) -> int:
     return await plain(n)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let chained = module
                 .classes
@@ -4212,8 +4212,8 @@ fn an_async_generator_presents_the_async_iteration_surface() {
 async def both(n: int) -> object:
     yield n
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             module
                 .classes
                 .iter()
@@ -4234,8 +4234,8 @@ def guarded(mgr: object) -> str:
         return \"body\"
     return \"after\"
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = &module.functions[0];
             let text = print_function(function);
@@ -4258,8 +4258,8 @@ def early(log: list[str]) -> str:
     finally:
         log.append(\"f\")
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = &module.functions[0];
             let text = print_function(function);
@@ -4290,8 +4290,8 @@ def looped(log: list[str], n: int) -> str:
         log.append(\"outer\")
     return \"done\"
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let text = print_function(&module.functions[0]);
             // the `break` unwinds to the loop's depth: the inner `finally` runs, the
@@ -4311,8 +4311,8 @@ fn a_lambda_is_a_nested_function_with_a_generated_name() {
 def adder(n: int) -> ((int) -> int):
     return lambda x: x + n
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let environment = &module.classes[0];
             assert_eq!(environment.name, "adder$env");
@@ -4337,8 +4337,8 @@ def counter() -> (() -> int):
     n = 1
     return f
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let method = &module.classes[0].methods[0];
             assert!(
@@ -4363,8 +4363,8 @@ data class Scaler:
     def make(self) -> ((int) -> int):
         return lambda x: x * self.k
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let names: Vec<&str> = module
                 .classes
@@ -4405,8 +4405,8 @@ def counted(n: int) -> object:
         yield i
         i = i + 1
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let state = &module.classes[0];
             let ty = |name: &str| {
@@ -4448,8 +4448,8 @@ fn a_generator_local_that_may_be_unset_stays_a_cell() {
             "e",
         ),
     ] {
-        with_source(source, |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        with_source(source, |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             let state = &module.classes[0];
             let field = state
                 .fields
@@ -4477,8 +4477,8 @@ def both(a: int, *rest: int, **named: object) -> int:
 def caller(a: int) -> int:
     return both(a, 1, 2, k=3)
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let caller = module
                 .functions
@@ -4503,8 +4503,8 @@ def picked(flag: bool, n: int) -> int:
         value = n
     return value
 ",
-        |db, model, suite| {
-            let module = crate::build_module(db, model, suite, "app", true);
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .functions
@@ -4525,8 +4525,8 @@ def picked(flag: bool, n: int) -> int:
 
 /// the reason each declined entry in `source` gives, by name
 fn declines(source: &str) -> Vec<(String, String)> {
-    with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         module
             .declined
             .iter()
@@ -4541,8 +4541,8 @@ fn declines(source: &str) -> Vec<(String, String)> {
 /// is reached the intended way, which is what catches a lowering that regresses to a
 /// slower or differently-scoped shape while still computing the same thing
 fn method_ir(source: &str, class: &str, method: &str) -> String {
-    with_source(source, |db, model, suite| {
-        let module = crate::build_module(db, model, suite, "app", true);
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         module
             .classes

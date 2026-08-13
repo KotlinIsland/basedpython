@@ -80,7 +80,7 @@ pub(super) fn template_code_lenses(db: &dyn Db, file: File) -> Vec<DjangoCodeLen
         .filter(|context| context.template == name)
     {
         let Some(view) = &context.view else { continue };
-        let Some(module) = file_to_module(db, view.file) else {
+        let Some(module) = file_to_module(db, db.program_file(view.file).resolver_file(db)) else {
             continue;
         };
 
@@ -156,7 +156,7 @@ pub(super) fn python_code_lenses(db: &dyn Db, file: File) -> Vec<DjangoCodeLens>
 
     // a test, unlike the two above, is addressed by the dotted module path the
     // test runner imports it by, so this half does need the module resolver
-    if let Some(module) = file_to_module(db, file) {
+    if let Some(module) = file_to_module(db, db.program_file(file).resolver_file(db)) {
         lenses.extend(test_lenses(db, file, &module.name(db).to_string()));
     }
 
@@ -168,7 +168,7 @@ fn test_lenses(db: &dyn Db, file: File, module: &str) -> Vec<DjangoCodeLens> {
     // a test class reaches `unittest.TestCase` through its bases, and every base
     // it is followed through has to be resolved. a file that declares no class at
     // all is the common case and costs a parse this query has already paid for
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
 
     let mut lenses = Vec::new();
 

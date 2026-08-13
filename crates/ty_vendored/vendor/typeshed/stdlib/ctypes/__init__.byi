@@ -26,19 +26,19 @@ from _ctypes import (
     sizeof as sizeof,
 )
 from _typeshed import StrPath, SupportsBool, SupportsLen
-from ctypes._endian import BigEndianStructure as BigEndianStructure, LittleEndianStructure as LittleEndianStructure
+from ctypes._endian export BigEndianStructure, LittleEndianStructure
 from types import GenericAlias
 from typing import ClassVar, Final, Generic, Literal, TypeAlias, TypeVar, type_check_only
 from typing_extensions import Self, deprecated
 
 if sys.platform == "win32":
-    from _ctypes import FormatError as FormatError, get_last_error as get_last_error, set_last_error as set_last_error
+    from _ctypes export FormatError, get_last_error, set_last_error
 
     if sys.version_info >= (3, 14):
-        from _ctypes import COMError as COMError, CopyComPointer as CopyComPointer
+        from _ctypes export COMError, CopyComPointer
 
 if sys.version_info >= (3, 11):
-    from ctypes._endian import BigEndianUnion as BigEndianUnion, LittleEndianUnion as LittleEndianUnion
+    from ctypes._endian export BigEndianUnion, LittleEndianUnion
 
 
 if sys.version_info >= (3, 14):
@@ -61,7 +61,7 @@ if sys.version_info >= (3, 14):
         """
 
 else:
-    from _ctypes import POINTER as POINTER, pointer as pointer
+    from _ctypes export POINTER, pointer
 
 if sys.version_info >= (3, 14):
     CField = _CField
@@ -229,10 +229,10 @@ def create_unicode_buffer(init: int | str, size: int | None = None) -> Array[c_w
     """
 
 if sys.version_info < (3, 15):
-    @deprecated("Deprecated since Python 3.13; will be removed in Python 3.15.")
+    @deprecated("Deprecated; will be removed in Python 3.15.")
     def SetPointerType(pointer: type[_Pointer[dynamic]], cls: _CTypeBaseType) -> None
 
-@deprecated("Soft deprecated since Python 3.13. Use multiplication instead.")
+@deprecated("Soft deprecated. Use multiplication instead.")
 def ARRAY[CT: _CData](typ: CT, len: int) -> Array[CT]
 
 if sys.platform == "win32":

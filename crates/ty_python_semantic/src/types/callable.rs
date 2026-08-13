@@ -1,3 +1,4 @@
+use crate::ProgramEnvironment;
 use ruff_python_ast::name::Name;
 use rustc_hash::FxHashSet;
 use smallvec::{SmallVec, smallvec_inline};
@@ -72,17 +73,23 @@ impl<'db> Type<'db> {
             .collect()
     }
 
-    pub(crate) fn try_upcast_to_callable(self, db: &'db dyn Db) -> Option<CallableTypes<'db>> {
-        self.try_upcast_to_callable_with_policy(db, UpcastPolicy::default())
+    pub(crate) fn try_upcast_to_callable(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<CallableTypes<'db>> {
+        self.try_upcast_to_callable_with_policy(db, env, UpcastPolicy::default())
     }
 
     pub(crate) fn try_upcast_to_callable_with_recursive_fallback(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         recursive_definition: Option<Definition<'db>>,
     ) -> Option<CallableTypes<'db>> {
         self.try_upcast_to_callable_with_policy_and_context(
             db,
+            env,
             UpcastPolicy::default(),
             CallableUpcastContext {
                 recursive_definition,
@@ -93,10 +100,12 @@ impl<'db> Type<'db> {
     pub(crate) fn try_upcast_to_callable_with_policy(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         policy: UpcastPolicy,
     ) -> Option<CallableTypes<'db>> {
         self.try_upcast_to_callable_with_policy_and_context(
             db,
+            env,
             policy,
             CallableUpcastContext::default(),
         )
@@ -105,11 +114,13 @@ impl<'db> Type<'db> {
     fn try_upcast_to_callable_with_policy_and_context(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         policy: UpcastPolicy,
         context: CallableUpcastContext<'db>,
     ) -> Option<CallableTypes<'db>> {
         if let Some(fallback) = self.materialized_divergent_fallback() {
-            return fallback.try_upcast_to_callable_with_policy_and_context(db, policy, context);
+            return fallback
+                .try_upcast_to_callable_with_policy_and_context(db, env, policy, context);
         }
 
         match self {
@@ -117,15 +128,15 @@ impl<'db> Type<'db> {
 
             // parameter-only marker; behaves as the type a body sees (bound of `Key`)
             Type::Overlapping(overlapping) => overlapping
-                .value_type(db)
-                .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+                .value_type(db, env)
+                .try_upcast_to_callable_with_policy_and_context(db, env, policy, context),
             Type::Restricted(restricted) => restricted
                 .value_type(db)
-                .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+                .try_upcast_to_callable_with_policy_and_context(db, env, policy, context),
 
             Type::Deferred(deferred) => deferred
-                .reduced(db)
-                .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+                .reduced(db, env)
+                .try_upcast_to_callable_with_policy_and_context(db, env, policy, context),
 
             Type::Dynamic(_) => Some(CallableTypes::one(CallableType::function_like(
                 db,
@@ -157,6 +168,7 @@ impl<'db> Type<'db> {
                 let call_symbol = self
                     .member_lookup_with_policy(
                         db,
+                        env,
                         "__call__",
                         MemberLookupPolicy::NO_INSTANCE_FALLBACK,
                     )
@@ -167,7 +179,7 @@ impl<'db> Type<'db> {
                 {
                     place
                         .ty
-                        .try_upcast_to_callable_with_policy_and_context(db, policy, context)
+                        .try_upcast_to_callable_with_policy_and_context(db, env, policy, context)
                         // The callable instance itself doesn't inherit the descriptor behavior of
                         // its `__call__` method.
                         .map(|callables| callables.map(|callable| callable.into_regular(db)))
@@ -183,67 +195,74 @@ impl<'db> Type<'db> {
 
             Type::NewTypeInstance(newtype) => newtype
                 .concrete_base_type(db)
-                .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+                .try_upcast_to_callable_with_policy_and_context(db, env, policy, context),
 
             Type::SubclassOf(subclass_of_ty) if policy == UpcastPolicy::Sound => {
                 Some(CallableTypes::one(CallableType::function_like(
                     db,
-                    Signature::new(Parameters::top(), subclass_of_ty.to_instance(db)),
+                    Signature::new(Parameters::top(), subclass_of_ty.to_instance(db, env)),
                 )))
             }
 
             // TODO: This is unsound so in future we can consider an opt-in option to disable it.
             Type::SubclassOf(subclass_of_ty) => match subclass_of_ty.subclass_of() {
                 SubclassOfInner::Class(class) => Some(class.into_callable(db)),
-                SubclassOfInner::Protocol(protocol) => protocol
-                    .class_origin()
-                    .map(|origin| (*origin).into_callable(db)),
-                SubclassOfInner::TypeVar(tvar) => match tvar.typevar(db).bound_or_constraints(db) {
-                    Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
-                        let upcast_callables = bound
-                            .to_meta_type(db)
-                            .try_upcast_to_callable_with_policy_and_context(db, policy, context)?;
-                        Some(upcast_callables.map(|callable| {
-                            let signatures = callable
-                                .signatures(db)
-                                .into_iter()
-                                .map(|sig| sig.clone().with_return_type(Type::TypeVar(tvar)));
-                            CallableType::new(
-                                db,
-                                CallableSignature::from_overloads(signatures),
-                                callable.kind(db),
-                                callable.provenance(db),
-                            )
-                        }))
+                SubclassOfInner::Protocol(protocol) => protocol.class_origin(db).map(|origin| {
+                    if protocol.materialization_kind(db).is_some() {
+                        // The origin supplies the constructor, but the actual receiver retains
+                        // `Top[P]` or `Bottom[P]`. Infer with both so instance-returning overloads
+                        // are materialized without replacing explicit non-instance returns.
+                        (*origin).into_callable_with_receiver(db, self)
+                    } else {
+                        (*origin).into_callable(db)
                     }
-                    Some(TypeVarBoundOrConstraints::Constraints(constraints)) => {
-                        let mut callables = SmallVec::new();
-                        for constraint in constraints.elements(db) {
-                            let element_upcast = constraint
-                                .to_meta_type(db)
+                }),
+                SubclassOfInner::TypeVar(tvar) => {
+                    match tvar.typevar(db).require_bound_or_constraints(db, env) {
+                        TypeVarBoundOrConstraints::UpperBound(bound) => {
+                            let upcast_callables = bound
+                                .constructor_for_typevar_bound(db, env)
                                 .try_upcast_to_callable_with_policy_and_context(
-                                    db, policy, context,
+                                    db, env, policy, context,
                                 )?;
-                            for callable in element_upcast.into_inner() {
+                            Some(upcast_callables.map(|callable| {
                                 let signatures = callable
                                     .signatures(db)
                                     .into_iter()
                                     .map(|sig| sig.clone().with_return_type(Type::TypeVar(tvar)));
-                                callables.push(CallableType::new(
+                                CallableType::new(
                                     db,
                                     CallableSignature::from_overloads(signatures),
                                     callable.kind(db),
                                     callable.provenance(db),
-                                ));
-                            }
+                                )
+                            }))
                         }
-                        Some(CallableTypes::new(callables))
+                        TypeVarBoundOrConstraints::Constraints(constraints) => {
+                            let mut callables = SmallVec::new();
+                            for constraint in constraints.elements(db) {
+                                let element_upcast = constraint
+                                    .to_meta_type(db, env)
+                                    .try_upcast_to_callable_with_policy_and_context(
+                                        db, env, policy, context,
+                                    )?;
+                                for callable in element_upcast.into_inner() {
+                                    let signatures =
+                                        callable.signatures(db).into_iter().map(|sig| {
+                                            sig.clone().with_return_type(Type::TypeVar(tvar))
+                                        });
+                                    callables.push(CallableType::new(
+                                        db,
+                                        CallableSignature::from_overloads(signatures),
+                                        callable.kind(db),
+                                        callable.provenance(db),
+                                    ));
+                                }
+                            }
+                            Some(CallableTypes::new(callables))
+                        }
                     }
-                    None => Some(CallableTypes::one(CallableType::single(
-                        db,
-                        Signature::new(Parameters::gradual_form(), Type::TypeVar(tvar)),
-                    ))),
-                },
+                }
                 SubclassOfInner::Dynamic(_) => Some(CallableTypes::one(CallableType::single(
                     db,
                     Signature::new(Parameters::unknown(), Type::from(subclass_of_ty)),
@@ -254,7 +273,7 @@ impl<'db> Type<'db> {
                 let mut callables = SmallVec::new();
                 for element in union.elements(db) {
                     let element_callable = element
-                        .try_upcast_to_callable_with_policy_and_context(db, policy, context)?;
+                        .try_upcast_to_callable_with_policy_and_context(db, env, policy, context)?;
                     callables.extend(element_callable.into_inner());
                 }
                 Some(CallableTypes::new(callables))
@@ -262,14 +281,14 @@ impl<'db> Type<'db> {
 
             Type::LiteralValue(literal) => match literal.kind() {
                 LiteralValueTypeKind::Enum(enum_literal) => enum_literal
-                    .enum_class_instance(db)
-                    .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+                    .enum_class_instance(db, env)
+                    .try_upcast_to_callable_with_policy_and_context(db, env, policy, context),
                 _ => None,
             },
 
             Type::TypeAlias(alias) => alias
                 .value_type(db)
-                .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+                .try_upcast_to_callable_with_policy_and_context(db, env, policy, context),
 
             Type::KnownBoundMethod(KnownBoundMethodType::FunctionTypeDunderCall(function))
                 if context.is_recursive_reference(db, function) =>
@@ -279,7 +298,7 @@ impl<'db> Type<'db> {
 
             Type::KnownBoundMethod(method) => Some(CallableTypes::one(CallableType::new(
                 db,
-                CallableSignature::from_overloads(method.signatures(db)),
+                CallableSignature::from_overloads(method.signatures(db, env)),
                 CallableTypeKind::Regular,
                 CallableFunctionProvenance::None,
             ))),
@@ -287,7 +306,7 @@ impl<'db> Type<'db> {
             Type::WrapperDescriptor(wrapper_descriptor) => {
                 Some(CallableTypes::one(CallableType::new(
                     db,
-                    CallableSignature::from_overloads(wrapper_descriptor.signatures(db)),
+                    CallableSignature::from_overloads(wrapper_descriptor.signatures(db, env)),
                     CallableTypeKind::Regular,
                     CallableFunctionProvenance::None,
                 )))
@@ -298,7 +317,7 @@ impl<'db> Type<'db> {
                     db,
                     Signature::new(
                         Parameters::standard([Parameter::positional_only(None)
-                            .with_annotated_type(newtype.base(db).instance_type(db))]),
+                            .with_annotated_type(newtype.base(db).instance_type(db, env))]),
                         Type::NewTypeInstance(newtype),
                     ),
                 )))
@@ -318,21 +337,19 @@ impl<'db> Type<'db> {
                 | KnownInstanceType::FunctoolsPartialCall(partial),
             ) => Some(CallableTypes::one(partial.partial(db))),
 
-            Type::Intersection(intersection) => {
-                intersection
-                    .finite_alternative_union(db)
-                    .and_then(|alternatives| {
-                        alternatives.try_upcast_to_callable_with_policy(db, policy)
-                    })
-            }
+            Type::Intersection(intersection) => intersection
+                .finite_alternative_union(db, env)
+                .and_then(|alternatives| {
+                    alternatives.try_upcast_to_callable_with_policy(db, env, policy)
+                }),
 
             // Only the materializations that are callable can be the one at hand; a
             // non-callable materialization does not disqualify the others.
             Type::UnsafeUnion(unsafe_union) => {
                 let mut callables = SmallVec::new();
                 for element in unsafe_union.elements(db) {
-                    if let Some(element_callable) =
-                        element.try_upcast_to_callable_with_policy_and_context(db, policy, context)
+                    if let Some(element_callable) = element
+                        .try_upcast_to_callable_with_policy_and_context(db, env, policy, context)
                     {
                         callables.extend(element_callable.into_inner());
                     }
@@ -341,8 +358,8 @@ impl<'db> Type<'db> {
             }
 
             Type::EnumComplement(complement) => complement
-                .remaining_literal_union(db)
-                .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+                .remaining_literal_union(db, env)
+                .try_upcast_to_callable_with_policy_and_context(db, env, policy, context),
 
             // TODO
             Type::DataclassDecorator(_)
@@ -527,10 +544,7 @@ impl<'db> CallableType<'db> {
         )
     }
 
-    pub(crate) fn paramspec_value(
-        db: &'db dyn Db,
-        parameters: Parameters<'db>,
-    ) -> CallableType<'db> {
+    fn paramspec_value(db: &'db dyn Db, parameters: Parameters<'db>) -> CallableType<'db> {
         CallableType::new(
             db,
             CallableSignature::single(Signature::new(parameters, Type::unknown())),
@@ -548,7 +562,7 @@ impl<'db> CallableType<'db> {
         matches!(self.kind(db), CallableTypeKind::FunctionLike)
     }
 
-    pub(crate) fn is_dunder_paramspec(self, db: &'db dyn Db) -> bool {
+    fn is_dunder_paramspec(self, db: &'db dyn Db) -> bool {
         matches!(self.kind(db), CallableTypeKind::DunderParamSpec)
     }
 
@@ -586,20 +600,25 @@ impl<'db> CallableType<'db> {
     /// Returns the reduced callable produced by partially applying selected overloads.
     pub(crate) fn partially_apply(
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         overloads: impl IntoIterator<Item = PartialSignatureApplication<'db>>,
     ) -> Option<Self> {
         Some(Self::new(
             db,
-            CallableSignature::partially_apply(db, overloads)?,
+            CallableSignature::partially_apply(db, env, overloads)?,
             CallableTypeKind::Regular,
             CallableFunctionProvenance::None,
         ))
     }
 
     /// Reifies this callable as the nominal `functools.partial[T]` instance for its return type.
-    pub(crate) fn into_functools_partial_instance(self, db: &'db dyn Db) -> Type<'db> {
-        let return_ty = self.signatures(db).overload_return_type_or_unknown(db);
-        KnownClass::FunctoolsPartial.to_specialized_instance(db, &[return_ty])
+    pub(crate) fn into_functools_partial_instance(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Type<'db> {
+        let return_ty = self.signatures(db).overload_return_type_or_unknown(db, env);
+        KnownClass::FunctoolsPartial.to_specialized_instance(db, env, &[return_ty])
     }
 
     /// Wraps this reduced callable as a synthetic `functools.partial(...)` instance type.
@@ -616,6 +635,7 @@ impl<'db> CallableType<'db> {
     pub(crate) fn bind_self(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         self_type: Option<Type<'db>>,
     ) -> CallableType<'db> {
         if self.is_dunder_paramspec(db) {
@@ -624,7 +644,7 @@ impl<'db> CallableType<'db> {
 
         CallableType::new(
             db,
-            self.signatures(db).bind_self(db, self_type),
+            self.signatures(db).bind_self(db, env, self_type),
             self.kind(db),
             self.provenance(db),
         )
@@ -648,20 +668,26 @@ impl<'db> CallableType<'db> {
         )
     }
 
-    pub(crate) fn apply_self(self, db: &'db dyn Db, self_type: Type<'db>) -> CallableType<'db> {
-        self.apply_self_with_receiver(db, self_type, self_type)
+    pub(crate) fn apply_self(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        self_type: Type<'db>,
+    ) -> CallableType<'db> {
+        self.apply_self_with_receiver(db, env, self_type, self_type)
     }
 
     pub(crate) fn apply_self_with_receiver(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         receiver_type: Type<'db>,
         self_type: Type<'db>,
     ) -> CallableType<'db> {
         CallableType::new(
             db,
             self.signatures(db)
-                .apply_self_with_receiver(db, receiver_type, self_type),
+                .apply_self_with_receiver(db, env, receiver_type, self_type),
             self.kind(db),
             self.provenance(db),
         )
@@ -683,13 +709,14 @@ impl<'db> CallableType<'db> {
     pub(super) fn recursive_type_normalized_impl(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         div: Type<'db>,
         nested: bool,
     ) -> Option<Self> {
         Some(CallableType::new(
             db,
             self.signatures(db)
-                .recursive_type_normalized_impl(db, div, nested)?,
+                .recursive_type_normalized_impl(db, env, div, nested)?,
             self.kind(db),
             self.provenance(db),
         ))
@@ -700,7 +727,7 @@ impl<'db> CallableType<'db> {
         db: &'db dyn Db,
         type_mapping: &TypeMapping<'a, 'db>,
         tcx: TypeContext<'db>,
-        visitor: &ApplyTypeMappingVisitor<'db>,
+        visitor: &ApplyTypeMappingVisitor<'_, 'db>,
     ) -> Self {
         if let TypeMapping::RescopeReturnCallables(replacements) = type_mapping {
             return replacements.get(&self).copied().unwrap_or(self);
@@ -718,12 +745,13 @@ impl<'db> CallableType<'db> {
     pub(super) fn find_legacy_typevars_impl(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         binding_context: Option<Definition<'db>>,
         typevars: &mut FxOrderSet<BoundTypeVarInstance<'db>>,
         visitor: &FindLegacyTypeVarsVisitor<'db>,
     ) {
         self.signatures(db)
-            .find_legacy_typevars_impl(db, binding_context, typevars, visitor);
+            .find_legacy_typevars_impl(db, env, binding_context, typevars, visitor);
     }
 }
 
@@ -738,7 +766,7 @@ impl<'db> CallableType<'db> {
 pub(crate) struct CallableTypes<'db>(SmallVec<[CallableType<'db>; 1]>);
 
 impl<'db> CallableTypes<'db> {
-    pub(super) fn new(callables: SmallVec<[CallableType<'db>; 1]>) -> Self {
+    fn new(callables: SmallVec<[CallableType<'db>; 1]>) -> Self {
         assert!(!callables.is_empty(), "CallableTypes should not be empty");
         CallableTypes(callables)
     }
@@ -764,7 +792,7 @@ impl<'db> CallableTypes<'db> {
         &self.0
     }
 
-    pub(super) fn into_inner(self) -> SmallVec<[CallableType<'db>; 1]> {
+    fn into_inner(self) -> SmallVec<[CallableType<'db>; 1]> {
         self.0
     }
 
@@ -772,9 +800,9 @@ impl<'db> CallableTypes<'db> {
         self.0.iter()
     }
 
-    pub(crate) fn into_type(self, db: &'db dyn Db) -> Type<'db> {
+    pub(crate) fn into_type(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
         assert!(!self.0.is_empty(), "CallableTypes should not be empty");
-        UnionType::from_elements(db, self.0.into_iter().map(Type::Callable))
+        UnionType::from_elements(db, env, self.0.into_iter().map(Type::Callable))
     }
 
     pub(crate) fn map(self, mut f: impl FnMut(CallableType<'db>) -> CallableType<'db>) -> Self {
@@ -793,7 +821,10 @@ impl<'db> CallableTypes<'db> {
         for callable in self.0 {
             for signature in callable.signatures(db) {
                 let signature = signature.clone();
-                let dedup_key = signature.clone().with_definition(None);
+                let dedup_key = signature
+                    .clone()
+                    .with_definition(None)
+                    .with_source_overload_index(None);
                 if seen_overloads.insert(dedup_key) {
                     overloads.push(signature);
                 }

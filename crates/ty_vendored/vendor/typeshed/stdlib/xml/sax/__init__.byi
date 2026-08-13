@@ -23,14 +23,14 @@ import sys
 from _typeshed import ReadableBuffer, StrPath, SupportsRead, _T_co
 from collections.abc import Iterable
 from typing import Final, Protocol, TypeAlias, type_check_only
-from xml.sax._exceptions import (
-    SAXException as SAXException,
-    SAXNotRecognizedException as SAXNotRecognizedException,
-    SAXNotSupportedException as SAXNotSupportedException,
-    SAXParseException as SAXParseException,
-    SAXReaderNotAvailable as SAXReaderNotAvailable,
+from xml.sax._exceptions export (
+    SAXException,
+    SAXNotRecognizedException,
+    SAXNotSupportedException,
+    SAXParseException,
+    SAXReaderNotAvailable,
 )
-from xml.sax.handler import ContentHandler as ContentHandler, ErrorHandler as ErrorHandler
+from xml.sax.handler export ContentHandler, ErrorHandler
 from xml.sax.xmlreader import InputSource as InputSource, XMLReader
 
 @type_check_only

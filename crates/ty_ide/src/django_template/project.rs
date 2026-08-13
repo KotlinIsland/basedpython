@@ -24,11 +24,13 @@ use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, AnyNodeRef, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::{FxHashMap, FxHashSet};
+use ty_module_resolver::ImportingFile;
 use ty_module_resolver::{
     Module, ModuleName, file_to_module, resolve_module_confident, resolve_real_module,
 };
 use ty_project::{Db, Project};
 use ty_python_core::definition::DefinitionKind;
+use ty_python_semantic::ProgramEnvironment;
 use ty_python_semantic::SemanticModel;
 use ty_python_semantic::django_settings::{self as settings_source, SettingsNaming};
 use ty_python_semantic::types::ide_support::{
@@ -441,8 +443,12 @@ impl Parameter {
     /// expression goes through no converter at all, and one whose converter the
     /// project registered itself yields whatever that converter's `to_python`
     /// returns.
-    pub(crate) fn value_type<'db>(&self, db: &'db dyn Db) -> Option<Type<'db>> {
-        self.converter?.value_type(db)
+    pub(crate) fn value_type<'db>(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<Type<'db>> {
+        self.converter?.value_type(db, env)
     }
 }
 
@@ -483,12 +489,12 @@ impl Converter {
     /// this is the other half of what a converter is: [`Self::matches`] says what
     /// the url may hold, and this says what comes out of `to_python` on the other
     /// side.
-    fn value_type(self, db: &dyn Db) -> Option<Type<'_>> {
+    fn value_type<'db>(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Option<Type<'db>> {
         match self {
             // three of django's five converters differ only in what they match
-            Self::Str | Self::Slug | Self::Path => Some(KnownClass::Str.to_instance(db)),
-            Self::Int => Some(KnownClass::Int.to_instance(db)),
-            Self::Uuid => instance_of_class(db, "uuid", "UUID"),
+            Self::Str | Self::Slug | Self::Path => Some(KnownClass::Str.to_instance(db, env)),
+            Self::Int => Some(KnownClass::Int.to_instance(db, env)),
+            Self::Uuid => instance_of_class(db, env, "uuid", "UUID"),
         }
     }
 
@@ -704,9 +710,10 @@ impl DiscoveredFile {
 /// tree — that django is what defines. asking first is also what keeps a project
 /// with no django from paying for the file-system walks the discovery does.
 #[salsa::tracked(returns(copy))]
-pub(crate) fn has_django(db: &dyn Db, _project: Project) -> bool {
+pub(crate) fn has_django(db: &dyn Db, project: Project) -> bool {
+    let environment = project.program(db).resolver_environment(db);
     ModuleName::new_static(DJANGO_PACKAGE)
-        .and_then(|name| resolve_module_confident(db, &name))
+        .and_then(|name| resolve_module_confident(db, environment, &name))
         .is_some()
 }
 
@@ -918,7 +925,15 @@ fn always_loaded_library(
     source: LibrarySource,
 ) -> Option<Library> {
     let name = ModuleName::new(path)?;
-    let file = resolve_real_module(db, importing, &name)?.file(db)?;
+    let file = resolve_real_module(
+        db,
+        ImportingFile::File(
+            importing,
+            db.program_file(importing).resolver_environment(db),
+        ),
+        &name,
+    )?
+    .file(db)?;
 
     library(db, file, source, true)
 }
@@ -940,7 +955,16 @@ pub(crate) fn django_is_authoritative(db: &dyn Db, project: Project) -> bool {
 
     DEFAULT_BUILTIN_MODULES.iter().all(|path| {
         ModuleName::new(path)
-            .and_then(|name| resolve_real_module(db, importing, &name))
+            .and_then(|name| {
+                resolve_real_module(
+                    db,
+                    ImportingFile::File(
+                        importing,
+                        db.program_file(importing).resolver_environment(db),
+                    ),
+                    &name,
+                )
+            })
             .and_then(|module| module.file(db))
             .is_some()
     })
@@ -958,7 +982,14 @@ fn app_package<'db>(db: &'db dyn Db, importing: File, app: &str) -> Option<Modul
 
     (1..=segments.len()).rev().find_map(|length| {
         let name = ModuleName::from_components(segments[..length].iter().copied())?;
-        let module = resolve_real_module(db, importing, &name)?;
+        let module = resolve_real_module(
+            db,
+            ImportingFile::File(
+                importing,
+                db.program_file(importing).resolver_environment(db),
+            ),
+            &name,
+        )?;
 
         module.kind(db).is_package().then_some(module)
     })
@@ -973,7 +1004,14 @@ fn templatetags_package<'db>(
     let mut name = package.name(db).clone();
     name.extend(&ModuleName::new(TEMPLATETAGS_PACKAGE)?);
 
-    resolve_real_module(db, importing, &name)
+    resolve_real_module(
+        db,
+        ImportingFile::File(
+            importing,
+            db.program_file(importing).resolver_environment(db),
+        ),
+        &name,
+    )
 }
 
 /// whether a module is one of django's own
@@ -1046,7 +1084,15 @@ fn root_urlconf(db: &dyn Db, project: Project) -> Option<File> {
     let importing = (*settings_file(db, project))?;
     let root = django_settings(db, project).root_urlconf.as_ref()?;
 
-    resolve_real_module(db, importing, &ModuleName::new(root)?)?.file(db)
+    resolve_real_module(
+        db,
+        ImportingFile::File(
+            importing,
+            db.program_file(importing).resolver_environment(db),
+        ),
+        &ModuleName::new(root)?,
+    )?
+    .file(db)
 }
 
 /// the names a module defines read on its own, the way the flat scan reads them
@@ -1144,6 +1190,7 @@ impl UrlWalk<'_> {
         prefix: Option<&str>,
         depth: usize,
     ) {
+        let db = self.db;
         let prefix = join_routes(prefix, include.prefix.as_deref());
 
         match &include.target {
@@ -1153,7 +1200,16 @@ impl UrlWalk<'_> {
             }
             IncludeTarget::Module(module) => {
                 let Some(included) = ModuleName::new(module)
-                    .and_then(|module| resolve_real_module(self.db, file, &module))
+                    .and_then(|module| {
+                        resolve_real_module(
+                            self.db,
+                            ImportingFile::File(
+                                file,
+                                db.program_file(file).resolver_environment(db),
+                            ),
+                            &module,
+                        )
+                    })
                     .and_then(|module| module.file(self.db))
                 else {
                     // a urlconf that can't be reached holds names the walk will
@@ -1308,7 +1364,7 @@ fn template_uses_in_file(db: &dyn Db, file: File) -> Box<[NameUse]> {
         return Box::default();
     }
 
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let mut visitor = TemplateUseVisitor {
         db,
         file,
@@ -1346,7 +1402,7 @@ fn resolves_outside_django(db: &dyn Db, file: File, func: &Expr) -> bool {
                         | DefinitionKind::ImportFrom(_)
                         | DefinitionKind::ImportFromSubmodule(_)
                         | DefinitionKind::StarImport(_)
-                ) && file_to_module(db, definition.file(db))
+                ) && file_to_module(db, db.program_file(definition.file(db)).resolver_file(db))
                     .is_none_or(|module| !is_djangos(db, module))
             })
         })
@@ -1400,7 +1456,7 @@ fn route_uses_in_file(db: &dyn Db, file: File) -> Box<[NameUse]> {
         return Box::default();
     }
 
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let mut visitor = RouteUseVisitor {
         db,
         file,
@@ -1487,7 +1543,7 @@ pub(crate) fn bound_names(db: &dyn Db, names: &[&str]) -> Vec<BoundName> {
             continue;
         }
 
-        let parsed = parsed_module(db, file).load(db);
+        let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
         bindings_in(file, parsed.suite(), names, &mut found);
     }
 
@@ -1780,7 +1836,7 @@ fn registrations_in_file(db: &dyn Db, file: File) -> Box<[Registration]> {
     };
     let library = library.to_compact_string();
 
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let mut visitor = RegistrationVisitor {
         file,
         library,
@@ -2085,7 +2141,7 @@ fn django_settings(db: &dyn Db, project: Project) -> DjangoSettings {
         return DjangoSettings::default();
     };
 
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
 
     let mut reader = SettingsReader {
         paths: PathEvaluator {
@@ -2426,7 +2482,7 @@ fn urlconf(db: &dyn Db, file: File) -> UrlConf {
         return UrlConf::default();
     }
 
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
 
     // django namespaces an included module's names under its `app_name` unless
     // the include says otherwise
@@ -2733,7 +2789,7 @@ pub(crate) fn resolved_class<T>(
         .find_map(|resolved| {
             let definition = resolved.definition()?;
             let defining = definition.file(db);
-            let parsed = parsed_module(db, defining).load(db);
+            let parsed = parsed_module(db, db.program_file(defining).python_file(db)).load(db);
             let class = definition.kind(db).as_class()?.node(&parsed);
 
             Some(read(defining, class))
@@ -2742,7 +2798,7 @@ pub(crate) fn resolved_class<T>(
 
 /// every definition `expr` resolves to, import aliases followed to their source
 fn definitions_of<'db>(db: &'db dyn Db, file: File, expr: &Expr) -> Vec<ResolvedDefinition<'db>> {
-    let model = SemanticModel::new(db, file);
+    let model = SemanticModel::new(db, db.program_file(file));
 
     match expr {
         Expr::Name(name) => definitions_for_name(
@@ -2763,7 +2819,7 @@ fn resolved_target(db: &dyn Db, file: File, expr: &Expr) -> Option<Target> {
         .find_map(|resolved| {
             let definition = resolved.definition()?;
             let defining = definition.file(db);
-            let parsed = parsed_module(db, defining).load(db);
+            let parsed = parsed_module(db, db.program_file(defining).python_file(db)).load(db);
 
             let (name, kind, full_range) = match definition.kind(db) {
                 kind if kind.as_class().is_some() => {
@@ -3074,7 +3130,7 @@ fn template_contexts_in_file(db: &dyn Db, file: File) -> Box<[TemplateContext]> 
         return Box::default();
     }
 
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
 
     let mut visitor = ContextVisitor {
         db,
@@ -3594,13 +3650,22 @@ fn processor_variables(db: &dyn Db, importing: File, name: &str) -> Vec<ContextV
     };
     // what a processor returns is only ever written in the module that runs
     let Some(file) = ModuleName::new(module)
-        .and_then(|module| resolve_real_module(db, importing, &module))
+        .and_then(|module| {
+            resolve_real_module(
+                db,
+                ImportingFile::File(
+                    importing,
+                    db.program_file(importing).resolver_environment(db),
+                ),
+                &module,
+            )
+        })
         .and_then(|module| module.file(db))
     else {
         return Vec::new();
     };
 
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let Some(definition) = parsed.suite().iter().find_map(|statement| match statement {
         Stmt::FunctionDef(definition) if definition.name.as_str() == function => Some(definition),
         _ => None,
@@ -3677,7 +3742,7 @@ pub(crate) fn django_classes_in_file(db: &dyn Db, file: File) -> Box<[DjangoClas
         return Box::default();
     }
 
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let mut visitor = DjangoClassVisitor {
         db,
         file,
@@ -3797,7 +3862,7 @@ pub(crate) fn is_test_class(db: &dyn Db, file: File, class: &ast::StmtClassDef) 
 
 /// whether `file` is one of `unittest`'s own modules
 fn is_unittests_own(db: &dyn Db, file: File) -> bool {
-    file_to_module(db, file)
+    file_to_module(db, db.program_file(file).resolver_file(db))
         .is_some_and(|module| module.name(db).components().next() == Some(UNITTEST_PACKAGE))
 }
 
@@ -3811,7 +3876,8 @@ fn class_ref(db: &dyn Db, file: File, expr: &Expr) -> Option<ClassRef> {
 
 /// whether `file` is one of django's own modules
 fn is_djangos_own(db: &dyn Db, file: File) -> bool {
-    file_to_module(db, file).is_some_and(|module| is_djangos(db, module))
+    file_to_module(db, db.program_file(file).resolver_file(db))
+        .is_some_and(|module| is_djangos(db, module))
 }
 
 /// what the admin registrations of one scope say
@@ -3876,7 +3942,7 @@ fn admin_registrations_in_file(db: &dyn Db, file: File) -> AdminRegistrations {
         return AdminRegistrations::default();
     }
 
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let mut visitor = AdminRegistrationVisitor {
         db,
         file,

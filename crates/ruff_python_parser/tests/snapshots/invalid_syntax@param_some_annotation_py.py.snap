@@ -137,4 +137,3 @@ Module(
   |
 1 | def f(s: some str) -> str: ...
   |          ^^^^ Syntax Error: `some` parameter annotations are not valid in .py files
-  |

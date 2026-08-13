@@ -6,7 +6,7 @@ use lsp_server::ErrorCode;
 use lsp_types::RenameRequest;
 use lsp_types::{RenameParams, TextEdit, Uri, WorkspaceEdit};
 use ty_ide::{TemplateRename, TemplateRenameOutcome, django_rename, rename};
-use ty_project::ProjectDatabase;
+use ty_project::{ProjectDatabase, SemanticDb as _};
 
 use crate::document::{FileRangeExt, LspRange, PositionExt, ToLink};
 use crate::server::api::Error;
@@ -57,7 +57,10 @@ impl BackgroundDocumentRequestHandler for RenameRequestHandler {
 
         // a python symbol is renamed exactly as it was; the django names a module
         // writes as plain strings are what is left over once it declines
-        if !template && let Some(rename_results) = rename(db, file, offset, &params.new_name) {
+        if !template
+            && let Some(rename_results) =
+                rename(db, db.program_file(file), offset, &params.new_name)
+        {
             // Group text edits by file
             let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
 

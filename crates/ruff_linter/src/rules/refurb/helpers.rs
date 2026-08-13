@@ -37,7 +37,7 @@ pub(super) fn generate_method_call(name: Name, method: &str, generator: Generato
             range: TextRange::default(),
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
         },
-        range: TextRange::default(),
+        range_start: ruff_text_size::TextSize::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
         is_cast: false,
         is_checked_cast: false,

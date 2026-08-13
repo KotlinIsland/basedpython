@@ -25,10 +25,12 @@ use rustc_hash::FxHashMap;
 
 use crate::Db;
 use crate::place::{builtins_symbol, global_symbol};
+use crate::types::ProgramEnvironment;
 use crate::types::call::{Argument, CallArguments};
 use crate::types::class::{ClassLiteral, ClassType, GenericAlias};
 use crate::types::function::FunctionType;
 use crate::types::generics::{Specialization, combine_use_site_projections};
+use crate::types::instance::Protocol;
 use crate::types::literal::LiteralValueTypeKind;
 use crate::types::protocol_class::ReifiedMember;
 use crate::types::tuple::Tuple;
@@ -54,21 +56,22 @@ pub(crate) enum ReifiedInferenceError<'db> {
 /// so `self` binding is accounted for.
 pub(crate) fn inferred_call_type_arguments<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     callee: Type<'db>,
     function: FunctionType<'db>,
     arguments: &CallArguments<'_, 'db>,
 ) -> Result<Vec<TypeArgument>, ReifiedInferenceError<'db>> {
     let bindings = callee
-        .try_call(db, arguments)
+        .try_call(db, env, arguments)
         .map_err(|_| ReifiedInferenceError::NoBinding)?;
     let specialization = bindings
         .single_element()
         .and_then(|callable| callable.matching_overloads().exactly_one().ok())
         .ok_or(ReifiedInferenceError::NoBinding)?
         .1
-        .specialization(db);
-    rendered_type_arguments(db, file, function, specialization)
+        .specialization(db, env);
+    rendered_type_arguments(db, env, file, function, specialization)
 }
 
 /// [`inferred_call_type_arguments`] for callers outside the `types` module:
@@ -80,6 +83,7 @@ pub(crate) fn inferred_call_type_arguments<'db>(
 /// caller just skips injection
 pub(crate) fn injectable_call_specialization<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     callee: Type<'db>,
     function: FunctionType<'db>,
@@ -95,7 +99,8 @@ pub(crate) fn injectable_call_specialization<'db>(
                 .map(|(name, ty)| (Argument::Keyword(name), Some(ty))),
         )
         .collect();
-    let rendered = inferred_call_type_arguments(db, file, callee, function, &arguments).ok()?;
+    let rendered =
+        inferred_call_type_arguments(db, env, file, callee, function, &arguments).ok()?;
     // an empty prefix means everything defaults — the bare call is already
     // correct and nothing is injected
     if rendered.is_empty() {
@@ -127,6 +132,7 @@ pub(crate) fn injectable_call_specialization<'db>(
 /// the bare call is legal exactly as written (everything defaults).
 fn rendered_type_arguments<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     function: FunctionType<'db>,
     specialization: Option<Specialization<'db>>,
@@ -153,13 +159,13 @@ fn rendered_type_arguments<'db>(
         let solution = solved
             .get(index)
             .copied()
-            .filter(|ty| kind.is_solution(db, *ty));
+            .filter(|ty| kind.is_solution(db, env, *ty));
         if solution.is_some() {
             last_solved = Some(index);
         }
         resolved.push(ResolvedParameter {
             name: typevar.name(db),
-            value: solution.or_else(|| typevar.default_type(db)),
+            value: solution.or_else(|| typevar.default_type(db, env)),
             kind,
         });
     }
@@ -187,10 +193,10 @@ fn rendered_type_arguments<'db>(
             let ty = parameter
                 .value
                 .ok_or_else(|| ReifiedInferenceError::Unsolved(parameter.name.clone()))?;
-            let promoted = ty.promote(db);
+            let promoted = ty.promote(db, env);
             parameter
                 .kind
-                .spelling(db, file, promoted)
+                .spelling(db, env, file, promoted)
                 .map(|text| TypeArgument {
                     text,
                     keyword: parameter.kind == ParameterKind::KeywordPack,
@@ -245,23 +251,34 @@ impl ParameterKind {
     /// call site can be specialized with. a run or a pack whose shape is not
     /// statically known is what the solver leaves behind when it could not
     /// determine it at all, which is "unsolved", not "solved to anything"
-    fn is_solution<'db>(self, db: &'db dyn Db, ty: Type<'db>) -> bool {
+    fn is_solution<'db>(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        ty: Type<'db>,
+    ) -> bool {
         match self {
             Self::Single => is_solution(db, ty),
-            Self::Variadic => variadic_elements(db, ty).is_some(),
+            Self::Variadic => variadic_elements(db, env, ty).is_some(),
             Self::KeywordPack => ty.keyword_pack_fields(db).is_some(),
         }
     }
 
     /// the source text this parameter's value spells as, or the empty string
     /// when it stands for no arguments at all
-    fn spelling<'db>(self, db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<String> {
+    fn spelling<'db>(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        file: File,
+        ty: Type<'db>,
+    ) -> Option<String> {
         let fields = match self {
-            Self::Single => return runtime_spelling(db, file, ty),
+            Self::Single => return runtime_spelling(db, env, file, ty),
             Self::Variadic => {
-                let spellings = variadic_elements(db, ty)?
+                let spellings = variadic_elements(db, env, ty)?
                     .into_iter()
-                    .map(|element| runtime_spelling(db, file, element.promote(db)))
+                    .map(|element| runtime_spelling(db, env, file, element.promote(db, env)))
                     .collect::<Option<Vec<_>>>()?;
                 return Some(spellings.join(", "));
             }
@@ -272,7 +289,7 @@ impl ParameterKind {
             .map(|(name, field)| {
                 Some(format!(
                     "{name}={}",
-                    runtime_spelling(db, file, field.promote(db))?
+                    runtime_spelling(db, env, file, field.promote(db, env))?
                 ))
             })
             .collect::<Option<Vec<_>>>()?;
@@ -282,11 +299,15 @@ impl ParameterKind {
 
 /// the run of type arguments a `*Ts` parameter stands for — the elements of
 /// the tuple that is its value
-fn variadic_elements<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Vec<Type<'db>>> {
+fn variadic_elements<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Option<Vec<Type<'db>>> {
     let Type::NominalInstance(instance) = ty else {
         return None;
     };
-    match instance.tuple_spec(db)?.into_owned() {
+    match instance.tuple_spec(db, env)?.into_owned() {
         Tuple::Fixed(elements) => Some(elements.elements_slice().to_vec()),
         Tuple::Variable(_) => None,
     }
@@ -310,12 +331,17 @@ fn is_solution<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
 
 /// A python expression that evaluates, in `file`'s module scope, to the
 /// runtime object denoted by `ty` — or `None` when there is no such spelling.
-fn runtime_spelling<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<String> {
+fn runtime_spelling<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+) -> Option<String> {
     if ty.is_none(db) {
         return Some("None".to_owned());
     }
     match ty {
-        Type::NominalInstance(instance) => spell_class(db, file, instance.class(db)),
+        Type::NominalInstance(instance) => spell_class(db, env, file, instance.class(db, env)),
         // a reified type parameter spells as its own name: pep 695 compiles it
         // into the enclosing function's closure, and the `generic` wrapper fills
         // that cell with the type argument, so the name evaluates to the type
@@ -326,7 +352,7 @@ fn runtime_spelling<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<S
             union
                 .elements(db)
                 .iter()
-                .map(|element| runtime_spelling(db, file, *element))
+                .map(|element| runtime_spelling(db, env, file, *element))
                 .collect::<Option<Vec<_>>>()?
                 .join(" | "),
         ),
@@ -334,14 +360,19 @@ fn runtime_spelling<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<S
     }
 }
 
-fn spell_class<'db>(db: &'db dyn Db, file: File, class: ClassType<'db>) -> Option<String> {
+fn spell_class<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    class: ClassType<'db>,
+) -> Option<String> {
     match class {
-        ClassType::NonGeneric(literal) => spell_class_literal(db, file, literal),
+        ClassType::NonGeneric(literal) => spell_class_literal(db, env, file, literal),
         ClassType::Generic(alias) => {
             let origin = ClassLiteral::Static(alias.origin(db));
-            let base = spell_class_literal(db, file, origin)?;
+            let base = spell_class_literal(db, env, file, origin)?;
             let arguments =
-                spell_specialization_arguments(db, file, origin, alias.specialization(db))?;
+                spell_specialization_arguments(db, env, file, origin, alias.specialization(db))?;
             Some(format!("{base}[{arguments}]"))
         }
     }
@@ -352,6 +383,7 @@ fn spell_class<'db>(db: &'db dyn Db, file: File, class: ClassType<'db>) -> Optio
 /// shape out-of-band; spell it rather than the class's single typevar
 fn spell_specialization_arguments<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     origin: ClassLiteral<'db>,
     specialization: Specialization<'db>,
@@ -362,7 +394,7 @@ fn spell_specialization_arguments<'db>(
                 let elements = fixed
                     .elements_slice()
                     .iter()
-                    .map(|element| runtime_spelling(db, file, element.promote(db)))
+                    .map(|element| runtime_spelling(db, env, file, element.promote(db, env)))
                     .collect::<Option<Vec<_>>>()?;
                 if elements.is_empty() {
                     Some("()".to_owned())
@@ -378,7 +410,7 @@ fn spell_specialization_arguments<'db>(
     let arguments = specialization
         .types(db)
         .iter()
-        .map(|argument| runtime_spelling(db, file, argument.promote(db)))
+        .map(|argument| runtime_spelling(db, env, file, argument.promote(db, env)))
         .collect::<Option<Vec<_>>>()?;
     Some(arguments.join(", "))
 }
@@ -394,21 +426,22 @@ fn spell_specialization_arguments<'db>(
 /// is never an error — the call simply stays bare.
 pub(crate) fn constructor_specialization_display<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     class_literal: ClassLiteral<'db>,
     constructed: Type<'db>,
 ) -> Option<String> {
-    let Type::NominalInstance(instance) = constructed.promote(db) else {
+    let Type::NominalInstance(instance) = constructed.promote(db, env) else {
         return None;
     };
-    let ClassType::Generic(alias) = instance.class(db) else {
+    let ClassType::Generic(alias) = instance.class(db, env) else {
         return None;
     };
     let origin = ClassLiteral::Static(alias.origin(db));
     if origin != class_literal {
         return None;
     }
-    spell_specialization_arguments(db, file, origin, alias.specialization(db))
+    spell_specialization_arguments(db, env, file, origin, alias.specialization(db))
 }
 
 /// The full runtime spelling (`list[int]`, `tuple[int, str]`) with which the
@@ -424,14 +457,19 @@ pub(crate) fn constructor_specialization_display<'db>(
 /// evaluates to the intended type object
 fn spell_class_literal<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     literal: ClassLiteral<'db>,
 ) -> Option<String> {
     let name = literal.name(db);
-    let resolved = global_symbol(db, file, name)
+    let resolved = global_symbol(db, db.program_file(file), name)
         .place
         .ignore_possibly_undefined()
-        .or_else(|| builtins_symbol(db, name).place.ignore_possibly_undefined())?;
+        .or_else(|| {
+            builtins_symbol(db, env, name)
+                .place
+                .ignore_possibly_undefined()
+        })?;
     let resolved_literal = resolved.as_class_literal()?;
     (resolved_literal == literal).then(|| name.to_string())
 }
@@ -534,7 +572,12 @@ pub struct ErasedUnion {
 /// and every argument must have a runtime spelling — an unspellable argument
 /// (a scope-local class, a dynamic type) disqualifies the whole union rather
 /// than producing a rewrite that cannot be spelled back out
-pub(crate) fn erased_union<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<ErasedUnion> {
+pub(crate) fn erased_union<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+) -> Option<ErasedUnion> {
     let Type::Union(union) = ty else {
         return None;
     };
@@ -544,7 +587,7 @@ pub(crate) fn erased_union<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> O
         let Type::NominalInstance(instance) = element else {
             return None;
         };
-        let ClassType::Generic(alias) = instance.class(db) else {
+        let ClassType::Generic(alias) = instance.class(db, env) else {
             return None;
         };
         let arm_origin = alias.origin(db);
@@ -593,16 +636,17 @@ pub(crate) fn erased_union<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> O
 
     let arms = rows
         .iter()
-        .map(|row| runtime_spelling(db, file, row[position].promote(db)))
+        .map(|row| runtime_spelling(db, env, file, row[position].promote(db, env)))
         .collect::<Option<Vec<_>>>()?;
     let fixed = (0..width)
         .filter(|index| *index != position)
         .map(|index| {
-            runtime_spelling(db, file, rows[0][index].promote(db)).map(|text| (index, text))
+            runtime_spelling(db, env, file, rows[0][index].promote(db, env))
+                .map(|text| (index, text))
         })
         .collect::<Option<Vec<_>>>()?;
     Some(ErasedUnion {
-        origin: spell_class_literal(db, file, origin)?,
+        origin: spell_class_literal(db, env, file, origin)?,
         position,
         arms,
         fixed,
@@ -659,6 +703,7 @@ fn erased_target_reason<'db>(
 /// keeps the ordinary `isinstance` lowering.
 pub(crate) fn parametric_is_target<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     rhs_ty: Type<'db>,
 ) -> Option<GenericAlias<'db>> {
     match rhs_ty {
@@ -667,7 +712,7 @@ pub(crate) fn parametric_is_target<'db>(
             let value = rhs_ty.as_type_alias()?.value_type(db);
             match value {
                 Type::GenericAlias(alias) => Some(alias),
-                Type::NominalInstance(instance) => match instance.class(db) {
+                Type::NominalInstance(instance) => match instance.class(db, env) {
                     ClassType::Generic(alias) => Some(alias),
                     ClassType::NonGeneric(_) => None,
                 },
@@ -683,14 +728,16 @@ pub(crate) fn parametric_is_target<'db>(
 /// the two forms; both then classify through [`classify_parametric_is`].
 pub(crate) fn parametric_cast_target<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     target_ty: Type<'db>,
 ) -> Option<GenericAlias<'db>> {
     match target_ty {
-        Type::NominalInstance(instance) => match instance.class(db) {
+        Type::NominalInstance(instance) => match instance.class(db, env) {
             ClassType::Generic(alias) => Some(alias),
             ClassType::NonGeneric(_) => None,
         },
         Type::ProtocolInstance(instance) => match instance.inner {
+            Protocol::Materialized(_) => None,
             crate::types::instance::Protocol::FromClass(protocol_class) => match *protocol_class {
                 ClassType::Generic(alias) => Some(alias),
                 ClassType::NonGeneric(_) => None,
@@ -698,7 +745,7 @@ pub(crate) fn parametric_cast_target<'db>(
             crate::types::instance::Protocol::Synthesized(_) => None,
         },
         // an alias name still resolves through the value-position rules
-        _ => parametric_is_target(db, target_ty),
+        _ => parametric_is_target(db, env, target_ty),
     }
 }
 
@@ -713,6 +760,7 @@ pub(crate) fn parametric_cast_target<'db>(
 /// back to the static fold or the runtime probe.
 pub(crate) fn classify_parametric_is<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     lhs_ty: Type<'db>,
     rhs_alias: crate::types::class::GenericAlias<'db>,
@@ -728,7 +776,8 @@ pub(crate) fn classify_parametric_is<'db>(
     };
     let plan = classify_value(
         db,
-        lhs_ty.promote(db),
+        env,
+        lhs_ty.promote(db, env),
         target_origin,
         rhs_alias,
         &target_args_ast,
@@ -746,7 +795,7 @@ pub(crate) fn classify_parametric_is<'db>(
     if let ParametricIsPlan::Probe(_) = plan
         && let Some(ErasedTargetReason::Protocol) = erased_target_reason(db, target_origin)
     {
-        return protocol_structural_members(db, file, ClassType::Generic(rhs_alias))
+        return protocol_structural_members(db, env, file, ClassType::Generic(rhs_alias))
             .map(|checks| ParametricIsPlan::ProtocolStructural(checks.into_boxed_slice()))
             .unwrap_or(ParametricIsPlan::ErasedTarget(ErasedTargetReason::Protocol));
     }
@@ -764,6 +813,7 @@ pub(crate) fn classify_parametric_is<'db>(
 /// reified annotations, so both consult one source of truth.
 pub(crate) fn protocol_structural_members<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     class: ClassType<'db>,
 ) -> Option<Vec<ProtocolMemberCheck>> {
@@ -771,13 +821,13 @@ pub(crate) fn protocol_structural_members<'db>(
     let mut checks = Vec::new();
     for member in protocol_class.interface(db).members(db) {
         let name = member.name().to_owned();
-        let check = match member.reified_member_shape(db)? {
+        let check = match member.reified_member_shape(db, env)? {
             ReifiedMember::Attribute {
                 ty,
                 readable,
                 writable,
             } => {
-                let expected = protocol_member_spelling(db, file, ty)?;
+                let expected = protocol_member_spelling(db, env, file, ty)?;
                 let variance = match (readable, writable) {
                     (true, true) => ArgVariance::Invariant,
                     (true, false) => ArgVariance::Covariant,
@@ -796,10 +846,10 @@ pub(crate) fn protocol_structural_members<'db>(
                 // back to the erased-target error
                 let mut param_checks = Vec::with_capacity(params.len());
                 for param_ty in params {
-                    let expected = protocol_member_spelling(db, file, param_ty)?;
+                    let expected = protocol_member_spelling(db, env, file, param_ty)?;
                     param_checks.push((expected, ArgVariance::Contravariant));
                 }
-                let ret = match reified_return_check(db, file, ret) {
+                let ret = match reified_return_check(db, env, file, ret) {
                     ReturnCheck::Skip => None,
                     ReturnCheck::Check(expected) => Some((expected, ArgVariance::Covariant)),
                     ReturnCheck::Unspellable => return None,
@@ -828,7 +878,12 @@ pub(crate) fn protocol_structural_members<'db>(
 /// This deliberately does *not* widen [`runtime_spelling`] itself: that spelling
 /// is also injected into reified calls (`f[int](…)`) and constructor
 /// specializations (`A[int](1)`), where `_by_lit` is not in scope.
-fn protocol_member_spelling<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<String> {
+fn protocol_member_spelling<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+) -> Option<String> {
     if let Type::LiteralValue(literal) = ty {
         let value = match literal.kind() {
             LiteralValueTypeKind::Bool(boolean) => {
@@ -849,7 +904,7 @@ fn protocol_member_spelling<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> 
         };
         return Some(format!("_by_lit({value})"));
     }
-    runtime_spelling(db, file, ty)
+    runtime_spelling(db, env, file, ty)
 }
 
 /// the covariant/skip/unspellable classification of a protocol method's return
@@ -864,23 +919,29 @@ enum ReturnCheck {
     Unspellable,
 }
 
-fn reified_return_check<'db>(db: &'db dyn Db, file: File, ret: Type<'db>) -> ReturnCheck {
-    if ret.is_none(db) || ret.is_dynamic() || is_object_instance(db, ret) {
+fn reified_return_check<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ret: Type<'db>,
+) -> ReturnCheck {
+    if ret.is_none(db) || ret.is_dynamic() || is_object_instance(db, env, ret) {
         return ReturnCheck::Skip;
     }
-    match protocol_member_spelling(db, file, ret) {
+    match protocol_member_spelling(db, env, file, ret) {
         Some(expected) => ReturnCheck::Check(expected),
         None => ReturnCheck::Unspellable,
     }
 }
 
-fn is_object_instance<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+fn is_object_instance<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> bool {
     matches!(ty, Type::NominalInstance(instance)
-        if instance.class(db).class_literal(db).is_known(db, KnownClass::Object))
+        if instance.class(db, env).class_literal(db).is_known(db, KnownClass::Object))
 }
 
 fn classify_value<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     value_ty: Type<'db>,
     target_origin: ClassLiteral<'db>,
     rhs_alias: crate::types::class::GenericAlias<'db>,
@@ -890,9 +951,10 @@ fn classify_value<'db>(
     // when the value's type is carried by a reified type parameter, the answer
     // lives in a runtime cell rather than the static type — extract the cell
     // comparisons before falling back to static subtyping
-    if value_ty.has_typevar(db)
+    if value_ty.has_typevar(db, env)
         && let Some(plan) = try_token_eq(
             db,
+            env,
             value_ty,
             target_origin,
             rhs_alias,
@@ -905,10 +967,10 @@ fn classify_value<'db>(
 
     // `a is C[args]` means `type(a) <: C[args]`, so the static answer is a
     // subtype question — this respects `C`'s declared variance for free
-    let target_instance = Type::instance(db, ClassType::Generic(rhs_alias));
-    if value_ty.is_subtype_of(db, target_instance) {
+    let target_instance = Type::instance(db, env, ClassType::Generic(rhs_alias));
+    if value_ty.is_subtype_of(db, env, target_instance) {
         ParametricIsPlan::Fold(true)
-    } else if value_ty.is_disjoint_from(db, target_instance) {
+    } else if value_ty.is_disjoint_from(db, env, target_instance) {
         ParametricIsPlan::Fold(false)
     } else {
         // undecidable statically; `classify_parametric_is` turns this into a
@@ -923,6 +985,7 @@ fn classify_value<'db>(
 /// not so shaped (the caller then resolves it statically).
 fn try_token_eq<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     value_ty: Type<'db>,
     target_origin: ClassLiteral<'db>,
     rhs_alias: crate::types::class::GenericAlias<'db>,
@@ -945,7 +1008,7 @@ fn try_token_eq<'db>(
             )]))
         }
         Type::NominalInstance(instance) => {
-            let ClassType::Generic(alias) = instance.class(db) else {
+            let ClassType::Generic(alias) = instance.class(db, env) else {
                 return None;
             };
             if ClassLiteral::Static(alias.origin(db)) != target_origin {
@@ -954,6 +1017,7 @@ fn try_token_eq<'db>(
             let mut tokens = Vec::new();
             unify_specializations(
                 db,
+                env,
                 target_origin,
                 alias.specialization(db),
                 rhs_alias.specialization(db),
@@ -981,13 +1045,14 @@ fn try_token_eq<'db>(
 /// type arguments against the value's reified `__orig_class__`.
 pub(crate) fn parametric_soundness_spelling<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     ty: Type<'db>,
 ) -> Option<(String, Box<[ArgVariance]>)> {
     let Type::NominalInstance(instance) = ty else {
         return None;
     };
-    let ClassType::Generic(alias) = instance.class(db) else {
+    let ClassType::Generic(alias) = instance.class(db, env) else {
         return None;
     };
     let origin = ClassLiteral::Static(alias.origin(db));
@@ -997,7 +1062,7 @@ pub(crate) fn parametric_soundness_spelling<'db>(
     if erased_target_reason(db, origin).is_some() {
         return None;
     }
-    let spelling = spell_class(db, file, ClassType::Generic(alias))?;
+    let spelling = spell_class(db, env, file, ClassType::Generic(alias))?;
     let variances = target_variances(db, alias);
     if variances.is_empty() {
         return None;
@@ -1023,7 +1088,7 @@ fn target_variances<'db>(db: &'db dyn Db, alias: GenericAlias<'db>) -> Box<[ArgV
     generic_context
         .variables(db)
         .map(|bound_typevar| {
-            let declared = bound_typevar.variance(db);
+            let declared = bound_typevar.probe_variance(db);
             let effective = combine_use_site_projections(
                 declared,
                 None,
@@ -1047,6 +1112,7 @@ fn target_variances<'db>(db: &'db dyn Db, alias: GenericAlias<'db>) -> Box<[ArgV
 /// a set of token comparisons (the caller then resolves the test statically).
 fn unify_specializations<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     origin: ClassLiteral<'db>,
     value_spec: Specialization<'db>,
     target_spec: Specialization<'db>,
@@ -1066,6 +1132,7 @@ fn unify_specializations<'db>(
                 {
                     unify_argument(
                         db,
+                        env,
                         *s,
                         *t,
                         target_args_ast.and_then(|args| args.get(index).copied()),
@@ -1085,6 +1152,7 @@ fn unify_specializations<'db>(
     for (index, (s, t)) in value_types.iter().zip(target_types).enumerate() {
         unify_argument(
             db,
+            env,
             *s,
             *t,
             target_args_ast.and_then(|args| args.get(index).copied()),
@@ -1096,12 +1164,13 @@ fn unify_specializations<'db>(
 
 fn unify_argument<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     value: Type<'db>,
     target: Type<'db>,
     target_ast: Option<&ast::Expr>,
     tokens: &mut Vec<(Name, TextRange)>,
 ) -> Result<(), ()> {
-    if value == target || value.is_equivalent_to(db, target) {
+    if value == target || value.is_equivalent_to(db, env, target) {
         return Ok(());
     }
     if let Type::TypeVar(bound_typevar) = value {
@@ -1118,8 +1187,10 @@ fn unify_argument<'db>(
     // (`list[T]` vs the `list[int]` written in the rhs)
     if let (Type::NominalInstance(value_instance), Type::NominalInstance(target_instance)) =
         (value, target)
-        && let (ClassType::Generic(value_alias), ClassType::Generic(target_alias)) =
-            (value_instance.class(db), target_instance.class(db))
+        && let (ClassType::Generic(value_alias), ClassType::Generic(target_alias)) = (
+            value_instance.class(db, env),
+            target_instance.class(db, env),
+        )
         && value_alias.origin(db) == target_alias.origin(db)
     {
         let nested_ast: Option<Vec<&ast::Expr>> =
@@ -1133,6 +1204,7 @@ fn unify_argument<'db>(
             };
         return unify_specializations(
             db,
+            env,
             ClassLiteral::Static(value_alias.origin(db)),
             value_alias.specialization(db),
             target_alias.specialization(db),
@@ -1155,7 +1227,7 @@ fn is_reified_function_typevar<'db>(
         return false;
     };
     let def_file = definition.file(db);
-    let module = parsed_module(db, def_file).load(db);
+    let module = parsed_module(db, db.program_file(def_file).python_file(db)).load(db);
     let ty_python_core::definition::DefinitionKind::Function(function) = definition.kind(db) else {
         return false;
     };
@@ -1201,6 +1273,7 @@ pub(crate) enum ReifiedOverrideError<'db> {
 /// check's scope — plain erased generics, overloads, `*Ts` / `**P` lists).
 pub(crate) fn reified_override_error<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     base: FunctionType<'db>,
     sub: FunctionType<'db>,
 ) -> Option<ReifiedOverrideError<'db>> {
@@ -1217,8 +1290,8 @@ pub(crate) fn reified_override_error<'db>(
                 .then(|| ReifiedOverrideError::ReifiesErased(missing.iter().cloned().collect()))
         }
         (true, true) => {
-            let base_interface = type_param_interface(db, base)?;
-            let sub_interface = type_param_interface(db, sub)?;
+            let base_interface = type_param_interface(db, env, base)?;
+            let sub_interface = type_param_interface(db, env, sub)?;
             if sub_interface.required > base_interface.required
                 || sub_interface.params.len() < base_interface.params.len()
             {
@@ -1232,7 +1305,7 @@ pub(crate) fn reified_override_error<'db>(
             for ((base_name, base_admissible), (sub_name, sub_admissible)) in
                 base_interface.params.iter().zip(&sub_interface.params)
             {
-                if !base_admissible.is_assignable_to(db, *sub_admissible) {
+                if !base_admissible.is_assignable_to(db, env, *sub_admissible) {
                     return Some(ReifiedOverrideError::Bound {
                         base_name: base_name.clone(),
                         sub_name: sub_name.clone(),
@@ -1257,6 +1330,7 @@ struct TypeParamInterface<'db> {
 
 fn type_param_interface<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     function: FunctionType<'db>,
 ) -> Option<TypeParamInterface<'db>> {
     let signature = function.signature(db);
@@ -1274,10 +1348,10 @@ fn type_param_interface<'db>(
                 .variables(db)
                 .map(|bound_typevar| {
                     let typevar = bound_typevar.typevar(db);
-                    let admissible = match typevar.bound_or_constraints(db) {
+                    let admissible = match typevar.bound_or_constraints(db, env) {
                         Some(TypeVarBoundOrConstraints::UpperBound(bound)) => bound,
                         Some(TypeVarBoundOrConstraints::Constraints(constraints)) => {
-                            constraints.as_type(db)
+                            constraints.as_type(db, env)
                         }
                         None => Type::object(),
                     };
@@ -1287,7 +1361,7 @@ fn type_param_interface<'db>(
         })
         .unwrap_or_default();
 
-    let module = parsed_module(db, overload_literal.file(db)).load(db);
+    let module = parsed_module(db, overload_literal.program_file(db).python_file(db)).load(db);
     let node = overload_literal
         .body_scope(db)
         .node(db)

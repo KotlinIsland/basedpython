@@ -436,7 +436,7 @@ fn return_stmt(id: Name, test: &Expr, target: &Expr, iter: &Expr, generator: Gen
             range: TextRange::default(),
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
         },
-        range: TextRange::default(),
+        range_start: ruff_text_size::TextSize::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
         is_cast: false,
         is_checked_cast: false,

@@ -36,6 +36,14 @@ type Unused = object  # stable
 # for more information.
 type MaybeNone = dynamic  # stable
 
+# typeshed-internal type aliases to facilitate transition from
+# `float` to either `float | int` or `float` (and similar for `complex`).
+# When you encounter one of these type aliases, you are encouraged to
+# replace them with the correct type. Please don't use them outside typeshed.
+# See https://github.com/python/typeshed/issues/16059 for details.
+type FloatInt = float | int
+type ComplexInt = complex | float | int
+
 # Used to mark arguments that default to a sentinel value. This prevents
 # stubtest from complaining about the default value not matching.
 #
@@ -289,7 +297,7 @@ type ConvertibleToFloat = str | ReadableBuffer | SupportsFloat | SupportsIndex
 # A few classes updated from Foo(str, Enum) to Foo(StrEnum). This is a convenience so these
 # can be accurate on all python versions without getting too wordy
 if sys.version_info >= (3, 11):
-    from enum import StrEnum as StrEnum
+    from enum export StrEnum
 else:
     from enum import Enum
 

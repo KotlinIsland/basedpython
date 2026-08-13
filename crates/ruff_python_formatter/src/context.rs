@@ -134,7 +134,7 @@ impl<'a> PyFormatContext<'a> {
         self.interpolated_string_state
     }
 
-    pub(crate) fn set_interpolated_string_state(
+    fn set_interpolated_string_state(
         &mut self,
         interpolated_string_state: InterpolatedStringState,
     ) {

@@ -1,4 +1,6 @@
 # ruff: noqa: PYI021
+"""Experimental ty APIs intended to be exposed to end users."""
+
 import collections.abc
 import sys
 from typing import (
@@ -11,7 +13,11 @@ from typing import (
 
 from typing_extensions import LiteralString, Self  # noqa: UP035
 
-from ._internal import TypeOf as _TypeOf
+# basedpython: `Unknown` is part of the language a user reads and writes, not an
+# internal of the checker, so it stays on the public module. upstream moved its
+# declaration to `_internal`, so the re-export below is what keeps it public
+# rather than a second declaration.
+from ._internal import TypeOf as _TypeOf, Unknown as Unknown
 
 # ------------------
 # Special operations
@@ -161,15 +167,6 @@ eagerly.
 # -----
 # Types
 # -----
-
-Unknown: _SpecialForm
-"""
-`Unknown` is a dynamic type inferred due to missing type information or an inference error.
-
-ty infers `Unknown` for unannotated values with insufficient type information. It also uses it as a
-fallback after certain type errors. This contrasts with `Any`, which represents an *explicitly*
-annotated dynamic type. Like `Any`, however, it is a dynamic type, so ty allows any operation on it.
-"""
 
 AlwaysTruthy: _SpecialForm
 """

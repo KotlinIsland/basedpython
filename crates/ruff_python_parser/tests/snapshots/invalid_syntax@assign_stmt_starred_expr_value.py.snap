@@ -220,4 +220,3 @@ Module(
 3 | _ = *list()
 4 | _ = *(p + q)
   |     ^^^^^^^^ Syntax Error: Starred expression cannot be used here
-  |

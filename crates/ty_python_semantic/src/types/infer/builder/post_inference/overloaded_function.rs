@@ -9,7 +9,7 @@ use crate::{
     Db,
     place::{DefinedPlace, Definedness, Place, place_from_bindings},
     types::{
-        KnownClass, Type,
+        CallableType, KnownClass, Type,
         context::InferContext,
         diagnostic::INVALID_OVERLOAD,
         function::{FunctionDecorators, FunctionType, KnownFunction, OverloadLiteral},
@@ -46,6 +46,7 @@ pub(crate) fn check_overloaded_function<'db>(
     };
 
     let db = context.db();
+    let env = context.program_environment();
 
     if function.file(db) != context.file() {
         // If the function is not in this file, we don't need to check it.
@@ -67,6 +68,7 @@ pub(crate) fn check_overloaded_function<'db>(
         ..
     }) = place_from_bindings(
         db,
+        env,
         use_def.end_of_scope_symbol_bindings(place.as_symbol().unwrap()),
     )
     .place
@@ -101,8 +103,15 @@ pub(crate) fn check_overloaded_function<'db>(
 
     if let Some(implementation) = implementation
         && binding_decorator_inconsistencies.is_empty()
+        && context.is_lint_enabled(&INVALID_OVERLOAD)
     {
-        check_non_generic_overload_implementation_consistency(context, overloads, implementation);
+        let implementation_callables = function.implementation_callables(db);
+        check_non_generic_overload_implementation_consistency(
+            context,
+            overloads,
+            implementation,
+            &implementation_callables,
+        );
     }
 
     // Check that the overloaded function has at least two overloads
@@ -113,9 +122,9 @@ pub(crate) fn check_overloaded_function<'db>(
                 "Overloaded function `{}` requires at least two overloads",
                 function_node.name
             ));
-            diagnostic.set_primary_message("Only one overload defined here");
+            diagnostic.set_primary_annotation_message("Only one overload defined here");
             if let Some(decorator) =
-                single_overload.find_known_decorator_span(db, KnownFunction::Overload)
+                single_overload.find_known_decorator_span(context.db(), KnownFunction::Overload)
             {
                 diagnostic.annotate(Annotation::secondary(decorator));
             }
@@ -142,11 +151,15 @@ pub(crate) fn check_overloaded_function<'db>(
             )
         {
             if class.is_protocol(db)
-                || (Type::ClassLiteral(class)
-                    .is_subtype_of(db, KnownClass::ABCMeta.to_instance(db))
-                    && overloads.iter().all(|overload| {
-                        overload.has_known_decorator(db, FunctionDecorators::ABSTRACT_METHOD)
-                    }))
+                || ({
+                    Type::ClassLiteral(class).is_subtype_of(
+                        db,
+                        env,
+                        KnownClass::ABCMeta.to_instance(db, env),
+                    )
+                } && overloads.iter().all(|overload| {
+                    overload.has_known_decorator(db, FunctionDecorators::ABSTRACT_METHOD)
+                }))
             {
                 implementation_required = false;
             }
@@ -192,7 +205,7 @@ pub(crate) fn check_overloaded_function<'db>(
                         .message(format_args!("Missing here")),
                 );
                 if let Some(decorator) =
-                    function.find_known_decorator_span(db, KnownFunction::Overload)
+                    function.find_known_decorator_span(context.db(), KnownFunction::Overload)
                 {
                     diagnostic.annotate(Annotation::secondary(decorator));
                 }
@@ -220,7 +233,8 @@ pub(crate) fn check_overloaded_function<'db>(
                     name = known_function.name()
                 ));
                 for known_function in [known_function, KnownFunction::Overload] {
-                    if let Some(decorator) = overload.find_known_decorator_span(db, known_function)
+                    if let Some(decorator) =
+                        overload.find_known_decorator_span(context.db(), known_function)
                     {
                         diagnostic.annotate(Annotation::secondary(decorator));
                     }
@@ -250,11 +264,13 @@ pub(crate) fn check_overloaded_function<'db>(
                         first overload",
                     name = known_function.name()
                 ));
-                if let Some(decorator) = overload.find_known_decorator_span(db, known_function) {
+                if let Some(decorator) =
+                    overload.find_known_decorator_span(context.db(), known_function)
+                {
                     diagnostic.annotate(Annotation::secondary(decorator));
                 }
                 let file = function.file(db);
-                let module = parsed_module(db, file).load(db);
+                let module = parsed_module(db, first_overload.python_file(db)).load(db);
                 let node = first_overload.node(db, file, &module);
                 let span = if node.body.len() == 1 {
                     Span::from(file).with_range(node.range())
@@ -272,15 +288,29 @@ pub(crate) fn check_overloaded_function<'db>(
 
 /// Check non-generic overload signatures against their implementation.
 ///
-/// This is the first, deliberately narrow pass at overload implementation consistency. It reports
-/// only when the overloads and implementation are all non-generic; generic signatures require
-/// careful treatment of type-variable domains.
+/// This is the first, deliberately narrow pass at overload implementation consistency. Signature
+/// compatibility is checked only when the overloads and implementation are all non-generic;
+/// generic signatures require careful treatment of type-variable domains. Each callable
+/// alternative of the implementation must contain a signature consistent with each overload.
 fn check_non_generic_overload_implementation_consistency<'db>(
     context: &InferContext<'db, '_>,
     overloads: &'db [OverloadLiteral<'db>],
     implementation: OverloadLiteral<'db>,
+    implementation_callables: &[CallableType<'db>],
 ) {
-    if !context.is_lint_enabled(&INVALID_OVERLOAD) {
+    let db = context.db();
+    let env = context.program_environment();
+    if implementation_callables.is_empty()
+        || implementation_callables
+            .iter()
+            .any(|callable| callable.signatures(db).overloads.is_empty())
+    {
+        let function_node = implementation.node(db, context.file(), context.module());
+        if let Some(builder) = context.report_lint(&INVALID_OVERLOAD, &function_node.name) {
+            builder.into_diagnostic(format_args!(
+                "Overload implementation is not callable after applying decorators"
+            ));
+        }
         return;
     }
 
@@ -292,12 +322,13 @@ fn check_non_generic_overload_implementation_consistency<'db>(
     // basedpython: an unannotated parameter's hole is erased first — it makes the signature
     // generic without there being any type-variable domain to reason about, and skipping on it
     // would silently retire this check for every unannotated implementation
-    let Some(implementation_signature) = implementation
+    if implementation
         .signature(db)
         .without_inferred_parameter_holes(db)
-    else {
+        .is_none()
+    {
         return;
-    };
+    }
 
     let Some(overload_signatures) = overloads
         .iter()
@@ -315,10 +346,51 @@ fn check_non_generic_overload_implementation_consistency<'db>(
 
     for (overload, overload_signature) in overload_signatures {
         let function_node = overload.node(db, context.file(), context.module());
-        let parameter_consistency = implementation_signature
-            .non_generic_implementation_parameters_consistency_with(db, &overload_signature);
-        let return_type_consistency = implementation_signature
-            .non_generic_implementation_return_type_consistency_with(db, &overload_signature);
+        let Some((implementation_signature, parameter_consistency, return_type_consistency)) =
+            implementation_callables.iter().find_map(|callable| {
+                let mut inconsistency = None;
+                for implementation_signature in &callable.signatures(db).overloads {
+                    // basedpython: erase an unannotated parameter's hole before comparing —
+                    // it makes the signature generic without there being any type-variable
+                    // domain to reason about, and skipping on it would silently retire this
+                    // check for every unannotated implementation
+                    let Some(implementation_signature) =
+                        implementation_signature.without_inferred_parameter_holes(db)
+                    else {
+                        continue;
+                    };
+                    let parameter_consistency = implementation_signature
+                        .non_generic_implementation_parameters_consistency_with(
+                            db,
+                            env,
+                            &overload_signature,
+                        );
+                    let return_type_consistency = implementation_signature
+                        .non_generic_implementation_return_type_consistency_with(
+                            db,
+                            env,
+                            &overload_signature,
+                        );
+                    if matches!(
+                        (&parameter_consistency, &return_type_consistency),
+                        (
+                            ParameterConsistency::Consistent,
+                            ReturnTypeConsistency::Consistent
+                        )
+                    ) {
+                        return None;
+                    }
+                    inconsistency = Some((
+                        implementation_signature,
+                        parameter_consistency,
+                        return_type_consistency,
+                    ));
+                }
+                inconsistency
+            })
+        else {
+            continue;
+        };
 
         let (parameter_error_context, return_type_error_context, message) =
             match (parameter_consistency, return_type_consistency) {
@@ -356,18 +428,18 @@ fn check_non_generic_overload_implementation_consistency<'db>(
         if let Some(error_context) = parameter_error_context {
             diagnostic.info(format_args!(
                 "Implementation signature `{}` is not assignable to overload signature `{}`",
-                implementation_signature.display(db),
-                overload_signature.display(db),
+                implementation_signature.display(db, env),
+                overload_signature.display(db, env),
             ));
-            error_context.attach_to(db, &mut diagnostic);
+            error_context.attach_to(db, env, &mut diagnostic);
         }
         if let Some(error_context) = return_type_error_context {
             diagnostic.info(format_args!(
                 "Overload returns `{}`, which is not assignable to implementation return type `{}`",
-                overload_signature.return_ty.display(db),
-                implementation_signature.return_ty.display(db),
+                overload_signature.return_ty.display(db, env),
+                implementation_signature.return_ty.display(db, env),
             ));
-            error_context.attach_to(db, &mut diagnostic);
+            error_context.attach_to(db, env, &mut diagnostic);
         }
         diagnostic.annotate(
             context

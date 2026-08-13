@@ -15,26 +15,22 @@ info[inlay-hint-location]: Inlay Hint Target
   |
 2 | class Wrapper[Element]:
   |       ^^^^^^^
-  |
 info: Source
  --> main2.py:6:9
   |
 6 |     a[: Wrapper[1]] = Wrapper(1)
   |         ^^^^^^^
-  |
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/builtins.byi:LL:7
    |
 LL | class int:
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:17
    |
 LL |     a[: Wrapper[1]] = Wrapper(1)
    |                 ^
-   |
 
 ---------------------------------------------
 info[inlay-hint-edit]: Inlay hint edits

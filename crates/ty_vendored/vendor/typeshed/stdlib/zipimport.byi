@@ -128,10 +128,10 @@ class zipimporter(_LoaderBasics):
             Deprecated since Python 3.10. Use exec_module() instead.
             """
 
-    override def exec_module(self, module: ModuleType) -> None:
+    override def exec_module(self, module: ModuleType):
         """Execute the module."""
 
-    override def create_module(self, spec: ModuleSpec) -> None:
+    override def create_module(self, spec: ModuleSpec):
         """Use default semantics for module creation."""
 
     def find_spec(self, fullname: str, target: ModuleType | None = None) -> ModuleSpec | None:

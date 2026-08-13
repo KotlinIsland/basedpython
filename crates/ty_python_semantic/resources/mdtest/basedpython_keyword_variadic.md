@@ -315,7 +315,6 @@ error[invalid-type-form]: Bare keyword-variadic pack `Kwargs` is not valid in th
   |
 2 |     def get(self) -> Kwargs: ...  # snapshot
   |                      ^^^^^^
-  |
 info: A keyword-variadic pack is only valid:
 info:  - unpacked with `**` in a callable parameter list
 info:  - as the default for another keyword-variadic pack

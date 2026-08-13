@@ -69,7 +69,7 @@ use crate::{Edit, Fix, FixAvailability, Violation};
 ///
 /// [The documentation]: https://docs.python.org/3/library/logging.html#logging.exception
 #[derive(ViolationMetadata)]
-#[violation_metadata(preview_since = "0.9.5")]
+#[violation_metadata(stable_since = "0.16.0")]
 pub(crate) struct LogExceptionOutsideExceptHandler;
 
 impl Violation for LogExceptionOutsideExceptHandler {
@@ -125,7 +125,7 @@ pub(crate) fn log_exception_outside_except_handler(checker: &Checker, call: &Exp
         _ => return,
     };
 
-    let mut diagnostic = checker.report_diagnostic(LogExceptionOutsideExceptHandler, call.range);
+    let mut diagnostic = checker.report_diagnostic(LogExceptionOutsideExceptHandler, call.range());
 
     if let Some(fix) = fix {
         diagnostic.set_fix(fix);

@@ -76,8 +76,8 @@ from http.client import HTTPConnection, HTTPMessage, HTTPResponse
 from http.cookiejar import CookieJar
 from re import Pattern
 from typing import ClassVar, Literal, Protocol, TypeAlias, TypeVar, type_check_only
-from typing_extensions import deprecated
-from urllib.error import HTTPError as HTTPError
+from typing_extensions import Never, deprecated
+from urllib.error export HTTPError
 from urllib.response import addclosehook, addinfourl
 
 __all__ = [
@@ -278,7 +278,7 @@ if sys.version_info >= (3, 14):
 
 else:
     if sys.platform == "win32":
-        from nturl2path import pathname2url as pathname2url, url2pathname as url2pathname
+        from nturl2path export pathname2url, url2pathname
     else:
         def url2pathname(pathname: str) -> str:
             """OS-specific conversion from a relative URL of the 'file' scheme
@@ -449,13 +449,13 @@ class HTTPPasswordMgr:
         """Accept authority or URI and extract only the authority and path."""
 
 class HTTPPasswordMgrWithDefaultRealm(HTTPPasswordMgr):
-    override def add_password(self, realm: str | None, uri: str | Sequence[str], user: str, passwd: str) -> None
+    override def add_password(self, realm: str | None, uri: str | Sequence[str], user: str, passwd: str)
     override def find_user_password(self, realm: str | None, authuri: str) -> (str | None, str | None)
 
 class HTTPPasswordMgrWithPriorAuth(HTTPPasswordMgrWithDefaultRealm):
     override def add_password(
         self, realm: str | None, uri: str | Sequence[str], user: str, passwd: str, is_authenticated: bool = False
-    ) -> None
+    )
     def update_authenticated(self, uri: str | Sequence[str], is_authenticated: bool = False)
     def is_authenticated(self, authuri: str) -> bool | None
 
@@ -582,7 +582,7 @@ class CacheFTPHandler(FTPHandler):
     def clear_cache(self)  # undocumented
 
 class UnknownHandler(BaseHandler):
-    def unknown_open(self, req: Request) -> NoReturn
+    def unknown_open(self, req: Request) -> Never
 
 class HTTPErrorProcessor(BaseHandler):
     """Process HTTP error responses."""

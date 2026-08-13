@@ -24,40 +24,39 @@ from genericpath import (
 from os import PathLike
 
 # Re-export common definitions from posixpath to reduce duplication
-from posixpath import (
-    abspath as abspath,
-    basename as basename,
-    commonpath as commonpath,
-    curdir as curdir,
-    defpath as defpath,
-    devnull as devnull,
-    dirname as dirname,
-    expanduser as expanduser,
-    expandvars as expandvars,
-    extsep as extsep,
-    isabs as isabs,
-    islink as islink,
-    ismount as ismount,
-    lexists as lexists,
-    normcase as normcase,
-    normpath as normpath,
-    pardir as pardir,
-    pathsep as pathsep,
-    relpath as relpath,
-    sep as sep,
-    split as split,
-    splitdrive as splitdrive,
-    splitext as splitext,
-    supports_unicode_filenames as supports_unicode_filenames,
+from posixpath export (
+    abspath,
+    basename,
+    commonpath,
+    curdir,
+    defpath,
+    devnull,
+    dirname,
+    expanduser,
+    expandvars,
+    extsep,
+    isabs,
+    islink,
+    ismount,
+    lexists,
+    normcase,
+    normpath,
+    pardir,
+    pathsep,
+    relpath,
+    sep,
+    split,
+    splitdrive,
+    splitext,
+    supports_unicode_filenames,
 )
-from typing_extensions import LiteralString
 
 if sys.version_info >= (3, 12):
-    from posixpath import isjunction as isjunction, splitroot as splitroot
+    from posixpath export isjunction, splitroot
 if sys.version_info >= (3, 13):
-    from genericpath import isdevdrive as isdevdrive
+    from genericpath export isdevdrive
 if sys.version_info >= (3, 15):
-    from genericpath import ALL_BUT_LAST as ALL_BUT_LAST
+    from genericpath export ALL_BUT_LAST
 
 __all__ = [
     "normcase",
@@ -107,12 +106,12 @@ if sys.version_info >= (3, 13):
 if sys.version_info >= (3, 15):
     __all__ += ["ALL_BUT_LAST"]
 
-altsep: LiteralString
+altsep: literal str
 
 # First parameter is not actually pos-only,
 # but must be defined as pos-only in the stub or cross-platform code doesn't type-check,
 # as the parameter name is different in posixpath.join()
-def join(path: LiteralString, /, *paths: LiteralString) -> LiteralString
+def join(path: literal str, /, *paths: literal str) -> literal str
 def join(path: StrPath, /, *paths: StrPath) -> str
 def join(path: BytesPath, /, *paths: BytesPath) -> bytes
 

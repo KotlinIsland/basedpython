@@ -138,7 +138,6 @@ Module(
 1 | match x:
 2 |     case int() | (str() and "x"): ...
   |                   ^^^^^^^^^^^^^ Syntax Error: an `and` pattern is basedpython syntax and is not valid in .py files
-  |
 
 
 ## Semantic Syntax Errors
@@ -147,4 +146,3 @@ Module(
 1 | match x:
 2 |     case int() | (str() and "x"): ...
   |                   ^^^^^^^^^^^^^ Syntax Error: an `and` pattern cannot be written inside an alternative of a `|` pattern
-  |

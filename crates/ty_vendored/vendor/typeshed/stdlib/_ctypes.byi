@@ -314,7 +314,7 @@ class _UnionType(_CTypeBaseType):
     # At runtime, various attributes are created on a Union subclass based
     # on its _fields_. This method doesn't exist, but represents those
     # dynamically created attributes.
-    def __getattr__(self, name: str) -> _CField[dynamic, dynamic, dynamic]
+    def __getattr__(self, name: str, /) -> _CField[dynamic, dynamic, dynamic]
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
         def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
@@ -330,8 +330,8 @@ class Union(_CData, metaclass=_UnionType):
         _align_: ClassVar[int]
 
     init(self, *args: dynamic, **kw: dynamic)
-    def __getattr__(self, name: str) -> dynamic
-    override def __setattr__(self, name: str, value: dynamic) -> None
+    def __getattr__(self, name: str, /) -> dynamic
+    override def __setattr__(self, name: str, value: dynamic, /)
 
 # This class is not exposed. It calls itself _ctypes.PyCStructType.
 @type_check_only
@@ -344,7 +344,7 @@ class _PyCStructType(_CTypeBaseType):
     # At runtime, various attributes are created on a Structure subclass based
     # on its _fields_. This method doesn't exist, but represents those
     # dynamically created attributes.
-    def __getattr__(self, name: str) -> _CField[dynamic, dynamic, dynamic]
+    def __getattr__(self, name: str, /) -> _CField[dynamic, dynamic, dynamic]
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
         def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
@@ -364,8 +364,8 @@ class Structure(_CData, metaclass=_PyCStructType):
         _layout_: ClassVar["ms" | "gcc-sysv"]
 
     init(self, *args: dynamic, **kw: dynamic)
-    def __getattr__(self, name: str) -> dynamic
-    override def __setattr__(self, name: str, value: dynamic) -> None
+    def __getattr__(self, name: str, /) -> dynamic
+    override def __setattr__(self, name: str, value: dynamic)
 
 # This class is not exposed. It calls itself _ctypes.PyCArrayType.
 @type_check_only

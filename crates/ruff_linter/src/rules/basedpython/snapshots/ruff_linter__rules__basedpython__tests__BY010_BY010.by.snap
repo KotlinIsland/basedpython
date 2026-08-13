@@ -24,7 +24,6 @@ BY010 [*] `TypeOf[…]` can be written as `typeof`
 5 | a: TypeOf[b] = 1
 6 | maybe: TypeOf[b] | None = None
   |        ^^^^^^^^^
-  |
 help: Replace with `typeof`
   |
 5 | a: TypeOf[b] = 1
@@ -38,7 +37,6 @@ BY010 [*] `TypeOf[…]` can be written as `typeof`
   |
 9 | def f(x: TypeOf[b]) -> TypeOf[b]: ...
   |          ^^^^^^^^^
-  |
 help: Replace with `typeof`
    |
 8  |
@@ -52,7 +50,6 @@ BY010 [*] `TypeOf[…]` can be written as `typeof`
   |
 9 | def f(x: TypeOf[b]) -> TypeOf[b]: ...
   |                        ^^^^^^^^^
-  |
 help: Replace with `typeof`
    |
 8  |

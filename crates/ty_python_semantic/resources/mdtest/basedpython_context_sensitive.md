@@ -128,7 +128,6 @@ error[unresolved-reference]: Name `Red` used when not defined
   |
 7 | a: Color | Paint = Red  # snapshot
   |                    ^^^
-  |
 info: `Color` and `Paint` both declare `Red`: write it qualified
 ```
 
@@ -148,7 +147,6 @@ error[unresolved-reference]: Name `Green` used when not defined
   |
 4 | b: Color = Green  # snapshot
   |            ^^^^^
-  |
 info: `Color` declares `Green`, but this scope binds `Green` itself: write `Color.Green`
 ```
 
@@ -277,7 +275,6 @@ error[unresolved-reference]: Name `Red` used when not defined
   |
 3 | a: C = Red  # snapshot
   |        ^^^
-  |
 info: `Red` is a member of `Color`, which is not in scope here under that name
 ```
 

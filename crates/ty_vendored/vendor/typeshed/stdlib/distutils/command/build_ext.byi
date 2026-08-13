@@ -42,9 +42,9 @@ class build_ext(Command):
     swig_opts: Incomplete
     user: Incomplete
     parallel: Incomplete
-    override def initialize_options(self) -> None
-    override def finalize_options(self) -> None
-    override def run(self) -> None
+    override def initialize_options(self)
+    override def finalize_options(self)
+    override def run(self)
     def check_extensions_list(self, extensions):
         """Ensure that the list of extensions (presumably provided as a
         command option 'extensions') is valid, i.e. it is a list of

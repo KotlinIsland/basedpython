@@ -9,11 +9,11 @@ use crate::suppression::{
 };
 use crate::types::check_types_with;
 pub use db::Db;
-pub use diagnostic::{
-    add_inferred_python_version_hint_to_diagnostic, inferred_python_version_source_annotation,
-};
+pub(crate) use diagnostic::add_inferred_python_version_hint_to_diagnostic;
+pub use diagnostic::inferred_python_version_source_annotation;
 pub use fixes::{fix_all_diagnostics, suppress_all_diagnostics};
 pub use place::{basedpython_typing_added_in, basedpython_warnings_added_in};
+use ruff_db::PythonFile;
 use ruff_db::diagnostic::{Annotation, Diagnostic, DiagnosticId, Severity, Span};
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
@@ -21,18 +21,18 @@ use ruff_db::source::{SourceTextError, source_text};
 use rustc_hash::FxHasher;
 pub use semantic_model::{
     Completion, DjangoLookupArgument, ExpectedStringLiteralCompletion, ExtensionOperatorRewrite,
-    HasDefinition, HasOptionalDefinition, HasType, ImplicitReceiverReference, MemberDefinition,
-    NameKind, PreludeDunderReceiver, SemanticModel,
+    HasDefinition, HasType, ImplicitReceiverReference, MemberDefinition, NameKind,
+    PreludeDunderReceiver, SemanticModel,
 };
 use std::hash::BuildHasherDefault;
-pub use suppression::{
-    SuppressFix, UNUSED_IGNORE_COMMENT, is_unused_ignore_comment_lint, suppress_all,
-    suppress_single,
-};
+pub use suppression::UNUSED_IGNORE_COMMENT;
+pub use suppression::suppress_single;
+pub(crate) use suppression::{SuppressFix, is_unused_ignore_comment_lint, suppress_all};
 use ty_module_resolver::ModuleGlobSet;
+pub use ty_python_core::Program;
+use ty_python_core::ProgramFile;
 use ty_python_core::definition::docstring_from_body;
 use ty_python_core::platform::PythonPlatform;
-use ty_python_core::program::Program;
 use ty_python_core::scope::ScopeId;
 use ty_python_core::{
     BindingWithConstraintsIterator, DeclarationsIterator, FileScopeId, attribute_scopes,
@@ -49,17 +49,17 @@ pub use types::conformance::{
 pub use types::conversions::{ConversionImport, ConversionInfo};
 pub use types::extensions::{ExtensionAttributeInfo, ExtensionMemberKind};
 pub use types::ide_support::{
-    ImportAliasResolution, OverridableMember, ResolvedDefinition, TypeHierarchyClass,
-    definitions_for_attribute, definitions_for_bin_op, definitions_for_django_lookup_root,
-    definitions_for_imported_symbol, definitions_for_name, definitions_for_unary_op,
-    map_stub_definition, type_hierarchy_prepare, type_hierarchy_subtypes,
+    ImplementationsFinder, ImportAliasResolution, OverridableMember, ResolvedDefinition,
+    TypeHierarchyClass, contains_identifier, definitions_for_attribute, definitions_for_bin_op,
+    definitions_for_django_lookup_root, definitions_for_imported_symbol, definitions_for_name,
+    definitions_for_unary_op, map_stub_definition, type_hierarchy_prepare, type_hierarchy_subtypes,
     type_hierarchy_supertypes,
 };
 pub use types::reified_infer::{
     ArgVariance, ErasedTargetReason, ErasedUnion, ParametricIsPlan, ProtocolMemberCheck,
 };
 pub use types::visibility::private_symbols;
-pub use types::{DisplaySettings, TypeQualifiers};
+pub use types::{DisplaySettings, ProgramEnvironment, TypeQualifiers};
 
 pub mod api_lockfile;
 mod db;
@@ -70,6 +70,7 @@ mod dunder_all;
 mod fixes;
 pub mod lint;
 pub(crate) mod place;
+pub(crate) mod place_load;
 mod reachability;
 pub mod reified;
 mod semantic_model;
@@ -98,7 +99,7 @@ pub fn default_lint_registry() -> &'static LintRegistry {
 }
 
 /// Register all known semantic lints.
-pub fn register_lints(registry: &mut LintRegistryBuilder) {
+fn register_lints(registry: &mut LintRegistryBuilder) {
     types::register_lints(registry);
     django_template::register_lints(registry);
     registry.register_lint(&UNUSED_IGNORE_COMMENT);
@@ -114,6 +115,9 @@ pub fn register_lints(registry: &mut LintRegistryBuilder) {
     reason = "each flag is an independent analysis toggle; a state machine would not model them"
 )]
 pub struct AnalysisSettings {
+    /// Whether narrowing with generic classes uses the top materialization.
+    pub strict_generic_narrowing: bool,
+
     /// Whether ty should use conservative equality and inequality semantics.
     pub strict_equality_semantics: bool,
 
@@ -281,6 +285,7 @@ const OPAQUE_REPR_CLASSES: &[&str] = &[
 impl Default for AnalysisSettings {
     fn default() -> Self {
         Self {
+            strict_generic_narrowing: false,
             strict_equality_semantics: false,
             respect_type_ignore_comments: true,
             allowed_unresolved_imports: ModuleGlobSet::empty(),
@@ -314,8 +319,7 @@ pub(crate) fn attribute_assignments<'db, 's>(
     class_body_scope: ScopeId<'db>,
     name: &'s str,
 ) -> impl Iterator<Item = (BindingWithConstraintsIterator<'db, 'db>, FileScopeId)> + use<'s, 'db> {
-    let file = class_body_scope.file(db);
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, class_body_scope.program_file(db));
 
     attribute_scopes(db, class_body_scope).filter_map(|function_scope_id| {
         let place_table = index.place_table(function_scope_id);
@@ -335,8 +339,7 @@ pub(crate) fn attribute_declarations<'db, 's>(
     class_body_scope: ScopeId<'db>,
     name: &'s str,
 ) -> impl Iterator<Item = (DeclarationsIterator<'db, 'db>, FileScopeId)> + use<'s, 'db> {
-    let file = class_body_scope.file(db);
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, class_body_scope.program_file(db));
 
     attribute_scopes(db, class_body_scope).filter_map(|function_scope_id| {
         let place_table = index.place_table(function_scope_id);
@@ -350,19 +353,19 @@ pub(crate) fn attribute_declarations<'db, 's>(
 }
 
 /// Get the module-level docstring for the given file.
-pub(crate) fn module_docstring(db: &dyn Db, file: File) -> Option<String> {
+pub(crate) fn module_docstring(db: &dyn Db, file: PythonFile<'_>) -> Option<String> {
     let module = parsed_module(db, file).load(db);
     docstring_from_body(module.suite())
         .map(|docstring_expr| docstring_expr.value.to_str().to_owned())
 }
 
-pub fn check_file_unwrap(db: &dyn Db, file: File) -> Vec<Diagnostic> {
+pub fn check_file_unwrap(db: &dyn Db, file: ProgramFile<'_>) -> Vec<Diagnostic> {
     check_file(db, file)
         .map(<[ruff_db::diagnostic::Diagnostic]>::into_vec)
         .unwrap_or_else(|error| vec![error])
 }
 
-pub fn check_file(db: &dyn Db, file: File) -> Result<Box<[Diagnostic]>, Diagnostic> {
+pub fn check_file(db: &dyn Db, file: ProgramFile<'_>) -> Result<Box<[Diagnostic]>, Diagnostic> {
     check_file_with(db, file, Vec::new())
 }
 
@@ -376,10 +379,10 @@ pub fn check_file(db: &dyn Db, file: File) -> Result<Box<[Diagnostic]>, Diagnost
 /// used either way.
 pub fn check_file_with(
     db: &dyn Db,
-    file: File,
+    file: ProgramFile<'_>,
     external: Vec<Diagnostic>,
 ) -> Result<Box<[Diagnostic]>, Diagnostic> {
-    with_display_for_file(db, file, || check_file_inner(db, file, external))
+    with_display_for_file(db, file.file(db), || check_file_inner(db, file, external))
 }
 
 /// Run `body` with the type display `file` is written in: basedpython surface
@@ -399,35 +402,41 @@ pub fn with_display_for_file<R>(db: &dyn Db, file: File, body: impl FnOnce() -> 
 
 fn check_file_inner(
     db: &dyn Db,
-    file: File,
+    file: ProgramFile<'_>,
     external: Vec<Diagnostic>,
 ) -> Result<Box<[Diagnostic]>, Diagnostic> {
+    let source_file = file.file(db);
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
     // Abort checking if there are IO errors.
-    let source = source_text(db, file);
+    let source = source_text(db, source_file);
 
     if let Some(read_error) = source.read_error() {
         return Err(IOErrorDiagnostic {
-            file,
+            file: source_file,
             error: read_error.clone(),
         }
         .to_diagnostic());
     }
 
-    let parsed = parsed_module(db, file);
+    let parsed = parsed_module(db, file.python_file(db));
 
     let parsed_ref = parsed.load(db);
     diagnostics.extend(
         parsed_ref
             .errors()
             .iter()
-            .map(|error| Diagnostic::invalid_syntax(file, &error.error, error)),
+            .map(|error| Diagnostic::invalid_syntax(source_file, &error.error, error)),
     );
 
     diagnostics.extend(parsed_ref.unsupported_syntax_errors().iter().map(|error| {
-        let mut error = Diagnostic::invalid_syntax(file, error, error);
-        add_inferred_python_version_hint_to_diagnostic(db, &mut error, "parsing syntax");
+        let mut error = Diagnostic::invalid_syntax(source_file, error, error);
+        add_inferred_python_version_hint_to_diagnostic(
+            db,
+            source_file,
+            &mut error,
+            "parsing syntax",
+        );
         error
     }));
 
@@ -445,7 +454,7 @@ pub struct IOErrorDiagnostic {
 }
 
 impl IOErrorDiagnostic {
-    pub fn to_diagnostic(&self) -> Diagnostic {
+    fn to_diagnostic(&self) -> Diagnostic {
         let mut diag = Diagnostic::new(DiagnosticId::Io, Severity::Error, &self.error);
         diag.annotate(Annotation::primary(Span::from(self.file)));
         diag
@@ -457,4 +466,4 @@ impl IOErrorDiagnostic {
 /// values that will soon converge, but where unioning in the early value causes an
 /// unrecoverable loss of precision. This constant controls how many iterations
 /// are considered likely to produce "tainted" results that should be discarded.
-pub(crate) const TAINTED_CYCLES: u32 = 3;
+const TAINTED_CYCLES: u32 = 3;

@@ -164,11 +164,9 @@ Module(
 1 | type X[T in ] = int
 2 | type X[T1 in , T2] = int
   |           ^^ Syntax Error: type mappings are a basedpython feature and are not valid in `.py` files
-  |
 
 
   |
 1 | type X[T in ] = int
 2 | type X[T1 in , T2] = int
   |              ^ Syntax Error: Expected an expression
-  |

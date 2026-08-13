@@ -27,6 +27,7 @@ use super::lexer::{Construct, ConstructKind, Token, TokenKind, string_contents};
 use super::project::{self, LibrarySource, Registration, RegistrationKind};
 use super::resolve;
 use super::uses::URL_TAG;
+use ty_python_semantic::ProgramEnvironment;
 
 /// an edit a completion carries alongside the text it inserts
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +99,7 @@ impl TemplateCompletion {
 /// the suggestions for `offset` in the template `file`
 pub(crate) fn completions(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     file: File,
     index: &TemplateIndex,
     source: &str,
@@ -115,12 +117,14 @@ pub(crate) fn completions(
         Context::None => Vec::new(),
         Context::TagName => tag_names(db, index, source, &cursor),
         Context::FilterName => filter_names(db, index, &cursor),
-        Context::Member(path) => members(db, file, index, source, offset, &path, &cursor),
-        Context::Variable => variables(db, file, index, offset, &cursor),
+        Context::Member(path) => members(db, env, file, index, source, offset, &path, &cursor),
+        Context::Variable => variables(db, env, file, index, offset, &cursor),
         Context::TemplatePath => template_paths(db, &cursor),
         Context::StaticPath => static_paths(db, &cursor),
         Context::UrlName => url_names(db, &cursor),
-        Context::RouteArgument(route) => route_arguments(db, file, index, offset, &cursor, &route),
+        Context::RouteArgument(route) => {
+            route_arguments(db, env, file, index, offset, &cursor, &route)
+        }
         Context::Library => libraries(db, index, &cursor),
         Context::BlockName => block_names(db, file, index, &cursor),
         Context::PartialName => partial_names(db, file, index, &cursor),
@@ -606,8 +610,10 @@ fn filter_names(
     completions
 }
 
+#[expect(clippy::too_many_arguments)]
 fn members(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     file: File,
     index: &TemplateIndex,
     source: &str,
@@ -616,18 +622,18 @@ fn members(
     cursor: &Cursor<'_>,
 ) -> Vec<TemplateCompletion> {
     let segments: Vec<&str> = path.iter().map(CompactString::as_str).collect();
-    let Some(ty) = resolve::path_type(db, file, index, source, offset, &segments) else {
+    let Some(ty) = resolve::path_type(db, env, file, index, source, offset, &segments) else {
         return Vec::new();
     };
 
-    let mut members: Vec<_> = resolve::members(db, ty)
+    let mut members: Vec<_> = resolve::members(db, env, ty)
         .into_iter()
         .map(|member| {
             let refused =
-                template_lookup(db, ty, &member.name, member.ty) == TemplateLookup::Refuses;
+                template_lookup(db, env, ty, &member.name, member.ty) == TemplateLookup::Refuses;
 
             TemplateCompletion::new(member.name.as_str(), CompletionKind::Field, cursor.range)
-                .detail(member.ty.display(db).to_string())
+                .detail(member.ty.display(db, env).to_string())
                 .unusable(refused)
         })
         .collect();
@@ -640,6 +646,7 @@ fn members(
 
 fn variables(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     file: File,
     index: &TemplateIndex,
     offset: TextSize,
@@ -676,7 +683,7 @@ fn variables(
         completion.detail = variable
             .value
             .and_then(|value| resolve::expression_type(db, variable.file, value))
-            .map(|ty| ty.display(db).to_string())
+            .map(|ty| ty.display(db, env).to_string())
             .or_else(|| Some(variable.source.description().to_string()));
         completions.push(completion);
     }
@@ -733,6 +740,7 @@ fn url_names(db: &dyn Db, cursor: &Cursor<'_>) -> Vec<TemplateCompletion> {
 /// of them.
 fn route_arguments(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     file: File,
     index: &TemplateIndex,
     offset: TextSize,
@@ -763,7 +771,7 @@ fn route_arguments(
         }
     }
 
-    completions.extend(variables(db, file, index, offset, cursor));
+    completions.extend(variables(db, env, file, index, offset, cursor));
     completions
 }
 
@@ -1224,7 +1232,12 @@ mod tests {
     fn a_partially_typed_tag_name_is_replaced_whole() {
         let source = "{% ext<CURSOR> %}";
         let test = project(source);
-        let completions = django_template_completions(&test.db, test.file, test.offset);
+        let completions = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        );
 
         let extends = completions
             .iter()
@@ -1256,7 +1269,12 @@ mod tests {
     #[test]
     fn a_tag_from_an_unloaded_library_carries_the_load_it_needs() {
         let test = project("{% <CURSOR> %}");
-        let completions = django_template_completions(&test.db, test.file, test.offset);
+        let completions = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        );
 
         let edit = completions
             .iter()
@@ -1276,7 +1294,12 @@ mod tests {
     fn a_load_is_written_below_an_extends_rather_than_above_it() {
         let source = "{% extends 'blog/base.html' %}\n{% <CURSOR> %}";
         let test = project(source);
-        let completions = django_template_completions(&test.db, test.file, test.offset);
+        let completions = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        );
 
         let edit = completions
             .iter()
@@ -1294,7 +1317,12 @@ mod tests {
     #[test]
     fn an_already_loaded_library_needs_no_load() {
         let test = project("{% load static %}{% <CURSOR> %}");
-        let completions = django_template_completions(&test.db, test.file, test.offset);
+        let completions = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        );
 
         let static_tag = completions
             .iter()
@@ -1319,7 +1347,12 @@ mod tests {
     fn a_template_path_completion_replaces_the_string_but_not_its_quotes() {
         let source = "{% extends 'blog/<CURSOR>' %}";
         let test = project(source);
-        let completions = django_template_completions(&test.db, test.file, test.offset);
+        let completions = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        );
 
         let range = completions[0].range;
         assert_eq!(&source[usize::from(range.start())..], "blog/<CURSOR>' %}");
@@ -1328,7 +1361,12 @@ mod tests {
     #[test]
     fn a_template_path_offered_outside_a_literal_brings_its_quotes() {
         let test = project("{% extends <CURSOR> %}");
-        let completions = django_template_completions(&test.db, test.file, test.offset);
+        let completions = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        );
 
         let first = completions.first().expect("a template to be offered");
         assert_eq!(first.label, "blog/base.html");
@@ -1342,7 +1380,12 @@ mod tests {
     #[test]
     fn a_template_path_offered_inside_a_literal_does_not() {
         let test = project("{% extends '<CURSOR>' %}");
-        let completions = django_template_completions(&test.db, test.file, test.offset);
+        let completions = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        );
 
         assert_eq!(completions[0].insert, None);
     }
@@ -1350,7 +1393,12 @@ mod tests {
     #[test]
     fn a_url_name_offered_outside_a_literal_brings_its_quotes() {
         let test = project("{% url <CURSOR> %}");
-        let completions = django_template_completions(&test.db, test.file, test.offset);
+        let completions = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        );
 
         let first = completions.first().expect("a route to be offered");
         assert_eq!(first.insert.as_deref(), Some("'blog:detail'"));
@@ -1417,7 +1465,12 @@ mod tests {
     #[test]
     fn a_route_argument_is_offered_with_the_equals_that_names_it() {
         let test = project("{% url 'blog:detail' <CURSOR> %}");
-        let completions = django_template_completions(&test.db, test.file, test.offset);
+        let completions = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        );
 
         assert_eq!(completions[0].insert.as_deref(), Some("pk="));
     }
@@ -1571,10 +1624,15 @@ mod tests {
             "django's own `humanize` filter is as available as the table's are"
         );
 
-        let edit = django_template_completions(&test.db, test.file, test.offset)
-            .into_iter()
-            .find(|completion| completion.label == "intcomma")
-            .and_then(|completion| completion.additional_edit);
+        let edit = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        )
+        .into_iter()
+        .find(|completion| completion.label == "intcomma")
+        .and_then(|completion| completion.additional_edit);
         assert!(
             edit.is_none(),
             "the template loaded it already, so no second `{{% load %}}` is written"
@@ -1585,11 +1643,16 @@ mod tests {
     fn a_filter_from_an_unloaded_installed_library_brings_its_load_with_it() {
         let test = with_humanize("{{ x|<CURSOR> }}", "");
 
-        let edit = django_template_completions(&test.db, test.file, test.offset)
-            .into_iter()
-            .find(|completion| completion.label == "intcomma")
-            .and_then(|completion| completion.additional_edit)
-            .expect("`intcomma` to come with the load it needs");
+        let edit = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        )
+        .into_iter()
+        .find(|completion| completion.label == "intcomma")
+        .and_then(|completion| completion.additional_edit)
+        .expect("`intcomma` to come with the load it needs");
         assert_eq!(edit.text, "{% load humanize %}\n");
     }
 
@@ -1605,10 +1668,15 @@ mod tests {
         );
 
         let test = with_humanize("{{ x|<CURSOR> }}", options);
-        let intcomma = django_template_completions(&test.db, test.file, test.offset)
-            .into_iter()
-            .find(|completion| completion.label == "intcomma")
-            .expect("the filter to be offered without a `{% load %}`");
+        let intcomma = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        )
+        .into_iter()
+        .find(|completion| completion.label == "intcomma")
+        .expect("the filter to be offered without a `{% load %}`");
         assert!(intcomma.additional_edit.is_none());
     }
 
@@ -1824,10 +1892,15 @@ mod tests {
             "django registers it into every template, so it is offered with no `{{% load %}}`"
         );
 
-        let squish = django_template_completions(&test.db, test.file, test.offset)
-            .into_iter()
-            .find(|completion| completion.label == "squish")
-            .expect("the tag to be offered");
+        let squish = django_template_completions(
+            &test.db,
+            &test.program_environment(),
+            test.file,
+            test.offset,
+        )
+        .into_iter()
+        .find(|completion| completion.label == "squish")
+        .expect("the tag to be offered");
         assert!(squish.additional_edit.is_none());
         assert_eq!(squish.documentation.as_deref(), Some("squishes its body."));
     }

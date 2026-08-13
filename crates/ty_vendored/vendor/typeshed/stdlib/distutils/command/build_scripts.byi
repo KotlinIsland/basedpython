@@ -7,7 +7,7 @@ from _typeshed import Incomplete
 from typing import ClassVar
 
 from ..cmd import Command
-from ..util import Mixin2to3 as Mixin2to3
+from ..util export Mixin2to3
 
 first_line_re: Incomplete
 
@@ -20,10 +20,10 @@ class build_scripts(Command):
     force: Incomplete
     executable: Incomplete
     outfiles: Incomplete
-    override def initialize_options(self) -> None
-    override def finalize_options(self) -> None
+    override def initialize_options(self)
+    override def finalize_options(self)
     def get_source_files(self)
-    override def run(self) -> None
+    override def run(self)
     def copy_scripts(self):
         """Copy each script listed in 'self.scripts'; if it's marked as a
         Python script in the Unix way (first line matches 'first_line_re',

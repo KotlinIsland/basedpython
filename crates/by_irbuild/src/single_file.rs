@@ -11,14 +11,19 @@ use ruff_db::files::{File, system_path_to_file};
 use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
 use ruff_python_ast::Stmt;
 use ty_project::{ProjectMetadata, TestDb};
-use ty_python_semantic::SemanticModel;
+use ty_python_semantic::{ProgramEnvironment, SemanticModel};
 
 use crate::Language;
 
 /// build a one-file db from basedpython source and hand its model and suite to `f`
 pub fn with_source<T>(
     source: &str,
-    f: impl FnOnce(&dyn ty_python_semantic::Db, &SemanticModel<'_>, &[Stmt]) -> T,
+    f: impl FnOnce(
+        &dyn ty_python_semantic::Db,
+        &ProgramEnvironment<'_>,
+        &SemanticModel<'_>,
+        &[Stmt],
+    ) -> T,
 ) -> T {
     with_source_in(source, Language::BasedPython, f)
 }
@@ -28,12 +33,19 @@ pub fn with_source<T>(
 pub fn with_source_in<T>(
     source: &str,
     language: Language,
-    f: impl FnOnce(&dyn ty_python_semantic::Db, &SemanticModel<'_>, &[Stmt]) -> T,
+    f: impl FnOnce(
+        &dyn ty_python_semantic::Db,
+        &ProgramEnvironment<'_>,
+        &SemanticModel<'_>,
+        &[Stmt],
+    ) -> T,
 ) -> T {
     let (db, file) = make_db(source, language);
-    let parsed = ruff_db::parsed::parsed_module(&db, file).load(&db);
-    let model = SemanticModel::new(&db, file);
-    f(&db, &model, parsed.suite())
+    let program_file = ty_python_semantic::Db::program_file(&db, file);
+    let parsed = ruff_db::parsed::parsed_module(&db, program_file.python_file(&db)).load(&db);
+    let model = SemanticModel::new(&db, program_file);
+    let env = ProgramEnvironment::from_file(program_file);
+    f(&db, &env, &model, parsed.suite())
 }
 
 fn make_db(source: &str, language: Language) -> (TestDb, File) {
@@ -55,9 +67,10 @@ pub fn module_from_source(
     module_name: &str,
     language: Language,
 ) -> by_ir::function::ModuleIr {
-    with_source_in(source, language, |db, model, suite| {
+    with_source_in(source, language, |db, env, model, suite| {
         crate::build_module(
             db,
+            env,
             model,
             suite,
             module_name,

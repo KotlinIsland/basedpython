@@ -6,7 +6,7 @@ See the socket module for documentation.
 import sys
 from _typeshed import ReadableBuffer, WriteableBuffer
 from collections.abc import Iterable
-from socket import error as error, gaierror as gaierror, herror as herror, timeout as timeout
+from socket export error, gaierror, herror, timeout
 from typing import Final, TypeAlias
 from typing_extensions import CapsuleType, disjoint_base
 

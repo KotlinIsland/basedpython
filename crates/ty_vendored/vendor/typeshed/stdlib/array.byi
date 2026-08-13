@@ -118,7 +118,7 @@ class array[in out Element in (int, float, str)](MutableSequence[Element]):
     def __new__(cls, typecode: str, initializer: Iterable[Element], /) -> Self
     def __new__(cls, typecode: str, initializer: bytes | bytearray = ..., /) -> Self
 
-    override def append(self, v: Element, /) -> None:
+    override def append(self, v: Element, /):
         """Append new value v to the end of the array."""
 
     def buffer_info(self) -> (int, int):
@@ -139,7 +139,7 @@ class array[in out Element in (int, float, str)](MutableSequence[Element]):
     override def count(self, v: Element, /) -> int:
         """Return number of occurrences of v in the array."""
 
-    override def extend(self, bb: Iterable[Element], /) -> None:
+    override def extend(self, bb: Iterable[Element], /):
         """Append items to the end of the array."""
 
     def frombytes(self, buffer: ReadableBuffer, /):
@@ -165,7 +165,7 @@ class array[in out Element in (int, float, str)](MutableSequence[Element]):
         Raise ValueError if the value is not present.
         """
 
-    override def insert(self, i: int, v: Element, /) -> None:
+    override def insert(self, i: int, v: Element, /):
         """Insert a new item v into the array before position i."""
 
     override def pop(self, i: int = -1, /) -> Element:
@@ -174,7 +174,7 @@ class array[in out Element in (int, float, str)](MutableSequence[Element]):
         i defaults to -1.
         """
 
-    override def remove(self, v: Element, /) -> None:
+    override def remove(self, v: Element, /):
         """Remove the first occurrence of v in the array."""
 
     def tobytes(self) -> bytes:
@@ -210,7 +210,7 @@ class array[in out Element in (int, float, str)](MutableSequence[Element]):
         """Set self[key] to value."""
     def __setitem__(self, key: slice[SupportsIndex | None], value: array[Element], /) -> None
 
-    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> None:
+    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /):
         """Delete self[key]."""
 
     def __add__(self, value: array[Element], /) -> array[Element]:

@@ -112,4 +112,3 @@ Module(
   |
 1 | with ctx() as Point(x, y): ...
   |               ^^^^^^^^^^^ Syntax Error: Invalid assignment target
-  |

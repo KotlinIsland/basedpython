@@ -29,6 +29,7 @@ use ty_python_core::{place_table, semantic_index};
 
 use crate::Db;
 use crate::place::{ConsideredDefinitions, symbol};
+use crate::types::ProgramEnvironment;
 use crate::types::name_fallback::claimed_by_name_resolution;
 use crate::types::signatures::{Parameters, Signature};
 use crate::types::{Type, TypeContext, UnionType, infer_expression_types};
@@ -62,10 +63,15 @@ pub(crate) fn receiver_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Type<
 /// `ty` with its receiver supplied — the callable `x.fn` evaluates to. `None`
 /// when `ty` is not a receiver callable, or its receiver does not accept
 /// `receiver_ty`
-fn bind_receiver<'db>(db: &'db dyn Db, ty: Type<'db>, receiver_ty: Type<'db>) -> Option<Type<'db>> {
+fn bind_receiver<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+    receiver_ty: Type<'db>,
+) -> Option<Type<'db>> {
     let signature = receiver_signature(db, ty)?;
     let receiver = signature.parameters().get_positional(0)?;
-    if !receiver_ty.is_assignable_to(db, receiver.annotated_type()) {
+    if !receiver_ty.is_assignable_to(db, env, receiver.annotated_type()) {
         return None;
     }
     let rest = signature.parameters().iter().skip(1).cloned();
@@ -73,7 +79,7 @@ fn bind_receiver<'db>(db: &'db dyn Db, ty: Type<'db>, receiver_ty: Type<'db>) ->
         db,
         Signature::new_generic(
             signature.generic_context,
-            Parameters::from_annotation(db, rest),
+            Parameters::from_annotation(db, env, rest),
             signature.return_ty,
         ),
     ))
@@ -87,14 +93,15 @@ fn bind_receiver<'db>(db: &'db dyn Db, ty: Type<'db>, receiver_ty: Type<'db>) ->
 /// the name in an ordinary load
 pub(crate) fn resolve_receiver_attribute<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     scope: ScopeId<'db>,
     receiver_ty: Type<'db>,
     name: &str,
 ) -> Option<Type<'db>> {
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, db.program_file(file));
     for (ancestor_id, _) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
-        let ancestor_scope = ancestor_id.to_scope_id(db, file);
+        let ancestor_scope = ancestor_id.to_scope_id(db, db.program_file(file));
         let Some(place) = place_table(db, ancestor_scope).symbol_by_name(name) else {
             continue;
         };
@@ -115,7 +122,7 @@ pub(crate) fn resolve_receiver_attribute<'db>(
         )
         .place
         .ignore_possibly_undefined()?;
-        return bind_receiver(db, declared, receiver_ty);
+        return bind_receiver(db, env, declared, receiver_ty);
     }
     None
 }
@@ -127,6 +134,7 @@ pub(crate) fn resolve_receiver_attribute<'db>(
 /// applicable extension member both win over it
 pub(crate) fn is_implicit_receiver_attribute<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     scope: ScopeId<'db>,
     attribute: &ast::ExprAttribute,
@@ -135,22 +143,24 @@ pub(crate) fn is_implicit_receiver_attribute<'db>(
     // an optional-chain link resolves against the chain's *present* type — the
     // `None` it short-circuits with is not part of the receiver
     let receiver_ty = if attribute.optional || spine_has_optional(&attribute.value) {
-        strip_none(db, receiver_ty)
+        strip_none(db, env, receiver_ty)
     } else {
         receiver_ty
     };
     let name = attribute.attr.as_str();
-    if !receiver_ty.member(db, name).place.is_undefined() {
+    if !receiver_ty.member(db, env, name).place.is_undefined() {
         return false;
     }
     // an extension member wins over a receiver callable, matching the order the
     // two fallbacks run in during inference. resolving again here is near-free
     // in a file with no extensions: the applicable-extension list is a cached
     // query that comes back empty
-    if crate::types::extensions::resolve_extension_member(db, file, receiver_ty, name).is_some() {
+    if crate::types::extensions::resolve_extension_member(db, env, file, receiver_ty, name)
+        .is_some()
+    {
         return false;
     }
-    resolve_receiver_attribute(db, file, scope, receiver_ty, name).is_some()
+    resolve_receiver_attribute(db, env, file, scope, receiver_ty, name).is_some()
 }
 
 /// whether any link of the attribute spine `expr` is an optional access
@@ -164,12 +174,17 @@ pub(crate) fn spine_has_optional(expr: &Expr) -> bool {
 }
 
 /// basedpython: `ty` without the `None` an optional chain unions in
-pub(crate) fn strip_none<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
+pub(crate) fn strip_none<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Type<'db> {
     let Type::Union(union) = ty else {
         return ty;
     };
     UnionType::from_elements(
         db,
+        env,
         union
             .elements(db)
             .iter()
@@ -208,25 +223,31 @@ impl<'db> ImplicitReceiverName<'db> {
 /// captured (a method's own `self` keeps its meaning)
 pub(crate) fn implicit_receiver_name<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     scope: ScopeId<'db>,
     name: &str,
 ) -> Option<ImplicitReceiverName<'db>> {
     let receiver = trailing_lambda_scope_receiver(db, file, scope)?;
-    if claimed_by_name_resolution(db, file, scope, name) {
+    if claimed_by_name_resolution(db, env, file, scope, name) {
         return None;
     }
     if name == "self" {
         return Some(ImplicitReceiverName::Receiver(receiver));
     }
-    if let Some(member) = receiver.member(db, name).place.ignore_possibly_undefined() {
+    if let Some(member) = receiver
+        .member(db, env, name)
+        .place
+        .ignore_possibly_undefined()
+    {
         return Some(ImplicitReceiverName::Member(member));
     }
     // an extension of the receiver's type supplies members too, and the block's
     // scope is the receiver's — so `p:` inside a `div:` block reaches an
     // `extension Tag: def p` exactly as `self.p:` does. reached last, after the
     // receiver's own members, like every other extension lookup
-    let resolution = crate::types::extensions::resolve_extension_member(db, file, receiver, name)?;
+    let resolution =
+        crate::types::extensions::resolve_extension_member(db, env, file, receiver, name)?;
     Some(ImplicitReceiverName::ExtensionMember {
         ty: resolution.ty,
         resolution,
@@ -242,8 +263,8 @@ fn trailing_lambda_scope_receiver<'db>(
     file: File,
     scope: ScopeId<'db>,
 ) -> Option<Type<'db>> {
-    let index = semantic_index(db, file);
-    let module = parsed_module(db, file).load(db);
+    let index = semantic_index(db, db.program_file(file));
+    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     for (_, ancestor) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
         match ancestor.kind() {
             ScopeKind::Comprehension => continue,

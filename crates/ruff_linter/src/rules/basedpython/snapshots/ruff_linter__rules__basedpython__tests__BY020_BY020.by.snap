@@ -63,7 +63,6 @@ BY020 [*] `cast` call can be written as the `cast` keyword
 13 |
 14 |     return typing.cast(object, value)
    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
 help: Replace with `cast`
    |
 13 |

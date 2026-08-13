@@ -259,7 +259,7 @@ fn at_python(db: &dyn Db, file: File, offset: TextSize) -> Option<(Named, TextRa
         return Some((Named::RouteDeclaration, url.range));
     }
 
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let (names, value, range) = super::python::name_at(&parsed, offset)?;
 
     Some(match names {
@@ -945,7 +945,7 @@ fn templates(db: &dyn Db) -> Vec<Template<'_>> {
 
 /// the value and contents range of the python string literal spanning `range`
 fn python_literal(db: &dyn Db, file: File, range: TextRange) -> Option<(CompactString, TextRange)> {
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let covering = covering_node(parsed.syntax().into(), range);
 
     let string = covering.ancestors().find_map(|node| match node {

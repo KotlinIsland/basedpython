@@ -24,6 +24,7 @@ use super::builtins;
 use super::index::TemplateIndex;
 use super::lexer::{ConstructKind, Token, TokenKind};
 use super::project::{self, Registration, RegistrationKind};
+use ty_python_semantic::ProgramEnvironment;
 
 /// what django names the flag it fills in itself, on the decorator and on the
 /// parameter it fills
@@ -45,6 +46,7 @@ pub struct TemplateSignature {
 /// what the filter whose argument `offset` sits in takes
 pub(crate) fn signature_help(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     index: &TemplateIndex,
     source: &str,
     offset: TextSize,
@@ -56,7 +58,7 @@ pub(crate) fn signature_help(
 
     let name = filter_argument_at(source, index.lexed().construct_tokens(construct), offset)?;
 
-    signature(db, name)
+    signature(db, env, name)
 }
 
 /// the filter whose argument `offset` sits in
@@ -105,7 +107,7 @@ fn is_operator(source: &str, token: &Token, operator: &str) -> bool {
 }
 
 /// what the filter `name` takes
-fn signature(db: &dyn Db, name: &str) -> Option<TemplateSignature> {
+fn signature(db: &dyn Db, env: &ProgramEnvironment<'_>, name: &str) -> Option<TemplateSignature> {
     let registered = filter_registration(db, name);
 
     // as for hover: the table documents django's own filters, but which of them
@@ -132,7 +134,7 @@ fn signature(db: &dyn Db, name: &str) -> Option<TemplateSignature> {
 
     // a function taking only the value takes no argument, and a filter that takes
     // no argument has nothing to say about the one that was written
-    let parameter = argument_parameter(db, registration)?;
+    let parameter = argument_parameter(db, env, registration)?;
 
     Some(TemplateSignature {
         label: format!("|{name}:{parameter}"),
@@ -157,8 +159,12 @@ fn filter_registration<'db>(db: &'db dyn Db, name: &str) -> Option<&'db Registra
 /// filters annotate almost none of theirs, and what an unannotated parameter
 /// infers to says nothing the reader wants: `def date(value, arg=None)` would put
 /// `arg: Unknown | None` in front of somebody looking for a format string.
-fn argument_parameter(db: &dyn Db, registration: &Registration) -> Option<String> {
-    let parsed = parsed_module(db, registration.file).load(db);
+fn argument_parameter(
+    db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
+    registration: &Registration,
+) -> Option<String> {
+    let parsed = parsed_module(db, db.program_file(registration.file).python_file(db)).load(db);
     let covering = covering_node(parsed.syntax().into(), registration.range)
         .find_first(|node| node.is_stmt_function_def())
         .ok()?;
@@ -178,10 +184,10 @@ fn argument_parameter(db: &dyn Db, registration: &Registration) -> Option<String
     let name = parameter.name.as_str();
 
     let annotated = parameter.annotation.is_some();
-    let model = SemanticModel::new(db, registration.file);
+    let model = SemanticModel::new(db, db.program_file(registration.file));
 
     match hintable_parameter_type(&model, parameter).filter(|_| annotated) {
-        Some(ty) => Some(format!("{name}: {}", ty.display(db))),
+        Some(ty) => Some(format!("{name}: {}", ty.display(db, env))),
         None => Some(name.to_string()),
     }
 }

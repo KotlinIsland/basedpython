@@ -315,10 +315,10 @@ def isgenerator(object: object) -> object is GeneratorType[object, Never, object
         throw()         used to raise an exception inside the generator
     """
 
-def iscoroutine(object: object) -> object is CoroutineType[dynamic, dynamic, dynamic]:
+def iscoroutine(object: object) -> object is CoroutineType[object, Never, object]:
     """Return true if the object is a coroutine."""
 
-def isawaitable(object: object) -> object is Awaitable[dynamic]:
+def isawaitable(object: object) -> object is Awaitable[object]:
     """Return true if object can be passed to an ``await`` expression."""
 
 def isasyncgenfunction(obj: (...) -> AsyncGenerator[dynamic, dynamic]) -> bool:
@@ -703,7 +703,7 @@ class Signature:
     override def __hash__(self) -> int
 
 if sys.version_info >= (3, 14):
-    from annotationlib import get_annotations as get_annotations
+    from annotationlib export get_annotations
 else:
     def get_annotations(
         obj: (...) -> object | type[object] | ModuleType,  # any callable, class, or module

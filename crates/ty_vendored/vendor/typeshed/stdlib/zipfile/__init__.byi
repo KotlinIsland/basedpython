@@ -488,7 +488,7 @@ class ZipInfo:
             """
 
 if sys.version_info >= (3, 12):
-    from zipfile._path import CompleteDirs as CompleteDirs, Path as Path
+    from zipfile._path export CompleteDirs, Path
 
 else:
     class CompleteDirs(ZipFile):

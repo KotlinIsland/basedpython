@@ -47,30 +47,30 @@ SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 import sys
 from unittest.async_case import *
 
-from .case import (
-    FunctionTestCase as FunctionTestCase,
-    SkipTest as SkipTest,
-    TestCase as TestCase,
-    addModuleCleanup as addModuleCleanup,
-    expectedFailure as expectedFailure,
-    skip as skip,
-    skipIf as skipIf,
-    skipUnless as skipUnless,
+from .case export (
+    FunctionTestCase,
+    SkipTest,
+    TestCase,
+    addModuleCleanup,
+    expectedFailure,
+    skip,
+    skipIf,
+    skipUnless,
 )
-from .loader import TestLoader as TestLoader, defaultTestLoader as defaultTestLoader
-from .main import TestProgram as TestProgram, main as main
-from .result import TestResult as TestResult
-from .runner import TextTestResult as TextTestResult, TextTestRunner as TextTestRunner
-from .signals import (
-    installHandler as installHandler,
-    registerResult as registerResult,
-    removeHandler as removeHandler,
-    removeResult as removeResult,
+from .loader export TestLoader, defaultTestLoader
+from .main export TestProgram, main
+from .result export TestResult
+from .runner export TextTestResult, TextTestRunner
+from .signals export (
+    installHandler,
+    registerResult,
+    removeHandler,
+    removeResult,
 )
-from .suite import BaseTestSuite as BaseTestSuite, TestSuite as TestSuite
+from .suite export BaseTestSuite, TestSuite
 
 if sys.version_info >= (3, 11):
-    from .case import doModuleCleanups as doModuleCleanups, enterModuleContext as enterModuleContext
+    from .case export doModuleCleanups, enterModuleContext
 
 __all__ = [
     "IsolatedAsyncioTestCase",
@@ -96,7 +96,7 @@ __all__ = [
 ]
 
 if sys.version_info < (3, 13):
-    from .loader import findTestCases as findTestCases, getTestCaseNames as getTestCaseNames, makeSuite as makeSuite
+    from .loader export findTestCases, getTestCaseNames, makeSuite
 
     __all__ += ["getTestCaseNames", "makeSuite", "findTestCases"]
 

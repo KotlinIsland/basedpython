@@ -11,7 +11,7 @@ the package, and perhaps a particular module inside it.
 """
 
 from _curses import *
-from _curses import window as window
+from _curses export window
 from _typeshed import structseq
 from collections.abc import Callable
 from typing import Final, ParamSpec, TypeVar, final, type_check_only

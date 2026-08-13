@@ -36,7 +36,7 @@ pub struct TextDocument {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum LanguageId {
+pub(crate) enum LanguageId {
     Python,
     /// A django template. Not python, but the server still has language services
     /// for it — see [`ty_ide::django_template_completions`].
@@ -89,7 +89,7 @@ impl LanguageId {
 }
 
 impl TextDocument {
-    pub fn new(
+    pub(crate) fn new(
         uri: Uri,
         contents: String,
         version: DocumentVersion,
@@ -113,23 +113,19 @@ impl TextDocument {
         self
     }
 
-    pub fn into_contents(self) -> String {
-        self.contents
-    }
-
     pub(crate) fn uri(&self) -> &Uri {
         &self.uri
     }
 
-    pub fn contents(&self) -> &str {
+    pub(crate) fn contents(&self) -> &str {
         &self.contents
     }
 
-    pub fn version(&self) -> DocumentVersion {
+    pub(crate) fn version(&self) -> DocumentVersion {
         self.version
     }
 
-    pub fn language_id(&self) -> LanguageId {
+    pub(crate) fn language_id(&self) -> LanguageId {
         self.language_id
     }
 
@@ -137,7 +133,7 @@ impl TextDocument {
         self.notebook.as_ref()
     }
 
-    pub fn apply_changes(
+    pub(crate) fn apply_changes(
         &mut self,
         changes: Vec<lsp_types::TextDocumentContentChangeEvent>,
         new_version: DocumentVersion,
@@ -187,7 +183,7 @@ impl TextDocument {
         });
     }
 
-    pub fn update_version(&mut self, new_version: DocumentVersion) {
+    pub(crate) fn update_version(&mut self, new_version: DocumentVersion) {
         self.modify(|_, version| {
             *version = new_version;
         });

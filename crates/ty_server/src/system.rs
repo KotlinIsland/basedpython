@@ -13,7 +13,7 @@ use ruff_db::file_revision::FileRevision;
 use ruff_db::files::{File, FilePath};
 use ruff_db::system::walk_directory::WalkDirectoryBuilder;
 use ruff_db::system::{
-    DirectoryEntry, FileType, Metadata, Result, System, SystemPath, SystemPathBuf,
+    CommandExecutor, DirectoryEntry, FileType, Metadata, Result, System, SystemPath, SystemPathBuf,
     SystemVirtualPath, SystemVirtualPathBuf, WhichResult, WritableSystem,
 };
 use ruff_notebook::{Notebook, NotebookError};
@@ -49,7 +49,7 @@ impl AnySystemPath {
     }
 
     #[expect(unused)]
-    pub(crate) const fn as_virtual(&self) -> Option<&SystemVirtualPath> {
+    const fn as_virtual(&self) -> Option<&SystemVirtualPath> {
         match self {
             AnySystemPath::SystemVirtual(path) => Some(path.as_path()),
             AnySystemPath::System(_) => None,
@@ -279,6 +279,10 @@ impl System for LSPSystem {
 
     fn env_var(&self, name: &str) -> std::result::Result<String, std::env::VarError> {
         self.native_system.env_var(name)
+    }
+
+    fn command_executor(&self) -> Option<&dyn CommandExecutor> {
+        self.native_system.command_executor()
     }
 
     fn dyn_clone(&self) -> Box<dyn System> {

@@ -18,5 +18,4 @@ RUF012 Mutable default value for class attribute
 18 |     var items: list[int] = []  # RUF012
 19 |     let names: list[str] = []  # RUF012
    |                            ^^
-   |
 help: Consider initializing in `__init__` or annotating with `typing.ClassVar`

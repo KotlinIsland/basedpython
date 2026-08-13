@@ -140,10 +140,10 @@ class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader)
 
         """
 
-    override class def get_code(cls, fullname: str) -> None:
+    override class def get_code(cls, fullname: str):
         """Return None as built-in modules do not have code objects."""
 
-    override class def get_source(cls, fullname: str) -> None:
+    override class def get_source(cls, fullname: str):
         """Return None as built-in modules do not have source code."""
 
     # Loader
@@ -163,7 +163,7 @@ class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader)
     static def create_module(spec: ModuleSpec) -> types.ModuleType | None:
         """Create a built-in module"""
 
-    override static def exec_module(module: types.ModuleType) -> None:
+    override static def exec_module(module: types.ModuleType):
         """Exec a built-in module"""
 
 class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
@@ -199,10 +199,10 @@ class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
 
         """
 
-    override class def get_code(cls, fullname: str) -> None:
+    override class def get_code(cls, fullname: str):
         """Return the code object for the frozen module."""
 
-    override class def get_source(cls, fullname: str) -> None:
+    override class def get_source(cls, fullname: str):
         """Return None as frozen modules do not have source code."""
 
     # Loader
@@ -222,4 +222,4 @@ class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
     static def create_module(spec: ModuleSpec) -> types.ModuleType | None:
         """Set __file__, if able."""
 
-    override static def exec_module(module: types.ModuleType) -> None
+    override static def exec_module(module: types.ModuleType)

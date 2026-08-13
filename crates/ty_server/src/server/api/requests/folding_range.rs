@@ -5,7 +5,7 @@ use lsp_types::{FoldingRange, FoldingRangeKind, FoldingRangeParams, Uri};
 use ruff_db::source::source_text;
 use ruff_text_size::TextRange;
 use ty_ide::{django_template_folding_ranges, folding_ranges};
-use ty_project::ProjectDatabase;
+use ty_project::{ProjectDatabase, SemanticDb as _};
 
 use crate::db::Db;
 use crate::document::ToRangeExt;
@@ -59,7 +59,7 @@ impl BackgroundDocumentRequestHandler for FoldingRangeRequestHandler {
         let ranges = if snapshot.is_django_template() {
             django_template_folding_ranges(db, file)
         } else {
-            folding_ranges(db, file, cell_range)
+            folding_ranges(db, db.program_file(file).python_file(db), cell_range)
         };
 
         let results: Vec<_> = ranges

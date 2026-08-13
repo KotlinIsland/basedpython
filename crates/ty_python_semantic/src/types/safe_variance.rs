@@ -15,6 +15,7 @@ use super::{
     is_private_member,
 };
 use crate::Db;
+use crate::types::ProgramEnvironment;
 
 /// basedpython safe variance: a private member seen through a view of its class that is
 /// not the class's own.
@@ -35,11 +36,11 @@ impl<'db> PrivateMemberView<'db> {
     ///
     /// The receiver's own type argument says nothing about what the object holds — that is what
     /// its being widened means.
-    fn erased(&self, db: &'db dyn Db) -> Type<'db> {
+    fn erased(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
         self.substituted
             .iter()
             .fold(self.declared_ty, |ty, typevar| {
-                ty.substitute_one_typevar(db, *typevar, Type::any())
+                ty.substitute_one_typevar(db, env, *typevar, Type::any())
             })
     }
 
@@ -49,8 +50,8 @@ impl<'db> PrivateMemberView<'db> {
     /// everything such a view can know: `t: T` reads as `object`. The value can be treated as its
     /// bound, but it is no longer a `T`, so it can never be funnelled back into the `T`-typed
     /// storage it came from.
-    pub(super) fn read_type(&self, db: &'db dyn Db) -> Type<'db> {
-        self.erased(db).top_materialization(db)
+    pub(super) fn read_type(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
+        self.erased(db, env).top_materialization(db, env)
     }
 
     /// The type a *write* through this view has to supply.
@@ -58,8 +59,8 @@ impl<'db> PrivateMemberView<'db> {
     /// Storage is invariant in its own type, so a write has to be valid for every type the member
     /// could really have — the erasure's bottom materialization. For a plain `T` that is `Never`:
     /// a view that knows nothing about a member cannot write to it, whatever it holds.
-    fn write_type(&self, db: &'db dyn Db) -> Type<'db> {
-        self.erased(db).bottom_materialization(db)
+    fn write_type(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
+        self.erased(db, env).bottom_materialization(db, env)
     }
 }
 
@@ -69,10 +70,11 @@ impl<'db> PrivateMemberView<'db> {
 /// `None` leaves the write to ordinary specialization.
 pub(super) fn private_member_write_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     object_ty: Type<'db>,
     attribute: &str,
 ) -> Option<Type<'db>> {
-    Some(private_member_view(db, object_ty, attribute)?.write_type(db))
+    Some(private_member_view(db, env, object_ty, attribute)?.write_type(db, env))
 }
 
 /// basedpython safe variance: a private member does not specialize.
@@ -86,13 +88,14 @@ pub(super) fn private_member_write_type<'db>(
 /// is already sound.
 pub(super) fn private_member_view<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     object_ty: Type<'db>,
     attribute: &str,
 ) -> Option<PrivateMemberView<'db>> {
     // a use-site modifier restricts which values the receiver may hold, not which
     // specialization it is a view of
     let instance = object_ty.erase_restriction(db).as_nominal_instance()?;
-    let super::ClassType::Generic(alias) = instance.class(db) else {
+    let super::ClassType::Generic(alias) = instance.class(db, env) else {
         return None;
     };
     let specialization = alias.specialization(db);
@@ -116,9 +119,13 @@ pub(super) fn private_member_view<'db>(
     // still names the class's type parameters rather than the receiver's arguments. a
     // `__getattr__` result is not a declared member of anything, so it is never private
     // however its name is spelled
-    let own_view = Type::instance(db, class.identity_specialization(db));
-    let member =
-        own_view.member_lookup_with_policy(db, attribute, MemberLookupPolicy::NO_GETATTR_LOOKUP);
+    let own_view = Type::instance(db, env, class.identity_specialization(db));
+    let member = own_view.member_lookup_with_policy(
+        db,
+        env,
+        attribute,
+        MemberLookupPolicy::NO_GETATTR_LOOKUP,
+    );
     let declared_ty = member.place.ignore_possibly_undefined()?;
     if !is_private_member(db, attribute, member.qualifiers, declared_ty) {
         return None;
@@ -129,6 +136,7 @@ pub(super) fn private_member_view<'db>(
             let identity = typevar.identity(db);
             let mentions_typevar = any_over_type(
                 db,
+                env,
                 declared_ty,
                 false,
                 |ty| matches!(ty, Type::TypeVar(other) if other.identity(db) == identity),

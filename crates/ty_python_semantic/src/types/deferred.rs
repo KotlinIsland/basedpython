@@ -43,6 +43,7 @@ use super::infer::{
     deferred_comparison, fold_tuple_concat, fold_tuple_repeat, literal_binary_op, literal_unary_op,
 };
 use super::visitor::{self, any_over_type};
+use crate::types::ProgramEnvironment;
 use crate::types::call::CallArguments;
 use crate::types::match_type::{MatchTypeOutcome, evaluate_match_type};
 use crate::types::type_fn::{
@@ -160,13 +161,14 @@ impl<'db> DeferredType<'db> {
     /// (non-literal) result (`int + Literal[1]` → `int`).
     pub(crate) fn build(
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         operation: &DeferredOperation,
         operands: Box<[Type<'db>]>,
     ) -> Type<'db> {
         if operation
             .deferring_operands(&operands)
             .iter()
-            .any(|operand| operand_is_symbolic(db, *operand))
+            .any(|operand| operand_is_symbolic(db, env, *operand))
         {
             // an operation nested deeper than anything a type expression could spell is not a
             // relationship anybody wrote down: it is a value a loop is accumulating, one layer
@@ -176,19 +178,23 @@ impl<'db> DeferredType<'db> {
             if operands.iter().any(|operand| {
                 deferral_depth(db, *operand, DEFERRAL_DEPTH_LIMIT) >= DEFERRAL_DEPTH_LIMIT
             }) {
-                return reduce(db, operation, &operands);
+                return reduce(db, env, operation, &operands);
             }
             return Type::Deferred(Self::new(db, operation.clone(), operands));
         }
-        evaluate(db, operation, &operands).unwrap_or_else(Type::unknown)
+        evaluate(db, env, operation, &operands).unwrap_or_else(Type::unknown)
     }
 
     /// Whether an operation over these operands must be deferred, i.e. some operand
     /// still mentions a type parameter.
-    pub(crate) fn is_deferred(db: &'db dyn Db, operands: &[Type<'db>]) -> bool {
+    pub(crate) fn is_deferred(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        operands: &[Type<'db>],
+    ) -> bool {
         operands
             .iter()
-            .any(|operand| operand_is_symbolic(db, *operand))
+            .any(|operand| operand_is_symbolic(db, env, *operand))
     }
 
     /// The non-symbolic meaning of the operation: what the result type would be if
@@ -196,15 +202,20 @@ impl<'db> DeferredType<'db> {
     /// reduces to `int`, a comparison reduces to `bool`. Every non-mapping operation
     /// delegates here, so a deferred operation is indistinguishable from its reduced
     /// form everywhere except under type-mapping.
-    pub(crate) fn reduced(self, db: &'db dyn Db) -> Type<'db> {
-        reduce(db, self.operation(db), self.operands(db))
+    pub(crate) fn reduced(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
+        reduce(db, env, self.operation(db), self.operands(db))
     }
 
     /// Re-evaluate the operation against operands to which a type-mapping has already
     /// been applied. Folds when the operands became concrete, stays symbolic while
     /// still unresolved.
-    pub(crate) fn re_evaluate(self, db: &'db dyn Db, operands: Box<[Type<'db>]>) -> Type<'db> {
-        Self::build(db, self.operation(db), operands)
+    pub(crate) fn re_evaluate(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        operands: Box<[Type<'db>]>,
+    ) -> Type<'db> {
+        Self::build(db, env, self.operation(db), operands)
     }
 
     /// basedpython: whether this deferral is an attribute type (`T.a`).
@@ -237,9 +248,13 @@ pub(crate) const fn is_symbolic_operand(ty: Type<'_>) -> bool {
 /// can be compared against a declared return type. A non-integer operand — `str`
 /// concatenation, say — has no such form, so keeping its operation symbolic would buy a
 /// weaker relation and nothing else.
-pub(crate) fn is_integer_operand<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
-    ty.reduce_deferred(db)
-        .is_subtype_of(db, KnownClass::Int.to_instance(db))
+pub(crate) fn is_integer_operand<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> bool {
+    ty.reduce_deferred(db, env)
+        .is_subtype_of(db, env, KnownClass::Int.to_instance(db, env))
 }
 
 /// basedpython: an integer expression over type parameters flattened to
@@ -391,9 +406,13 @@ impl<'db> LinearForm<'db> {
 impl<'db> Type<'db> {
     /// Collapse a top-level [`DeferredType`] to its reduced form; any other type is
     /// returned unchanged.
-    pub(crate) fn reduce_deferred(self, db: &'db dyn Db) -> Type<'db> {
+    pub(crate) fn reduce_deferred(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Type<'db> {
         match self {
-            Type::Deferred(deferred) => deferred.reduced(db),
+            Type::Deferred(deferred) => deferred.reduced(db, env),
             _ => self,
         }
     }
@@ -426,6 +445,7 @@ const DEFERRAL_DEPTH_LIMIT: usize = 8;
 /// each operand were replaced by its upper bound.
 fn reduce<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     operation: &DeferredOperation,
     operands: &[Type<'db>],
 ) -> Type<'db> {
@@ -449,7 +469,7 @@ fn reduce<'db>(
 
     let operands: Box<[Type<'db>]> = operands
         .iter()
-        .map(|operand| operand.reduce_deferred(db))
+        .map(|operand| operand.reduce_deferred(db, env))
         .collect();
 
     // an attribute type is the one operation whose receiver has to be substituted rather
@@ -463,17 +483,17 @@ fn reduce<'db>(
         let receiver = match receiver.as_typevar() {
             Some(bound_typevar) => bound_typevar
                 .typevar(db)
-                .require_bound_or_constraints(db)
-                .as_type(db),
+                .require_bound_or_constraints(db, env)
+                .as_type(db, env),
             None => *receiver,
         };
         return receiver
-            .member(db, name)
+            .member(db, env, name)
             .ignore_possibly_undefined()
             .unwrap_or_else(Type::unknown);
     }
 
-    evaluate(db, operation, &operands).unwrap_or_else(Type::unknown)
+    evaluate(db, env, operation, &operands).unwrap_or_else(Type::unknown)
 }
 
 /// Evaluate a deferred operation against operands that no longer mention a type
@@ -481,32 +501,33 @@ fn reduce<'db>(
 /// is genuinely unsupported between the operands.
 fn evaluate<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     operation: &DeferredOperation,
     operands: &[Type<'db>],
 ) -> Option<Type<'db>> {
     match *operation {
         DeferredOperation::Binary(op) => {
             let [left, right] = operands else { return None };
-            literal_binary_op(db, *left, *right, op, true)
+            literal_binary_op(db, env, *left, *right, op, true)
                 // the same tuple folds the value inferrer applies: without them
                 // `(X,) * Dim` would re-evaluate through typeshed's `tuple.__mul__` and
                 // widen to `tuple[X, ...]`, throwing away the length the fold just learned
                 .or_else(|| match op {
-                    ast::Operator::Mult => fold_tuple_repeat(db, *left, *right)
-                        .or_else(|| fold_tuple_repeat(db, *right, *left)),
-                    ast::Operator::Add => fold_tuple_concat(db, *left, *right),
+                    ast::Operator::Mult => fold_tuple_repeat(db, env, *left, *right)
+                        .or_else(|| fold_tuple_repeat(db, env, *right, *left)),
+                    ast::Operator::Add => fold_tuple_concat(db, env, *left, *right),
                     _ => None,
                 })
-                .or_else(|| Type::try_call_bin_op_return_type(db, *left, op, *right))
+                .or_else(|| Type::try_call_bin_op_return_type(db, env, *left, op, *right))
         }
         DeferredOperation::Attribute(ref name) => {
             let [receiver] = operands else { return None };
-            receiver.member(db, name).ignore_possibly_undefined()
+            receiver.member(db, env, name).ignore_possibly_undefined()
         }
         DeferredOperation::Unary(op) => {
             let [operand] = operands else { return None };
             if let Type::LiteralValue(literal) = operand
-                && let Some(folded) = literal_unary_op(db, op, *literal)
+                && let Some(folded) = literal_unary_op(db, env, op, *literal)
             {
                 return Some(folded);
             }
@@ -517,9 +538,15 @@ fn evaluate<'db>(
                 _ => return None,
             };
             operand
-                .try_call_dunder(db, dunder, CallArguments::none(), TypeContext::default())
+                .try_call_dunder(
+                    db,
+                    env,
+                    dunder,
+                    CallArguments::none(),
+                    TypeContext::default(),
+                )
                 .ok()
-                .map(|bindings| bindings.return_type(db))
+                .map(|bindings| bindings.return_type(db, env))
         }
         DeferredOperation::Call => {
             let [callee, args @ ..] = operands else {
@@ -533,15 +560,15 @@ fn evaluate<'db>(
             let callee = match callee {
                 Type::BoundMethod(method) => method
                     .self_instance(db)
-                    .member(db, method.function(db).name(db))
+                    .member(db, env, method.function(db).name(db))
                     .ignore_possibly_undefined()
                     .unwrap_or(*callee),
                 _ => *callee,
             };
             callee
-                .try_call(db, &CallArguments::positional(args.iter().copied()))
+                .try_call(db, env, &CallArguments::positional(args.iter().copied()))
                 .ok()
-                .map(|bindings| bindings.return_type(db))
+                .map(|bindings| bindings.return_type(db, env))
         }
         DeferredOperation::TypeFn => {
             let [Type::FunctionLiteral(function), arguments @ ..] = operands else {
@@ -584,8 +611,8 @@ fn evaluate<'db>(
             // rich comparisons fold to a `Literal[bool]` for literal operands and to
             // `bool` otherwise; identity/membership operators fall back to `bool`
             Some(
-                deferred_comparison(db, *left, op, *right)
-                    .unwrap_or_else(|| KnownClass::Bool.to_instance(db)),
+                deferred_comparison(db, env, *left, op, *right)
+                    .unwrap_or_else(|| KnownClass::Bool.to_instance(db, env)),
             )
         }
     }
@@ -593,8 +620,8 @@ fn evaluate<'db>(
 
 /// Whether `ty` still mentions a type parameter (or a nested deferred operation),
 /// meaning an operation over it cannot be evaluated yet.
-fn operand_is_symbolic<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
-    any_over_type(db, ty, false, |t| {
+fn operand_is_symbolic<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> bool {
+    any_over_type(db, env, ty, false, |t| {
         t.as_typevar().is_some() || matches!(t, Type::Deferred(_))
     })
 }

@@ -13,6 +13,15 @@ def _(user_id: UserId):
     reveal_type(user_id)  # revealed: UserId
 ```
 
+A `NewType` constructor preserves its argument's runtime identity but gives the result its own
+static tag. Applying an unrelated `NewType` constructor replaces the previous tag.
+
+```py
+MediaId = NewType("MediaId", int)
+
+reveal_type(MediaId(UserId(1)))  # revealed: MediaId
+```
+
 ## Subtyping
 
 The basic purpose of `NewType` is that it acts like a subtype of its base, but not the exact same
@@ -202,7 +211,6 @@ warning[mismatched-type-name]: The name passed to `NewType` must match the varia
   |
 5 | UserId = NewType("Id", int)
   |                  ^^^^ Expected "UserId", got "Id"
-  |
 ```
 
 ```py
@@ -218,7 +226,6 @@ warning[mismatched-type-name]: The name passed to `NewType` must match the varia
    |
 10 | UsesExistingId = NewType("Id", "Id")
    |                          ^^^^ Expected "UsesExistingId", got "Id"
-   |
 ```
 
 ## The base must be a class type or another newtype
@@ -567,24 +574,21 @@ E(["foo"])  # error: [invalid-argument-type]
 E(E(E(["foo"])))  # error: [invalid-argument-type]
 ```
 
-## `NewType` wrapping preserves singleton-ness and single-valued-ness
+## `NewType` wrapping preserves singleton-ness
 
 ```py
 from typing_extensions import NewType
 from ty_extensions import static_assert
-from ty_extensions._internal import is_singleton, is_single_valued
+from ty_extensions._internal import is_singleton
 from types import EllipsisType
 
 A = NewType("A", EllipsisType)
 static_assert(is_singleton(A))
-static_assert(is_single_valued(A))
 reveal_type(type(A(...)) is EllipsisType)  # revealed: Literal[True]
-# TODO: This should be `Literal[True]` also.
-reveal_type(A(...) is ...)  # revealed: bool
+reveal_type(A(...) is ...)  # revealed: Literal[True]
 
 B = NewType("B", int)
 static_assert(not is_singleton(B))
-static_assert(not is_single_valued(B))
 ```
 
 ## `NewType`s of tuples can be iterated/unpacked
@@ -646,14 +650,15 @@ error[invalid-base]: Cannot subclass an instance of NewType
   |
 6 | class Foo(X): ...
   |           ^
-  |
 info: Perhaps you were looking for: `Foo = NewType('Foo', X)`
 info: Definition of class `Foo` will raise `TypeError` at runtime
 ```
 
-## Don't narrow `NewType`-wrapped `Enum`s inside of match arms
+## `NewType`-wrapped enums match their members
 
-`Literal[Foo.X]` is actually disjoint from `N` here:
+A `NewType` constructor returns its argument unchanged at runtime, and an ordinary literal does not
+restrict `NewType` tags. An enum member can therefore inhabit both its literal type and a `NewType`
+based on the enum. Each arm retains both types, and matching every enum member is exhaustive.
 
 ```py
 from enum import Enum
@@ -668,11 +673,11 @@ N = NewType("N", Foo)
 def f(x: N):
     match x:
         case Foo.X:
-            reveal_type(x)  # revealed: N
+            reveal_type(x)  # revealed: N & Literal[Foo.X]
         case Foo.Y:
-            reveal_type(x)  # revealed: N
+            reveal_type(x)  # revealed: N & Literal[Foo.Y]
         case _:
-            reveal_type(x)  # revealed: N
+            reveal_type(x)  # revealed: Never
 ```
 
 ## The base of a `NewType` can't be a protocol class or a `TypedDict`
@@ -693,7 +698,6 @@ error[invalid-newtype]: invalid base for `typing.NewType`
   |
 7 | UserId = NewType("UserId", Id)
   |                            ^^ type `Id`
-  |
 info: The base of a `NewType` is not allowed to be a protocol class.
 ```
 
@@ -711,7 +715,6 @@ error[invalid-newtype]: invalid base for `typing.NewType`
    |
 12 | Bar = NewType("Bar", Foo)
    |                      ^^^ type `Foo`
-   |
 info: The base of a `NewType` is not allowed to be a `TypedDict`.
 ```
 

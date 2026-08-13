@@ -12,7 +12,7 @@ re-evaluated when the parameter is specialized at a call site.
 class Array[Dim: int]
 
 def extend[Dim: int](a: Array[Dim]) -> Array[Dim + 1]:
-    return a
+    raise NotImplementedError
 
 def foo(data: Array[5]):
     data2 = extend(data)
@@ -36,10 +36,10 @@ class Array[Dim: int]:
     pass
 
 def extend[Dim: int](a: Array[Dim]) -> Array[Dim + 1]:
-    return a
+    raise NotImplementedError
 
 def shrink[Dim: int](a: Array[Dim]) -> Array[Dim - 2]:
-    return a
+    raise NotImplementedError
 
 def foo(data: Array[5]):
     reveal_type(extend(extend(data)))  # revealed: Array[7]
@@ -147,7 +147,7 @@ class Array[Dim: int]:
     pass
 
 def extend[Dim: int](a: Array[Dim]) -> Array[Dim + 1]:
-    return a
+    raise NotImplementedError
 
 def foo(data: Array[int]):
     reveal_type(extend(data))  # revealed: Array[int]

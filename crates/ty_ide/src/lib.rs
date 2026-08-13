@@ -16,6 +16,7 @@ mod folding_range;
 mod goto;
 mod goto_declaration;
 mod goto_definition;
+mod goto_implementation;
 mod goto_type_definition;
 mod hints;
 mod hover;
@@ -38,8 +39,8 @@ pub use call_hierarchy::outgoing_calls::{OutgoingCall, outgoing_calls};
 pub use call_hierarchy::{CallHierarchyItem, prepare_call_hierarchy};
 pub use code_action::{FileEdit, QuickFix, code_actions};
 pub use completion::{
-    Completion, CompletionCapabilities, CompletionInsertTextFormat, CompletionKind,
-    CompletionSettings, completion,
+    Completion, CompletionCapabilities, CompletionCommand, CompletionInsertTextFormat,
+    CompletionKind, CompletionSettings, completion,
 };
 pub use django_template::{
     DisplayTemplateHover, DjangoChecker, DjangoCodeLens, DjangoLensAction, DjangoLensTarget,
@@ -57,6 +58,7 @@ pub use document_symbols::document_symbols;
 pub use find_references::find_references;
 pub use folding_range::{FoldingRange, FoldingRangeKind, folding_ranges};
 pub use goto::{goto_declaration, goto_definition, goto_type_definition};
+pub use goto_implementation::goto_implementation;
 pub use hints::{Hint, HintKind, hints};
 pub use hover::hover;
 pub use inlay_hints::{
@@ -82,10 +84,13 @@ use ruff_db::{
     vendored::VendoredPath,
 };
 use ruff_text_size::{Ranged, TextRange};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxBuildHasher, FxHashSet};
 use std::ops::{Deref, DerefMut};
 use ty_project::Db;
+pub use ty_python_semantic::ProgramEnvironment;
 use ty_python_semantic::types::{Type, TypeDefinition};
+
+type FxIndexMap<K, V> = indexmap::IndexMap<K, V, FxBuildHasher>;
 
 /// Information associated with a text range.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -144,7 +149,7 @@ pub struct NavigationTarget {
 
 impl NavigationTarget {
     /// Creates a new `NavigationTarget` where the focus and full range are identical.
-    pub fn new(file: File, range: TextRange) -> Self {
+    fn new(file: File, range: TextRange) -> Self {
         Self {
             file,
             focus_range: range,
@@ -202,7 +207,7 @@ pub struct ReferenceTarget {
 
 impl ReferenceTarget {
     /// Creates a new `ReferenceTarget`.
-    pub fn new(file: File, range: TextRange, kind: ReferenceKind) -> Self {
+    fn new(file: File, range: TextRange, kind: ReferenceKind) -> Self {
         Self {
             file_range: FileRange::new(file, range),
             kind,
@@ -288,23 +293,23 @@ impl FromIterator<NavigationTarget> for NavigationTargets {
 }
 
 pub trait HasNavigationTargets {
-    fn navigation_targets(&self, db: &dyn Db) -> NavigationTargets;
+    fn navigation_targets(&self, db: &dyn Db, env: &ProgramEnvironment<'_>) -> NavigationTargets;
 }
 
 impl HasNavigationTargets for Type<'_> {
-    fn navigation_targets(&self, db: &dyn Db) -> NavigationTargets {
+    fn navigation_targets(&self, db: &dyn Db, env: &ProgramEnvironment<'_>) -> NavigationTargets {
         match self {
             Type::Union(union) => union
                 .elements(db)
                 .iter()
-                .flat_map(|target| target.navigation_targets(db))
+                .flat_map(|target| target.navigation_targets(db, env))
                 .collect(),
 
             Type::Intersection(intersection) => {
-                if let Some(alternatives) = intersection.finite_alternatives(db) {
+                if let Some(alternatives) = intersection.finite_alternatives(db, env) {
                     return alternatives
                         .iter()
-                        .flat_map(|alternative| alternative.navigation_targets(db))
+                        .flat_map(|alternative| alternative.navigation_targets(db, env))
                         .collect();
                 }
 
@@ -321,26 +326,26 @@ impl HasNavigationTargets for Type<'_> {
                         // because the type is the intersection of all those types.
                         NavigationTargets::empty()
                     }
-                    None => first.navigation_targets(db),
+                    None => first.navigation_targets(db, env),
                 }
             }
 
             Type::EnumComplement(complement) => complement
-                .remaining_literal_types(db)
+                .remaining_literal_types(db, env)
                 .iter()
-                .flat_map(|alternative| alternative.navigation_targets(db))
+                .flat_map(|alternative| alternative.navigation_targets(db, env))
                 .collect(),
 
             ty => ty
-                .definition(db)
-                .map(|definition| definition.navigation_targets(db))
+                .definition(db, env)
+                .map(|definition| definition.navigation_targets(db, env))
                 .unwrap_or_else(NavigationTargets::empty),
         }
     }
 }
 
 impl HasNavigationTargets for TypeDefinition<'_> {
-    fn navigation_targets(&self, db: &dyn Db) -> NavigationTargets {
+    fn navigation_targets(&self, db: &dyn Db, _: &ProgramEnvironment<'_>) -> NavigationTargets {
         let Some(full_range) = self.full_range(db) else {
             return NavigationTargets::empty();
         };
@@ -354,7 +359,7 @@ impl HasNavigationTargets for TypeDefinition<'_> {
 }
 
 /// Get the cache-relative path where vendored paths should be written to.
-pub fn relative_cached_vendored_root() -> SystemPathBuf {
+fn relative_cached_vendored_root() -> SystemPathBuf {
     // The vendored files are uniquely identified by the source commit.
     SystemPathBuf::from(format!("vendored/typeshed/{}", ty_vendored::SOURCE_COMMIT))
 }
@@ -408,6 +413,7 @@ pub fn map_system_to_vendored<'a>(
 mod tests {
     use camino::Utf8Component;
     use insta::internals::SettingsBindDropGuard;
+    use ty_python_semantic::ProgramEnvironment;
 
     use ruff_db::Db;
     use ruff_db::diagnostic::{
@@ -416,15 +422,16 @@ mod tests {
     use ruff_db::files::{File, FileRootKind, system_path_to_file};
     use ruff_db::parsed::{ParsedModuleRef, parsed_module};
     use ruff_db::source::{SourceText, source_text};
-    use ruff_db::system::{DbWithTestSystem, DbWithWritableSystem, SystemPath, SystemPathBuf};
+    use ruff_db::system::{DbWithWritableSystem, SystemPath, SystemPathBuf};
     use ruff_python_ast::PythonVersion;
     use ruff_python_codegen::Stylist;
     use ruff_python_trivia::textwrap::dedent;
     use ruff_text_size::TextSize;
     use ty_module_resolver::SearchPathSettings;
-    use ty_project::{Db as _, ProjectMetadata};
+    use ty_project::{Db as _, ProjectMetadata, SemanticDb as _};
+    use ty_python_core::ProgramFile;
     use ty_python_core::platform::PythonPlatform;
-    use ty_python_core::program::{FallibleStrategy, Program, ProgramSettings};
+    use ty_python_core::program::{FallibleStrategy, ProgramSettings};
     use ty_python_semantic::PythonVersionWithSource;
 
     /// A way to create a simple single-file (named `main.py`) cursor test.
@@ -444,6 +451,14 @@ mod tests {
     impl CursorTest {
         pub(super) fn builder() -> CursorTestBuilder {
             CursorTestBuilder::default()
+        }
+
+        pub(super) fn program_file(&self, file: File) -> ProgramFile<'_> {
+            self.db.program_file(file)
+        }
+
+        pub(super) fn program_environment(&self, file: File) -> ProgramEnvironment<'_> {
+            ProgramEnvironment::from_file(self.program_file(file))
         }
 
         pub(super) fn write_file(
@@ -527,10 +542,9 @@ mod tests {
             let mut db =
                 ty_project::TestDb::new(ProjectMetadata::new("test", SystemPathBuf::from("/")));
 
-            db.init_program_with_python_version(
-                self.python_version.unwrap_or_else(PythonVersion::latest_ty),
-            )
-            .unwrap();
+            if let Some(python_version) = self.python_version {
+                db.set_python_version(python_version);
+            }
 
             let mut cursor: Option<Cursor> = None;
             for &Source {
@@ -570,7 +584,8 @@ mod tests {
                     db.project().open_file(&mut db, file);
 
                     let source = source_text(&db, file);
-                    let parsed = parsed_module(&db, file).load(&db);
+                    let parsed =
+                        parsed_module(&db, db.program_file(file).python_file(&db)).load(&db);
                     let stylist =
                         Stylist::from_tokens(parsed.tokens(), source.as_str()).into_owned();
                     cursor = Some(Cursor {
@@ -657,7 +672,7 @@ mod tests {
             let mut db =
                 ty_project::TestDb::new(ProjectMetadata::new("test", project_root.clone()));
 
-            // Write site-packages files first (before init)
+            // Write site-packages files first.
             for Source {
                 path,
                 contents,
@@ -669,11 +684,6 @@ mod tests {
                     .expect("write to memory file system to be successful");
             }
 
-            // Create /src directory for first-party code
-            db.memory_file_system()
-                .create_directory_all(&project_root)
-                .expect("create /src directory");
-
             // Configure search paths with site-packages
             let search_paths = SearchPathSettings {
                 src_roots: vec![project_root.clone()],
@@ -683,8 +693,8 @@ mod tests {
             .to_search_paths(db.system(), db.vendored(), &FallibleStrategy)
             .expect("valid search paths");
 
-            Program::from_settings(
-                &db,
+            db.project().update_program(
+                &mut db,
                 ProgramSettings {
                     python_version: PythonVersionWithSource::default(),
                     python_platform: PythonPlatform::default(),
@@ -722,7 +732,8 @@ mod tests {
                     db.project().open_file(&mut db, file);
 
                     let source = source_text(&db, file);
-                    let parsed = parsed_module(&db, file).load(&db);
+                    let parsed =
+                        parsed_module(&db, db.program_file(file).python_file(&db)).load(&db);
                     let stylist =
                         Stylist::from_tokens(parsed.tokens(), source.as_str()).into_owned();
                     cursor = Some(Cursor {

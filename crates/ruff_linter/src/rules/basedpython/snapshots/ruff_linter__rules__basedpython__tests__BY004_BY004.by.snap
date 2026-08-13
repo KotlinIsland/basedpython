@@ -42,7 +42,6 @@ BY004 [*] `super()` call can be written as `super`
 13 |     def attribute(self) -> object:
 14 |         return super().__class__
    |                ^^^^^^^
-   |
 help: Remove the parentheses
    |
 13 |     def attribute(self) -> object:

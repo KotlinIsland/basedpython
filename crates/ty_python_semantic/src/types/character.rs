@@ -10,23 +10,32 @@
 //!   redundant)? ([`is_character_instance`])
 
 use crate::Db;
+use crate::types::ProgramEnvironment;
 use crate::types::{KnownClass, Type};
 
 /// whether `ty` denotes the `Character` type — its instance type (the meaning
 /// of a bare `Character` in an annotation position) or the class literal
 /// `type[Character]` (its meaning in a value position). a union, optional, or
 /// `str` does not qualify
-pub fn denotes_character<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
-    is_character_instance(db, ty)
+pub fn denotes_character<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> bool {
+    is_character_instance(db, env, ty)
         || ty
             .to_class_type(db)
             .is_some_and(|class| class.is_known(db, KnownClass::Character))
 }
 
 /// whether `ty` is a `Character` instance — its class is exactly `Character`
-pub fn is_character_instance<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+pub fn is_character_instance<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> bool {
     matches!(
         ty,
-        Type::NominalInstance(instance) if instance.class(db).is_known(db, KnownClass::Character)
+        Type::NominalInstance(instance) if instance.class(db, env).is_known(db, KnownClass::Character)
     )
 }

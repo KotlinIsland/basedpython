@@ -44,7 +44,7 @@ from collections.abc import Callable, Container, Mapping, MutableMapping
 from reprlib import Repr
 from types import MethodType, ModuleType, TracebackType
 from typing import Final, Protocol, TypeVar, type_check_only
-from typing_extensions import deprecated
+from typing_extensions import Never, deprecated
 
 __all__ = ["help"]
 
@@ -89,7 +89,7 @@ def visiblename(name: str, all: Container[str] | None = None, obj: object = None
 def classify_class_attrs(object: object) -> list[(str, str, type, str)]:
     """Wrap inspect.classify_class_attrs, with fixup for data descriptors and bound methods."""
 
-@deprecated("Deprecated since Python 3.13.")
+@deprecated("Deprecated.")
 def ispackage(path: StrPath) -> bool:  # undocumented
     """Guess whether a path refers to a package directory."""
 
@@ -134,7 +134,7 @@ class Doc:
     def document(self, object: object, name: str | None = None, *args: dynamic) -> str:
         """Generate documentation for an object."""
 
-    def fail(self, object: object, name: str | None = None, *args: dynamic) -> NoReturn:
+    def fail(self, object: object, name: str | None = None, *args: dynamic) -> Never:
         """Raise an exception for unimplemented types."""
 
     abstract def docmodule(self, object: object, name: str | None = None, *args: dynamic) -> str:

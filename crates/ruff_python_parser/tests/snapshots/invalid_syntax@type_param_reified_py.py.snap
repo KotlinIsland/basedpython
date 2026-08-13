@@ -224,4 +224,3 @@ Module(
 2 | class C[reified T]: ...
 3 | type X[reified T] = int
   |        ^^^^^^^ Syntax Error: reified type parameters are not valid in `.py` files
-  |

@@ -43,6 +43,7 @@ use super::project::{self, Parameter, RegistrationKind, UrlName};
 use super::resolve;
 use super::uses::URL_TAG;
 use super::{ancestors, builtins};
+use ty_python_semantic::ProgramEnvironment;
 
 /// the tag that names a static file
 const STATIC_TAG: &str = "static";
@@ -718,6 +719,7 @@ impl Checker<'_> {
     /// `alters_data` before it attempts the call, so a write method that also
     /// needs arguments is refused rather than uncallable.
     fn members_needing_arguments(&mut self) {
+        let env = &ProgramEnvironment::from_file(self.db.program_file(self.file));
         self.decides(&[
             &TEMPLATE_MEMBER_NEEDS_ARGUMENTS,
             &TEMPLATE_MEMBER_ALTERS_DATA,
@@ -737,6 +739,7 @@ impl Checker<'_> {
                 for length in 1..segments.len() {
                     let Some(ty) = resolve::path_type(
                         self.db,
+                        env,
                         self.file,
                         self.index,
                         self.source,
@@ -746,16 +749,16 @@ impl Checker<'_> {
                         break;
                     };
                     let name = segments[length];
-                    let Some(member) = resolve::uncalled_member_type(self.db, ty, name) else {
+                    let Some(member) = resolve::uncalled_member_type(self.db, env, ty, name) else {
                         break;
                     };
 
-                    if template_lookup(self.db, ty, name, member) == TemplateLookup::Refuses {
+                    if template_lookup(self.db, env, ty, name, member) == TemplateLookup::Refuses {
                         refused.push((name.to_compact_string(), path[length].range));
                         break;
                     }
 
-                    if callable_needs_arguments(self.db, member) {
+                    if callable_needs_arguments(self.db, env, member) {
                         found.push((name.to_compact_string(), path[length].range));
                         break;
                     }

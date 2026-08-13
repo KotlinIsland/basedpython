@@ -9,7 +9,7 @@ use crate::session::client::Client;
 use lsp_types::HoverRequest;
 use lsp_types::{HoverParams, MarkupContent, Uri};
 use ty_ide::{MarkupKind, django_template_hover, hover};
-use ty_project::ProjectDatabase;
+use ty_project::{ProjectDatabase, SemanticDb as _};
 
 pub(crate) struct HoverRequestHandler;
 
@@ -65,7 +65,7 @@ impl BackgroundDocumentRequestHandler for HoverRequestHandler {
                 )
             })
         } else {
-            hover(db, file, offset).map(|range_info| {
+            hover(db, db.program_file(file), offset).map(|range_info| {
                 (
                     range_info.display(db, markup_kind).to_string(),
                     range_info.range,

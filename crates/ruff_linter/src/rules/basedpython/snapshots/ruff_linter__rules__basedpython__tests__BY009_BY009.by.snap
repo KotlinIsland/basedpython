@@ -6,7 +6,6 @@ BY009 [*] `Unpack[…]` can be written as `*`
   |
 4 | def f(*args: Unpack[tuple[int, ...]]): ...
   |              ^^^^^^^^^^^^^^^^^^^^^^^
-  |
 help: Replace with `*`
   |
 3 |
@@ -20,7 +19,6 @@ BY009 [*] `Unpack[…]` can be written as `*`
    |
 10 | coords: tuple[Unpack[tuple[int, str]]]
    |               ^^^^^^^^^^^^^^^^^^^^^^^
-   |
 help: Replace with `*`
    |
 9  |

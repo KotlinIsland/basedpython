@@ -1,8 +1,9 @@
 use crate::goto::{django_lookup_definitions, find_goto_target};
 use crate::{Db, NavigationTargets, RangedValue};
-use ruff_db::files::{File, FileRange};
+use ruff_db::files::FileRange;
 use ruff_db::parsed::parsed_module;
 use ruff_text_size::{Ranged, TextSize};
+use ty_python_core::ProgramFile;
 use ty_python_semantic::{ImportAliasResolution, SemanticModel};
 
 /// Navigate to the declaration of a symbol.
@@ -12,10 +13,10 @@ use ty_python_semantic::{ImportAliasResolution, SemanticModel};
 /// is needed because Python doesn't require formal declarations of variables like most languages do.
 pub fn goto_declaration(
     db: &dyn Db,
-    file: File,
+    file: ProgramFile<'_>,
     offset: TextSize,
 ) -> Option<RangedValue<NavigationTargets>> {
-    let module = parsed_module(db, file).load(db);
+    let module = parsed_module(db, file.python_file(db)).load(db);
     let model = SemanticModel::new(db, file);
     let goto_target = find_goto_target(&model, &module, offset)?;
 
@@ -29,7 +30,7 @@ pub fn goto_declaration(
         .into_navigation_targets(model.db());
 
     Some(RangedValue {
-        range: FileRange::new(file, goto_target.range()),
+        range: FileRange::new(file.file(db), goto_target.range()),
         value: declaration_targets,
     })
 }
@@ -57,13 +58,11 @@ mod tests {
           |
         5 | result = my_function(1, 2)
           |          ^^^^^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:5
           |
         2 | def my_function(x, y):
           |     -----------
-          |
         ");
     }
 
@@ -82,13 +81,11 @@ mod tests {
           |
         3 | y = x
           |     ^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:1
           |
         2 | x = 42
           | -
-          |
         ");
     }
 
@@ -113,13 +110,11 @@ mod tests {
           |
         9 |     person["name"]
           |            ^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:5:5
           |
         5 |     name: str
           |     ----
-          |
         "#);
     }
 
@@ -141,13 +136,11 @@ mod tests {
           |
         6 | instance = MyClass()
           |            ^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:7
           |
         2 | class MyClass:
           |       -------
-          |
         ");
     }
 
@@ -166,13 +159,11 @@ mod tests {
           |
         3 |     return param * 2
           |            ^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:9
           |
         2 | def foo(param):
           |         -----
-          |
         ");
     }
 
@@ -192,13 +183,11 @@ mod tests {
           |
         3 |     v: T = value
           |        ^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:18
           |
         2 | def generic_func[T](value: T) -> T:
           |                  -
-          |
         ");
     }
 
@@ -218,13 +207,11 @@ mod tests {
           |
         3 |     def __init__(self, value: T):
           |                               ^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:20
           |
         2 | class GenericClass[T]:
           |                    -
-          |
         ");
     }
 
@@ -246,13 +233,11 @@ mod tests {
           |
         5 |         return x  # Should find outer x
           |                ^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:1
           |
         2 | x = "outer"
           | -
-          |
         "#);
     }
 
@@ -301,13 +286,11 @@ variable = 42
           |
         3 | print(mymodule.function())
           |       ^^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> mymodule.py:1:1
           |
         1 |
           | -
-          |
         ");
     }
 
@@ -339,13 +322,11 @@ def other_function():
           |
         3 | print(my_function())
           |       ^^^^^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> mymodule.py:2:5
           |
         2 | def my_function():
           |     -----------
-          |
         ");
     }
 
@@ -380,13 +361,11 @@ FOO = 0
           |
         3 | print(sub.helper())
           |       ^^^ Clicking here
-          |
         info: Found 1 declaration
          --> mymodule/submodule.py:1:1
           |
         1 |
           | -
-          |
         ");
     }
 
@@ -405,11 +384,11 @@ FOO = 0
           |
         1 | from lib import module
           |                 ^^^^^^ Clicking here
-          |
         info: Found 1 declaration
-        --> lib/module.py:1:1
-         |
-         |
+         --> lib/module.py:1:1
+          |
+        1 |
+          | -
         ");
     }
 
@@ -439,13 +418,11 @@ def func(arg):
           |
         3 | print(h("test"))
           |       ^ Clicking here
-          |
         info: Found 1 declaration
          --> utils.py:2:5
           |
         2 | def func(arg):
           |     ----
-          |
         "#);
     }
 
@@ -481,13 +458,11 @@ def shared_function():
           |
         3 | print(shared_function())
           |       ^^^^^^^^^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> original.py:2:5
           |
         2 | def shared_function():
           |     ---------------
-          |
         ");
     }
 
@@ -521,13 +496,11 @@ def multiply_numbers(a, b):
           |
         3 | result = add_numbers(5, 3)
           |          ^^^^^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> math_utils.py:2:5
           |
         2 | def add_numbers(a, b):
           |     -----------
-          |
         ");
     }
 
@@ -568,13 +541,11 @@ def another_helper():
           |
         3 | result = helper_function("test")
           |          ^^^^^^^^^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> package/utils.py:2:5
           |
         2 | def helper_function(arg):
           |     ---------------
-          |
         "#);
     }
 
@@ -614,13 +585,11 @@ def another_helper():
           |
         3 | result = helper_function("test")
           |          ^^^^^^^^^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> package/utils.py:2:5
           |
         2 | def helper_function(arg):
           |     ---------------
-          |
         "#);
     }
 
@@ -654,13 +623,11 @@ FOO = 0
           |
         2 | import mymodule.submodule as sub
           |                              ^^^ Clicking here
-          |
         info: Found 1 declaration
          --> mymodule/submodule.py:1:1
           |
         1 |
           | -
-          |
         ");
     }
 
@@ -694,13 +661,11 @@ FOO = 0
           |
         2 | import mymodule.submodule as sub
           |                 ^^^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> mymodule/submodule.py:1:1
           |
         1 |
           | -
-          |
         ");
     }
 
@@ -738,13 +703,11 @@ def another_helper(path):
           |
         2 | from mypackage.utils import helper as h
           |                             ^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> mypackage/utils.py:2:5
           |
         2 | def helper(a, b):
           |     ------
-          |
         ");
     }
 
@@ -782,13 +745,11 @@ def another_helper(path):
           |
         2 | from mypackage.utils import helper as h
           |                                       ^ Clicking here
-          |
         info: Found 1 declaration
          --> mypackage/utils.py:2:5
           |
         2 | def helper(a, b):
           |     ------
-          |
         ");
     }
 
@@ -826,13 +787,11 @@ def another_helper(path):
           |
         2 | from mypackage.utils import helper as h
           |                ^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> mypackage/utils.py:1:1
           |
         1 |
           | -
-          |
         ");
     }
 
@@ -855,13 +814,11 @@ def another_helper(path):
           |
         7 | y = c.x
           |       ^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:9
           |
         4 |         self.x: int = 1
           |         ------
-          |
         ");
     }
 
@@ -882,13 +839,11 @@ def another_helper(path):
           |
         2 | a: "MyClass" = 1
           |     ^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:7
           |
         4 | class MyClass:
           |       -------
-          |
         "#);
     }
 
@@ -909,13 +864,11 @@ def another_helper(path):
           |
         2 | a: "None | MyClass" = 1
           |            ^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:7
           |
         4 | class MyClass:
           |       -------
-          |
         "#);
     }
 
@@ -950,13 +903,11 @@ def another_helper(path):
           |
         2 | a: "None | MyClass" = 1
           |            ^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:7
           |
         4 | class MyClass:
           |       -------
-          |
         "#);
     }
 
@@ -1005,13 +956,11 @@ def another_helper(path):
           |
         2 | a: "MyClass | No" = 1
           |     ^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:7
           |
         4 | class MyClass:
           |       -------
-          |
         "#);
     }
 
@@ -1043,13 +992,11 @@ def another_helper(path):
           |
         2 | ab: "ab"
           |      ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:1
           |
         2 | ab: "ab"
           | --
-          |
         "#);
     }
 
@@ -1081,13 +1028,11 @@ def another_helper(path):
           |
         2 | x: "list['MyClass | int'] | None"
           |           ^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:7
           |
         4 | class MyClass:
           |       -------
-          |
         "#);
     }
 
@@ -1108,13 +1053,11 @@ def another_helper(path):
           |
         2 | x: "list['int | MyClass'] | None"
           |                 ^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:7
           |
         4 | class MyClass:
           |       -------
-          |
         "#);
     }
 
@@ -1135,13 +1078,11 @@ def another_helper(path):
           |
         2 | x: "list['int | None'] | MyClass"
           |                          ^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:7
           |
         4 | class MyClass:
           |       -------
-          |
         "#);
     }
 
@@ -1162,13 +1103,11 @@ def another_helper(path):
           |
         2 | x: "list['int' | 'MyClass'] | None"
           |                   ^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:7
           |
         4 | class MyClass:
           |       -------
-          |
         "#);
     }
 
@@ -1189,13 +1128,11 @@ def another_helper(path):
           |
         2 | x: "list['MyClass' | 'str'] | None"
           |           ^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:7
           |
         4 | class MyClass:
           |       -------
-          |
         "#);
     }
 
@@ -1230,13 +1167,11 @@ def another_helper(path):
           |
         2 | x: """'list["int" | "str"]' | MyClass"""
           |                               ^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:7
           |
         4 | class MyClass:
           |       -------
-          |
         "#);
     }
 
@@ -1263,13 +1198,11 @@ def another_helper(path):
            |
         11 | y = d.y.x
            |         ^ Clicking here
-           |
         info: Found 1 declaration
          --> main.py:4:9
           |
         4 |         self.x: int = 1
           |         ------
-          |
         ");
     }
 
@@ -1292,13 +1225,11 @@ def another_helper(path):
           |
         7 | y = c.x
           |       ^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:9
           |
         4 |         self.x = 1
           |         ------
-          |
         ");
     }
 
@@ -1321,13 +1252,11 @@ def another_helper(path):
           |
         7 | res = c.foo()
           |         ^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:3:9
           |
         3 |     def foo(self):
           |         ---
-          |
         ");
     }
 
@@ -1391,13 +1320,11 @@ def outer():
           |
         8 |         return x  # Should find the nonlocal x declaration in outer scope
           |                ^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:3:5
           |
         3 |     x = "outer_value"
           |     -
-          |
         "#);
     }
 
@@ -1424,13 +1351,11 @@ def outer():
           |
         6 |         nonlocal xy
           |                  ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:3:5
           |
         3 |     xy = "outer_value"
           |     --
-          |
         "#);
     }
 
@@ -1454,13 +1379,11 @@ def function():
           |
         7 |     return global_var  # Should find the global variable declaration
           |            ^^^^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:1
           |
         2 | global_var = "global_value"
           | ----------
-          |
         "#);
     }
 
@@ -1484,13 +1407,11 @@ def function():
           |
         5 |     global global_var
           |            ^^^^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:1
           |
         2 | global_var = "global_value"
           | ----------
-          |
         "#);
     }
 
@@ -1515,13 +1436,11 @@ def function():
           |
         9 | y = b.x
           |       ^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:3:5
           |
         3 |     x = 10
           |     -
-          |
         ");
     }
 
@@ -1542,13 +1461,11 @@ def function():
           |
         4 |         case ["get", ab]:
           |                      ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:22
           |
         4 |         case ["get", ab]:
           |                      --
-          |
         "#);
     }
 
@@ -1569,13 +1486,11 @@ def function():
           |
         5 |             x = ab
           |                 ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:22
           |
         4 |         case ["get", ab]:
           |                      --
-          |
         "#);
     }
 
@@ -1596,13 +1511,11 @@ def function():
           |
         4 |         case ["get", *ab]:
           |                       ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:23
           |
         4 |         case ["get", *ab]:
           |                       --
-          |
         "#);
     }
 
@@ -1623,13 +1536,11 @@ def function():
           |
         5 |             x = ab
           |                 ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:23
           |
         4 |         case ["get", *ab]:
           |                       --
-          |
         "#);
     }
 
@@ -1650,13 +1561,11 @@ def function():
           |
         4 |         case ["get", ("a" | "b") as ab]:
           |                                     ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:37
           |
         4 |         case ["get", ("a" | "b") as ab]:
           |                                     --
-          |
         "#);
     }
 
@@ -1677,13 +1586,11 @@ def function():
           |
         5 |             x = ab
           |                 ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:4:37
           |
         4 |         case ["get", ("a" | "b") as ab]:
           |                                     --
-          |
         "#);
     }
 
@@ -1710,13 +1617,11 @@ def function():
            |
         10 |         case Click(x, button=ab):
            |                              ^^ Clicking here
-           |
         info: Found 1 declaration
           --> main.py:10:30
            |
         10 |         case Click(x, button=ab):
            |                              --
-           |
         ");
     }
 
@@ -1743,13 +1648,11 @@ def function():
            |
         11 |             x = ab
            |                 ^^ Clicking here
-           |
         info: Found 1 declaration
           --> main.py:10:30
            |
         10 |         case Click(x, button=ab):
            |                              --
-           |
         ");
     }
 
@@ -1776,13 +1679,11 @@ def function():
            |
         10 |         case Click(x, button=ab):
            |              ^^^^^ Clicking here
-           |
         info: Found 1 declaration
          --> main.py:2:7
           |
         2 | class Click:
           |       -----
-          |
         ");
     }
 
@@ -1820,13 +1721,11 @@ def function():
           |
         2 | type Alias1[AB: int = bool] = tuple[AB, list[AB]]
           |             ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:13
           |
         2 | type Alias1[AB: int = bool] = tuple[AB, list[AB]]
           |             --
-          |
         ");
     }
 
@@ -1844,13 +1743,11 @@ def function():
           |
         2 | type Alias1[AB: int = bool] = tuple[AB, list[AB]]
           |                                     ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:13
           |
         2 | type Alias1[AB: int = bool] = tuple[AB, list[AB]]
           |             --
-          |
         ");
     }
 
@@ -1869,13 +1766,11 @@ def function():
           |
         3 | type Alias2[**AB = [int, str]] = Callable[AB, tuple[AB]]
           |               ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:3:15
           |
         3 | type Alias2[**AB = [int, str]] = Callable[AB, tuple[AB]]
           |               --
-          |
         ");
     }
 
@@ -1894,13 +1789,11 @@ def function():
           |
         3 | type Alias2[**AB = [int, str]] = Callable[AB, tuple[AB]]
           |                                           ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:3:15
           |
         3 | type Alias2[**AB = [int, str]] = Callable[AB, tuple[AB]]
           |               --
-          |
         ");
     }
 
@@ -1918,13 +1811,11 @@ def function():
           |
         2 | type Alias3[*AB = ()] = tuple[tuple[*AB], tuple[*AB]]
           |              ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:14
           |
         2 | type Alias3[*AB = ()] = tuple[tuple[*AB], tuple[*AB]]
           |              --
-          |
         ");
     }
 
@@ -1942,13 +1833,11 @@ def function():
           |
         2 | type Alias3[*AB = ()] = tuple[tuple[*AB], tuple[*AB]]
           |                                      ^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:14
           |
         2 | type Alias3[*AB = ()] = tuple[tuple[*AB], tuple[*AB]]
           |              --
-          |
         ");
     }
 
@@ -1975,13 +1864,11 @@ def function():
            |
         11 | c.value = 42
            |   ^^^^^ Clicking here
-           |
         info: Found 1 declaration
          --> main.py:7:9
           |
         7 |     def value(self):
           |         -----
-          |
         ");
     }
 
@@ -2048,13 +1935,11 @@ def function():
           |
         9 |     obj.name
           |         ^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:6:5
           |
         6 |     name: str
           |     ----
-          |
         ");
     }
 
@@ -2077,13 +1962,11 @@ class MyClass:
           |
         5 |     def generic_method[T](self, value: ClassType) -> T:
           |                                        ^^^^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:3:5
           |
         3 |     ClassType = int
           |     ---------
-          |
         ");
     }
 
@@ -2104,13 +1987,11 @@ class MyClass:
           |
         5 | result = my_function(1, y=2, z=3)
           |                         ^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:2:20
           |
         2 | def my_function(x, y, z=10):
           |                    -
-          |
         ");
     }
 
@@ -2141,7 +2022,6 @@ class MyClass:
            |
         14 | result = process("hello", format="json")
            |                           ^^^^^^ Clicking here
-           |
         info: Found 2 declarations
          --> main.py:5:24
           |
@@ -2151,7 +2031,6 @@ class MyClass:
         7 | @overload
         8 | def process(data: int, format: int) -> int: ...
           |                        ------
-          |
         "#);
     }
 
@@ -2175,13 +2054,11 @@ class MyClass:
           |
         8 | TD(f=1)
           |    ^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:5:5
           |
         5 |     f: int
           |     -
-          |
         ");
     }
 
@@ -2205,13 +2082,11 @@ class MyClass:
           |
         8 | NT(f=1)
           |    ^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:5:5
           |
         5 |     f: int
           |     -
-          |
         ");
     }
 
@@ -2236,13 +2111,11 @@ class MyClass:
           |
         9 | DC(f=1)
           |    ^ Clicking here
-          |
         info: Found 1 declaration
          --> main.py:6:5
           |
         6 |     f: int
           |     -
-          |
         ");
     }
 
@@ -2269,13 +2142,11 @@ class MyClass:
            |
         11 | DC(f=1)
            |    ^ Clicking here
-           |
         info: Found 1 declaration
          --> main.py:9:24
           |
         9 |     def __init__(self, f: int) -> None: ...
           |                        -
-          |
         ");
     }
 
@@ -2303,13 +2174,11 @@ class MyClass:
            |
         12 | DC(g=1)
            |    ^ Clicking here
-           |
         info: Found 1 declaration
           --> main.py:10:5
            |
         10 |     f: int = Field(alias='g')
            |     -
-           |
         ");
     }
 
@@ -2351,7 +2220,6 @@ def ab(a: str): ...
           |
         4 | ab(1)
           | ^^ Clicking here
-          |
         info: Found 2 declarations
          --> mymodule.pyi:5:5
           |
@@ -2361,7 +2229,6 @@ def ab(a: str): ...
         7 | @overload
         8 | def ab(a: str): ...
           |     --
-          |
         ");
     }
 
@@ -2403,7 +2270,6 @@ def ab(a: str): ...
           |
         4 | ab("hello")
           | ^^ Clicking here
-          |
         info: Found 2 declarations
          --> mymodule.pyi:5:5
           |
@@ -2413,7 +2279,6 @@ def ab(a: str): ...
         7 | @overload
         8 | def ab(a: str): ...
           |     --
-          |
         "#);
     }
 
@@ -2455,7 +2320,6 @@ def ab(a: int): ...
           |
         4 | ab(1, 2)
           | ^^ Clicking here
-          |
         info: Found 2 declarations
          --> mymodule.pyi:5:5
           |
@@ -2465,7 +2329,6 @@ def ab(a: int): ...
         7 | @overload
         8 | def ab(a: int): ...
           |     --
-          |
         ");
     }
 
@@ -2507,7 +2370,6 @@ def ab(a: int): ...
           |
         4 | ab(1)
           | ^^ Clicking here
-          |
         info: Found 2 declarations
          --> mymodule.pyi:5:5
           |
@@ -2517,7 +2379,6 @@ def ab(a: int): ...
         7 | @overload
         8 | def ab(a: int): ...
           |     --
-          |
         ");
     }
 
@@ -2562,7 +2423,6 @@ def ab(a: int, *, c: int): ...
           |
         4 | ab(1, b=2)
           | ^^ Clicking here
-          |
         info: Found 3 declarations
           --> mymodule.pyi:5:5
            |
@@ -2576,7 +2436,6 @@ def ab(a: int, *, c: int): ...
         10 | @overload
         11 | def ab(a: int, *, c: int): ...
            |     --
-           |
         ");
     }
 
@@ -2621,7 +2480,6 @@ def ab(a: int, *, c: int): ...
           |
         4 | ab(1, c=2)
           | ^^ Clicking here
-          |
         info: Found 3 declarations
           --> mymodule.pyi:5:5
            |
@@ -2635,7 +2493,6 @@ def ab(a: int, *, c: int): ...
         10 | @overload
         11 | def ab(a: int, *, c: int): ...
            |     --
-           |
         ");
     }
 
@@ -2665,13 +2522,11 @@ def ab(a: int, *, c: int): ...
           |
         4 | x = subpkg
           |     ^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> mypackage/__init__.py:2:7
           |
         2 | from .subpkg.submod import val
           |       ------
-          |
         ");
     }
 
@@ -2705,11 +2560,11 @@ def ab(a: int, *, c: int): ...
           |
         2 | from .subpkg.submod import val
           |       ^^^^^^ Clicking here
-          |
         info: Found 1 declaration
-        --> mypackage/subpkg/__init__.py:1:1
-         |
-         |
+         --> mypackage/subpkg/__init__.py:1:1
+          |
+        1 |
+          | -
         ");
     }
 
@@ -2764,13 +2619,11 @@ def ab(a: int, *, c: int): ...
           |
         2 | from .subpkg.submod import val
           |              ^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> mypackage/subpkg/submod.py:1:1
           |
         1 |
           | -
-          |
         ");
     }
 
@@ -2800,13 +2653,11 @@ def ab(a: int, *, c: int): ...
           |
         2 | from .subpkg import subpkg
           |       ^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> mypackage/subpkg/__init__.py:1:1
           |
         1 |
           | -
-          |
         ");
     }
 
@@ -2836,13 +2687,11 @@ def ab(a: int, *, c: int): ...
           |
         2 | from .subpkg import subpkg
           |                     ^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> mypackage/subpkg/__init__.py:2:1
           |
         2 | subpkg: int = 10
           | ------
-          |
         ");
     }
 
@@ -2873,13 +2722,11 @@ def ab(a: int, *, c: int): ...
           |
         4 | x = subpkg
           |     ^^^^^^ Clicking here
-          |
         info: Found 1 declaration
          --> mypackage/subpkg/__init__.py:2:1
           |
         2 | subpkg: int = 10
           | ------
-          |
         ");
     }
 
@@ -2907,7 +2754,6 @@ def ab(a: int, *, c: int): ...
           |
         6 | print(a)
           |       ^ Clicking here
-          |
         info: Found 3 declarations
          --> main.py:2:1
           |
@@ -2921,7 +2767,6 @@ def ab(a: int, *, c: int): ...
         7 |
         8 | a: bool = True
           | -
-          |
         "#);
     }
 
@@ -2944,20 +2789,22 @@ def q():
           |
         5 |     return Book.objects.filter(author.name == "x")
           |                                ^^^^^^ Clicking here
-          |
         info: Found 1 declaration
           --> src/blog/models.py:10:5
            |
         10 |     author = models.ForeignKey(Author, on_delete=models.CASCADE)
            |     ------
-           |
         "#);
     }
 
     impl CursorTest {
         fn goto_declaration(&self) -> String {
             let Some(targets) = salsa::attach(&self.db, || {
-                goto_declaration(&self.db, self.cursor.file, self.cursor.offset)
+                goto_declaration(
+                    &self.db,
+                    self.program_file(self.cursor.file),
+                    self.cursor.offset,
+                )
             }) else {
                 return "No goto target found".to_string();
             };

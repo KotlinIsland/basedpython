@@ -765,6 +765,49 @@ Defaults to `false`.
 
 ---
 
+### `strict-generic-narrowing`
+
+Whether ty should use strict narrowing for unspecialized generic classes in
+`isinstance()` and `issubclass()` checks, as well as `match` class patterns.
+
+When enabled, ty narrows to the top materialization of the class. For example,
+`isinstance(value, list)` narrows a value of type `object` to `Top[list[Unknown]]`,
+representing the (infinite) union of all possible `list` specializations. Iterating
+over the list would yield values of type `object`.
+
+When disabled, ty uses gradual generic narrowing, preserving compatible type
+arguments from the original type where possible. For example,
+`isinstance(value, list)` narrows a value of type `Sequence[int]` to `list[int]`.
+If no specialization is available, the same check narrows a value of type `object`
+to `list[Unknown]`; items of any type can then be appended to the list. Class
+patterns such as `case list():` follow the same behavior.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Use the top materialization when narrowing to an unspecialized generic class
+    strict-generic-narrowing = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Use the top materialization when narrowing to an unspecialized generic class
+    strict-generic-narrowing = true
+    ```
+
+---
+
 ## `environment`
 
 ### `extra-paths`
@@ -1864,6 +1907,49 @@ Defaults to `false`.
 
 ---
 
+#### `strict-generic-narrowing`
+
+Whether ty should use strict narrowing for unspecialized generic classes in
+`isinstance()` and `issubclass()` checks, as well as `match` class patterns.
+
+When enabled, ty narrows to the top materialization of the class. For example,
+`isinstance(value, list)` narrows a value of type `object` to `Top[list[Unknown]]`,
+representing the (infinite) union of all possible `list` specializations. Iterating
+over the list would yield values of type `object`.
+
+When disabled, ty uses gradual generic narrowing, preserving compatible type
+arguments from the original type where possible. For example,
+`isinstance(value, list)` narrows a value of type `Sequence[int]` to `list[int]`.
+If no specialization is available, the same check narrows a value of type `object`
+to `list[Unknown]`; items of any type can then be appended to the list. Class
+patterns such as `case list():` follow the same behavior.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # Use the top materialization when narrowing to an unspecialized generic class
+    strict-generic-narrowing = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # Use the top materialization when narrowing to an unspecialized generic class
+    strict-generic-narrowing = true
+    ```
+
+---
+
 ## `run`
 
 ### `main`
@@ -1982,6 +2068,33 @@ to re-include `dist` use `exclude = ["!dist"]`
 
 ---
 
+### `exclude-scripts`
+
+Whether to exclude files containing PEP 723 inline script metadata unless they are
+explicitly passed on the command line.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.src]
+    exclude-scripts = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [src]
+    exclude-scripts = true
+    ```
+
+---
+
 ### `include`
 
 A list of files and directories to check. The `include` option
@@ -2057,43 +2170,6 @@ Enabled by default.
     ```toml
     [src]
     respect-ignore-files = false
-    ```
-
----
-
-### `root`
-
-!!! warning "Deprecated"
-    This option has been deprecated. Use `environment.root` instead.
-
-The root of the project, used for finding first-party modules.
-
-If left unspecified, ty will try to detect common project layouts and initialize `src.root` accordingly.
-The project root (`.`) is always included. Additionally, the following directories are included
-if they exist and are not packages (i.e. they do not contain `__init__.py` or `__init__.pyi` files):
-
-* `./src`
-* `./<project-name>` (if a `./<project-name>/<project-name>` directory exists)
-* `./python`
-
-**Default value**: `null`
-
-**Type**: `str`
-
-**Example usage**:
-
-=== "pyproject.toml"
-
-    ```toml
-    [tool.ty.src]
-    root = "./app"
-    ```
-
-=== "ty.toml"
-
-    ```toml
-    [src]
-    root = "./app"
     ```
 
 ---

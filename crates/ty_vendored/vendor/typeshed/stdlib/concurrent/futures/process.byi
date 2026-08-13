@@ -230,12 +230,17 @@ class _ExecutorManagerThread(Thread):
     work_ids_queue: Queue[int]
     pending_work_items: dict[int, _WorkItem[dynamic]]
     init(self, executor: ProcessPoolExecutor)
-    override def run(self) -> None
+    override def run(self)
     def add_call_item_to_queue(self)
     def wait_result_broken_or_wakeup(self) -> (dynamic, bool, str)
     def process_result_item(self, result_item: int | _ResultItem)
     def is_shutting_down(self) -> bool
-    def terminate_broken(self, cause: str)
+
+    if sys.version_info >= (3, 15):
+        def terminate_broken(self, cause: str, bpe_message: str | None = None) -> None
+    else:
+        def terminate_broken(self, cause: str) -> None
+
     def flag_executor_shutting_down(self)
     def shutdown_workers(self)
     def join_executor_internals(self)

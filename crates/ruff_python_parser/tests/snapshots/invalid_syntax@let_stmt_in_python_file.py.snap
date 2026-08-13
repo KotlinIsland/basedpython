@@ -83,4 +83,3 @@ Module(
   |
 1 | let Point(x, y) := origin
   | ^^^^^^^^^^^^^^^ Syntax Error: a destructuring `let` is not valid in .py files
-  |

@@ -20,4 +20,4 @@ class FixRenames(fixer_base.BaseFix):
     order: ClassVar["pre"]
     PATTERN: ClassVar[str]
     override def match(self, node)
-    override def transform(self, node, results) -> None
+    override def transform(self, node, results)

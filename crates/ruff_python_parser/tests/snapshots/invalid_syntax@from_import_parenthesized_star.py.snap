@@ -47,4 +47,3 @@ Module(
   |
 1 | from x import (*)
   |               ^^ Syntax Error: Star import cannot be parenthesized
-  |

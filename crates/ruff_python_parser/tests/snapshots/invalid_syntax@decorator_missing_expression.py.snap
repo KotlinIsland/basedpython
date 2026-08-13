@@ -288,4 +288,3 @@ Module(
 7 | | @
 8 | | class Test
   | |__________^ Syntax Error: class without body requires `: ...` in .py files
-  |

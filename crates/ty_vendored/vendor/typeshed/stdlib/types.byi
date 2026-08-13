@@ -351,8 +351,8 @@ else:
         init(self, **kwargs: dynamic)
         override def __eq__(self, value: object, /) -> bool
         override def __getattribute__(self, name: str, /) -> dynamic
-        override def __setattr__(self, name: str, value: dynamic, /) -> None
-        override def __delattr__(self, name: str, /) -> None
+        override def __setattr__(self, name: str, value: dynamic, /)
+        override def __delattr__(self, name: str, /)
 
 @disjoint_base
 class ModuleType:
@@ -495,7 +495,7 @@ final class AsyncGeneratorType[out Yield, in Send = None](AsyncGenerator[Yield, 
 
 # Non-default variations to accommodate coroutines
 
-final class CoroutineType[out Yield, in Send, out Return](Coroutine[Yield, Send, Return]):
+final class CoroutineType[out Yield, in SendT_nd, out ReturnT_nd](Coroutine[Yield, SendT_nd, ReturnT_nd]):
     __name__: str
     """name of the coroutine"""
 
@@ -516,13 +516,13 @@ final class CoroutineType[out Yield, in Send, out Return](Coroutine[Yield, Send,
         def cr_state(self) -> "CORO_CREATED" | "CORO_SUSPENDED" | "CORO_RUNNING" | "CORO_CLOSED":
             """state of the coroutine"""
 
-    override def close(self) -> None:
+    override def close(self):
         """close() -> raise GeneratorExit inside coroutine."""
 
-    override def __await__(self) -> Generator[dynamic, None, Return]:
+    override def __await__(self) -> Generator[dynamic, None, ReturnT_nd]:
         """Return an iterator to be used in await expression."""
 
-    override def send(self, arg: Send, /) -> Yield:
+    override def send(self, arg: SendT_nd, /) -> Yield:
         """send(arg) -> send 'arg' into coroutine,
         return next iterated value or raise StopIteration.
         """
@@ -816,8 +816,8 @@ class DynamicClassAttribute(property):
         doc: str | None = None,
     )
     override def __get__(self, instance: dynamic, ownerclass: type | None = None) -> dynamic
-    override def __set__(self, instance: dynamic, value: dynamic) -> None
-    override def __delete__(self, instance: dynamic) -> None
+    override def __set__(self, instance: dynamic, value: dynamic)
+    override def __delete__(self, instance: dynamic)
     override def getter(self, fget: (dynamic) -> dynamic) -> DynamicClassAttribute
     override def setter(self, fset: (dynamic, dynamic) -> object) -> DynamicClassAttribute
     override def deleter(self, fdel: (dynamic) -> object) -> DynamicClassAttribute

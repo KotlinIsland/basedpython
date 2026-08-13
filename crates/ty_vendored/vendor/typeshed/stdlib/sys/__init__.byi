@@ -79,7 +79,7 @@ from collections.abc import AsyncGenerator, Callable, Sequence
 from io import TextIOWrapper
 from types import FrameType, ModuleType, SimpleNamespace, TracebackType
 from typing import Final, Literal, Protocol, TypeAlias, TypeVar, final, type_check_only
-from typing_extensions import LiteralString, deprecated
+from typing_extensions import Never, deprecated
 
 private type LazyImportMode = "normal" | "all" | "none"
 private type LazyImportFilter = (str | None, str, (*: str) | None) -> bool
@@ -134,7 +134,7 @@ orig_argv: list[str]
 path: list[str]
 path_hooks: list[(str) -> PathEntryFinderProtocol]
 path_importer_cache: dict[str, PathEntryFinderProtocol | None]
-platform: LiteralString
+platform: literal str
 platlibdir: str
 prefix: str
 pycache_prefix: str | None
@@ -572,7 +572,7 @@ if sys.version_info >= (3, 11):
         if no such exception exists.
         """
 
-def exit(status: _ExitCode = None, /) -> NoReturn:
+def exit(status: _ExitCode = None, /) -> Never:
     """Exit the interpreter by raising SystemExit(status).
 
     If the status is omitted or None, it defaults to zero (i.e., success).
@@ -597,10 +597,10 @@ if sys.platform != "win32":
         The flag constants are defined in the os module.
         """
 
-def getfilesystemencoding() -> LiteralString:
+def getfilesystemencoding() -> literal str:
     """Return the encoding used to convert Unicode filenames to OS filenames."""
 
-def getfilesystemencodeerrors() -> LiteralString:
+def getfilesystemencodeerrors() -> literal str:
     """Return the error mode used Unicode to OS filename conversion."""
 
 if sys.version_info >= (3, 15):
@@ -697,7 +697,7 @@ if sys.platform == "win32":
         intended for identifying the OS rather than feature detection.
         """
 
-def intern(string: LiteralString, /) -> LiteralString:
+def intern(string: literal str, /) -> literal str:
     """``Intern'' the given string.
 
     This enters the string in the (global) table of interned strings whose
@@ -917,7 +917,7 @@ if sys.version_info >= (3, 12):
             """Activate stack profiler trampoline *backend*."""
 
     else:
-        def activate_stack_trampoline(backend: str, /) -> NoReturn:
+        def activate_stack_trampoline(backend: str, /) -> Never:
             """Activate stack profiler trampoline *backend*."""
 
     from . import _monitoring

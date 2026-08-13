@@ -36,6 +36,7 @@ use crate::Db;
 use crate::place::{
     builtins_symbol, is_basedpython_implicit_typing_name, module_type_implicit_global_symbol,
 };
+use crate::types::ProgramEnvironment;
 
 /// whether an ordinary lexical lookup owns `name`: a binding or a declaration
 /// anywhere in the visible scope chain, or a builtin
@@ -50,13 +51,14 @@ use crate::place::{
 /// nested scope), matching the free-variable walk of a name load
 pub(crate) fn claimed_by_lexical_scope(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     file: File,
     scope: ScopeId<'_>,
     name: &str,
 ) -> bool {
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, db.program_file(file));
     for (ancestor_id, _) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
-        let ancestor_scope = ancestor_id.to_scope_id(db, file);
+        let ancestor_scope = ancestor_id.to_scope_id(db, db.program_file(file));
         if place_table(db, ancestor_scope)
             .symbol_by_name(name)
             .is_some_and(|symbol| symbol.is_bound() || symbol.is_declared())
@@ -64,7 +66,7 @@ pub(crate) fn claimed_by_lexical_scope(
             return true;
         }
     }
-    !builtins_symbol(db, name).place.is_undefined()
+    !builtins_symbol(db, env, name).place.is_undefined()
 }
 
 /// [`claimed_by_lexical_scope`], and additionally every name ty resolves with no
@@ -77,14 +79,15 @@ pub(crate) fn claimed_by_lexical_scope(
 /// lowered it as a receiver member or a lookup path
 pub(crate) fn claimed_by_name_resolution(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     file: File,
     scope: ScopeId<'_>,
     name: &str,
 ) -> bool {
-    claimed_by_lexical_scope(db, file, scope, name)
+    claimed_by_lexical_scope(db, env, file, scope, name)
         // states the intent directly rather than leaning on the fact that the
         // builtins lookup above happens to fall back to `types.ModuleType` too
-        || !module_type_implicit_global_symbol(db, file, name)
+        || !module_type_implicit_global_symbol(db, db.program_file(file), name)
             .place
             .is_undefined()
         || is_basedpython_implicit_typing_name(name)
@@ -109,19 +112,28 @@ mod tests {
         let mut db = setup_db();
         db.write_file("/src/a.by", "x = 1\n").unwrap();
         let file = system_path_to_file(&db, "/src/a.by").unwrap();
-        let scope = global_scope(&db, file);
+        let scope = global_scope(&db, crate::Db::program_file(&db, file));
 
         // a binding and a builtin: both gates own these
         for name in ["x", "int"] {
-            assert!(claimed_by_lexical_scope(&db, file, scope, name), "{name}");
-            assert!(claimed_by_name_resolution(&db, file, scope, name), "{name}");
+            assert!(
+                claimed_by_lexical_scope(&db, &db.program_environment(), file, scope, name),
+                "{name}"
+            );
+            assert!(
+                claimed_by_name_resolution(&db, &db.program_environment(), file, scope, name),
+                "{name}"
+            );
         }
 
         // a name nothing claims: both gates leave it for the fallbacks
         for name in ["nonesuch", "Red"] {
-            assert!(!claimed_by_lexical_scope(&db, file, scope, name), "{name}");
             assert!(
-                !claimed_by_name_resolution(&db, file, scope, name),
+                !claimed_by_lexical_scope(&db, &db.program_environment(), file, scope, name),
+                "{name}"
+            );
+            assert!(
+                !claimed_by_name_resolution(&db, &db.program_environment(), file, scope, name),
                 "{name}"
             );
         }
@@ -130,14 +142,23 @@ mod tests {
         // builtins lookup already falls back to `types.ModuleType`, so the wider
         // gate's own module-global check only ever repeats an answer it has
         for name in ["__name__", "__spec__", "__debug__", "__file__"] {
-            assert!(claimed_by_lexical_scope(&db, file, scope, name), "{name}");
+            assert!(
+                claimed_by_lexical_scope(&db, &db.program_environment(), file, scope, name),
+                "{name}"
+            );
         }
 
         // the whole of the difference: the basedpython implicit `typing` names, and
         // the two implicit names that have no stub to resolve through
         for name in ["Optional", "Self", "Sequence", "Character", "Some"] {
-            assert!(!claimed_by_lexical_scope(&db, file, scope, name), "{name}");
-            assert!(claimed_by_name_resolution(&db, file, scope, name), "{name}");
+            assert!(
+                !claimed_by_lexical_scope(&db, &db.program_environment(), file, scope, name),
+                "{name}"
+            );
+            assert!(
+                claimed_by_name_resolution(&db, &db.program_environment(), file, scope, name),
+                "{name}"
+            );
         }
     }
 }

@@ -16,6 +16,7 @@ use ruff_db::system::SystemPath;
 use rustc_hash::FxHashMap;
 
 use crate::db::Db;
+use crate::environment::ResolverEnvironment;
 use crate::module::Module;
 
 /// The name of a distribution, as `pyproject.toml` and `site-packages` spell it.
@@ -175,12 +176,15 @@ fn top_level_of<'db>(db: &'db dyn Db, module: Module<'db>) -> Option<&'db str> {
 
 /// The distributions installed into every `site-packages` directory ty resolved.
 #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
-pub fn distribution_index(db: &dyn Db) -> DistributionIndex {
+pub fn distribution_index<'db>(
+    db: &'db dyn Db,
+    resolver_environment: ResolverEnvironment<'db>,
+) -> DistributionIndex {
     let _span = tracing::debug_span!("distribution_index").entered();
 
     let mut owners: FxHashMap<Box<str>, Vec<DistributionName>> = FxHashMap::default();
 
-    for site_packages in db.search_paths().site_packages_paths() {
+    for site_packages in resolver_environment.search_paths(db).site_packages_paths() {
         index_site_packages(db, site_packages, &mut owners);
     }
 
@@ -471,11 +475,11 @@ types_requests-2.32.0.dist-info/RECORD,,
 
         fn owners(db: &TestDb, module: &str) -> Vec<String> {
             let module_name = ModuleName::new(module).unwrap();
-            let module = all_modules(db)
+            let module = all_modules(db, db.resolver_environment())
                 .into_iter()
                 .find(|listed| listed.name(db) == &module_name)
                 .unwrap_or_else(|| panic!("`{module}` should resolve"));
-            distribution_index(db)
+            distribution_index(db, db.resolver_environment())
                 .owners_of(db, module)
                 .iter()
                 .map(ToString::to_string)
@@ -524,7 +528,7 @@ types_requests-2.32.0.dist-info/RECORD,,
                 ],
             );
 
-            let index = distribution_index(&db);
+            let index = distribution_index(&db, db.resolver_environment());
             let mut owners: Vec<_> = index
                 .owners_of_top_level("google")
                 .iter()
@@ -547,7 +551,7 @@ types_requests-2.32.0.dist-info/RECORD,,
         fn a_distribution_without_a_record_is_skipped() {
             let (db, _) = case(&[("orphan/__init__.py", "")], &[]);
 
-            assert!(distribution_index(&db).is_empty());
+            assert!(distribution_index(&db, db.resolver_environment()).is_empty());
             assert!(owners(&db, "orphan").is_empty());
         }
 
@@ -559,7 +563,7 @@ types_requests-2.32.0.dist-info/RECORD,,
             );
 
             assert!(
-                distribution_index(&db)
+                distribution_index(&db, db.resolver_environment())
                     .owners_of_top_level("numpy")
                     .is_empty()
             );
@@ -583,7 +587,7 @@ types_requests-2.32.0.dist-info/RECORD,,
             );
 
             assert!(
-                distribution_index(&db)
+                distribution_index(&db, db.resolver_environment())
                     .owners_of_top_level("extra")
                     .is_empty()
             );

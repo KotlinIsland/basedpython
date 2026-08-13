@@ -6,7 +6,7 @@ use lsp_types::{
     PrepareRenameParams, PrepareRenamePlaceholder, PrepareRenameRequest, PrepareRenameResult, Uri,
 };
 use ty_ide::{PreparedTemplateRename, can_rename, django_prepare_rename};
-use ty_project::ProjectDatabase;
+use ty_project::{ProjectDatabase, SemanticDb as _};
 
 use crate::document::{PositionExt, ToRangeExt};
 use crate::server::api::Error;
@@ -57,7 +57,7 @@ impl BackgroundDocumentRequestHandler for PrepareRenameRequestHandler {
 
         // a python symbol is answered exactly as it was; the django names a
         // module writes as plain strings are what is left over once it declines
-        if !template && let Some(range) = can_rename(db, file, offset) {
+        if !template && let Some(range) = can_rename(db, db.program_file(file), offset) {
             return Ok(range
                 .to_lsp_range(db, file, snapshot.encoding())
                 .map(|lsp_range| lsp_range.local_range().into()));

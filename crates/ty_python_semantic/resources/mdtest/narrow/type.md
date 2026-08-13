@@ -180,14 +180,14 @@ def h(x: object):
     if type(x) is list:
         reveal_type(x)  # revealed: Top[list[Unknown]]
     elif type(x) is frozenset:
-        reveal_type(x)  # revealed: frozenset[object]
+        reveal_type(x)  # revealed: frozenset[Hashable]
     else:
         reveal_type(x)  # revealed: object
 
     if type(x) is not list and type(x) is not frozenset:
         reveal_type(x)  # revealed: object
     else:
-        reveal_type(x)  # revealed: Top[list[Unknown]] | frozenset[object]
+        reveal_type(x)  # revealed: Top[list[Unknown]] | frozenset[Hashable]
 ```
 
 ## No narrowing for `type(x) is C[int]`
@@ -212,7 +212,7 @@ def f(x: A[int] | B):
         reveal_type(x)  # revealed: A[int] | B
 
     if type(x) is A:
-        reveal_type(x)  # revealed: A[int]
+        reveal_type(x)  # revealed: A[int] | (B & A[object])
     else:
         reveal_type(x)  # revealed: A[int] | B
 
@@ -230,7 +230,7 @@ def f(x: A[int] | B):
     if type(x) is not A:
         reveal_type(x)  # revealed: A[int] | B
     else:
-        reveal_type(x)  # revealed: A[int]
+        reveal_type(x)  # revealed: A[int] | (B & A[object])
 
     if type(x) is not B:
         reveal_type(x)  # revealed: A[int] | B

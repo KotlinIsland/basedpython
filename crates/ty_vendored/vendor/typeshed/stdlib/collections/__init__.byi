@@ -31,7 +31,7 @@ from collections.abc import (
 )
 from types import GenericAlias
 from typing import ClassVar, Generic, TypeVar, final, type_check_only
-from typing_extensions import Self, disjoint_base
+from typing_extensions import Never, Self, disjoint_base
 
 if sys.version_info >= (3, 15):
     from builtins import frozendict
@@ -98,8 +98,8 @@ class UserDict[in out Key, in out Value](MutableMapping[Key, Value]):
 
     override def __len__(self) -> int
     override def __getitem__(self, key: Key) -> Value
-    override def __setitem__(self, key: Key, item: Value) -> None
-    override def __delitem__(self, key: Key) -> None
+    override def __setitem__(self, key: Key, item: Value)
+    override def __delitem__(self, key: Key)
     override def __iter__(self) -> Iterator[Key]
     override def __contains__(self, key: object) -> bool
     def copy(self) -> Self
@@ -151,17 +151,17 @@ class UserList[in out Element](MutableSequence[Element]):
     override def __setitem__(self, i: SupportsIndex, item: Element) -> None
     def __setitem__(self, i: slice[SupportsIndex | None], item: Iterable[Element]) -> None
 
-    override def __delitem__(self, i: SupportsIndex | slice[SupportsIndex | None]) -> None
+    override def __delitem__(self, i: SupportsIndex | slice[SupportsIndex | None])
     def __add__(self, other: Iterable[Element]) -> Self
     def __radd__(self, other: Iterable[Element]) -> Self
     override def __iadd__(self, other: Iterable[Element]) -> Self
     def __mul__(self, n: int) -> Self
     def __rmul__(self, n: int) -> Self
     def __imul__(self, n: int) -> Self
-    override def append(self, item: Element) -> None
-    override def insert(self, i: int, item: Element) -> None
+    override def append(self, item: Element)
+    override def insert(self, i: int, item: Element)
     override def pop(self, i: int = -1) -> Element
-    override def remove(self, item: Element) -> None
+    override def remove(self, item: Element)
     def copy(self) -> Self
     def __copy__(self) -> Self
     override def count(self, item: Element) -> int
@@ -174,7 +174,7 @@ class UserList[in out Element](MutableSequence[Element]):
     def sort(self: UserList[SupportsRichComparisonT], *, key: None = None, reverse: bool = False) -> None
     def sort(self, *, key: (Element) -> SupportsRichComparison, reverse: bool = False) -> None
 
-    override def extend(self, other: Iterable[Element]) -> None
+    override def extend(self, other: Iterable[Element])
 
 class UserString(Sequence[UserString]):
     data: str
@@ -257,7 +257,7 @@ class deque[in out Element](MutableSequence[Element]):
     init(self, *, maxlen: int | None = None)
     init(self, iterable: Iterable[Element], maxlen: int | None = None)
 
-    override def append(self, x: Element, /) -> None:
+    override def append(self, x: Element, /):
         """Add an element to the right side of the deque."""
 
     def appendleft(self, x: Element, /):
@@ -269,13 +269,13 @@ class deque[in out Element](MutableSequence[Element]):
     override def count(self, x: Element, /) -> int:
         """Return number of occurrences of value."""
 
-    override def extend(self, iterable: Iterable[Element], /) -> None:
+    override def extend(self, iterable: Iterable[Element], /):
         """Extend the right side of the deque with elements from the iterable."""
 
     def extendleft(self, iterable: Iterable[Element], /):
         """Extend the left side of the deque with elements from the iterable."""
 
-    override def insert(self, i: int, x: Element, /) -> None:
+    override def insert(self, i: int, x: Element, /):
         """Insert value before index."""
 
     override def index(self, x: Element, start: int = 0, stop: int = ..., /) -> int:
@@ -290,7 +290,7 @@ class deque[in out Element](MutableSequence[Element]):
     def popleft(self) -> Element:
         """Remove and return the leftmost element."""
 
-    override def remove(self, value: Element, /) -> None:
+    override def remove(self, value: Element, /):
         """Remove first occurrence of value."""
 
     def rotate(self, n: int = 1, /):
@@ -307,10 +307,10 @@ class deque[in out Element](MutableSequence[Element]):
     override def __getitem__(self, key: SupportsIndex, /) -> Element:
         """Return self[key]."""
 
-    override def __setitem__(self, key: SupportsIndex, value: Element, /) -> None:
+    override def __setitem__(self, key: SupportsIndex, value: Element, /):
         """Set self[key] to value."""
 
-    override def __delitem__(self, key: SupportsIndex, /) -> None:
+    override def __delitem__(self, key: SupportsIndex, /):
         """Delete self[key]."""
 
     override def __contains__(self, key: object, /) -> bool:
@@ -327,6 +327,9 @@ class deque[in out Element](MutableSequence[Element]):
 
     def __mul__(self, value: int, /) -> Self:
         """Return self*value."""
+
+    def __rmul__(self, value: int, /) -> Self:
+        """Return value*self."""
 
     def __imul__(self, value: int, /) -> Self:
         """Implement self*=value."""
@@ -430,7 +433,7 @@ class Counter[in out Element](dict[Element, int]):
 
         """
 
-    override class def fromkeys(cls, iterable: dynamic, v: int | None = None) -> NoReturn
+    override class def fromkeys(cls, iterable: dynamic, v: int | None = None) -> Never
 
     def subtract(self, iterable: None = None, /) -> None:
         """Like dict.update() but subtracts counts instead of replacing them.
@@ -479,7 +482,7 @@ class Counter[in out Element](dict[Element, int]):
     def __missing__(self, key: Element) -> int:
         """The count of elements not in the Counter is zero."""
 
-    override def __delitem__(self, elem: object) -> None:
+    override def __delitem__(self, elem: object):
         """Like dict.__delitem__() but does not raise KeyError for missing values."""
 
     override def __eq__(self, other: object) -> bool:
@@ -804,8 +807,8 @@ class ChainMap[in out Key, in out Value](MutableMapping[Key, Value]):
 
     let parents: Self
 
-    override def __setitem__(self, key: Key, value: Value) -> None
-    override def __delitem__(self, key: Key) -> None
+    override def __setitem__(self, key: Key, value: Value)
+    override def __delitem__(self, key: Key)
     override def __getitem__(self, key: Key) -> Value
     override def __iter__(self) -> Iterator[Key]
     override def __len__(self) -> int

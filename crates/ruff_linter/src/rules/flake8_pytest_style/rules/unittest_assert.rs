@@ -228,7 +228,7 @@ impl UnittestAssert {
     }
 
     /// Create a map from argument name to value.
-    pub(crate) fn args_map<'a>(
+    fn args_map<'a>(
         &'a self,
         args: &'a [Expr],
         keywords: &'a [Keyword],
@@ -397,7 +397,7 @@ impl UnittestAssert {
                         range: TextRange::default(),
                         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                     },
-                    range: TextRange::default(),
+                    range_start: ruff_text_size::TextSize::default(),
                     node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                     is_cast: false,
                     is_checked_cast: false,
@@ -450,7 +450,7 @@ impl UnittestAssert {
                         range: TextRange::default(),
                         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                     },
-                    range: TextRange::default(),
+                    range_start: ruff_text_size::TextSize::default(),
                     node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                     is_cast: false,
                     is_checked_cast: false,

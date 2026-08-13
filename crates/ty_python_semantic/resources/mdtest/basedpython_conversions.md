@@ -794,6 +794,8 @@ reveal_type(d)  # revealed: dict[str, Show]
 ```by
 protocol Show:
     def show(self) -> str
+    # a `frozenset` element has to be `Hashable`
+    def __hash__(self) -> int
 
 extension str(Show):
     override def show(self) -> str:

@@ -16,6 +16,7 @@ use super::index::{BindingOrigin, TemplateIndex, TemplateReference};
 use super::lexer::TokenKind;
 use super::project;
 use super::resolve;
+use ty_python_semantic::ProgramEnvironment;
 
 /// a hint written into a template between what the template itself says
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +38,7 @@ pub enum TemplateInlayHintKind {
 /// every hint `range` of the template `file` shows
 pub(crate) fn inlay_hints(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     file: File,
     index: &TemplateIndex,
     source: &str,
@@ -46,7 +48,7 @@ pub(crate) fn inlay_hints(
     let mut hints = Vec::new();
 
     if settings.template_binding_types {
-        binding_types(db, file, index, source, range, &mut hints);
+        binding_types(db, env, file, index, source, range, &mut hints);
     }
 
     if settings.resolved_templates {
@@ -62,6 +64,7 @@ pub(crate) fn inlay_hints(
 /// the element type each `{% for %}` binding takes
 fn binding_types(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     file: File,
     index: &TemplateIndex,
     source: &str,
@@ -93,6 +96,7 @@ fn binding_types(
 
         let Some(ty) = resolve::path_type(
             db,
+            env,
             file,
             index,
             source,
@@ -104,7 +108,7 @@ fn binding_types(
 
         hints.push(TemplateInlayHint {
             position: binding.range.end(),
-            label: format!(": {}", ty.display(db)),
+            label: format!(": {}", ty.display(db, env)),
             kind: TemplateInlayHintKind::Type,
         });
     }

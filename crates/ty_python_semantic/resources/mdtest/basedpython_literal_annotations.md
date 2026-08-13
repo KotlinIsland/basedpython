@@ -58,8 +58,8 @@ reveal_type(b)  # revealed: 2j
 ```by
 class A[T]: ...
 
-a: A[T=int] = A()
-reveal_type(a)  # revealed: A[int]
+def f(a: A[T=int]):
+    reveal_type(a)  # revealed: A[int]
 ```
 
 ## keyword type-arg binding reorders by name
@@ -67,8 +67,8 @@ reveal_type(a)  # revealed: A[int]
 ```by
 class B[T, R]: ...
 
-a: B[R=str, T=int] = B()
-reveal_type(a)  # revealed: B[int, str]
+def f(a: B[R=str, T=int]):
+    reveal_type(a)  # revealed: B[int, str]
 ```
 
 ## keyword type-arg binding falls back to typevar default
@@ -81,8 +81,8 @@ python-version = "3.13"
 ```by
 class C[T = int, R = str]: ...
 
-a: C[R=int] = C()
-reveal_type(a)  # revealed: C[int, int]
+def f(a: C[R=int]):
+    reveal_type(a)  # revealed: C[int, int]
 ```
 
 ## forward self-reference works without quotes

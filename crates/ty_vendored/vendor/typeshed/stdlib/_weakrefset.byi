@@ -10,10 +10,10 @@ class WeakSet[in out Element](MutableSet[Element]):
     init(self, data: None = None)
     init(self, data: Iterable[Element])
 
-    override def add(self, item: Element) -> None
-    override def discard(self, item: Element) -> None
+    override def add(self, item: Element)
+    override def discard(self, item: Element)
     def copy(self) -> Self
-    override def remove(self, item: Element) -> None
+    override def remove(self, item: Element)
     def update(self, other: Iterable[Element])
     __hash__: ClassVar[None]
     override def __contains__(self, item: object) -> bool

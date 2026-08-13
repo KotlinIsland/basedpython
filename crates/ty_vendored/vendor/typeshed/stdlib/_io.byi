@@ -702,7 +702,7 @@ class _TextIOBase(_IOBase):
         (which is always equal to the length of the string).
         """
 
-    override def writelines(self, lines: Iterable[str], /) -> None:
+    override def writelines(self, lines: Iterable[str], /):
         """Write a list of lines to stream.
 
         Line separators are not added, so it is usual for each of the

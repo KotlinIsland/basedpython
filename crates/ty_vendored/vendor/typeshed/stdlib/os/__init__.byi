@@ -49,20 +49,20 @@ from io import BufferedRandom, BufferedReader, BufferedWriter, FileIO, TextIOWra
 from subprocess import Popen
 from types import GenericAlias, TracebackType
 from typing import Final, Generic, Literal, Protocol, TypeAlias, TypeVar, final, runtime_checkable, type_check_only
-from typing_extensions import LiteralString, Self, Unpack, deprecated
+from typing_extensions import Never, Self, Unpack, deprecated
 
 from . import path as _path
 
 # Re-export common definitions from os.path to reduce duplication
-from .path import (
-    altsep as altsep,
-    curdir as curdir,
-    defpath as defpath,
-    devnull as devnull,
-    extsep as extsep,
-    pardir as pardir,
-    pathsep as pathsep,
-    sep as sep,
+from .path export (
+    altsep,
+    curdir,
+    defpath,
+    devnull,
+    extsep,
+    pardir,
+    pathsep,
+    sep,
 )
 
 __all__ = [
@@ -750,7 +750,7 @@ if sys.platform != "win32":
     final ST_RDONLY: int
 
 linesep: "\n" | "\r\n"
-name: LiteralString
+name: literal str
 
 F_OK: Final = 0
 R_OK: Final = 4
@@ -788,9 +788,9 @@ class _Environ(MutableMapping[AnyStr, AnyStr], Generic[AnyStr]):
 
     override def setdefault(self, key: AnyStr, value: AnyStr) -> AnyStr
     def copy(self) -> dict[AnyStr, AnyStr]
-    override def __delitem__(self, key: AnyStr) -> None
+    override def __delitem__(self, key: AnyStr)
     override def __getitem__(self, key: AnyStr) -> AnyStr
-    override def __setitem__(self, key: AnyStr, value: AnyStr) -> None
+    override def __setitem__(self, key: AnyStr, value: AnyStr)
     override def __iter__(self) -> Iterator[AnyStr]
     override def __len__(self) -> int
     def __or__[T1, T2](self, other: Mapping[T1, T2]) -> dict[AnyStr | T1, AnyStr | T2]
@@ -2357,7 +2357,7 @@ if sys.platform != "win32":
             of the file the link points to.
             """
 
-def abort() -> NoReturn:
+def abort() -> Never:
     """Abort the interpreter immediately.
 
     This function 'dumps core' or otherwise fails in the hardest way
@@ -2365,14 +2365,14 @@ def abort() -> NoReturn:
     """
 
 # These are defined as execl(file, *args) but the first *arg is mandatory.
-def execl(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]])) -> NoReturn:
+def execl(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]])) -> Never:
     """execl(file, *args)
 
     Execute the executable file with argument list args, replacing the
     current process.
     """
 
-def execlp(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]])) -> NoReturn:
+def execlp(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]])) -> Never:
     """execlp(file, *args)
 
     Execute the executable file (which is searched for along $PATH)
@@ -2380,14 +2380,14 @@ def execlp(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrByte
     """
 
 # These are: execle(file, *args, env) but env is pulled from the last element of the args.
-def execle(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], ExecEnv)) -> NoReturn:
+def execle(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], ExecEnv)) -> Never:
     """execle(file, *args, env)
 
     Execute the executable file with argument list args and
     environment env, replacing the current process.
     """
 
-def execlpe(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], ExecEnv)) -> NoReturn:
+def execlpe(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], ExecEnv)) -> Never:
     """execlpe(file, *args, env)
 
     Execute the executable file (which is searched for along $PATH)
@@ -2416,7 +2416,7 @@ private type ExecVArgs = (
 # we limit to str | bytes.
 private type ExecEnv = Mapping[bytes, bytes | str] | Mapping[str, bytes | str]
 
-def execv(path: StrOrBytesPath, argv: ExecVArgs, /) -> NoReturn:
+def execv(path: StrOrBytesPath, argv: ExecVArgs, /) -> Never:
     """Execute an executable path with arguments, replacing current process.
 
     path
@@ -2425,7 +2425,7 @@ def execv(path: StrOrBytesPath, argv: ExecVArgs, /) -> NoReturn:
       Tuple or list of strings.
     """
 
-def execve(path: FileDescriptorOrPath, argv: ExecVArgs, env: ExecEnv) -> NoReturn:
+def execve(path: FileDescriptorOrPath, argv: ExecVArgs, env: ExecEnv) -> Never:
     """Execute an executable path with arguments, replacing current process.
 
     path
@@ -2436,7 +2436,7 @@ def execve(path: FileDescriptorOrPath, argv: ExecVArgs, env: ExecEnv) -> NoRetur
       Dictionary of strings mapping to strings.
     """
 
-def execvp(file: StrOrBytesPath, args: ExecVArgs) -> NoReturn:
+def execvp(file: StrOrBytesPath, args: ExecVArgs) -> Never:
     """execvp(file, args)
 
     Execute the executable file (which is searched for along $PATH)
@@ -2444,7 +2444,7 @@ def execvp(file: StrOrBytesPath, args: ExecVArgs) -> NoReturn:
     args may be a list or tuple of strings.
     """
 
-def execvpe(file: StrOrBytesPath, args: ExecVArgs, env: ExecEnv) -> NoReturn:
+def execvpe(file: StrOrBytesPath, args: ExecVArgs, env: ExecEnv) -> Never:
     """execvpe(file, args, env)
 
     Execute the executable file (which is searched for along $PATH)
@@ -2453,7 +2453,7 @@ def execvpe(file: StrOrBytesPath, args: ExecVArgs, env: ExecEnv) -> NoReturn:
     args may be a list or tuple of strings.
     """
 
-def _exit(status: int) -> NoReturn:
+def _exit(status: int) -> Never:
     """Exit to the system with specified status, without normal exit processing."""
 
 def kill(pid: int, signal: int, /):
@@ -3235,8 +3235,8 @@ if sys.platform == "linux":
     def pidfd_open(pid: int, flags: int = 0) -> int:
         """Return a file descriptor referring to the process *pid*.
 
-        The descriptor can be used to perform process management without races and
-        signals.
+        The descriptor can be used to perform process management without races
+        and signals.
         """
 
 if sys.version_info >= (3, 12) and sys.platform == "linux":

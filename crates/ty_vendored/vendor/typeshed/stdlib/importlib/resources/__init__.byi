@@ -22,7 +22,7 @@ else:
     from importlib.abc import Traversable
 
 if sys.version_info >= (3, 11):
-    from importlib.resources._common import Package as Package
+    from importlib.resources._common export Package
 else:
     type Package = str | ModuleType
 
@@ -49,19 +49,19 @@ elif sys.version_info < (3, 13):
     type Resource = str
 
 if sys.version_info >= (3, 12):
-    from importlib.resources._common import Anchor as Anchor
+    from importlib.resources._common export Anchor
 
     __all__ += ["Anchor"]
 
 if sys.version_info >= (3, 13):
-    from importlib.resources._functional import (
-        contents as contents,
-        is_resource as is_resource,
-        open_binary as open_binary,
-        open_text as open_text,
-        path as path,
-        read_binary as read_binary,
-        read_text as read_text,
+    from importlib.resources._functional export (
+        contents,
+        is_resource,
+        open_binary,
+        open_text,
+        path,
+        read_binary,
+        read_text,
     )
 
 else:
@@ -97,7 +97,7 @@ else:
         Directories are *not* resources.
         """
 
-    @deprecated("Deprecated since Python 3.11. Use `files(anchor).iterdir()`.")
+    @deprecated("Deprecated; limited resource support. Use `files(anchor).iterdir()`.")
     def contents(package: Package) -> Iterator[str]:
         """Return an iterable of entries in `package`.
 
@@ -107,7 +107,7 @@ else:
         """
 
 if sys.version_info >= (3, 11):
-    from importlib.resources._common import as_file as as_file
+    from importlib.resources._common export as_file
 else:
     def as_file(path: Traversable) -> AbstractContextManager[Path, False]:
         """
@@ -116,7 +116,7 @@ else:
         """
 
 if sys.version_info >= (3, 11):
-    from importlib.resources._common import files as files
+    from importlib.resources._common export files
 else:
     def files(package: Package) -> Traversable:
         """
@@ -124,6 +124,6 @@ else:
         """
 
 if sys.version_info >= (3, 11):
-    from importlib.resources.abc import ResourceReader as ResourceReader
+    from importlib.resources.abc export ResourceReader
 else:
-    from importlib.abc import ResourceReader as ResourceReader
+    from importlib.abc export ResourceReader

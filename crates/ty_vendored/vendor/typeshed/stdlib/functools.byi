@@ -92,7 +92,7 @@ final class _lru_cache_wrapper[Fn: (...) -> object]:
     """
 
     __wrapped__: Fn
-    def __call__[Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(**Parameters) -> R], *args: *Parameters, **kwargs: **Parameters) -> R:
+    def __call__[Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(**Parameters) -> R], *args: Parameters.args, **kwargs: Parameters.kwargs) -> R:
         """Call self as a function."""
 
     def __get__(self, instance: None, owner: type | None = None) -> Self

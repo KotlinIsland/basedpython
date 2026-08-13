@@ -6,7 +6,6 @@ BY007 [*] `Any` can be written as `dynamic`
   |
 4 | def annotated(payload: Any) -> Any: ...
   |                        ^^^
-  |
 help: Replace with `dynamic`
   |
 3 |
@@ -20,7 +19,6 @@ BY007 [*] `Any` can be written as `dynamic`
   |
 4 | def annotated(payload: Any) -> Any: ...
   |                                ^^^
-  |
 help: Replace with `dynamic`
   |
 3 |

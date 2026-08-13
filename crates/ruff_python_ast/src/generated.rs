@@ -4104,12 +4104,6 @@ impl ruff_text_size::Ranged for crate::ExprCompare {
     }
 }
 
-impl ruff_text_size::Ranged for crate::ExprCall {
-    fn range(&self) -> ruff_text_size::TextRange {
-        self.range
-    }
-}
-
 impl ruff_text_size::Ranged for crate::ExprFString {
     fn range(&self) -> ruff_text_size::TextRange {
         self.range
@@ -10432,12 +10426,17 @@ pub struct ExprCompare {
     pub comparators: Box<[Expr]>,
 }
 
+/// A call expression whose end offset is derived from its arguments.
+///
+/// The parser and error-recovery code must ensure that the call and its arguments
+/// end at the same offset.
+///
 /// See also [Call](https://docs.python.org/3/library/ast.html#ast.Call)
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
 pub struct ExprCall {
     pub node_index: crate::AtomicNodeIndex,
-    pub range: ruff_text_size::TextRange,
+    pub range_start: ruff_text_size::TextSize,
     pub func: Box<Expr>,
     pub arguments: crate::Arguments,
     /// basedpython: when true, this call represents a `<value> cast <type>`
@@ -11719,12 +11718,12 @@ impl ExprCall {
         V: SourceOrderVisitor<'a> + ?Sized,
     {
         let ExprCall {
+            range_start: _,
             func,
             arguments,
             is_cast: _,
             is_checked_cast: _,
             is_string_tag: _,
-            range: _,
             node_index: _,
         } = self;
         visitor.visit_expr(func);

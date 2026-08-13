@@ -280,7 +280,7 @@ impl<'a> Generator<'a> {
         }
     }
 
-    pub(crate) fn unparse_stmt(&mut self, ast: &Stmt) {
+    fn unparse_stmt(&mut self, ast: &Stmt) {
         macro_rules! statement {
             ($body:block) => {{
                 if !std::mem::take(&mut self.inline_statement) {
@@ -1083,7 +1083,7 @@ impl<'a> Generator<'a> {
         self.p("]");
     }
 
-    pub(crate) fn unparse_type_param(&mut self, ast: &TypeParam) {
+    fn unparse_type_param(&mut self, ast: &TypeParam) {
         // basedpython: the `reified` modifier is surface syntax with no python
         // spelling, so it is only re-emitted when rendering basedpython
         if ast.is_reified() && self.mode == Mode::BasedPython {
@@ -1150,7 +1150,7 @@ impl<'a> Generator<'a> {
         }
     }
 
-    pub(crate) fn unparse_expr(&mut self, ast: &Expr, level: u8) {
+    fn unparse_expr(&mut self, ast: &Expr, level: u8) {
         macro_rules! opprec {
             ($opty:ident, $x:expr, $enu:path, $($var:ident($op:literal, $prec:ident)),*$(,)?) => {
                 match $x {
@@ -1465,7 +1465,7 @@ impl<'a> Generator<'a> {
             Expr::Call(ast::ExprCall {
                 func,
                 arguments,
-                range: _,
+                range_start: _,
                 node_index: _,
                 is_cast: _,
                 is_checked_cast: _,
@@ -1843,7 +1843,7 @@ impl<'a> Generator<'a> {
         self.unparse_expr(&named.value, precedence::EXPR);
     }
 
-    pub(crate) fn unparse_singleton(&mut self, singleton: Singleton) {
+    fn unparse_singleton(&mut self, singleton: Singleton) {
         match singleton {
             Singleton::None => self.p("None"),
             Singleton::True => self.p("True"),

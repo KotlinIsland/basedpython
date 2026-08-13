@@ -6,8 +6,8 @@ https://peps.python.org/pep-0205/
 """
 
 from _typeshed import SupportsKeysAndGetItem
-from _weakref import getweakrefcount as getweakrefcount, getweakrefs as getweakrefs, proxy as proxy
-from _weakrefset import WeakSet as WeakSet
+from _weakref export getweakrefcount, getweakrefs, proxy
+from _weakrefset export WeakSet
 from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping
 from types import GenericAlias
 from typing import ClassVar, Generic, ParamSpec, TypeVar, final
@@ -103,8 +103,8 @@ class WeakValueDictionary[in out Key, in out Value](MutableMapping[Key, Value]):
 
     override def __len__(self) -> int
     override def __getitem__(self, key: Key) -> Value
-    override def __setitem__(self, key: Key, value: Value) -> None
-    override def __delitem__(self, key: Key) -> None
+    override def __setitem__(self, key: Key, value: Value)
+    override def __delitem__(self, key: Key)
     override def __contains__(self, key: object) -> bool
     override def __iter__(self) -> Iterator[Key]
     def copy(self) -> WeakValueDictionary[Key, Value]
@@ -189,8 +189,8 @@ class WeakKeyDictionary[in out Key, in out Value](MutableMapping[Key, Value]):
 
     override def __len__(self) -> int
     override def __getitem__(self, key: Key) -> Value
-    override def __setitem__(self, key: Key, value: Value) -> None
-    override def __delitem__(self, key: Key) -> None
+    override def __setitem__(self, key: Key, value: Value)
+    override def __delitem__(self, key: Key)
     override def __contains__(self, key: object) -> bool
     override def __iter__(self) -> Iterator[Key]
     def copy(self) -> WeakKeyDictionary[Key, Value]

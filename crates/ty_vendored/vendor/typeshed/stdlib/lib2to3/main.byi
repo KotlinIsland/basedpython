@@ -7,7 +7,7 @@ from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from logging import _ExcInfoType
 from typing import Literal
 
-from . import refactor as refactor
+from . export refactor
 
 def diff_texts(a: str, b: str, filename: str) -> Iterator[str]:
     """Return a unified diff of two strings."""
@@ -63,13 +63,13 @@ class StdoutRefactoringTool(refactor.MultiprocessRefactoringTool):
         stack_info: bool = False,
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
-    ) -> None
+    )
     # Same as super.write_file but without default values
     override def write_file(
         self, new_text: str, filename: FileDescriptorOrPath, old_text: str, encoding: str | None
-    ) -> None
+    )
     # filename has to be str
-    override def print_output(self, old: str, new: str, filename: str, equal: bool) -> None
+    override def print_output(self, old: str, new: str, filename: str, equal: bool)
 
 def warn(msg: object)
 def main(fixer_pkg: str, args: Sequence[AnyStr] | None = None) -> 0 | 1 | 2:

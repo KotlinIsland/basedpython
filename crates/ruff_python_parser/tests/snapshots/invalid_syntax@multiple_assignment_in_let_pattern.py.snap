@@ -140,13 +140,11 @@ Module(
   |
 1 | let Point(x, y) and Point(x, y) := origin
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ Syntax Error: an `and` pattern is basedpython syntax and is not valid in .py files
-  |
 
 
   |
 1 | let Point(x, y) and Point(x, y) := origin
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Syntax Error: a destructuring `let` is not valid in .py files
-  |
 
 
 ## Semantic Syntax Errors
@@ -154,10 +152,8 @@ Module(
   |
 1 | let Point(x, y) and Point(x, y) := origin
   |                           ^ Syntax Error: multiple assignments to name `x` in pattern
-  |
 
 
   |
 1 | let Point(x, y) and Point(x, y) := origin
   |                              ^ Syntax Error: multiple assignments to name `y` in pattern
-  |

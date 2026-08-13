@@ -25,7 +25,7 @@ class CancelledError(Error):
     """The Future was cancelled."""
 
 if sys.version_info >= (3, 11):
-    from builtins import TimeoutError as TimeoutError
+    from builtins export TimeoutError
 else:
     class TimeoutError(Error):
         """The operation exceeded the given deadline."""

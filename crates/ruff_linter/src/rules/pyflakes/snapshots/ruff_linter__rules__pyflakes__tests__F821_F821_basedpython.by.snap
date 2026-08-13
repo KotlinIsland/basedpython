@@ -155,7 +155,6 @@ F821 Undefined name `Bleu`
 124 | chosen: Colour = Green
 125 | missing: Colour = Bleu  # F821
     |                   ^^^^
-    |
 
 F821 Undefined name `a_receiver_member`
    --> F821_basedpython.by:147:1
@@ -163,7 +162,6 @@ F821 Undefined name `a_receiver_member`
 146 | # but the deferral stops at the block: the same name outside one is reported
 147 | a_receiver_member("x")  # F821
     | ^^^^^^^^^^^^^^^^^
-    |
 
 F821 Undefined name `UndefinedPattern`
    --> F821_basedpython.by:178:12
@@ -223,4 +221,3 @@ F821 Undefined name `no_lookup_for_ne`
 224 | Book.objects.filter(data[undefined_index] == 1)  # F821
 225 | Book.objects.filter(no_lookup_for_ne != 1)  # F821
     |                     ^^^^^^^^^^^^^^^^
-    |

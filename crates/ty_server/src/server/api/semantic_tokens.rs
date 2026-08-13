@@ -5,7 +5,7 @@ use ruff_text_size::{Ranged, TextRange};
 use ty_ide::{
     SemanticTokenModifier, SemanticTokenType, django_template_semantic_tokens, semantic_tokens,
 };
-use ty_project::ProjectDatabase;
+use ty_project::{ProjectDatabase, SemanticDb as _};
 
 use crate::document::{PositionEncoding, ToRangeExt};
 
@@ -27,7 +27,7 @@ pub(crate) fn generate_semantic_tokens(
     let semantic_token_data = if django_template {
         django_template_semantic_tokens(db, file, range)
     } else {
-        semantic_tokens(db, file, range)
+        semantic_tokens(db, db.program_file(file), range)
     };
 
     let mut encoder = Encoder {

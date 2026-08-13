@@ -133,7 +133,7 @@ fn match_typed_dict_assign<'a>(
     let Expr::Call(ast::ExprCall {
         func,
         arguments,
-        range: _,
+        range_start: _,
         node_index: _,
         is_cast: _,
         is_checked_cast: _,
@@ -278,7 +278,7 @@ fn match_fields_and_total(arguments: &Arguments) -> Option<(Suite, Option<&Keywo
                 Expr::Call(ast::ExprCall {
                     func,
                     arguments: Arguments { keywords, .. },
-                    range: _,
+                    range_start: _,
                     node_index: _,
                     is_cast: _,
                     is_checked_cast: _,

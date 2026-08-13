@@ -16,26 +16,22 @@ info[inlay-hint-location]: Inlay Hint Target
    |
 LL | class int:
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:5
    |
 LL | a[: 1] = identity[[1]](1)
    |     ^
-   |
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/builtins.byi:LL:7
    |
 LL | class int:
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:20
    |
 LL | a[: 1] = identity[[1]](1)
    |                    ^
-   |
 
 ---------------------------------------------
 info[inlay-hint-edit]: Inlay hint edits

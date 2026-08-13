@@ -1,0 +1,17 @@
+---
+source: crates/ty_ide/src/hover.rs
+expression: test.hover()
+---
+int | builtins.float | main.float
+---------------------------------------------
+```python
+int | builtins.float | main.float
+```
+---------------------------------------------
+info[hover]: Hovered content is
+ --> main.py:7:5
+  |
+7 |     x
+  |     ^- Cursor offset
+  |     |
+  |     source

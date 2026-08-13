@@ -22,6 +22,7 @@ use ty_python_core::scope::ScopeId;
 use ty_python_core::{global_scope, place_table, use_def_map};
 
 use crate::place::{Place, known_module_symbol};
+use crate::types::ProgramEnvironment;
 use crate::types::class::{CodeGeneratorKind, Field, FieldKind};
 use crate::types::function::FunctionType;
 use crate::types::list_members::all_end_of_scope_members;
@@ -76,7 +77,7 @@ fn has_base_named(db: &dyn Db, class: StaticClassLiteral<'_>, module: &str, name
         .filter_map(|candidate| candidate.class_literal(db).as_static())
         .any(|candidate| {
             candidate.name(db) == name
-                && file_to_module(db, candidate.file(db))
+                && file_to_module(db, candidate.program_file(db).resolver_file(db))
                     .is_some_and(|candidate_module| candidate_module.name(db) == module)
         })
 }
@@ -126,10 +127,11 @@ pub(in crate::types) fn drf_view_model<'db>(
     db: &'db dyn Db,
     class: StaticClassLiteral<'db>,
 ) -> Option<StaticClassLiteral<'db>> {
+    let env = &ProgramEnvironment::from_file(class.program_file(db));
     if !is_drf_generic_view(db, class) {
         return None;
     }
-    queryset_or_manager_model(db, own_body_binding(db, class, "queryset")?)
+    queryset_or_manager_model(db, env, own_body_binding(db, class, "queryset")?)
 }
 
 /// the specialized instance type constructed by a django field constructor
@@ -146,6 +148,7 @@ pub(in crate::types) fn drf_view_model<'db>(
 /// custom field without markers) degrades to no pinning
 pub(in crate::types) fn field_constructor_instance_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     class: StaticClassLiteral<'db>,
     to_arg: Option<Type<'db>>,
     null_arg: Option<Type<'db>>,
@@ -163,13 +166,15 @@ pub(in crate::types) fn field_constructor_instance_type<'db>(
     // `Unknown` explicitly: `_ST`/`_GT` appear in no constructor parameter, so leaving them to
     // the call's own inference would solve them to `Never` rather than leave them gradual
     Some(
-        pinned_field_instance_type(db, class, to_arg, null_arg, through_arg)
-            .unwrap_or_else(|| specialized_instance(db, class, [Type::unknown(), Type::unknown()])),
+        pinned_field_instance_type(db, env, class, to_arg, null_arg, through_arg).unwrap_or_else(
+            || specialized_instance(db, env, class, [Type::unknown(), Type::unknown()]),
+        ),
     )
 }
 
 fn pinned_field_instance_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     class: StaticClassLiteral<'db>,
     to_arg: Option<Type<'db>>,
     null_arg: Option<Type<'db>>,
@@ -177,21 +182,21 @@ fn pinned_field_instance_type<'db>(
 ) -> Option<Type<'db>> {
     // `ManyToManyField` is generic over `(_To, _Through)`, not `(_ST, _GT)`
     if has_base(db, class, KnownClass::DjangoManyToManyField) {
-        let target = model_target_instance(db, to_arg?)?;
+        let target = model_target_instance(db, env, to_arg?)?;
         let through = through_arg
-            .and_then(|through| model_target_instance(db, through))
+            .and_then(|through| model_target_instance(db, env, through))
             .unwrap_or_else(Type::unknown);
-        return Some(specialized_instance(db, class, [target, through]));
+        return Some(specialized_instance(db, env, class, [target, through]));
     }
 
     let set_marker = marker_type(db, class, "_pyi_private_set_type")?;
     let get_marker = marker_type(db, class, "_pyi_private_get_type")?;
 
     let (mut set_ty, mut get_ty) = if is_relation_field_class(db, class) {
-        let target = model_target_instance(db, to_arg?)?;
+        let target = model_target_instance(db, env, to_arg?)?;
         (
-            replace_dynamic(db, set_marker, target),
-            replace_dynamic(db, get_marker, target),
+            replace_dynamic(db, env, set_marker, target),
+            replace_dynamic(db, env, get_marker, target),
         )
     } else {
         if contains_dynamic(db, set_marker) || contains_dynamic(db, get_marker) {
@@ -201,11 +206,11 @@ fn pinned_field_instance_type<'db>(
     };
 
     if is_null(null_arg)? {
-        set_ty = UnionType::from_two_elements(db, set_ty, Type::none(db));
-        get_ty = UnionType::from_two_elements(db, get_ty, Type::none(db));
+        set_ty = UnionType::from_two_elements(db, env, set_ty, Type::none(db, env));
+        get_ty = UnionType::from_two_elements(db, env, get_ty, Type::none(db, env));
     }
 
-    Some(specialized_instance(db, class, [set_ty, get_ty]))
+    Some(specialized_instance(db, env, class, [set_ty, get_ty]))
 }
 
 /// resolve a literal `null=` argument: absent or `False` → `Some(false)`,
@@ -221,12 +226,16 @@ fn is_null(null_arg: Option<Type<'_>>) -> Option<bool> {
 
 /// the instance type of a `to=`/`through=` argument, when it statically
 /// resolves to a django model class
-fn model_target_instance<'db>(db: &'db dyn Db, to_arg: Type<'db>) -> Option<Type<'db>> {
+fn model_target_instance<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    to_arg: Type<'db>,
+) -> Option<Type<'db>> {
     let class = to_arg.as_class_literal()?;
     if !class.as_static().is_some_and(|class| is_model(db, class)) {
         return None;
     }
-    to_arg.to_instance_approximation(db)
+    to_arg.to_instance_approximation(db, env)
 }
 
 /// the first `name` declaration found on the mro, in mro order
@@ -246,9 +255,14 @@ fn marker_type<'db>(
 
 /// substitute the dynamic parts of a relation-field marker (`Any` in
 /// `Any | Combinable`) with the resolved `to=` model instance type
-fn replace_dynamic<'db>(db: &'db dyn Db, marker: Type<'db>, replacement: Type<'db>) -> Type<'db> {
+fn replace_dynamic<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    marker: Type<'db>,
+    replacement: Type<'db>,
+) -> Type<'db> {
     match marker {
-        Type::Union(union) => union.map(db, |element| {
+        Type::Union(union) => union.map(db, env, |element| {
             if element.is_dynamic() {
                 replacement
             } else {
@@ -269,34 +283,43 @@ fn contains_dynamic(db: &dyn Db, ty: Type<'_>) -> bool {
 
 fn specialized_instance<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     class: StaticClassLiteral<'db>,
     types: [Type<'db>; 2],
 ) -> Type<'db> {
     let class_type = class.apply_specialization(db, |generic_context| {
         generic_context.specialize(db, Cow::Owned(types.to_vec()))
     });
-    Type::instance(db, class_type)
+    Type::instance(db, env, class_type)
 }
 
 /// `ty` is an instance of a `django.db.models.Field` subclass
-pub(in crate::types) fn is_field_instance(db: &dyn Db, ty: Type<'_>) -> bool {
-    instance_static_class(db, ty).is_some_and(|class| is_field_class(db, class))
+pub(in crate::types) fn is_field_instance(
+    db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
+    ty: Type<'_>,
+) -> bool {
+    instance_static_class(db, env, ty).is_some_and(|class| is_field_class(db, class))
 }
 
-fn is_relation_field_instance(db: &dyn Db, ty: Type<'_>) -> bool {
-    instance_static_class(db, ty).is_some_and(|class| is_relation_field_class(db, class))
+fn is_relation_field_instance(db: &dyn Db, env: &ProgramEnvironment<'_>, ty: Type<'_>) -> bool {
+    instance_static_class(db, env, ty).is_some_and(|class| is_relation_field_class(db, class))
 }
 
-pub(in crate::types) fn is_many_to_many_instance(db: &dyn Db, ty: Type<'_>) -> bool {
-    instance_static_class(db, ty)
+pub(in crate::types) fn is_many_to_many_instance(
+    db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
+    ty: Type<'_>,
+) -> bool {
+    instance_static_class(db, env, ty)
         .is_some_and(|class| has_base(db, class, KnownClass::DjangoManyToManyField))
 }
 
 /// `ty` is an instance of `JSONField` — the one built-in field whose `__`
 /// segments are arbitrary object keys and array indices rather than a closed set
 /// of lookups
-fn is_json_field_instance(db: &dyn Db, ty: Type<'_>) -> bool {
-    instance_static_class(db, ty)
+fn is_json_field_instance(db: &dyn Db, env: &ProgramEnvironment<'_>, ty: Type<'_>) -> bool {
+    instance_static_class(db, env, ty)
         .is_some_and(|class| has_base_named(db, class, "django.db.models.fields.json", "JSONField"))
 }
 
@@ -307,12 +330,20 @@ fn is_json_field_instance(db: &dyn Db, ty: Type<'_>) -> bool {
 /// and a constructor call in a `.by` file infers as `final CharField[…]` — a
 /// restricted type, whose nominal class is nothing at all. reading through the
 /// modifier is what keeps a model's fields visible there
-fn nominal_class<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<ClassType<'db>> {
-    ty.erase_restriction(db).nominal_class(db)
+fn nominal_class<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Option<ClassType<'db>> {
+    ty.erase_restriction(db).nominal_class(db, env)
 }
 
-fn instance_static_class<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<StaticClassLiteral<'db>> {
-    nominal_class(db, ty)?.class_literal(db).as_static()
+fn instance_static_class<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Option<StaticClassLiteral<'db>> {
+    nominal_class(db, env, ty)?.class_literal(db).as_static()
 }
 
 /// the per-field facts read from a field constructor call in a class-body
@@ -380,8 +411,12 @@ pub(in crate::types) fn is_abstract_model<'db>(
 }
 
 /// the `_GT` (instance read) side of a pinned field instance type
-fn field_get_type<'db>(db: &'db dyn Db, field_ty: Type<'db>) -> Option<Type<'db>> {
-    let ClassType::Generic(alias) = nominal_class(db, field_ty)? else {
+fn field_get_type<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    field_ty: Type<'db>,
+) -> Option<Type<'db>> {
+    let ClassType::Generic(alias) = nominal_class(db, env, field_ty)? else {
         return None;
     };
     let [_, get_ty] = alias.specialization(db).types(db) else {
@@ -392,8 +427,12 @@ fn field_get_type<'db>(db: &'db dyn Db, field_ty: Type<'db>) -> Option<Type<'db>
 
 /// the `_ST` (assignment/lookup) side of a pinned field instance type — the
 /// type django accepts when writing the field or filtering on it exactly
-fn field_set_type<'db>(db: &'db dyn Db, field_ty: Type<'db>) -> Option<Type<'db>> {
-    let ClassType::Generic(alias) = nominal_class(db, field_ty)? else {
+fn field_set_type<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    field_ty: Type<'db>,
+) -> Option<Type<'db>> {
+    let ClassType::Generic(alias) = nominal_class(db, env, field_ty)? else {
         return None;
     };
     let [set_ty, _] = alias.specialization(db).types(db) else {
@@ -405,7 +444,11 @@ fn field_set_type<'db>(db: &'db dyn Db, field_ty: Type<'db>) -> Option<Type<'db>
 /// the runtime read type of a model's primary key: the explicit
 /// `primary_key=True` field's read type, or `int` for the auto `id`
 /// (`BigAutoField` per modern defaults)
-fn model_pk_type<'db>(db: &'db dyn Db, fields: &FxIndexMap<Name, Field<'db>>) -> Type<'db> {
+fn model_pk_type<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    fields: &FxIndexMap<Name, Field<'db>>,
+) -> Type<'db> {
     for field in fields.values() {
         if matches!(
             &field.kind,
@@ -414,30 +457,38 @@ fn model_pk_type<'db>(db: &'db dyn Db, fields: &FxIndexMap<Name, Field<'db>>) ->
                 ..
             }
         ) {
-            return field_get_type(db, field.declared_ty).unwrap_or_else(Type::unknown);
+            return field_get_type(db, env, field.declared_ty).unwrap_or_else(Type::unknown);
         }
     }
-    KnownClass::Int.to_instance(db)
+    KnownClass::Int.to_instance(db, env)
 }
 
 /// the type of a to-one relation field's `<name>_id` attname: the target
 /// model's primary-key type, `| None` when the field is nullable
-fn attname_type<'db>(db: &'db dyn Db, field: &Field<'db>) -> Option<Type<'db>> {
+fn attname_type<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    field: &Field<'db>,
+) -> Option<Type<'db>> {
     let FieldKind::Django { null, .. } = &field.kind else {
         return None;
     };
-    if !is_relation_field_instance(db, field.declared_ty) {
+    if !is_relation_field_instance(db, env, field.declared_ty) {
         return None;
     }
-    let target =
-        field_get_type(db, field.declared_ty)?.filter_union(db, |element| !element.is_none(db));
-    let target_class = instance_static_class(db, target)?;
+    let target = field_get_type(db, env, field.declared_ty)?
+        .filter_union(db, |element| !element.is_none(db));
+    let target_class = instance_static_class(db, env, target)?;
     if !is_model(db, target_class) {
         return None;
     }
-    let target_pk = model_pk_type(db, target_class.fields(db, None, CodeGeneratorKind::Django));
+    let target_pk = model_pk_type(
+        db,
+        env,
+        target_class.fields(db, None, CodeGeneratorKind::Django),
+    );
     Some(if *null {
-        UnionType::from_two_elements(db, target_pk, Type::none(db))
+        UnionType::from_two_elements(db, env, target_pk, Type::none(db, env))
     } else {
         target_pk
     })
@@ -449,6 +500,7 @@ fn attname_type<'db>(db: &'db dyn Db, field: &Field<'db>) -> Option<Type<'db>> {
 /// get nothing — their concrete subclasses do
 pub(in crate::types) fn synthesized_model_attribute<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     class: StaticClassLiteral<'db>,
     fields: &FxIndexMap<Name, Field<'db>>,
     name: &str,
@@ -457,7 +509,7 @@ pub(in crate::types) fn synthesized_model_attribute<'db>(
         return None;
     }
     match name {
-        "pk" => Some(model_pk_type(db, fields)),
+        "pk" => Some(model_pk_type(db, env, fields)),
         "id" => {
             let has_explicit_pk = fields.values().any(|field| {
                 matches!(
@@ -468,7 +520,7 @@ pub(in crate::types) fn synthesized_model_attribute<'db>(
                     }
                 )
             });
-            (!has_explicit_pk).then(|| KnownClass::Int.to_instance(db))
+            (!has_explicit_pk).then(|| KnownClass::Int.to_instance(db, env))
         }
         _ => {
             // `get_<field>_display()` for a field declared with `choices=`
@@ -483,23 +535,27 @@ pub(in crate::types) fn synthesized_model_attribute<'db>(
                     })
                 )
             {
-                return Some(display_method(db, class));
+                return Some(display_method(db, env, class));
             }
             let field_name = name.strip_suffix("_id")?;
-            attname_type(db, fields.get(field_name)?)
+            attname_type(db, env, fields.get(field_name)?)
         }
     }
 }
 
 /// the `() -> str` bound method django synthesizes for a choices field's
 /// `get_<field>_display`
-fn display_method<'db>(db: &'db dyn Db, class: StaticClassLiteral<'db>) -> Type<'db> {
-    let self_ty = Type::instance(db, class.default_specialization(db));
+fn display_method<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: StaticClassLiteral<'db>,
+) -> Type<'db> {
+    let self_ty = Type::instance(db, env, class.default_specialization(db));
     let signature = Signature::new(
         Parameters::standard([
             Parameter::positional_or_keyword(Name::new_static("self")).with_annotated_type(self_ty)
         ]),
-        KnownClass::Str.to_instance(db),
+        KnownClass::Str.to_instance(db, env),
     );
     Type::function_like_callable(db, signature)
 }
@@ -520,6 +576,7 @@ pub(in crate::types) fn reverse_accessors<'db>(
     db: &'db dyn Db,
     class: StaticClassLiteral<'db>,
 ) -> FxIndexMap<Name, Type<'db>> {
+    let env = &ProgramEnvironment::from_file(class.program_file(db));
     let mut accessors = FxIndexMap::default();
     if class.is_known(db, KnownClass::DjangoModel) || is_abstract_model(db, class) {
         return accessors;
@@ -528,7 +585,7 @@ pub(in crate::types) fn reverse_accessors<'db>(
     // enumerate the module's class *definitions* structurally rather than
     // resolving every global symbol: inferring arbitrary bindings from here
     // can cycle back into member lookups that consult this query
-    let global = global_scope(db, class.file(db));
+    let global = global_scope(db, class.program_file(db));
     let use_def = use_def_map(db, global);
     let mut sources = Vec::new();
     for (_, bindings) in use_def.all_end_of_scope_symbol_bindings() {
@@ -548,8 +605,8 @@ pub(in crate::types) fn reverse_accessors<'db>(
             continue;
         }
         for field in source.fields(db, None, CodeGeneratorKind::Django).values() {
-            let is_m2m = is_many_to_many_instance(db, field.declared_ty);
-            if !is_relation_field_instance(db, field.declared_ty) && !is_m2m {
+            let is_m2m = is_many_to_many_instance(db, env, field.declared_ty);
+            if !is_relation_field_instance(db, env, field.declared_ty) && !is_m2m {
                 continue;
             }
 
@@ -557,12 +614,12 @@ pub(in crate::types) fn reverse_accessors<'db>(
             // field it is the first (`_To`) specialization argument, and the
             // second (`_Through`) carries the through model
             let (target, through) = if is_m2m {
-                match m2m_target_and_through(db, field.declared_ty) {
+                match m2m_target_and_through(db, env, field.declared_ty) {
                     Some((target, through)) => (target, Some(through)),
                     None => continue,
                 }
             } else {
-                match field_get_type(db, field.declared_ty) {
+                match field_get_type(db, env, field.declared_ty) {
                     Some(target) => (
                         target.filter_union(db, |element| !element.is_none(db)),
                         None,
@@ -570,7 +627,7 @@ pub(in crate::types) fn reverse_accessors<'db>(
                     None => continue,
                 }
             };
-            if instance_static_class(db, target) != Some(class) {
+            if instance_static_class(db, env, target) != Some(class) {
                 continue;
             }
             let FieldKind::Django { related_name, .. } = &field.kind else {
@@ -581,7 +638,7 @@ pub(in crate::types) fn reverse_accessors<'db>(
                 continue;
             }
             let one_to_one =
-                instance_static_class(db, field.declared_ty).is_some_and(|field_class| {
+                instance_static_class(db, env, field.declared_ty).is_some_and(|field_class| {
                     has_base(db, field_class, KnownClass::DjangoOneToOneField)
                 });
             let accessor = match related_name {
@@ -589,14 +646,14 @@ pub(in crate::types) fn reverse_accessors<'db>(
                 None if one_to_one => Name::new(source.name(db).to_lowercase()),
                 None => Name::new(format!("{}_set", source.name(db).to_lowercase())),
             };
-            let source_instance = Type::instance(db, source.default_specialization(db));
+            let source_instance = Type::instance(db, env, source.default_specialization(db));
             let accessor_ty = if let Some(through) = through {
                 // the reverse of a many-to-many is itself a many-to-many manager
-                many_related_manager_instance(db, source_instance, through)
+                many_related_manager_instance(db, env, source_instance, through)
             } else if one_to_one {
                 Some(source_instance)
             } else {
-                related_manager_instance(db, source_instance)
+                related_manager_instance(db, env, source_instance)
             };
             if let Some(accessor_ty) = accessor_ty {
                 accessors.insert(accessor, accessor_ty);
@@ -611,9 +668,10 @@ pub(in crate::types) fn reverse_accessors<'db>(
 /// target model and through model (the latter `Unknown` for an implicit table)
 fn m2m_target_and_through<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     field_ty: Type<'db>,
 ) -> Option<(Type<'db>, Type<'db>)> {
-    let ClassType::Generic(alias) = nominal_class(db, field_ty)? else {
+    let ClassType::Generic(alias) = nominal_class(db, env, field_ty)? else {
         return None;
     };
     let [target, through] = alias.specialization(db).types(db) else {
@@ -626,11 +684,13 @@ fn m2m_target_and_through<'db>(
 /// module, or `None` when it doesn't resolve (degrade to no accessor)
 fn many_related_manager_instance<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     source: Type<'db>,
     through: Type<'db>,
 ) -> Option<Type<'db>> {
     let manager = known_module_symbol(
         db,
+        env,
         KnownModule::DjangoDbModelsFieldsRelatedDescriptors,
         "ManyRelatedManager",
     )
@@ -645,14 +705,19 @@ fn many_related_manager_instance<'db>(
     };
     let class_type =
         class.apply_specialization(db, |generic_context| generic_context.specialize(db, args));
-    Some(Type::instance(db, class_type))
+    Some(Type::instance(db, env, class_type))
 }
 
 /// `RelatedManager[source]` from the stubs' `related_descriptors` module,
 /// or `None` when it doesn't resolve (degrade to no accessor)
-fn related_manager_instance<'db>(db: &'db dyn Db, source: Type<'db>) -> Option<Type<'db>> {
+fn related_manager_instance<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    source: Type<'db>,
+) -> Option<Type<'db>> {
     let manager = known_module_symbol(
         db,
+        env,
         KnownModule::DjangoDbModelsFieldsRelatedDescriptors,
         "RelatedManager",
     )
@@ -666,13 +731,14 @@ fn related_manager_instance<'db>(db: &'db dyn Db, source: Type<'db>) -> Option<T
     let class_type = class.apply_specialization(db, |generic_context| {
         generic_context.specialize(db, Cow::Owned(vec![source]))
     });
-    Some(Type::instance(db, class_type))
+    Some(Type::instance(db, env, class_type))
 }
 
 /// the member names `synthesized_model_attribute` can synthesize for
 /// `class`, for member listing (IDE completions)
 pub(in crate::types) fn synthesized_member_names<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     class: StaticClassLiteral<'db>,
     fields: &FxIndexMap<Name, Field<'db>>,
 ) -> Vec<Name> {
@@ -693,7 +759,7 @@ pub(in crate::types) fn synthesized_member_names<'db>(
         names.push(Name::new_static("id"));
     }
     for (name, field) in fields {
-        if is_relation_field_instance(db, field.declared_ty) {
+        if is_relation_field_instance(db, env, field.declared_ty) {
             names.push(Name::new(format!("{name}_id")));
         }
     }
@@ -706,17 +772,23 @@ pub(in crate::types) fn synthesized_member_names<'db>(
 /// all optional and none-able — requiredness is a `save` concern
 pub(in crate::types) fn extra_constructor_parameters<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     fields: &FxIndexMap<Name, Field<'db>>,
 ) -> Vec<(Name, Type<'db>)> {
     let mut extras = Vec::new();
     if !fields.contains_key("pk") {
         extras.push((
             Name::new_static("pk"),
-            UnionType::from_two_elements(db, model_pk_type(db, fields), Type::none(db)),
+            UnionType::from_two_elements(
+                db,
+                env,
+                model_pk_type(db, env, fields),
+                Type::none(db, env),
+            ),
         ));
     }
     for (name, field) in fields {
-        let Some(attname_ty) = attname_type(db, field) else {
+        let Some(attname_ty) = attname_type(db, env, field) else {
             continue;
         };
         let attname = Name::new(format!("{name}_id"));
@@ -725,7 +797,7 @@ pub(in crate::types) fn extra_constructor_parameters<'db>(
         }
         extras.push((
             attname,
-            UnionType::from_two_elements(db, attname_ty, Type::none(db)),
+            UnionType::from_two_elements(db, env, attname_ty, Type::none(db, env)),
         ));
     }
     extras
@@ -745,9 +817,10 @@ pub(in crate::types) fn extra_constructor_parameters<'db>(
 /// the model a `Manager[M]` / `QuerySet[M, _]` instance is parameterized by
 pub(in crate::types) fn queryset_or_manager_model<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     self_instance: Type<'db>,
 ) -> Option<StaticClassLiteral<'db>> {
-    let class = nominal_class(db, self_instance)?;
+    let class = nominal_class(db, env, self_instance)?;
     let is_qs_or_manager = class.class_literal(db).as_static().is_some_and(|literal| {
         has_base(db, literal, KnownClass::DjangoManager)
             || has_base(db, literal, KnownClass::DjangoQuerySet)
@@ -759,7 +832,7 @@ pub(in crate::types) fn queryset_or_manager_model<'db>(
         return None;
     };
     let model_instance = alias.specialization(db).types(db).first()?;
-    let model = instance_static_class(db, *model_instance)?;
+    let model = instance_static_class(db, env, *model_instance)?;
     is_model(db, model).then_some(model)
 }
 
@@ -826,13 +899,14 @@ struct FieldRef<'db> {
 /// `model` to a reference for path walking
 fn field_ref<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     model: StaticClassLiteral<'db>,
     name: &str,
 ) -> Option<FieldRef<'db>> {
     let fields = model.fields(db, None, CodeGeneratorKind::Django);
 
     if name == "pk" {
-        let pk = model_pk_type(db, fields);
+        let pk = model_pk_type(db, env, fields);
         return Some(FieldRef {
             relation_model: None,
             is_relation: false,
@@ -843,15 +917,15 @@ fn field_ref<'db>(
     }
 
     if let Some(field) = fields.get(name) {
-        if is_relation_field_instance(db, field.declared_ty) {
-            let target = field_get_type(db, field.declared_ty)
+        if is_relation_field_instance(db, env, field.declared_ty) {
+            let target = field_get_type(db, env, field.declared_ty)
                 .map(|ty| ty.filter_union(db, |element| !element.is_none(db)));
             let relation_model = target
-                .and_then(|target| instance_static_class(db, target))
+                .and_then(|target| instance_static_class(db, env, target))
                 .filter(|target| is_model(db, *target));
             // a bare relation in a `values()` row reads as the target's pk
             let value_type = relation_model.map_or_else(Type::unknown, |target| {
-                model_pk_type(db, target.fields(db, None, CodeGeneratorKind::Django))
+                model_pk_type(db, env, target.fields(db, None, CodeGeneratorKind::Django))
             });
             return Some(FieldRef {
                 relation_model,
@@ -864,14 +938,14 @@ fn field_ref<'db>(
         return Some(FieldRef {
             relation_model: None,
             is_relation: false,
-            set_type: field_set_type(db, field.declared_ty).unwrap_or_else(Type::unknown),
-            value_type: field_get_type(db, field.declared_ty).unwrap_or_else(Type::unknown),
+            set_type: field_set_type(db, env, field.declared_ty).unwrap_or_else(Type::unknown),
+            value_type: field_get_type(db, env, field.declared_ty).unwrap_or_else(Type::unknown),
             declared_type: Some(field.declared_ty),
         });
     }
 
     // synthesized names: the auto `id` and `<fk>_id` attnames
-    if let Some(synthesized) = synthesized_model_attribute(db, model, fields, name) {
+    if let Some(synthesized) = synthesized_model_attribute(db, env, model, fields, name) {
         return Some(FieldRef {
             relation_model: None,
             is_relation: false,
@@ -888,6 +962,7 @@ fn field_ref<'db>(
 /// `set_type`; `None` for lookups without a checkable operand
 fn concrete_lookup_operand<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     set_type: Type<'db>,
     lookups: &[&str],
 ) -> Option<Type<'db>> {
@@ -899,9 +974,9 @@ fn concrete_lookup_operand<'db>(
         "exact" | "iexact" | "gt" | "gte" | "lt" | "lte" => Some(set_type),
         "contains" | "icontains" | "startswith" | "istartswith" | "endswith" | "iendswith"
         | "regex" | "iregex" | "search" | "trigram_similar" => {
-            Some(KnownClass::Str.to_instance(db))
+            Some(KnownClass::Str.to_instance(db, env))
         }
-        "isnull" => Some(KnownClass::Bool.to_instance(db)),
+        "isnull" => Some(KnownClass::Bool.to_instance(db, env)),
         // `in`/`range` take iterables, date/time transforms chain further —
         // skip rather than risk a false positive
         _ => None,
@@ -919,6 +994,7 @@ fn is_relation_lookup(name: &str) -> bool {
 /// resolve a lookup key (`author__name__startswith`) against `model`
 pub(in crate::types) fn resolve_lookup<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     model: StaticClassLiteral<'db>,
     key: &str,
 ) -> FieldResolution<'db> {
@@ -930,7 +1006,7 @@ pub(in crate::types) fn resolve_lookup<'db>(
         let segment = segments[index];
         let is_last = index + 1 == segments.len();
 
-        let Some(field) = field_ref(db, model, segment) else {
+        let Some(field) = field_ref(db, env, model, segment) else {
             // only the leading segment is unambiguously a field position; a
             // later unknown segment was already classified as a lookup below
             return FieldResolution::Unknown {
@@ -951,7 +1027,7 @@ pub(in crate::types) fn resolve_lookup<'db>(
             let next = segments[index + 1];
             // after a relation hop the next segment is expected to be a field
             // on the target model — traverse into it
-            if field_ref(db, target, next).is_some() {
+            if field_ref(db, env, target, next).is_some() {
                 model = target;
                 index += 1;
                 continue;
@@ -961,7 +1037,7 @@ pub(in crate::types) fn resolve_lookup<'db>(
             // is almost certainly a typo
             if index + 2 == segments.len() && is_relation_lookup(next) {
                 let operand = match next {
-                    "isnull" => Some(KnownClass::Bool.to_instance(db)),
+                    "isnull" => Some(KnownClass::Bool.to_instance(db, env)),
                     _ => None,
                 };
                 return FieldResolution::Resolved { operand };
@@ -977,7 +1053,7 @@ pub(in crate::types) fn resolve_lookup<'db>(
                 operand: Some(field.set_type),
             };
         }
-        let operand = concrete_lookup_operand(db, field.set_type, &segments[index + 1..]);
+        let operand = concrete_lookup_operand(db, env, field.set_type, &segments[index + 1..]);
         return FieldResolution::Resolved { operand };
     }
 }
@@ -1152,19 +1228,20 @@ fn assemble_key(segments: &[Cow<'_, str>]) -> Option<String> {
 /// field the model declares
 fn path_field<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     model: StaticClassLiteral<'db>,
     names: &[&str],
 ) -> Option<FieldRef<'db>> {
     let (&last, leading) = names.split_last()?;
     let mut model = model;
     for name in leading {
-        let field = field_ref(db, model, name)?;
+        let field = field_ref(db, env, model, name)?;
         if !field.is_relation {
             return None;
         }
         model = field.relation_model?;
     }
-    field_ref(db, model, last)
+    field_ref(db, env, model, last)
 }
 
 /// the type the leading name of a lookup path takes: the target model's instance
@@ -1172,20 +1249,21 @@ fn path_field<'db>(
 /// model they traverse into; the field's own read type otherwise
 fn lookup_root_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     model: StaticClassLiteral<'db>,
     name: &str,
 ) -> Option<Type<'db>> {
     // a many-to-many field's `_GT` is its *through* model, not its target
     if let Some(field) = model.fields(db, None, CodeGeneratorKind::Django).get(name)
-        && is_many_to_many_instance(db, field.declared_ty)
+        && is_many_to_many_instance(db, env, field.declared_ty)
     {
-        return m2m_target_and_through(db, field.declared_ty).map(|(target, _)| target);
+        return m2m_target_and_through(db, env, field.declared_ty).map(|(target, _)| target);
     }
-    let field = field_ref(db, model, name)?;
+    let field = field_ref(db, env, model, name)?;
     if field.is_relation {
         // an unresolved relation target leaves nothing to traverse into
         let target = field.relation_model?;
-        return Some(Type::instance(db, target.default_specialization(db)));
+        return Some(Type::instance(db, env, target.default_specialization(db)));
     }
     Some(field.value_type)
 }
@@ -1197,6 +1275,7 @@ fn lookup_root_type<'db>(
 /// meaning it has today, and the transpiler leaves it exactly as written
 pub(crate) fn lookup_expressions<'a, 'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     scope: ScopeId<'db>,
     model: StaticClassLiteral<'db>,
@@ -1205,7 +1284,7 @@ pub(crate) fn lookup_expressions<'a, 'db>(
     let mut classified: Vec<Option<LookupExpression<'a, 'db>>> = arguments
         .args
         .iter()
-        .map(|argument| lookup_expression(db, file, scope, model, argument))
+        .map(|argument| lookup_expression(db, env, file, scope, model, argument))
         .collect();
 
     // a lookup lowers to a keyword argument, which python requires after every
@@ -1246,6 +1325,7 @@ pub(crate) fn lookup_expressions<'a, 'db>(
 /// manager method that takes them as positional expressions
 pub(crate) fn lookup_call_model<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     callee: Type<'db>,
 ) -> Option<StaticClassLiteral<'db>> {
     let Type::BoundMethod(bound_method) = callee else {
@@ -1257,7 +1337,7 @@ pub(crate) fn lookup_call_model<'db>(
     {
         return None;
     }
-    queryset_or_manager_model(db, bound_method.self_instance(db))
+    queryset_or_manager_model(db, env, bound_method.self_instance(db))
 }
 
 /// the keyword a lookup expression lowers to, as source ranges — the whole
@@ -1278,19 +1358,20 @@ pub(crate) struct LookupLowering {
 /// reports it, and lowering it would emit a keyword django itself rejects
 pub(crate) fn lookup_call_lowering<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     scope: ScopeId<'db>,
     callee: Type<'db>,
     call: &ast::ExprCall,
 ) -> Vec<LookupLowering> {
-    let Some(model) = lookup_call_model(db, callee) else {
+    let Some(model) = lookup_call_model(db, env, callee) else {
         return Vec::new();
     };
-    lookup_expressions(db, file, scope, model, &call.arguments)
+    lookup_expressions(db, env, file, scope, model, &call.arguments)
         .into_iter()
         .filter(|lookup| {
             matches!(
-                resolve_lookup(db, model, &lookup.key),
+                resolve_lookup(db, env, model, &lookup.key),
                 FieldResolution::Resolved { .. }
             )
         })
@@ -1304,6 +1385,7 @@ pub(crate) fn lookup_call_lowering<'db>(
 
 fn lookup_expression<'a, 'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     scope: ScopeId<'db>,
     model: StaticClassLiteral<'db>,
@@ -1323,10 +1405,10 @@ fn lookup_expression<'a, 'db>(
     // anything that already claims the name wins, exactly as it does for an
     // implicit receiver: this is asked of a raw name by the transpiler too, so it
     // takes the wider of the two name-fallback gates
-    if claimed_by_name_resolution(db, file, scope, root.id.as_str()) {
+    if claimed_by_name_resolution(db, env, file, scope, root.id.as_str()) {
         return None;
     }
-    let root_type = lookup_root_type(db, model, root.id.as_str())?;
+    let root_type = lookup_root_type(db, env, model, root.id.as_str())?;
 
     // the dotted part of the path names the field; the subscripts after it index
     // into it, so a dot *after* a subscript names nothing django can spell
@@ -1346,8 +1428,8 @@ fn lookup_expression<'a, 'db>(
         // only a json field carries the key and index transforms a subscript
         // spells. on anything else django rejects the keyword at runtime, so a
         // subscript there is left as written
-        let field = path_field(db, model, &names)?;
-        if !is_json_field_instance(db, field.declared_type?) {
+        let field = path_field(db, env, model, &names)?;
+        if !is_json_field_instance(db, env, field.declared_type?) {
             return None;
         }
     }
@@ -1372,11 +1454,12 @@ fn lookup_expression<'a, 'db>(
 /// when the key names no field / attname of the model
 pub(in crate::types) fn resolve_create_kwarg<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     model: StaticClassLiteral<'db>,
     key: &str,
 ) -> FieldResolution<'db> {
     // create() keys are plain field names or attnames — no `__` traversal
-    match field_ref(db, model, key) {
+    match field_ref(db, env, model, key) {
         Some(field) if field.is_relation => FieldResolution::Resolved { operand: None },
         Some(field) => FieldResolution::Resolved {
             operand: Some(field.set_type),
@@ -1392,6 +1475,7 @@ pub(in crate::types) fn resolve_create_kwarg<'db>(
 /// `-` (descending) is stripped. returns the offending segment when unknown
 pub(in crate::types) fn resolve_field_name<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     model: StaticClassLiteral<'db>,
     name: &str,
 ) -> FieldResolution<'db> {
@@ -1400,7 +1484,7 @@ pub(in crate::types) fn resolve_field_name<'db>(
     if name == "?" || name.is_empty() {
         return FieldResolution::Resolved { operand: None };
     }
-    match resolve_lookup(db, model, name) {
+    match resolve_lookup(db, env, model, name) {
         FieldResolution::Unknown { model, segment } => FieldResolution::Unknown { model, segment },
         FieldResolution::Resolved { .. } => FieldResolution::Resolved { operand: None },
     }
@@ -1464,12 +1548,13 @@ impl MetaFieldsDeclarer {
 /// member lookup: the declaring class's body is the scope this runs from
 pub(in crate::types) fn is_meta_fields_entry_valid<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     model: StaticClassLiteral<'db>,
     declarer: StaticClassLiteral<'db>,
     name: &str,
 ) -> bool {
-    let model_instance = Type::instance(db, model.default_specialization(db));
-    if !matches!(model_instance.member(db, name).place, Place::Undefined) {
+    let model_instance = Type::instance(db, env, model.default_specialization(db));
+    if !matches!(model_instance.member(db, env, name).place, Place::Undefined) {
         return true;
     }
     declarer
@@ -1565,15 +1650,16 @@ impl<'db> FieldListKind<'db> {
     pub(in crate::types) fn resolve(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         model: StaticClassLiteral<'db>,
         entry: &str,
     ) -> FieldResolution<'db> {
         match self {
             // `order_by` syntax — `-` and `?` included
-            Self::Ordering => resolve_field_name(db, model, entry),
-            Self::ViewFieldNames => resolve_lookup(db, model, entry),
+            Self::Ordering => resolve_field_name(db, env, model, entry),
+            Self::ViewFieldNames => resolve_lookup(db, env, model, entry),
             Self::MetaFields { declaring } => {
-                if is_meta_fields_entry_valid(db, model, declaring, entry) {
+                if is_meta_fields_entry_valid(db, env, model, declaring, entry) {
                     FieldResolution::Resolved { operand: None }
                 } else {
                     FieldResolution::Unknown {
@@ -1590,7 +1676,7 @@ impl<'db> FieldListKind<'db> {
                 if path.is_empty() {
                     return FieldResolution::Resolved { operand: None };
                 }
-                resolve_lookup(db, model, path)
+                resolve_lookup(db, env, model, path)
             }
         }
     }
@@ -1601,13 +1687,14 @@ impl<'db> FieldListKind<'db> {
 /// when the path can't be statically resolved (so refinement is skipped)
 fn field_value_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     model: StaticClassLiteral<'db>,
     key: &str,
 ) -> Option<Type<'db>> {
     let segments: Vec<&str> = key.split("__").collect();
     let mut model = model;
     for (index, segment) in segments.iter().enumerate() {
-        let field = field_ref(db, model, segment)?;
+        let field = field_ref(db, env, model, segment)?;
         let is_last = index + 1 == segments.len();
         if field.is_relation && !is_last {
             // traverse into the related model for the next segment
@@ -1625,6 +1712,7 @@ fn field_value_type<'db>(
 /// keep the stub type (`named=True`, no fields, or any unresolved field)
 pub(in crate::types) fn values_list_row_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     model: StaticClassLiteral<'db>,
     fields: &[&str],
     flat: bool,
@@ -1637,14 +1725,14 @@ pub(in crate::types) fn values_list_row_type<'db>(
     }
     let values: Option<Vec<Type<'db>>> = fields
         .iter()
-        .map(|field| field_value_type(db, model, field))
+        .map(|field| field_value_type(db, env, model, field))
         .collect();
     let values = values?;
     if flat {
         // `flat=True` is only valid with a single field
         return (values.len() == 1).then(|| values[0]);
     }
-    Some(Type::heterogeneous_tuple(db, values))
+    Some(Type::heterogeneous_tuple(db, env, values))
 }
 
 /// refine a `values(*fields)` call's row type to `dict[str, <union of the
@@ -1652,6 +1740,7 @@ pub(in crate::types) fn values_list_row_type<'db>(
 /// `dict[str, Any]`). `None` to keep the stub type
 pub(in crate::types) fn values_row_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     model: StaticClassLiteral<'db>,
     fields: &[&str],
 ) -> Option<Type<'db>> {
@@ -1660,19 +1749,24 @@ pub(in crate::types) fn values_row_type<'db>(
     }
     let values: Option<Vec<Type<'db>>> = fields
         .iter()
-        .map(|field| field_value_type(db, model, field))
+        .map(|field| field_value_type(db, env, model, field))
         .collect();
-    let value = UnionType::from_elements(db, values?);
-    Some(KnownClass::Dict.to_specialized_instance(db, &[KnownClass::Str.to_instance(db), value]))
+    let value = UnionType::from_elements(db, env, values?);
+    Some(KnownClass::Dict.to_specialized_instance(
+        db,
+        env,
+        &[KnownClass::Str.to_instance(db, env), value],
+    ))
 }
 
 /// rebuild a `QuerySet[Model, _Row]` return type with a refined `_Row`
 pub(in crate::types) fn with_queryset_row<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     queryset_ty: Type<'db>,
     row: Type<'db>,
 ) -> Option<Type<'db>> {
-    let ClassType::Generic(alias) = nominal_class(db, queryset_ty)? else {
+    let ClassType::Generic(alias) = nominal_class(db, env, queryset_ty)? else {
         return None;
     };
     let [model_arg, _] = alias.specialization(db).types(db) else {
@@ -1684,7 +1778,7 @@ pub(in crate::types) fn with_queryset_row<'db>(
         .apply_specialization(db, |generic_context| {
             generic_context.specialize(db, Cow::Owned(vec![model_arg, row]))
         });
-    Some(Type::instance(db, class_type))
+    Some(Type::instance(db, env, class_type))
 }
 
 // ---------------------------------------------------------------------------
@@ -1703,7 +1797,7 @@ pub(in crate::types) fn with_queryset_row<'db>(
 
 /// whether `file` belongs to the `rest_framework` package
 fn is_drf_module(db: &dyn Db, file: File) -> bool {
-    file_to_module(db, file).is_some_and(|module| {
+    file_to_module(db, db.program_file(file).resolver_file(db)).is_some_and(|module| {
         let name = module.name(db).as_str();
         name == "rest_framework" || name.starts_with("rest_framework.")
     })
@@ -1779,14 +1873,15 @@ fn declares_outside_drf<'db>(db: &'db dyn Db, class: StaticClassLiteral<'db>, na
 /// fires only where today's answer carries no information at all
 fn substitute_model<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     declared_return: Type<'db>,
     model: StaticClassLiteral<'db>,
 ) -> Option<Type<'db>> {
-    let model_instance = Type::instance(db, model.default_specialization(db));
+    let model_instance = Type::instance(db, env, model.default_specialization(db));
     if declared_return.is_dynamic() {
         return Some(model_instance);
     }
-    let ClassType::Generic(alias) = nominal_class(db, declared_return)? else {
+    let ClassType::Generic(alias) = nominal_class(db, env, declared_return)? else {
         return None;
     };
     let arity = alias.specialization(db).types(db).len();
@@ -1803,7 +1898,7 @@ fn substitute_model<'db>(
         .apply_specialization(db, |generic_context| {
             generic_context.specialize(db, Cow::Owned(vec![model_instance; arity]))
         });
-    Some(Type::instance(db, class_type))
+    Some(Type::instance(db, env, class_type))
 }
 
 /// the more precise return type a drf method has once the receiver's class
@@ -1814,6 +1909,7 @@ fn substitute_model<'db>(
 /// the result is then a list serializer rather than the serializer class
 pub(in crate::types) fn drf_method_return_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     method: FunctionType<'db>,
     self_instance: Type<'db>,
     declared_return: Type<'db>,
@@ -1825,11 +1921,11 @@ pub(in crate::types) fn drf_method_return_type<'db>(
     if !is_drf_module(db, method.file(db)) {
         return None;
     }
-    let class = instance_static_class(db, self_instance)?;
+    let class = instance_static_class(db, env, self_instance)?;
     let name = method.name(db).as_str();
     let refined = match name {
         "get_queryset" | "get_object" => {
-            substitute_model(db, declared_return, drf_view_model(db, class)?)?
+            substitute_model(db, env, declared_return, drf_view_model(db, class)?)?
         }
         "get_serializer" | "get_serializer_class" => {
             // `get_serializer` builds its result by calling
@@ -1840,22 +1936,23 @@ pub(in crate::types) fn drf_method_return_type<'db>(
             }
             let serializer = Type::instance(
                 db,
+                env,
                 drf_view_serializer(db, class)?.default_specialization(db),
             );
             if name == "get_serializer" {
                 serializer
             } else {
-                serializer.to_meta_type(db)
+                serializer.to_meta_type(db, env)
             }
         }
         "save" | "create" | "update" => {
-            substitute_model(db, declared_return, drf_serializer_model(db, class)?)?
+            substitute_model(db, env, declared_return, drf_serializer_model(db, class)?)?
         }
         _ => return None,
     };
     // never contradict a view or serializer that *did* write its type argument
     refined
-        .is_assignable_to(db, declared_return)
+        .is_assignable_to(db, env, declared_return)
         .then_some(refined)
 }
 
@@ -1945,6 +2042,7 @@ const ALTERS_DATA_METHODS: &[&str] = &[
 ///   `update`, and django renders a field
 pub(in crate::types) fn refuses_template_call<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     receiver: Type<'db>,
     name: &str,
     member: Type<'db>,
@@ -1955,7 +2053,7 @@ pub(in crate::types) fn refuses_template_call<'db>(
     if !matches!(member, Type::FunctionLiteral(_) | Type::BoundMethod(_)) {
         return false;
     }
-    let Some(class) = instance_static_class(db, receiver) else {
+    let Some(class) = instance_static_class(db, env, receiver) else {
         return false;
     };
 
@@ -1973,7 +2071,7 @@ fn declared_by_django<'db>(db: &'db dyn Db, class: StaticClassLiteral<'db>, name
         .filter_map(ClassBase::into_class)
         .filter_map(|candidate| candidate.class_literal(db).as_static())
         .filter(|candidate| {
-            file_to_module(db, candidate.file(db))
+            file_to_module(db, candidate.program_file(db).resolver_file(db))
                 .is_some_and(|module| module.name(db).as_str().starts_with("django."))
         })
         .any(|candidate| {

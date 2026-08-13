@@ -42,7 +42,7 @@ from _typeshed import (
     SupportsRichComparisonT,
     SupportsWrite,
 )
-from collections.abc import Awaitable, Callable, Iterable, Iterator, MutableSet, Reversible, Set as AbstractSet, Sized
+from collections.abc import Awaitable, Callable, Iterable, Iterator, MutableSet, Set as AbstractSet, Sized
 from io import BufferedRandom, BufferedReader, BufferedWriter, FileIO, TextIOWrapper
 from os import PathLike
 from types import CellType, CodeType, EllipsisType, GenericAlias, NotImplementedType, TracebackType, UnionType
@@ -52,7 +52,8 @@ from types import CellType, CodeType, EllipsisType, GenericAlias, NotImplemented
 from typing import ClassVar, Final, Generic, ParamSpec, Protocol, TypeAlias, TypeVar, final, type_check_only
 
 # we can't import `Literal` from typing or mypy crashes: see #11247
-from typing_extensions import Never, Literal, LiteralString, Self, TypeIs, TypeVarTuple, deprecated, disjoint_base  # noqa: Y023, UP035
+from typing_extensions import Never, Literal, Self, TypeIs, TypeVarTuple, deprecated, disjoint_base  # noqa: Y023, UP035
+from ty_extensions import Top
 
 if sys.version_info >= (3, 14):
     from _typeshed import AnnotateFunc
@@ -835,7 +836,7 @@ class str(Sequence[str]):
     def __new__(cls, object: object = "") -> Self
     def __new__(cls, object: ReadableBuffer, encoding: str = "utf-8", errors: str = "strict") -> Self
 
-    def capitalize(self: LiteralString) -> LiteralString:
+    def capitalize(self: literal str) -> literal str:
         """Return a capitalized version of the string.
 
         More specifically, make the first character have upper case and the
@@ -843,11 +844,11 @@ class str(Sequence[str]):
         """
     def capitalize(self) -> str
 
-    def casefold(self: LiteralString) -> LiteralString:
+    def casefold(self: literal str) -> literal str:
         """Return a version of the string suitable for caseless comparisons."""
     def casefold(self) -> str
 
-    def center(self: LiteralString, width: SupportsIndex, fillchar: LiteralString = " ", /) -> LiteralString:
+    def center(self: literal str, width: SupportsIndex, fillchar: literal str = " ", /) -> literal str:
         """Return a centered string of length width.
 
         Padding is done using the specified fill character (default is
@@ -888,7 +889,7 @@ class str(Sequence[str]):
           Optional stop position. Default: end of the string.
         """
 
-    def expandtabs(self: LiteralString, tabsize: SupportsIndex = 8) -> LiteralString:
+    def expandtabs(self: literal str, tabsize: SupportsIndex = 8) -> literal str:
         """Return a copy where all tab characters are expanded using spaces.
 
         If tabsize is not given, a tab size of 8 characters is assumed.
@@ -902,7 +903,7 @@ class str(Sequence[str]):
         notation.  Return -1 on failure.
         """
 
-    def format(self: LiteralString, *args: LiteralString, **kwargs: LiteralString) -> LiteralString:
+    def format(self: literal str, *args: literal str, **kwargs: literal str) -> literal str:
         """Return a formatted version of the string, using substitutions from args and kwargs.
         The substitutions are identified by braces ('{' and '}').
         """
@@ -1003,7 +1004,7 @@ class str(Sequence[str]):
         uppercase and there is at least one cased character in the string.
         """
 
-    def join(self: LiteralString, iterable: Iterable[LiteralString], /) -> LiteralString:
+    def join(self: literal str, iterable: Iterable[literal str], /) -> literal str:
         """Concatenate any number of strings.
 
         The string whose method is called is inserted in between each given
@@ -1013,7 +1014,7 @@ class str(Sequence[str]):
         """
     def join(self, iterable: Iterable[str], /) -> str
 
-    def ljust(self: LiteralString, width: SupportsIndex, fillchar: LiteralString = " ", /) -> LiteralString:
+    def ljust(self: literal str, width: SupportsIndex, fillchar: literal str = " ", /) -> literal str:
         """Return a left-justified string of length width.
 
         Padding is done using the specified fill character (default is
@@ -1021,18 +1022,18 @@ class str(Sequence[str]):
         """
     def ljust(self, width: SupportsIndex, fillchar: str = " ", /) -> str
 
-    def lower(self: LiteralString) -> LiteralString:
+    def lower(self: literal str) -> literal str:
         """Return a copy of the string converted to lowercase."""
     def lower(self) -> str
 
-    def lstrip(self: LiteralString, chars: LiteralString | None = None, /) -> LiteralString:
+    def lstrip(self: literal str, chars: literal str | None = None, /) -> literal str:
         """Return a copy of the string with leading whitespace removed.
 
         If chars is given and not None, remove characters in chars instead.
         """
     def lstrip(self, chars: str | None = None, /) -> str
 
-    def partition(self: LiteralString, sep: LiteralString, /) -> (LiteralString, LiteralString, LiteralString):
+    def partition(self: literal str, sep: literal str, /) -> (literal str, literal str, literal str):
         """Partition the string into three parts using the given separator.
 
         This will search for the separator in the string.  If the separator
@@ -1045,7 +1046,7 @@ class str(Sequence[str]):
     def partition(self, sep: str, /) -> (str, str, str)
 
     if sys.version_info >= (3, 13):
-        def replace(self: LiteralString, old: LiteralString, new: LiteralString, /, count: SupportsIndex = -1) -> LiteralString:
+        def replace(self: literal str, old: literal str, new: literal str, /, count: SupportsIndex = -1) -> literal str:
             """Return a copy with all occurrences of substring old replaced by new.
 
               count
@@ -1057,7 +1058,7 @@ class str(Sequence[str]):
             """
         def replace(self, old: str, new: str, /, count: SupportsIndex = -1) -> str
     else:
-        def replace(self: LiteralString, old: LiteralString, new: LiteralString, count: SupportsIndex = -1, /) -> LiteralString:
+        def replace(self: literal str, old: literal str, new: literal str, count: SupportsIndex = -1, /) -> literal str:
             """Return a copy with all occurrences of substring old replaced by new.
 
               count
@@ -1069,7 +1070,7 @@ class str(Sequence[str]):
             """
         def replace(self, old: str, new: str, count: SupportsIndex = -1, /) -> str
 
-    def removeprefix(self: LiteralString, prefix: LiteralString, /) -> LiteralString:
+    def removeprefix(self: literal str, prefix: literal str, /) -> literal str:
         """Return a str with the given prefix string removed if present.
 
         If the string starts with the prefix string, return
@@ -1078,7 +1079,7 @@ class str(Sequence[str]):
         """
     def removeprefix(self, prefix: str, /) -> str
 
-    def removesuffix(self: LiteralString, suffix: LiteralString, /) -> LiteralString:
+    def removesuffix(self: literal str, suffix: literal str, /) -> literal str:
         """Return a str with the given suffix string removed if present.
 
         If the string ends with the suffix string and that suffix is not
@@ -1101,7 +1102,7 @@ class str(Sequence[str]):
         notation.  Raises ValueError when the substring is not found.
         """
 
-    def rjust(self: LiteralString, width: SupportsIndex, fillchar: LiteralString = " ", /) -> LiteralString:
+    def rjust(self: literal str, width: SupportsIndex, fillchar: literal str = " ", /) -> literal str:
         """Return a right-justified string of length width.
 
         Padding is done using the specified fill character (default is
@@ -1109,7 +1110,7 @@ class str(Sequence[str]):
         """
     def rjust(self, width: SupportsIndex, fillchar: str = " ", /) -> str
 
-    def rpartition(self: LiteralString, sep: LiteralString, /) -> (LiteralString, LiteralString, LiteralString):
+    def rpartition(self: literal str, sep: literal str, /) -> (literal str, literal str, literal str):
         """Partition the string into three parts using the given separator.
 
         This will search for the separator in the string, starting at the
@@ -1122,7 +1123,7 @@ class str(Sequence[str]):
         """
     def rpartition(self, sep: str, /) -> (str, str, str)
 
-    def rsplit(self: LiteralString, sep: LiteralString | None = None, maxsplit: SupportsIndex = -1) -> list[LiteralString]:
+    def rsplit(self: literal str, sep: literal str | None = None, maxsplit: SupportsIndex = -1) -> list[literal str]:
         """Return a list of the substrings in the string, using sep as the separator string.
 
           sep
@@ -1139,14 +1140,14 @@ class str(Sequence[str]):
         """
     def rsplit(self, sep: str | None = None, maxsplit: SupportsIndex = -1) -> list[str]
 
-    def rstrip(self: LiteralString, chars: LiteralString | None = None, /) -> LiteralString:
+    def rstrip(self: literal str, chars: literal str | None = None, /) -> literal str:
         """Return a copy of the string with trailing whitespace removed.
 
         If chars is given and not None, remove characters in chars instead.
         """
     def rstrip(self, chars: str | None = None, /) -> str
 
-    def split(self: LiteralString, sep: LiteralString | None = None, maxsplit: SupportsIndex = -1) -> list[LiteralString]:
+    def split(self: literal str, sep: literal str | None = None, maxsplit: SupportsIndex = -1) -> list[literal str]:
         """Return a list of the substrings in the string, using sep as the separator string.
 
           sep
@@ -1167,7 +1168,7 @@ class str(Sequence[str]):
         """
     def split(self, sep: str | None = None, maxsplit: SupportsIndex = -1) -> list[str]
 
-    def splitlines(self: LiteralString, keepends: bool = False) -> list[LiteralString]:
+    def splitlines(self: literal str, keepends: bool = False) -> list[literal str]:
         """Return a list of the lines in the string, breaking at line boundaries.
 
         Line breaks are not included in the resulting list unless keepends
@@ -1188,18 +1189,18 @@ class str(Sequence[str]):
           Optional stop position. Default: end of the string.
         """
 
-    def strip(self: LiteralString, chars: LiteralString | None = None, /) -> LiteralString:
+    def strip(self: literal str, chars: literal str | None = None, /) -> literal str:
         """Return a copy of the string with leading and trailing whitespace removed.
 
         If chars is given and not None, remove characters in chars instead.
         """
     def strip(self, chars: str | None = None, /) -> str
 
-    def swapcase(self: LiteralString) -> LiteralString:
+    def swapcase(self: literal str) -> literal str:
         """Convert uppercase characters to lowercase and lowercase characters to uppercase."""
     def swapcase(self) -> str
 
-    def title(self: LiteralString) -> LiteralString:
+    def title(self: literal str) -> literal str:
         """Return a version of the string where each word is titlecased.
 
         More specifically, words start with uppercased characters and all
@@ -1220,11 +1221,11 @@ class str(Sequence[str]):
         None are deleted.
         """
 
-    def upper(self: LiteralString) -> LiteralString:
+    def upper(self: literal str) -> literal str:
         """Return a copy of the string converted to uppercase."""
     def upper(self) -> str
 
-    def zfill(self: LiteralString, width: SupportsIndex, /) -> LiteralString:
+    def zfill(self: literal str, width: SupportsIndex, /) -> literal str:
         """Pad a numeric string with zeros on the left, to fill a field of the given width.
 
         The string is never truncated.
@@ -1286,7 +1287,7 @@ class str(Sequence[str]):
     @staticmethod
     def maketrans(x: str, y: str, z: str, /) -> dict[int, int | None]
 
-    def __add__(self: LiteralString, value: LiteralString, /) -> LiteralString:
+    def __add__(self: literal str, value: literal str, /) -> literal str:
         """Return self+value."""
     def __add__(self, value: str, /) -> str
 
@@ -1297,14 +1298,14 @@ class str(Sequence[str]):
     override def __eq__(self, value: object, /) -> bool
     def __ge__(self, value: str, /) -> bool
 
-    override def __getitem__(self: LiteralString, key: SupportsIndex | slice[SupportsIndex | None], /) -> LiteralString:
+    override def __getitem__(self: literal str, key: SupportsIndex | slice[SupportsIndex | None], /) -> literal str:
         """Return self[key]."""
     def __getitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> str
 
     def __gt__(self, value: str, /) -> bool
     override def __hash__(self) -> int
 
-    override def __iter__(self: LiteralString) -> Iterator[LiteralString]:
+    override def __iter__(self: literal str) -> Iterator[literal str]:
         """Implement iter(self)."""
     def __iter__(self) -> Iterator[str]
 
@@ -1314,17 +1315,17 @@ class str(Sequence[str]):
 
     def __lt__(self, value: str, /) -> bool
 
-    def __mod__(self: LiteralString, value: LiteralString | (*: LiteralString), /) -> LiteralString:
+    def __mod__(self: literal str, value: literal str | (*: literal str), /) -> literal str:
         """Return self%value."""
     def __mod__(self, value: dynamic, /) -> str
 
-    def __mul__(self: LiteralString, value: SupportsIndex, /) -> LiteralString:
+    def __mul__(self: literal str, value: SupportsIndex, /) -> literal str:
         """Return self*value."""
     def __mul__(self, value: SupportsIndex, /) -> str
 
     override def __ne__(self, value: object, /) -> bool
 
-    def __rmul__(self: LiteralString, value: SupportsIndex, /) -> LiteralString:
+    def __rmul__(self: literal str, value: SupportsIndex, /) -> literal str:
         """Return value*self."""
     def __rmul__(self, value: SupportsIndex, /) -> str
 
@@ -1826,7 +1827,7 @@ class bytearray(MutableSequence[int]):
     init(self, ints: Iterable[SupportsIndex] | SupportsIndex | ReadableBuffer, /)
     init(self, string: str, /, encoding: str, errors: str = "strict")
 
-    override def append(self, item: SupportsIndex, /) -> None:
+    override def append(self, item: SupportsIndex, /):
         """Append a single item to the end of the bytearray.
 
         item
@@ -1896,7 +1897,7 @@ class bytearray(MutableSequence[int]):
         If tabsize is not given, a tab size of 8 characters is assumed.
         """
 
-    override def extend(self, iterable_of_ints: Iterable[SupportsIndex], /) -> None:
+    override def extend(self, iterable_of_ints: Iterable[SupportsIndex], /):
         """Append all the items from the iterator or sequence to the end of the bytearray.
 
         iterable_of_ints
@@ -1950,7 +1951,7 @@ class bytearray(MutableSequence[int]):
         Raise ValueError if the subsection is not found.
         """
 
-    override def insert(self, index: SupportsIndex, item: SupportsIndex, /) -> None:
+    override def insert(self, index: SupportsIndex, item: SupportsIndex, /):
         """Insert a single item into the bytearray before the given index.
 
         index
@@ -2066,7 +2067,7 @@ class bytearray(MutableSequence[int]):
         If no index argument is given, will pop the last item.
         """
 
-    override def remove(self, value: int, /) -> None:
+    override def remove(self, value: int, /):
         """Remove the first occurrence of a value in the bytearray.
 
         value
@@ -2309,7 +2310,7 @@ class bytearray(MutableSequence[int]):
         """Set self[key] to value."""
     def __setitem__(self, key: slice[SupportsIndex | None], value: Iterable[SupportsIndex] | bytes, /) -> None
 
-    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> None:
+    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /):
         """Delete self[key]."""
 
     def __add__(self, value: ReadableBuffer, /) -> bytearray:
@@ -2563,6 +2564,7 @@ final class slice[out StartT = dynamic, out StopT = StartT, out StepT = StartT |
     override def __eq__(self, value: object, /) -> bool
     if sys.version_info >= (3, 12):
         def __hash__(self) -> int
+
     else:
         __hash__: ClassVar[None]
 
@@ -2654,10 +2656,10 @@ class list[in out Element](MutableSequence[Element]):
     def copy[WidenElement = Never](self) -> list[Element | WidenElement]:
         """Return a shallow copy of the list."""
 
-    override def append(self, object: Element, /) -> None:
+    override def append(self, object: Element, /):
         """Append object to the end of the list."""
 
-    override def extend(self, iterable: Iterable[Element], /) -> None:
+    override def extend(self, iterable: Iterable[Element], /):
         """Extend list by appending elements from the iterable."""
 
     override def pop(self, index: SupportsIndex = -1, /) -> Element:
@@ -2677,10 +2679,10 @@ class list[in out Element](MutableSequence[Element]):
     override def count(self, value: Element, /) -> int:
         """Return number of occurrences of value."""
 
-    override def insert(self, index: SupportsIndex, object: Element, /) -> None:
+    override def insert(self, index: SupportsIndex, object: Element, /):
         """Insert object before index."""
 
-    override def remove(self, value: Element, /) -> None:
+    override def remove(self, value: Element, /):
         """Remove first occurrence of value.
 
         Raises ValueError if the value is not present.
@@ -2720,7 +2722,7 @@ class list[in out Element](MutableSequence[Element]):
         """Set self[key] to value."""
     def __setitem__(self, key: slice[SupportsIndex | None], value: Iterable[Element], /) -> None
 
-    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> None:
+    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /):
         """Delete self[key]."""
 
     # Overloading looks unnecessary, but is needed to work around complex mypy problems
@@ -2834,10 +2836,10 @@ class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
     override def __getitem__(self, key: Overlapping[Key], /) -> Value:
         """Return self[key]."""
 
-    override def __setitem__(self, key: Key, value: Value, /) -> None:
+    override def __setitem__(self, key: Key, value: Value, /):
         """Set self[key] to value."""
 
-    override def __delitem__(self, key: Key, /) -> None:
+    override def __delitem__(self, key: Key, /):
         """Delete self[key]."""
 
     override def __iter__(self) -> Iterator[Key]:
@@ -2858,6 +2860,7 @@ class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
         def __ror__[T1, T2, WidenKey = Never, WidenValue = Never](self, value: dict[T1, T2], /) -> dict[Key | T1 | WidenKey, Value | T2 | WidenValue]:
             """Return value|self."""
         def __ror__[T1, T2](self, value: frozendict[T1, T2], /) -> frozendict[Key | T1, Value | T2]
+
     else:
         def __or__[T1, T2, WidenKey = Never, WidenValue = Never](self, value: dict[T1, T2], /) -> dict[Key | T1 | WidenKey, Value | T2 | WidenValue]:
             """Return self|value."""
@@ -2946,7 +2949,7 @@ class set[in out Element: Hashable](MutableSet[Element]):
     init(self)
     init(self, iterable: Iterable[Element], /)
 
-    override def add(self, element: Element, /) -> None:
+    override def add(self, element: Element, /):
         """Add an element to a set.
 
         This has no effect if the element is already present.
@@ -2961,7 +2964,7 @@ class set[in out Element: Hashable](MutableSet[Element]):
     def difference_update(self, *s: Iterable[object]):
         """Update the set, removing elements found in others."""
 
-    override def discard(self, element: object, /) -> None:
+    override def discard(self, element: object, /):
         """Remove an element from a set if it is a member.
 
         Unlike set.remove(), the discard() method does not raise
@@ -2983,7 +2986,7 @@ class set[in out Element: Hashable](MutableSet[Element]):
     def issuperset(self, s: Iterable[object], /) -> bool:
         """Report whether this set contains another set."""
 
-    override def remove(self, element: Element, /) -> None:
+    override def remove(self, element: Element, /):
         """Remove an element from a set; it must be a member.
 
         If the element is not a member, raise a KeyError.
@@ -3288,7 +3291,7 @@ def breakpoint(*args: dynamic, **kws: dynamic):
     By default, this drops you into the pdb debugger.
     """
 
-def callable(obj: object, /) -> obj is (...) -> object:
+def callable(obj: object, /) -> obj is Top[(...) -> object]:
     """Return whether the object is callable (i.e., some kind of function).
 
     Note that classes are callable, as are instances of classes with a
@@ -4147,7 +4150,7 @@ private type SupportsSomeKindOfPow = (
 )
 
 # TODO: `pow(int, int, Literal[0])` fails at runtime,
-# but adding a `NoReturn` overload isn't a good solution for expressing that (see #8566).
+# but adding a `Never` overload isn't a good solution for expressing that (see #8566).
 def pow(base: int, exp: int, mod: int) -> int:
     """Equivalent to base**exp with 2 arguments or base**exp % mod with 3 arguments
 
@@ -4178,12 +4181,16 @@ def pow(base: SupportsSomeKindOfPow, exp: complex, mod: None = None) -> complex
 
 quit: _sitebuiltins.Quitter
 
+@type_check_only
+private protocol SupportsReversed[out Element]:
+    def __reversed__(self) -> Element
+
 @disjoint_base
-class reversed[in out Element]:
+class reversed[out Element]:
     """Return a reverse iterator over the values of the given sequence."""
 
-    def __new__(cls, sequence: Reversible[Element], /) -> Iterator[Element]
-    def __new__(cls, sequence: SupportsLenAndGetItem[Element], /) -> Iterator[Element]
+    def __new__[T](cls, sequence: SupportsReversed[T], /) -> T
+    def __new__(cls, sequence: SupportsLenAndGetItem[Element], /) -> Self
 
     def __iter__(self) -> Self:
         """Implement iter(self)."""
@@ -4406,7 +4413,7 @@ class BaseException:
     __suppress_context__: bool
     __traceback__: TracebackType | None
     init(self, *args: object)
-    def __new__(cls, *args: dynamic, **kwds: dynamic) -> Self
+    def __new__(cls, /, *args: dynamic, **kwds: dynamic) -> Self
     def __setstate__(self, state: dict[str, dynamic] | None, /)
     def with_traceback(self, tb: TracebackType | None, /) -> Self:
         """Set self.__traceback__ to tb and return self."""

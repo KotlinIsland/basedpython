@@ -243,4 +243,3 @@ Module(
 6 | async def outer():
 7 |     d: (await 1)
   |         ^^^^^^^ Syntax Error: await expression cannot be used within a type annotation
-  |

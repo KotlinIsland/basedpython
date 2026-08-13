@@ -17,9 +17,9 @@ class upload(PyPIRCCommand):
     show_response: int
     sign: bool
     identity: Incomplete
-    override def initialize_options(self) -> None
+    override def initialize_options(self)
     repository: Incomplete
     realm: Incomplete
-    override def finalize_options(self) -> None
-    override def run(self) -> None
+    override def finalize_options(self)
+    override def run(self)
     def upload_file(self, command: str, pyversion: str, filename: str)

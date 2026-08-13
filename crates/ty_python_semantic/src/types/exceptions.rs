@@ -46,6 +46,7 @@ use ty_python_core::definition::Definition;
 use ty_python_core::scope::ScopeId;
 
 use crate::Db;
+use crate::types::ProgramEnvironment;
 use crate::types::context::InferContext;
 use crate::types::diagnostic::{
     INVALID_RAISES_CLAUSE, OVERRIDE_RAISE, UNDECLARED_RAISE, UNHANDLED_EXCEPTION,
@@ -112,10 +113,12 @@ pub(crate) fn raised_exceptions<'db>(db: &'db dyn Db, overload: OverloadLiteral<
 /// miss one that can.
 pub(crate) fn function_raised_exceptions<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     function: FunctionLiteral<'db>,
 ) -> Type<'db> {
     UnionType::from_elements(
         db,
+        env,
         function
             .iter_overloads_and_implementation(db)
             .map(|overload| raised_exceptions(db, overload))
@@ -140,7 +143,7 @@ pub(crate) fn declared_exceptions<'db>(
     if !file.source_type(db).is_basedpython() {
         return None;
     }
-    let module = parsed_module(db, file).load(db);
+    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let raises = overload.node(db, file, &module).raises.as_deref()?;
 
     if raises.is_ellipsis_literal_expr() {
@@ -164,8 +167,10 @@ pub(crate) fn inferred_exceptions<'db>(
     db: &'db dyn Db,
     overload: OverloadLiteral<'db>,
 ) -> Type<'db> {
+    let env = &ProgramEnvironment::from_file(overload.program_file(db));
     resolve_effects(
         db,
+        env,
         body_exception_effects(db, overload),
         Some(overload.body_scope(db)),
     )
@@ -181,26 +186,29 @@ pub(crate) fn body_exception_effects<'db>(
     db: &'db dyn Db,
     overload: OverloadLiteral<'db>,
 ) -> ExceptionEffects<'db> {
+    let env = &ProgramEnvironment::from_file(overload.program_file(db));
     let file = overload.file(db);
     if !file.source_type(db).is_basedpython() {
         return ExceptionEffects::default();
     }
-    let module = parsed_module(db, file).load(db);
+    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let node = overload.node(db, file, &module);
     let inference = infer_scope_types(db, overload.body_scope(db), TypeContext::default());
 
-    collect_exception_effects(db, &node.body, |expr| inference.expression_type(expr))
+    collect_exception_effects(db, env, &node.body, |expr| inference.expression_type(expr))
 }
 
 /// Union the exceptions escaping `effects`, following each call into its callee.
 pub(crate) fn resolve_effects<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     effects: &ExceptionEffects<'db>,
     self_body_scope: Option<ScopeId<'db>>,
 ) -> Type<'db> {
     UnionType::from_elements(
         db,
-        escaping_sites(db, effects, self_body_scope, &[])
+        env,
+        escaping_sites(db, env, effects, self_body_scope, &[])
             .into_iter()
             .map(|(_, raised)| raised),
     )
@@ -215,6 +223,7 @@ pub(crate) fn resolve_effects<'db>(
 /// re-entered.
 pub(crate) fn escaping_sites<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     effects: &ExceptionEffects<'db>,
     self_body_scope: Option<ScopeId<'db>>,
     allowed: &[Type<'db>],
@@ -222,7 +231,7 @@ pub(crate) fn escaping_sites<'db>(
     let direct = effects
         .direct
         .iter()
-        .filter_map(|raise| Some((raise.range, escaping(db, raise.raised, allowed)?)));
+        .filter_map(|raise| Some((raise.range, escaping(db, env, raise.raised, allowed)?)));
 
     let from_calls = effects
         .calls
@@ -236,10 +245,11 @@ pub(crate) fn escaping_sites<'db>(
         .filter_map(|call| {
             let raised = escaping(
                 db,
-                function_raised_exceptions(db, call.callee),
+                env,
+                function_raised_exceptions(db, env, call.callee),
                 &call.caught,
             )?;
-            Some((call.range, escaping(db, raised, allowed)?))
+            Some((call.range, escaping(db, env, raised, allowed)?))
         });
 
     direct.chain(from_calls).collect()
@@ -253,6 +263,7 @@ pub(crate) fn escaping_sites<'db>(
 /// everything.
 pub(crate) fn escaping<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     raised: Type<'db>,
     caught: &[Type<'db>],
 ) -> Option<Type<'db>> {
@@ -262,6 +273,7 @@ pub(crate) fn escaping<'db>(
 
     let escaped = UnionType::from_elements(
         db,
+        env,
         union_elements(db, raised).into_iter().filter(|element| {
             // a dynamic member is an unknown exception, not a known one: it is
             // what `raises ...` declares, and what an unreadable `raise` leaves
@@ -269,7 +281,7 @@ pub(crate) fn escaping<'db>(
             !element.is_dynamic()
                 && !caught
                     .iter()
-                    .any(|caught| element.is_assignable_to(db, *caught))
+                    .any(|caught| element.is_assignable_to(db, env, *caught))
         }),
     );
 
@@ -291,11 +303,13 @@ pub(crate) fn union_elements<'db>(db: &'db dyn Db, ty: Type<'db>) -> Vec<Type<'d
 /// read that in-progress inference rather than re-entering it as a query.
 pub(crate) fn collect_exception_effects<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     body: &[Stmt],
     expression_type: impl Fn(&Expr) -> Type<'db>,
 ) -> ExceptionEffects<'db> {
     let mut collector = EffectsCollector {
         db,
+        env: env.clone(),
         expression_type,
         caught: Vec::new(),
         handling: Vec::new(),
@@ -312,6 +326,7 @@ pub(crate) fn collect_exception_effects<'db>(
 
 struct EffectsCollector<'db, F> {
     db: &'db dyn Db,
+    env: ProgramEnvironment<'db>,
     expression_type: F,
     /// the exception types caught by the `except` clauses currently enclosing
     /// the node being visited, innermost last
@@ -328,6 +343,7 @@ where
     F: Fn(&Expr) -> Type<'db>,
 {
     fn visit_try(&mut self, try_stmt: &ast::StmtTry) {
+        let env = self.env.clone();
         // an `except*` clause does not simply catch what it names — what escapes
         // it is a regrouped `ExceptionGroup` — so it is treated as catching
         // nothing rather than pretending either way
@@ -361,7 +377,7 @@ where
                 caught
                     .get(index)
                     .copied()
-                    .unwrap_or_else(|| KnownClass::BaseException.to_instance(self.db)),
+                    .unwrap_or_else(|| KnownClass::BaseException.to_instance(self.db, &env)),
             );
             self.visit_body(&handler.body);
             self.handling.pop();
@@ -375,14 +391,16 @@ where
     /// The exception instance type an `except` clause catches. A bare `except:`
     /// catches everything, and so does a clause this analysis cannot read.
     fn caught_type(&self, type_: Option<&Expr>) -> Type<'db> {
+        let env = self.env.clone();
         let Some(type_) = type_ else {
-            return KnownClass::BaseException.to_instance(self.db);
+            return KnownClass::BaseException.to_instance(self.db, &env);
         };
 
         let caught = (self.expression_type)(type_);
-        if let Some(tuple) = caught.tuple_instance_spec(self.db) {
+        if let Some(tuple) = caught.tuple_instance_spec(self.db, &env) {
             return UnionType::from_elements(
                 self.db,
+                &env,
                 tuple
                     .iter_element_types(self.db)
                     .map(|element| self.exception_instance(element))
@@ -394,6 +412,7 @@ where
     }
 
     fn record_raise(&mut self, raise: &ast::StmtRaise) {
+        let env = self.env.clone();
         let range = raise.range();
         let Some(exception) = raise.exc.as_deref() else {
             // a bare `raise` re-raises what the enclosing handler caught; outside
@@ -402,7 +421,7 @@ where
                 .handling
                 .last()
                 .copied()
-                .unwrap_or_else(|| KnownClass::RuntimeError.to_instance(self.db));
+                .unwrap_or_else(|| KnownClass::RuntimeError.to_instance(self.db, &env));
             self.record_escaping(reraised, range);
             return;
         };
@@ -415,9 +434,14 @@ where
     /// Read `ty` as the exception instance it produces: `raise TypeError` names
     /// the class, `raise TypeError(...)` and `raise err` name an instance.
     fn exception_instance(&self, ty: Type<'db>) -> Type<'db> {
-        if ty.is_assignable_to(self.db, KnownClass::BaseException.to_subclass_of(self.db)) {
-            ty.to_instance_approximation(self.db)
-                .unwrap_or_else(|| KnownClass::BaseException.to_instance(self.db))
+        let env = self.env.clone();
+        if ty.is_assignable_to(
+            self.db,
+            &env,
+            KnownClass::BaseException.to_subclass_of(self.db, &env),
+        ) {
+            ty.to_instance_approximation(self.db, &env)
+                .unwrap_or_else(|| KnownClass::BaseException.to_instance(self.db, &env))
         } else {
             ty
         }
@@ -426,7 +450,8 @@ where
     /// Record `raised` as raised at `range`, minus whatever the enclosing
     /// handlers catch.
     fn record_escaping(&mut self, raised: Type<'db>, range: TextRange) {
-        if let Some(escaping) = escaping(self.db, raised, &self.caught) {
+        let env = self.env.clone();
+        if let Some(escaping) = escaping(self.db, &env, raised, &self.caught) {
             self.direct.push(RaiseEffect {
                 raised: escaping,
                 range,
@@ -449,6 +474,7 @@ where
     F: Fn(&Expr) -> Type<'db>,
 {
     fn visit_stmt(&mut self, stmt: &Stmt) {
+        let env = self.env.clone();
         match stmt {
             // a nested function does not run where it is defined; its own body is
             // analysed when something calls it. its decorators and defaults do run
@@ -475,7 +501,7 @@ where
             Stmt::Assert(assert) => {
                 walk_stmt(self, stmt);
                 self.record_escaping(
-                    KnownClass::AssertionError.to_instance(self.db),
+                    KnownClass::AssertionError.to_instance(self.db, &env),
                     assert.range(),
                 );
             }
@@ -555,6 +581,7 @@ pub(super) fn check_override_raises<'db>(
     superclass_function: FunctionType<'db>,
     superclass: ClassType<'db>,
 ) {
+    let env = context.program_environment();
     let db = context.db();
     // resolving both sets walks two call graphs, so do nothing at all unless the
     // strictness option asked for it
@@ -562,9 +589,9 @@ pub(super) fn check_override_raises<'db>(
         return;
     }
 
-    let allowed = function_raised_exceptions(db, superclass_function.literal(db));
-    let raised = function_raised_exceptions(db, subclass_function.literal(db));
-    let Some(extra) = escaping(db, raised, &[allowed]) else {
+    let allowed = function_raised_exceptions(db, env, superclass_function.literal(db));
+    let raised = function_raised_exceptions(db, env, subclass_function.literal(db));
+    let Some(extra) = escaping(db, env, raised, &[allowed]) else {
         return;
     };
 
@@ -580,7 +607,7 @@ pub(super) fn check_override_raises<'db>(
     };
     let mut diagnostic = builder.into_diagnostic(format_args!(
         "`{member}` can raise `{}`, which the method it overrides cannot",
-        extra.display(db)
+        extra.display(db, env)
     ));
     let base = superclass.name(db);
     let annotation = Annotation::secondary(
@@ -595,7 +622,7 @@ pub(super) fn check_override_raises<'db>(
     } else {
         annotation.message(format_args!(
             "`{base}.{member}` raises only `{}`",
-            allowed.display(db)
+            allowed.display(db, env)
         ))
     });
 }
@@ -614,6 +641,7 @@ pub(super) fn check_function_exceptions<'db, 'ast>(
     definition: Definition<'db>,
     expression_type: impl Fn(&Expr) -> Type<'db>,
 ) {
+    let env = context.program_environment();
     let db = context.db();
     if !context.file().source_type(db).is_basedpython() {
         return;
@@ -638,12 +666,12 @@ pub(super) fn check_function_exceptions<'db, 'ast>(
         None => return,
     };
 
-    let effects = collect_exception_effects(db, &function.body, expression_type);
+    let effects = collect_exception_effects(db, env, &function.body, expression_type);
     if effects.is_empty() {
         return;
     }
 
-    for (range, escaped) in escaping_sites(db, &effects, Some(body_scope), &allowed) {
+    for (range, escaped) in escaping_sites(db, env, &effects, Some(body_scope), &allowed) {
         let name = &function.name.id;
         if declared.is_some() {
             let Some(builder) = context.report_lint(&UNDECLARED_RAISE, range) else {
@@ -651,7 +679,7 @@ pub(super) fn check_function_exceptions<'db, 'ast>(
             };
             builder.into_diagnostic(format_args!(
                 "`{name}` can raise `{}`, which its `raises` clause does not include",
-                escaped.display(db)
+                escaped.display(db, env)
             ));
         } else {
             let Some(builder) = context.report_lint(&UNHANDLED_EXCEPTION, range) else {
@@ -659,7 +687,7 @@ pub(super) fn check_function_exceptions<'db, 'ast>(
             };
             builder.into_diagnostic(format_args!(
                 "`{}` can escape `{name}`, the entry point",
-                escaped.display(db)
+                escaped.display(db, env)
             ));
         }
     }
@@ -688,18 +716,19 @@ fn check_raises_clause_is_exceptions<'db, 'ast>(
     clause: &'ast Expr,
     declared: Type<'db>,
 ) {
+    let env = context.program_environment();
     let db = context.db();
     if declared.is_never() || declared.is_dynamic() {
         return;
     }
-    if !declared.is_disjoint_from(db, KnownClass::BaseException.to_instance(db)) {
+    if !declared.is_disjoint_from(db, env, KnownClass::BaseException.to_instance(db, env)) {
         return;
     }
 
     if let Some(builder) = context.report_lint(&INVALID_RAISES_CLAUSE, clause) {
         builder.into_diagnostic(format_args!(
             "`{}` contains no exception, so nothing can satisfy this `raises` clause",
-            declared.display(db)
+            declared.display(db, env)
         ));
     }
 }
@@ -712,6 +741,7 @@ fn check_raises_clause_is_exceptions<'db, 'ast>(
 /// becomes the empty tuple, which no exception is an instance of.
 pub fn declared_raises_runtime_target<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: ruff_db::files::File,
     function: Type<'db>,
 ) -> Option<String> {
@@ -727,7 +757,7 @@ pub fn declared_raises_runtime_target<'db>(
         return Some("()".to_string());
     }
 
-    crate::types::soundness::runtime_check_target(db, file, declared)
+    crate::types::soundness::runtime_check_target(db, env, file, declared)
 }
 
 /// Whether `function` is the module's entry point — a `main` defined directly at

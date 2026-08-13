@@ -28,7 +28,7 @@ use crate::Db;
 pub fn private_symbols(db: &dyn Db, file: File) -> FxHashSet<Name> {
     let _span = tracing::trace_span!("private_symbols", file=?file.path(db)).entered();
 
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let source = source_text(db, file);
 
     let mut names = FxHashSet::default();

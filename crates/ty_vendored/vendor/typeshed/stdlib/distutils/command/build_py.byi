@@ -7,7 +7,7 @@ from _typeshed import Incomplete
 from typing import ClassVar, Literal
 
 from ..cmd import Command
-from ..util import Mixin2to3 as Mixin2to3
+from ..util export Mixin2to3
 
 class build_py(Command):
     description: str
@@ -22,11 +22,11 @@ class build_py(Command):
     compile: int
     optimize: int
     force: Incomplete
-    override def initialize_options(self) -> None
+    override def initialize_options(self)
     packages: Incomplete
     data_files: Incomplete
-    override def finalize_options(self) -> None
-    override def run(self) -> None
+    override def finalize_options(self)
+    override def run(self)
     def get_data_files(self):
         """Generate list of '(package,src_dir,build_dir,filenames)' tuples"""
 
@@ -73,5 +73,5 @@ class build_py(Command):
 
 class build_py_2to3(build_py, Mixin2to3):
     updated_files: Incomplete
-    override def run(self) -> None
+    override def run(self)
     override def build_module(self, module, module_file, package)

@@ -79,7 +79,6 @@ UP007 [*] Use `X | Y` for type annotations
 10 | d: Union[list[literal str], int]
 11 | e: Union[typeof d, int]
    |    ^^^^^^^^^^^^^^^^^^^^
-   |
 help: Convert to `X | Y`
    |
 10 | d: Union[list[literal str], int]

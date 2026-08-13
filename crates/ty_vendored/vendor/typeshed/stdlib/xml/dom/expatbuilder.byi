@@ -6,6 +6,7 @@ This avoids all the overhead of SAX and pulldom to gain performance.
 
 from _typeshed import ReadableBuffer, SupportsRead
 from typing import Final, TypeAlias
+from typing_extensions import Never
 from xml.dom.minidom import Document, DocumentFragment, DOMImplementation, Element, Node, TypeInfo
 from xml.dom.xmlbuilder import DOMBuilderFilter, Options
 from xml.parsers.expat import XMLParserType
@@ -127,7 +128,7 @@ class FragmentBuilder(ExpatBuilder):
     originalDocument: Document
     context: Node
     init(self, context: Node, options: Options | None = None)
-    override def reset(self) -> None
+    override def reset(self)
     override def parseFile(self, file: SupportsRead[ReadableBuffer | str]) -> DocumentFragment:
         """Parse a document fragment from a file object, returning the
         fragment node.
@@ -171,13 +172,13 @@ class InternalSubsetExtractor(ExpatBuilder):
     def getSubset(self) -> str:
         """Return the internal subset as a string."""
 
-    override def parseFile(self, file: SupportsRead[ReadableBuffer | str]) -> None
-    override def parseString(self, string: str | ReadableBuffer) -> None
+    override def parseFile(self, file: SupportsRead[ReadableBuffer | str])
+    override def parseString(self, string: str | ReadableBuffer)
     override def start_doctype_decl_handler(
         self, name: str, publicId: str | None, systemId: str | None, has_internal_subset: bool
-    ) -> None
-    override def end_doctype_decl_handler(self) -> NoReturn
-    override def start_element_handler(self, name: str, attrs: list[str]) -> NoReturn
+    )
+    override def end_doctype_decl_handler(self) -> Never
+    override def start_element_handler(self, name: str, attrs: list[str]) -> Never
 
 def parse(file: str | SupportsRead[ReadableBuffer | str], namespaces: bool = True) -> Document:
     """Parse a document, returning the resulting Document node.

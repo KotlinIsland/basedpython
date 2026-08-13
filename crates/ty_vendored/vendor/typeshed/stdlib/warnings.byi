@@ -2,11 +2,11 @@
 
 import re
 import sys
-from _warnings import warn as warn, warn_explicit as warn_explicit
+from _warnings export warn, warn_explicit
 from collections.abc import Sequence
 from types import ModuleType, TracebackType
 from typing import Generic, Literal, TypeAlias
-from typing_extensions import LiteralString, TypeVar
+from typing_extensions import TypeVar
 
 __all__ = [
     "warn",
@@ -229,8 +229,8 @@ if sys.version_info >= (3, 13):
 
         """
 
-        message: LiteralString
+        message: literal str
         category: type[Warning] | None
         stacklevel: int
-        init(self, message: LiteralString, /, *, category: type[Warning] | None = ..., stacklevel: int = 1)
+        init(self, message: literal str, /, *, category: type[Warning] | None = ..., stacklevel: int = 1)
         def __call__[Element](self, arg: Element, /) -> Element

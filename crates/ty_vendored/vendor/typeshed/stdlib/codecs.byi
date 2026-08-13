@@ -220,7 +220,7 @@ def getwriter(encoding: str) -> _StreamWriter:
 
     """
 
-@deprecated("Deprecated since Python 3.14. Use `open()` instead.")
+@deprecated("Deprecated. Use `open()` instead.")
 def open(
     filename: str, mode: str = "r", encoding: str | None = None, errors: str = "strict", buffering: int = -1
 ) -> StreamReaderWriter:
@@ -682,20 +682,20 @@ class StreamReaderWriter(TextIO):
         """Return the next decoded line from the input stream."""
 
     override def __iter__(self) -> Self
-    override def write(self, data: str) -> None
-    override def writelines(self, list: Iterable[str]) -> None
+    override def write(self, data: str)
+    override def writelines(self, list: Iterable[str])
     def reset(self)
-    override def seek(self, offset: int, whence: int = 0) -> None
+    override def seek(self, offset: int, whence: int = 0)
     override def __enter__(self) -> Self
-    override def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
+    override def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None)
     def __getattr__(self, name: str) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
     # These methods don't actually exist directly, but they are needed to satisfy the TextIO
     # interface. At runtime, they are delegated through __getattr__.
-    override def close(self) -> None
+    override def close(self)
     override def fileno(self) -> int
-    override def flush(self) -> None
+    override def flush(self)
     override def isatty(self) -> bool
     override def readable(self) -> bool
     override def truncate(self, size: int | None = ...) -> int
@@ -757,20 +757,20 @@ class StreamRecoder(BinaryIO):
 
     override def __iter__(self) -> Self
     # Base class accepts more types than just bytes
-    override def write(self, data: bytes) -> None
-    override def writelines(self, list: Iterable[bytes]) -> None
+    override def write(self, data: bytes)
+    override def writelines(self, list: Iterable[bytes])
     def reset(self)
     def __getattr__(self, name: str) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
     override def __enter__(self) -> Self
-    override def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
-    override def seek(self, offset: int, whence: int = 0) -> None
+    override def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None)
+    override def seek(self, offset: int, whence: int = 0)
     # These methods don't actually exist directly, but they are needed to satisfy the BinaryIO
     # interface. At runtime, they are delegated through __getattr__.
-    override def close(self) -> None
+    override def close(self)
     override def fileno(self) -> int
-    override def flush(self) -> None
+    override def flush(self)
     override def isatty(self) -> bool
     override def readable(self) -> bool
     override def truncate(self, size: int | None = ...) -> int

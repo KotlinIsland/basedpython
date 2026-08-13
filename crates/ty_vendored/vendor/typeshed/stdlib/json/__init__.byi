@@ -101,8 +101,8 @@ from _typeshed import SupportsRead, SupportsWrite
 from collections.abc import Callable
 from typing import Literal
 
-from .decoder import JSONDecodeError as JSONDecodeError, JSONDecoder as JSONDecoder
-from .encoder import JSONEncoder as JSONEncoder
+from .decoder export JSONDecodeError, JSONDecoder
+from .encoder export JSONEncoder
 
 __all__ = ["dump", "dumps", "load", "loads", "JSONDecoder", "JSONDecodeError", "JSONEncoder"]
 

@@ -122,5 +122,5 @@ class ConditionalFix(BaseFix, metaclass=ABCMeta):
     """Base class for fixers which not execute if an import is found."""
 
     skip_on: ClassVar[str | None]
-    override def start_tree(self, tree: Node, filename: StrPath, /) -> None
+    override def start_tree(self, tree: Node, filename: StrPath, /)
     def should_skip(self, node: Base) -> bool

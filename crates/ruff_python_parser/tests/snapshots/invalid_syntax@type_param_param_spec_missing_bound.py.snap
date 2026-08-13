@@ -149,4 +149,3 @@ Module(
 1 | type X[**T:] = int
 2 | type X[**T:, T2] = int
   |            ^ Syntax Error: a bound on a keyword-variadic pack is a basedpython feature and is not valid in .py files
-  |

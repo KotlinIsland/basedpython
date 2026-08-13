@@ -122,6 +122,18 @@ def _(response: Success | Failure | TruthyIntTag | FalsyIntTag | AmbiguousTag):
         reveal_type(response)  # revealed: Success | TruthyIntTag | AmbiguousTag
     else:
         reveal_type(response)  # revealed: Failure | FalsyIntTag | AmbiguousTag
+
+def truthiness_after_value_guard(response: Success | Failure | None):
+    # error: [overlapping-condition] "This condition does not distinguish between `Success & ~AlwaysTruthy`, `Failure & ~AlwaysTruthy` and `None`"
+    if not response:
+        return
+
+    if response.success:
+        reveal_type(response)  # revealed: Success & ~AlwaysFalsy
+        reveal_type(response.result)  # revealed: int
+    else:
+        reveal_type(response)  # revealed: Failure & ~AlwaysFalsy
+        reveal_type(response.errors)  # revealed: list[str]
 ```
 
 ## Function Literals

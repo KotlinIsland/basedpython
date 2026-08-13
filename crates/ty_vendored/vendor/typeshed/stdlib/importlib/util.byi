@@ -5,13 +5,13 @@ import sys
 import types
 from _typeshed import ReadableBuffer
 from collections.abc import Callable
-from importlib._bootstrap import module_from_spec as module_from_spec, spec_from_loader as spec_from_loader
-from importlib._bootstrap_external import (
-    MAGIC_NUMBER as MAGIC_NUMBER,
-    cache_from_source as cache_from_source,
-    decode_source as decode_source,
-    source_from_cache as source_from_cache,
-    spec_from_file_location as spec_from_file_location,
+from importlib._bootstrap export module_from_spec, spec_from_loader
+from importlib._bootstrap_external export (
+    MAGIC_NUMBER,
+    cache_from_source,
+    decode_source,
+    source_from_cache,
+    spec_from_file_location,
 )
 from importlib.abc import Loader
 from types import TracebackType

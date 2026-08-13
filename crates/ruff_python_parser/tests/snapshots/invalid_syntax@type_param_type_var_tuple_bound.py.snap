@@ -178,4 +178,3 @@ Module(
 1 | type X[*T: int] = int
 2 | type X[*T: *(int, str)] = int
   |            ^ Syntax Error: a bound on a `TypeVarTuple` is a basedpython feature and is not valid in .py files
-  |

@@ -29,6 +29,6 @@ class bdist(Command):
     skip_build: int
     group: Incomplete
     owner: Incomplete
-    override def initialize_options(self) -> None
-    override def finalize_options(self) -> None
-    override def run(self) -> None
+    override def initialize_options(self)
+    override def finalize_options(self)
+    override def run(self)

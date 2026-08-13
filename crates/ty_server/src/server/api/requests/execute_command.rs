@@ -14,7 +14,6 @@ use std::fmt::{self, Write};
 use std::str::FromStr;
 use ty_module_resolver::ModuleResolveMode;
 use ty_project::{Db as _, ProjectDatabase};
-use ty_python_core::program::Program;
 
 pub(crate) struct ExecuteCommand;
 
@@ -213,7 +212,8 @@ fn interpreter(db: &ProjectDatabase) -> Option<SystemPathBuf> {
 
     let system = db.system();
 
-    Program::get(db)
+    db.project()
+        .program(db)
         .search_paths(db)
         .site_packages_paths()
         .flat_map(|site_packages| site_packages.ancestors().take(MAX_PREFIX_DEPTH + 1))
@@ -255,13 +255,9 @@ fn debug_information(session: &Session) -> crate::Result<String> {
 
     for db in session.project_dbs() {
         writeln!(buffer, "Project at {}", db.project().root(db))?;
-        let program = Program::get(db);
+        let program = db.project().program(db);
         writeln!(buffer, "Program:")?;
-        writeln!(
-            buffer,
-            "  python-version: {}",
-            program.python_version_with_source(db).version
-        )?;
+        writeln!(buffer, "  python-version: {}", program.python_version(db))?;
         writeln!(buffer, "  python-platform: {}", program.python_platform(db))?;
         let mut writer = IndentingWriter {
             inner: &mut buffer,
@@ -272,8 +268,8 @@ fn debug_information(session: &Session) -> crate::Result<String> {
             writer,
             "  search-paths: {:#}",
             program
-                .search_paths(db)
-                .display(db, ModuleResolveMode::Typing)
+                .resolver_environment(db)
+                .display_search_paths(db, ModuleResolveMode::Typing)
         )?;
 
         writeln!(buffer, "Settings: {:#?}", db.project().settings(db))?;

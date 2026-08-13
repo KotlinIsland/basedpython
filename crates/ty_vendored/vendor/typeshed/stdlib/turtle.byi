@@ -1566,7 +1566,7 @@ class RawTurtle(TPen, TNavigator):
         undobuffersize: int = 1000,
         visible: bool = True,
     )
-    override def reset(self) -> None:
+    override def reset(self):
         """Delete the turtle's drawings and restore its default values.
 
         No argument.

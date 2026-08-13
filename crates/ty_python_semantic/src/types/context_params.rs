@@ -25,6 +25,7 @@ use ty_python_core::scope::{NodeWithScopeKind, ScopeId};
 use ty_python_core::semantic_index;
 
 use crate::Db;
+use crate::types::ProgramEnvironment;
 use crate::types::soundness::single_signature;
 use crate::types::{Type, binding_type};
 
@@ -56,13 +57,14 @@ struct Candidate<'db> {
 /// call at `call_offset` inside `scope`
 pub(crate) fn resolve_context_argument<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     scope: ScopeId<'db>,
     call_offset: TextSize,
     parameter_ty: Type<'db>,
 ) -> ContextResolution<'db> {
     let file = scope.file(db);
-    let index = semantic_index(db, file);
-    let module = parsed_module(db, file).load(db);
+    let index = semantic_index(db, db.program_file(file));
+    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
 
     for (file_scope_id, ancestor) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
         let is_call_scope = file_scope_id == scope.file_scope_id(db);
@@ -93,7 +95,7 @@ pub(crate) fn resolve_context_argument<'db>(
             .into_iter()
             .filter_map(|candidate| {
                 let ty = binding_type(db, candidate.definition);
-                ty.is_assignable_to(db, parameter_ty).then_some((
+                ty.is_assignable_to(db, env, parameter_ty).then_some((
                     candidate.name,
                     ty,
                     candidate.definition,
@@ -141,6 +143,7 @@ pub struct ImplicitContextArgument {
 /// a parameter is not knowable statically
 pub fn implicit_context_arguments<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     callee: Type<'db>,
     call: &ast::ExprCall,
@@ -156,11 +159,11 @@ pub fn implicit_context_arguments<'db>(
     };
     let parameters = signature.parameters();
 
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, db.program_file(file));
     let Some(file_scope_id) = index.try_expression_scope_id(&ast::ExprRef::from(call)) else {
         return Vec::new();
     };
-    let scope = file_scope_id.to_scope_id(db, file);
+    let scope = file_scope_id.to_scope_id(db, db.program_file(file));
 
     let positional_count = call.arguments.args.len();
     let mut positional_index = 0;
@@ -189,12 +192,20 @@ pub fn implicit_context_arguments<'db>(
             name: variable,
             definition,
             ..
-        } = resolve_context_argument(db, scope, call.range().start(), parameter.annotated_type())
-        {
+        } = resolve_context_argument(
+            db,
+            env,
+            scope,
+            call.range().start(),
+            parameter.annotated_type(),
+        ) {
             implicit.push(ImplicitContextArgument {
                 parameter: name.clone(),
                 variable,
-                declaration: definition.focus_range(db, &parsed_module(db, file).load(db)),
+                declaration: definition.focus_range(
+                    db,
+                    &parsed_module(db, db.program_file(file).python_file(db)).load(db),
+                ),
             });
         }
     }

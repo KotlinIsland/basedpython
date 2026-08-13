@@ -168,7 +168,6 @@ Module(
 2 | multiple....dots
 3 | multiple.....dots
   |         ^^^ Syntax Error: Simple statements must be separated by newlines or semicolons
-  |
 
 
   |
@@ -176,4 +175,3 @@ Module(
 2 | multiple....dots
 3 | multiple.....dots
   |             ^ Syntax Error: Expected an identifier
-  |

@@ -185,9 +185,9 @@ class SimpleHandler(BaseHandler):
     )
     override def get_stdin(self) -> InputStream
     override def get_stderr(self) -> ErrorStream
-    override def add_cgi_vars(self) -> None
-    override def _write(self, data: bytes) -> None
-    override def _flush(self) -> None
+    override def add_cgi_vars(self)
+    override def _write(self, data: bytes)
+    override def _flush(self)
 
 class BaseCGIHandler(SimpleHandler):
     """CGI-like systems using input/output/error streams and environ mapping

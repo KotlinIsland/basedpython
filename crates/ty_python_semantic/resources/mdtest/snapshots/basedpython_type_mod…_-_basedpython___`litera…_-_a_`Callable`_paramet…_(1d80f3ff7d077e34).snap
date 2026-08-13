@@ -27,6 +27,5 @@ error[invalid-syntax]: the `literal` type modifier is not valid in .py files
   |
 4 | a: Callable[[literal str], None]
   |              ^^^^^^^
-  |
 
 ```

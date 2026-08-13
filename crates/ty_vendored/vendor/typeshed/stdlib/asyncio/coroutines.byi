@@ -1,7 +1,7 @@
 import sys
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import ParamSpec, TypeVar
-from typing_extensions import deprecated
+from typing_extensions import Never, deprecated
 
 # Keep asyncio.__all__ updated with any changes to __all__ here
 if sys.version_info >= (3, 11):
@@ -19,18 +19,18 @@ if sys.version_info < (3, 11):
         an error message is logged.
         """
 
-def iscoroutine(obj: object) -> obj is Coroutine[dynamic, dynamic, dynamic]:
+def iscoroutine(obj: object) -> obj is Coroutine[object, Never, object]:
     """Return True if obj is a coroutine object."""
 
 if sys.version_info >= (3, 11):
-    @deprecated("Deprecated since Python 3.14. Use `inspect.iscoroutinefunction()` instead.")
+    @deprecated("Deprecated; will be removed in Python 3.16. Use `inspect.iscoroutinefunction()` instead.")
     def iscoroutinefunction(func: (...) -> Coroutine[dynamic, dynamic, dynamic]) -> bool:
         """Return True if func is a decorated coroutine function."""
-    @deprecated("Deprecated since Python 3.14. Use `inspect.iscoroutinefunction()` instead.")
+    @deprecated("Deprecated; will be removed in Python 3.16. Use `inspect.iscoroutinefunction()` instead.")
     def iscoroutinefunction[Parameters: (*: *, **: *), Element](func: (**Parameters) -> Awaitable[Element]) -> TypeGuard[(**Parameters) -> Coroutine[dynamic, dynamic, Element]]
-    @deprecated("Deprecated since Python 3.14. Use `inspect.iscoroutinefunction()` instead.")
+    @deprecated("Deprecated; will be removed in Python 3.16. Use `inspect.iscoroutinefunction()` instead.")
     def iscoroutinefunction[Parameters: (*: *, **: *)](func: (**Parameters) -> object) -> TypeGuard[(**Parameters) -> Coroutine[dynamic, dynamic, dynamic]]
-    @deprecated("Deprecated since Python 3.14. Use `inspect.iscoroutinefunction()` instead.")
+    @deprecated("Deprecated; will be removed in Python 3.16. Use `inspect.iscoroutinefunction()` instead.")
     def iscoroutinefunction(func: object) -> TypeGuard[(...) -> Coroutine[dynamic, dynamic, dynamic]]
 else:
     # Sometimes needed in Python < 3.11 due to the fact that it supports @coroutine

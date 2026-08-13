@@ -18,13 +18,13 @@ class PyPIRCCommand(Command):
     realm: None
     user_options: ClassVar[list[(str, str | None, str)]]
     boolean_options: ClassVar[list[str]]
-    override def initialize_options(self) -> None:
+    override def initialize_options(self):
         """Initialize options."""
 
-    override def finalize_options(self) -> None:
+    override def finalize_options(self):
         """Finalizes options."""
 
-    override abstract def run(self) -> None:
+    override abstract def run(self):
         """A command's raison d'etre: carry out the action it exists to
         perform, controlled by the options initialized in
         'initialize_options()', customized by other commands, the setup

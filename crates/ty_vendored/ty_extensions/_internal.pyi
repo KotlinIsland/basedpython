@@ -1,4 +1,11 @@
 # ruff: noqa: PYI021
+"""
+Internal-only symbols for special forms and type-system tests.
+
+Some symbols provide definitions and on-hover documentation for special forms. Others exist only as
+helpers for ty's tests. None of these symbols are intended to be directly imported by end users.
+"""
+
 import types
 from collections.abc import Callable
 from enum import Enum
@@ -50,6 +57,15 @@ ordinary `Callable[...]` types in type-theoretic tests.
 # Types
 # -----
 
+Unknown: _SpecialForm
+"""
+`Unknown` is a dynamic type inferred due to missing type information or an inference error.
+
+ty infers `Unknown` for unannotated values with insufficient type information. It also uses it as a
+fallback after certain type errors. This contrasts with `Any`, which represents an *explicitly*
+annotated dynamic type. Like `Any`, however, it is a dynamic type, so ty allows any operation on it.
+"""
+
 Todo: _SpecialForm
 """
 `@Todo` is a dynamic type inferred due to a known missing feature or incomplete implementation in
@@ -85,6 +101,27 @@ class ConstraintSetSolution:
 
 class ConstraintSet:
     @staticmethod
+    def lower_bound(
+        lower_bound: TypeForm[object],
+        typevar: TypeForm[object],
+    ) -> ConstraintSet:
+        """Returns a constraint set requiring `typevar` to be a supertype of `lower_bound`."""
+
+    @staticmethod
+    def upper_bound(
+        typevar: TypeForm[object],
+        upper_bound: TypeForm[object],
+    ) -> ConstraintSet:
+        """Returns a constraint set requiring `typevar` to be a subtype of `upper_bound`."""
+
+    @staticmethod
+    def equality(
+        typevar: TypeForm[object],
+        value: TypeForm[object],
+    ) -> ConstraintSet:
+        """Returns a constraint set requiring `typevar` to specialize exactly to `value`."""
+
+    @staticmethod
     def range(
         lower_bound: TypeForm[object],
         typevar: TypeForm[object],
@@ -116,6 +153,11 @@ class ConstraintSet:
         Returns whether this constraint set satisfies another — that is, whether
         every specialization that satisfies this constraint set also satisfies
         `other`.
+        """
+
+    def exists(self, typevars: TypeForm[tuple[object, ...]]) -> Self:
+        """
+        Existentially abstracts the given type variables from this constraint set.
         """
 
     def for_all(self, typevars: TypeForm[tuple[object, ...]]) -> Self:
@@ -246,9 +288,6 @@ def is_disjoint_from(
 
 def is_singleton(ty: TypeForm[object]) -> bool:
     """Returns `True` if `ty` is a singleton type with exactly one inhabitant."""
-
-def is_single_valued(ty: TypeForm[object]) -> bool:
-    """Returns `True` if `ty` is non-empty and all inhabitants compare equal to each other."""
 
 # -------------------
 # Operations on types

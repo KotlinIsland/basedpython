@@ -515,8 +515,8 @@ reveal_type(x4)  # revealed: list[LiteralString]
 x5: list[list[Literal[1]]] = [[1]]
 reveal_type(x5)  # revealed: list[list[Literal[1]]]
 
-x6: dict[list[Literal[1]], list[Literal[Color.RED]]] = {[1]: [Color.RED, Color.RED]}
-reveal_type(x6)  # revealed: dict[list[Literal[1]], list[Literal[Color.RED]]]
+x6: dict[tuple[Literal[1]], list[Literal[Color.RED]]] = {(1,): [Color.RED, Color.RED]}
+reveal_type(x6)  # revealed: dict[tuple[Literal[1]], list[Literal[Color.RED]]]
 
 x7: X[Literal[1]] = X([1])
 reveal_type(x7)  # revealed: X[Literal[1]]
@@ -524,8 +524,8 @@ reveal_type(x7)  # revealed: X[Literal[1]]
 x8: X[int] = X([1])
 reveal_type(x8)  # revealed: X[int]
 
-x9: dict[list[X[Literal[1]]], set[Literal[b"a"]]] = {[X([1])]: {b"a"}}
-reveal_type(x9)  # revealed: dict[list[X[Literal[1]]], set[Literal[b"a"]]]
+x9: dict[tuple[X[Literal[1]]], set[Literal[b"a"]]] = {(X([1]),): {b"a"}}
+reveal_type(x9)  # revealed: dict[tuple[X[Literal[1]]], set[Literal[b"a"]]]
 
 x10: list[Literal[1, 2, 3]] = [1, 2, 3]
 reveal_type(x10)  # revealed: list[Literal[1, 2, 3]]

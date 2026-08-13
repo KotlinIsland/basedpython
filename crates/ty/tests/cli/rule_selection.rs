@@ -27,7 +27,6 @@ fn configuration_rule_severity() -> anyhow::Result<()> {
       |
     7 | prin(x)  # unresolved-reference
       | ^^^^
-      |
     info: rule `unresolved-reference` is enabled by default
 
     Found 1 diagnostic
@@ -54,7 +53,6 @@ fn configuration_rule_severity() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     Found 1 diagnostic
@@ -102,14 +100,12 @@ fn basedpython_configuration_section() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0
       |     ^^^^^
-      |
 
     error[unresolved-reference]: Name `prin` used when not defined
      --> test.py:7:1
       |
     7 | prin(x)  # unresolved-reference
       | ^^^^
-      |
 
     Found 2 diagnostics
 
@@ -147,7 +143,6 @@ fn cli_rule_severity() -> anyhow::Result<()> {
       |
     2 | import does_not_exit
       |        ^^^^^^^^^^^^^
-      |
     info: Searched in the following paths during module resolution:
     info:   1. <temp_dir>/ (first-party code)
     info:   2. vendored://stdlib (stdlib typeshed stubs vendored by ty)
@@ -159,7 +154,6 @@ fn cli_rule_severity() -> anyhow::Result<()> {
       |
     9 | prin(x)  # unresolved-reference
       | ^^^^
-      |
     info: rule `unresolved-reference` is enabled by default
 
     Found 2 diagnostics
@@ -187,7 +181,6 @@ fn cli_rule_severity() -> anyhow::Result<()> {
       |
     2 | import does_not_exit
       |        ^^^^^^^^^^^^^
-      |
     info: Searched in the following paths during module resolution:
     info:   1. <temp_dir>/ (first-party code)
     info:   2. vendored://stdlib (stdlib typeshed stubs vendored by ty)
@@ -199,7 +192,6 @@ fn cli_rule_severity() -> anyhow::Result<()> {
       |
     4 | y = 4 / 0
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected on the command line
 
     Found 2 diagnostics
@@ -238,7 +230,6 @@ fn cli_rule_severity_precedence() -> anyhow::Result<()> {
       |
     7 | prin(x)  # unresolved-reference
       | ^^^^
-      |
     info: rule `unresolved-reference` is enabled by default
 
     Found 1 diagnostic
@@ -266,7 +257,6 @@ fn cli_rule_severity_precedence() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected on the command line
 
     Found 1 diagnostic
@@ -302,7 +292,6 @@ fn configuration_unknown_rules() -> anyhow::Result<()> {
       |
     3 | division-by-zer = "warn" # incorrect rule name
       | ^^^^^^^^^^^^^^^
-      |
 
     Found 1 diagnostic
 
@@ -377,7 +366,6 @@ fn overrides_basic() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0  # division-by-zero: error (global)
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     error[unresolved-reference]: Name `prin` used when not defined
@@ -385,7 +373,6 @@ fn overrides_basic() -> anyhow::Result<()> {
       |
     4 | prin(x)    # unresolved-reference: error (global)
       | ^^^^
-      |
     info: rule `unresolved-reference` was selected in the configuration file
 
     warning[division-by-zero]: Cannot divide object of type `Literal[4]` by zero
@@ -393,7 +380,6 @@ fn overrides_basic() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0  # division-by-zero: warn (override)
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     Found 3 diagnostics
@@ -451,7 +437,6 @@ fn overrides_precedence() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0  # division-by-zero: warn (first override)
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     Found 1 diagnostic
@@ -501,7 +486,6 @@ fn multiple_overrides_inherit_cli_rules() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0
       |     ^^^^^
-      |
 
     Found 1 diagnostic
 
@@ -552,7 +536,6 @@ fn overrides_exclude() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0  # division-by-zero: error (override excluded)
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     warning[division-by-zero]: Cannot divide object of type `Literal[4]` by zero
@@ -560,7 +543,6 @@ fn overrides_exclude() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0  # division-by-zero: warn (override applies)
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     Found 2 diagnostics
@@ -616,7 +598,6 @@ fn overrides_inherit_global() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0  # division-by-zero: warn (global)
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     error[unresolved-reference]: Name `prin` used when not defined
@@ -624,7 +605,6 @@ fn overrides_inherit_global() -> anyhow::Result<()> {
       |
     3 | prin(y)    # unresolved-reference: error (global)
       | ^^^^
-      |
     info: rule `unresolved-reference` was selected in the configuration file
 
     error[unresolved-reference]: Name `prin` used when not defined
@@ -632,7 +612,6 @@ fn overrides_inherit_global() -> anyhow::Result<()> {
       |
     3 | prin(y)    # unresolved-reference: error (inherited from global)
       | ^^^^
-      |
     info: rule `unresolved-reference` was selected in the configuration file
 
     Found 3 diagnostics
@@ -769,7 +748,6 @@ fn overrides_missing_include_exclude() -> anyhow::Result<()> {
       |
     5 | [[tool.ty.overrides]]
       | ^^^^^^^^^^^^^^^^^^^^^ This overrides section applies to all files
-      |
     info: It has no `include` or `exclude` option restricting the files
     info: Restrict the files by adding a pattern to `include` or `exclude`...
     info: or remove the `[[overrides]]` section and merge the configuration into the root `[rules]` table if the configuration should apply to all files
@@ -779,7 +757,6 @@ fn overrides_missing_include_exclude() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     Found 2 diagnostics
@@ -824,7 +801,6 @@ fn overrides_empty_include() -> anyhow::Result<()> {
       |
     6 | include = []  # Empty include - won't match any files
       |           ^^ This `include` list is empty
-      |
     info: Remove the `include` option to match all files or add a pattern to match specific files
 
     error[division-by-zero]: Cannot divide object of type `Literal[4]` by zero
@@ -832,7 +808,6 @@ fn overrides_empty_include() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     Found 2 diagnostics
@@ -876,7 +851,6 @@ fn overrides_no_actual_overrides() -> anyhow::Result<()> {
       |
     5 | [[tool.ty.overrides]]
       | ^^^^^^^^^^^^^^^^^^^^^ This overrides section overrides no settings
-      |
     info: It has no `rules` or `analysis` table
     info: Add a `[overrides.rules]` or `[overrides.analysis]` table...
     info: or remove the `[[overrides]]` section if there's nothing to override
@@ -886,7 +860,6 @@ fn overrides_no_actual_overrides() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     Found 2 diagnostics
@@ -939,7 +912,6 @@ fn overrides_unknown_rules() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     warning[unknown-rule]: Unknown rule `division-by-zer`. Did you mean `division-by-zero`?
@@ -947,14 +919,12 @@ fn overrides_unknown_rules() -> anyhow::Result<()> {
        |
     10 | division-by-zer = "error"  # incorrect rule name
        | ^^^^^^^^^^^^^^^
-       |
 
     warning[division-by-zero]: Cannot divide object of type `Literal[4]` by zero
      --> tests/test_main.py:2:5
       |
     2 | y = 4 / 0
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     Found 3 diagnostics
@@ -1025,7 +995,6 @@ fn cli_all_rules_warn() -> anyhow::Result<()> {
       |
     2 | prin(x)  # unresolved-reference
       | ^^^^
-      |
     info: rule `unresolved-reference` was selected on the command line
 
     warning[unresolved-reference]: Name `x` used when not defined
@@ -1033,7 +1002,6 @@ fn cli_all_rules_warn() -> anyhow::Result<()> {
       |
     2 | prin(x)  # unresolved-reference
       |      ^
-      |
     info: rule `unresolved-reference` was selected on the command line
 
     Found 2 diagnostics
@@ -1079,7 +1047,6 @@ fn cli_all_rules_precedence() -> anyhow::Result<()> {
       |
     6 | prin(y)  # unresolved-reference
       | ^^^^
-      |
     info: rule `unresolved-reference` was selected on the command line
 
     Found 1 diagnostic
@@ -1159,7 +1126,6 @@ fn configuration_all_rules() -> anyhow::Result<()> {
       |
     6 | prin(y)  # unresolved-reference
       | ^^^^
-      |
     info: rule `unresolved-reference` was selected in the configuration file
 
     Found 1 diagnostic
@@ -1207,7 +1173,7 @@ fn configuration_all_rules_with_rule_sorting_before_all() -> anyhow::Result<()> 
     exit_code: 1
     ----- stdout -----
     error[abstract-method-in-final-class]: Final class `Derived` has unimplemented abstract methods
-      --> test.py:6:5
+      --> test.py:11:7
        |
      6 | /     @abstractmethod
      7 | |     def foo(self) -> int:
@@ -1218,7 +1184,6 @@ fn configuration_all_rules_with_rule_sorting_before_all() -> anyhow::Result<()> 
        |   ------
     11 |   class Derived(Base):
        |         ^^^^^^^ `foo` is unimplemented
-       |
     info: rule `abstract-method-in-final-class` was selected in the configuration file
 
     Found 1 diagnostic
@@ -1270,7 +1235,7 @@ fn overrides_all_rules_with_rule_sorting_before_all() -> anyhow::Result<()> {
     exit_code: 1
     ----- stdout -----
     error[abstract-method-in-final-class]: Final class `Derived` has unimplemented abstract methods
-      --> src/test.py:6:5
+      --> src/test.py:11:7
        |
      6 | /     @abstractmethod
      7 | |     def foo(self) -> int:
@@ -1281,7 +1246,6 @@ fn overrides_all_rules_with_rule_sorting_before_all() -> anyhow::Result<()> {
        |   ------
     11 |   class Derived(Base):
        |         ^^^^^^^ `foo` is unimplemented
-       |
     info: rule `abstract-method-in-final-class` was selected in the configuration file
 
     Found 1 diagnostic
@@ -1337,7 +1301,6 @@ fn all_overrides() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0  # division-by-zero: error (global)
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     error[unresolved-reference]: Name `prin` used when not defined
@@ -1345,7 +1308,6 @@ fn all_overrides() -> anyhow::Result<()> {
       |
     4 | prin(x)    # unresolved-reference: error (global)
       | ^^^^
-      |
     info: rule `unresolved-reference` was selected in the configuration file
 
     error[division-by-zero]: Cannot divide object of type `Literal[4]` by zero
@@ -1353,7 +1315,6 @@ fn all_overrides() -> anyhow::Result<()> {
       |
     2 | y = 4 / 0  # division-by-zero: error (global)
       |     ^^^^^
-      |
     info: rule `division-by-zero` was selected in the configuration file
 
     warning[unresolved-reference]: Name `prin` used when not defined
@@ -1361,7 +1322,6 @@ fn all_overrides() -> anyhow::Result<()> {
       |
     4 | prin(x)    # unresolved-reference: warn (override)
       | ^^^^
-      |
     info: rule `unresolved-reference` was selected in the configuration file
 
     Found 4 diagnostics

@@ -14,7 +14,7 @@ use ruff_python_stdlib::identifiers::is_mangled_private;
 use rustc_hash::FxHashSet;
 
 use crate::{
-    Db, Program,
+    Db, ProgramEnvironment,
     lint::LintId,
     place::{DefinedPlace, Place, PlaceAndQualifiers, TypeOrigin},
     reachability::ReachabilityConstraintsExtension,
@@ -85,7 +85,6 @@ pub(super) fn check_class<'db>(
     if configuration.check_method_liskov_violations() && !inconsistent_generic_bases {
         check_inherited_method_conflicts(context, class, class_specialized, &own_class_members);
     }
-
     let enum_info = enum_metadata(db, class.into());
 
     #[expect(
@@ -129,10 +128,11 @@ fn check_inherited_method_conflicts<'db>(
     own_class_members: &FxHashSet<MemberWithDefinition<'db>>,
 ) {
     let db = context.db();
+    let env = &context.program_environment();
 
     let mut direct_bases = Vec::new();
     for base in class.explicit_bases(db) {
-        match ClassBase::try_from_explicit_base(db, *base, Some(class.into())) {
+        match ClassBase::try_from_explicit_base(db, env, *base, Some(class.into())) {
             Some(ClassBase::Class(base)) if base.static_class_literal(db).is_some() => {
                 direct_bases.push(base);
             }
@@ -154,7 +154,7 @@ fn check_inherited_method_conflicts<'db>(
     if direct_bases.iter().enumerate().any(|(index, left)| {
         direct_bases[index + 1..]
             .iter()
-            .any(|right| !left.could_coexist_in_mro_with(db, *right, &constraints))
+            .any(|right| !left.could_coexist_in_mro_with(db, env, *right, &constraints))
     }) {
         return;
     }
@@ -172,7 +172,7 @@ fn check_inherited_method_conflicts<'db>(
             ClassBase::TypedDict(_) | ClassBase::Class(_) => return,
         }
     }
-    let receiver = Type::instance(db, class_specialized);
+    let receiver = Type::instance(db, env, class_specialized);
     let mut seen_names: FxHashSet<_> = own_class_members
         .iter()
         .map(|member| member.member.name.clone())
@@ -216,24 +216,24 @@ fn check_inherited_method_conflicts<'db>(
                 continue;
             }
             let Some((selected_decorator, selected_ty)) =
-                source_method_contract(db, owner, receiver, name)
+                source_method_contract(db, env, owner, receiver, name)
             else {
                 continue;
             };
 
             for contract_owner in mro[index + 1..].iter().copied() {
                 let Some((contract_decorator, contract_ty)) =
-                    source_method_contract(db, contract_owner, receiver, name)
+                    source_method_contract(db, env, contract_owner, receiver, name)
                 else {
                     continue;
                 };
                 let Some((selected_ty, contract_ty)) =
-                    method_override_types(db, selected_ty, contract_ty)
+                    method_override_types(db, env, selected_ty, contract_ty)
                 else {
                     continue;
                 };
                 if selected_decorator == contract_decorator
-                    && selected_ty.is_assignable_to(db, contract_ty)
+                    && selected_ty.is_assignable_to(db, env, contract_ty)
                 {
                     continue;
                 }
@@ -270,19 +270,23 @@ fn check_inherited_method_conflicts<'db>(
                     .filter_map(ClassBase::into_class)
                     .find(|ancestor| ancestor.class_literal(db) == contract_owner.class_literal(db))
                 {
-                    let parent_receiver = Type::instance(db, owner);
+                    let parent_receiver = Type::instance(db, env, owner);
                     let Some((parent_decorator, parent_ty)) =
-                        source_method_contract(db, owner, parent_receiver, name)
+                        source_method_contract(db, env, owner, parent_receiver, name)
                     else {
                         continue;
                     };
-                    let Some((ancestor_decorator, ancestor_ty)) =
-                        source_method_contract(db, parent_contract_owner, parent_receiver, name)
-                    else {
+                    let Some((ancestor_decorator, ancestor_ty)) = source_method_contract(
+                        db,
+                        env,
+                        parent_contract_owner,
+                        parent_receiver,
+                        name,
+                    ) else {
                         continue;
                     };
                     if parent_decorator != ancestor_decorator
-                        || !is_assignable_method_override(db, parent_ty, ancestor_ty)
+                        || !is_assignable_method_override(db, env, parent_ty, ancestor_ty)
                     {
                         continue;
                     }
@@ -306,7 +310,7 @@ fn check_inherited_method_conflicts<'db>(
                     name,
                     (owner, member.first_reachable_definition, selected_decorator),
                     (contract_owner, contract_definition, contract_decorator),
-                    || selected_ty.assignability_error_context(db, contract_ty),
+                    || selected_ty.assignability_error_context(db, env, contract_ty),
                 );
                 continue 'members;
             }
@@ -317,6 +321,7 @@ fn check_inherited_method_conflicts<'db>(
 /// Returns a source-defined method bound to the class whose MRO is being checked.
 fn source_method_contract<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     owner: ClassType<'db>,
     receiver: Type<'db>,
     name: &Name,
@@ -335,7 +340,7 @@ fn source_method_contract<'db>(
     // class Conflict(ReturnsStr, ReturnsInt): ...
     // ```
     let Type::FunctionLiteral(function) = owner
-        .own_class_member(db, None, name)
+        .own_class_member(db, env, None, name)
         .inner
         .place
         .raw_type()?
@@ -343,8 +348,9 @@ fn source_method_contract<'db>(
         return None;
     };
     let ty = Type::FunctionLiteral(function)
-        .try_call_dunder_get(db, Some(receiver), receiver.to_meta_type(db))?
-        .0;
+        .try_call_dunder_get(db, env, Some(receiver), receiver.to_meta_type(db, env))
+        .unwrap_or_else(|error| Some(error.fallback()))?
+        .return_type;
     Some((MethodDecorator::try_from_fn_type(db, function)?, ty))
 }
 
@@ -360,7 +366,8 @@ fn enum_class_creation_manages_conflict<'db>(
     selected_owner: ClassType<'db>,
     contract_owner: ClassType<'db>,
 ) -> bool {
-    if !is_enum_class_by_inheritance(db, class) {
+    let env = ProgramEnvironment::from_scope(class.body_scope(db));
+    if !is_enum_class_by_inheritance(db, &env, class) {
         return false;
     }
 
@@ -372,8 +379,12 @@ fn enum_class_creation_manages_conflict<'db>(
             || contract_owner.is_known(db, KnownClass::Enum);
     }
 
-    Program::get(db).python_version(db) >= PythonVersion::PY311
-        && Type::ClassLiteral(class.into()).is_subtype_of(db, KnownClass::Flag.to_subclass_of(db))
+    env.python_version(db) >= PythonVersion::PY311
+        && Type::ClassLiteral(class.into()).is_subtype_of(
+            db,
+            &env,
+            KnownClass::Flag.to_subclass_of(db, &env),
+        )
         && matches!(
             name.as_str(),
             "__or__" | "__and__" | "__xor__" | "__ror__" | "__rand__" | "__rxor__" | "__invert__"
@@ -430,15 +441,16 @@ fn check_class_declaration<'db>(
     member: &MemberWithDefinition<'db>,
 ) {
     let db = context.db();
+    let env = &context.program_environment();
 
     let MemberWithDefinition {
         member,
         first_reachable_definition,
     } = member;
 
-    let instance_of_class = Type::instance(db, class);
+    let instance_of_class = Type::instance(db, env, class);
 
-    let subclass_instance_member = instance_of_class.member(db, &member.name);
+    let subclass_instance_member = instance_of_class.member(db, env, &member.name);
     let Place::Defined(DefinedPlace {
         ty: type_on_subclass_instance,
         ..
@@ -586,7 +598,7 @@ fn check_class_declaration<'db>(
                     .can_validate_with_value_annotation()
                     && let Some(expected_type) = enum_info.value_annotation_type()
                 {
-                    if !member_value_type.is_assignable_to(db, expected_type) {
+                    if !member_value_type.is_assignable_to(db, env, expected_type) {
                         if let Some(builder) = context.report_lint(
                             &INVALID_ASSIGNMENT,
                             first_reachable_definition.focus_range(db, context.module()),
@@ -597,8 +609,8 @@ fn check_class_declaration<'db>(
                             ));
                             diagnostic.info(format_args!(
                                 "Expected `{}`, got `{}`",
-                                expected_type.display(db),
-                                member_value_type.display(db)
+                                expected_type.display(db, env),
+                                member_value_type.display(db, env)
                             ));
                         }
                     }
@@ -661,7 +673,7 @@ fn check_class_declaration<'db>(
                 }
             } else {
                 if superclass_literal
-                    .own_synthesized_member(db, superclass_specialization, None, &member.name)
+                    .own_synthesized_member(db, env, superclass_specialization, None, &member.name)
                     .is_none()
                 {
                     continue;
@@ -672,7 +684,7 @@ fn check_class_declaration<'db>(
             }
 
             let superclass_instance_member =
-                Type::instance(db, superclass).member(db, &member.name);
+                Type::instance(db, env, superclass).member(db, env, &member.name);
             let Place::Defined(DefinedPlace {
                 ty: superclass_type,
                 ..
@@ -708,7 +720,7 @@ fn check_class_declaration<'db>(
                 || (configuration.check_final_variable_overridden()
                     && overridden_final_variable.is_none())
             {
-                let own_class_member = superclass.own_class_member(db, None, &member.name);
+                let own_class_member = superclass.own_class_member(db, env, None, &member.name);
 
                 if configuration.check_final_method_overridden() {
                     overridden_final_method = overridden_final_method.or_else(|| {
@@ -791,7 +803,8 @@ fn check_class_declaration<'db>(
                     let subclass_kind = *subclass_variable_kind.get_or_insert_with(|| {
                         variable_kind(
                             db,
-                            class.own_class_member(db, None, &member.name).inner,
+                            env,
+                            class.own_class_member(db, env, None, &member.name).inner,
                             subclass_instance_member,
                         )
                     });
@@ -817,7 +830,7 @@ fn check_class_declaration<'db>(
                         if let Some((immediate_parent, immediate_parent_kind)) =
                             immediate_parent_variable_kind
                             && immediate_parent != superclass
-                            && immediate_parent.is_subclass_of(db, superclass)
+                            && immediate_parent.is_subclass_of(db, env, superclass)
                             && immediate_parent_kind != superclass_variable_kind
                         {
                             continue;
@@ -873,6 +886,7 @@ fn check_class_declaration<'db>(
             if let Some(superclass_function) = superclass_function
                 && let Some(error) = crate::types::reified_infer::reified_override_error(
                     db,
+                    env,
                     superclass_function,
                     subclass_function,
                 )
@@ -908,12 +922,12 @@ fn check_class_declaration<'db>(
             }
 
             let Some((subclass_override_type, superclass_override_type)) =
-                method_override_types(db, type_on_subclass_instance, superclass_type)
+                method_override_types(db, env, type_on_subclass_instance, superclass_type)
             else {
                 continue;
             };
 
-            if subclass_override_type.is_assignable_to(db, superclass_override_type) {
+            if subclass_override_type.is_assignable_to(db, env, superclass_override_type) {
                 continue;
             }
 
@@ -927,7 +941,12 @@ fn check_class_declaration<'db>(
                     // The immediate parent already defines this method and is different from the
                     // current ancestor we're checking. Check if the immediate parent's method
                     // is also incompatible with this ancestor.
-                    if !is_assignable_method_override(db, immediate_parent_type, superclass_type) {
+                    if !is_assignable_method_override(
+                        db,
+                        env,
+                        immediate_parent_type,
+                        superclass_type,
+                    ) {
                         // The immediate parent already has an LSP violation with this ancestor.
                         // Don't report the same violation for the child.
                         continue;
@@ -944,7 +963,13 @@ fn check_class_declaration<'db>(
                 superclass,
                 superclass_type,
                 method_kind,
-                || subclass_override_type.assignability_error_context(db, superclass_override_type),
+                || {
+                    subclass_override_type.assignability_error_context(
+                        db,
+                        env,
+                        superclass_override_type,
+                    )
+                },
             );
 
             liskov_diagnostic_emitted = true;
@@ -954,8 +979,8 @@ fn check_class_declaration<'db>(
     if !subclass_overrides_superclass_declaration && !has_dynamic_superclass {
         if has_typeddict_in_mro {
             if !KnownClass::TypedDictFallback
-                .to_instance(db)
-                .member(db, &member.name)
+                .to_instance(db, env)
+                .member(db, env, &member.name)
                 .place
                 .is_undefined()
             {
@@ -963,8 +988,8 @@ fn check_class_declaration<'db>(
             }
         } else if class_kind == Some(CodeGeneratorKind::NamedTuple) {
             if !KnownClass::NamedTupleFallback
-                .to_instance(db)
-                .member(db, &member.name)
+                .to_instance(db, env)
+                .member(db, env, &member.name)
                 .place
                 .is_undefined()
             {
@@ -981,9 +1006,11 @@ fn check_class_declaration<'db>(
 
     if !subclass_overrides_superclass_declaration
         && !has_dynamic_superclass
-        // accessing `.kind()` here is fine as `definition`
-        // will always be a definition in the file currently being checked
-        && first_reachable_definition.kind(db).is_function_def()
+        && (
+            // accessing `.kind()` here is fine as `definition`
+            // will always be a definition in the file currently being checked
+            first_reachable_definition.kind(db).is_function_def()
+        )
     {
         check_explicit_overrides(context, member, class_scope, class);
     }
@@ -1031,16 +1058,18 @@ fn check_class_declaration<'db>(
 /// ```
 fn is_assignable_method_override<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     subclass_type: Type<'db>,
     superclass_type: Type<'db>,
 ) -> bool {
-    method_override_types(db, subclass_type, superclass_type).is_some_and(
-        |(subclass_type, superclass_type)| subclass_type.is_assignable_to(db, superclass_type),
+    method_override_types(db, env, subclass_type, superclass_type).is_some_and(
+        |(subclass_type, superclass_type)| subclass_type.is_assignable_to(db, env, superclass_type),
     )
 }
 
 fn method_override_types<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     subclass_type: Type<'db>,
     superclass_type: Type<'db>,
 ) -> Option<(Type<'db>, Type<'db>)> {
@@ -1061,19 +1090,22 @@ fn method_override_types<'db>(
 
             receiver.map_or((subclass_type, superclass_type), |receiver| {
                 let typing_self_type = subclass_method.typing_self_type(db);
-                let receiver = receiver.bind_self_typevars(db, typing_self_type);
+                let receiver = receiver.bind_self_typevars(db, env, typing_self_type);
                 let receiver = IntersectionType::from_elements(
                     db,
+                    env,
                     [subclass_method.self_instance(db), receiver],
                 );
                 (
                     Type::Callable(subclass_method.into_callable_type_with_receiver(
                         db,
+                        env,
                         receiver,
                         typing_self_type,
                     )),
                     Type::Callable(superclass_method.into_callable_type_with_receiver(
                         db,
+                        env,
                         receiver,
                         typing_self_type,
                     )),
@@ -1082,14 +1114,14 @@ fn method_override_types<'db>(
         }
         _ => (subclass_type, superclass_type),
     };
-    let superclass_callable = superclass_type.try_upcast_to_callable(db)?;
+    let superclass_callable = superclass_type.try_upcast_to_callable(db, env)?;
 
-    Some((subclass_type, superclass_callable.into_type(db)))
+    Some((subclass_type, superclass_callable.into_type(db, env)))
 }
 
 /// Whether an attribute declaration is a class variable or an instance variable.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, get_size2::GetSize)]
-enum VariableKind {
+pub(super) enum VariableKind {
     /// A variable annotated with `ClassVar`.
     Class,
     /// An instance variable, including an unannotated class-body assignment.
@@ -1130,7 +1162,8 @@ fn superclass_variable_kind<'db>(
         return None;
     }
 
-    variable_kind(db, class_member, instance_member)
+    let env = ProgramEnvironment::from_scope(superclass_scope);
+    variable_kind(db, &env, class_member, instance_member)
 }
 
 /// Returns the variable kind for a superclass member, preserving inherited `ClassVar` declarations
@@ -1153,11 +1186,12 @@ fn superclass_variable_kind<'db>(
 /// ```
 #[allow(clippy::needless_pass_by_value)]
 #[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
-fn effective_superclass_variable_kind<'db>(
+pub(super) fn effective_superclass_variable_kind<'db>(
     db: &'db dyn Db,
     superclass: ClassType<'db>,
     name: Name,
 ) -> Option<VariableKind> {
+    let env = &ProgramEnvironment::from_file(superclass.class_literal(db).program_file(db));
     let inherited_variable_kind = || {
         superclass
             .iter_mro(db)
@@ -1176,7 +1210,7 @@ fn effective_superclass_variable_kind<'db>(
         superclass_symbol.is_bound() || superclass_symbol.is_declared()
     } else {
         superclass_literal
-            .own_synthesized_member(db, superclass_specialization, None, &name)
+            .own_synthesized_member(db, env, superclass_specialization, None, &name)
             .is_some()
     };
 
@@ -1185,8 +1219,8 @@ fn effective_superclass_variable_kind<'db>(
             db,
             superclass_scope,
             superclass_symbol_id,
-            superclass.own_class_member(db, None, &name).inner,
-            Type::instance(db, superclass).member(db, &name),
+            superclass.own_class_member(db, env, None, &name).inner,
+            superclass.own_instance_member(db, env, &name).inner,
         );
 
         if superclass_variable_kind == Some(VariableKind::Instance)
@@ -1258,7 +1292,7 @@ fn is_function_definition<'db>(
 /// it inspects the declaration's AST node, which might live in another module.
 #[salsa::tracked(heap_size=ruff_memory_usage::heap_size)]
 fn is_let_declaration<'db>(db: &'db dyn Db, scope: ScopeId<'db>, symbol: ScopedSymbolId) -> bool {
-    let module = parsed_module(db, scope.file(db)).load(db);
+    let module = parsed_module(db, scope.program_file(db).python_file(db)).load(db);
     use_def_map(db, scope)
         .end_of_scope_symbol_declarations(symbol)
         .filter_map(|declaration| declaration.declaration.definition())
@@ -1287,6 +1321,7 @@ fn is_let_marker(annotation: &ast::Expr) -> bool {
 /// Returns the variable kind for an attribute if it should participate in `ClassVar` override checks.
 fn variable_kind<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     class_member: PlaceAndQualifiers<'db>,
     instance_member: PlaceAndQualifiers<'db>,
 ) -> Option<VariableKind> {
@@ -1334,7 +1369,7 @@ fn variable_kind<'db>(
         ..
     }) = class_member.place
         && class_member_ty
-            .class_member(db, "__get__")
+            .class_member(db, env, "__get__")
             .place
             .ignore_possibly_undefined()
             .is_some()
@@ -1388,7 +1423,7 @@ fn report_invalid_attribute_override<'db>(
 
     let mut diagnostic =
         builder.into_diagnostic(format_args!("Invalid override of attribute `{member}`"));
-    diagnostic.set_primary_message(format_args!(
+    diagnostic.set_primary_annotation_message(format_args!(
         "{subclass_kind} cannot override {superclass_kind} `{superclass_member}`"
     ));
     diagnostic.info("This violates the Liskov Substitution Principle");
@@ -1652,7 +1687,15 @@ fn check_missing_overrides<'db>(
         "Method `{}` overrides `{superclass_member}` but is not decorated with `@override`",
         member.name
     ));
-    diagnostic.info("Decorate the method with `@typing.override` to make the override explicit");
+    let override_module =
+        if context.program_environment().python_version(db) >= PythonVersion::PY312 {
+            "typing"
+        } else {
+            "typing_extensions"
+        };
+    diagnostic.info(format_args!(
+        "Decorate the method with `@{override_module}.override` to make the override explicit"
+    ));
 
     if let Some(superclass_definition) = superclass_definition
         && superclass_definition.file(db) == context.file()
@@ -1705,7 +1748,6 @@ fn extract_local_override_definitions<'db>(
         extract_member_functions_from_type(db, member.ty, &member.name, subclass_scope);
     let mut candidates = smallvec::smallvec![];
     let mut seen_function_types = smallvec::SmallVec::<[FunctionType<'db>; 1]>::new();
-
     for definition in end_of_scope_function_definitions(db, subclass_scope, &member.name) {
         let function = member_functions
             .iter()
@@ -1753,7 +1795,6 @@ fn end_of_scope_function_definitions<'db>(
     let use_def = use_def_map(db, subclass_scope);
     let predicates = use_def.predicates();
     let reachability_constraints = use_def.reachability_constraints();
-
     use_def
         .end_of_scope_symbol_bindings(symbol_id)
         .filter_map(|binding| {
@@ -1820,7 +1861,7 @@ fn is_local_member_function<'db>(
     member_name: &Name,
     member_scope: ScopeId<'db>,
 ) -> bool {
-    function.file(db) == member_scope.file(db)
+    function.python_file(db) == member_scope.python_file(db)
         && function.definition(db).scope(db) == member_scope
         && function.name(db) == member_name
 }
@@ -1881,6 +1922,7 @@ fn check_post_init_signature<'db>(
     let Some((static_class, spec)) = class.static_class_literal(db) else {
         return;
     };
+    let env = &context.program_environment();
 
     let init_var_fields = static_class
         .fields(db, spec, policy)
@@ -1896,7 +1938,7 @@ fn check_post_init_signature<'db>(
         });
 
     let first_parameter = Parameter::positional_only(Some(Name::new_static("self")))
-        .with_annotated_type(Type::instance(db, class));
+        .with_annotated_type(Type::instance(db, env, class));
 
     let following_parameters = init_var_fields.map(|(name, field)| {
         Parameter::positional_only(Some(name.clone())).with_annotated_type(field.declared_ty)
@@ -1909,7 +1951,7 @@ fn check_post_init_signature<'db>(
 
     if member
         .ty
-        .is_assignable_to(db, Type::Callable(expected_signature))
+        .is_assignable_to(db, env, Type::Callable(expected_signature))
     {
         return;
     }
@@ -1962,12 +2004,13 @@ fn check_enum_member_against_constructor_method<'db>(
     method: EnumConstructorMethod,
 ) {
     let db = context.db();
+    let env = &context.program_environment();
 
     // The enum metaclass unpacks tuple values as positional args:
     //   MEMBER = (a, b, c)  →  __new__(cls, a, b, c) / __init__(self, a, b, c)
     //   MEMBER = x          →  __new__(cls, x) / __init__(self, x)
     let args: Vec<Type<'db>> = if let Type::NominalInstance(instance) = member_value_type
-        && let Some(spec) = instance.tuple_spec(db)
+        && let Some(spec) = instance.tuple_spec(db, env)
     {
         if let Tuple::Fixed(fixed) = &*spec {
             fixed.all_elements().to_vec()
@@ -1984,9 +2027,16 @@ fn check_enum_member_against_constructor_method<'db>(
 
     let constraints = ConstraintSetBuilder::new();
     let result = Type::FunctionLiteral(function)
-        .bindings(db)
-        .match_parameters(db, &call_args)
-        .check_types(db, &constraints, &call_args, TypeContext::default(), &[]);
+        .bindings(db, env)
+        .match_parameters(db, env, &call_args)
+        .check_types(
+            db,
+            env,
+            &constraints,
+            &call_args,
+            TypeContext::default(),
+            &[],
+        );
 
     if result.is_err() {
         if let Some(builder) = context.report_lint(
@@ -1999,7 +2049,7 @@ fn check_enum_member_against_constructor_method<'db>(
             ));
             diagnostic.info(format_args!(
                 "Expected compatible arguments for `{}`",
-                Type::FunctionLiteral(function).display(db),
+                Type::FunctionLiteral(function).display(db, env),
             ));
         }
     }

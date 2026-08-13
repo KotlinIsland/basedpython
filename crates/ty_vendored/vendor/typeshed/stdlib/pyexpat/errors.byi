@@ -2,54 +2,53 @@
 
 import sys
 from typing import Final
-from typing_extensions import LiteralString
 
 codes: dict[str, int]
 messages: dict[int, str]
 
-final XML_ERROR_ABORTED: LiteralString
-final XML_ERROR_ASYNC_ENTITY: LiteralString
-final XML_ERROR_ATTRIBUTE_EXTERNAL_ENTITY_REF: LiteralString
-final XML_ERROR_BAD_CHAR_REF: LiteralString
-final XML_ERROR_BINARY_ENTITY_REF: LiteralString
-final XML_ERROR_CANT_CHANGE_FEATURE_ONCE_PARSING: LiteralString
-final XML_ERROR_DUPLICATE_ATTRIBUTE: LiteralString
-final XML_ERROR_ENTITY_DECLARED_IN_PE: LiteralString
-final XML_ERROR_EXTERNAL_ENTITY_HANDLING: LiteralString
-final XML_ERROR_FEATURE_REQUIRES_XML_DTD: LiteralString
-final XML_ERROR_FINISHED: LiteralString
-final XML_ERROR_INCOMPLETE_PE: LiteralString
-final XML_ERROR_INCORRECT_ENCODING: LiteralString
-final XML_ERROR_INVALID_TOKEN: LiteralString
-final XML_ERROR_JUNK_AFTER_DOC_ELEMENT: LiteralString
-final XML_ERROR_MISPLACED_XML_PI: LiteralString
-final XML_ERROR_NOT_STANDALONE: LiteralString
-final XML_ERROR_NOT_SUSPENDED: LiteralString
-final XML_ERROR_NO_ELEMENTS: LiteralString
-final XML_ERROR_NO_MEMORY: LiteralString
-final XML_ERROR_PARAM_ENTITY_REF: LiteralString
-final XML_ERROR_PARTIAL_CHAR: LiteralString
-final XML_ERROR_PUBLICID: LiteralString
-final XML_ERROR_RECURSIVE_ENTITY_REF: LiteralString
-final XML_ERROR_SUSPENDED: LiteralString
-final XML_ERROR_SUSPEND_PE: LiteralString
-final XML_ERROR_SYNTAX: LiteralString
-final XML_ERROR_TAG_MISMATCH: LiteralString
-final XML_ERROR_TEXT_DECL: LiteralString
-final XML_ERROR_UNBOUND_PREFIX: LiteralString
-final XML_ERROR_UNCLOSED_CDATA_SECTION: LiteralString
-final XML_ERROR_UNCLOSED_TOKEN: LiteralString
-final XML_ERROR_UNDECLARING_PREFIX: LiteralString
-final XML_ERROR_UNDEFINED_ENTITY: LiteralString
-final XML_ERROR_UNEXPECTED_STATE: LiteralString
-final XML_ERROR_UNKNOWN_ENCODING: LiteralString
-final XML_ERROR_XML_DECL: LiteralString
+final XML_ERROR_ABORTED: literal str
+final XML_ERROR_ASYNC_ENTITY: literal str
+final XML_ERROR_ATTRIBUTE_EXTERNAL_ENTITY_REF: literal str
+final XML_ERROR_BAD_CHAR_REF: literal str
+final XML_ERROR_BINARY_ENTITY_REF: literal str
+final XML_ERROR_CANT_CHANGE_FEATURE_ONCE_PARSING: literal str
+final XML_ERROR_DUPLICATE_ATTRIBUTE: literal str
+final XML_ERROR_ENTITY_DECLARED_IN_PE: literal str
+final XML_ERROR_EXTERNAL_ENTITY_HANDLING: literal str
+final XML_ERROR_FEATURE_REQUIRES_XML_DTD: literal str
+final XML_ERROR_FINISHED: literal str
+final XML_ERROR_INCOMPLETE_PE: literal str
+final XML_ERROR_INCORRECT_ENCODING: literal str
+final XML_ERROR_INVALID_TOKEN: literal str
+final XML_ERROR_JUNK_AFTER_DOC_ELEMENT: literal str
+final XML_ERROR_MISPLACED_XML_PI: literal str
+final XML_ERROR_NOT_STANDALONE: literal str
+final XML_ERROR_NOT_SUSPENDED: literal str
+final XML_ERROR_NO_ELEMENTS: literal str
+final XML_ERROR_NO_MEMORY: literal str
+final XML_ERROR_PARAM_ENTITY_REF: literal str
+final XML_ERROR_PARTIAL_CHAR: literal str
+final XML_ERROR_PUBLICID: literal str
+final XML_ERROR_RECURSIVE_ENTITY_REF: literal str
+final XML_ERROR_SUSPENDED: literal str
+final XML_ERROR_SUSPEND_PE: literal str
+final XML_ERROR_SYNTAX: literal str
+final XML_ERROR_TAG_MISMATCH: literal str
+final XML_ERROR_TEXT_DECL: literal str
+final XML_ERROR_UNBOUND_PREFIX: literal str
+final XML_ERROR_UNCLOSED_CDATA_SECTION: literal str
+final XML_ERROR_UNCLOSED_TOKEN: literal str
+final XML_ERROR_UNDECLARING_PREFIX: literal str
+final XML_ERROR_UNDEFINED_ENTITY: literal str
+final XML_ERROR_UNEXPECTED_STATE: literal str
+final XML_ERROR_UNKNOWN_ENCODING: literal str
+final XML_ERROR_XML_DECL: literal str
 if sys.version_info >= (3, 11):
-    final XML_ERROR_RESERVED_PREFIX_XML: LiteralString
-    final XML_ERROR_RESERVED_PREFIX_XMLNS: LiteralString
-    final XML_ERROR_RESERVED_NAMESPACE_URI: LiteralString
-    final XML_ERROR_INVALID_ARGUMENT: LiteralString
-    final XML_ERROR_NO_BUFFER: LiteralString
-    final XML_ERROR_AMPLIFICATION_LIMIT_BREACH: LiteralString
+    final XML_ERROR_RESERVED_PREFIX_XML: literal str
+    final XML_ERROR_RESERVED_PREFIX_XMLNS: literal str
+    final XML_ERROR_RESERVED_NAMESPACE_URI: literal str
+    final XML_ERROR_INVALID_ARGUMENT: literal str
+    final XML_ERROR_NO_BUFFER: literal str
+    final XML_ERROR_AMPLIFICATION_LIMIT_BREACH: literal str
 if sys.version_info >= (3, 14):
-    final XML_ERROR_NOT_STARTED: LiteralString
+    final XML_ERROR_NOT_STARTED: literal str

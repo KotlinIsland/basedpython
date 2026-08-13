@@ -7,7 +7,6 @@ TC006 [*] Add quotes to type expression in `typing.cast()`
 12 | # a real `typing.cast()` call in the same file is still flagged
 13 | flagged = cast(int, val)
    |                ^^^
-   |
 help: Add quotes
    |
 12 | # a real `typing.cast()` call in the same file is still flagged

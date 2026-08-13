@@ -27,49 +27,41 @@ info[inlay-hint-location]: Inlay Hint Target
    |
 LL | class int:
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:11
    |
 LL | identity[[Literal[1]]](1)
    |           ^^^^^^^^^^
-   |
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/builtins.byi:LL:7
    |
 LL | class str(Sequence[str]):
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:7
    |
 LL | pair[[Literal["a"], Literal[2]]]('a', 2)
    |       ^^^^^^^^^^^^
-   |
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/builtins.byi:LL:7
    |
 LL | class int:
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:21
    |
 LL | pair[[Literal["a"], Literal[2]]]('a', 2)
    |                     ^^^^^^^^^^
-   |
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/builtins.byi:LL:7
    |
 LL | class int:
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:6
    |
 LL | Box[[Literal[1]]](1)
    |      ^^^^^^^^^^
-   |

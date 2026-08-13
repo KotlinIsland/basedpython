@@ -1,15 +1,15 @@
 from multiprocessing import context, reduction as reducer
-from multiprocessing.context import (
-    AuthenticationError as AuthenticationError,
-    BufferTooShort as BufferTooShort,
-    Process as Process,
-    ProcessError as ProcessError,
-    TimeoutError as TimeoutError,
+from multiprocessing.context export (
+    AuthenticationError,
+    BufferTooShort,
+    Process,
+    ProcessError,
+    TimeoutError,
 )
-from multiprocessing.process import (
-    active_children as active_children,
-    current_process as current_process,
-    parent_process as parent_process,
+from multiprocessing.process export (
+    active_children,
+    current_process,
+    parent_process,
 )
 
 # These are technically functions that return instances of these Queue classes.
@@ -19,8 +19,8 @@ from multiprocessing.process import (
 # Avoid using `multiprocessing.Queue` as a type annotation;
 # use imports from multiprocessing.queues instead.
 # See #4266 and #8450 for discussion.
-from multiprocessing.queues import JoinableQueue as JoinableQueue, Queue as Queue, SimpleQueue as SimpleQueue
-from multiprocessing.spawn import freeze_support as freeze_support
+from multiprocessing.queues export JoinableQueue, Queue, SimpleQueue
+from multiprocessing.spawn export freeze_support
 
 __all__ = [
     "Array",

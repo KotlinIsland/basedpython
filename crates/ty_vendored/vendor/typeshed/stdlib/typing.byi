@@ -27,7 +27,7 @@ import typing_extensions
 from _collections_abc import dict_items, dict_keys, dict_values
 from _typeshed import IdentityFunction, ReadableBuffer, SupportsGetItem, SupportsGetItemViewable, SupportsKeysAndGetItem, Viewable
 from abc import ABCMeta, abstractmethod
-from re import Match as Match, Pattern as Pattern
+from re export Match, Pattern
 from types import (
     BuiltinFunctionType,
     CodeType,
@@ -1144,7 +1144,7 @@ def no_type_check[F: (...) -> dynamic](arg: F) -> F:
     """
 
 if sys.version_info < (3, 15):
-    @deprecated("Deprecated since Python 3.13; removed in Python 3.15.")
+    @deprecated("Deprecated; removed in Python 3.15.")
     def no_type_check_decorator[Parameters: (*: *, **: *), Element](decorator: (**Parameters) -> Element) -> (**Parameters) -> Element:
         """Decorator to give another decorator the @no_type_check effect.
 
@@ -1473,11 +1473,11 @@ protocol Awaitable[out Element]:
 
 # Non-default variations to accommodate coroutines, and `AwaitableGenerator` having a 4th type parameter.
 
-class Coroutine[out Yield, in Send, out Return](Awaitable[Return]):
+class Coroutine[out Yield, in SendT_nd, out ReturnT_nd](Awaitable[ReturnT_nd]):
     __name__: str
     __qualname__: str
 
-    abstract def send(self, value: Send, /) -> Yield:
+    abstract def send(self, value: SendT_nd, /) -> Yield:
         """Send a value into the coroutine.
         Return next yielded value or raise StopIteration.
         """
@@ -2120,7 +2120,6 @@ if sys.version_info >= (3, 11):
         kw_only_default: bool = False,
         frozen_default: bool = False,  # on 3.11, runtime accepts it as part of kwargs
         field_specifiers: (*: type[dynamic] | (...) -> dynamic) = (),
-        **kwargs: dynamic,
     ) -> IdentityFunction:
         """Decorator to mark an object as providing dataclass-like behavior.
 
@@ -2221,11 +2220,11 @@ class NamedTuple((*: dynamic)):
     @deprecated("Creating a typing.NamedTuple using keyword arguments is deprecated and support will be removed in Python 3.15")
     def __init__(self, typename: str, fields: None = None, /, **kwargs: dynamic) -> None
 
-    final class def _make(cls, iterable: Iterable[dynamic]) -> typing_extensions.Self
+    final class def _make(cls, iterable: Iterable[dynamic]) -> typing_extensions.Self  # ty:ignore[invalid-type-form]
     final def _asdict(self) -> dict[str, dynamic]
-    final def _replace(self, **kwargs: dynamic) -> typing_extensions.Self
+    final def _replace(self, **kwargs: dynamic) -> typing_extensions.Self  # ty:ignore[invalid-type-form]
     if sys.version_info >= (3, 13):
-        def __replace__(self, **kwargs: dynamic) -> typing_extensions.Self
+        def __replace__(self, **kwargs: dynamic) -> typing_extensions.Self  # ty:ignore[invalid-type-form]
 
 # Internal mypy fallback type for all typed dicts (does not exist at runtime)
 # N.B. Keep this mostly in sync with typing_extensions._TypedDict/mypy_extensions._TypedDict
@@ -2271,7 +2270,7 @@ class _TypedDict(Mapping[str, object], metaclass=ABCMeta):
     def __ior__(self, value: typing_extensions.Self, /) -> typing_extensions.Self
 
 if sys.version_info >= (3, 14):
-    from annotationlib import ForwardRef as ForwardRef
+    from annotationlib export ForwardRef
 
     def evaluate_forward_ref(
         forward_ref: ForwardRef,

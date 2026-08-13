@@ -79,4 +79,4 @@ class NamedTupleFallback((*: dynamic)):
 # Non-default variations to accommodate couroutines, and `AwaitableGenerator` having a 4th type parameter.
 
 # The parameters correspond to Generator, but the 4th is the original type.
-class AwaitableGenerator[out Yield, in Send, out Return, in out Other](Awaitable[Return], Generator[Yield, Send, Return], metaclass=ABCMeta)
+class AwaitableGenerator[out Yield, in SendT_nd, out ReturnT_nd, in out Other](Awaitable[ReturnT_nd], Generator[Yield, SendT_nd, ReturnT_nd], metaclass=ABCMeta)

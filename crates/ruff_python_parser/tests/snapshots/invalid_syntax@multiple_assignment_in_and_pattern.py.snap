@@ -121,7 +121,6 @@ Module(
 1 | match 2:
 2 |     case Class(x) and [x]: ...
   |          ^^^^^^^^^^^^^^^^ Syntax Error: an `and` pattern is basedpython syntax and is not valid in .py files
-  |
 
 
 ## Semantic Syntax Errors
@@ -130,4 +129,3 @@ Module(
 1 | match 2:
 2 |     case Class(x) and [x]: ...
   |                        ^ Syntax Error: multiple assignments to name `x` in pattern
-  |

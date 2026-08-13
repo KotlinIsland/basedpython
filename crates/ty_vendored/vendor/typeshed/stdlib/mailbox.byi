@@ -187,10 +187,10 @@ class Maildir(Mailbox[MaildirMessage]):
     override def add(self, message: MessageData | MaildirMessage) -> str:
         """Add message and return assigned key."""
 
-    override def remove(self, key: str) -> None:
+    override def remove(self, key: str):
         """Remove the keyed message; raise KeyError if it doesn't exist."""
 
-    override def __setitem__(self, key: str, message: MessageData | MaildirMessage) -> None:
+    override def __setitem__(self, key: str, message: MessageData | MaildirMessage):
         """Replace the keyed message; raise KeyError if it doesn't exist."""
 
     override def get_message(self, key: str) -> MaildirMessage:
@@ -230,16 +230,16 @@ class Maildir(Mailbox[MaildirMessage]):
     override def __len__(self) -> int:
         """Return a count of messages in the mailbox."""
 
-    override def flush(self) -> None:
+    override def flush(self):
         """Write any pending changes to disk."""
 
-    override def lock(self) -> None:
+    override def lock(self):
         """Lock the mailbox."""
 
-    override def unlock(self) -> None:
+    override def unlock(self):
         """Unlock the mailbox if it is locked."""
 
-    override def close(self) -> None:
+    override def close(self):
         """Flush and close the mailbox."""
 
     def list_folders(self) -> list[str]:
@@ -266,10 +266,10 @@ class _singlefileMailbox[out MessageT: Message = Message](Mailbox[MessageT], met
     override def add(self, message: MessageData) -> str:
         """Add message and return assigned key."""
 
-    override def remove(self, key: str) -> None:
+    override def remove(self, key: str):
         """Remove the keyed message; raise KeyError if it doesn't exist."""
 
-    override def __setitem__(self, key: str, message: MessageData) -> None:
+    override def __setitem__(self, key: str, message: MessageData):
         """Replace the keyed message; raise KeyError if it doesn't exist."""
 
     override def iterkeys(self) -> Iterator[str]:
@@ -281,16 +281,16 @@ class _singlefileMailbox[out MessageT: Message = Message](Mailbox[MessageT], met
     override def __len__(self) -> int:
         """Return a count of messages in the mailbox."""
 
-    override def lock(self) -> None:
+    override def lock(self):
         """Lock the mailbox."""
 
-    override def unlock(self) -> None:
+    override def unlock(self):
         """Unlock the mailbox if it is locked."""
 
-    override def flush(self) -> None:
+    override def flush(self):
         """Write any pending changes to disk."""
 
-    override def close(self) -> None:
+    override def close(self):
         """Flush and close the mailbox."""
 
 class _mboxMMDF[out MessageT: Message = Message](_singlefileMailbox[MessageT]):
@@ -333,10 +333,10 @@ class MH(Mailbox[MHMessage]):
     override def add(self, message: MessageData) -> str:
         """Add message and return assigned key."""
 
-    override def remove(self, key: str) -> None:
+    override def remove(self, key: str):
         """Remove the keyed message; raise KeyError if it doesn't exist."""
 
-    override def __setitem__(self, key: str, message: MessageData) -> None:
+    override def __setitem__(self, key: str, message: MessageData):
         """Replace the keyed message; raise KeyError if it doesn't exist."""
 
     override def get_message(self, key: str) -> MHMessage:
@@ -357,16 +357,16 @@ class MH(Mailbox[MHMessage]):
     override def __len__(self) -> int:
         """Return a count of messages in the mailbox."""
 
-    override def flush(self) -> None:
+    override def flush(self):
         """Write any pending changes to the disk."""
 
-    override def lock(self) -> None:
+    override def lock(self):
         """Lock the mailbox."""
 
-    override def unlock(self) -> None:
+    override def unlock(self):
         """Unlock the mailbox if it is locked."""
 
-    override def close(self) -> None:
+    override def close(self):
         """Flush and close the mailbox."""
 
     def list_folders(self) -> list[str]:

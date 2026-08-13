@@ -30,6 +30,7 @@ use ty_python_core::semantic_index;
 
 use crate::Db;
 use crate::place::known_module_symbol;
+use crate::types::ProgramEnvironment;
 use crate::types::dedicated::role::function_framework_role;
 use crate::types::{
     FunctionType, KnownClass, KnownFunction, Type, definition_expression_type,
@@ -67,7 +68,7 @@ pub(in crate::types) fn is_fixture_function<'db>(
 fn fixture_marker<'db>(db: &'db dyn Db, function: FunctionType<'db>) -> Option<FixtureMarker> {
     let file = function.file(db);
     let definition = function.definition(db);
-    let module = parsed_module(db, file).load(db);
+    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let node = function.node(db, file, &module);
     let types = infer_definition_types(db, definition);
 
@@ -122,8 +123,8 @@ pub(in crate::types) fn module_fixtures(
     db: &dyn Db,
     file: File,
 ) -> FxHashMap<Name, FunctionType<'_>> {
-    let parsed = parsed_module(db, file).load(db);
-    let index = semantic_index(db, file);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+    let index = semantic_index(db, db.program_file(file));
 
     let mut fixtures = FxHashMap::default();
     for statement in parsed.suite() {
@@ -182,26 +183,28 @@ pub(in crate::types) fn conftest_chain(db: &dyn Db, file: File) -> Vec<File> {
 /// then the builtin fixtures. the first hit wins.
 pub(in crate::types) fn resolve_fixture<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     name: &str,
 ) -> Option<ResolvedFixture<'db>> {
     if let Some(function) = module_fixtures(db, file).get(name) {
-        return Some(resolved_from_function(db, *function));
+        return Some(resolved_from_function(db, env, *function));
     }
     for conftest in conftest_chain(db, file) {
         if let Some(function) = module_fixtures(db, *conftest).get(name) {
-            return Some(resolved_from_function(db, *function));
+            return Some(resolved_from_function(db, env, *function));
         }
     }
-    resolve_builtin_fixture(db, name)
+    resolve_builtin_fixture(db, env, name)
 }
 
 fn resolved_from_function<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     function: FunctionType<'db>,
 ) -> ResolvedFixture<'db> {
     ResolvedFixture {
-        provided_type: fixture_provided_type(db, function),
+        provided_type: fixture_provided_type(db, env, function),
         definition: Some(function.definition(db)),
     }
 }
@@ -223,14 +226,18 @@ const BUILTIN_FIXTURE_MODULES: &[(&str, &str)] = &[
     ("pytestconfig", "_pytest.fixtures"),
 ];
 
-fn resolve_builtin_fixture<'db>(db: &'db dyn Db, name: &str) -> Option<ResolvedFixture<'db>> {
+fn resolve_builtin_fixture<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    name: &str,
+) -> Option<ResolvedFixture<'db>> {
     // `request` is injected by pytest itself rather than defined as a
     // fixture function; its type is `FixtureRequest`
     if name == "request" {
-        let request = known_module_symbol(db, KnownModule::PytestFixtures, "FixtureRequest")
+        let request = known_module_symbol(db, env, KnownModule::PytestFixtures, "FixtureRequest")
             .place
             .ignore_possibly_undefined()?
-            .to_instance_approximation(db)?;
+            .to_instance_approximation(db, env)?;
         return Some(ResolvedFixture {
             provided_type: Some(request),
             definition: None,
@@ -240,9 +247,13 @@ fn resolve_builtin_fixture<'db>(db: &'db dyn Db, name: &str) -> Option<ResolvedF
     let (_, module_name) = BUILTIN_FIXTURE_MODULES
         .iter()
         .find(|(fixture_name, _)| *fixture_name == name)?;
-    let module = resolve_module_confident(db, &ModuleName::new(module_name)?)?;
+    let module = resolve_module_confident(
+        db,
+        env.resolver_environment(db),
+        &ModuleName::new(module_name)?,
+    )?;
     let function = module_fixtures(db, module.file(db)?).get(name)?;
-    Some(resolved_from_function(db, *function))
+    Some(resolved_from_function(db, env, *function))
 }
 
 /// the type a parameter bound to `function` receives, or `None` when it
@@ -253,6 +264,7 @@ fn resolve_builtin_fixture<'db>(db: &'db dyn Db, name: &str) -> Option<ResolvedF
 /// the generator wrapper is unwrapped. a plain `-> T` fixture provides `T`.
 pub(in crate::types) fn fixture_provided_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     function: FunctionType<'db>,
 ) -> Option<Type<'db>> {
     let signature = function.signature(db);
@@ -260,11 +272,15 @@ pub(in crate::types) fn fixture_provided_type<'db>(
     if return_type.is_dynamic() {
         return None;
     }
-    Some(unwrap_generator(db, return_type))
+    Some(unwrap_generator(db, env, return_type))
 }
 
 /// the yielded element of a generator/iterator type, or `ty` unchanged.
-fn unwrap_generator<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
+fn unwrap_generator<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Type<'db> {
     for known in [
         KnownClass::Generator,
         KnownClass::AsyncGenerator,
@@ -272,7 +288,7 @@ fn unwrap_generator<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
         KnownClass::AsyncIterator,
         KnownClass::Iterable,
     ] {
-        if let Some(specialization) = ty.known_specialization(db, known) {
+        if let Some(specialization) = ty.known_specialization(db, env, known) {
             if let Some(element) = specialization.types(db).first() {
                 return *element;
             }
@@ -283,15 +299,20 @@ fn unwrap_generator<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
 
 /// `true` if `ty` is an instance of pytest's `MarkGenerator` — the type of
 /// `pytest.mark`, whose `.parametrize` attribute builds the decorator.
-pub(in crate::types) fn is_mark_generator<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+pub(in crate::types) fn is_mark_generator<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> bool {
     let Some(class) = ty
-        .nominal_class(db)
+        .nominal_class(db, env)
         .and_then(|class| class.class_literal(db).as_static())
     else {
         return false;
     };
     class.name(db).as_str() == "MarkGenerator"
-        && file_to_module(db, class.file(db)).and_then(|module| module.known(db))
+        && file_to_module(db, class.program_file(db).resolver_file(db))
+            .and_then(|module| module.known(db))
             == Some(KnownModule::PytestMarkStructures)
 }
 
@@ -311,6 +332,7 @@ pub(in crate::types) struct ParametrizeMarker<'ast> {
 /// not static literals (dynamic → not checkable).
 pub(in crate::types) fn parametrize_marker<'ast>(
     db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
     function: FunctionType<'_>,
     decorator: &'ast ast::Decorator,
 ) -> Option<ParametrizeMarker<'ast>> {
@@ -324,7 +346,7 @@ pub(in crate::types) fn parametrize_marker<'ast>(
         return None;
     }
     let types = infer_definition_types(db, function.definition(db));
-    if !is_mark_generator(db, types.expression_type(attribute.value.as_ref())) {
+    if !is_mark_generator(db, env, types.expression_type(attribute.value.as_ref())) {
         return None;
     }
     let argnames = call.arguments.find_argument_value("argnames", 0)?;
@@ -345,13 +367,14 @@ pub(in crate::types) fn parametrized_names(
     db: &dyn Db,
     function: FunctionType<'_>,
 ) -> FxHashSet<Name> {
+    let env = &ProgramEnvironment::from_file(function.program_file(db));
     let file = function.file(db);
-    let module = parsed_module(db, file).load(db);
+    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let mut names: FxHashSet<Name> = function
         .node(db, file, &module)
         .decorator_list
         .iter()
-        .filter_map(|decorator| parametrize_marker(db, function, decorator))
+        .filter_map(|decorator| parametrize_marker(db, env, function, decorator))
         .flat_map(|marker| marker.names)
         .collect();
     names.shrink_to_fit();
@@ -367,6 +390,7 @@ pub(in crate::types) fn parametrized_names(
 /// fixture resolves or the resolved one's type cannot be derived.
 pub(in crate::types) fn injected_parameter_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     function: FunctionType<'db>,
     name: &str,
 ) -> Option<Type<'db>> {
@@ -374,7 +398,7 @@ pub(in crate::types) fn injected_parameter_type<'db>(
     if parametrized_names(db, function).contains(name) {
         return None;
     }
-    resolve_fixture(db, function.file(db), name)?.provided_type
+    resolve_fixture(db, env, function.file(db), name)?.provided_type
 }
 
 /// parse `@pytest.mark.parametrize` argnames — a comma-separated string or a

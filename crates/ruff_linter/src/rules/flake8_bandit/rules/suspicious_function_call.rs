@@ -10,10 +10,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use crate::Violation;
 use crate::checkers::ast::Checker;
-use crate::preview::{
-    is_s310_resolve_string_literal_bindings_enabled, is_suspicious_function_reference_enabled,
-};
-use crate::settings::LinterSettings;
+use crate::preview::is_suspicious_function_reference_enabled;
 
 /// ## What it does
 /// Checks for calls to `pickle` functions or modules that wrap them.
@@ -62,7 +59,9 @@ pub(crate) struct SuspiciousPickleUsage;
 impl Violation for SuspiciousPickleUsage {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "`pickle` and modules that wrap it can be unsafe when used to deserialize untrusted data, possible security issue".to_string()
+        "`pickle` and modules that wrap it can be unsafe \
+            when used to deserialize untrusted data, possible security issue"
+            .to_string()
     }
 }
 
@@ -449,7 +448,9 @@ pub(crate) struct SuspiciousURLOpenUsage;
 impl Violation for SuspiciousURLOpenUsage {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "Audit URL open for permitted schemes. Allowing use of `file:` or custom schemes is often unexpected.".to_string()
+        "Audit URL open for permitted schemes. \
+            Allowing use of `file:` or custom schemes is often unexpected."
+            .to_string()
     }
 }
 
@@ -537,7 +538,9 @@ pub(crate) struct SuspiciousXMLCElementTreeUsage;
 impl Violation for SuspiciousXMLCElementTreeUsage {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; use `defusedxml` equivalents".to_string()
+        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; \
+            use `defusedxml` equivalents"
+            .to_string()
     }
 }
 
@@ -582,7 +585,9 @@ pub(crate) struct SuspiciousXMLElementTreeUsage;
 impl Violation for SuspiciousXMLElementTreeUsage {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; use `defusedxml` equivalents".to_string()
+        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; \
+            use `defusedxml` equivalents"
+            .to_string()
     }
 }
 
@@ -627,7 +632,9 @@ pub(crate) struct SuspiciousXMLExpatReaderUsage;
 impl Violation for SuspiciousXMLExpatReaderUsage {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; use `defusedxml` equivalents".to_string()
+        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; \
+            use `defusedxml` equivalents"
+            .to_string()
     }
 }
 
@@ -672,7 +679,9 @@ pub(crate) struct SuspiciousXMLExpatBuilderUsage;
 impl Violation for SuspiciousXMLExpatBuilderUsage {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; use `defusedxml` equivalents".to_string()
+        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; \
+            use `defusedxml` equivalents"
+            .to_string()
     }
 }
 
@@ -717,7 +726,9 @@ pub(crate) struct SuspiciousXMLSaxUsage;
 impl Violation for SuspiciousXMLSaxUsage {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; use `defusedxml` equivalents".to_string()
+        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; \
+            use `defusedxml` equivalents"
+            .to_string()
     }
 }
 
@@ -762,7 +773,9 @@ pub(crate) struct SuspiciousXMLMiniDOMUsage;
 impl Violation for SuspiciousXMLMiniDOMUsage {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; use `defusedxml` equivalents".to_string()
+        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; \
+            use `defusedxml` equivalents"
+            .to_string()
     }
 }
 
@@ -807,7 +820,9 @@ pub(crate) struct SuspiciousXMLPullDOMUsage;
 impl Violation for SuspiciousXMLPullDOMUsage {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; use `defusedxml` equivalents".to_string()
+        "Using `xml` to parse untrusted data is known to be vulnerable to XML attacks; \
+            use `defusedxml` equivalents"
+            .to_string()
     }
 }
 
@@ -896,7 +911,10 @@ pub(crate) struct SuspiciousUnverifiedContextUsage;
 impl Violation for SuspiciousUnverifiedContextUsage {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "Python allows using an insecure context via the `_create_unverified_context` that reverts to the previous behavior that does not validate certificates or perform hostname checks.".to_string()
+        "Python allows using an insecure context via the `_create_unverified_context` \
+            that reverts to the previous behavior that does not validate certificates \
+            or perform hostname checks."
+            .to_string()
     }
 }
 
@@ -948,7 +966,9 @@ pub(crate) struct SuspiciousFTPLibUsage;
 impl Violation for SuspiciousFTPLibUsage {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "FTP-related functions are being called. FTP is considered insecure. Use SSH/SFTP/SCP or some other encrypted protocol.".to_string()
+        "FTP-related functions are being called. FTP is considered insecure. \
+            Use SSH/SFTP/SCP or some other encrypted protocol."
+            .to_string()
     }
 }
 
@@ -957,7 +977,7 @@ pub(crate) fn suspicious_function_call(checker: &Checker, call: &ExprCall) {
         checker,
         call.func.as_ref(),
         Some(&call.arguments),
-        call.range,
+        call.range(),
     );
 }
 
@@ -967,17 +987,16 @@ pub(crate) fn suspicious_function_reference(checker: &Checker, func: &Expr) {
     }
 
     match checker.semantic().current_expression_parent() {
-        Some(Expr::Call(parent))
-            // Avoid duplicate diagnostics. For example:
-            //
-            // ```python
-            // # vvvvvvvvvvvvvvvvvvvvvvvvv Already reported as a call expression
-            //   shelve.open(lorem, ipsum)
-            // # ^^^^^^ Should not be reported as a reference
-            // ```
-            if parent.func.range().contains_range(func.range()) => {
-                return;
-            }
+        // Avoid duplicate diagnostics. For example:
+        //
+        // ```python
+        // # vvvvvvvvvvvvvvvvvvvvvvvvv Already reported as a call expression
+        //   shelve.open(lorem, ipsum)
+        // # ^^^^^^ Should not be reported as a reference
+        // ```
+        Some(Expr::Call(parent)) if parent.func.range().contains_range(func.range()) => {
+            return;
+        }
         Some(Expr::Attribute(_)) => {
             // Avoid duplicate diagnostics. For example:
             //
@@ -1021,13 +1040,8 @@ fn suspicious_function(
     }
 
     /// Resolves `expr` to its binding and checks if the resolved expression starts with an HTTP or HTTPS prefix.
-    fn expression_starts_with_http_prefix(
-        expr: &Expr,
-        semantic: &SemanticModel,
-        settings: &LinterSettings,
-    ) -> bool {
-        let resolved_expression = if is_s310_resolve_string_literal_bindings_enabled(settings)
-            && let Some(name_expr) = expr.as_name_expr()
+    fn expression_starts_with_http_prefix(expr: &Expr, semantic: &SemanticModel) -> bool {
+        let resolved_expression = if let Some(name_expr) = expr.as_name_expr()
             && let Some(binding_id) = semantic.only_binding(name_expr)
             && let Some(value) = find_binding_value(semantic.binding(binding_id), semantic)
         {
@@ -1170,11 +1184,7 @@ fn suspicious_function(
                         .all(|keyword| keyword.arg.is_some())
                 {
                     if let Some(url_expr) = arguments.find_argument_value("url", 0)
-                        && expression_starts_with_http_prefix(
-                            url_expr,
-                            checker.semantic(),
-                            checker.settings(),
-                        )
+                        && expression_starts_with_http_prefix(url_expr, checker.semantic())
                     {
                         return;
                     }
@@ -1211,11 +1221,7 @@ fn suspicious_function(
                             }) =>
                         {
                             if let Some(url_expr) = arguments.find_argument_value("url", 0)
-                                && expression_starts_with_http_prefix(
-                                    url_expr,
-                                    checker.semantic(),
-                                    checker.settings(),
-                                )
+                                && expression_starts_with_http_prefix(url_expr, checker.semantic())
                             {
                                 return;
                             }
@@ -1223,11 +1229,7 @@ fn suspicious_function(
 
                         // If the `url` argument is a string literal (including resolved bindings), allow `http` and `https` schemes.
                         Some(expr)
-                            if expression_starts_with_http_prefix(
-                                expr,
-                                checker.semantic(),
-                                checker.settings(),
-                            ) =>
+                            if expression_starts_with_http_prefix(expr, checker.semantic()) =>
                         {
                             return;
                         }

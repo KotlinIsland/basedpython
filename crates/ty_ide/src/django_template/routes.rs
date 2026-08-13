@@ -34,6 +34,7 @@ use ty_python_semantic::types::ide_support::{
 use ty_python_semantic::{HasType, SemanticModel};
 
 use super::project::{self, Parameter, RouteView, TargetKind, UrlName};
+use ty_python_semantic::ProgramEnvironment;
 
 /// the methods a django class-based view serves a request through
 ///
@@ -50,7 +51,11 @@ const HANDLER_METHODS: &[&str] = &[
 /// nothing is reported unless the url tree was walked in full: a route's
 /// arguments include the ones contributed by every pattern it is mounted behind,
 /// and a walk that stopped short has read only some of them.
-pub(crate) fn diagnostics(db: &dyn Db, file: File) -> Vec<Diagnostic> {
+pub(crate) fn diagnostics(
+    db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
+    file: File,
+) -> Vec<Diagnostic> {
     if !project::routes_are_authoritative(db, db.project()) {
         return Vec::new();
     }
@@ -61,7 +66,7 @@ pub(crate) fn diagnostics(db: &dyn Db, file: File) -> Vec<Diagnostic> {
         .iter()
         .filter(|route| route.file == file)
     {
-        check_route(db, file, route, &mut found);
+        check_route(db, env, file, route, &mut found);
     }
 
     found.sort_by_key(|diagnostic| {
@@ -75,15 +80,21 @@ pub(crate) fn diagnostics(db: &dyn Db, file: File) -> Vec<Diagnostic> {
 }
 
 /// check one route against every handler it reaches
-fn check_route(db: &dyn Db, file: File, route: &UrlName, found: &mut Vec<Diagnostic>) {
+fn check_route(
+    db: &dyn Db,
+    env: &ProgramEnvironment<'_>,
+    file: File,
+    route: &UrlName,
+    found: &mut Vec<Diagnostic>,
+) {
     // a view nothing could resolve to a definition, and a pattern this could not
     // read in full, are both routes there is nothing to say about
     let (Some(view), Some(parameters)) = (route.view.as_ref(), route.parameters()) else {
         return;
     };
 
-    for handler in handlers(db, view) {
-        for complaint in handler.complaints(db, &parameters, route.extra_arguments) {
+    for handler in handlers(db, env, view) {
+        for complaint in handler.complaints(db, env, &parameters, route.extra_arguments) {
             report(db, file, view, &handler, &complaint, found);
         }
     }
@@ -132,8 +143,12 @@ fn report(
 /// hierarchy it is declared. what a project inherits from django needs no
 /// exception: every handler django ships takes `**kwargs`, and a `**kwargs`
 /// silences the check on its own.
-fn handlers<'db>(db: &'db dyn Db, view: &RouteView) -> Vec<Handler<'db>> {
-    let parsed = parsed_module(db, view.target.file).load(db);
+fn handlers<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    view: &RouteView,
+) -> Vec<Handler<'db>> {
+    let parsed = parsed_module(db, db.program_file(view.target.file).python_file(db)).load(db);
 
     let declaration = parsed
         .suite()
@@ -142,14 +157,14 @@ fn handlers<'db>(db: &'db dyn Db, view: &RouteView) -> Vec<Handler<'db>> {
 
     match (view.target.kind, declaration) {
         (TargetKind::Function, Some(Declaration::Function(function))) => {
-            Handler::of(db, view.target.file, function, None)
+            Handler::of(db, env, view.target.file, function, None)
                 .into_iter()
                 .collect()
         }
         (TargetKind::Class, Some(Declaration::Class(class))) if view.class_based => HANDLER_METHODS
             .iter()
             .filter_map(|method| {
-                match declared_handler(db, view.target.file, class, method, MAX_BASE_DEPTH)? {
+                match declared_handler(db, env, view.target.file, class, method, MAX_BASE_DEPTH)? {
                     Declared::Handler(handler) => Some(handler),
                     Declared::Anything => None,
                 }
@@ -186,6 +201,7 @@ enum Declared<'db> {
 /// declares the method, and what a search cannot see it must not report around.
 fn declared_handler<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     class: &ast::StmtClassDef,
     method: &str,
@@ -196,7 +212,7 @@ fn declared_handler<'db>(
         _ => None,
     }) {
         return Some(
-            match Handler::of(db, file, function, Some(class.name.id.as_str())) {
+            match Handler::of(db, env, file, function, Some(class.name.id.as_str())) {
                 Some(handler) => Declared::Handler(handler),
                 None => Declared::Anything,
             },
@@ -209,7 +225,7 @@ fn declared_handler<'db>(
 
     for base in class.bases() {
         let followed = project::resolved_class(db, file, base, |defining, base_class| {
-            declared_handler(db, defining, base_class, method, depth - 1)
+            declared_handler(db, env, defining, base_class, method, depth - 1)
         });
 
         match followed {
@@ -270,12 +286,13 @@ impl<'db> Handler<'db> {
     /// type checker cannot see through leaves a signature this refuses to read.
     fn of(
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         file: File,
         function: &ast::StmtFunctionDef,
         class: Option<&str>,
     ) -> Option<Self> {
-        let declared = function.inferred_type(&SemanticModel::new(db, file))?;
-        let mut parameters = callable_parameters(db, declared)?;
+        let declared = function.inferred_type(&SemanticModel::new(db, db.program_file(file)))?;
+        let mut parameters = callable_parameters(db, env, declared)?;
 
         // a method is called through the instance, which fills its receiver
         if class.is_some() && !parameters.is_empty() {
@@ -319,6 +336,7 @@ impl<'db> Handler<'db> {
     fn complaints(
         &self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         parameters: &[Parameter],
         extra_arguments: bool,
     ) -> Vec<Complaint> {
@@ -343,20 +361,24 @@ impl<'db> Handler<'db> {
             else {
                 continue;
             };
-            let Some(value) = parameter.value_type(db) else {
+            let Some(value) = parameter.value_type(db, env) else {
                 continue;
             };
-            if value.is_assignable_to(db, declared) {
+            if value.is_assignable_to(db, env, declared) {
                 continue;
             }
 
             complaints.push(Complaint {
                 kind: ComplaintKind::ParameterType,
-                message: format!("takes `{}` as `{}`", parameter.name, declared.display(db)),
+                message: format!(
+                    "takes `{}` as `{}`",
+                    parameter.name,
+                    declared.display(db, env)
+                ),
                 help: format!(
                     "the route's `{}` converter gives a `{}`",
                     converter.name(),
-                    value.display(db)
+                    value.display(db, env)
                 ),
             });
         }

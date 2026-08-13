@@ -35,7 +35,7 @@ fn is_simple_call(expr: &Expr) -> bool {
                     range: _,
                     node_index: _,
                 },
-            range: _,
+            range_start: _,
             node_index: _,
             is_cast: _,
             is_checked_cast: _,

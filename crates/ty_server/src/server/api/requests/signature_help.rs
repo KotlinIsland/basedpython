@@ -12,7 +12,8 @@ use lsp_types::{
     SignatureHelpParams, SignatureInformation, Uri,
 };
 use ty_ide::{TemplateSignature, django_template_signature_help, signature_help};
-use ty_project::ProjectDatabase;
+use ty_project::{ProjectDatabase, SemanticDb as _};
+use ty_python_semantic::ProgramEnvironment;
 
 pub(crate) struct SignatureHelpRequestHandler;
 
@@ -52,7 +53,13 @@ impl BackgroundDocumentRequestHandler for SignatureHelpRequestHandler {
         };
 
         if snapshot.is_django_template() {
-            return Ok(django_template_signature_help(db, file, offset).map(template_signature));
+            return Ok(django_template_signature_help(
+                db,
+                &ProgramEnvironment::from_file(db.program_file(file)),
+                file,
+                offset,
+            )
+            .map(template_signature));
         }
 
         if triggered_by_a_template_character(&params) {
@@ -67,7 +74,7 @@ impl BackgroundDocumentRequestHandler for SignatureHelpRequestHandler {
         // Extract signature help capabilities from the client
         let resolved_capabilities = snapshot.resolved_client_capabilities();
 
-        let Some(signature_help_info) = signature_help(db, file, offset) else {
+        let Some(signature_help_info) = signature_help(db, db.program_file(file), offset) else {
             return Ok(None);
         };
 

@@ -2,15 +2,20 @@ use std::borrow::Cow;
 use std::time::Instant;
 
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionList,
+    Command, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionList,
     CompletionParams, CompletionRequest, CompletionResponse, Documentation, InsertTextFormat,
     TextEdit, Uri,
 };
 use ruff_source_file::OneIndexed;
 use ruff_text_size::Ranged;
-use ty_ide::{CompletionCapabilities, CompletionInsertTextFormat, CompletionKind, completion};
-use ty_project::ProjectDatabase;
+use ty_ide::{
+    CompletionCapabilities, CompletionCommand, CompletionInsertTextFormat, CompletionKind,
+    completion,
+};
+use ty_project::{ProjectDatabase, SemanticDb as _};
+use ty_python_semantic::ProgramEnvironment;
 
+use crate::capabilities::ResolvedClientCapabilities;
 use crate::document::{PositionExt, ToRangeExt};
 use crate::server::api::traits::{
     BackgroundDocumentRequestHandler, RequestHandler, RetriableRequestHandler,
@@ -69,12 +74,15 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
         }
 
         let client_capabilities = snapshot.resolved_client_capabilities();
+        let program_file = db.program_file(file);
+        let env = ProgramEnvironment::from_file(program_file);
         let completions = completion(
             db,
+            &env,
             snapshot.workspace_settings().completions(),
             CompletionCapabilities::default()
                 .snippets(client_capabilities.supports_completion_item_snippets()),
-            file,
+            program_file,
             offset,
         );
         if completions.is_empty() {
@@ -92,7 +100,7 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
                 // own few words instead
                 let type_display = comp
                     .ty
-                    .map(|ty| ty.display(db).to_string())
+                    .map(|ty| ty.display(db, &env).to_string())
                     .or_else(|| comp.detail.as_ref().map(ToString::to_string));
                 let import_edit = comp.import.as_ref().and_then(|edit| {
                     let range = edit
@@ -170,6 +178,9 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
                     text_edit,
                     additional_text_edits: import_edit.map(|edit| vec![edit]),
                     documentation,
+                    command: comp
+                        .command
+                        .and_then(|command| to_lsp_command(command, client_capabilities)),
                     ..Default::default()
                 }
             })
@@ -223,7 +234,8 @@ fn django_template_completions(
     file: ruff_db::files::File,
     offset: ruff_text_size::TextSize,
 ) -> Option<CompletionResponse> {
-    let completions = ty_ide::django_template_completions(db, file, offset);
+    let env = ProgramEnvironment::from_file(db.program_file(file));
+    let completions = ty_ide::django_template_completions(db, &env, file, offset);
     if completions.is_empty() {
         return None;
     }
@@ -301,6 +313,30 @@ fn django_template_completions(
         item_defaults: None,
         apply_kind: None,
     }))
+}
+
+/// Maps an editor-neutral completion intent to the concrete LSP command the
+/// client should run after applying the completion.
+///
+/// The intent itself is decided in `ty_ide`; this is the single place that knows
+/// any editor-specific command identifiers.
+///
+/// Returns `None` when the client has not advertised support for the command,
+/// so that clients without a handler never receive one.
+fn to_lsp_command(
+    command: CompletionCommand,
+    client_capabilities: ResolvedClientCapabilities,
+) -> Option<Command> {
+    match command {
+        CompletionCommand::TriggerSignatureHelp => client_capabilities
+            .supports_trigger_parameter_hints_command()
+            .then(|| Command {
+                title: "Trigger parameter hints".into(),
+                tooltip: None,
+                command: "ty.triggerParameterHints".into(),
+                arguments: None,
+            }),
+    }
 }
 
 fn ty_kind_to_lsp_kind(kind: CompletionKind) -> CompletionItemKind {

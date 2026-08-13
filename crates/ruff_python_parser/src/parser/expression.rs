@@ -68,7 +68,7 @@ pub(super) const EXPR_SET: TokenSet = TokenSet::new([
 .union(LITERAL_SET);
 
 /// Tokens that can appear after an expression.
-pub(super) const END_EXPR_SET: TokenSet = TokenSet::new([
+const END_EXPR_SET: TokenSet = TokenSet::new([
     // Ex) `expr` (without a newline)
     TokenKind::EndOfFile,
     // Ex) `expr`
@@ -402,7 +402,7 @@ impl<'src> Parser<'src> {
         self.parse_binary_expression_or_higher_recursive(lhs, left_precedence, context, start)
     }
 
-    pub(super) fn parse_binary_expression_or_higher_recursive(
+    fn parse_binary_expression_or_higher_recursive(
         &mut self,
         mut left: ParsedExpr,
         left_precedence: OperatorPrecedence,
@@ -489,7 +489,7 @@ impl<'src> Parser<'src> {
                     expr: Expr::Call(ast::ExprCall {
                         func: Box::new(func),
                         arguments,
-                        range: self.node_range(start),
+                        range_start: start,
                         node_index: AtomicNodeIndex::NONE,
                         is_cast: false,
                         is_checked_cast: true,
@@ -539,7 +539,7 @@ impl<'src> Parser<'src> {
                     expr: Expr::Call(ast::ExprCall {
                         func: Box::new(func),
                         arguments,
-                        range: self.node_range(start),
+                        range_start: start,
                         node_index: AtomicNodeIndex::NONE,
                         is_cast: true,
                         is_checked_cast: false,
@@ -792,11 +792,11 @@ impl<'src> Parser<'src> {
                     );
                 }
             } else {
+                // > The power operator `**` binds less tightly than an arithmetic
+                // > or bitwise unary operator on its right, that is, 2**-1 is 0.5.
+                //
+                // Reference: https://docs.python.org/3/reference/expressions.html#id21
                 if left_precedence > OperatorPrecedence::PosNegBitNot
-                    // > The power operator `**` binds less tightly than an arithmetic
-                    // > or bitwise unary operator on its right, that is, 2**-1 is 0.5.
-                    //
-                    // Reference: https://docs.python.org/3/reference/expressions.html#id21
                     && left_precedence != OperatorPrecedence::Exponent
                 {
                     self.add_error(
@@ -1259,7 +1259,7 @@ impl<'src> Parser<'src> {
     /// expression, `[` for a subscript expression, or `.` for an attribute expression.
     ///
     /// This method does nothing if the current token is not a candidate for a postfix expression.
-    pub(super) fn parse_postfix_expression(
+    fn parse_postfix_expression(
         &mut self,
         mut lhs: Expr,
         start: TextSize,
@@ -1371,7 +1371,7 @@ impl<'src> Parser<'src> {
                     Expr::Call(ast::ExprCall {
                         func: Box::new(lhs),
                         arguments,
-                        range: self.node_range(start),
+                        range_start: start,
                         node_index: AtomicNodeIndex::NONE,
                         is_cast: false,
                         is_checked_cast: false,
@@ -1483,13 +1483,14 @@ impl<'src> Parser<'src> {
     /// If the parser isn't position at a `(` token.
     ///
     /// See: <https://docs.python.org/3/reference/expressions.html#calls>
-    pub(super) fn parse_call_expression(&mut self, func: Expr, start: TextSize) -> ast::ExprCall {
+    fn parse_call_expression(&mut self, func: Expr, start: TextSize) -> ast::ExprCall {
         let arguments = self.parse_arguments(ArgumentsContext::Call);
+        debug_assert_eq!(self.node_range(start).end(), arguments.end());
 
         ast::ExprCall {
             func: Box::new(func),
             arguments,
-            range: self.node_range(start),
+            range_start: start,
             node_index: AtomicNodeIndex::NONE,
             is_cast: false,
             is_checked_cast: false,
@@ -4706,7 +4707,7 @@ impl<'src> Parser<'src> {
     /// parenthesized or the first token of the expression.
     ///
     /// See: <https://docs.python.org/3/reference/expressions.html#generator-expressions>
-    pub(super) fn parse_generator_expression(
+    fn parse_generator_expression(
         &mut self,
         element: Expr,
         start: TextSize,
@@ -4957,11 +4958,7 @@ impl<'src> Parser<'src> {
     /// If the parser isn't positioned at a `:=` token.
     ///
     /// See: <https://docs.python.org/3/reference/expressions.html#assignment-expressions>
-    pub(super) fn parse_named_expression(
-        &mut self,
-        mut target: Expr,
-        start: TextSize,
-    ) -> ast::ExprNamed {
+    fn parse_named_expression(&mut self, mut target: Expr, start: TextSize) -> ast::ExprNamed {
         self.bump(TokenKind::ColonEqual);
 
         if !target.is_name_expr() {
@@ -5238,7 +5235,7 @@ impl ParsedExpr {
     }
 
     #[inline]
-    pub(super) const fn is_unparenthesized_named_expr(&self) -> bool {
+    const fn is_unparenthesized_named_expr(&self) -> bool {
         !self.is_parenthesized && self.expr.is_named_expr()
     }
 }
@@ -5409,7 +5406,7 @@ impl ExpressionContext {
         ExpressionContext::starred_bitwise_or().with_yield_expression_allowed()
     }
 
-    pub(super) fn disallow_starred_expressions(self) -> Self {
+    fn disallow_starred_expressions(self) -> Self {
         let flags = self.0 & !ExpressionContextFlags::ALLOW_STARRED_EXPRESSION;
         ExpressionContext(flags)
     }

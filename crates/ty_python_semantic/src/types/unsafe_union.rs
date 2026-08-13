@@ -26,6 +26,7 @@ use crate::Db;
 use crate::place::{
     DefinedPlace, Definedness, Place, PlaceAndQualifiers, Provenance, PublicTypePolicy, TypeOrigin,
 };
+use crate::types::ProgramEnvironment;
 use crate::types::set_theoretic::UnionType;
 use crate::types::variance::VarianceInferable;
 use crate::types::{
@@ -98,8 +99,8 @@ impl<'db> UnsafeUnionType<'db> {
     ///
     /// This is the type an `UnsafeUnion` is narrowed to when it is used *safely*, and the
     /// face it presents to operations that must hold for every possible materialization.
-    pub(crate) fn to_union(self, db: &'db dyn Db) -> Type<'db> {
-        UnionType::from_elements(db, self.elements(db).iter().copied())
+    pub(crate) fn to_union(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
+        UnionType::from_elements(db, env, self.elements(db).iter().copied())
     }
 
     /// Apply `transform` to every element, rebuilding (and possibly collapsing) the menu.
@@ -122,10 +123,14 @@ impl<'db> UnsafeUnionType<'db> {
     }
 
     /// Project every element from a class-object type into its instance type.
-    pub(crate) fn to_instance(self, db: &'db dyn Db) -> Option<InstanceProjection<Type<'db>>> {
+    pub(crate) fn to_instance(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<InstanceProjection<Type<'db>>> {
         let mut is_exact = true;
         let instance = self.try_map_elements(db, |element| {
-            let projection = element.to_instance(db)?;
+            let projection = element.to_instance(db, env)?;
             is_exact &= projection.is_exact();
             Some(projection.into_inner())
         })?;
@@ -200,10 +205,17 @@ impl<'db> VarianceInferable<'db> for UnsafeUnionType<'db> {
     /// An `UnsafeUnion` is invariant in its elements: each one is reachable in both
     /// directions (a value can be assigned *to* the type through it, and read *out* of the
     /// type as it), so neither polarity alone describes it.
-    fn variance_of(self, db: &'db dyn Db, typevar: BoundTypeVarIdentity<'db>) -> TypeVarVariance {
+    fn variance_of(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        typevar: BoundTypeVarIdentity<'db>,
+    ) -> TypeVarVariance {
         self.elements(db)
             .iter()
-            .map(|element| TypeVarVariance::Invariant.compose(element.variance_of(db, typevar)))
+            .map(|element| {
+                TypeVarVariance::Invariant.compose(element.variance_of(db, env, typevar))
+            })
             .collect()
     }
 }

@@ -1,12 +1,59 @@
 # Function parameter types
 
+## Basic
+
 Within a function scope, the declared type of each parameter is its annotated type (or Unknown if
-not annotated). The initial inferred type is the annotated type of the parameter, if any. If there
-is no annotation, it is the union of `Unknown` with the type of the default value expression (if
-any).
+not annotated). The initial inferred type is the annotated type of the parameter, if any:
+
+```py
+def f(declared: int, unannotated):
+    reveal_type(declared)  # revealed: int
+    reveal_type(unannotated)  # revealed: unannotated@f
+```
+
+basedpython infers a signature for the unannotated parameter rather than leaving it `Unknown`, so
+the parameter reads as the type variable that stands for whatever callers pass.
 
 The variadic parameter is a variadic tuple of its annotated type; the variadic-keywords parameter is
-a dictionary from strings to its annotated type.
+a dictionary from strings to its annotated type:
+
+```py
+def g(*args: int, **kwargs: int):
+    reveal_type(args)  # revealed: tuple[int, ...]
+    reveal_type(kwargs)  # revealed: dict[str, int]
+```
+
+## Unannotated parameters with defaults
+
+If there is no annotation but there is a default value, the parameter is still inferred, and the
+default value's type bounds the inferred type variable:
+
+```py
+def f(a="foo", b=0, c=True, d=None):
+    reveal_type(a)  # revealed: a@f
+    reveal_type(b)  # revealed: b@f
+    reveal_type(c)  # revealed: c@f
+    reveal_type(d)  # revealed: d@f
+```
+
+The body is checked against that bound, so an operation the default value does not support is
+rejected:
+
+```py
+def g(x=0):
+    print(x + 1)
+
+    # error: [unsupported-operator] "Operator `+` is not supported between objects of type `x@g` and `Literal["foo"]`"
+    x + "foo"
+```
+
+The bound also constrains callers, so an argument wider than the default value's type is rejected at
+the call site:
+
+```py
+# error: [invalid-argument-type] "Argument to function `g` is incorrect: Argument type `float` does not satisfy `int`, inferred for parameter `x`"
+g(1.5)
+```
 
 ## Parameter kinds
 

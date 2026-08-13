@@ -6,6 +6,7 @@ use ty_module_resolver::KnownModule;
 use ty_python_core::{Truthiness, place::PlaceExpr};
 
 use crate::place::Place;
+use crate::types::ProgramEnvironment;
 use crate::types::{
     ClassLiteral, IntersectionBuilder, KnownClass, Type,
     diagnostic::{OVERLAPPING_CONDITION, REDUNDANT_BOOLEAN_COMPARISON, REDUNDANT_CONDITION},
@@ -159,13 +160,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         root: &ast::Expr,
         polarity: ConditionPolarity,
     ) {
+        let env = self.program_environment();
         // Only a value *read* can have its outcome fixed by its own type. A comparison or a call
         // computes a fresh value, and ty folding that one is the statically-known-branch
         // machinery doing its job — `elif isinstance(x, B):` closing an exhaustive chain is
         // deliberate, not a conditional that failed to be conditional.
         let is_place = PlaceExpr::try_from_expr(root).is_some();
         let truthiness = ConditionTruthiness::classify(
-            self.expression_type(root).bool(self.db()),
+            self.expression_type(root).bool(self.db(), env),
             polarity,
             || is_place && self.is_artificial(root),
         );
@@ -189,6 +191,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         root: &ast::Expr,
         truthiness: ConditionTruthiness,
     ) {
+        let env = self.program_environment();
         let Some((outcome, adjective)) = truthiness.constant_outcome() else {
             return;
         };
@@ -199,7 +202,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             builder.into_diagnostic(format_args!("This condition is always {outcome}"));
         diagnostic.info(format_args!(
             "`{}` is always {adjective}",
-            self.expression_type(root).display(self.db())
+            self.expression_type(root).display(self.db(), env)
         ));
     }
 
@@ -257,6 +260,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         root: &ast::Expr,
         polarity: ConditionPolarity,
     ) {
+        let env = self.program_environment();
         if !self.context.is_lint_enabled(&OVERLAPPING_CONDITION) {
             return;
         }
@@ -264,7 +268,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let Some(tested) = self.try_expression_type(root) else {
             return;
         };
-        let selected = selected_branch(db, tested, polarity, db.analysis_settings(self.file()));
+        let selected =
+            selected_branch(db, env, tested, polarity, db.analysis_settings(self.file()));
         if !selected.conflates() {
             return;
         }
@@ -277,16 +282,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         };
         let leading = leading
             .iter()
-            .map(|kind| format!("`{}`", kind.part.display(db)))
+            .map(|kind| format!("`{}`", kind.part.display(db, env)))
             .collect::<Vec<_>>()
             .join(", ");
         let mut diagnostic = builder.into_diagnostic(format_args!(
             "This condition does not distinguish between {leading} and `{}`",
-            last.part.display(db)
+            last.part.display(db, env)
         ));
         diagnostic.info(format_args!(
             "`{}` is tested for {}",
-            tested.display(db),
+            tested.display(db, env),
             polarity.noun()
         ));
         diagnostic.help("Compare against the specific value instead of testing truthiness");
@@ -303,6 +308,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         op: ast::CmpOp,
         range: TextRange,
     ) {
+        let env = self.program_environment();
         if !self.context.is_lint_enabled(&REDUNDANT_BOOLEAN_COMPARISON) {
             return;
         }
@@ -323,7 +329,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             _ => return,
         };
         let db = self.db();
-        if !operand_ty.is_subtype_of(db, KnownClass::Bool.to_instance(db)) {
+        if !operand_ty.is_subtype_of(db, env, KnownClass::Bool.to_instance(db, env)) {
             return;
         }
 
@@ -339,7 +345,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         ));
         diagnostic.info(format_args!(
             "`{}` already is the value this comparison produces",
-            operand_ty.display(db)
+            operand_ty.display(db, env)
         ));
         if is_equality == literal {
             diagnostic.help("Test the operand directly");
@@ -386,6 +392,7 @@ impl SelectedBranch<'_> {
 /// nobody expected it to.
 fn selected_branch<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     tested: Type<'db>,
     polarity: ConditionPolarity,
     settings: &AnalysisSettings,
@@ -395,19 +402,19 @@ fn selected_branch<'db>(
         has_whole: false,
         has_partial: false,
     };
-    for_each_arm(db, tested, &mut |arm| {
-        let Some(class) = arm_class(db, arm) else {
+    for_each_arm(db, env, tested, &mut |arm| {
+        let Some(class) = arm_class(db, env, arm) else {
             return;
         };
         if is_exempt(db, arm, class, &settings.overlapping_condition_exempt_types) {
             return;
         }
-        let truthiness = arm_truthiness(db, arm, settings);
+        let truthiness = arm_truthiness(db, env, arm, settings);
         let whole = !truthiness.is_ambiguous();
         let part = match truthiness {
             Truthiness::AlwaysTrue if polarity == ConditionPolarity::Falsy => return,
             Truthiness::AlwaysFalse if polarity == ConditionPolarity::Truthy => return,
-            Truthiness::Ambiguous => IntersectionBuilder::new(db)
+            Truthiness::Ambiguous => IntersectionBuilder::new(db, env)
                 .add_positive(arm)
                 .add_negative(polarity.rejects())
                 .build(),
@@ -424,11 +431,11 @@ fn selected_branch<'db>(
         match selected
             .kinds
             .iter_mut()
-            .find(|kind| same_kind(db, kind.class, class))
+            .find(|kind| same_kind(db, env, kind.class, class))
         {
             // keep the most general class of the group, so which arm the message names does not
             // depend on the order the arms happen to be in
-            Some(kind) if derives(db, kind.class, class) => {
+            Some(kind) if derives(db, env, kind.class, class) => {
                 kind.class = class;
                 kind.part = part;
             }
@@ -442,7 +449,12 @@ fn selected_branch<'db>(
 /// Visit the union arms of `tested`, or `tested` itself when it has only the one.
 ///
 /// An enum complement and an intersection with a finite alternative are unions in all but name.
-fn for_each_arm<'db>(db: &'db dyn Db, tested: Type<'db>, visit: &mut impl FnMut(Type<'db>)) {
+fn for_each_arm<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    tested: Type<'db>,
+    visit: &mut impl FnMut(Type<'db>),
+) {
     if let Some(union) = tested.as_union_like(db) {
         for arm in union.elements(db) {
             visit(*arm);
@@ -450,22 +462,27 @@ fn for_each_arm<'db>(db: &'db dyn Db, tested: Type<'db>, visit: &mut impl FnMut(
         return;
     }
     let alternatives = match tested {
-        Type::EnumComplement(complement) => Some(complement.remaining_literal_union(db)),
-        Type::Intersection(intersection) => intersection.finite_alternative_union(db),
+        Type::EnumComplement(complement) => Some(complement.remaining_literal_union(db, env)),
+        Type::Intersection(intersection) => intersection.finite_alternative_union(db, env),
         _ => None,
     };
     match alternatives {
         // the equality guard keeps a type that describes itself from recursing forever
-        Some(alternatives) if alternatives != tested => for_each_arm(db, alternatives, visit),
+        Some(alternatives) if alternatives != tested => for_each_arm(db, env, alternatives, visit),
         _ => visit(tested),
     }
 }
 
-fn arm_truthiness<'db>(db: &'db dyn Db, arm: Type<'db>, settings: &AnalysisSettings) -> Truthiness {
-    let truthiness = arm.bool(db);
+fn arm_truthiness<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    arm: Type<'db>,
+    settings: &AnalysisSettings,
+) -> Truthiness {
+    let truthiness = arm.bool(db, env);
     if truthiness.is_ambiguous()
         && settings.overlapping_condition_assume_truthy_instances
-        && defines_no_truthiness(db, arm)
+        && defines_no_truthiness(db, env, arm)
     {
         return Truthiness::AlwaysTrue;
     }
@@ -476,11 +493,15 @@ fn arm_truthiness<'db>(db: &'db dyn Db, arm: Type<'db>, settings: &AnalysisSetti
 ///
 /// Such an instance is truthy unless a subclass says otherwise, which is why ty calls it
 /// ambiguous; `overlapping-condition-assume-truthy-instances` takes it at face value instead.
-fn defines_no_truthiness<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+fn defines_no_truthiness<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> bool {
     matches!(ty, Type::NominalInstance(_) | Type::ProtocolInstance(_))
         && ["__bool__", "__len__"]
             .iter()
-            .all(|dunder| matches!(ty.member(db, dunder).place, Place::Undefined))
+            .all(|dunder| matches!(ty.member(db, env, dunder).place, Place::Undefined))
 }
 
 /// The class whose instances a union arm holds, if it has one.
@@ -490,16 +511,20 @@ fn defines_no_truthiness<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
 /// intersection is a remnant of some earlier narrowing whose truthiness ty models only
 /// approximately: `str & ~AlwaysFalsy` cannot be falsy, but ty still calls it ambiguous, so
 /// counting it would report a falsy branch that only ever holds `None`.
-fn arm_class<'db>(db: &'db dyn Db, arm: Type<'db>) -> Option<ClassLiteral<'db>> {
+fn arm_class<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    arm: Type<'db>,
+) -> Option<ClassLiteral<'db>> {
     if arm.is_intersection() {
         return None;
     }
-    match arm.to_meta_type(db) {
+    match arm.to_meta_type(db, env) {
         Type::ClassLiteral(class) => Some(class),
         Type::GenericAlias(alias) => Some(ClassLiteral::Static(alias.origin(db))),
         Type::SubclassOf(subclass_of) => subclass_of
             .subclass_of()
-            .into_class(db)
+            .into_class(db, env)
             .map(|class| class.class_literal(db)),
         _ => None,
     }
@@ -510,16 +535,28 @@ fn arm_class<'db>(db: &'db dyn Db, arm: Type<'db>) -> Option<ClassLiteral<'db>> 
 ///
 /// Type arguments are deliberately out of scope: `list[A]` and `list[B]` are both lists, and a
 /// truthiness test sees only that one of them is empty.
-fn same_kind<'db>(db: &'db dyn Db, left: ClassLiteral<'db>, right: ClassLiteral<'db>) -> bool {
-    left == right || derives(db, left, right) || derives(db, right, left)
+fn same_kind<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    left: ClassLiteral<'db>,
+    right: ClassLiteral<'db>,
+) -> bool {
+    left == right || derives(db, env, left, right) || derives(db, env, right, left)
 }
 
 /// Whether `subclass` derives `base`, ignoring type arguments.
-fn derives<'db>(db: &'db dyn Db, subclass: ClassLiteral<'db>, base: ClassLiteral<'db>) -> bool {
+fn derives<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    subclass: ClassLiteral<'db>,
+    base: ClassLiteral<'db>,
+) -> bool {
     subclass != base
-        && subclass
-            .default_specialization(db)
-            .is_subclass_of(db, base.default_specialization(db))
+        && subclass.default_specialization(db).is_subclass_of(
+            db,
+            env,
+            base.default_specialization(db),
+        )
 }
 
 /// Whether the user has told us not to count this arm as distinct.

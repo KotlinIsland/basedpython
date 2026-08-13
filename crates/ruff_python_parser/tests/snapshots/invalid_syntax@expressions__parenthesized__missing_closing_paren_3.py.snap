@@ -102,4 +102,3 @@ Module(
 6 | def foo():
 7 |     pass
   |         ^ Syntax Error: unexpected EOF while parsing
-  |

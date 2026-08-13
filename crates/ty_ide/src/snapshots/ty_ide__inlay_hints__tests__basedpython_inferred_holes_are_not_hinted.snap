@@ -18,10 +18,8 @@ info[inlay-hint-location]: Inlay Hint Target
    |
 LL | class int:
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:11
    |
 LL | b = pair[[1]]('lit', 1)
    |           ^
-   |

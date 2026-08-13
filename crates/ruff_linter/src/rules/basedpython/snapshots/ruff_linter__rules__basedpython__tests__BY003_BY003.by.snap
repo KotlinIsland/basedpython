@@ -180,7 +180,6 @@ BY003 [*] `isinstance` call can be written as `is`
 22 |     _ = isinstance(x, int).__class__
 23 |     _ = -isinstance(x, int)
    |          ^^^^^^^^^^^^^^^^^^
-   |
 help: Replace with `is`
    |
 22 |     _ = isinstance(x, int).__class__

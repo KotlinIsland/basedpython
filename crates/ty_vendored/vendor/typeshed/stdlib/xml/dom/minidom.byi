@@ -21,7 +21,7 @@ from _typeshed import Incomplete, ReadableBuffer, SupportsRead, SupportsWrite
 from collections.abc import Iterable, Sequence
 from types import TracebackType
 from typing import ClassVar, Generic, Literal, Protocol, TypeAlias, TypeVar, type_check_only
-from typing_extensions import Self
+from typing_extensions import Never, Self
 from xml.dom.minicompat import EmptyNodeList, NodeList
 from xml.dom.xmlbuilder import DocumentLS, DOMImplementationLS
 from xml.sax.xmlreader import XMLReader
@@ -209,7 +209,7 @@ class Attr(Node):
     init(
         self, qName: str, namespaceURI: str | None = None, localName: str | None = None, prefix: str | None = None
     )
-    override def unlink(self) -> None
+    override def unlink(self)
     let isId: bool
 
     let schemaType: TypeInfo
@@ -309,7 +309,7 @@ class Element(Node):
     init(
         self, tagName: str, namespaceURI: str | None = None, prefix: str | None = None, localName: str | None = None
     )
-    override def unlink(self) -> None
+    override def unlink(self)
     def getAttribute(self, attname: str) -> str:
         """Returns the value of the specified attribute.
 
@@ -380,14 +380,14 @@ class Childless:
     childNodes: EmptyNodeList
     let firstChild: None
     let lastChild: None
-    def appendChild(self, node: NodesThatAreChildren | DocumentFragment) -> NoReturn
+    def appendChild(self, node: NodesThatAreChildren | DocumentFragment) -> Never
     def hasChildNodes(self) -> False
     def insertBefore(
         self, newChild: NodesThatAreChildren | DocumentFragment, refChild: NodesThatAreChildren | None
-    ) -> NoReturn
-    def removeChild(self, oldChild: NodesThatAreChildren) -> NoReturn
+    ) -> Never
+    def removeChild(self, oldChild: NodesThatAreChildren) -> Never
     def normalize(self)
-    def replaceChild(self, newChild: NodesThatAreChildren | DocumentFragment, oldChild: NodesThatAreChildren) -> NoReturn
+    def replaceChild(self, newChild: NodesThatAreChildren | DocumentFragment, oldChild: NodesThatAreChildren) -> Never
 
 class ProcessingInstruction(Childless, Node):
     __slots__ = ("target", "data")
@@ -494,7 +494,7 @@ class CDATASection(Text):
     nextSibling: DocumentFragmentChildren | ElementChildren | None
     previousSibling: DocumentFragmentChildren | ElementChildren | None
 
-    override def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "") -> None
+    override def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "")
 
 class ReadOnlySequentialNamedNodeMap[in out N: Node]:
     __slots__ = ("_seq",)
@@ -504,10 +504,10 @@ class ReadOnlySequentialNamedNodeMap[in out N: Node]:
     def getNamedItemNS(self, namespaceURI: str | None, localName: str) -> N | None
     def __getitem__(self, name_or_tuple: str | NSName) -> N | None
     def item(self, index: int) -> N | None
-    def removeNamedItem(self, name: str) -> NoReturn
-    def removeNamedItemNS(self, namespaceURI: str | None, localName: str) -> NoReturn
-    def setNamedItem(self, node: Node) -> NoReturn
-    def setNamedItemNS(self, node: Node) -> NoReturn
+    def removeNamedItem(self, name: str) -> Never
+    def removeNamedItemNS(self, namespaceURI: str | None, localName: str) -> Never
+    def setNamedItem(self, node: Node) -> Never
+    def setNamedItemNS(self, node: Node) -> Never
     let length: int
 
 class Identified:
@@ -567,10 +567,10 @@ class Entity(Identified, Node):
     notationName: str | None
 
     init(self, name: str, publicId: str | None, systemId: str | None, notation: str | None)
-    override def appendChild(self, newChild: EntityChildren) -> NoReturn
-    override def insertBefore(self, newChild: EntityChildren, refChild: EntityChildren | None) -> NoReturn
-    override def removeChild(self, oldChild: EntityChildren) -> NoReturn
-    override def replaceChild(self, newChild: EntityChildren, oldChild: EntityChildren) -> NoReturn
+    override def appendChild(self, newChild: EntityChildren) -> Never
+    override def insertBefore(self, newChild: EntityChildren, refChild: EntityChildren | None) -> Never
+    override def removeChild(self, oldChild: EntityChildren) -> Never
+    override def replaceChild(self, newChild: EntityChildren, oldChild: EntityChildren) -> Never
 
 class Notation(Identified, Childless, Node):
     nodeType: ClassVar[12]
@@ -658,7 +658,7 @@ class Document(Node, DocumentLS):
     init(self)
     override def appendChild[DocumentChildrenVar: DocumentChildren](self, node: DocumentChildrenVar) -> DocumentChildrenVar
     override def removeChild[DocumentChildrenVar: DocumentChildren](self, oldChild: DocumentChildrenVar) -> DocumentChildrenVar
-    override def unlink(self) -> None
+    override def unlink(self)
     override def cloneNode(self, deep: bool) -> Document | None
     def createDocumentFragment(self) -> DocumentFragment
     def createElement(self, tagName: str) -> Element

@@ -2,6 +2,7 @@ use ruff_macros::{ViolationMetadata, derive_message_formats};
 use ruff_python_ast::helpers::any_over_expr;
 use ruff_python_ast::{self as ast, Arguments, Expr, Stmt};
 use ruff_python_semantic::analyze::typing::is_list;
+use ruff_text_size::Ranged;
 
 use crate::Violation;
 use crate::checkers::ast::Checker;
@@ -73,7 +74,7 @@ pub(crate) fn manual_list_copy(checker: &Checker, for_stmt: &ast::StmtFor) {
                 range: _,
                 node_index: _,
             },
-        range,
+        range_start: _,
         node_index: _,
         is_cast: _,
         is_checked_cast: _,
@@ -82,6 +83,7 @@ pub(crate) fn manual_list_copy(checker: &Checker, for_stmt: &ast::StmtFor) {
     else {
         return;
     };
+    let call_range = value.range();
 
     if !keywords.is_empty() {
         return;
@@ -126,5 +128,5 @@ pub(crate) fn manual_list_copy(checker: &Checker, for_stmt: &ast::StmtFor) {
         return;
     }
 
-    checker.report_diagnostic(ManualListCopy, *range);
+    checker.report_diagnostic(ManualListCopy, call_range);
 }

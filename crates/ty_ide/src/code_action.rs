@@ -8,6 +8,7 @@ use ruff_diagnostics::Edit;
 use ruff_python_ast::find_node::covering_node;
 use ruff_text_size::TextRange;
 use ty_project::Db;
+use ty_python_core::ProgramFile;
 use ty_python_semantic::lint::LintId;
 use ty_python_semantic::suppress_single;
 use ty_python_semantic::types::{
@@ -57,7 +58,7 @@ impl QuickFix {
 /// parsing it as python.
 pub fn code_actions(
     db: &dyn Db,
-    file: File,
+    file: ProgramFile<'_>,
     diagnostic_range: TextRange,
     diagnostic_id: &str,
     template: bool,
@@ -68,7 +69,7 @@ pub fn code_actions(
     };
 
     if template {
-        return django_template_code_actions(db, file, diagnostic_range, lint_id);
+        return django_template_code_actions(db, file.file(db), diagnostic_range, lint_id);
     }
 
     let mut actions = Vec::new();
@@ -88,14 +89,18 @@ pub fn code_actions(
         || lint_id == LintId::of(&MISPLACED_DEPENDENCY)
         || lint_id == LintId::of(&UNRESOLVED_IMPORT)
     {
-        actions.extend(add_dependency::code_actions(db, file, diagnostic_range));
+        actions.extend(add_dependency::code_actions(
+            db,
+            file.file(db),
+            diagnostic_range,
+        ));
     }
 
     // Suggest just suppressing the lint (always a valid option, but never ideal)
     actions.push(QuickFix::new(
         format!("Ignore '{}' for this line", lint_id.name()),
-        file,
-        suppress_single(db, file, lint_id, diagnostic_range).into_edits(),
+        file.file(db),
+        suppress_single(db, file.python_file(db), lint_id, diagnostic_range).into_edits(),
         false,
     ));
 
@@ -104,17 +109,16 @@ pub fn code_actions(
 
 fn unresolved_fixes(
     db: &dyn Db,
-    file: File,
+    file: ProgramFile<'_>,
     diagnostic_range: TextRange,
 ) -> Option<impl Iterator<Item = QuickFix>> {
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, file.python_file(db)).load(db);
     let node = covering_node(parsed.syntax().into(), diagnostic_range).node();
     let symbol = &node.expr_name()?.id;
-
     Some(
         completion::unresolved_fixes(db, file, &parsed, symbol, node)
             .into_iter()
-            .map(move |import| QuickFix::new(import.label, file, vec![import.edit], true)),
+            .map(move |import| QuickFix::new(import.label, file.file(db), vec![import.edit], true)),
     )
 }
 
@@ -136,6 +140,7 @@ mod tests {
     use ruff_python_trivia::textwrap::dedent;
     use ruff_text_size::{TextRange, TextSize};
     use ty_project::ProjectMetadata;
+    use ty_python_core::ProgramFile;
     use ty_python_semantic::{
         default_lint_registry,
         lint::LintMetadata,
@@ -153,9 +158,8 @@ mod tests {
         1 | b = a / 10
           |     ^
           |
-          |
           - b = a / 10
-        1 + b = a / 10  # ty:ignore[unresolved-reference]
+        1 + b = a / 10  # ty: ignore[unresolved-reference]
           |
         ");
     }
@@ -171,9 +175,8 @@ mod tests {
         1 | b = a / 10  # fmt: off
           |     ^
           |
-          |
           - b = a / 10  # fmt: off
-        1 + b = a / 10  # fmt: off  # ty:ignore[unresolved-reference]
+        1 + b = a / 10  # fmt: off  # ty: ignore[unresolved-reference]
           |
         ");
     }
@@ -201,7 +204,6 @@ mod tests {
         2 | b = a / 0  # ty:ignore[division-by-zero]
           |     ^
           |
-          |
         1 |
           - b = a / 0  # ty:ignore[division-by-zero]
         2 + b = a / 0  # ty:ignore[division-by-zero, unresolved-reference]
@@ -223,7 +225,6 @@ mod tests {
           |
         2 | b = a / 10  # ty:ignore[]
           |     ^
-          |
           |
         1 |
           - b = a / 10  # ty:ignore[]
@@ -248,7 +249,6 @@ mod tests {
           |
         4 | b = a / 10
           |     ^
-          |
           |
         2 | seen_code = True
           - # ty:ignore[]
@@ -280,7 +280,6 @@ mod tests {
         3 | # ty:ignore[] # ty:ignore[not-a-rule] # ty:ignore[division-by-zero]
           |                           ^^^^^^^^^^
           |
-          |
         2 | seen_code = True
           - # ty:ignore[] # ty:ignore[not-a-rule] # ty:ignore[division-by-zero]
         3 + # ty:ignore[ignore-comment-unknown-rule] # ty:ignore[not-a-rule] # ty:ignore[division-by-zero]
@@ -309,7 +308,6 @@ mod tests {
           |
         7 |     absent,
           |     ^^^^^^
-          |
           |
         2 | seen_code = True
           - # ty:ignore[]
@@ -342,7 +340,6 @@ mod tests {
         9 |     absent,
           |     ^^^^^^
           |
-          |
         4 | seen_code = True
           - # ty:ignore[invalid-assignment]
         5 + # ty:ignore[invalid-assignment, unresolved-reference]
@@ -366,7 +363,6 @@ mod tests {
         2 | b = a / 0  # type:ignore[ty:division-by-zero]
           |     ^
           |
-          |
         1 |
           - b = a / 0  # type:ignore[ty:division-by-zero]
         2 + b = a / 0  # type:ignore[ty:division-by-zero, ty:unresolved-reference]
@@ -389,10 +385,9 @@ mod tests {
         2 | b = a / 0  # type:ignore[mypy-code]
           |     ^
           |
-          |
         1 |
           - b = a / 0  # type:ignore[mypy-code]
-        2 + b = a / 0  # type:ignore[mypy-code]  # ty:ignore[unresolved-reference]
+        2 + b = a / 0  # type:ignore[mypy-code]  # ty: ignore[unresolved-reference]
           |
         ");
     }
@@ -414,10 +409,9 @@ mod tests {
         4 | b = a / 0
           |     ^
           |
-          |
         3 |
           - b = a / 0
-        4 + b = a / 0  # ty:ignore[unresolved-reference]
+        4 + b = a / 0  # ty: ignore[unresolved-reference]
           |
         ");
     }
@@ -436,7 +430,6 @@ mod tests {
           |
         2 | b = a / 0  # ty:ignore[division-by-zero,]
           |     ^
-          |
           |
         1 |
           - b = a / 0  # ty:ignore[division-by-zero,]
@@ -460,7 +453,6 @@ mod tests {
         2 | b = a / 0  # ty:ignore[division-by-zero   ]
           |     ^
           |
-          |
         1 |
           - b = a / 0  # ty:ignore[division-by-zero   ]
         2 + b = a / 0  # ty:ignore[division-by-zero, unresolved-reference   ]
@@ -483,10 +475,9 @@ mod tests {
         2 | b = a / 0  # ty:ignore[division-by-zero] some explanation
           |     ^
           |
-          |
         1 |
           - b = a / 0  # ty:ignore[division-by-zero] some explanation
-        2 + b = a / 0  # ty:ignore[division-by-zero] some explanation  # ty:ignore[unresolved-reference]
+        2 + b = a / 0  # ty:ignore[division-by-zero] some explanation  # ty: ignore[unresolved-reference]
           |
         ");
     }
@@ -511,7 +502,6 @@ mod tests {
         4 | |         /
         5 | |         0
           | |_________^
-          |
           |
         2 | b = (
           -         a  # ty:ignore[division-by-zero]
@@ -542,7 +532,6 @@ mod tests {
         5 | |         0  # ty:ignore[division-by-zero]
           | |_________^
           |
-          |
         4 |         /
           -         0  # ty:ignore[division-by-zero]
         5 +         0  # ty:ignore[division-by-zero, unresolved-reference]
@@ -572,7 +561,6 @@ mod tests {
         5 | |         0  # ty:ignore[division-by-zero]
           | |_________^
           |
-          |
         2 | b = (
           -         a  # ty:ignore[division-by-zero]
         3 +         a  # ty:ignore[division-by-zero, unresolved-reference]
@@ -599,10 +587,9 @@ mod tests {
         3 |     {a}
           |      ^
           |
-          |
         4 |     more text
           - """
-        5 + """  # ty:ignore[unresolved-reference]
+        5 + """  # ty: ignore[unresolved-reference]
           |
         "#);
     }
@@ -627,10 +614,9 @@ mod tests {
         4 |     a
           |     ^
           |
-          |
         3 |     {
           -     a
-        4 +     a  # ty:ignore[unresolved-reference]
+        4 +     a  # ty: ignore[unresolved-reference]
         5 |     }
           |
         ");
@@ -653,10 +639,9 @@ mod tests {
         2 | b = a + """
           |     ^
           |
-          |
         3 |     more text
           - """
-        4 + """  # ty:ignore[unresolved-reference]
+        4 + """  # ty: ignore[unresolved-reference]
           |
         "#);
     }
@@ -677,10 +662,9 @@ mod tests {
         2 | b = a \
           |     ^
           |
-          |
         2 | b = a \
           - + "test"
-        3 + + "test"  # ty:ignore[unresolved-reference]
+        3 + + "test"  # ty: ignore[unresolved-reference]
           |
         "#);
     }
@@ -704,10 +688,9 @@ mod tests {
         4 |         + ddd  \
           |           ^^^
           |
-          |
         4 |         + ddd  \
           -
-        5 +   # ty:ignore[unresolved-reference]
+        5 +   # ty: ignore[unresolved-reference]
         6 |     ] # test
           |
         ");
@@ -727,10 +710,20 @@ mod tests {
           |
         2 | reveal_type(1)
           | ^^^^^^^^^^^
-          |
         help: This is a preferred code action
           |
         1 + from typing import reveal_type
+        2 |
+          |
+
+        info[code-action]: import typing_extensions.reveal_type
+         --> main.py:2:1
+          |
+        2 | reveal_type(1)
+          | ^^^^^^^^^^^
+        help: This is a preferred code action
+          |
+        1 + from typing_extensions import reveal_type
         2 |
           |
 
@@ -740,10 +733,9 @@ mod tests {
         2 | reveal_type(1)
           | ^^^^^^^^^^^
           |
-          |
         1 |
           - reveal_type(1)
-        2 + reveal_type(1)  # ty:ignore[undefined-reveal]
+        2 + reveal_type(1)  # ty: ignore[undefined-reveal]
           |
         ");
     }
@@ -763,10 +755,20 @@ mod tests {
           |
         2 | @deprecated("do not use")
           |  ^^^^^^^^^^
-          |
         help: This is a preferred code action
           |
         1 + from warnings import deprecated
+        2 |
+          |
+
+        info[code-action]: import typing_extensions.deprecated
+         --> main.py:2:2
+          |
+        2 | @deprecated("do not use")
+          |  ^^^^^^^^^^
+        help: This is a preferred code action
+          |
+        1 + from typing_extensions import deprecated
         2 |
           |
 
@@ -776,10 +778,9 @@ mod tests {
         2 | @deprecated("do not use")
           |  ^^^^^^^^^^
           |
-          |
         1 |
           - @deprecated("do not use")
-        2 + @deprecated("do not use")  # ty:ignore[unresolved-reference]
+        2 + @deprecated("do not use")  # ty: ignore[unresolved-reference]
         3 | def my_func(): ...
           |
         "#);
@@ -802,10 +803,20 @@ mod tests {
           |
         4 | @deprecated("do not use")
           |  ^^^^^^^^^^
-          |
         help: This is a preferred code action
           |
         1 + from warnings import deprecated
+        2 |
+          |
+
+        info[code-action]: import typing_extensions.deprecated
+         --> main.py:4:2
+          |
+        4 | @deprecated("do not use")
+          |  ^^^^^^^^^^
+        help: This is a preferred code action
+          |
+        1 + from typing_extensions import deprecated
         2 |
           |
 
@@ -814,7 +825,6 @@ mod tests {
           |
         4 | @deprecated("do not use")
           |  ^^^^^^^^^^
-          |
         help: This is a preferred code action
           |
         3 |
@@ -829,10 +839,9 @@ mod tests {
         4 | @deprecated("do not use")
           |  ^^^^^^^^^^
           |
-          |
         3 |
           - @deprecated("do not use")
-        4 + @deprecated("do not use")  # ty:ignore[unresolved-reference]
+        4 + @deprecated("do not use")  # ty: ignore[unresolved-reference]
         5 | def my_func(): ...
           |
         "#);
@@ -853,7 +862,6 @@ mod tests {
           |
         2 | ExecutionLoader
           | ^^^^^^^^^^^^^^^
-          |
         help: This is a preferred code action
           |
         1 + from importlib.abc import ExecutionLoader
@@ -866,10 +874,9 @@ mod tests {
         2 | ExecutionLoader
           | ^^^^^^^^^^^^^^^
           |
-          |
         1 |
           - ExecutionLoader
-        2 + ExecutionLoader  # ty:ignore[unresolved-reference]
+        2 + ExecutionLoader  # ty: ignore[unresolved-reference]
           |
         ");
     }
@@ -893,7 +900,6 @@ mod tests {
           |
         3 | ExecutionLoader
           | ^^^^^^^^^^^^^^^
-          |
         help: This is a preferred code action
           |
         1 + from importlib.abc import ExecutionLoader
@@ -906,10 +912,9 @@ mod tests {
         3 | ExecutionLoader
           | ^^^^^^^^^^^^^^^
           |
-          |
         2 | import importlib
           - ExecutionLoader
-        3 + ExecutionLoader  # ty:ignore[unresolved-reference]
+        3 + ExecutionLoader  # ty: ignore[unresolved-reference]
           |
         ");
     }
@@ -930,7 +935,6 @@ mod tests {
           |
         3 | ExecutionLoader
           | ^^^^^^^^^^^^^^^
-          |
         help: This is a preferred code action
           |
         1 + from importlib.abc import ExecutionLoader
@@ -942,7 +946,6 @@ mod tests {
           |
         3 | ExecutionLoader
           | ^^^^^^^^^^^^^^^
-          |
         help: This is a preferred code action
           |
         2 | import importlib.abc
@@ -956,26 +959,23 @@ mod tests {
         3 | ExecutionLoader
           | ^^^^^^^^^^^^^^^
           |
-          |
         2 | import importlib.abc
           - ExecutionLoader
-        3 + ExecutionLoader  # ty:ignore[unresolved-reference]
+        3 + ExecutionLoader  # ty: ignore[unresolved-reference]
           |
         ");
     }
 
-    pub(super) struct CodeActionTest {
-        pub(super) db: ty_project::TestDb,
-        pub(super) file: File,
-        pub(super) diagnostic_range: TextRange,
+    struct CodeActionTest {
+        db: ty_project::TestDb,
+        file: File,
+        diagnostic_range: TextRange,
     }
 
     impl CodeActionTest {
-        pub(super) fn with_source(source: &str) -> Self {
+        fn with_source(source: &str) -> Self {
             let mut db =
                 ty_project::TestDb::new(ProjectMetadata::new("test", SystemPathBuf::from("/")));
-
-            db.init_program().unwrap();
 
             let mut cleansed = dedent(source).to_string();
 
@@ -1007,14 +1007,13 @@ mod tests {
             }
         }
 
-        pub(super) fn code_actions(&self, lint: &LintMetadata) -> String {
+        fn code_actions(&self, lint: &LintMetadata) -> String {
             use std::fmt::Write;
 
             let mut buf = String::new();
 
             let config = DisplayDiagnosticConfig::new("ty")
                 .color(false)
-                .show_fix_diff(true)
                 .context(0)
                 .format(DiagnosticFormat::Full);
 
@@ -1022,7 +1021,11 @@ mod tests {
             // have their own tests
             for action in code_actions(
                 &self.db,
-                self.file,
+                ProgramFile::new(
+                    &self.db,
+                    self.file,
+                    self.db.program_environment().program(&self.db),
+                ),
                 self.diagnostic_range,
                 &lint.name,
                 false,

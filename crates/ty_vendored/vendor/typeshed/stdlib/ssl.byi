@@ -124,19 +124,19 @@ from typing import Final, Literal, NamedTuple, TypeAlias, TypedDict, type_check_
 from typing_extensions import Never, Self, deprecated
 
 if sys.version_info >= (3, 13):
-    from _ssl import HAS_PSK as HAS_PSK
+    from _ssl export HAS_PSK
 
 if sys.version_info >= (3, 15):
-    from _ssl import HAS_PSK_TLS13 as HAS_PSK_TLS13
+    from _ssl export HAS_PSK_TLS13
 
 if sys.version_info >= (3, 14):
-    from _ssl import HAS_PHA as HAS_PHA
+    from _ssl export HAS_PHA
 
 if sys.version_info < (3, 12):
-    from _ssl import RAND_pseudo_bytes as RAND_pseudo_bytes
+    from _ssl export RAND_pseudo_bytes
 
 if sys.platform == "win32":
-    from _ssl import enum_certificates as enum_certificates, enum_crls as enum_crls
+    from _ssl export enum_certificates, enum_crls
 
 private type PCTRTT = (*: (str, str))
 private type PCTRTTT = (*: PCTRTT)
@@ -390,8 +390,18 @@ class Purpose(_ASN1Object, enum.Enum):
     # because this is an enum, the inherited __new__ is replaced at runtime with
     # Enum.__new__.
     def __new__(cls, value: object) -> Self
-    SERVER_AUTH = (129, "serverAuth", "TLS Web Server Authentication", "1.3.6.1.5.5.7.3.2")
-    CLIENT_AUTH = (130, "clientAuth", "TLS Web Client Authentication", "1.3.6.1.5.5.7.3.1")
+    SERVER_AUTH = (  # ty:ignore[invalid-assignment]
+        129,
+        "serverAuth",
+        "TLS Web Server Authentication",
+        "1.3.6.1.5.5.7.3.2",
+    )
+    CLIENT_AUTH = (  # ty:ignore[invalid-assignment]
+        130,
+        "clientAuth",
+        "TLS Web Client Authentication",
+        "1.3.6.1.5.5.7.3.1",
+    )
 
 class SSLSocket(socket.socket):
     """This class implements a subtype of socket.socket that wraps
@@ -410,7 +420,7 @@ class SSLSocket(socket.socket):
     let session_reused: bool | None
 
     init(self, *args: dynamic, **kwargs: dynamic)
-    override def connect(self, addr: socket._Address) -> None:
+    override def connect(self, addr: socket._Address):
         """Connects to remote ADDR, and then wraps the connection in
         an SSL channel.
         """
@@ -427,12 +437,12 @@ class SSLSocket(socket.socket):
         self, buffer: WriteableBuffer, nbytes: int | None = None, flags: int = 0
     ) -> (int, socket._RetAddress)
     override def send(self, data: ReadableBuffer, flags: int = 0) -> int
-    override def sendall(self, data: ReadableBuffer, flags: int = 0) -> None
+    override def sendall(self, data: ReadableBuffer, flags: int = 0)
 
     override def sendto(self, data: ReadableBuffer, flags_or_addr: socket._Address, addr: None = None) -> int
     def sendto(self, data: ReadableBuffer, flags_or_addr: int, addr: socket._Address) -> int
 
-    override def shutdown(self, how: int) -> None
+    override def shutdown(self, how: int)
     @deprecated("Deprecated since Python 3.6. Use `SSLSocket.recv` method instead.")
     def read(self, len: int = 1024, buffer: WriteableBuffer | None = None) -> bytes:
         """Read up to LEN bytes and return them.
@@ -641,7 +651,7 @@ class SSLContext(_SSLContext):
         cafile: StrOrBytesPath | None = None,
         capath: StrOrBytesPath | None = None,
         cadata: str | ReadableBuffer | None = None,
-    ) -> None
+    )
 
     override def get_ca_certs(self, binary_form: False = False) -> list[PeerCertRetDictType]:
         """Returns a list of dicts with information of loaded CA certs.
@@ -663,14 +673,14 @@ class SSLContext(_SSLContext):
         def set_client_sigalgs(self, sigalgs: str, /)
         def set_server_sigalgs(self, sigalgs: str, /)
 
-    override def set_default_verify_paths(self) -> None
-    override def set_ciphers(self, cipherlist: str, /) -> None
+    override def set_default_verify_paths(self)
+    override def set_ciphers(self, cipherlist: str, /)
     def set_alpn_protocols(self, alpn_protocols: Iterable[str])
     @deprecated("Deprecated since Python 3.10. Use ALPN instead.")
     def set_npn_protocols(self, npn_protocols: Iterable[str]) -> None
     def set_servername_callback(self, server_name_callback: SrvnmeCbType | None)
-    override def load_dh_params(self, path: str, /) -> None
-    override def set_ecdh_curve(self, name: str, /) -> None
+    override def load_dh_params(self, path: str, /)
+    override def set_ecdh_curve(self, name: str, /)
     def wrap_socket(
         self,
         sock: socket.socket,

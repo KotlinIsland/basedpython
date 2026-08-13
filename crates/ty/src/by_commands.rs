@@ -33,7 +33,9 @@ fn configured_min_version(cwd: &Path) -> PythonVersion {
         return Config::default().min_version;
     };
     let db = ProjectDatabase::use_defaults(metadata, system);
-    ruff_db::Db::python_version(&db)
+    db.project()
+        .program(&db)
+        .python_version(&db)
         .to_string()
         .parse()
         .unwrap_or_else(|_| Config::default().min_version)
@@ -270,10 +272,13 @@ pub(crate) fn cmd_run(
 /// src-layout project, `src/` before the project root. Only roots inside the
 /// project are kept: an emitted tree can only mirror what is being built.
 fn module_roots(db: &ProjectDatabase, cwd: &Path) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = ty_module_resolver::system_module_search_paths(db)
-        .map(|path| PathBuf::from(path.as_str()))
-        .filter(|path| path.starts_with(cwd))
-        .collect();
+    let mut roots: Vec<PathBuf> = ty_module_resolver::system_module_search_paths(
+        db,
+        db.project().program(db).resolver_environment(db),
+    )
+    .map(|path| PathBuf::from(path.as_str()))
+    .filter(|path| path.starts_with(cwd))
+    .collect();
     // a nested root shadows the one containing it, so the deepest match wins
     roots.sort_by_key(|root| std::cmp::Reverse(root.components().count()));
     roots
@@ -463,8 +468,9 @@ pub(crate) fn cmd_compile(
             .and_then(|stem| stem.to_str())
             .context("a source file has no usable module name")?;
 
-        let parsed = ruff_db::parsed::parsed_module(&db, *file).load(&db);
-        let model = ty_python_semantic::SemanticModel::new(&db, *file);
+        let program_file = ty_python_semantic::Db::program_file(&db, *file);
+        let parsed = ruff_db::parsed::parsed_module(&db, program_file.python_file(&db)).load(&db);
+        let model = ty_python_semantic::SemanticModel::new(&db, program_file);
         // a `.py` source needs no transpiling to be its own interpreted fallback
         let mut options = options.clone();
         if path.extension().is_some_and(|x| x == "py") {
@@ -472,6 +478,7 @@ pub(crate) fn cmd_compile(
         }
         let mut lowered = by_irbuild::build_module(
             &db,
+            &model.program_environment(),
             &model,
             parsed.suite(),
             module,
@@ -1160,7 +1167,6 @@ fn render_diagnostics(db: &ProjectDatabase, diagnostics: &[Diagnostic]) -> anyho
 
     let display_config = DisplayDiagnosticConfig::new("ty")
         .color(colored::control::SHOULD_COLORIZE.should_colorize())
-        .show_fix_diff(true)
         .context(0);
     let mut stderr = std::io::stderr().lock();
     write!(

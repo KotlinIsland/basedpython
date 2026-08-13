@@ -1292,7 +1292,7 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
             ast::Expr::Call(ast::ExprCall {
                 func,
                 arguments,
-                range: _,
+                range_start: _,
                 node_index: _,
                 is_cast: _,
                 is_checked_cast: _,

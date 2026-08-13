@@ -85,7 +85,7 @@ class _EnumDict(dict[str, dynamic]):
     else:
         def __init__(self) -> None
 
-    override def __setitem__(self, key: str, value: dynamic) -> None:
+    override def __setitem__(self, key: str, value: dynamic):
         """
         Changes anything not dundered or not a descriptor.
 

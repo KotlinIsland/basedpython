@@ -61,7 +61,7 @@ import sys
 from _typeshed import Unused
 from enum import Enum
 from typing import Final, TypeAlias
-from typing_extensions import LiteralString
+from typing_extensions import Never
 
 private type FieldsType = (int, int, int, int, int, int)
 
@@ -200,7 +200,7 @@ class UUID:
     def __gt__(self, other: UUID) -> bool
     def __ge__(self, other: UUID) -> bool
     override def __hash__(self) -> builtins.int
-    override def __setattr__(self, name: Unused, value: Unused) -> NoReturn
+    override def __setattr__(self, name: Unused, value: Unused) -> Never
 
 def getnode() -> int:
     """Get the hardware address as a 48-bit positive integer.
@@ -272,10 +272,10 @@ final NAMESPACE_DNS: UUID
 final NAMESPACE_URL: UUID
 final NAMESPACE_OID: UUID
 final NAMESPACE_X500: UUID
-final RESERVED_NCS: LiteralString
-final RFC_4122: LiteralString
-final RESERVED_MICROSOFT: LiteralString
-final RESERVED_FUTURE: LiteralString
+final RESERVED_NCS: literal str
+final RFC_4122: literal str
+final RESERVED_MICROSOFT: literal str
+final RESERVED_FUTURE: literal str
 
 if sys.version_info >= (3, 12):
     def main():

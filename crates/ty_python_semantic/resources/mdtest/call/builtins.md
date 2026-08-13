@@ -412,7 +412,7 @@ result to `Sized` or `object`; ideally the element type would remain `Unknown`, 
 return type would still be used where possible.
 
 ```py
-from ty_extensions import Unknown
+from ty_extensions._internal import Unknown
 
 def _(xs: Unknown):
     # TODO: should be `list[Unknown]`
@@ -466,7 +466,6 @@ error[call-non-callable]: `NotImplemented` is not callable
   |           --------------^^
   |           |
   |           Did you mean `NotImplementedError`?
-  |
 ```
 
 ```py
@@ -483,13 +482,12 @@ error[call-non-callable]: `NotImplemented` is not callable
   |           --------------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |           |
   |           Did you mean `NotImplementedError`?
-  |
 ```
 
 ## `map` with generic callbacks
 
 ```py
-from ty_extensions import Unknown
+from ty_extensions._internal import Unknown
 import re
 
 def _(s: Unknown | str):
@@ -502,4 +500,74 @@ def _(xs: Unknown | list[str]):
     reveal_type(escaped)  # revealed: map[str]
     tokens: list[Unknown | str] = []
     tokens.extend(escaped)
+```
+
+## Failed `map` calls retain their result type
+
+When the argument count identifies a single `map` overload, an incompatible callback still produces
+its usual error. The mapped values retain the callback's return type and do not produce an
+additional error when called.
+
+```py
+class Function:
+    def __init__(self, value: str) -> None: ...
+    def __call__(self) -> None: ...
+
+# error: [invalid-argument-type]
+for function in map(Function, [object()]):
+    function()
+```
+
+## `dict` calls do not expose internal type variables
+
+Several `dict` overloads accept one positional argument. Whichever is selected, the constructed type
+is reported in terms of the argument, never in terms of `dict`'s own type variables.
+
+```toml
+[analysis]
+strict-generic-narrowing = true
+```
+
+```py
+from collections.abc import Mapping
+
+def copy(value: object) -> dict[str, str]:
+    if isinstance(value, Mapping):
+        # error: [invalid-return-type] "Return type does not match returned value: expected `dict[str, str]`, found `dict[object, object]`"
+        return dict(value)
+    return {}
+```
+
+## Failed `dict` calls preserve narrowed mapping types
+
+An invalid `dict` call must not invalidate an assignment inside a branch where the original value
+has already been narrowed to a mapping.
+
+```toml
+[analysis]
+strict-generic-narrowing = true
+```
+
+```py
+from collections.abc import Mapping
+
+def clean(value: dict[str, int] | str | None) -> None:
+    if isinstance(value, Mapping):
+        value = dict(value, 1)  # error: [no-matching-overload]
+        reveal_type(value)  # revealed: dict[str, int]
+        for key, item in value.items():
+            value[key] = item
+```
+
+## Failed inner `OrderedDict` calls do not invalidate outer constructors
+
+Constructing an `OrderedDict` from a list containing both strings and floats is already rejected.
+That failure must not cause a second error when the resulting value is passed to another
+`OrderedDict` constructor.
+
+```py
+from collections import OrderedDict
+
+items = [OrderedDict([["key", 1.0]])]  # error: [no-matching-overload]
+OrderedDict(zip(["name"], items))
 ```

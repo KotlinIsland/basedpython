@@ -16,13 +16,11 @@ info[inlay-hint-location]: Inlay Hint Target
    |
 LL | class str(Sequence[str]):
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:10
    |
 LL | result[: str] = apply:[it: int]
    |          ^^^
-   |
 
 ---------------------------------------------
 info[inlay-hint-edit]: Inlay hint edits

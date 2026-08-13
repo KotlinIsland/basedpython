@@ -66,11 +66,13 @@ use ruff_python_ast::{
 };
 use ruff_python_stdlib::identifiers::is_identifier;
 use ruff_text_size::{Ranged, TextSize};
+use ty_python_semantic::ProgramEnvironment;
 use ty_python_semantic::{HasType, SemanticModel};
 
 /// lower every module-level function ty can represent natively
 pub fn build_module(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     suite: &[Stmt],
     module_name: &str,
@@ -119,7 +121,7 @@ pub fn build_module(
             if let Stmt::ClassDef(class) = stmt
                 && layouts.contains_key(class.name.as_str())
             {
-                match class_fields(db, model, suite, class, &layouts) {
+                match class_fields(db, env, model, suite, class, &layouts) {
                     Ok(fields) => {
                         if layouts.get(class.name.as_str()) != Some(&fields) {
                             layouts.insert(class.name.to_string(), fields);
@@ -163,7 +165,7 @@ pub fn build_module(
         if decorated {
             mutable.insert(class.name.as_str());
         }
-        if let Some(base) = base_class(db, model, class, &layouts).ok().flatten() {
+        if let Some(base) = base_class(db, env, model, class, &layouts).ok().flatten() {
             mutable.insert(class.name.as_str());
             // a base of ours is made mutable too, whether it stands alone or beside a
             // name from outside: this class may override a method of it, and a direct
@@ -196,6 +198,7 @@ pub fn build_module(
                     Stmt::FunctionDef(method) if method.decorator_list.is_empty() => {
                         let mut signature = signature(
                             db,
+                            env,
                             model,
                             method,
                             &layouts,
@@ -220,7 +223,8 @@ pub fn build_module(
         .iter()
         .filter_map(|stmt| match stmt {
             Stmt::FunctionDef(function) => {
-                let mut signature = signature(db, model, function, &layouts, None, &[]).ok()?;
+                let mut signature =
+                    signature(db, env, model, function, &layouts, None, &[]).ok()?;
                 resumable_return(function, &mut signature);
                 Some((function.name.to_string(), signature))
             }
@@ -234,14 +238,15 @@ pub fn build_module(
     // handing a name to a callee's edition keeps it in a buffer, which is itself an
     // eligibility this is computing — so it is iterated. eligibility only ever grows,
     // and the positions are bounded by the parameters, so it settles
-    let supplied = supplied_arrays(db, model, suite, &layouts);
+    let supplied = supplied_arrays(db, env, model, suite, &layouts);
     let mut arrays = ArrayEditions::new();
     loop {
         let next: ArrayEditions = suite
             .iter()
             .filter_map(|stmt| match stmt {
                 Stmt::FunctionDef(function) if !generators::is_generator(&function.body) => {
-                    let found = array_editions(db, model, function, &layouts, &arrays, &supplied);
+                    let found =
+                        array_editions(db, env, model, function, &layouts, &arrays, &supplied);
                     (!found.is_empty()).then(|| (function.name.to_string(), found))
                 }
                 _ => None,
@@ -299,6 +304,7 @@ pub fn build_module(
                 };
                 let signature = signature(
                     db,
+                    env,
                     model,
                     init,
                     &layouts,
@@ -321,7 +327,7 @@ pub fn build_module(
         })
         .filter_map(|class| {
             // the map is the *layout* chain, which only an in-module base extends
-            base_class(db, model, class, &layouts)
+            base_class(db, env, model, class, &layouts)
                 .ok()
                 .flatten()
                 .and_then(|base| base.in_module().map(str::to_owned))
@@ -334,6 +340,7 @@ pub fn build_module(
         bases: &bases,
         unique_loop_bindings,
         db,
+        env,
         model,
         native_callees: &native_callees,
         suite,
@@ -365,10 +372,10 @@ pub fn build_module(
         if let Stmt::FunctionDef(function) = stmt {
             module
                 .gradual
-                .extend(gradual_signature_places(db, model, function));
+                .extend(gradual_signature_places(db, env, model, function));
             module
                 .promoted
-                .extend(promoted_places(db, model, function, &layouts));
+                .extend(promoted_places(db, env, model, function, &layouts));
             match lower_function(unit, function).and_then(verified) {
                 Ok((lowered, environments)) => {
                     module.functions.push(lowered);
@@ -542,7 +549,11 @@ fn lower_generator(
     captures: Option<&closures::Nested>,
 ) -> Lowered<(Function, Vec<by_ir::function::ClassIr>)> {
     let Unit {
-        db, model, layouts, ..
+        env,
+        db,
+        model,
+        layouts,
+        ..
     } = unit;
     generators::check(function)?;
 
@@ -556,7 +567,8 @@ fn lower_generator(
     // a field is a *cell* — `object`, with an unset check on every read — unless the
     // name is definitely assigned, in which case it takes the local's own
     // representation and the read is an infallible `GetField`
-    let representations = local_representations(db, model, &function.body, layouts, unit.arrays);
+    let representations =
+        local_representations(db, env, model, &function.body, layouts, unit.arrays);
     let locals: Vec<String> = representations
         .iter()
         .map(|(name, _)| name.clone())
@@ -567,7 +579,7 @@ fn lower_generator(
     // the constructor seeds every one of them, so they are as assigned as a parameter
     let mut assigned = generators::definitely_assigned(function);
     assigned.extend(captured.iter().cloned());
-    let parameters = signature(db, model, function, layouts, receiver, &[])?.params;
+    let parameters = signature(db, env, model, function, layouts, receiver, &[])?.params;
     let representation = |name: &str| {
         parameters
             .iter()
@@ -674,7 +686,11 @@ fn lower_generator_constructor(
     captured: &[String],
 ) -> Lowered<Function> {
     let Unit {
-        db, model, layouts, ..
+        env,
+        db,
+        model,
+        layouts,
+        ..
     } = unit;
     let Signature {
         params,
@@ -686,7 +702,7 @@ fn lower_generator_constructor(
         deferring,
         computed_defaults,
         ..
-    } = signature(db, model, function, layouts, receiver, &[])?;
+    } = signature(db, env, model, function, layouts, receiver, &[])?;
 
     let mut builder = FunctionBuilder::new(function.name.to_string(), RType::OBJECT);
     builder.at(span(function.range));
@@ -1122,13 +1138,14 @@ fn prune_unbuildable(
 /// been chosen, and where the report can name something a user wrote
 fn promoted_places(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     function: &ast::StmtFunctionDef,
     layouts: &Layouts,
 ) -> Vec<by_ir::function::PromotedPlace> {
     let mut places: Vec<by_ir::function::PromotedPlace> = Vec::new();
     let record = |places: &mut Vec<_>, place: String, ty| {
-        if let Some(missed) = mapper::missed_representation(db, ty, layouts) {
+        if let Some(missed) = mapper::missed_representation(db, env, ty, layouts) {
             places.push(by_ir::function::PromotedPlace {
                 function: function.name.to_string(),
                 place,
@@ -1164,6 +1181,7 @@ fn promoted_places(
 
 fn gradual_signature_places(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     function: &ast::StmtFunctionDef,
 ) -> Vec<GradualUse> {
@@ -1171,7 +1189,7 @@ fn gradual_signature_places(
     // member answers for the whole type, and so does the gradual bound of the hole an
     // unannotated parameter opens
     let is_gradual =
-        |ty: ty_python_semantic::types::Type<'_>| ty.is_dynamic() || ty.has_gradual_member(db);
+        |ty: ty_python_semantic::types::Type<'_>| ty.is_dynamic() || ty.has_gradual_member(db, env);
     let mut places = Vec::new();
     for parameter in &function.parameters.args {
         if parameter
@@ -1215,6 +1233,7 @@ fn lower_class<'a>(
     class: &'a ast::StmtClassDef,
 ) -> Lowered<(by_ir::function::ClassIr, Vec<by_ir::function::ClassIr>)> {
     let Unit {
+        env,
         db,
         model,
         suite,
@@ -1249,9 +1268,9 @@ fn lower_class<'a>(
             }
         }
     }
-    let base = base_class(db, model, class, layouts)?;
+    let base = base_class(db, env, model, class, layouts)?;
 
-    let fields = class_fields(db, model, suite, class, layouts)?;
+    let fields = class_fields(db, env, model, suite, class, layouts)?;
     let mut lowered = Vec::new();
     let mut environments = Vec::new();
     let mut constants = Vec::new();
@@ -1462,6 +1481,7 @@ fn slot_zero(parameters: &ast::Parameters) -> Option<&ast::ParameterWithDefault>
 /// there, and a struct field has no way to be absent
 fn init_fields(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     class: &ast::StmtClassDef,
     layouts: &Layouts,
@@ -1504,7 +1524,7 @@ fn init_fields(
         let ty = target
             .inferred_type(model)
             .ok_or_else(|| Decline::new("an attribute assignment has no inferred type"))?;
-        let rtype = map_type_with(db, ty, layouts)?;
+        let rtype = map_type_with(db, env, ty, layouts)?;
         match widths.iter_mut().find(|(written, _)| *written == name) {
             Some((_, existing)) => {
                 if *existing != rtype {
@@ -1719,6 +1739,7 @@ fn attribute_of(target: &Expr, receiver: &str, owner: Option<&str>) -> Option<St
 /// the outside and laid out here at the same time
 fn base_class(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     class: &ast::StmtClassDef,
     layouts: &Layouts,
@@ -1738,7 +1759,7 @@ fn base_class(
         // and no members, so there is nothing to lay out and nothing to inherit.
         // resolved rather than matched by name, because a module may bind `object`
         // to something else entirely
-        [base] if !keyed && is_builtin_object(db, model, base, layouts) => Ok(None),
+        [base] if !keyed && is_builtin_object(db, env, model, base, layouts) => Ok(None),
         [Expr::Name(name)] if layouts.contains_key(name.id.as_str()) => {
             if keyed {
                 // the layout would have to be ours, which only the type spec lays out,
@@ -1841,6 +1862,7 @@ fn class_keywords(class: &ast::StmtClassDef) -> Lowered<Vec<ClassKeyword>> {
 /// subclass the wrong base entirely
 fn is_builtin_object(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     base: &Expr,
     layouts: &Layouts,
@@ -1854,7 +1876,7 @@ fn is_builtin_object(
     // and it has to *be* a class: an unresolved name is gradual, and a gradual base
     // says nothing about what it brings
     base.inferred_type(model)
-        .is_some_and(|ty| !ty.is_dynamic() && mapper::map_type(db, ty).is_ok())
+        .is_some_and(|ty| !ty.is_dynamic() && mapper::map_type(db, env, ty).is_ok())
 }
 
 /// a base written as a name, or as a chain of attributes on one, as a dotted path
@@ -1956,6 +1978,7 @@ fn stores_through_setattr(class: &ast::StmtClassDef) -> bool {
 /// the declared fields of a class, or a decline explaining why it has no layout
 fn class_fields(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     suite: &[Stmt],
     class: &ast::StmtClassDef,
@@ -1984,7 +2007,7 @@ fn class_fields(
             }
         }
     }
-    let base = base_class(db, model, class, layouts)?;
+    let base = base_class(db, env, model, class, layouts)?;
 
     // a subclass's struct *begins* with its base's fields, in the same order and
     // unchanged, so a pointer to one is a valid pointer to the other — which is what
@@ -2000,17 +2023,21 @@ fn class_fields(
         .cloned()
         .collect();
     let fields = if is_data {
-        data_fields(db, model, class, layouts, inherited)?
+        data_fields(db, env, model, class, layouts, inherited)?
     } else {
         // a plain class *is* its `__init__`: the fields are the attributes it gives
         // the instance, in the order it gives them, and a `__slots__` declares the
         // ones no assignment reached
-        slot_fields(class, init_fields(db, model, class, layouts, inherited)?)?
+        slot_fields(
+            class,
+            init_fields(db, env, model, class, layouts, inherited)?,
+        )?
     };
-    let fields = spec_built_where_needed(db, model, suite, class, base.as_ref(), layouts, fields)?;
+    let fields =
+        spec_built_where_needed(db, env, model, suite, class, base.as_ref(), layouts, fields)?;
     metaclass_carries_the_body(class, base.as_ref(), layouts, is_data)?;
     Ok(presence_where_a_finalizer_reads(
-        db, model, suite, layouts, class, fields,
+        db, env, model, suite, layouts, class, fields,
     ))
 }
 
@@ -2069,6 +2096,7 @@ fn metaclass_carries_the_body(
 /// the fields of a `data class`: the annotations its body writes, after its base's
 fn data_fields(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     class: &ast::StmtClassDef,
     layouts: &Layouts,
@@ -2098,7 +2126,7 @@ fn data_fields(
                     .ok_or_else(|| Decline::new("a field has no inferred type"))?;
                 fields.push(by_ir::function::FieldDecl {
                     name,
-                    ty: map_type_with(db, ty, layouts)?,
+                    ty: map_type_with(db, env, ty, layouts)?,
                     default,
                     optional: false,
                 });
@@ -2121,8 +2149,10 @@ fn data_fields(
 /// spec is the only construction that can say where — so such a class needs `type` for
 /// every base's metaclass and no class keyword to place. one that adds no fields is
 /// built through its metaclass instead, and neither restriction reaches it
+#[expect(clippy::too_many_arguments)]
 fn spec_built_where_needed(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     suite: &[Stmt],
     class: &ast::StmtClassDef,
@@ -2147,7 +2177,9 @@ fn spec_built_where_needed(
     let appended = match base {
         None => false,
         Some(ClassBase::External(_)) => true,
-        Some(ClassBase::InModule(name)) => laid_out_from_outside(db, model, suite, layouts, name),
+        Some(ClassBase::InModule(name)) => {
+            laid_out_from_outside(db, env, model, suite, layouts, name)
+        }
     };
     if appended
         && base.is_some_and(|base| {
@@ -2202,13 +2234,14 @@ fn class_written<'a>(suite: &'a [Stmt], name: &str) -> Option<&'a ast::StmtClass
 /// the shared ones at two different offsets
 fn presence_where_a_finalizer_reads(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     suite: &[Stmt],
     layouts: &Layouts,
     class: &ast::StmtClassDef,
     mut fields: Vec<by_ir::function::FieldDecl>,
 ) -> Vec<by_ir::function::FieldDecl> {
-    if fields.is_empty() || !layout_tree_finalizes(db, model, suite, layouts, class) {
+    if fields.is_empty() || !layout_tree_finalizes(db, env, model, suite, layouts, class) {
         return fields;
     }
     for field in &mut fields {
@@ -2223,6 +2256,7 @@ fn presence_where_a_finalizer_reads(
 /// working a layout out is a walk up the base chain through ty
 fn layout_tree_finalizes(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     suite: &[Stmt],
     layouts: &Layouts,
@@ -2246,10 +2280,10 @@ fn layout_tree_finalizes(
     if finalizers.is_empty() {
         return false;
     }
-    let root = layout_root(db, model, suite, layouts, class);
+    let root = layout_root(db, env, model, suite, layouts, class);
     finalizers
         .into_iter()
-        .any(|candidate| layout_root(db, model, suite, layouts, candidate) == root)
+        .any(|candidate| layout_root(db, env, model, suite, layouts, candidate) == root)
 }
 
 /// the topmost class of this module's own that this one's layout extends
@@ -2258,6 +2292,7 @@ fn layout_tree_finalizes(
 /// they share this
 fn layout_root(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     suite: &[Stmt],
     layouts: &Layouts,
@@ -2266,7 +2301,7 @@ fn layout_root(
     let mut current = class;
     // bounded the way [`laid_out_from_outside`] is
     for _ in 0..=suite.len() {
-        let next = base_class(db, model, current, layouts)
+        let next = base_class(db, env, model, current, layouts)
             .ok()
             .flatten()
             .and_then(|base| base.in_module().map(str::to_owned))
@@ -2288,6 +2323,7 @@ fn layout_root(
 /// out here, and a subclass on it extends a struct rather than appending to one
 fn laid_out_from_outside(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     suite: &[Stmt],
     layouts: &Layouts,
@@ -2300,7 +2336,7 @@ fn laid_out_from_outside(
     // bounded by the class count: a base chain cannot visit one twice without being a
     // cycle, and a cycle would otherwise spin here rather than settle
     for _ in 0..=suite.len() {
-        match base_class(db, model, current, layouts).ok().flatten() {
+        match base_class(db, env, model, current, layouts).ok().flatten() {
             None => return false,
             Some(ClassBase::External(_)) => return true,
             Some(ClassBase::InModule(base)) => match class_written(suite, &base) {
@@ -2679,6 +2715,7 @@ fn lower_function_with_receiver(
     arrays: &[(usize, RType)],
 ) -> Lowered<(Function, Vec<by_ir::function::ClassIr>)> {
     let Unit {
+        env,
         db,
         model,
         native_callees,
@@ -2725,12 +2762,12 @@ fn lower_function_with_receiver(
         ret,
         deferring,
         computed_defaults,
-    } = signature(db, model, function, layouts, receiver, arrays)?;
+    } = signature(db, env, model, function, layouts, receiver, arrays)?;
 
     // a nested function lives on a generated environment class, whose fields are
     // the captures. it has to exist before the body is lowered, because the `def`
     // statement allocates it
-    let locals_here = local_representations(db, model, &function.body, layouts, unit.arrays);
+    let locals_here = local_representations(db, env, model, &function.body, layouts, unit.arrays);
     let bound: HashSet<String> = params
         .iter()
         .map(|(name, _)| name.clone())
@@ -2847,6 +2884,7 @@ fn lower_function_with_receiver(
             .filter_map(|entry| {
                 let mut signature = signature(
                     db,
+                    env,
                     model,
                     &entry.def,
                     &layouts_with_env,
@@ -3193,6 +3231,8 @@ type Methods = HashMap<String, HashMap<String, Signature>>;
 /// environment's methods need to see the environment's own layout
 #[derive(Clone, Copy)]
 struct Unit<'a> {
+    /// the environment the module is being checked in, which every type query needs
+    env: &'a ProgramEnvironment<'a>,
     /// whether a closure made in a loop binds *that* iteration's values, which is
     /// the language's default and the transpiler's. it decides one thing here:
     /// whether a captured loop target is a shared cell or a per-closure copy
@@ -3487,6 +3527,7 @@ fn edition_name(function: &str, signature: &[(usize, RType)]) -> String {
 /// answer depends only on this function, so it is settled before any body is lowered
 fn array_editions(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     function: &ast::StmtFunctionDef,
     layouts: &Layouts,
@@ -3511,7 +3552,7 @@ fn array_editions(
             let rtype = parameter
                 .parameter
                 .inferred_type(model)
-                .and_then(|ty| mapper::map_local_type(db, ty, layouts).ok())
+                .and_then(|ty| mapper::map_local_type(db, env, ty, layouts).ok())
                 .filter(|rtype| matches!(rtype, RType::Array(_)))?;
             Some((index, rtype))
         })
@@ -3547,6 +3588,7 @@ fn array_editions(
 /// argument's representation, which is what this is computing
 fn supplied_arrays(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     suite: &[Stmt],
     layouts: &Layouts,
@@ -3571,7 +3613,7 @@ fn supplied_arrays(
                         .filter_map(|(index, argument)| {
                             let rtype = argument
                                 .inferred_type(model)
-                                .and_then(|ty| mapper::map_local_type(db, ty, layouts).ok())
+                                .and_then(|ty| mapper::map_local_type(db, env, ty, layouts).ok())
                                 .filter(|rtype| matches!(rtype, RType::Array(_)))?;
                             Some((index, rtype))
                         })
@@ -3590,6 +3632,7 @@ fn supplied_arrays(
 
 fn signature(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     function: &ast::StmtFunctionDef,
     layouts: &Layouts,
@@ -3668,11 +3711,11 @@ fn signature(
                 // interpreted twin, and a method's twin belongs to a *different*
                 // class than the compiled receiver, while a nested function has no
                 // python-visible name to have been defined under
-                if receiver.is_none() && mapper::is_promoted_float(db, ty) {
+                if receiver.is_none() && mapper::is_promoted_float(db, env, ty) {
                     deferring.push(params.len());
                     RType::FLOAT
                 } else {
-                    map_type_with(db, ty, layouts)?
+                    map_type_with(db, env, ty, layouts)?
                 }
             }
         };
@@ -3706,7 +3749,7 @@ fn signature(
         posonly: parameters.posonlyargs.len()
             + usize::from(matches!(receiver, Some(Receiver::Implicit(_)))),
         kwonly: parameters.kwonlyargs.len(),
-        ret: return_type(db, model, function, layouts)?,
+        ret: return_type(db, env, model, function, layouts)?,
         deferring,
         computed_defaults,
     })
@@ -3856,6 +3899,7 @@ fn boxed_object(builder: &mut by_ir::builder::FunctionBuilder, id: RegisterId) -
 
 fn return_type(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     function: &ast::StmtFunctionDef,
     layouts: &Layouts,
@@ -3870,7 +3914,7 @@ fn return_type(
                 let ty = value
                     .inferred_type(model)
                     .ok_or_else(|| Decline::new("a returned expression has no inferred type"))?;
-                map_type_with(db, ty, layouts)?
+                map_type_with(db, env, ty, layouts)?
             }
         };
         found = Some(match found {
@@ -3908,7 +3952,7 @@ fn return_type(
             let ty = annotation
                 .inferred_type(model)
                 .ok_or_else(|| Decline::new("a return annotation has no inferred type"))?;
-            map_type_with(db, ty, layouts)
+            map_type_with(db, env, ty, layouts)
         }
         None => Ok(RType::NONE),
     }
@@ -3920,6 +3964,7 @@ fn return_type(
 /// write to it has to fit
 fn local_representations(
     db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
     body: &[Stmt],
     layouts: &Layouts,
@@ -3952,7 +3997,7 @@ fn local_representations(
     // `buffer_safe` first. a buffer handed out ungated is a list that escapes
     let peek = |expr: &Expr| -> RType {
         expr.inferred_type(model)
-            .and_then(|ty| map_type_with(db, ty, layouts).ok())
+            .and_then(|ty| map_type_with(db, env, ty, layouts).ok())
             .unwrap_or(RType::OBJECT)
     };
 
@@ -4006,7 +4051,7 @@ fn local_representations(
         if display.elts.is_empty() {
             return expr
                 .inferred_type(model)
-                .and_then(|ty| mapper::map_local_type(db, ty, layouts).ok())
+                .and_then(|ty| mapper::map_local_type(db, env, ty, layouts).ok())
                 .filter(|rtype| matches!(rtype, RType::Array(_)));
         }
         let mut element: Option<RType> = None;
@@ -6808,6 +6853,7 @@ impl Lowering<'_, '_> {
     /// definition. calling the native entry directly would skip the test and unbox
     /// the argument, which raises where python does not
     fn defers_call(&self, name: &str, node: &ast::ExprCall) -> bool {
+        let env = &self.model.program_environment();
         let Some(signature) = self.signatures.get(name) else {
             return false;
         };
@@ -6842,7 +6888,7 @@ impl Lowering<'_, '_> {
                 supplied.is_none_or(|argument| {
                     argument
                         .inferred_type(self.model)
-                        .and_then(|ty| map_type(self.db, ty).ok())
+                        .and_then(|ty| map_type(self.db, env, ty).ok())
                         != Some(RType::FLOAT)
                 })
             })
@@ -7415,10 +7461,11 @@ impl Lowering<'_, '_> {
 
     /// the representation an expression will produce, without lowering it
     fn peek_type(&self, expr: &Expr) -> Lowered<RType> {
+        let env = &self.model.program_environment();
         let ty = expr
             .inferred_type(self.model)
             .ok_or_else(|| Decline::new("an expression has no inferred type"))?;
-        map_type_with(self.db, ty, self.layouts)
+        map_type_with(self.db, env, ty, self.layouts)
     }
 
     /// the representation that holds every one of `exprs`
@@ -7854,6 +7901,7 @@ impl Lowering<'_, '_> {
     /// register holds a double — so the representation knows more than the
     /// annotation, and this is the one place that matters
     fn float_by_proof(&self, left: &Expr, lhs_ty: &RType, right: &Expr, rhs_ty: &RType) -> bool {
+        let env = &self.model.program_environment();
         if *lhs_ty != RType::FLOAT && *rhs_ty != RType::FLOAT {
             return false;
         }
@@ -7864,7 +7912,7 @@ impl Lowering<'_, '_> {
             *rtype == RType::OBJECT
                 && expr
                     .inferred_type(self.model)
-                    .is_some_and(|ty| mapper::is_promoted_float(self.db, ty))
+                    .is_some_and(|ty| mapper::is_promoted_float(self.db, env, ty))
         };
         numeric(left, lhs_ty) && numeric(right, rhs_ty)
     }
@@ -9043,6 +9091,7 @@ impl Lowering<'_, '_> {
     }
 
     fn call(&mut self, node: &ast::ExprCall) -> Lowered<(Value, RType)> {
+        let env = &self.model.program_environment();
         // `super()` with no arguments is not an ordinary call: python's own compiler
         // fills the two arguments in from the frame. a compiled method has no frame,
         // but the compiler knows both — so it fills them in here instead. a shadowed
@@ -9227,7 +9276,7 @@ impl Lowering<'_, '_> {
         // part company for a function that never returns at all
         let result_ty = match self.signatures.get(name) {
             Some(signature) => signature.ret.clone(),
-            None => map_type(self.db, ty)?,
+            None => map_type(self.db, env, ty)?,
         };
 
         // the callee's parameter representations, so each argument is coerced rather

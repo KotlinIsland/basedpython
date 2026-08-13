@@ -261,7 +261,7 @@ class HTTPResponse(io.BufferedIOBase, BinaryIO):
     override def __enter__(self) -> Self
     override def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: types.TracebackType | None
-    ) -> None
+    )
     @deprecated("Deprecated since Python 3.9. Use `HTTPResponse.headers` attribute instead.")
     def info(self) -> HTTPMessage:
         """Returns an instance of the class mimetools.Message containing

@@ -2,7 +2,7 @@
 
 use crate::AtomicNodeIndex;
 use crate::generated::{
-    ExprBytesLiteral, ExprDict, ExprFString, ExprList, ExprName, ExprNamed, ExprSet,
+    ExprBytesLiteral, ExprCall, ExprDict, ExprFString, ExprList, ExprName, ExprNamed, ExprSet,
     ExprStringLiteral, ExprTString, ExprTuple, PatternMatchAnd, PatternMatchAs, PatternMatchOr,
     StmtClassDef,
 };
@@ -1461,6 +1461,34 @@ impl ExprStringLiteral {
     }
 }
 
+impl Ranged for ExprCall {
+    fn range(&self) -> TextRange {
+        TextRange::new(self.range_start, self.arguments.end())
+    }
+}
+
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "`range_start` is represented by the reconstructed `range` field"
+)]
+impl fmt::Debug for ExprCall {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExprCall")
+            .field("node_index", &self.node_index)
+            .field("range", &self.range())
+            .field("func", &self.func)
+            .field("arguments", &self.arguments)
+            // basedpython: the surface form a call was written in — `a cast T`,
+            // `a cast? T`, a string tag — is not recoverable from `func` and
+            // `arguments` alone, so the parser snapshots have to show it
+            .field("is_cast", &self.is_cast)
+            .field("is_checked_cast", &self.is_checked_cast)
+            .field("is_string_tag", &self.is_string_tag)
+            .finish()
+    }
+}
+
 /// The value representing a [`ExprStringLiteral`].
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
@@ -1501,10 +1529,10 @@ impl StringLiteralValue {
             "Use `StringLiteralValue::single` to create single-part strings"
         );
         Self {
-            inner: StringLiteralValueInner::Concatenated(ConcatenatedStringLiteral {
+            inner: StringLiteralValueInner::Concatenated(Box::new(ConcatenatedStringLiteral {
                 strings,
                 value: OnceLock::new(),
-            }),
+            })),
         }
     }
 
@@ -1627,7 +1655,7 @@ enum StringLiteralValueInner {
     Single(StringLiteral),
 
     /// An implicitly concatenated string literals i.e., `"foo" "bar"`.
-    Concatenated(ConcatenatedStringLiteral),
+    Concatenated(Box<ConcatenatedStringLiteral>),
 }
 
 bitflags! {
@@ -4384,6 +4412,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<Pattern>(), 72);
         assert_eq!(std::mem::size_of::<Parameters>(), 56);
         assert_eq!(std::mem::size_of::<Arguments>(), 40);
+        // basedpython: an expression carries the `local` / `once` lifetime modifiers,
+        // which is a word wider than upstream
         assert_eq!(std::mem::size_of::<Expr>(), 72);
         assert_eq!(std::mem::size_of::<ExprAttribute>(), 56);
         assert_eq!(std::mem::size_of::<ExprAwait>(), 24);
@@ -4411,7 +4441,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<ExprSetComp>(), 48);
         assert_eq!(std::mem::size_of::<ExprSlice>(), 40);
         assert_eq!(std::mem::size_of::<ExprStarred>(), 24);
-        assert_eq!(std::mem::size_of::<ExprStringLiteral>(), 64);
+        assert_eq!(std::mem::size_of::<ExprStringLiteral>(), 48);
         assert_eq!(std::mem::size_of::<ExprSubscript>(), 32);
         // basedpython: the callable-parameter shape a tuple can carry (`/` and
         // `*` marker positions, `local` / `once` modifiers) is boxed behind an

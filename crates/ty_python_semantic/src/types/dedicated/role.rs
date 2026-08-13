@@ -119,8 +119,8 @@ mod tests {
             .build()?;
 
         let file = system_path_to_file(&db, "/src/main.py")?;
-        let module = parsed_module(&db, file).load(&db);
-        let model = SemanticModel::new(&db, file);
+        let module = parsed_module(&db, db.program_file(file).python_file(&db)).load(&db);
+        let model = SemanticModel::new(&db, crate::Db::program_file(&db, file));
         let class_def = module
             .suite()
             .iter()
@@ -153,8 +153,8 @@ mod tests {
             .build()?;
 
         let file = system_path_to_file(&db, "/src/main.py")?;
-        let module = parsed_module(&db, file).load(&db);
-        let model = SemanticModel::new(&db, file);
+        let module = parsed_module(&db, db.program_file(file).python_file(&db)).load(&db);
+        let model = SemanticModel::new(&db, crate::Db::program_file(&db, file));
         let class_def = module
             .suite()
             .iter()
@@ -219,8 +219,8 @@ mod tests {
             .build()?;
 
         let file = system_path_to_file(&db, "/src/main.py")?;
-        let module = parsed_module(&db, file).load(&db);
-        let model = SemanticModel::new(&db, file);
+        let module = parsed_module(&db, db.program_file(file).python_file(&db)).load(&db);
+        let model = SemanticModel::new(&db, crate::Db::program_file(&db, file));
         let class_def = module
             .suite()
             .iter()
@@ -314,8 +314,8 @@ mod tests {
             )
             .build()?;
         let file = system_path_to_file(&db, "/src/main.py")?;
-        let module = parsed_module(&db, file).load(&db);
-        let model = SemanticModel::new(&db, file);
+        let module = parsed_module(&db, db.program_file(file).python_file(&db)).load(&db);
+        let model = SemanticModel::new(&db, crate::Db::program_file(&db, file));
         let class_def = module
             .suite()
             .iter()
@@ -355,8 +355,8 @@ mod tests {
         let db = builder.build()?;
 
         let file = system_path_to_file(&db, target)?;
-        let module = parsed_module(&db, file).load(&db);
-        let index = semantic_index(&db, file);
+        let module = parsed_module(&db, db.program_file(file).python_file(&db)).load(&db);
+        let index = semantic_index(&db, db.program_file(file));
         let function_node = module
             .suite()
             .iter()

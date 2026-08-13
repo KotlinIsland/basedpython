@@ -83,7 +83,7 @@ if sys.version_info >= (3, 14):
     __all__ += ["Reader", "Writer"]
 
 if sys.version_info >= (3, 11):
-    from _io import text_encoding as text_encoding
+    from _io export text_encoding
 
     __all__ += ["DEFAULT_BUFFER_SIZE", "IncrementalNewlineDecoder", "text_encoding"]
 

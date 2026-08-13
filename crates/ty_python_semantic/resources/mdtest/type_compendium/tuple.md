@@ -506,8 +506,8 @@ An unspecialized tuple is equivalent to `tuple[Any, ...]` and `tuple[Unknown, ..
 
 ```py
 from typing_extensions import Any, assert_type
-from ty_extensions import Unknown, static_assert
-from ty_extensions._internal import is_equivalent_to
+from ty_extensions import static_assert
+from ty_extensions._internal import Unknown, is_equivalent_to
 
 static_assert(is_equivalent_to(tuple[Any, ...], tuple[Unknown, ...]))
 
@@ -555,10 +555,10 @@ y = 1, 2
 
 reveal_type(("foo", *y))  # revealed: tuple[Literal["foo"], Literal[1], Literal[2]]
 
-aa: tuple[list[int], ...] = ([42], *{[56], [78]}, [100])
+aa: tuple[list[int], ...] = ([42], *[[56], [78]], [100])
 reveal_type(aa)  # revealed: tuple[list[int], list[int], list[int], list[int]]
 
-bb: tuple[list[Literal[42, 56]], ...] = ([42], *{[56, 42], [42]}, [42, 42, 56])
+bb: tuple[list[Literal[42, 56]], ...] = ([42], *[[56, 42], [42]], [42, 42, 56])
 reveal_type(bb)  # revealed: tuple[list[Literal[42, 56]], list[Literal[42, 56]], list[Literal[42, 56]], list[Literal[42, 56]]]
 
 reveal_type((*[],))  # revealed: tuple[()]

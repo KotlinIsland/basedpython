@@ -205,7 +205,7 @@ class closing[in out SupportsCloseT: SupportsClose](AbstractContextManager[Suppo
 
     init(self, thing: SupportsCloseT)
     override def __enter__(self) -> SupportsCloseT
-    override def __exit__(self, *exc_info: Unused) -> None
+    override def __exit__(self, *exc_info: Unused)
 
 @type_check_only
 private protocol SupportsAclose:
@@ -247,7 +247,7 @@ class suppress(AbstractContextManager[None, bool]):
     """
 
     init(self, *exceptions: type[BaseException])
-    override def __enter__(self) -> None
+    override def __enter__(self)
     override def __exit__(
         self, exctype: type[BaseException] | None, excinst: BaseException | None, exctb: TracebackType | None
     ) -> bool
@@ -266,7 +266,7 @@ class _RedirectStream[in out SupportsRedirectT: SupportsRedirect | None](Abstrac
     override def __enter__(self) -> SupportsRedirectT
     override def __exit__(
         self, exctype: type[BaseException] | None, excinst: BaseException | None, exctb: TracebackType | None
-    ) -> None
+    )
 
 class redirect_stdout[in out SupportsRedirectT: SupportsRedirect | None](_RedirectStream[SupportsRedirectT]):
     """Context manager for temporarily redirecting stdout to another file.
@@ -404,7 +404,7 @@ class nullcontext[in out Element](AbstractContextManager[Element, None], Abstrac
     init(self: nullcontext[Element], enter_result: Element)
 
     override def __enter__(self) -> Element
-    override def __exit__(self, *exctype: Unused) -> None
+    override def __exit__(self, *exctype: Unused)
     override async def __aenter__(self) -> Element
     override async def __aexit__(self, *exctype: Unused) -> None
 

@@ -90,4 +90,3 @@ Module(
   |
 1 | for Point(x, y) in points: ...
   |     ^^^^^^^^^^^ Syntax Error: Invalid assignment target
-  |

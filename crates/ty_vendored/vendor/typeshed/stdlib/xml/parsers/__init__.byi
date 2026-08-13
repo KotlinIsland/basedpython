@@ -7,4 +7,4 @@ expat -- Python wrapper for James Clark's Expat parser, with namespace
 
 """
 
-from xml.parsers import expat as expat
+from xml.parsers export expat

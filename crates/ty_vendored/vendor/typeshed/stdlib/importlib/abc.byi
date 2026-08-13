@@ -7,7 +7,7 @@ from _typeshed import ReadableBuffer, StrPath
 from abc import ABCMeta
 from collections.abc import Iterator, Mapping, Sequence
 from importlib import _bootstrap_external
-from importlib._abc import Loader as Loader
+from importlib._abc export Loader
 from importlib.machinery import ModuleSpec
 from io import BufferedReader
 from typing import Literal, Protocol, runtime_checkable
@@ -136,7 +136,7 @@ class SourceLoader(_bootstrap_external.SourceLoader, ResourceLoader, ExecutionLo
     override def path_mtime(self, path: str) -> float:
         """Return the (int) modification time for the path (str)."""
 
-    override def set_data(self, path: str, data: bytes) -> None:
+    override def set_data(self, path: str, data: bytes):
         """Write the bytes to the path (if possible).
 
         Accepts a str path and data as bytes.
@@ -355,8 +355,8 @@ if sys.version_info < (3, 11):
         override def contents(self) -> Iterator[str]
 
 elif sys.version_info < (3, 14):
-    from importlib.resources.abc import (
-        ResourceReader as ResourceReader,
-        Traversable as Traversable,
-        TraversableResources as TraversableResources,
+    from importlib.resources.abc export (
+        ResourceReader,
+        Traversable,
+        TraversableResources,
     )

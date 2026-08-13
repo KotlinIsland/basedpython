@@ -18,6 +18,7 @@ use ty_project::Db;
 use ty_python_semantic::dependencies::{GroupName, available_groups};
 
 use crate::code_action::{FileEdit, QuickFix};
+use ty_module_resolver::ImportingFile;
 
 /// The actions that declare the distribution an import at `range` needs.
 ///
@@ -70,7 +71,7 @@ pub(crate) fn code_actions(db: &dyn Db, file: File, range: TextRange) -> Vec<Qui
 
 /// The module an import statement covering `range` names.
 fn imported_module_name(db: &dyn Db, file: File, range: TextRange) -> Option<ModuleName> {
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let covering = covering_node(parsed.syntax().into(), range);
 
     // `import a.b` anchors the diagnostic on the alias, `from a.b import c` on
@@ -103,9 +104,15 @@ fn distribution_to_declare(
 ) -> Option<DistributionName> {
     let root = ModuleName::new(module_name.first_component())?;
 
-    match resolve_module(db, file, module_name) {
+    match resolve_module(
+        db,
+        ImportingFile::File(file, db.program_file(file).resolver_environment(db)),
+        module_name,
+    ) {
         Some(module) => {
-            let owners = ty_module_resolver::distribution_index(db).owners_of(db, module);
+            let resolver_environment = db.program_file(file).resolver_environment(db);
+            let owners = ty_module_resolver::distribution_index(db, resolver_environment)
+                .owners_of(db, module);
             let available = available_groups(db, file);
             owners
                 .iter()

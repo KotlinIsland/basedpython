@@ -14,91 +14,77 @@ info[inlay-hint-location]: Inlay Hint Target
   |
 2 | class Pair[Key, Value]:
   |       ^^^^
-  |
 info: Source
  --> main2.py:5:5
   |
 5 | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
   |     ^^^^
-  |
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/typing.byi:LL:1
    |
 LL | Literal: _SpecialForm
    | ^^^^^^^
-   |
 info: Source
   --> main2.py:LL:10
    |
 LL | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
    |          ^^^^^^^
-   |
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/builtins.byi:LL:7
    |
 LL | class int:
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:18
    |
 LL | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
    |                  ^
-   |
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/typing.byi:LL:1
    |
 LL | Literal: _SpecialForm
    | ^^^^^^^
-   |
 info: Source
   --> main2.py:LL:22
    |
 LL | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
    |                      ^^^^^^^
-   |
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/builtins.byi:LL:7
    |
 LL | class str(Sequence[str]):
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:30
    |
 LL | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
    |                              ^^^
-   |
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/builtins.byi:LL:7
    |
 LL | class int:
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:45
    |
 LL | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
    |                                             ^^^^^^^^^^
-   |
 
 info[inlay-hint-location]: Inlay Hint Target
   --> stdlib/builtins.byi:LL:7
    |
 LL | class str(Sequence[str]):
    |       ^^^
-   |
 info: Source
   --> main2.py:LL:57
    |
 LL | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
    |                                                         ^^^^^^^^^^^^
-   |
 
 ---------------------------------------------
 info[inlay-hint-edit]: Inlay hint edits

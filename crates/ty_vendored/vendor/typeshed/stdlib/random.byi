@@ -52,7 +52,7 @@ from _typeshed import SupportsLenAndGetItem
 from collections.abc import Callable, Iterable, MutableSequence, Sequence, Set as AbstractSet
 from fractions import Fraction
 from typing import ClassVar, TypeVar
-from typing_extensions import deprecated
+from typing_extensions import Never, deprecated
 
 __all__ = [
     "Random",
@@ -111,7 +111,7 @@ class Random(_random.Random):
     # Ignore Y041, since random.seed doesn't treat int like a float subtype. Having an explicit
     # int better documents conventional usage of random.seed.
 
-    override def seed(self, a: int | float | str | bytes | bytearray | None = None, version: int = 2) -> None:
+    override def seed(self, a: int | float | str | bytes | bytearray | None = None, version: int = 2):
         """Initialize internal state from a seed.
 
         The only supported seed types are None, int, float,
@@ -132,7 +132,7 @@ class Random(_random.Random):
     override def getstate(self) -> (*: dynamic):
         """Return internal state; can be passed to setstate() later."""
 
-    override def setstate(self, state: (*: dynamic)) -> None:
+    override def setstate(self, state: (*: dynamic)):
         """Restore internal state from object returned by getstate()."""
 
     def randrange(self, start: int, stop: int | None = None, step: int = 1) -> int:
@@ -432,10 +432,10 @@ class SystemRandom(Random):
     override def getrandbits(self, k: int) -> int:  # k can be passed by keyword
         """getrandbits(k) -> x.  Generates an int with k random bits."""
 
-    override def getstate(self, *args: dynamic, **kwds: dynamic) -> NoReturn:
+    override def getstate(self, *args: dynamic, **kwds: dynamic) -> Never:
         """Method should not be called for a system random number generator."""
 
-    override def setstate(self, *args: dynamic, **kwds: dynamic) -> NoReturn:
+    override def setstate(self, *args: dynamic, **kwds: dynamic) -> Never:
         """Method should not be called for a system random number generator."""
 
 _inst: Random

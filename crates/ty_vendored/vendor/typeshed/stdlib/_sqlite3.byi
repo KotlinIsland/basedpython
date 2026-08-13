@@ -22,7 +22,7 @@ from typing import Final, Literal, TypeAlias, TypeVar
 from typing_extensions import deprecated
 
 if sys.version_info >= (3, 11):
-    from sqlite3 import Blob as Blob
+    from sqlite3 export Blob
 
 _T = TypeVar("_T")
 private type SqliteData = str | ReadableBuffer | int | float | None

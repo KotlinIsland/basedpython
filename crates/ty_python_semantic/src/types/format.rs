@@ -18,6 +18,7 @@ use ruff_python_literal::mini_language::{FormatSpecViolation, FormatTarget};
 use ruff_python_literal::strftime::{self, DirectiveKind};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
+use crate::types::ProgramEnvironment;
 use crate::types::class::{ClassLiteral, ClassType};
 use crate::types::class_base::ClassBase;
 use crate::types::context::InferContext;
@@ -83,10 +84,15 @@ pub enum SpecLanguage {
 /// this is decided by the class that *owns* `__format__`, not by the class of
 /// the value: a subclass of `int` that adds no `__format__` of its own still
 /// formats by `int`'s rules
-pub fn spec_language<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<SpecLanguage> {
+pub fn spec_language<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Option<SpecLanguage> {
     let owner = owner_of(
         db,
-        ty.erase_restriction(db).nominal_class(db)?,
+        env,
+        ty.erase_restriction(db).nominal_class(db, env)?,
         "__format__",
     )?;
     let literal = owner.class_literal(db);
@@ -108,19 +114,28 @@ pub fn spec_language<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<SpecLanguage
 const STRFTIME_OWNERS: &[&str] = &["datetime.date", "datetime.time"];
 
 /// which mini-language target formats `ty`, when that is the language it reads
-pub fn format_target<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<FormatTarget> {
-    match spec_language(db, ty)? {
+pub fn format_target<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Option<FormatTarget> {
+    match spec_language(db, env, ty)? {
         SpecLanguage::MiniLanguage(target) => Some(target),
         SpecLanguage::Strftime => None,
     }
 }
 
 /// the class in `class`'s MRO that defines `name` itself
-fn owner_of<'db>(db: &'db dyn Db, class: ClassType<'db>, name: &str) -> Option<ClassType<'db>> {
+fn owner_of<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: ClassType<'db>,
+    name: &str,
+) -> Option<ClassType<'db>> {
     class
         .iter_mro(db)
         .filter_map(ClassBase::into_class)
-        .find(|base| !base.own_class_member(db, None, name).is_undefined())
+        .find(|base| !base.own_class_member(db, env, None, name).is_undefined())
 }
 
 /// the format spec written in a replacement field
@@ -159,10 +174,10 @@ impl<'ast> WrittenSpec<'ast> {
     }
 
     /// the type the spec argument has at the `__format__` call
-    fn argument_type<'db>(&self, db: &'db dyn Db) -> Type<'db> {
+    fn argument_type<'db>(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
         match self.literal {
             Some(literal) => Type::string_literal(db, literal),
-            None => KnownClass::Str.to_instance(db),
+            None => KnownClass::Str.to_instance(db, env),
         }
     }
 
@@ -182,11 +197,12 @@ pub(crate) fn check_interpolation<'db>(
     element: &ast::InterpolatedElement,
     value_ty: Type<'db>,
 ) {
+    let env = context.program_environment();
     let db = context.db();
     // a use-site modifier says nothing about how the value renders: `A()` is
     // inferred as `final A`, and it is `A` that has or lacks a `__format__`
     let value_ty = value_ty.erase_restriction(db);
-    let formatted = converted(db, value_ty, element.conversion);
+    let formatted = converted(db, env, value_ty, element.conversion);
     let spec = WrittenSpec::of(element);
 
     // the conversion does not excuse the value — `!r` is a request for the very
@@ -214,8 +230,9 @@ pub(crate) fn check_interpolation<'db>(
         && formatted
             .try_call_dunder(
                 db,
+                env,
                 "__format__",
-                CallArguments::positional([spec.argument_type(db)]),
+                CallArguments::positional([spec.argument_type(db, env)]),
                 TypeContext::default(),
             )
             .is_err()
@@ -310,16 +327,17 @@ pub(crate) fn check_stringifying_call<'db>(
 /// rather than by the value's own
 fn converted<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     value_ty: Type<'db>,
     conversion: ast::ConversionFlag,
 ) -> Type<'db> {
     match conversion {
         ast::ConversionFlag::None => value_ty,
-        ast::ConversionFlag::Str => value_ty.str(db),
-        ast::ConversionFlag::Repr => value_ty.repr(db),
+        ast::ConversionFlag::Str => value_ty.str(db, env),
+        ast::ConversionFlag::Repr => value_ty.repr(db, env),
         // `ascii` is `repr` with the non-ascii escaped, which cannot be read
         // off the type
-        ast::ConversionFlag::Ascii => KnownClass::Str.to_instance(db),
+        ast::ConversionFlag::Ascii => KnownClass::Str.to_instance(db, env),
     }
 }
 
@@ -329,9 +347,12 @@ fn report_rejected_spec<'db>(
     spec: &WrittenSpec<'_>,
     formatted: Type<'db>,
 ) {
+    let env = context.program_environment();
     let db = context.db();
     // the rejection may be nothing but a stub's silence, which settles nothing
-    if inherits_object_format(db, formatted) && !declares_what_it_implements(db, formatted) {
+    if inherits_object_format(db, env, formatted)
+        && !declares_what_it_implements(db, env, formatted)
+    {
         return;
     }
     let Some(builder) = context.report_lint(&INVALID_FORMAT_SPEC, spec.range) else {
@@ -340,13 +361,13 @@ fn report_rejected_spec<'db>(
     let written = spec.literal.unwrap_or_default();
     let mut diagnostic = builder.into_diagnostic(format_args!(
         "`{written}` is not a valid format spec for `{}`",
-        formatted.display(db)
+        formatted.display(db, env)
     ));
     // the overwhelmingly common cause is a class that never opted in
-    if inherits_object_format(db, formatted) {
+    if inherits_object_format(db, env, formatted) {
         diagnostic.info(format_args!(
             "`{}` inherits `object.__format__`, which accepts only the empty spec",
-            formatted.display(db)
+            formatted.display(db, env)
         ));
         diagnostic.help("define `__format__` to give the class a format spec of its own");
     }
@@ -363,8 +384,12 @@ fn report_rejected_spec<'db>(
 ///
 /// (`implicit-object-repr` distrusts even the vendored stubs, because typeshed
 /// omits `__str__` and `__repr__` wholesale and we have not patched that)
-fn declares_what_it_implements<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
-    let Some(class) = ty.nominal_class(db) else {
+fn declares_what_it_implements<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> bool {
+    let Some(class) = ty.nominal_class(db, env) else {
         return false;
     };
     class
@@ -378,9 +403,13 @@ fn declares_what_it_implements<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
 }
 
 /// whether the `__format__` that would be called is `object`'s own
-fn inherits_object_format<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
-    ty.nominal_class(db)
-        .and_then(|class| owner_of(db, class, "__format__"))
+fn inherits_object_format<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> bool {
+    ty.nominal_class(db, env)
+        .and_then(|class| owner_of(db, env, class, "__format__"))
         .is_some_and(|owner| owner.class_literal(db).known(db) == Some(KnownClass::Object))
 }
 
@@ -390,8 +419,9 @@ fn check_spec_content<'db>(
     spec: &WrittenSpec<'_>,
     formatted: Type<'db>,
 ) {
+    let env = context.program_environment();
     let db = context.db();
-    let (Some(written), Some(language)) = (spec.literal, spec_language(db, formatted)) else {
+    let (Some(written), Some(language)) = (spec.literal, spec_language(db, env, formatted)) else {
         return;
     };
     let target = match language {
@@ -504,6 +534,7 @@ pub(crate) fn check_implicit_object_repr<'db>(
     value_ty: Type<'db>,
     rendering: Rendering,
 ) {
+    let env = context.program_environment();
     let db = context.db();
     // a stub describes an interface and never runs, so no rendering of it
     // reaches anyone
@@ -511,7 +542,7 @@ pub(crate) fn check_implicit_object_repr<'db>(
         return;
     }
     let settings = db.analysis_settings(context.file());
-    let Some(class) = unrendered_class(db, settings, value_ty, rendering) else {
+    let Some(class) = unrendered_class(db, env, settings, value_ty, rendering) else {
         return;
     };
     let Some(builder) = context.report_lint(&IMPLICIT_OBJECT_REPR, at) else {
@@ -520,7 +551,7 @@ pub(crate) fn check_implicit_object_repr<'db>(
     let dunders = rendering.dunder_list();
     // the class is named rather than the value, because it is the class that
     // is missing something — `print(some_function)` is about `FunctionType`
-    let named = Type::instance(db, class).display(db).to_string();
+    let named = Type::instance(db, env, class).display(db, env).to_string();
     let mut diagnostic =
         builder.into_diagnostic(format_args!("`{named}` has no {dunders} of its own"));
     diagnostic.info(
@@ -538,9 +569,13 @@ pub(crate) fn check_implicit_object_repr<'db>(
 /// most values are instances, and their own class is the answer. a value that
 /// *is* a class or a function is an instance of its meta type — `type` and
 /// `types.FunctionType` — which is what decides how it prints
-fn runtime_class<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<ClassType<'db>> {
-    ty.nominal_class(db)
-        .or_else(|| ty.to_meta_type(db).to_class_type(db))
+fn runtime_class<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Option<ClassType<'db>> {
+    ty.nominal_class(db, env)
+        .or_else(|| ty.to_meta_type(db, env).to_class_type(db))
 }
 
 /// whether `class` is one of the configured class names
@@ -565,13 +600,14 @@ fn is_named<'db>(
 /// the value renders by whatever default the interpreter has
 fn unrendered_class<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     settings: &AnalysisSettings,
     ty: Type<'db>,
     rendering: Rendering,
 ) -> Option<ClassType<'db>> {
     // `A()` is inferred as `final A`; it is `A` that has or lacks a rendering
     let ty = ty.erase_restriction(db);
-    let class = runtime_class(db, ty)?;
+    let class = runtime_class(db, env, ty)?;
     // `object` itself is the one class whose bare repr is not a mistake: it is
     // what the author asked for
     if class.class_literal(db).known(db) == Some(KnownClass::Object) {
@@ -617,7 +653,7 @@ fn unrendered_class<'db>(
     // asked of an instance of the class, so a value that *is* a class or a
     // function is asked about `type` and `types.FunctionType` rather than about
     // its own members
-    let instance = Type::instance(db, class);
+    let instance = Type::instance(db, env, class);
     rendering
         .dunders()
         .iter()
@@ -625,6 +661,7 @@ fn unrendered_class<'db>(
             instance
                 .member_lookup_with_policy(
                     db,
+                    env,
                     dunder,
                     MemberLookupPolicy::MRO_NO_OBJECT_FALLBACK
                         | MemberLookupPolicy::NO_INSTANCE_FALLBACK,

@@ -50,7 +50,7 @@ More condensed:
 """
 
 import sys
-from _blake2 import blake2b as blake2b, blake2s as blake2s
+from _blake2 export blake2b, blake2s
 from _hashlib import (
     HASH,
     _HashObject,

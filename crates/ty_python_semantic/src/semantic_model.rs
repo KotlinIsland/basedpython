@@ -1,4 +1,5 @@
 use compact_str::CompactString;
+use ruff_db::PythonFile;
 use ruff_db::files::{File, FilePath};
 use ruff_db::parsed::{parsed_module, parsed_string_annotation};
 use ruff_db::source::{line_index, source_text};
@@ -10,22 +11,23 @@ use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{
-    KnownModule, Module, ModuleName, list_modules, resolve_module, resolve_real_shadowable_module,
+    ImportingFile, KnownModule, Module, ModuleName, list_modules, resolve_module,
 };
 
 use crate::Db;
 use crate::place::implicit_globals::all_implicit_module_globals;
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
-use crate::types::list_members::{Member, all_members, all_reachable_members};
+use crate::types::list_members::{all_members, all_reachable_members};
 use crate::types::{
-    CycleDetector, SpecialFormType, Type, TypeQualifiers, binding_type, infer_complete_scope_types,
-    inferred_declaration,
+    CycleDetector, ProgramEnvironment, SpecialFormType, Type, TypeQualifiers, binding_type,
+    infer_complete_scope_types, inferred_declaration,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::place_table;
 use ty_python_core::scope::{FileScopeId, Scope};
 use ty_python_core::semantic_index;
 use ty_python_core::symbol::Symbol;
+use ty_python_core::{Program, ProgramFile};
 
 /// The primary interface the LSP should use for querying semantic information about a [`File`].
 ///
@@ -40,14 +42,14 @@ use ty_python_core::symbol::Symbol;
 /// methods will automatically handle using the string literal's AST node when necessary.
 pub struct SemanticModel<'db> {
     db: &'db dyn Db,
-    file: File,
+    file: ProgramFile<'db>,
     /// If `Some` then this `SemanticModel` is for analyzing the sub-AST of a string annotation.
     /// This expression will be used as a witness to the scope/location we're analyzing.
     in_string_annotation_expr: Option<Box<Expr>>,
 }
 
 impl<'db> SemanticModel<'db> {
-    pub fn new(db: &'db dyn Db, file: File) -> Self {
+    pub fn new(db: &'db dyn Db, file: ProgramFile<'db>) -> Self {
         Self {
             db,
             file,
@@ -60,11 +62,27 @@ impl<'db> SemanticModel<'db> {
     }
 
     pub fn file(&self) -> File {
+        self.file.file(self.db)
+    }
+
+    pub fn python_file(&self) -> PythonFile<'db> {
+        self.file.python_file(self.db)
+    }
+
+    pub fn program_file(&self) -> ProgramFile<'db> {
         self.file
     }
 
+    pub fn program(&self) -> Program<'db> {
+        self.file.program(self.db)
+    }
+
+    pub fn program_environment(&self) -> ProgramEnvironment<'db> {
+        ProgramEnvironment::from_file(self.program_file())
+    }
+
     pub fn file_path(&self) -> &FilePath {
-        self.file.path(self.db)
+        self.file().path(self.db)
     }
 
     /// basedpython: the source text of the specialization step the transpiler
@@ -73,6 +91,7 @@ impl<'db> SemanticModel<'db> {
     /// no injectable spelling exists — the checker reports the latter as
     /// `unspecialized-reified-generic`
     pub fn reified_call_specialization(&self, call: &ast::ExprCall) -> Option<String> {
+        let env = &self.program_environment();
         let db = self.db;
         let callee_ty = call.func.inferred_type(self)?;
         let function = match callee_ty {
@@ -96,7 +115,13 @@ impl<'db> SemanticModel<'db> {
             keywords.push((name.as_str(), keyword.value.inferred_type(self)?));
         }
         crate::types::reified_infer::injectable_call_specialization(
-            db, self.file, callee_ty, function, positional, keywords,
+            db,
+            env,
+            self.file(),
+            callee_ty,
+            function,
+            positional,
+            keywords,
         )
     }
 
@@ -113,6 +138,7 @@ impl<'db> SemanticModel<'db> {
         class_def: &ast::StmtClassDef,
     ) -> Vec<crate::types::conformance::ConformanceRegistration> {
         use crate::types::conformance;
+        let env = &self.program_environment();
 
         let db = self.db;
         let Some(crate::types::ClassLiteral::Static(extension)) = class_def
@@ -132,12 +158,17 @@ impl<'db> SemanticModel<'db> {
             else {
                 continue;
             };
-            let Ok((spelling, import)) =
-                crate::types::conversions::class_reference(db, self.file, self, anchor, interface)
-            else {
+            let Ok((spelling, import)) = crate::types::conversions::class_reference(
+                db,
+                env,
+                self.file.file(db),
+                self,
+                anchor,
+                interface,
+            ) else {
                 continue;
             };
-            let table = conformance::witness_table(db, self.file, extension, interface);
+            let table = conformance::witness_table(db, self.file.file(db), extension, interface);
             let mut imports = Vec::new();
             let mut entries = Vec::new();
             for entry in table {
@@ -163,7 +194,8 @@ impl<'db> SemanticModel<'db> {
     /// registration ran, so deferring that module's execution defers the
     /// conformance out of existence
     pub fn eagerly_imported_modules(&self) -> Vec<String> {
-        crate::types::conformance::eagerly_imported_modules(self.db, self.file)
+        let db = self.db;
+        crate::types::conformance::eagerly_imported_modules(self.db, self.file.file(db))
     }
 
     /// basedpython: when an attribute access reads a *requirement* off an
@@ -178,9 +210,10 @@ impl<'db> SemanticModel<'db> {
         attribute: &ast::ExprAttribute,
     ) -> Option<crate::types::conformance::WitnessDispatch> {
         use crate::types::conformance;
+        let env = self.program_environment();
 
         let db = self.db;
-        if !self.file.source_type(db).is_basedpython() {
+        if !self.file.file(db).source_type(db).is_basedpython() {
             return None;
         }
         let receiver_ty = attribute.value.inferred_type(self)?;
@@ -192,18 +225,19 @@ impl<'db> SemanticModel<'db> {
         let receiver_ty = if attribute.optional
             || crate::types::receivers::spine_has_optional(&attribute.value)
         {
-            crate::types::receivers::strip_none(db, receiver_ty)
+            crate::types::receivers::strip_none(db, &env, receiver_ty)
         } else {
             receiver_ty
         };
-        let interface = receiver_ty.erase_restriction(db).nominal_class(db)?;
+        let interface = receiver_ty.erase_restriction(db).nominal_class(db, &env)?;
         let member = attribute.attr.as_str();
         if !conformance::requires_witness_dispatch(db, interface, member) {
             return None;
         }
         let (spelling, import) = crate::types::conversions::class_reference(
             db,
-            self.file,
+            &env,
+            self.file.file(db),
             self,
             &attribute.value,
             interface,
@@ -212,8 +246,8 @@ impl<'db> SemanticModel<'db> {
         // how the receiver reaches the witness: a `class def` takes the class,
         // a data member is read, anything else is fetched and called by the
         // parentheses that already follow the access
-        let member_ty = Type::instance(db, interface)
-            .member(db, member)
+        let member_ty = Type::instance(db, &env, interface)
+            .member(db, &env, member)
             .place
             .ignore_possibly_undefined();
         let kind = match member_ty {
@@ -246,11 +280,11 @@ impl<'db> SemanticModel<'db> {
         use crate::types::conformance;
 
         let db = self.db;
-        if !self.file.source_type(db).is_basedpython() {
+        if !self.file.file(db).source_type(db).is_basedpython() {
             return None;
         }
         let interface = target.inferred_type(self)?.to_class_type(db)?;
-        if !conformance::visible_conformances(db, self.file)
+        if !conformance::visible_conformances(db, self.file.file(db))
             .iter()
             .any(|(_, declared)| declared.class_literal(db) == interface.class_literal(db))
         {
@@ -274,10 +308,11 @@ impl<'db> SemanticModel<'db> {
         &self,
         attribute: &ast::ExprAttribute,
     ) -> Option<crate::types::extensions::ExtensionAttributeInfo> {
+        let env = self.program_environment();
         let db = self.db;
         let receiver_ty = attribute.value.inferred_type(self)?;
         if !receiver_ty
-            .member(db, attribute.attr.as_str())
+            .member(db, &env, attribute.attr.as_str())
             .place
             .is_undefined()
         {
@@ -285,7 +320,8 @@ impl<'db> SemanticModel<'db> {
         }
         let resolution = crate::types::extensions::resolve_extension_member(
             db,
-            self.file,
+            &env,
+            self.file(),
             receiver_ty,
             attribute.attr.as_str(),
         )?;
@@ -293,7 +329,7 @@ impl<'db> SemanticModel<'db> {
         // `A()` is a `final A`, still a receiver a `class def` has to widen
         let receiver_is_class = receiver_ty
             .erase_restriction(db)
-            .nominal_class(db)
+            .nominal_class(db, &env)
             .is_none();
         self.extension_rewrite(&resolution, attribute.attr.as_str(), receiver_is_class)
     }
@@ -311,18 +347,28 @@ impl<'db> SemanticModel<'db> {
         &self,
         attribute: &ast::ExprAttribute,
     ) -> Option<PreludeDunderReceiver> {
+        let env = self.program_environment();
         let db = self.db;
         let name = attribute.attr.as_str();
         if !crate::types::conversions::CONVERSION_DUNDERS.contains(&name) {
             return None;
         }
         let receiver_ty = attribute.value.inferred_type(self)?;
-        if !receiver_ty.member(db, name).place.is_undefined() {
+        if !receiver_ty.member(db, &env, name).place.is_undefined() {
             return None;
         }
-        let resolution =
-            crate::types::extensions::resolve_extension_member(db, self.file, receiver_ty, name)?;
-        if !crate::types::extensions::is_prelude_extension(db, self.file, resolution.extension) {
+        let resolution = crate::types::extensions::resolve_extension_member(
+            db,
+            &env,
+            self.file(),
+            receiver_ty,
+            name,
+        )?;
+        if !crate::types::extensions::is_prelude_extension(
+            db,
+            self.file.file(db),
+            resolution.extension,
+        ) {
             return None;
         }
         // a use-site modifier does not turn an instance into a class object:
@@ -330,7 +376,7 @@ impl<'db> SemanticModel<'db> {
         Some(
             if receiver_ty
                 .erase_restriction(db)
-                .nominal_class(db)
+                .nominal_class(db, &env)
                 .is_none()
             {
                 PreludeDunderReceiver::Class
@@ -345,19 +391,29 @@ impl<'db> SemanticModel<'db> {
     /// for every operator the operand's own type supports, which is all of
     /// them outside a file that declares such an extension
     pub fn extension_operator_info(&self, expr: &Expr) -> Option<ExtensionOperatorRewrite> {
+        let env = &self.program_environment();
         let db = self.db;
         let operator = match expr {
             Expr::UnaryOp(unary) => {
                 let operand = unary.operand.inferred_type(self)?;
                 crate::types::extensions::unary_extension_operator(
-                    db, self.file, unary.op, operand,
+                    db,
+                    env,
+                    self.file(),
+                    unary.op,
+                    operand,
                 )?
             }
             Expr::BinOp(binary) => {
                 let left = binary.left.inferred_type(self)?;
                 let right = binary.right.inferred_type(self)?;
                 crate::types::extensions::binary_extension_operator(
-                    db, self.file, left, binary.op, right,
+                    db,
+                    env,
+                    self.file(),
+                    left,
+                    binary.op,
+                    right,
                 )?
             }
             // only a single comparison lowers: a chain (`a < b < c`) is two
@@ -372,7 +428,12 @@ impl<'db> SemanticModel<'db> {
                 let left = compare.left.inferred_type(self)?;
                 let right = right_expr.inferred_type(self)?;
                 crate::types::extensions::comparison_extension_operator(
-                    db, self.file, left, *op, right,
+                    db,
+                    env,
+                    self.file(),
+                    left,
+                    *op,
+                    right,
                 )?
             }
             _ => return None,
@@ -394,15 +455,17 @@ impl<'db> SemanticModel<'db> {
         receiver_is_class: bool,
     ) -> Option<crate::types::extensions::ExtensionAttributeInfo> {
         let db = self.db;
-        if crate::types::extensions::is_prelude_extension(db, self.file, resolution.extension)
-            || resolution.ambiguous_with.is_some_and(|other| {
-                crate::types::extensions::is_prelude_extension(db, self.file, other)
-            })
-        {
+        if crate::types::extensions::is_prelude_extension(
+            db,
+            self.file.file(db),
+            resolution.extension,
+        ) || resolution.ambiguous_with.is_some_and(|other| {
+            crate::types::extensions::is_prelude_extension(db, self.file.file(db), other)
+        }) {
             return None;
         }
         let extension_file = resolution.extension.file(db);
-        let import_from = if extension_file == self.file {
+        let import_from = if extension_file == self.file.file(db) {
             None
         } else {
             // spelled the way this file already imports the module: ty's absolute
@@ -411,7 +474,7 @@ impl<'db> SemanticModel<'db> {
             // no absolute spelling at all
             Some(crate::types::conversions::imported_module_spelling(
                 db,
-                self.file,
+                self.file.file(db),
                 extension_file,
             )?)
         };
@@ -452,8 +515,9 @@ impl<'db> SemanticModel<'db> {
         ruff_text_size::TextRange,
         crate::types::conversions::ConversionInfo,
     )> {
+        let env = &self.program_environment();
         let db = self.db;
-        if !self.file.source_type(db).is_basedpython() {
+        if !self.file.file(db).source_type(db).is_basedpython() {
             return Vec::new();
         }
         let Some(callable_ty) = call.func.inferred_type(self) else {
@@ -479,7 +543,8 @@ impl<'db> SemanticModel<'db> {
             };
             let Some(repair) = crate::types::conversions::repair_conversion(
                 db,
-                self.file,
+                env,
+                self.file.file(db),
                 argument_type,
                 parameter_type,
                 Some(value),
@@ -488,7 +553,14 @@ impl<'db> SemanticModel<'db> {
             };
             conversions.push((
                 value.range(),
-                crate::types::conversions::conversion_info(db, self.file, self, value, &repair),
+                crate::types::conversions::conversion_info(
+                    db,
+                    env,
+                    self.file.file(db),
+                    self,
+                    value,
+                    &repair,
+                ),
             ));
         }
         conversions
@@ -504,13 +576,16 @@ impl<'db> SemanticModel<'db> {
     /// falls through to the full check, so the gate can only save work — it can
     /// never change an answer.
     fn call_may_convert(&self, call: &ast::ExprCall, callable_ty: Type<'db>) -> bool {
+        let env = &self.program_environment();
         let db = self.db;
-        if !crate::types::conformance::visible_conformances(db, self.file).is_empty() {
+        if !crate::types::conformance::visible_conformances(db, self.file.file(db)).is_empty() {
             return true;
         }
         for argument in call.arguments.iter_source_order() {
             match argument.value().inferred_type(self) {
-                Some(ty) if crate::types::conversions::may_convert(db, self.file, ty) => {
+                Some(ty)
+                    if crate::types::conversions::may_convert(db, env, self.file.file(db), ty) =>
+                {
                     return true;
                 }
                 // an argument whose type is unknown here could be anything
@@ -527,7 +602,12 @@ impl<'db> SemanticModel<'db> {
         };
         signature.iter().any(|overload| {
             overload.parameters().iter().any(|parameter| {
-                crate::types::conversions::may_convert(db, self.file, parameter.annotated_type())
+                crate::types::conversions::may_convert(
+                    db,
+                    env,
+                    self.file.file(db),
+                    parameter.annotated_type(),
+                )
             })
         })
     }
@@ -547,27 +627,39 @@ impl<'db> SemanticModel<'db> {
         ruff_text_size::TextRange,
         crate::types::conversions::ConversionInfo,
     )> {
+        let env = &self.program_environment();
         let db = self.db;
-        if !self.file.source_type(db).is_basedpython() {
+        if !self.file.file(db).source_type(db).is_basedpython() {
             return Vec::new();
         }
         let Some((value, declared)) = self.conversion_site_of(stmt) else {
             return Vec::new();
         };
-        crate::types::conversions::value_conversions(db, self.file, self, value, declared)
-            .into_iter()
-            .map(|(range, repair)| {
-                // the anchor is the value being wrapped, which decides what the
-                // emitted names have to resolve to — for an element-wise
-                // conversion that is the element, not the whole literal
-                let anchor =
-                    crate::types::conversions::expression_at(value, range).unwrap_or(value);
-                let info = crate::types::conversions::conversion_info(
-                    db, self.file, self, anchor, &repair,
-                );
-                (range, info)
-            })
-            .collect()
+        crate::types::conversions::value_conversions(
+            db,
+            env,
+            self.file.file(db),
+            self,
+            value,
+            declared,
+        )
+        .into_iter()
+        .map(|(range, repair)| {
+            // the anchor is the value being wrapped, which decides what the
+            // emitted names have to resolve to — for an element-wise
+            // conversion that is the element, not the whole literal
+            let anchor = crate::types::conversions::expression_at(value, range).unwrap_or(value);
+            let info = crate::types::conversions::conversion_info(
+                db,
+                env,
+                self.file.file(db),
+                self,
+                anchor,
+                &repair,
+            );
+            (range, info)
+        })
+        .collect()
     }
 
     /// the value expression and the type it is checked against, for a statement
@@ -576,6 +668,7 @@ impl<'db> SemanticModel<'db> {
         &self,
         stmt: &'ast ast::Stmt,
     ) -> Option<(&'ast ast::Expr, Type<'db>)> {
+        let env = self.program_environment();
         let db = self.db;
         match stmt {
             ast::Stmt::AnnAssign(assignment) => {
@@ -594,7 +687,7 @@ impl<'db> SemanticModel<'db> {
                     [ast::Expr::Attribute(attribute)] => {
                         let object_ty = attribute.value.inferred_type(self)?;
                         let declared = object_ty
-                            .member(db, attribute.attr.as_str())
+                            .member(db, &env, attribute.attr.as_str())
                             .place
                             .ignore_possibly_undefined()?;
                         Some((&assignment.value, declared))
@@ -607,10 +700,11 @@ impl<'db> SemanticModel<'db> {
                         let declarations = index
                             .use_def_map(binding.file_scope(db))
                             .declarations_at_binding(binding);
-                        let declared = crate::place::place_from_declarations(db, declarations)
-                            .ignore_conflicting_declarations()
-                            .place
-                            .ignore_possibly_undefined()?;
+                        let declared =
+                            crate::place::place_from_declarations(db, &env, declarations)
+                                .ignore_conflicting_declarations()
+                                .place
+                                .ignore_possibly_undefined()?;
                         Some((&assignment.value, declared))
                     }
                     _ => None,
@@ -633,14 +727,14 @@ impl<'db> SemanticModel<'db> {
         let index = semantic_index(db, self.file);
         let file_scope = self.scope(node)?;
         let function_ref = index.scope(file_scope).node().as_function()?;
-        let module = parsed_module(db, self.file).load(db);
+        let module = parsed_module(db, self.file.python_file(db)).load(db);
         let function = function_ref.node(&module);
         // a generator's declared type describes the generator, not the returned
         // value; the checker checks those against the yield type instead
         if function.is_async || file_scope.is_generator_function(index) {
             return None;
         }
-        crate::types::conversions::function_declared_return_type(db, self.file, function)
+        crate::types::conversions::function_declared_return_type(db, self.file.file(db), function)
     }
 
     /// basedpython: whether subscripting `value` is a runtime `__getitem__`
@@ -648,9 +742,10 @@ impl<'db> SemanticModel<'db> {
     /// subscript on it lowers to. `false` for a value the checker could not
     /// resolve — the specialization reading is the one it also checks
     pub fn subscript_is_getitem_call(&self, value: &Expr) -> bool {
+        let env = &self.program_environment();
         value
             .inferred_type(self)
-            .is_some_and(|ty| crate::types::subscript::is_runtime_subscript(self.db, ty))
+            .is_some_and(|ty| crate::types::subscript::is_runtime_subscript(self.db, env, ty))
     }
 
     /// basedpython: whether an attribute access resolves through an *implicit
@@ -659,6 +754,7 @@ impl<'db> SemanticModel<'db> {
     /// `fn(x)`. Like extensions, a receiver callable never shadows a declared
     /// member, and an extension member wins over it
     pub fn implicit_receiver_attribute(&self, attribute: &ast::ExprAttribute) -> bool {
+        let env = &self.program_environment();
         let db = self.db;
         let Some(receiver_ty) = attribute.value.inferred_type(self) else {
             return false;
@@ -668,7 +764,8 @@ impl<'db> SemanticModel<'db> {
         };
         crate::types::receivers::is_implicit_receiver_attribute(
             db,
-            self.file,
+            env,
+            self.file(),
             scope.to_scope_id(db, self.file),
             attribute,
             receiver_ty,
@@ -683,10 +780,12 @@ impl<'db> SemanticModel<'db> {
         &self,
         name: &ast::ExprName,
     ) -> Option<ImplicitReceiverReference> {
+        let env = &self.program_environment();
         let scope = self.scope(ast::AnyNodeRef::from(name))?;
         let resolved = crate::types::receivers::implicit_receiver_name(
             self.db,
-            self.file,
+            env,
+            self.file(),
             scope.to_scope_id(self.db, self.file),
             name.id.as_str(),
         )?;
@@ -713,6 +812,7 @@ impl<'db> SemanticModel<'db> {
     /// every other call, and for any argument the checker did not read as a
     /// lookup, which the transpiler must then leave exactly as written
     pub fn django_lookup_arguments(&self, call: &ast::ExprCall) -> Vec<DjangoLookupArgument> {
+        let env = &self.program_environment();
         let db = self.db;
         let Some(callee) = call.func.inferred_type(self) else {
             return Vec::new();
@@ -722,7 +822,8 @@ impl<'db> SemanticModel<'db> {
         };
         crate::types::dedicated::django::lookup_call_lowering(
             db,
-            self.file,
+            env,
+            self.file(),
             scope.to_scope_id(db, self.file),
             callee,
             call,
@@ -743,7 +844,8 @@ impl<'db> SemanticModel<'db> {
         let scope = self.scope(ast::AnyNodeRef::from(name))?;
         crate::types::context_sensitive::qualifier_for_unbound_name(
             self.db,
-            self.file,
+            &self.program_environment(),
+            self.file.file(self.db),
             scope.to_scope_id(self.db, self.file),
             name.id.as_str(),
             || name.inferred_type(self),
@@ -758,12 +860,14 @@ impl<'db> SemanticModel<'db> {
     /// spelling exists — reification of constructors is best-effort, never
     /// an error
     pub fn reified_constructor_type_arguments(&self, call: &ast::ExprCall) -> Option<String> {
+        let env = &self.program_environment();
         let callee_ty = call.func.inferred_type(self)?;
         let class_literal = callee_ty.as_class_literal()?;
         let constructed = call.inferred_type(self)?;
         crate::types::reified_infer::constructor_specialization_display(
             self.db,
-            self.file,
+            env,
+            self.file(),
             class_literal,
             constructed,
         )
@@ -809,11 +913,20 @@ impl<'db> SemanticModel<'db> {
         lhs: &ast::Expr,
         rhs: &ast::Expr,
     ) -> Option<crate::types::reified_infer::ParametricIsPlan> {
-        let alias =
-            crate::types::reified_infer::parametric_is_target(self.db, rhs.inferred_type(self)?)?;
+        let env = &self.program_environment();
+        let alias = crate::types::reified_infer::parametric_is_target(
+            self.db,
+            env,
+            rhs.inferred_type(self)?,
+        )?;
         let lhs_ty = lhs.inferred_type(self)?;
         Some(crate::types::reified_infer::classify_parametric_is(
-            self.db, self.file, lhs_ty, alias, rhs,
+            self.db,
+            env,
+            self.file(),
+            lhs_ty,
+            alias,
+            rhs,
         ))
     }
 
@@ -826,13 +939,20 @@ impl<'db> SemanticModel<'db> {
         value: &ast::Expr,
         target: &ast::Expr,
     ) -> Option<crate::types::reified_infer::ParametricIsPlan> {
+        let env = &self.program_environment();
         let alias = crate::types::reified_infer::parametric_cast_target(
             self.db,
+            env,
             target.inferred_type(self)?,
         )?;
         let value_ty = value.inferred_type(self)?;
         Some(crate::types::reified_infer::classify_parametric_is(
-            self.db, self.file, value_ty, alias, target,
+            self.db,
+            env,
+            self.file(),
+            value_ty,
+            alias,
+            target,
         ))
     }
 
@@ -845,15 +965,17 @@ impl<'db> SemanticModel<'db> {
         &self,
         annotation: &ast::Expr,
     ) -> Option<crate::types::reified_infer::ErasedUnion> {
+        let env = &self.program_environment();
         crate::types::reified_infer::erased_union(
             self.db,
-            self.file,
+            env,
+            self.file(),
             annotation.inferred_type(self)?,
         )
     }
 
     pub fn line_index(&self) -> LineIndex {
-        line_index(self.db, self.file)
+        line_index(self.db, self.file())
     }
 
     /// Returns a map from symbol name to that symbol's
@@ -865,12 +987,13 @@ impl<'db> SemanticModel<'db> {
         &self,
         node: ast::AnyNodeRef<'_>,
     ) -> FxHashMap<Name, MemberDefinition<'db>> {
+        let db = self.db;
         let mut members = FxHashMap::default();
-        let index = semantic_index(self.db, self.file);
+        let program_file = self.program_file();
+        let index = semantic_index(self.db, program_file);
         let Some(file_scope) = self.scope(node) else {
             return members;
         };
-
         for (file_scope, _) in index
             .visible_ancestor_scopes(file_scope)
             .collect::<Vec<_>>()
@@ -878,7 +1001,7 @@ impl<'db> SemanticModel<'db> {
             .rev()
         {
             for memberdef in
-                all_reachable_members(self.db, file_scope.to_scope_id(self.db, self.file))
+                all_reachable_members(db, file_scope.to_scope_id(self.db, program_file))
             {
                 members.insert(
                     memberdef.member.name,
@@ -895,34 +1018,34 @@ impl<'db> SemanticModel<'db> {
     /// Resolve the given import made in this file to a Type
     pub fn resolve_module_type(&self, module: Option<&str>, level: u32) -> Option<Type<'db>> {
         let module = self.resolve_module(module, level)?;
-        Some(Type::module_literal(self.db, self.file, module))
+        Some(Type::module_literal(self.db, self.program_file(), module))
     }
 
     /// Resolve the given import made in this file to a Module
     pub fn resolve_module(&self, module: Option<&str>, level: u32) -> Option<Module<'db>> {
+        let importing_file = ImportingFile::File(
+            self.file(),
+            self.program_environment().resolver_environment(self.db),
+        );
         let module_name =
-            ModuleName::from_identifier_parts(self.db, self.file, module, level).ok()?;
-        resolve_module(self.db, self.file, &module_name)
+            ModuleName::from_identifier_parts(self.db, importing_file, module, level).ok()?;
+        resolve_module(self.db, importing_file, &module_name)
     }
 
     /// Returns completions for symbols available in a `import <CURSOR>` context.
     pub fn import_completions(&self) -> Vec<Completion<'db>> {
-        let typing_extensions = ModuleName::new_static("typing_extensions").unwrap();
-        let is_typing_extensions_available = self.file.is_stub(self.db)
-            || resolve_real_shadowable_module(self.db, self.file, &typing_extensions).is_some();
-        list_modules(self.db)
+        let resolver_environment = self.program_environment().resolver_environment(self.db);
+        list_modules(self.db, resolver_environment)
             .iter()
             .copied()
-            .filter(|module| {
-                is_typing_extensions_available || module.name(self.db) != &typing_extensions
-            })
             .map(|module| {
                 let builtin = module.is_known(self.db, KnownModule::Builtins);
-                let ty = Type::module_literal(self.db, self.file, module);
+                let ty = Type::module_literal(self.db, self.program_file(), module);
                 Completion {
                     name: CompactString::new(module.name(self.db).as_str()),
                     ty: Some(ty),
                     builtin,
+                    is_type_check_only: false,
                 }
             })
             .collect()
@@ -930,7 +1053,14 @@ impl<'db> SemanticModel<'db> {
 
     /// Returns completions for symbols available in a `from module import <CURSOR>` context.
     pub fn from_import_completions(&self, import: &ast::StmtImportFrom) -> Vec<Completion<'db>> {
-        let module_name = match ModuleName::from_import_statement(self.db, self.file, import) {
+        let module_name = match ModuleName::from_import_statement(
+            self.db,
+            ImportingFile::File(
+                self.file(),
+                self.program_environment().resolver_environment(self.db),
+            ),
+            import,
+        ) {
             Ok(module_name) => module_name,
             Err(err) => {
                 tracing::debug!(
@@ -949,7 +1079,14 @@ impl<'db> SemanticModel<'db> {
         &self,
         module_name: &ModuleName,
     ) -> Vec<Completion<'db>> {
-        let Some(module) = resolve_module(self.db, self.file, module_name) else {
+        let Some(module) = resolve_module(
+            self.db,
+            ImportingFile::File(
+                self.file(),
+                self.program_environment().resolver_environment(self.db),
+            ),
+            module_name,
+        ) else {
             tracing::debug!("Could not resolve module from `{module_name:?}`");
             return vec![];
         };
@@ -959,11 +1096,19 @@ impl<'db> SemanticModel<'db> {
     /// Returns completions for symbols available in the given module as if
     /// it were imported by this model's `File`.
     fn module_completions(&self, module_name: &ModuleName) -> Vec<Completion<'db>> {
-        let Some(module) = resolve_module(self.db, self.file, module_name) else {
+        let db = self.db;
+        let Some(module) = resolve_module(
+            self.db,
+            ImportingFile::File(
+                self.file(),
+                self.program_environment().resolver_environment(self.db),
+            ),
+            module_name,
+        ) else {
             tracing::debug!("Could not resolve module from `{module_name:?}`");
             return vec![];
         };
-        let ty = Type::module_literal(self.db, self.file, module);
+        let ty = Type::module_literal(self.db, self.program_file(), module);
         let builtin = module.is_known(self.db, KnownModule::Builtins);
         let private = self.foreign_private_symbols(ty);
 
@@ -972,14 +1117,15 @@ impl<'db> SemanticModel<'db> {
             clippy::iter_over_hash_type,
             reason = "completion order is determined later by relevance ranking"
         )]
-        for Member { name, ty } in all_members(self.db, ty) {
-            if private.is_some_and(|names| names.contains(&name)) {
+        for member in all_members(db, &self.program_environment(), ty) {
+            if private.is_some_and(|names| names.contains(&member.name)) {
                 continue;
             }
             completions.push(Completion {
-                name: CompactString::new(name),
-                ty: Some(ty),
+                name: CompactString::new(member.name),
+                ty: Some(member.ty),
                 builtin,
+                is_type_check_only: member.is_type_check_only,
             });
         }
         completions.extend(self.submodule_completions(&module));
@@ -992,12 +1138,13 @@ impl<'db> SemanticModel<'db> {
 
         let mut completions = vec![];
         for submodule in module.all_submodules(self.db) {
-            let ty = Type::module_literal(self.db, self.file, *submodule);
+            let ty = Type::module_literal(self.db, self.program_file(), *submodule);
             let base = submodule.name(self.db).last_component();
             completions.push(Completion {
                 name: CompactString::new(base),
                 ty: Some(ty),
                 builtin,
+                is_type_check_only: false,
             });
         }
         completions
@@ -1007,11 +1154,12 @@ impl<'db> SemanticModel<'db> {
     /// module. they are the module's implementation, not its interface, so an
     /// IDE must not offer them here.
     fn foreign_private_symbols(&self, ty: Type<'db>) -> Option<&'db FxHashSet<Name>> {
+        let db = self.db;
         let Type::ModuleLiteral(module) = ty else {
             return None;
         };
         let file = module.module(self.db).file(self.db)?;
-        if file == self.file {
+        if file == self.file.file(db) {
             return None;
         }
         Some(crate::types::visibility::private_symbols(self.db, file))
@@ -1019,18 +1167,20 @@ impl<'db> SemanticModel<'db> {
 
     /// Returns completions for symbols available in a `object.<CURSOR>` context.
     pub fn attribute_completions(&self, node: &ast::ExprAttribute) -> Vec<Completion<'db>> {
+        let db = self.db;
         let Some(ty) = node.value.inferred_type(self) else {
             return Vec::new();
         };
         let private = self.foreign_private_symbols(ty);
 
-        all_members(self.db, ty)
+        all_members(db, &self.program_environment(), ty)
             .into_iter()
             .filter(|member| !private.is_some_and(|names| names.contains(&member.name)))
             .map(|member| Completion {
                 name: CompactString::new(member.name),
                 ty: Some(member.ty),
                 builtin: false,
+                is_type_check_only: member.is_type_check_only,
             })
             .collect()
     }
@@ -1041,18 +1191,21 @@ impl<'db> SemanticModel<'db> {
     /// If a scope could not be determined, then completions for the global
     /// scope of this model's `File` are returned.
     pub fn scoped_completions(&self, node: ast::AnyNodeRef<'_>) -> Vec<Completion<'db>> {
-        let index = semantic_index(self.db, self.file);
+        let db = self.db;
+        let program_file = self.program_file();
+        let index = semantic_index(self.db, program_file);
         let Some(file_scope) = self.scope(node) else {
             return vec![];
         };
         let mut completions = vec![];
         for (file_scope, _) in index.ancestor_scopes(file_scope) {
             completions.extend(
-                all_reachable_members(self.db, file_scope.to_scope_id(self.db, self.file)).map(
+                all_reachable_members(db, file_scope.to_scope_id(self.db, program_file)).map(
                     |memberdef| Completion {
                         name: CompactString::new(memberdef.member.name),
                         ty: Some(memberdef.member.ty),
                         builtin: false,
+                        is_type_check_only: memberdef.member.is_type_check_only,
                     },
                 ),
             );
@@ -1067,12 +1220,33 @@ impl<'db> SemanticModel<'db> {
                 name: CompactString::new(name),
                 ty: Some(ty),
                 builtin: true,
+                is_type_check_only: false,
             }),
         );
 
+        // Project-level builtins take precedence over the standard builtins.
+        let project_builtins = ModuleName::new_static("__builtins__").unwrap();
+        let importing_file =
+            ImportingFile::File(self.file(), self.file.resolver_environment(self.db));
+        if resolve_module(self.db, importing_file, &project_builtins).is_some() {
+            completions.extend(
+                self.module_completions(&project_builtins)
+                    .into_iter()
+                    .filter(|completion| !completion.is_type_check_only)
+                    .map(|mut completion| {
+                        completion.builtin = true;
+                        completion
+                    }),
+            );
+        }
+
         // Builtins are available in all scopes.
-        let builtins = ModuleName::new_static("builtins").expect("valid module name");
-        completions.extend(self.module_completions(&builtins));
+        let builtins = KnownModule::Builtins.name();
+        completions.extend(
+            self.module_completions(&builtins)
+                .into_iter()
+                .filter(|completion| !completion.is_type_check_only),
+        );
 
         // The above can sometimes result in duplicates. Get rid of them.
         completions.sort_by(|c1, c2| c1.name.cmp(&c2.name));
@@ -1084,7 +1258,7 @@ impl<'db> SemanticModel<'db> {
     /// Returns `true` if the given class definition's name was previously
     /// bound in the same scope (i.e., the class definition is a re-assignment).
     pub fn is_class_name_reassigned(&self, class_def: &ast::StmtClassDef) -> bool {
-        let index = semantic_index(self.db, self.file);
+        let index = semantic_index(self.db, self.program_file());
         let definition = index.expect_single_definition(class_def);
         let scope = definition.scope(self.db);
         let table = place_table(self.db, scope);
@@ -1094,7 +1268,7 @@ impl<'db> SemanticModel<'db> {
 
     /// Returns the scope in which `node` is defined (handles string annotations).
     pub fn scope(&self, node: ast::AnyNodeRef<'_>) -> Option<FileScopeId> {
-        let index = semantic_index(self.db, self.file);
+        let index = semantic_index(self.db, self.program_file());
         match self.node_in_ast(node) {
             ast::AnyNodeRef::Identifier(identifier) => index.try_expression_scope_id(identifier),
 
@@ -1148,7 +1322,7 @@ impl<'db> SemanticModel<'db> {
         &self,
         node: ast::AnyNodeRef<'_>,
     ) -> impl Iterator<Item = (FileScopeId, &Scope)> + '_ {
-        let index = semantic_index(self.db, self.file);
+        let index = semantic_index(self.db, self.program_file());
         self.scope(node)
             .into_iter()
             .flat_map(move |scope| index.ancestor_scopes(scope))
@@ -1166,8 +1340,8 @@ impl<'db> SemanticModel<'db> {
         &self,
         covering_node: &CoveringNode<'_>,
     ) -> Option<Definition<'db>> {
-        let index = semantic_index(self.db, self.file);
-        let parsed = parsed_module(self.db, self.file).load(self.db);
+        let index = semantic_index(self.db, self.program_file());
+        let parsed = parsed_module(self.db, self.python_file()).load(self.db);
         let target_range = covering_node.node().range();
 
         for node in covering_node.ancestors() {
@@ -1194,7 +1368,7 @@ impl<'db> SemanticModel<'db> {
     ///
     /// If we're analyzing a string annotation, it will return the string literal's node.
     /// Otherwise it will return the input.
-    pub fn node_in_ast<'a>(&'a self, node: ast::AnyNodeRef<'a>) -> ast::AnyNodeRef<'a> {
+    fn node_in_ast<'a>(&'a self, node: ast::AnyNodeRef<'a>) -> ast::AnyNodeRef<'a> {
         if let Some(string_annotation) = &self.in_string_annotation_expr {
             (&**string_annotation).into()
         } else {
@@ -1206,7 +1380,7 @@ impl<'db> SemanticModel<'db> {
     ///
     /// If we're analyzing a string annotation, it will return the string literal's expression.
     /// Otherwise it will return the input.
-    pub fn expr_in_ast<'a>(&'a self, expr: &'a Expr) -> &'a Expr {
+    fn expr_in_ast<'a>(&'a self, expr: &'a Expr) -> &'a Expr {
         if let Some(string_annotation) = &self.in_string_annotation_expr {
             string_annotation
         } else {
@@ -1218,7 +1392,7 @@ impl<'db> SemanticModel<'db> {
     ///
     /// If we're analyzing a string annotation, it will return the string literal's expression.
     /// Otherwise it will return the input.
-    pub fn expr_ref_in_ast<'a>(&'a self, expr: ExprRef<'a>) -> ExprRef<'a> {
+    fn expr_ref_in_ast<'a>(&'a self, expr: ExprRef<'a>) -> ExprRef<'a> {
         if let Some(string_annotation) = &self.in_string_annotation_expr {
             ExprRef::from(string_annotation)
         } else {
@@ -1237,11 +1411,11 @@ impl<'db> SemanticModel<'db> {
     ) -> Option<(Parsed<ModExpression>, Self)> {
         // Ask the inference engine whether this is actually a string annotation
         let expr = ExprRef::StringLiteral(string_expr);
-        let index = semantic_index(self.db, self.file);
+        let index = semantic_index(self.db, self.program_file());
         // When looking up scopes, use the expr in the top-level AST
         // (we might be trying to enter a sub-sub-AST, so this isn't silly)
         let file_scope = index.expression_scope_id(&self.expr_ref_in_ast(expr));
-        let scope = file_scope.to_scope_id(self.db, self.file);
+        let scope = file_scope.to_scope_id(self.db, self.program_file());
         // When querying whether the expr is a string annotation, we do however use the actual expr
         // (the inference engine should record this information even for sub-nodes)
         if !infer_complete_scope_types(self.db, scope).is_string_annotation(expr) {
@@ -1253,7 +1427,7 @@ impl<'db> SemanticModel<'db> {
         // The string_annotation will be used as the expr/node for any query that needs
         // to look up a node in the AST to prevent panics, because these sub-AST nodes
         // are not in the File's AST!
-        let source = source_text(self.db, self.file);
+        let source = source_text(self.db, self.file());
         let string_literal = string_expr.as_single_part_string()?;
         let ast = parsed_string_annotation(source.as_str(), string_literal).ok()?;
         let model = Self {
@@ -1281,8 +1455,8 @@ impl<'db> SemanticModel<'db> {
         match definition.kind(self.db) {
             DefinitionKind::TypeAlias(_) => true,
             DefinitionKind::AnnotatedAssignment(assignment) => {
-                let parsed = parsed_module(self.db, definition.file(self.db));
-                let model = Self::new(self.db, definition.file(self.db));
+                let parsed = parsed_module(self.db, definition.python_file(self.db));
+                let model = Self::new(self.db, definition.program_file(self.db));
                 model.is_type_alias_annotation(assignment.annotation(&parsed.load(self.db)))
             }
             _ => false,
@@ -1292,6 +1466,7 @@ impl<'db> SemanticModel<'db> {
     /// Returns the type qualifiers (e.g. `Final`, `ClassVar`) for a given expression,
     /// if the expression refers to a name or attribute with declared qualifiers.
     pub fn type_qualifiers(&self, expr: ExprRef<'_>) -> TypeQualifiers {
+        let db = self.db;
         match expr {
             ExprRef::Name(name) => {
                 let Some(definition) =
@@ -1300,7 +1475,7 @@ impl<'db> SemanticModel<'db> {
                     return TypeQualifiers::empty();
                 };
                 let definition_file = definition.file(self.db);
-                let module = parsed_module(self.db, definition_file).load(self.db);
+                let module = parsed_module(self.db, definition.python_file(self.db)).load(self.db);
                 if !definition
                     .kind(self.db)
                     .category(definition_file.is_stub(self.db), &module)
@@ -1308,7 +1483,7 @@ impl<'db> SemanticModel<'db> {
                 {
                     return TypeQualifiers::empty();
                 }
-                let Some(declared) = inferred_declaration(self.db, definition).declared() else {
+                let Some(declared) = inferred_declaration(self.db(), definition).declared() else {
                     return TypeQualifiers::empty();
                 };
                 declared.qualifiers()
@@ -1319,7 +1494,8 @@ impl<'db> SemanticModel<'db> {
                 };
                 value_ty
                     .member_lookup_with_policy(
-                        self.db,
+                        db,
+                        &self.program_environment(),
                         &attr.attr.id,
                         crate::types::MemberLookupPolicy::default(),
                     )
@@ -1375,16 +1551,13 @@ impl<'db> SemanticModel<'db> {
                 _ => Vec::new(),
             }
         }
+        let db = self.db;
 
         let Some(expected_ty) = self.string_literal_completion_expected_type(string_expr) else {
             return Vec::new();
         };
 
-        let mut candidates = collect(
-            self.db,
-            expected_ty,
-            &StringLiteralCandidatesVisitor::default(),
-        );
+        let mut candidates = collect(db, expected_ty, &StringLiteralCandidatesVisitor::default());
         candidates.sort_unstable_by(|left, right| left.value.cmp(&right.value));
         candidates.dedup_by(|left, right| left.value == right.value);
         candidates
@@ -1395,9 +1568,9 @@ impl<'db> SemanticModel<'db> {
         string_expr: &ast::ExprStringLiteral,
     ) -> Option<Type<'db>> {
         let expr = ast::ExprRef::from(string_expr);
-        let index = semantic_index(self.db, self.file);
+        let index = semantic_index(self.db, self.program_file());
         let file_scope = index.try_expression_scope_id(&self.expr_ref_in_ast(expr))?;
-        let scope = file_scope.to_scope_id(self.db, self.file);
+        let scope = file_scope.to_scope_id(self.db, self.program_file());
 
         infer_complete_scope_types(self.db, scope).try_expected_type(expr)
     }
@@ -1513,6 +1686,9 @@ pub struct Completion<'db> {
     /// use it mainly in tests so that we can write less
     /// noisy tests.
     pub builtin: bool,
+    /// Whether this symbol is known to exist only for type checking and should
+    /// be ranked below runtime values.
+    pub is_type_check_only: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1537,7 +1713,7 @@ pub trait HasDefinition {
     fn definition<'db>(&self, model: &SemanticModel<'db>) -> Definition<'db>;
 }
 
-pub trait HasOptionalDefinition {
+pub(crate) trait HasOptionalDefinition {
     /// Returns the definition of `self`, if it has one.
     ///
     /// ## Panics
@@ -1547,13 +1723,14 @@ pub trait HasOptionalDefinition {
 
 impl HasType for ast::ExprRef<'_> {
     fn inferred_type<'db>(&self, model: &SemanticModel<'db>) -> Option<Type<'db>> {
-        let index = semantic_index(model.db, model.file);
+        let file = model.program_file();
+        let index = semantic_index(model.db, file);
         // TODO(#1637): semantic tokens is making this crash even with
         // `try_expr_ref_in_ast` guarding this, for now just use `try_expression_scope_id`.
         // The problematic input is `x: "float` (with a dangling quote). I imagine the issue
         // is we're too eagerly setting `is_string_annotation` in inference.
         let file_scope = index.try_expression_scope_id(&model.expr_ref_in_ast(*self))?;
-        let scope = file_scope.to_scope_id(model.db, model.file);
+        let scope = file_scope.to_scope_id(model.db, file);
 
         infer_complete_scope_types(model.db, scope).try_expression_type(*self)
     }
@@ -1658,7 +1835,7 @@ macro_rules! impl_binding_has_ty_def {
         impl HasDefinition for $ty {
             #[inline]
             fn definition<'db>(&self, model: &SemanticModel<'db>) -> Definition<'db> {
-                let index = semantic_index(model.db, model.file);
+                let index = semantic_index(model.db, model.program_file());
                 index.expect_single_definition(self)
             }
         }
@@ -1667,7 +1844,7 @@ macro_rules! impl_binding_has_ty_def {
             #[inline]
             fn inferred_type<'db>(&self, model: &SemanticModel<'db>) -> Option<Type<'db>> {
                 let binding = HasDefinition::definition(self, model);
-                Some(binding_type(model.db, binding))
+                Some(binding_type(model.db(), binding))
             }
         }
     };
@@ -1707,8 +1884,11 @@ impl HasType for ast::Alias {
         if &self.name == "*" {
             return Some(Type::Never);
         }
-        let index = semantic_index(model.db, model.file);
-        Some(binding_type(model.db, index.expect_single_definition(self)))
+        let index = semantic_index(model.db, model.program_file());
+        Some(binding_type(
+            model.db(),
+            index.expect_single_definition(self),
+        ))
     }
 }
 
@@ -1716,7 +1896,7 @@ impl HasOptionalDefinition for ast::ExceptHandlerExceptHandler {
     fn optional_definition<'db>(&self, model: &SemanticModel<'db>) -> Option<Definition<'db>> {
         self.name.as_ref()?;
 
-        let index = semantic_index(model.db, model.file);
+        let index = semantic_index(model.db, model.program_file());
         Some(index.expect_single_definition(self))
     }
 }
@@ -1724,7 +1904,7 @@ impl HasOptionalDefinition for ast::ExceptHandlerExceptHandler {
 impl HasType for ast::ExceptHandlerExceptHandler {
     fn inferred_type<'db>(&self, model: &SemanticModel<'db>) -> Option<Type<'db>> {
         let definition = self.optional_definition(model)?;
-        Some(binding_type(model.db, definition))
+        Some(binding_type(model.db(), definition))
     }
 }
 
@@ -1734,6 +1914,7 @@ mod tests {
     use crate::{HasType, SemanticModel};
     use ruff_db::files::system_path_to_file;
     use ruff_db::parsed::parsed_module;
+    use ty_python_core::ProgramFile;
 
     #[test]
     fn function_type() -> anyhow::Result<()> {
@@ -1743,7 +1924,8 @@ mod tests {
 
         let foo = system_path_to_file(&db, "/src/foo.py").unwrap();
 
-        let ast = parsed_module(&db, foo).load(&db);
+        let foo = ProgramFile::new(&db, foo, db.program_environment().program(&db));
+        let ast = parsed_module(&db, foo.python_file(&db)).load(&db);
 
         let function = ast.suite()[0].as_function_def_stmt().unwrap();
         let model = SemanticModel::new(&db, foo);
@@ -1762,7 +1944,8 @@ mod tests {
 
         let foo = system_path_to_file(&db, "/src/foo.py").unwrap();
 
-        let ast = parsed_module(&db, foo).load(&db);
+        let foo = ProgramFile::new(&db, foo, db.program_environment().program(&db));
+        let ast = parsed_module(&db, foo.python_file(&db)).load(&db);
 
         let class = ast.suite()[0].as_class_def_stmt().unwrap();
         let model = SemanticModel::new(&db, foo);
@@ -1782,7 +1965,8 @@ mod tests {
 
         let bar = system_path_to_file(&db, "/src/bar.py").unwrap();
 
-        let ast = parsed_module(&db, bar).load(&db);
+        let bar = ProgramFile::new(&db, bar, db.program_environment().program(&db));
+        let ast = parsed_module(&db, bar.python_file(&db)).load(&db);
 
         let import = ast.suite()[0].as_import_from_stmt().unwrap();
         let alias = &import.names[0];

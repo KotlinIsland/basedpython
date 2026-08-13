@@ -16,6 +16,7 @@ use super::index::TemplateIndex;
 use super::lexer::{ConstructKind, Token, TokenKind, string_contents};
 use super::project::{self, RegistrationKind};
 use super::resolve::{self, Origin};
+use ty_python_semantic::ProgramEnvironment;
 
 /// where the name at `offset` of the template `file` is defined
 pub(crate) fn goto_definition(
@@ -74,6 +75,7 @@ impl Site<'_> {
     }
 
     fn definition(&self) -> Option<NavigationTargets> {
+        let env = &ProgramEnvironment::from_file(self.db.program_file(self.file));
         match self.token.kind {
             TokenKind::TagName => Some(self.registration(false)),
             TokenKind::FilterName => Some(self.registration(true)),
@@ -86,13 +88,14 @@ impl Site<'_> {
                 let segments = path_up_to(self.source, self.tokens, self.token, false);
                 let ty = resolve::path_type(
                     self.db,
+                    env,
                     self.file,
                     self.index,
                     self.source,
                     self.offset,
                     &segments,
                 )?;
-                Some(ty.navigation_targets(self.db))
+                Some(ty.navigation_targets(self.db, env))
             }
             _ => None,
         }

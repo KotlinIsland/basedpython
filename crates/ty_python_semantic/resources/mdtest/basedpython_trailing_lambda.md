@@ -653,7 +653,6 @@ def f(a): ...
 f:  # error: [invalid-syntax]
 # error: [invalid-syntax] "Unexpected indentation"
 # error: [unresolved-reference] "Name `it` used when not defined"
-# error: [invalid-syntax] "Expected a statement"
     print(it)
 ```
 
@@ -731,7 +730,6 @@ def f(a: (int) -> None) -> int:
 x = y = f:
     # error: [invalid-syntax] "Unexpected indentation"
     # error: [unresolved-reference] "Name `it` used when not defined"
-    # error: [invalid-syntax] "Expected a statement"
     print(it)
 ```
 
@@ -748,6 +746,5 @@ def f(a: (int) -> None) -> tuple[int, int]:
 p, q = f:
     # error: [invalid-syntax] "Unexpected indentation"
     # error: [unresolved-reference] "Name `it` used when not defined"
-    # error: [invalid-syntax] "Expected a statement"
     print(it)
 ```

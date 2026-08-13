@@ -39,6 +39,7 @@ use ruff_db::files::File;
 use ty_module_resolver::{ModuleName, resolve_module};
 
 use crate::Db;
+use crate::types::ProgramEnvironment;
 use crate::types::Type;
 use crate::types::class::{ClassLiteral, ClassType, StaticClassLiteral};
 use crate::types::context::InferContext;
@@ -47,6 +48,7 @@ use crate::types::extensions::{
     applicable_extensions, backing_function_name, extended_class, extension_applies,
     extensions_in_module, own_member,
 };
+use ty_module_resolver::ImportingFile;
 
 /// the protocols (or abstract classes) a conformance extension declares its
 /// target conforms to — the extension's explicit bases, which is exactly where
@@ -125,7 +127,12 @@ pub fn declares_conformances(db: &dyn Db, file: File) -> bool {
 pub(crate) fn eagerly_imported_modules(db: &dyn Db, file: File) -> Vec<String> {
     let mut eager = Vec::new();
     for module_name in imported_module_names(db, file) {
-        let Some(target) = resolve_module(db, file, &module_name).and_then(|m| m.file(db)) else {
+        let Some(target) = resolve_module(
+            db,
+            ImportingFile::File(file, db.program_file(file).resolver_environment(db)),
+            &module_name,
+        )
+        .and_then(|m| m.file(db)) else {
             continue;
         };
         if target != file && *declares_conformances(db, target) {
@@ -137,7 +144,7 @@ pub(crate) fn eagerly_imported_modules(db: &dyn Db, file: File) -> Vec<String> {
 
 /// every module named by an `import` or a `from ... import` in `file`
 fn imported_module_names(db: &dyn Db, file: File) -> Vec<ModuleName> {
-    ty_python_core::semantic_index(db, file)
+    ty_python_core::semantic_index(db, db.program_file(file))
         .imported_modules()
         .cloned()
         .chain(
@@ -157,6 +164,7 @@ fn imported_module_names(db: &dyn Db, file: File) -> Vec<ModuleName> {
 /// they are reached through the conforming type
 pub(crate) fn conformance_for<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     receiver_class: ClassType<'db>,
     protocol: ClassLiteral<'db>,
@@ -165,7 +173,7 @@ pub(crate) fn conformance_for<'db>(
         if declared.class_literal(db) != protocol {
             continue;
         }
-        if extension_applies(db, extension, receiver_class).is_some() {
+        if extension_applies(db, env, extension, receiver_class).is_some() {
             return Some(declared);
         }
     }
@@ -182,6 +190,7 @@ pub(crate) fn conformance_for<'db>(
 /// no file to ask
 pub(crate) fn repair_with_conformance<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     file: File,
     source: Type<'db>,
     target: Type<'db>,
@@ -194,18 +203,18 @@ pub(crate) fn repair_with_conformance<'db>(
         return None;
     }
     // a repair only ever *adds* an assignment that fails without it
-    if source.is_assignable_to(db, target) {
+    if source.is_assignable_to(db, env, target) {
         return None;
     }
     // a use-site modifier says nothing about which class the value is an
     // instance of, so `final Widget` finds `Widget`'s conformances
-    let source_class = source.erase_restriction(db).nominal_class(db)?;
+    let source_class = source.erase_restriction(db).nominal_class(db, env)?;
 
     for &(extension, protocol) in conformances {
-        if extension_applies(db, extension, source_class).is_none() {
+        if extension_applies(db, env, extension, source_class).is_none() {
             continue;
         }
-        if Type::instance(db, protocol).is_assignable_to(db, target) {
+        if Type::instance(db, env, protocol).is_assignable_to(db, env, target) {
             return Some(protocol);
         }
     }
@@ -406,6 +415,7 @@ pub(crate) fn validate_conformance_declaration<'db>(
     extension: StaticClassLiteral<'db>,
     class_node: &ast::StmtClassDef,
 ) {
+    let env = context.program_environment();
     let db = context.db();
     let declared = declared_conformances(db, extension);
     if declared.is_empty() {
@@ -431,17 +441,20 @@ pub(crate) fn validate_conformance_declaration<'db>(
             if let Some(builder) = context.report_lint(&INVALID_CONFORMANCE, node.range()) {
                 let mut diagnostic =
                     builder.into_diagnostic("a conformance list names interfaces".to_string());
-                diagnostic.info(format_args!("`{}` is not a class", base_ty.display(db)));
+                diagnostic.info(format_args!(
+                    "`{}` is not a class",
+                    base_ty.display(db, env)
+                ));
             }
             continue;
         };
         let interface = &interface;
-        let interface_instance = Type::instance(db, *interface);
+        let interface_instance = Type::instance(db, env, *interface);
         if !is_conformable(db, *interface) {
             if let Some(builder) = context.report_lint(&INVALID_CONFORMANCE, node.range()) {
                 let mut diagnostic = builder.into_diagnostic(format_args!(
                     "`{}` is not a protocol",
-                    interface_instance.display(db),
+                    interface_instance.display(db, env),
                 ));
                 diagnostic.info(
                     "a conformance names a protocol; an abstract class carries concrete members a \
@@ -459,7 +472,7 @@ pub(crate) fn validate_conformance_declaration<'db>(
             let mut diagnostic = builder.into_diagnostic(format_args!(
                 "`{}` is already conformed to `{}` here",
                 target.name(db),
-                interface_instance.display(db),
+                interface_instance.display(db, env),
             ));
             diagnostic.info(format_args!(
                 "the other conformance is declared in `{}`",
@@ -560,29 +573,29 @@ pub(crate) fn validate_conformance_declaration<'db>(
         // `def show(self) -> int` silently answered a `-> str` requirement
         for requirement in interface_requirements(db, *interface) {
             let name = requirement.as_str();
-            let supplied = bound_own_member(db, extension, name)
-                .or_else(|| bound_target_member(db, target, name));
+            let supplied = bound_own_member(db, env, extension, name)
+                .or_else(|| bound_target_member(db, env, target, name));
             let (Some(supplied), Some(expected)) = (
                 supplied,
                 interface_instance
-                    .member(db, name)
+                    .member(db, env, name)
                     .place
                     .ignore_possibly_undefined()
                     .map(|expected| shed_receiver(db, expected)),
             ) else {
                 continue;
             };
-            if !supplied.is_assignable_to(db, expected)
+            if !supplied.is_assignable_to(db, env, expected)
                 && let Some(builder) = context.report_lint(&INVALID_CONFORMANCE, node.range())
             {
                 let mut diagnostic = builder.into_diagnostic(format_args!(
                     "`{name}` does not match the member `{}` declares",
-                    interface_instance.display(db),
+                    interface_instance.display(db, env),
                 ));
                 diagnostic.info(format_args!(
                     "expected `{}`, found `{}`",
-                    expected.display(db),
-                    supplied.display(db),
+                    expected.display(db, env),
+                    supplied.display(db, env),
                 ));
             }
         }
@@ -603,7 +616,7 @@ pub(crate) fn validate_conformance_declaration<'db>(
                         name,
                     )
                     .is_none()
-                    && !target_declares(db, target, name)
+                    && !target_declares(db, env, target, name)
             })
             .map(|requirement| format!("`{requirement}`"))
             .collect();
@@ -613,7 +626,7 @@ pub(crate) fn validate_conformance_declaration<'db>(
             let mut diagnostic = builder.into_diagnostic(format_args!(
                 "`{}` does not answer every member of `{}`",
                 target.name(db),
-                interface_instance.display(db),
+                interface_instance.display(db, env),
             ));
             diagnostic.info(format_args!("missing: {}", missing.join(", ")));
             diagnostic.help(
@@ -627,14 +640,17 @@ pub(crate) fn validate_conformance_declaration<'db>(
 /// extended type — the shape a caller reaching it through the interface gets
 fn bound_own_member<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     extension: StaticClassLiteral<'db>,
     name: &str,
 ) -> Option<Type<'db>> {
     let member = own_member(db, extension, name)?;
-    let receiver = Type::instance(db, super::extensions::body_view_class(db, extension)?);
+    let receiver = Type::instance(db, env, super::extensions::body_view_class(db, extension)?);
     let bound = member
-        .try_call_dunder_get(db, Some(receiver), receiver.to_meta_type(db))
-        .map_or(member, |(bound, _)| bound);
+        .try_call_dunder_get(db, env, Some(receiver), receiver.to_meta_type(db, env))
+        .ok()
+        .flatten()
+        .map_or(member, |result| result.return_type);
     Some(shed_receiver(db, bound))
 }
 
@@ -653,12 +669,13 @@ fn shed_receiver<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
 /// the member `name` the conforming type answers itself, bound against it
 fn bound_target_member<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     target: ClassLiteral<'db>,
     name: &str,
 ) -> Option<Type<'db>> {
-    let receiver = Type::instance(db, target.unknown_specialization(db));
+    let receiver = Type::instance(db, env, target.unknown_specialization(db));
     let member = receiver
-        .member(db, name)
+        .member(db, env, name)
         .place
         .ignore_possibly_undefined()?;
     Some(shed_receiver(db, member))
@@ -696,12 +713,17 @@ fn conflicting_conformance<'db>(
 
 /// does the conforming type already answer `name` itself, without the
 /// conformance having to supply it?
-fn target_declares<'db>(db: &'db dyn Db, target: ClassLiteral<'db>, name: &str) -> bool {
+fn target_declares<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    target: ClassLiteral<'db>,
+    name: &str,
+) -> bool {
     // `object`'s members count: every value really does answer `__str__` and
     // friends at runtime, and excluding them reported a `Stringy` protocol as
     // unanswered by a class that satisfies it perfectly well
-    !Type::instance(db, target.unknown_specialization(db))
-        .member(db, name)
+    !Type::instance(db, env, target.unknown_specialization(db))
+        .member(db, env, name)
         .place
         .is_undefined()
 }

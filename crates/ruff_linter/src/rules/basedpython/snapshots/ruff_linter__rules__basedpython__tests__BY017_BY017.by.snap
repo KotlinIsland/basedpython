@@ -6,7 +6,6 @@ BY017 [*] Declaration body of `...` is unnecessary
   |
 1 | class Empty: ...
   |            ^^^^^
-  |
 help: Remove the body
   |
   - class Empty: ...
@@ -19,7 +18,6 @@ BY017 [*] Declaration body of `...` is unnecessary
   |
 4 | class Stub(Empty): ...
   |                  ^^^^^
-  |
 help: Remove the body
   |
 3 |
@@ -33,7 +31,6 @@ BY017 [*] Declaration body of `...` is unnecessary
   |
 7 | def stub(x: int) -> int: ...
   |                        ^^^^^
-  |
 help: Remove the body
   |
 6 |
@@ -47,7 +44,6 @@ BY017 [*] Declaration body of `...` is unnecessary
    |
 10 | async def async_stub() -> None: ...
    |                               ^^^^^
-   |
 help: Remove the body
    |
 9  |
@@ -80,7 +76,6 @@ BY017 [*] Declaration body of `...` is unnecessary
 15 |
 16 |     class Nested: ...
    |                 ^^^^^
-   |
 help: Remove the body
    |
 15 |

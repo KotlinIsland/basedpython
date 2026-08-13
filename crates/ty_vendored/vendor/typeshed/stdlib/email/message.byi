@@ -497,7 +497,7 @@ class MIMEPart[out HeaderRegistryT = dynamic, in HeaderRegistryParamT = dynamic]
         match.  Ignore parts with 'Content-Disposition: attachment'.
         """
 
-    override def attach(self, payload: Self) -> None:
+    override def attach(self, payload: Self):
         """Add the given payload to the current payload.
 
         The current payload will always be a list of objects after this method

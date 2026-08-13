@@ -91,9 +91,9 @@ class SMTPChannel(asynchat.async_chat):
         decode_data: bool = False,
     )
     # base asynchat.async_chat.push() accepts bytes
-    override def push(self, msg: str) -> None
-    override def collect_incoming_data(self, data: bytes) -> None
-    override def found_terminator(self) -> None
+    override def push(self, msg: str)
+    override def collect_incoming_data(self, data: bytes)
+    override def found_terminator(self)
     def smtp_HELO(self, arg: str)
     def smtp_NOOP(self, arg: str)
     def smtp_QUIT(self, arg: str)

@@ -21,6 +21,7 @@
 use super::variance::VarianceInferable;
 use super::{BoundTypeVarIdentity, Type, TypeVarVariance, visitor};
 use crate::Db;
+use crate::types::ProgramEnvironment;
 
 #[salsa::interned(debug, heap_size=ruff_memory_usage::heap_size)]
 pub struct OverlappingType<'db> {
@@ -48,12 +49,12 @@ impl<'db> OverlappingType<'db> {
     /// method body*: the upper bound of the wrapped type argument. A covariant
     /// `Key` is thereby erased to its bound (`object` when unbounded), so it can
     /// never be written back into `Key`-typed storage.
-    pub(crate) fn value_type(self, db: &'db dyn Db) -> Type<'db> {
+    pub(crate) fn value_type(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
         match self.type_argument(db) {
             Type::TypeVar(typevar) => typevar
                 .typevar(db)
-                .bound_or_constraints(db)
-                .map(|bound_or_constraints| bound_or_constraints.as_type(db))
+                .bound_or_constraints(db, env)
+                .map(|bound_or_constraints| bound_or_constraints.as_type(db, env))
                 .unwrap_or_else(Type::object),
             other => other,
         }
@@ -65,9 +66,13 @@ impl<'db> Type<'db> {
     /// such a parameter (`Key`'s upper bound). Any other type is returned
     /// unchanged. Used when binding a parameter's declared type inside the body,
     /// where the marker has no place — it exists only for the call binder.
-    pub(crate) fn erase_overlapping(self, db: &'db dyn Db) -> Type<'db> {
+    pub(crate) fn erase_overlapping(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Type<'db> {
         match self {
-            Type::Overlapping(overlapping) => overlapping.value_type(db),
+            Type::Overlapping(overlapping) => overlapping.value_type(db, env),
             _ => self,
         }
     }
@@ -78,7 +83,12 @@ impl<'db> VarianceInferable<'db> for OverlappingType<'db> {
     // neither direction, matching the escape-hatch semantics (its whole purpose
     // is to let a covariant typevar appear in an input position without forcing
     // invariance).
-    fn variance_of(self, _db: &'db dyn Db, _typevar: BoundTypeVarIdentity<'db>) -> TypeVarVariance {
+    fn variance_of(
+        self,
+        _db: &'db dyn Db,
+        _env: &ProgramEnvironment<'db>,
+        _typevar: BoundTypeVarIdentity<'db>,
+    ) -> TypeVarVariance {
         TypeVarVariance::Bivariant
     }
 }

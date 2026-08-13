@@ -23,6 +23,7 @@ use ty_python_semantic::{HasType, SemanticModel};
 use super::index::{Binding, BindingOrigin, TemplateIndex};
 use super::lexer::TokenKind;
 use super::project::{self, ContextVariable};
+use ty_python_semantic::ProgramEnvironment;
 
 /// how many `{% with %}` hops a path is followed through before giving up
 ///
@@ -99,6 +100,7 @@ pub(crate) fn template_name(db: &dyn Db, file: File) -> Option<String> {
 /// `book.author.name`. the empty path has no type.
 pub(crate) fn path_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     template: File,
     index: &TemplateIndex,
     source: &str,
@@ -107,6 +109,7 @@ pub(crate) fn path_type<'db>(
 ) -> Option<Type<'db>> {
     resolve_path(
         db,
+        env,
         template,
         index,
         source,
@@ -116,8 +119,10 @@ pub(crate) fn path_type<'db>(
     )
 }
 
+#[expect(clippy::too_many_arguments)]
 fn resolve_path<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     template: File,
     index: &TemplateIndex,
     source: &str,
@@ -126,18 +131,20 @@ fn resolve_path<'db>(
     fuel: u32,
 ) -> Option<Type<'db>> {
     let (root, rest) = segments.split_first()?;
-    let mut ty = root_type(db, template, index, source, offset, root, fuel)?;
+    let mut ty = root_type(db, env, template, index, source, offset, root, fuel)?;
 
     for segment in rest {
-        ty = member_type(db, ty, segment)?;
+        ty = member_type(db, env, ty, segment)?;
     }
 
     Some(ty)
 }
 
 /// the type of the leading name of a path
+#[expect(clippy::too_many_arguments)]
 fn root_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     template: File,
     index: &TemplateIndex,
     source: &str,
@@ -161,18 +168,17 @@ fn root_type<'db>(
             let segments = path_segments(index, source, value);
             let value_type = resolve_path(
                 db,
+                env,
                 template,
                 index,
                 source,
-                // the tag's value expression is written in the tag itself, so it
-                // resolves in the scope *before* this binding takes effect
                 binding.range.start(),
                 &segments,
                 fuel - 1,
             )?;
 
             match binding.origin {
-                BindingOrigin::LoopVariable => iterable_element_type(db, value_type),
+                BindingOrigin::LoopVariable => iterable_element_type(db, env, value_type),
                 BindingOrigin::Alias | BindingOrigin::ForLoop => Some(value_type),
             }
         }
@@ -207,11 +213,16 @@ pub(crate) fn path_segments<'src>(
 /// method.
 ///
 /// [resolved]: https://docs.djangoproject.com/en/stable/ref/templates/language/#variables
-pub(crate) fn member_type<'db>(db: &'db dyn Db, ty: Type<'db>, name: &str) -> Option<Type<'db>> {
-    let member = uncalled_member_type(db, ty, name)?;
+pub(crate) fn member_type<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+    name: &str,
+) -> Option<Type<'db>> {
+    let member = uncalled_member_type(db, env, ty, name)?;
 
-    match template_lookup(db, ty, name, member) {
-        TemplateLookup::Calls => Some(resolved(db, member)),
+    match template_lookup(db, env, ty, name, member) {
+        TemplateLookup::Calls => Some(resolved(db, env, member)),
         TemplateLookup::UsesUncalled => Some(member),
         // django renders `string_if_invalid` here, which is configurable and by
         // default the empty string. nothing useful can be said about a path
@@ -228,10 +239,11 @@ pub(crate) fn member_type<'db>(db: &'db dyn Db, ty: Type<'db>, name: &str) -> Op
 /// member itself.
 pub(crate) fn uncalled_member_type<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     ty: Type<'db>,
     name: &str,
 ) -> Option<Type<'db>> {
-    members(db, ty)
+    members(db, env, ty)
         .into_iter()
         .find(|member| member.name == name)
         .map(|member| member.ty)
@@ -241,8 +253,8 @@ pub(crate) fn uncalled_member_type<'db>(
 ///
 /// django calls whatever the lookup found if it is callable, so a member that
 /// takes no arguments contributes its return type rather than its own.
-fn resolved<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
-    no_argument_call_return_type(db, ty).unwrap_or(ty)
+fn resolved<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> Type<'db> {
+    no_argument_call_return_type(db, env, ty).unwrap_or(ty)
 }
 
 /// every attribute a value of type `ty` has
@@ -250,10 +262,14 @@ fn resolved<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
 /// the type's own class comes first and the rest follows, each alphabetically. a
 /// django model inherits several dozen members from `models.Model`, and sorting
 /// its fields in among them puts `title` below `save_base`.
-pub(crate) fn members<'db>(db: &'db dyn Db, ty: Type<'db>) -> Vec<Member<'db>> {
-    let own = own_class_member_names(db, ty);
+pub(crate) fn members<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Vec<Member<'db>> {
+    let own = own_class_member_names(db, env, ty);
 
-    let mut members: Vec<_> = all_members(db, ty)
+    let mut members: Vec<_> = all_members(db, env, ty)
         .into_iter()
         // a template can only write a `\w+` name after a dot, so a dunder is both
         // unreachable and noise
@@ -270,7 +286,7 @@ pub(crate) fn members<'db>(db: &'db dyn Db, ty: Type<'db>) -> Vec<Member<'db>> {
 
 /// the type of the python expression at `range` of `file`
 pub(crate) fn expression_type(db: &dyn Db, file: File, range: TextRange) -> Option<Type<'_>> {
-    let parsed = parsed_module(db, file).load(db);
+    let parsed = parsed_module(db, db.program_file(file).python_file(db)).load(db);
     let covering = covering_node(parsed.syntax().into(), range);
 
     // the smallest node covering the range must be the expression itself; a
@@ -280,5 +296,5 @@ pub(crate) fn expression_type(db: &dyn Db, file: File, range: TextRange) -> Opti
     }
 
     let expression = covering.node().as_expr_ref()?;
-    expression.inferred_type(&SemanticModel::new(db, file))
+    expression.inferred_type(&SemanticModel::new(db, db.program_file(file)))
 }

@@ -293,9 +293,9 @@ class _TemporaryFileWrapper(IO[AnyStr]):
         def __init__(self, file: IO[AnyStr], name: str, delete: bool = True) -> None
 
     override def __enter__(self) -> Self
-    override def __exit__(self, exc: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None) -> None
+    override def __exit__(self, exc: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None)
     def __getattr__(self, name: str) -> dynamic
-    override def close(self) -> None:
+    override def close(self):
         """
         Close the temporary file, possibly deleting it.
         """
@@ -314,7 +314,7 @@ class _TemporaryFileWrapper(IO[AnyStr]):
     # TypeError: '_TemporaryFileWrapper' object is not an iterator
     override def __next__(self) -> AnyStr
     override def fileno(self) -> int
-    override def flush(self) -> None
+    override def flush(self)
     override def isatty(self) -> bool
     override def read(self, n: int = ...) -> AnyStr
     override def readable(self) -> bool
@@ -423,13 +423,13 @@ class SpooledTemporaryFile(IO[AnyStr], _SpooledTemporaryFileBase):
     let errors: str | None
     def rollover(self)
     override def __enter__(self) -> Self
-    override def __exit__(self, exc: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None) -> None
+    override def __exit__(self, exc: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None)
     # These methods are copied from the abstract methods of IO, because
     # SpooledTemporaryFile implements IO.
     # See also https://github.com/python/typeshed/pull/2452#issuecomment-420657918.
-    override def close(self) -> None
+    override def close(self)
     override def fileno(self) -> int
-    override def flush(self) -> None
+    override def flush(self)
     override def isatty(self) -> bool
     if sys.version_info >= (3, 11):
         # These three work only if the SpooledTemporaryFile is opened in binary mode,

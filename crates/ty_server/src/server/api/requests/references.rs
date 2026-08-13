@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use lsp_types::ReferencesRequest;
 use lsp_types::{Location, ReferenceParams, Uri};
 use ty_ide::{django_references, find_references};
-use ty_project::ProjectDatabase;
+use ty_project::{ProjectDatabase, SemanticDb as _};
 
 use crate::document::{PositionExt, ToLink};
 use crate::server::api::traits::{
@@ -56,7 +56,7 @@ impl BackgroundDocumentRequestHandler for ReferencesRequestHandler {
         // names a module writes as plain strings are what is left over once it
         // declines
         let found = (!template)
-            .then(|| find_references(db, file, offset, include_declaration))
+            .then(|| find_references(db, db.program_file(file), offset, include_declaration))
             .flatten()
             .or_else(|| django_references(db, file, offset, include_declaration, template));
 

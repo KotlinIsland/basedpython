@@ -31,7 +31,7 @@ Written by Marc-Andre Lemburg (mal@lemburg.com).
 import sys
 from codecs import CodecInfo
 
-from . import aliases as aliases
+from . export aliases
 
 class CodecRegistryError(LookupError, SystemError)
 

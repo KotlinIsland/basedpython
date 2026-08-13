@@ -1,6 +1,8 @@
+use crate::ProgramEnvironment;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use itertools::{Either, Itertools};
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{self as ast, PySourceType};
@@ -8,19 +10,19 @@ use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
 use crate::{
-    Db, TypeQualifiers,
+    Db, FxOrderMap, TypeQualifiers,
     place::{
         DefinedPlace, Definedness, Place, PlaceAndQualifiers, Provenance, PublicTypePolicy,
         TypeOrigin,
     },
     types::{
-        ApplySpecialization, ApplyTypeMappingVisitor, CycleDetector, DynamicType, GenericContext,
-        InstanceProjection, KnownClass, KnownInstanceType, LintDiagnosticGuard,
-        MaterializationKind, Parameter, Parameters, Type, TypeAliasType, TypeContext, TypeMapping,
-        TypeVarVariance, UnionBuilder, UnionType, any_over_type, binding_type,
+        ApplySpecialization, ApplyTypeMappingVisitor, ClassLiteral, CycleDetector, DynamicType,
+        GenericContext, InstanceProjection, IntersectionType, KnownClass, KnownInstanceType,
+        LintDiagnosticGuard, MaterializationKind, Parameter, Parameters, Type, TypeAliasType,
+        TypeContext, TypeMapping, TypeVarVariance, UnionBuilder, UnionType, any_over_type,
+        binding_type,
         constraints::ConstraintSetBuilder,
         definition_expression_type,
-        generics::InferableTypeVars,
         tuple::Tuple,
         variance::VarianceInferable,
         visitor::{
@@ -30,6 +32,7 @@ use crate::{
     },
 };
 use ty_python_core::{
+    Program,
     definition::{Definition, DefinitionKind},
     semantic_index,
 };
@@ -56,16 +59,17 @@ impl<'db> Type<'db> {
         )
     }
 
-    pub(crate) fn has_typevar(self, db: &'db dyn Db) -> bool {
-        any_over_type(db, self, false, |ty| matches!(ty, Type::TypeVar(_)))
+    pub(crate) fn has_typevar(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
+        any_over_type(db, env, self, false, |ty| matches!(ty, Type::TypeVar(_)))
     }
 
     pub(crate) fn references_typevar(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         typevar_id: TypeVarIdentity<'db>,
     ) -> bool {
-        any_over_type(db, self, false, |ty| match ty {
+        any_over_type(db, env, self, false, |ty| match ty {
             Type::TypeVar(bound_typevar) => typevar_id == bound_typevar.typevar(db).identity(db),
             Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) => {
                 typevar_id == typevar.identity(db)
@@ -74,17 +78,26 @@ impl<'db> Type<'db> {
         })
     }
 
-    pub(crate) fn has_non_self_typevar(self, db: &'db dyn Db) -> bool {
+    pub(crate) fn has_non_self_typevar(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> bool {
         any_over_type(
             db,
+            env,
             self,
             false,
             |ty| matches!(ty, Type::TypeVar(tv) if !tv.typevar(db).is_self(db)),
         )
     }
 
-    pub(crate) fn has_typevar_or_typevar_instance(self, db: &'db dyn Db) -> bool {
-        any_over_type(db, self, false, |ty| {
+    pub(crate) fn has_typevar_or_typevar_instance(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> bool {
+        any_over_type(db, env, self, false, |ty| {
             matches!(
                 ty,
                 Type::KnownInstance(KnownInstanceType::TypeVar(_)) | Type::TypeVar(_)
@@ -96,8 +109,12 @@ impl<'db> Type<'db> {
     ///
     /// `Self` is bound by the enclosing class rather than by the generic context currently being
     /// defined, so a type mentioning only `Self` leaves nothing unsolved in that context.
-    pub(crate) fn has_non_self_typevar_or_typevar_instance(self, db: &'db dyn Db) -> bool {
-        any_over_type_with_opaque_self(db, self, |ty| match ty {
+    pub(crate) fn has_non_self_typevar_or_typevar_instance(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> bool {
+        any_over_type_with_opaque_self(db, env, self, |ty| match ty {
             Type::TypeVar(bound_typevar) => !bound_typevar.typevar(db).is_self(db),
             Type::KnownInstance(KnownInstanceType::TypeVar(_)) => true,
             _ => false,
@@ -108,11 +125,15 @@ impl<'db> Type<'db> {
     ///
     /// Such a type variable is a stand-in for an as-yet-unknown `TypedDict`, so a construct that
     /// requires one (`**kwargs: Unpack[T]`) can accept it and defer until it is solved.
-    pub(crate) fn is_typed_dict_bounded_typevar(self, db: &'db dyn Db) -> bool {
+    pub(crate) fn is_typed_dict_bounded_typevar(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> bool {
         let Type::TypeVar(bound_typevar) = self else {
             return false;
         };
-        match bound_typevar.typevar(db).bound_or_constraints(db) {
+        match bound_typevar.typevar(db).bound_or_constraints(db, env) {
             Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
                 bound.resolve_type_alias(db).is_typed_dict()
             }
@@ -124,8 +145,12 @@ impl<'db> Type<'db> {
         }
     }
 
-    pub(crate) fn has_unspecialized_type_var(self, db: &'db dyn Db) -> bool {
-        any_over_type(db, self, false, |ty| {
+    pub(crate) fn has_unspecialized_type_var(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> bool {
+        any_over_type(db, env, self, false, |ty| {
             matches!(ty, Type::Dynamic(DynamicType::UnspecializedTypeVar))
         })
     }
@@ -200,10 +225,12 @@ pub(super) fn walk_type_var_type<'db, V: visitor::TypeVisitor<'db> + ?Sized>(
     visitor: &V,
 ) {
     if let Some(bound_or_constraints) = if visitor.should_visit_lazy_type_attributes() {
-        typevar.bound_or_constraints(db)
+        typevar.bound_or_constraints(db, visitor.program_environment())
     } else {
         match typevar._bound_or_constraints(db) {
-            _ if visitor.should_visit_lazy_type_attributes() => typevar.bound_or_constraints(db),
+            _ if visitor.should_visit_lazy_type_attributes() => {
+                typevar.bound_or_constraints(db, visitor.program_environment())
+            }
             Some(TypeVarBoundOrConstraintsEvaluation::Eager(bound_or_constraints)) => {
                 Some(bound_or_constraints)
             }
@@ -223,7 +250,7 @@ pub(super) fn walk_type_var_type<'db, V: visitor::TypeVisitor<'db> + ?Sized>(
         visitor.visit_type(db, lower_bound);
     }
     if let Some(default_type) = if visitor.should_visit_lazy_type_attributes() {
-        typevar.default_type(db)
+        typevar.default_type(db, visitor.program_environment())
     } else {
         match typevar._default(db) {
             Some(TypeVarDefaultEvaluation::Eager(default_type)) => Some(default_type),
@@ -315,7 +342,11 @@ impl<'db> TypeVarInstance<'db> {
     ///
     /// [`bound_or_constraints`](Self::bound_or_constraints) therefore hides it, and this is the
     /// only way to reach it.
-    pub(crate) fn pack_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
+    pub(crate) fn pack_bound(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<Type<'db>> {
         if !self.is_pack(db) {
             return None;
         }
@@ -323,7 +354,7 @@ impl<'db> TypeVarInstance<'db> {
             TypeVarBoundOrConstraintsEvaluation::Eager(TypeVarBoundOrConstraints::UpperBound(
                 bound,
             )) => Some(bound),
-            TypeVarBoundOrConstraintsEvaluation::LazyUpperBound => self.lazy_bound(db),
+            TypeVarBoundOrConstraintsEvaluation::LazyUpperBound => self.lazy_bound(db, env),
             TypeVarBoundOrConstraintsEvaluation::Eager(TypeVarBoundOrConstraints::Constraints(
                 _,
             ))
@@ -331,8 +362,8 @@ impl<'db> TypeVarInstance<'db> {
         }
     }
 
-    pub(crate) fn has_pack_bound(self, db: &'db dyn Db) -> bool {
-        self.pack_bound(db).is_some()
+    pub(crate) fn has_pack_bound(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
+        self.pack_bound(db, env).is_some()
     }
 
     /// Whether this type variable stands for a run of types (`*Ts`) or a field mapping
@@ -341,16 +372,39 @@ impl<'db> TypeVarInstance<'db> {
         self.is_typevartuple(db) || self.is_keyword_variadic(db)
     }
 
-    pub(crate) fn upper_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
-        if let Some(TypeVarBoundOrConstraints::UpperBound(ty)) = self.bound_or_constraints(db) {
+    pub(crate) fn upper_bound(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<Type<'db>> {
+        if let Some(TypeVarBoundOrConstraints::UpperBound(ty)) = self.bound_or_constraints(db, env)
+        {
             Some(ty)
         } else {
             None
         }
     }
 
-    pub(crate) fn constraints(self, db: &'db dyn Db) -> Option<&'db [Type<'db>]> {
-        if let Some(TypeVarBoundOrConstraints::Constraints(tuple)) = self.bound_or_constraints(db) {
+    /// Returns whether this type variable has constraints without evaluating a lazy bound.
+    pub(super) fn is_constrained(self, db: &'db dyn Db) -> bool {
+        matches!(
+            self._bound_or_constraints(db),
+            Some(
+                TypeVarBoundOrConstraintsEvaluation::Eager(TypeVarBoundOrConstraints::Constraints(
+                    _
+                )) | TypeVarBoundOrConstraintsEvaluation::LazyConstraints
+            )
+        )
+    }
+
+    pub(crate) fn constraints(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<&'db [Type<'db>]> {
+        if let Some(TypeVarBoundOrConstraints::Constraints(tuple)) =
+            self.bound_or_constraints(db, env)
+        {
             Some(tuple.elements(db))
         } else {
             None
@@ -360,6 +414,7 @@ impl<'db> TypeVarInstance<'db> {
     pub(crate) fn bound_or_constraints(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
     ) -> Option<TypeVarBoundOrConstraints<'db>> {
         // basedpython: a variadic pack's bound is never an upper bound on the pack's own value,
         // so it is kept out of the type lattice entirely — reach it through
@@ -372,10 +427,10 @@ impl<'db> TypeVarInstance<'db> {
                 Some(bound_or_constraints)
             }
             TypeVarBoundOrConstraintsEvaluation::LazyUpperBound => self
-                .lazy_bound(db)
+                .lazy_bound(db, env)
                 .map(TypeVarBoundOrConstraints::UpperBound),
             TypeVarBoundOrConstraintsEvaluation::LazyConstraints => self
-                .lazy_constraints(db)
+                .lazy_constraints(db, env)
                 .map(TypeVarBoundOrConstraints::Constraints),
         })
     }
@@ -396,8 +451,9 @@ impl<'db> TypeVarInstance<'db> {
         heap_size=ruff_memory_usage::heap_size
     )]
     fn lazy_lower_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
+        let env = &ProgramEnvironment::from_definition(self.definition(db)?);
         let definition = self.definition(db)?;
-        let module = parsed_module(db, definition.file(db)).load(db);
+        let module = parsed_module(db, definition.program_file(db).python_file(db)).load(db);
         let DefinitionKind::TypeVar(typevar) = definition.kind(db) else {
             return None;
         };
@@ -405,7 +461,7 @@ impl<'db> TypeVarInstance<'db> {
             definition_expression_type(db, definition, typevar.node(&module).lower_bound.as_ref()?);
 
         // a generic lower bound is reported as an error and dropped, mirroring the upper bound
-        if lower.has_non_self_typevar_or_typevar_instance(db) {
+        if lower.has_non_self_typevar_or_typevar_instance(db, env) {
             return None;
         }
 
@@ -417,25 +473,31 @@ impl<'db> TypeVarInstance<'db> {
     pub(crate) fn require_bound_or_constraints(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
     ) -> TypeVarBoundOrConstraints<'db> {
-        self.bound_or_constraints(db)
+        self.bound_or_constraints(db, env)
             .unwrap_or_else(|| TypeVarBoundOrConstraints::UpperBound(Type::object()))
     }
 
-    pub(crate) fn default_type(self, db: &'db dyn Db) -> Option<Type<'db>> {
+    pub(crate) fn default_type(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<Type<'db>> {
         let visitor = TypeVarDefaultVisitor::new(None);
-        self.default_type_impl(db, &visitor)
+        self.default_type_impl(db, env, &visitor)
     }
 
     fn default_type_impl(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         visitor: &TypeVarDefaultVisitor<'db>,
     ) -> Option<Type<'db>> {
         visitor.visit(db, self, || {
             self._default(db).and_then(|default| match default {
                 TypeVarDefaultEvaluation::Eager(ty) => Some(ty),
-                TypeVarDefaultEvaluation::Lazy => self.lazy_default_impl(db, visitor),
+                TypeVarDefaultEvaluation::Lazy => self.lazy_default_impl(db, env, visitor),
             })
         })
     }
@@ -443,8 +505,9 @@ impl<'db> TypeVarInstance<'db> {
     fn materialize_impl(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         materialization_kind: MaterializationKind,
-        visitor: &ApplyTypeMappingVisitor<'db>,
+        visitor: &ApplyTypeMappingVisitor<'_, 'db>,
     ) -> Self {
         Self::new(
             db,
@@ -453,56 +516,64 @@ impl<'db> TypeVarInstance<'db> {
                 .and_then(|bound_or_constraints| match bound_or_constraints {
                     TypeVarBoundOrConstraintsEvaluation::Eager(bound_or_constraints) => Some(
                         bound_or_constraints
-                            .materialize_impl(db, materialization_kind, visitor)
+                            .materialize_impl(db, env, materialization_kind, visitor)
                             .into(),
                     ),
                     TypeVarBoundOrConstraintsEvaluation::LazyUpperBound => {
-                        self.lazy_bound(db).map(|bound| {
+                        self.lazy_bound(db, visitor.env).map(|bound| {
                             TypeVarBoundOrConstraints::UpperBound(bound)
-                                .materialize_impl(db, materialization_kind, visitor)
+                                .materialize_impl(db, env, materialization_kind, visitor)
                                 .into()
                         })
                     }
                     TypeVarBoundOrConstraintsEvaluation::LazyConstraints => {
-                        self.lazy_constraints(db).map(|constraints| {
+                        self.lazy_constraints(db, visitor.env).map(|constraints| {
                             TypeVarBoundOrConstraints::Constraints(constraints)
-                                .materialize_impl(db, materialization_kind, visitor)
+                                .materialize_impl(db, env, materialization_kind, visitor)
                                 .into()
                         })
                     }
                 }),
             self._lower_bound(db)
                 .and_then(|lower_bound| match lower_bound {
-                    TypeVarLowerBoundEvaluation::Eager(ty) => {
-                        Some(ty.materialize(db, materialization_kind, visitor).into())
-                    }
-                    TypeVarLowerBoundEvaluation::Lazy => self
-                        .lazy_lower_bound(db)
-                        .map(|ty| ty.materialize(db, materialization_kind, visitor).into()),
+                    TypeVarLowerBoundEvaluation::Eager(ty) => Some(
+                        ty.materialize(db, env, materialization_kind, visitor)
+                            .into(),
+                    ),
+                    TypeVarLowerBoundEvaluation::Lazy => self.lazy_lower_bound(db).map(|ty| {
+                        ty.materialize(db, env, materialization_kind, visitor)
+                            .into()
+                    }),
                 }),
             self.explicit_variance(db),
             self._default(db).and_then(|default| match default {
-                TypeVarDefaultEvaluation::Eager(ty) => {
-                    Some(ty.materialize(db, materialization_kind, visitor).into())
-                }
-                TypeVarDefaultEvaluation::Lazy => self
-                    .lazy_default(db)
-                    .map(|ty| ty.materialize(db, materialization_kind, visitor).into()),
+                TypeVarDefaultEvaluation::Eager(ty) => Some(
+                    ty.materialize(db, env, materialization_kind, visitor)
+                        .into(),
+                ),
+                TypeVarDefaultEvaluation::Lazy => self.lazy_default(db, visitor.env).map(|ty| {
+                    ty.materialize(db, env, materialization_kind, visitor)
+                        .into()
+                }),
             }),
         )
     }
 
-    fn to_instance(self, db: &'db dyn Db) -> Option<InstanceProjection<Self>> {
-        let bound_or_constraints = match self.bound_or_constraints(db)? {
+    fn to_instance(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<InstanceProjection<Self>> {
+        let bound_or_constraints = match self.bound_or_constraints(db, env)? {
             TypeVarBoundOrConstraints::UpperBound(upper_bound) => upper_bound
-                .to_instance(db)?
+                .to_instance(db, env)?
                 .map(TypeVarBoundOrConstraints::UpperBound),
             TypeVarBoundOrConstraints::Constraints(constraints) => constraints
-                .to_instance(db)?
+                .to_instance(db, env)?
                 .map(TypeVarBoundOrConstraints::Constraints),
         };
         let lower_bound = match self.lower_bound(db) {
-            Some(lower_bound) => Some(lower_bound.to_instance(db)?),
+            Some(lower_bound) => Some(lower_bound.to_instance(db, env)?),
             None => None,
         };
         let identity = TypeVarIdentity::new(
@@ -532,6 +603,7 @@ impl<'db> TypeVarInstance<'db> {
     fn type_is_self_referential(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         ty: Type<'db>,
         visitor: &TypeVarDefaultVisitor<'db>,
     ) -> bool {
@@ -540,6 +612,7 @@ impl<'db> TypeVarInstance<'db> {
         #[derive(Copy, Clone)]
         struct State<'db, 'a> {
             db: &'db dyn Db,
+            env: &'a ProgramEnvironment<'db>,
             visitor: &'a TypeVarDefaultVisitor<'db>,
             seen_typevars: &'a RefCell<FxHashSet<TypeVarInstance<'db>>>,
             seen_type_aliases: &'a RefCell<SeenTypeAliases<'db>>,
@@ -547,10 +620,13 @@ impl<'db> TypeVarInstance<'db> {
 
         fn typevar_default_is_self_referential<'db>(
             state: State<'db, '_>,
+            env: &ProgramEnvironment<'db>,
             typevar: TypeVarInstance<'db>,
             self_identity: TypeVarIdentity<'db>,
         ) -> bool {
-            if typevar.identity(state.db) == self_identity {
+            let db = state.db;
+
+            if typevar.identity(db) == self_identity {
                 return true;
             }
 
@@ -559,20 +635,22 @@ impl<'db> TypeVarInstance<'db> {
             }
 
             typevar
-                .default_type_impl(state.db, state.visitor)
+                .default_type_impl(db, state.env, state.visitor)
                 .is_some_and(|default_ty| {
-                    type_is_self_referential_impl(state, default_ty, self_identity)
+                    type_is_self_referential_impl(state, env, default_ty, self_identity)
                 })
         }
 
         fn type_alias_is_self_referential<'db>(
             state: State<'db, '_>,
+            env: &ProgramEnvironment<'db>,
             type_alias: TypeAliasType<'db>,
             self_identity: TypeVarIdentity<'db>,
         ) -> bool {
+            let db = state.db;
             {
                 let mut seen_type_aliases = state.seen_type_aliases.borrow_mut();
-                let definition = type_alias.definition(state.db);
+                let definition = type_alias.definition(db);
                 // A recursive alias can produce a new specialization every time its body is
                 // expanded, so use its definition as the stable recursion key.
                 if seen_type_aliases.contains(&definition) {
@@ -581,54 +659,57 @@ impl<'db> TypeVarInstance<'db> {
                 seen_type_aliases.push(definition);
             }
 
-            let value_type = if let Some(specialization) = type_alias.specialization(state.db) {
+            let value_type = if let Some(specialization) = type_alias.specialization(db) {
                 if specialization
-                    .types(state.db)
+                    .types(db)
                     .iter()
-                    .any(|ty| type_is_self_referential_impl(state, *ty, self_identity))
+                    .any(|ty| type_is_self_referential_impl(state, env, *ty, self_identity))
                 {
                     return true;
                 }
-                type_alias.value_type(state.db)
-            } else if let Some(generic_context) = type_alias.generic_context(state.db)
-                && generic_context.variables(state.db).any(|typevar| {
+                type_alias.value_type(db)
+            } else if let Some(generic_context) = type_alias.generic_context(db)
+                && generic_context.variables(db).any(|typevar| {
                     typevar_default_is_self_referential(
                         state,
-                        typevar.typevar(state.db),
+                        env,
+                        typevar.typevar(db),
                         self_identity,
                     )
                 })
             {
                 return true;
             } else {
-                type_alias.raw_value_type(state.db)
+                type_alias.raw_value_type(db)
             };
 
-            type_is_self_referential_impl(state, value_type, self_identity)
+            type_is_self_referential_impl(state, env, value_type, self_identity)
         }
 
         fn type_is_self_referential_impl<'db>(
             state: State<'db, '_>,
+            env: &ProgramEnvironment<'db>,
             ty: Type<'db>,
             self_identity: TypeVarIdentity<'db>,
         ) -> bool {
             // `Self` is opaque here: its upper bound names the enclosing class's own type
             // parameters, so descending into it would make `class C[T = Self]` look like a
             // typevar whose default refers back to itself.
-            any_over_type_with_opaque_self(state.db, ty, |inner_ty| match inner_ty {
+            any_over_type_with_opaque_self(state.db, env, ty, |inner_ty| match inner_ty {
                 Type::TypeVar(bound_typevar) => typevar_default_is_self_referential(
                     state,
+                    env,
                     bound_typevar.typevar(state.db),
                     self_identity,
                 ),
                 Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) => {
-                    typevar_default_is_self_referential(state, typevar, self_identity)
+                    typevar_default_is_self_referential(state, env, typevar, self_identity)
                 }
                 Type::TypeAlias(alias) => {
-                    type_alias_is_self_referential(state, alias, self_identity)
+                    type_alias_is_self_referential(state, env, alias, self_identity)
                 }
                 Type::KnownInstance(KnownInstanceType::TypeAliasType(alias)) => {
-                    type_alias_is_self_referential(state, alias, self_identity)
+                    type_alias_is_self_referential(state, env, alias, self_identity)
                 }
                 _ => false,
             })
@@ -639,12 +720,13 @@ impl<'db> TypeVarInstance<'db> {
 
         let state = State {
             db,
+            env,
             visitor,
             seen_typevars: &seen_typevars,
             seen_type_aliases: &seen_type_aliases,
         };
 
-        type_is_self_referential_impl(state, ty, self.identity(db))
+        type_is_self_referential_impl(state, env, ty, self.identity(db))
     }
 
     /// Returns the "unchecked" upper bound of a type variable instance.
@@ -657,7 +739,9 @@ impl<'db> TypeVarInstance<'db> {
     )]
     fn lazy_bound_unchecked(self, db: &'db dyn Db) -> Option<Type<'db>> {
         let definition = self.definition(db)?;
-        let module = parsed_module(db, definition.file(db)).load(db);
+        let program_file = definition.program_file(db);
+        let python_file = program_file.python_file(db);
+        let module = parsed_module(db, python_file).load(db);
         let ty = match definition.kind(db) {
             // PEP 695 typevar
             DefinitionKind::TypeVar(typevar) => {
@@ -703,7 +787,7 @@ impl<'db> TypeVarInstance<'db> {
         let Some(definition) = self.definition(db) else {
             return false;
         };
-        let module = parsed_module(db, definition.file(db)).load(db);
+        let module = parsed_module(db, definition.program_file(db).python_file(db)).load(db);
         let bound = match definition.kind(db) {
             DefinitionKind::TypeVarTuple(typevartuple) => &typevartuple.node(&module).bound,
             DefinitionKind::ParamSpec(paramspec) => &paramspec.node(&module).bound,
@@ -728,19 +812,19 @@ impl<'db> TypeVarInstance<'db> {
         let Some(definition) = self.definition(db) else {
             return false;
         };
-        let module = parsed_module(db, definition.file(db)).load(db);
+        let module = parsed_module(db, definition.program_file(db).python_file(db)).load(db);
         match definition.kind(db) {
             DefinitionKind::TypeVar(typevar) => typevar.node(&module).is_some_hole,
             _ => false,
         }
     }
 
-    fn lazy_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
+    fn lazy_bound(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Option<Type<'db>> {
         let bound = self.lazy_bound_unchecked(db)?;
 
         // a generic bound is reported as an error and dropped, but `Self` is a legitimate bound:
         // it is bound by the enclosing class, and is substituted when the method binds its receiver
-        if bound.has_non_self_typevar_or_typevar_instance(db) {
+        if bound.has_non_self_typevar_or_typevar_instance(db, env) {
             return None;
         }
 
@@ -757,14 +841,17 @@ impl<'db> TypeVarInstance<'db> {
     )]
     fn lazy_constraints_unchecked(self, db: &'db dyn Db) -> Option<TypeVarConstraints<'db>> {
         let definition = self.definition(db)?;
-        let module = parsed_module(db, definition.file(db)).load(db);
+        let program_file = definition.program_file(db);
+        let python_file = program_file.python_file(db);
+        let env = ProgramEnvironment::from_file(program_file);
+        let module = parsed_module(db, python_file).load(db);
         let constraints = match definition.kind(db) {
             // PEP 695 typevar
             DefinitionKind::TypeVar(typevar) => {
                 let typevar_node = typevar.node(&module);
                 let bound =
                     definition_expression_type(db, definition, typevar_node.bound.as_ref()?);
-                if let Some(tuple) = bound.tuple_instance_spec(db)
+                if let Some(tuple) = bound.tuple_instance_spec(db, &env)
                     && let Tuple::Fixed(tuple) = tuple.into_owned()
                 {
                     TypeVarConstraints::new(db, tuple.owned_elements())
@@ -792,13 +879,17 @@ impl<'db> TypeVarInstance<'db> {
         Some(constraints)
     }
 
-    fn lazy_constraints(self, db: &'db dyn Db) -> Option<TypeVarConstraints<'db>> {
+    fn lazy_constraints(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<TypeVarConstraints<'db>> {
         let constraints = self.lazy_constraints_unchecked(db)?;
 
         if constraints
             .elements(db)
             .iter()
-            .any(|ty| ty.has_typevar_or_typevar_instance(db))
+            .any(|ty| ty.has_typevar_or_typevar_instance(db, env))
         {
             return None;
         }
@@ -855,7 +946,9 @@ impl<'db> TypeVarInstance<'db> {
         }
 
         let definition = self.definition(db)?;
-        let module = parsed_module(db, definition.file(db)).load(db);
+        let program_file = definition.program_file(db);
+        let python_file = program_file.python_file(db);
+        let module = parsed_module(db, python_file).load(db);
         let ty = match definition.kind(db) {
             // PEP 695 typevar
             DefinitionKind::TypeVar(typevar) => {
@@ -901,14 +994,15 @@ impl<'db> TypeVarInstance<'db> {
         Some(ty)
     }
 
-    fn lazy_default(self, db: &'db dyn Db) -> Option<Type<'db>> {
+    fn lazy_default(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Option<Type<'db>> {
         let visitor = TypeVarDefaultVisitor::new(None);
-        self.lazy_default_impl(db, &visitor)
+        self.lazy_default_impl(db, env, &visitor)
     }
 
     fn lazy_default_impl(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         visitor: &TypeVarDefaultVisitor<'db>,
     ) -> Option<Type<'db>> {
         let default = self.lazy_default_unchecked(db)?;
@@ -917,7 +1011,7 @@ impl<'db> TypeVarInstance<'db> {
         // (https://typing.python.org/en/latest/spec/generics.html#defaults-for-type-parameters).
         // Here we simply check for non-self-referential.
         // TODO: We should also check for non-forward references.
-        if self.type_is_self_referential(db, default, visitor) {
+        if self.type_is_self_referential(db, env, default, visitor) {
             return None;
         }
 
@@ -932,7 +1026,7 @@ impl<'db> TypeVarInstance<'db> {
             return None;
         }
         let typevar_definition = self.definition(db)?;
-        let index = semantic_index(db, typevar_definition.file(db));
+        let index = semantic_index(db, typevar_definition.program_file(db));
         let (_, child) = index
             .child_scopes(typevar_definition.file_scope(db))
             .next()?;
@@ -966,7 +1060,7 @@ impl TypeVarNonce {
         )
     }
 
-    pub(crate) fn add(self, delta: u32) -> Self {
+    fn add(self, delta: u32) -> Self {
         Self(
             self.0
                 .checked_add(delta)
@@ -1044,14 +1138,19 @@ pub(crate) fn max_typevar_freshness_matching_generic_context<'db>(
     types: impl IntoIterator<Item = Type<'db>>,
     generic_context: GenericContext<'db>,
 ) -> Option<TypeVarNonce> {
-    struct MatchingFreshnessCollector<'db> {
+    struct MatchingFreshnessCollector<'a, 'db> {
+        env: &'a ProgramEnvironment<'db>,
         base_identities: FxHashSet<BoundTypeVarIdentity<'db>>,
         recursion_guard: TypeCollector<'db>,
         max_freshness: Cell<Option<TypeVarNonce>>,
     }
 
-    impl<'db> MatchingFreshnessCollector<'db> {
-        fn new(db: &'db dyn Db, generic_context: GenericContext<'db>) -> Self {
+    impl<'a, 'db> MatchingFreshnessCollector<'a, 'db> {
+        fn new(
+            db: &'db dyn Db,
+            env: &'a ProgramEnvironment<'db>,
+            generic_context: GenericContext<'db>,
+        ) -> Self {
             let base_identities = generic_context
                 .variables(db)
                 .map(|typevar| {
@@ -1061,6 +1160,7 @@ pub(crate) fn max_typevar_freshness_matching_generic_context<'db>(
                 })
                 .collect();
             Self {
+                env,
                 base_identities,
                 recursion_guard: TypeCollector::default(),
                 max_freshness: Cell::default(),
@@ -1068,7 +1168,11 @@ pub(crate) fn max_typevar_freshness_matching_generic_context<'db>(
         }
     }
 
-    impl<'db> TypeVisitor<'db> for MatchingFreshnessCollector<'db> {
+    impl<'db> TypeVisitor<'db> for MatchingFreshnessCollector<'_, 'db> {
+        fn program_environment(&self) -> &ProgramEnvironment<'db> {
+            self.env
+        }
+
         fn should_visit_lazy_type_attributes(&self) -> bool {
             false
         }
@@ -1094,7 +1198,8 @@ pub(crate) fn max_typevar_freshness_matching_generic_context<'db>(
         }
     }
 
-    let collector = MatchingFreshnessCollector::new(db, generic_context);
+    let env = ProgramEnvironment::from_program(generic_context.program(db));
+    let collector = MatchingFreshnessCollector::new(db, &env, generic_context);
     for ty in types {
         collector.visit_type(db, ty);
     }
@@ -1175,7 +1280,7 @@ impl<'db> BoundTypeVarInstance<'db> {
     }
 
     pub(crate) fn kind(self, db: &'db dyn Db) -> TypeVarKind {
-        self.typevar(db).kind(db)
+        self.identity(db).kind(db)
     }
 
     pub fn is_paramspec(self, db: &'db dyn Db) -> bool {
@@ -1213,11 +1318,16 @@ impl<'db> BoundTypeVarInstance<'db> {
             self.kind(db)
         );
 
+        let env = ProgramEnvironment::from_program(self.binding_context(db).program(db));
         let upper_bound = TypeVarBoundOrConstraints::UpperBound(match kind {
-            ParamSpecAttrKind::Args => Type::homogeneous_tuple(db, Type::object()),
+            ParamSpecAttrKind::Args => Type::homogeneous_tuple(db, &env, Type::object()),
             ParamSpecAttrKind::Kwargs => KnownClass::Dict
-                .to_specialized_instance(db, &[KnownClass::Str.to_instance(db), Type::any()])
-                .top_materialization(db),
+                .to_specialized_instance(
+                    db,
+                    &env,
+                    &[KnownClass::Str.to_instance(db, &env), Type::any()],
+                )
+                .top_materialization(db, &env),
         });
 
         let typevar = self.typevar(db);
@@ -1278,7 +1388,12 @@ impl<'db> BoundTypeVarInstance<'db> {
 
     /// Create a new PEP 695 type variable that can be used in signatures
     /// of synthetic generic functions.
-    pub(crate) fn synthetic(db: &'db dyn Db, name: Name, variance: TypeVarVariance) -> Self {
+    pub(crate) fn synthetic(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        name: Name,
+        variance: TypeVarVariance,
+    ) -> Self {
         let identity = TypeVarIdentity::new(
             db,
             name,
@@ -1296,7 +1411,7 @@ impl<'db> BoundTypeVarInstance<'db> {
         Self::new(
             db,
             typevar,
-            BindingContext::Synthetic,
+            BindingContext::Synthetic(env.program(db)),
             None,
             TypeVarNonce::NONE,
         )
@@ -1332,8 +1447,9 @@ impl<'db> BoundTypeVarInstance<'db> {
         db: &'db dyn Db,
         f: impl FnOnce(Option<TypeVarBoundOrConstraints<'db>>) -> Option<TypeVarBoundOrConstraints<'db>>,
     ) -> Self {
+        let env = ProgramEnvironment::from_program(self.binding_context(db).program(db));
         let typevar = self.typevar(db);
-        let bound_or_constraints = f(typevar.bound_or_constraints(db));
+        let bound_or_constraints = f(typevar.bound_or_constraints(db, &env));
         let typevar = TypeVarInstance::new(
             db,
             typevar.identity(db),
@@ -1358,19 +1474,56 @@ impl<'db> BoundTypeVarInstance<'db> {
         polarity: TypeVarVariance,
     ) -> TypeVarVariance {
         let _span = tracing::trace_span!("variance_with_polarity").entered();
+
         match self.typevar(db).explicit_variance(db) {
             Some(explicit_variance) => explicit_variance.compose(polarity),
             None => match self.binding_context(db) {
-                BindingContext::Definition(definition) => binding_type(db, definition)
-                    .with_polarity(polarity)
-                    .variance_of(db, self.identity(db)),
-                BindingContext::Synthetic => TypeVarVariance::Invariant,
+                BindingContext::Definition(definition) => polarity.compose_thunk(|| {
+                    let env = ProgramEnvironment::from_definition(definition);
+                    let binding_ty = binding_type(db, definition);
+                    match binding_ty.variance_of(db, &env, self.identity(db)) {
+                        // When both directions are valid, the typing spec selects covariance. It
+                        // says so of a parameter the class never mentions; basedpython also infers
+                        // bivariance for one that only a private member mentions, and that
+                        // parameter really is used, so its inferred variance stands.
+                        TypeVarVariance::Bivariant
+                            if binding_ty
+                                .as_class_literal()
+                                .and_then(ClassLiteral::as_static)
+                                .is_none_or(|class| {
+                                    class.typevar_is_unused(db, self.identity(db))
+                                }) =>
+                        {
+                            TypeVarVariance::Covariant
+                        }
+                        variance => variance,
+                    }
+                }),
+                BindingContext::Synthetic(_) => TypeVarVariance::Invariant,
             },
         }
     }
 
     pub fn variance(self, db: &'db dyn Db) -> TypeVarVariance {
         self.variance_with_polarity(db, TypeVarVariance::Covariant)
+    }
+
+    /// basedpython: the variance a *runtime* probe should test, which is the inferred
+    /// answer without the typing spec's rule that a bivariant class parameter is
+    /// reported covariant. A parameter no member mentions really does match either
+    /// way, and the parametric `is`-test skips comparing it rather than checking a
+    /// direction that cannot fail.
+    pub(crate) fn probe_variance(self, db: &'db dyn Db) -> TypeVarVariance {
+        match self.typevar(db).explicit_variance(db) {
+            Some(explicit_variance) => explicit_variance,
+            None => match self.binding_context(db) {
+                BindingContext::Definition(definition) => {
+                    let env = ProgramEnvironment::from_definition(definition);
+                    binding_type(db, definition).variance_of(db, &env, self.identity(db))
+                }
+                BindingContext::Synthetic(_) => TypeVarVariance::Invariant,
+            },
+        }
     }
 
     /// The variance of this type variable at the position it is bound.
@@ -1381,7 +1534,11 @@ impl<'db> BoundTypeVarInstance<'db> {
     /// rules, so the declaration is read past and the type variable's position within the
     /// function's own signature answers instead. This keeps `def f[T]() -> T` and its legacy
     /// spelling saying the same thing.
-    pub(crate) fn positional_variance(self, db: &'db dyn Db) -> TypeVarVariance {
+    pub(crate) fn positional_variance(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> TypeVarVariance {
         let BindingContext::Definition(definition) = self.binding_context(db) else {
             return self.variance(db);
         };
@@ -1389,7 +1546,7 @@ impl<'db> BoundTypeVarInstance<'db> {
         if binding_ty.is_function_literal() {
             return binding_ty
                 .with_polarity(TypeVarVariance::Covariant)
-                .variance_of(db, self.identity(db));
+                .variance_of(db, env, self.identity(db));
         }
         self.variance(db)
     }
@@ -1413,7 +1570,11 @@ impl<'db> BoundTypeVarInstance<'db> {
     /// Confined to `.by`, since `in out` is its syntax. A legacy `TypeVar("T")`
     /// is invariant under python's own rules, and refining that would change
     /// what a `.py` file means.
-    pub(crate) fn is_declared_invariant_but_never_written(self, db: &'db dyn Db) -> bool {
+    pub(crate) fn is_declared_invariant_but_never_written(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> bool {
         if self.typevar(db).explicit_variance(db) != Some(TypeVarVariance::Invariant) {
             return false;
         }
@@ -1425,7 +1586,7 @@ impl<'db> BoundTypeVarInstance<'db> {
         }
         binding_type(db, definition)
             .with_polarity(TypeVarVariance::Covariant)
-            .variance_of(db, self.identity(db))
+            .variance_of(db, env, self.identity(db))
             .is_covariant()
     }
 
@@ -1443,8 +1604,9 @@ impl<'db> BoundTypeVarInstance<'db> {
     pub(super) fn apply_type_mapping_impl<'a>(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         type_mapping: &TypeMapping<'a, 'db>,
-        visitor: &ApplyTypeMappingVisitor<'db>,
+        visitor: &ApplyTypeMappingVisitor<'_, 'db>,
     ) -> Type<'db> {
         let mapped_specialization_type =
             |specialization: &ApplySpecialization<'a, 'db>| -> Option<Type<'db>> {
@@ -1527,21 +1689,41 @@ impl<'db> BoundTypeVarInstance<'db> {
                     if mapped == Type::TypeVar(self) {
                         mapped
                     } else {
+                        let env = visitor.env;
                         // Materialization uses a different mapping mode. Reuse of the outer
                         // visitor can incorrectly hit a cache entry from specialization.
-                        let materialization_visitor = ApplyTypeMappingVisitor::default();
-                        mapped.materialize(db, *materialization_kind, &materialization_visitor)
+                        let materialization_visitor = visitor.for_new_materialization_root();
+                        let materialized = mapped.materialize(
+                            db,
+                            env,
+                            *materialization_kind,
+                            &materialization_visitor,
+                        );
+
+                        if *materialization_kind == MaterializationKind::Top
+                            && !materialization_visitor.is_equivalent_to_materialization(
+                                db,
+                                mapped,
+                                materialized,
+                            )
+                            && let Some(upper_bound) = self.top_materialized_upper_bound(db)
+                        {
+                            IntersectionType::from_two_elements(db, env, materialized, upper_bound)
+                        } else {
+                            materialized
+                        }
                     }
                 })
                 .unwrap_or(Type::TypeVar(self)),
             TypeMapping::BindSelf(binding) => {
-                if binding.should_bind(db, self) {
+                if binding.should_bind(db, visitor.env, self) {
                     binding.self_type()
-                } else if self.bounds_mention_self(db) {
+                } else if self.bounds_mention_self(db, env) {
                     // a type variable can be bounded by `Self` (`def method[T: Self]`). that bound
                     // only constrains anything once its `Self` has been bound to the receiver too
                     Type::TypeVar(self.with_mapped_bound_and_default(
                         db,
+                        env,
                         self.freshness(db),
                         type_mapping,
                         visitor,
@@ -1568,6 +1750,7 @@ impl<'db> BoundTypeVarInstance<'db> {
                 if generic_context.contains(db, self.identity(db)) && !self.is_parameter_pack(db) {
                     Type::TypeVar(self.with_mapped_bound_and_default(
                         db,
+                        env,
                         self.freshness(db).add(*delta),
                         type_mapping,
                         visitor,
@@ -1583,9 +1766,41 @@ impl<'db> BoundTypeVarInstance<'db> {
             | TypeMapping::RescopeReturnCallables(_)
             | TypeMapping::AttachRegexGroups(_) => Type::TypeVar(self),
             TypeMapping::Materialize(materialization_kind) => {
-                Type::TypeVar(self.materialize_impl(db, *materialization_kind, visitor))
+                Type::TypeVar(self.materialize_impl(db, env, *materialization_kind, visitor))
             }
         }
+    }
+
+    /// Returns the static upper bound used when materializing a gradual type argument.
+    ///
+    /// Constraints are unioned only when materializing an exposed member, where their union is a
+    /// valid conservative upper bound. A bound may recursively refer to its own generic class,
+    /// either directly or through other bounds. Such a bound has no finite static top
+    /// materialization, so recover from its cycle without applying an upper bound.
+    pub(super) fn top_materialized_upper_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
+        #[salsa::tracked(
+            returns(copy),
+            cycle_result=|_, _, _| None,
+            heap_size=ruff_memory_usage::heap_size
+        )]
+        fn top_materialized_upper_bound_inner<'db>(
+            db: &'db dyn Db,
+            bound_typevar: BoundTypeVarInstance<'db>,
+        ) -> Option<Type<'db>> {
+            let env =
+                ProgramEnvironment::from_program(bound_typevar.binding_context(db).program(db));
+
+            bound_typevar
+                .typevar(db)
+                .bound_or_constraints(db, &env)
+                .map(|bound_or_constraints| {
+                    bound_or_constraints
+                        .as_type(db, &env)
+                        .top_materialization(db, &env)
+                })
+        }
+
+        top_materialized_upper_bound_inner(db, self)
     }
 }
 
@@ -1627,13 +1842,14 @@ impl<'db> BoundTypeVarInstance<'db> {
     fn materialize_impl(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         materialization_kind: MaterializationKind,
-        visitor: &ApplyTypeMappingVisitor<'db>,
+        visitor: &ApplyTypeMappingVisitor<'_, 'db>,
     ) -> Self {
         Self::new(
             db,
             self.typevar(db)
-                .materialize_impl(db, materialization_kind, visitor),
+                .materialize_impl(db, env, materialization_kind, visitor),
             self.binding_context(db),
             self.paramspec_attr(db),
             self.freshness(db),
@@ -1645,21 +1861,25 @@ impl<'db> BoundTypeVarInstance<'db> {
     /// A lazily-evaluated bound is invisible to [`Type::contains_self`], so callers that need to
     /// know whether `Self` binding has any work to do must ask this separately. That covers the
     /// lower end of a basedpython bound range (`def method[T: Self..object]`), which is lazy too
-    pub(crate) fn bounds_mention_self(self, db: &'db dyn Db) -> bool {
+    pub(crate) fn bounds_mention_self(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> bool {
         let typevar = self.typevar(db);
         if typevar
             .lower_bound(db)
-            .is_some_and(|lower_bound| lower_bound.contains_self(db))
+            .is_some_and(|lower_bound| lower_bound.contains_self(db, env))
         {
             return true;
         }
-        match typevar.bound_or_constraints(db) {
+        match typevar.bound_or_constraints(db, env) {
             None => false,
-            Some(TypeVarBoundOrConstraints::UpperBound(bound)) => bound.contains_self(db),
+            Some(TypeVarBoundOrConstraints::UpperBound(bound)) => bound.contains_self(db, env),
             Some(TypeVarBoundOrConstraints::Constraints(constraints)) => constraints
                 .elements(db)
                 .iter()
-                .any(|constraint| constraint.contains_self(db)),
+                .any(|constraint| constraint.contains_self(db, env)),
         }
     }
 
@@ -1668,12 +1888,13 @@ impl<'db> BoundTypeVarInstance<'db> {
     fn with_mapped_bound_and_default(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         nonce: TypeVarNonce,
         type_mapping: &TypeMapping<'_, 'db>,
-        visitor: &ApplyTypeMappingVisitor<'db>,
+        visitor: &ApplyTypeMappingVisitor<'_, 'db>,
     ) -> Self {
         let typevar = self.typevar(db);
-        let bound_or_constraints = typevar.bound_or_constraints(db);
+        let bound_or_constraints = typevar.bound_or_constraints(db, env);
         let lower_bound = typevar.lower_bound(db);
         let default = self.default_type(db);
 
@@ -1692,16 +1913,16 @@ impl<'db> BoundTypeVarInstance<'db> {
             typevar.identity(db),
             bound_or_constraints.map(|bound_or_constraints| {
                 bound_or_constraints
-                    .apply_type_mapping_impl(db, type_mapping, visitor)
+                    .apply_type_mapping_impl(db, env, type_mapping, visitor)
                     .into()
             }),
             lower_bound.map(|ty| {
-                ty.apply_type_mapping_impl(db, type_mapping, TypeContext::default(), visitor)
+                ty.apply_type_mapping_impl(db, env, type_mapping, TypeContext::default(), visitor)
                     .into()
             }),
             typevar.explicit_variance(db),
             default.map(|ty| {
-                ty.apply_type_mapping_impl(db, type_mapping, TypeContext::default(), visitor)
+                ty.apply_type_mapping_impl(db, env, type_mapping, TypeContext::default(), visitor)
                     .into()
             }),
         );
@@ -1715,8 +1936,12 @@ impl<'db> BoundTypeVarInstance<'db> {
         )
     }
 
-    pub(super) fn to_instance(self, db: &'db dyn Db) -> Option<InstanceProjection<Self>> {
-        Some(self.typevar(db).to_instance(db)?.map(|typevar| {
+    pub(super) fn to_instance(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<InstanceProjection<Self>> {
+        Some(self.typevar(db).to_instance(db, env)?.map(|typevar| {
             Self::new(
                 db,
                 typevar,
@@ -1840,12 +2065,18 @@ fn lazy_lower_bound_cycle_recover<'db>(
     cycle: &salsa::Cycle,
     previous: &Option<Type<'db>>,
     current: Option<Type<'db>>,
-    _typevar: TypeVarInstance<'db>,
+    typevar: TypeVarInstance<'db>,
 ) -> Option<Type<'db>> {
     // Normalize the bound to ensure cycle convergence.
     match (previous, current) {
-        (Some(prev), Some(current)) => Some(current.cycle_normalized(db, *prev, cycle)),
-        (None, Some(current)) => Some(current.recursive_type_normalized(db, cycle)),
+        (Some(prev), Some(current)) => {
+            let env = &ProgramEnvironment::from_definition(typevar.definition(db)?);
+            Some(current.cycle_normalized(db, env, *prev, cycle))
+        }
+        (None, Some(current)) => {
+            let env = &ProgramEnvironment::from_definition(typevar.definition(db)?);
+            Some(current.recursive_type_normalized(db, env, cycle))
+        }
         (_, None) => None,
     }
 }
@@ -1856,14 +2087,19 @@ fn lazy_bound_cycle_recover<'db>(
     cycle: &salsa::Cycle,
     previous: &Option<Type<'db>>,
     current: Option<Type<'db>>,
-    _typevar: TypeVarInstance<'db>,
+    typevar: TypeVarInstance<'db>,
 ) -> Option<Type<'db>> {
     // Normalize the bounds/constraints to ensure cycle convergence.
-    match (previous, current) {
-        (Some(prev), Some(current)) => Some(current.cycle_normalized(db, *prev, cycle)),
-        (None, Some(current)) => Some(current.recursive_type_normalized(db, cycle)),
-        (_, None) => None,
-    }
+    let current = current?;
+    let program_file = typevar
+        .definition(db)
+        .expect("a lazy TypeVar bound must have a source definition")
+        .program_file(db);
+    let env = ProgramEnvironment::from_file(program_file);
+    Some(match previous {
+        Some(prev) => current.cycle_normalized(db, &env, *prev, cycle),
+        None => current.recursive_type_normalized(db, &env, cycle),
+    })
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -1873,14 +2109,19 @@ fn lazy_constraints_cycle_recover<'db>(
     cycle: &salsa::Cycle,
     previous: &Option<TypeVarConstraints<'db>>,
     current: Option<TypeVarConstraints<'db>>,
-    _typevar: TypeVarInstance<'db>,
+    typevar: TypeVarInstance<'db>,
 ) -> Option<TypeVarConstraints<'db>> {
     // Normalize the bounds/constraints to ensure cycle convergence.
-    match (previous, current) {
-        (Some(prev), Some(constraints)) => Some(constraints.cycle_normalized(db, *prev, cycle)),
-        (None, Some(current)) => Some(current.recursive_type_normalized(db, cycle)),
-        (_, None) => None,
-    }
+    let current = current?;
+    let program_file = typevar
+        .definition(db)
+        .expect("lazy TypeVar constraints must have a source definition")
+        .program_file(db);
+    let env = ProgramEnvironment::from_file(program_file);
+    Some(match previous {
+        Some(prev) => current.cycle_normalized(db, &env, *prev, cycle),
+        None => current.recursive_type_normalized(db, &env, cycle),
+    })
 }
 
 #[expect(clippy::ref_option)]
@@ -1888,15 +2129,20 @@ fn lazy_default_cycle_recover<'db>(
     db: &'db dyn Db,
     cycle: &salsa::Cycle,
     previous_default: &Option<Type<'db>>,
-    default: Option<Type<'db>>,
-    _typevar: TypeVarInstance<'db>,
+    current: Option<Type<'db>>,
+    typevar: TypeVarInstance<'db>,
 ) -> Option<Type<'db>> {
     // Normalize the default to ensure cycle convergence.
-    match (previous_default, default) {
-        (Some(prev), Some(default)) => Some(default.cycle_normalized(db, *prev, cycle)),
-        (None, Some(default)) => Some(default.recursive_type_normalized(db, cycle)),
-        (_, None) => None,
-    }
+    let current = current?;
+    let program_file = typevar
+        .definition(db)
+        .expect("a lazy TypeVar default must have a source definition")
+        .program_file(db);
+    let env = ProgramEnvironment::from_file(program_file);
+    Some(match previous_default {
+        Some(prev) => current.cycle_normalized(db, &env, *prev, cycle),
+        None => current.recursive_type_normalized(db, &env, cycle),
+    })
 }
 
 /// Where a type variable is bound and usable.
@@ -1905,8 +2151,9 @@ pub enum BindingContext<'db> {
     /// The definition of the generic class, function, or type alias that binds this typevar.
     Definition(Definition<'db>),
     /// The typevar is synthesized internally, and is not associated with a particular definition
-    /// in the source, but is still bound and eligible for specialization inference.
-    Synthetic,
+    /// in the source, but is still bound and eligible for specialization inference. Its program
+    /// identifies the environment that cannot otherwise be recovered from a source definition.
+    Synthetic(Program<'db>),
 }
 
 impl<'db> From<Definition<'db>> for BindingContext<'db> {
@@ -1919,7 +2166,14 @@ impl<'db> BindingContext<'db> {
     pub(crate) fn definition(self) -> Option<Definition<'db>> {
         match self {
             BindingContext::Definition(definition) => Some(definition),
-            BindingContext::Synthetic => None,
+            BindingContext::Synthetic(_) => None,
+        }
+    }
+
+    pub(crate) fn program(self, db: &'db dyn Db) -> Program<'db> {
+        match self {
+            Self::Definition(definition) => definition.program(db),
+            Self::Synthetic(program) => program,
         }
     }
 
@@ -1932,6 +2186,17 @@ impl<'db> BindingContext<'db> {
 pub enum ParamSpecAttrKind {
     Args,
     Kwargs,
+}
+
+impl ParamSpecAttrKind {
+    /// Returns the component represented by a `ParamSpec` attribute name.
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "args" => Some(Self::Args),
+            "kwargs" => Some(Self::Kwargs),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for ParamSpecAttrKind {
@@ -1958,7 +2223,7 @@ pub struct BoundTypeVarIdentity<'db> {
     /// of a `ParamSpec` i.e., `P.args` or `P.kwargs`.
     pub(super) paramspec_attr: Option<ParamSpecAttrKind>,
     /// The freshness nonce for this bound typevar occurrence; `0` is the source-level occurrence.
-    pub(super) freshness: TypeVarNonce,
+    freshness: TypeVarNonce,
 }
 
 impl<'db> BoundTypeVarIdentity<'db> {
@@ -1986,6 +2251,110 @@ impl<'db> BoundTypeVarIdentity<'db> {
     }
 }
 
+/// A set of bound typevar occurrences.
+///
+/// Membership is keyed by [`BoundTypeVarIdentity`], including any freshness nonce, while the first
+/// bound instance encountered for each identity is retained. This lets a fresh generic-callable
+/// occurrence be inferable without making the surrounding source-level typevar inferable.
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) enum TypeVarSet<'db> {
+    None,
+    Some(TypeVarSetInner<'db>),
+}
+
+impl<'db> TypeVarSet<'db> {
+    pub(crate) fn from_typevars(
+        db: &'db dyn Db,
+        typevars: impl IntoIterator<Item = BoundTypeVarInstance<'db>>,
+    ) -> Self {
+        let mut typevars = typevars.into_iter().peekable();
+        if typevars.peek().is_none() {
+            return TypeVarSet::None;
+        }
+
+        let mut set = FxOrderMap::default();
+        for typevar in typevars {
+            set.entry(typevar.identity(db)).or_insert(typevar);
+        }
+        set.shrink_to_fit();
+        Self::Some(TypeVarSetInner::new_internal(db, set))
+    }
+}
+
+#[salsa::interned(debug, constructor=new_internal, heap_size=ruff_memory_usage::heap_size)]
+pub(crate) struct TypeVarSetInner<'db> {
+    #[returns(ref)]
+    typevars: FxOrderMap<BoundTypeVarIdentity<'db>, BoundTypeVarInstance<'db>>,
+}
+
+// The Salsa heap is tracked separately.
+impl get_size2::GetSize for TypeVarSetInner<'_> {}
+
+impl<'db> BoundTypeVarIdentity<'db> {
+    pub(crate) fn is_inferable(self, db: &'db dyn Db, inferable: TypeVarSet<'db>) -> bool {
+        match inferable {
+            TypeVarSet::None => false,
+            TypeVarSet::Some(inner) => inner.typevars(db).contains_key(&self),
+        }
+    }
+}
+
+impl<'db> BoundTypeVarInstance<'db> {
+    pub(crate) fn is_inferable(self, db: &'db dyn Db, inferable: TypeVarSet<'db>) -> bool {
+        self.identity(db).is_inferable(db, inferable)
+    }
+}
+
+impl<'db> TypeVarSet<'db> {
+    pub(crate) fn merge(self, db: &'db dyn Db, other: Self) -> Self {
+        #[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
+        fn merge_inner<'db>(
+            db: &'db dyn Db,
+            self_inner: TypeVarSetInner<'db>,
+            other_inner: TypeVarSetInner<'db>,
+        ) -> TypeVarSet<'db> {
+            TypeVarSet::from_typevars(
+                db,
+                self_inner
+                    .typevars(db)
+                    .values()
+                    .chain(other_inner.typevars(db).values())
+                    .copied(),
+            )
+        }
+
+        match (self, other) {
+            (TypeVarSet::None, other) | (other, TypeVarSet::None) => other,
+            (TypeVarSet::Some(self_inner), TypeVarSet::Some(other_inner)) => {
+                merge_inner(db, self_inner, other_inner)
+            }
+        }
+    }
+
+    // This is not an IntoIterator implementation because I have no desire to try to name the
+    // iterator type.
+    pub(crate) fn iter(
+        self,
+        db: &'db dyn Db,
+    ) -> impl Iterator<Item = BoundTypeVarInstance<'db>> + 'db {
+        match self {
+            TypeVarSet::None => Either::Left(std::iter::empty()),
+            TypeVarSet::Some(inner) => Either::Right(inner.typevars(db).values().copied()),
+        }
+    }
+
+    // Keep this around for debugging purposes
+    #[cfg_attr(not(test), expect(dead_code))]
+    fn display(self, db: &'db dyn Db) -> String {
+        format!(
+            "[{}]",
+            self.iter(db)
+                .map(|typevar| typevar.identity(db).display(db))
+                .format(", ")
+        )
+    }
+}
+
 #[salsa::tracked(
     returns(copy),
     cycle_initial=|_, id, _| Some(Type::divergent(id)),
@@ -1996,14 +2365,21 @@ fn bound_typevar_default_type<'db>(
     db: &'db dyn Db,
     bound_typevar: BoundTypeVarInstance<'db>,
 ) -> Option<Type<'db>> {
+    let typevar = bound_typevar.typevar(db);
+    typevar._default(db)?;
+    let definition = typevar
+        .definition(db)
+        .expect("a bound TypeVar with a default must have a source definition");
+    let env = ProgramEnvironment::from_definition(definition);
+    let default = typevar.default_type(db, &env)?;
     let binding_context = bound_typevar.binding_context(db);
-    bound_typevar.typevar(db).default_type(db).map(|ty| {
-        ty.apply_type_mapping(
-            db,
-            &TypeMapping::BindLegacyTypevars(binding_context),
-            TypeContext::default(),
-        )
-    })
+
+    Some(default.apply_type_mapping(
+        db,
+        &env,
+        &TypeMapping::BindLegacyTypevars(binding_context),
+        TypeContext::default(),
+    ))
 }
 
 #[expect(clippy::ref_option)]
@@ -2012,13 +2388,19 @@ fn bound_typevar_default_type_cycle_recover<'db>(
     cycle: &salsa::Cycle,
     previous_default: &Option<Type<'db>>,
     default: Option<Type<'db>>,
-    _bound_typevar: BoundTypeVarInstance<'db>,
+    bound_typevar: BoundTypeVarInstance<'db>,
 ) -> Option<Type<'db>> {
-    match (previous_default, default) {
-        (Some(previous), Some(default)) => Some(default.cycle_normalized(db, *previous, cycle)),
-        (None, Some(default)) => Some(default.recursive_type_normalized(db, cycle)),
-        (_, None) => None,
-    }
+    let default = default?;
+    let program_file = bound_typevar
+        .typevar(db)
+        .definition(db)
+        .expect("a bound TypeVar with a default must have a source definition")
+        .program_file(db);
+    let env = ProgramEnvironment::from_file(program_file);
+    Some(match previous_default {
+        Some(previous) => default.cycle_normalized(db, &env, *previous, cycle),
+        None => default.recursive_type_normalized(db, &env, cycle),
+    })
 }
 
 /// Whether a typevar's basedpython lower bound is eagerly specified or lazily evaluated.
@@ -2089,15 +2471,19 @@ fn walk_type_var_constraints<'db, V: visitor::TypeVisitor<'db> + ?Sized>(
 }
 
 impl<'db> TypeVarConstraints<'db> {
-    pub(super) fn as_type(self, db: &'db dyn Db) -> Type<'db> {
-        UnionType::from_elements(db, self.elements(db))
+    pub(super) fn as_type(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
+        UnionType::from_elements(db, env, self.elements(db))
     }
 
-    fn to_instance(self, db: &'db dyn Db) -> Option<InstanceProjection<TypeVarConstraints<'db>>> {
+    fn to_instance(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<InstanceProjection<TypeVarConstraints<'db>>> {
         let mut instance_elements = Vec::new();
         let mut is_exact = true;
         for ty in self.elements(db) {
-            let projection = ty.to_instance(db)?;
+            let projection = ty.to_instance(db, env)?;
             is_exact &= projection.is_exact();
             instance_elements.push(projection.into_inner());
         }
@@ -2123,9 +2509,10 @@ impl<'db> TypeVarConstraints<'db> {
     pub(crate) fn map_with_boundness_and_qualifiers(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         mut transform_fn: impl FnMut(&Type<'db>) -> PlaceAndQualifiers<'db>,
     ) -> PlaceAndQualifiers<'db> {
-        let mut builder = UnionBuilder::new(db);
+        let mut builder = UnionBuilder::new(db, env);
         let mut qualifiers = TypeQualifiers::empty();
 
         let mut all_unbound = true;
@@ -2180,13 +2567,14 @@ impl<'db> TypeVarConstraints<'db> {
     fn materialize_impl(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         materialization_kind: MaterializationKind,
-        visitor: &ApplyTypeMappingVisitor<'db>,
+        visitor: &ApplyTypeMappingVisitor<'_, 'db>,
     ) -> Self {
         let materialized = self
             .elements(db)
             .iter()
-            .map(|ty| ty.materialize(db, materialization_kind, visitor))
+            .map(|ty| ty.materialize(db, env, materialization_kind, visitor))
             .collect::<Box<_>>();
         TypeVarConstraints::new(db, materialized)
     }
@@ -2194,13 +2582,16 @@ impl<'db> TypeVarConstraints<'db> {
     fn apply_type_mapping_impl(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         type_mapping: &TypeMapping<'_, 'db>,
-        visitor: &ApplyTypeMappingVisitor<'db>,
+        visitor: &ApplyTypeMappingVisitor<'_, 'db>,
     ) -> Self {
         let mapped = self
             .elements(db)
             .iter()
-            .map(|ty| ty.apply_type_mapping_impl(db, type_mapping, TypeContext::default(), visitor))
+            .map(|ty| {
+                ty.apply_type_mapping_impl(db, env, type_mapping, TypeContext::default(), visitor)
+            })
             .collect::<Box<_>>();
         TypeVarConstraints::new(db, mapped)
     }
@@ -2209,7 +2600,13 @@ impl<'db> TypeVarConstraints<'db> {
     /// removing divergent types introduced by the cycle.
     ///
     /// See [`Type::cycle_normalized`] for more details on how this works.
-    fn cycle_normalized(self, db: &'db dyn Db, previous: Self, cycle: &salsa::Cycle) -> Self {
+    fn cycle_normalized(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        previous: Self,
+        cycle: &salsa::Cycle,
+    ) -> Self {
         let current_elements = self.elements(db);
         let prev_elements = previous.elements(db);
         TypeVarConstraints::new(
@@ -2217,7 +2614,7 @@ impl<'db> TypeVarConstraints<'db> {
             current_elements
                 .iter()
                 .zip(prev_elements.iter())
-                .map(|(ty, prev_ty)| ty.cycle_normalized(db, *prev_ty, cycle))
+                .map(|(ty, prev_ty)| ty.cycle_normalized(db, env, *prev_ty, cycle))
                 .collect::<Box<_>>(),
         )
     }
@@ -2225,8 +2622,13 @@ impl<'db> TypeVarConstraints<'db> {
     /// Normalize recursive types for cycle recovery when there's no previous value.
     ///
     /// See [`Type::recursive_type_normalized`] for more details.
-    fn recursive_type_normalized(self, db: &'db dyn Db, cycle: &salsa::Cycle) -> Self {
-        self.map(db, |ty| ty.recursive_type_normalized(db, cycle))
+    fn recursive_type_normalized(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        cycle: &salsa::Cycle,
+    ) -> Self {
+        self.map(db, |ty| ty.recursive_type_normalized(db, env, cycle))
     }
 }
 
@@ -2242,7 +2644,9 @@ pub(super) fn walk_type_var_bounds<'db, V: visitor::TypeVisitor<'db> + ?Sized>(
     visitor: &V,
 ) {
     match bounds {
-        TypeVarBoundOrConstraints::UpperBound(bound) => visitor.visit_type(db, bound),
+        TypeVarBoundOrConstraints::UpperBound(bound) => {
+            visitor.visit_type(db, bound);
+        }
         TypeVarBoundOrConstraints::Constraints(constraints) => {
             walk_type_var_constraints(db, constraints, visitor);
         }
@@ -2253,16 +2657,18 @@ impl<'db> TypeVarBoundOrConstraints<'db> {
     fn materialize_impl(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         materialization_kind: MaterializationKind,
-        visitor: &ApplyTypeMappingVisitor<'db>,
+        visitor: &ApplyTypeMappingVisitor<'_, 'db>,
     ) -> Self {
         match self {
             TypeVarBoundOrConstraints::UpperBound(bound) => TypeVarBoundOrConstraints::UpperBound(
-                bound.materialize(db, materialization_kind, visitor),
+                bound.materialize(db, env, materialization_kind, visitor),
             ),
             TypeVarBoundOrConstraints::Constraints(constraints) => {
                 TypeVarBoundOrConstraints::Constraints(constraints.materialize_impl(
                     db,
+                    env,
                     materialization_kind,
                     visitor,
                 ))
@@ -2273,16 +2679,24 @@ impl<'db> TypeVarBoundOrConstraints<'db> {
     fn apply_type_mapping_impl(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         type_mapping: &TypeMapping<'_, 'db>,
-        visitor: &ApplyTypeMappingVisitor<'db>,
+        visitor: &ApplyTypeMappingVisitor<'_, 'db>,
     ) -> Self {
         match self {
-            TypeVarBoundOrConstraints::UpperBound(bound) => TypeVarBoundOrConstraints::UpperBound(
-                bound.apply_type_mapping_impl(db, type_mapping, TypeContext::default(), visitor),
-            ),
+            TypeVarBoundOrConstraints::UpperBound(bound) => {
+                TypeVarBoundOrConstraints::UpperBound(bound.apply_type_mapping_impl(
+                    db,
+                    env,
+                    type_mapping,
+                    TypeContext::default(),
+                    visitor,
+                ))
+            }
             TypeVarBoundOrConstraints::Constraints(constraints) => {
                 TypeVarBoundOrConstraints::Constraints(constraints.apply_type_mapping_impl(
                     db,
+                    env,
                     type_mapping,
                     visitor,
                 ))
@@ -2296,10 +2710,10 @@ impl<'db> TypeVarBoundOrConstraints<'db> {
     /// constraints provides a conservative upper bound, but it loses precision. And for many use
     /// cases, it's more efficient to just map over the constraint types directly, rather than
     /// building a union out of them and mapping over that.
-    pub(crate) fn as_type(self, db: &'db dyn Db) -> Type<'db> {
+    pub(crate) fn as_type(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
         match self {
             TypeVarBoundOrConstraints::UpperBound(bound) => bound,
-            TypeVarBoundOrConstraints::Constraints(constraints) => constraints.as_type(db),
+            TypeVarBoundOrConstraints::Constraints(constraints) => constraints.as_type(db, env),
         }
     }
 }
@@ -2317,13 +2731,22 @@ pub(crate) enum PackBoundViolation<'db> {
 impl<'db> PackBoundViolation<'db> {
     /// The bound this violation was measured against. Only ever `None` for a pack with no bound,
     /// which cannot produce a violation in the first place.
-    fn bound(db: &'db dyn Db, typevar: BoundTypeVarInstance<'db>) -> Option<Type<'db>> {
-        typevar.typevar(db).pack_bound(db)
+    fn bound(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        typevar: BoundTypeVarInstance<'db>,
+    ) -> Option<Type<'db>> {
+        typevar.typevar(db).pack_bound(db, env)
     }
 
-    pub(crate) fn message(&self, db: &'db dyn Db, typevar: BoundTypeVarInstance<'db>) -> String {
-        let bound = Self::bound(db, typevar)
-            .map(|bound| bound.display(db).to_string())
+    pub(crate) fn message(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        typevar: BoundTypeVarInstance<'db>,
+    ) -> String {
+        let bound = Self::bound(db, env, typevar)
+            .map(|bound| bound.display(db, env).to_string())
             .unwrap_or_default();
         let kind = if typevar.is_typevartuple(db) {
             "type variable tuple"
@@ -2334,7 +2757,7 @@ impl<'db> PackBoundViolation<'db> {
         match self {
             Self::Member(member) => format!(
                 "Type `{}` is not assignable to upper bound `{bound}` of {kind} `{name}`",
-                member.display(db),
+                member.display(db, env),
             ),
             Self::MissingField(field) => {
                 format!("Upper bound `{bound}` of {kind} `{name}` requires a field `{field}`")
@@ -2347,15 +2770,16 @@ impl<'db> PackBoundViolation<'db> {
     pub(in crate::types) fn attach_context(
         &self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         typevar: BoundTypeVarInstance<'db>,
         diagnostic: &mut LintDiagnosticGuard<'_, '_>,
     ) {
-        let (Self::Member(member), Some(bound)) = (self, Self::bound(db, typevar)) else {
+        let (Self::Member(member), Some(bound)) = (self, Self::bound(db, env, typevar)) else {
             return;
         };
         member
-            .assignability_error_context(db, bound)
-            .attach_to(db, diagnostic);
+            .assignability_error_context(db, env, bound)
+            .attach_to(db, env, diagnostic);
     }
 }
 
@@ -2372,16 +2796,17 @@ impl<'db> PackBoundViolation<'db> {
 /// callable for a keyword-variadic pack.
 pub(crate) fn pack_bound_violation<'db>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     typevar: BoundTypeVarInstance<'db>,
     provided: Type<'db>,
     constraints: &ConstraintSetBuilder<'db>,
-    inferable: InferableTypeVars<'db>,
+    inferable: TypeVarSet<'db>,
 ) -> Option<PackBoundViolation<'db>> {
-    let bound = typevar.typevar(db).pack_bound(db)?;
+    let bound = typevar.typevar(db).pack_bound(db, env)?;
     let outside = |member: Type<'db>, bound: Type<'db>| {
         member
-            .when_assignable_to(db, bound, constraints, inferable)
-            .is_never_satisfied(db)
+            .when_assignable_to(db, env, bound, constraints, inferable)
+            .is_never_satisfied(db, env)
     };
 
     let whole_pack = typevar.typevar(db).has_whole_pack_bound(db);
@@ -2428,5 +2853,172 @@ impl<'db> super::cyclic::HasIdentity<'db> for TypeVarInstance<'db> {
 
     fn to_identity(&self, _db: &'db dyn Db) -> Self::Id {
         *self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use ruff_db::testing::assert_function_query_was_not_run_by_name;
+
+    use crate::db::tests::setup_db;
+
+    fn bound_typevar<'db>(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        name: &'static str,
+        kind: TypeVarKind,
+        bound_or_constraints: Option<TypeVarBoundOrConstraintsEvaluation<'db>>,
+        freshness: TypeVarNonce,
+    ) -> BoundTypeVarInstance<'db> {
+        let identity = TypeVarIdentity::new(db, Name::new_static(name), None, kind);
+        let typevar = TypeVarInstance::new(
+            db,
+            identity,
+            bound_or_constraints,
+            None,
+            Some(TypeVarVariance::Invariant),
+            None,
+        );
+        BoundTypeVarInstance::new(
+            db,
+            typevar,
+            BindingContext::Synthetic(env.program(db)),
+            None,
+            freshness,
+        )
+    }
+
+    #[test]
+    fn typevar_set_empty_set_is_none() {
+        let db = setup_db();
+        let db = &db;
+        let env = db.program_environment();
+        let typevar = BoundTypeVarInstance::synthetic(
+            db,
+            &env,
+            Name::new_static("T"),
+            TypeVarVariance::Invariant,
+        );
+        let inferable = TypeVarSet::from_typevars(db, []);
+
+        assert_eq!(inferable, TypeVarSet::None);
+        assert_eq!(inferable.iter(db).count(), 0);
+        assert!(!typevar.is_inferable(db, inferable));
+        assert!(!typevar.identity(db).is_inferable(db, inferable));
+    }
+
+    #[test]
+    fn typevar_set_keeps_first_instance_for_each_identity() {
+        let mut db = setup_db();
+        db.clear_salsa_events();
+        let env = db.program_environment();
+
+        // The synthetic lazy bound has no definition, so it is equivalent to the implicit
+        // `object` upper bound represented eagerly below.
+        let lazy = bound_typevar(
+            &db,
+            &env,
+            "T",
+            TypeVarKind::Pep695TypeVar,
+            Some(TypeVarBoundOrConstraintsEvaluation::LazyUpperBound),
+            TypeVarNonce::NONE,
+        );
+        let eager = bound_typevar(
+            &db,
+            &env,
+            "T",
+            TypeVarKind::Pep695TypeVar,
+            Some(TypeVarBoundOrConstraints::UpperBound(Type::object()).into()),
+            TypeVarNonce::NONE,
+        );
+        let u = BoundTypeVarInstance::synthetic(
+            &db,
+            &env,
+            Name::new_static("U"),
+            TypeVarVariance::Invariant,
+        );
+        let v = BoundTypeVarInstance::synthetic(
+            &db,
+            &env,
+            Name::new_static("V"),
+            TypeVarVariance::Invariant,
+        );
+
+        assert_ne!(lazy, eager);
+        assert_eq!(lazy.identity(&db), eager.identity(&db));
+
+        let left = TypeVarSet::from_typevars(&db, [lazy, u, eager]);
+        let right = TypeVarSet::from_typevars(&db, [eager, v, lazy]);
+        let merged = left.merge(&db, right);
+
+        assert_eq!(left.iter(&db).collect::<Vec<_>>(), [lazy, u]);
+        assert_eq!(right.iter(&db).collect::<Vec<_>>(), [eager, v]);
+        assert_eq!(merged.iter(&db).collect::<Vec<_>>(), [lazy, u, v]);
+        assert_eq!(merged, TypeVarSet::from_typevars(&db, [lazy, u, v]));
+        assert!(lazy.is_inferable(&db, merged));
+        assert!(eager.is_inferable(&db, merged));
+        assert_eq!(merged.display(&db), "[T, U, V]");
+
+        let events = db.take_salsa_events();
+        assert_function_query_was_not_run_by_name(&db, "lazy_bound_unchecked", None, &events);
+    }
+
+    #[test]
+    fn typevar_set_distinguishes_fresh_and_paramspec_identities() {
+        let db = setup_db();
+        let db = &db;
+        let env = db.program_environment();
+        let typevar = bound_typevar(
+            db,
+            &env,
+            "T",
+            TypeVarKind::Pep695TypeVar,
+            None,
+            TypeVarNonce::NONE,
+        );
+        let fresh = bound_typevar(
+            db,
+            &env,
+            "T",
+            TypeVarKind::Pep695TypeVar,
+            None,
+            TypeVarNonce::NONE.increment(),
+        );
+        let paramspec = bound_typevar(
+            db,
+            &env,
+            "P",
+            TypeVarKind::Pep695ParamSpec,
+            None,
+            TypeVarNonce::NONE,
+        );
+        let args = paramspec.with_paramspec_attr(db, ParamSpecAttrKind::Args);
+        let kwargs = paramspec.with_paramspec_attr(db, ParamSpecAttrKind::Kwargs);
+
+        let inferable = TypeVarSet::from_typevars(db, [typevar, fresh, args, kwargs]);
+        assert_eq!(
+            inferable.iter(db).collect::<Vec<_>>(),
+            [typevar, fresh, args, kwargs]
+        );
+        assert!(typevar.is_inferable(db, inferable));
+        assert!(fresh.is_inferable(db, inferable));
+        assert!(args.is_inferable(db, inferable));
+        assert!(kwargs.is_inferable(db, inferable));
+        assert!(!paramspec.is_inferable(db, inferable));
+
+        let paramspec_only = TypeVarSet::from_typevars(db, [paramspec]);
+        assert!(
+            args.identity(db)
+                .without_paramspec_attr(db)
+                .is_inferable(db, paramspec_only)
+        );
+        assert!(
+            kwargs
+                .identity(db)
+                .without_paramspec_attr(db)
+                .is_inferable(db, paramspec_only)
+        );
     }
 }

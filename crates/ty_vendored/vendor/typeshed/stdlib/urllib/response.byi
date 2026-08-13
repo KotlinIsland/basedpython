@@ -22,13 +22,13 @@ class addbase(tempfile._TemporaryFileWrapper[bytes]):
     init(self, fp: IO[bytes])
     override def __exit__(
         self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
-    ) -> None
+    )
     # These methods don't actually exist, but the class inherits at runtime from
     # tempfile._TemporaryFileWrapper, which uses __getattr__ to delegate to the
     # underlying file object. To satisfy the BinaryIO interface, we pretend that this
     # class has these additional methods.
     override def write(self, s: ReadableBuffer) -> int
-    override def writelines(self, lines: Iterable[ReadableBuffer]) -> None
+    override def writelines(self, lines: Iterable[ReadableBuffer])
 
 class addclosehook(addbase):
     """Class to add a close hook to an open file."""

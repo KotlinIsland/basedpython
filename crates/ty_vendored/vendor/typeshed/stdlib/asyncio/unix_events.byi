@@ -260,9 +260,9 @@ if sys.platform != "win32":
             # Doesn't actually have ABCMeta metaclass at runtime, but mypy complains if we don't have it in the stub.
             # See discussion in #7412
             class BaseChildWatcher(AbstractChildWatcher, metaclass=ABCMeta):
-                override def close(self) -> None
+                override def close(self)
                 override def is_active(self) -> bool
-                override def attach_loop(self, loop: events.AbstractEventLoop | None) -> None
+                override def attach_loop(self, loop: events.AbstractEventLoop | None)
 
             class SafeChildWatcher(BaseChildWatcher):
                 """'Safe' child watcher implementation.
@@ -278,10 +278,10 @@ if sys.platform != "win32":
                 override def __enter__(self) -> Self
                 override def __exit__(
                     self, a: type[BaseException] | None, b: BaseException | None, c: types.TracebackType | None
-                ) -> None
+                )
                 override def add_child_handler[*Args](
                     self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
-                ) -> None
+                )
                 override def remove_child_handler(self, pid: int) -> bool
 
             class FastChildWatcher(BaseChildWatcher):
@@ -298,10 +298,10 @@ if sys.platform != "win32":
                 override def __enter__(self) -> Self
                 override def __exit__(
                     self, a: type[BaseException] | None, b: BaseException | None, c: types.TracebackType | None
-                ) -> None
+                )
                 override def add_child_handler[*Args](
                     self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
-                ) -> None
+                )
                 override def remove_child_handler(self, pid: int) -> bool
 
     class _UnixSelectorEventLoop(BaseSelectorEventLoop):
@@ -459,16 +459,16 @@ if sys.platform != "win32":
                 """
 
                 override def is_active(self) -> bool
-                override def close(self) -> None
+                override def close(self)
                 override def __enter__(self) -> Self
                 override def __exit__(
                     self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: types.TracebackType | None
-                ) -> None
+                )
                 override def add_child_handler[*Args](
                     self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
-                ) -> None
+                )
                 override def remove_child_handler(self, pid: int) -> bool
-                override def attach_loop(self, loop: events.AbstractEventLoop | None) -> None
+                override def attach_loop(self, loop: events.AbstractEventLoop | None)
 
             class ThreadedChildWatcher(AbstractChildWatcher):
                 """Threaded child watcher implementation.
@@ -484,17 +484,17 @@ if sys.platform != "win32":
                 """
 
                 override def is_active(self) -> True
-                override def close(self) -> None
+                override def close(self)
                 override def __enter__(self) -> Self
                 override def __exit__(
                     self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: types.TracebackType | None
-                ) -> None
+                )
                 def __del__(self)
                 override def add_child_handler[*Args](
                     self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
-                ) -> None
+                )
                 override def remove_child_handler(self, pid: int) -> bool
-                override def attach_loop(self, loop: events.AbstractEventLoop | None) -> None
+                override def attach_loop(self, loop: events.AbstractEventLoop | None)
 
             class PidfdChildWatcher(AbstractChildWatcher):
                 """Child watcher implementation using Linux's pid file descriptors.
@@ -511,11 +511,11 @@ if sys.platform != "win32":
                 override def __enter__(self) -> Self
                 override def __exit__(
                     self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: types.TracebackType | None
-                ) -> None
+                )
                 override def is_active(self) -> bool
-                override def close(self) -> None
-                override def attach_loop(self, loop: events.AbstractEventLoop | None) -> None
+                override def close(self)
+                override def attach_loop(self, loop: events.AbstractEventLoop | None)
                 override def add_child_handler[*Args](
                     self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
-                ) -> None
+                )
                 override def remove_child_handler(self, pid: int) -> bool

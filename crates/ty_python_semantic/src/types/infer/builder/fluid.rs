@@ -45,6 +45,7 @@ use ty_python_core::fluid::FluidUseRole;
 
 use super::TypeInferenceBuilder;
 use crate::Db;
+use crate::types::ProgramEnvironment;
 use crate::types::any_over_type;
 use crate::types::binding_type;
 use crate::types::constraints::ConstraintSetBuilder;
@@ -146,6 +147,7 @@ impl<'db> FluidTimeline<'db> {
     pub(crate) fn cycle_normalized(
         mut self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         previous: Option<&FluidTimeline<'db>>,
         cycle: &salsa::Cycle,
     ) -> Self {
@@ -173,14 +175,14 @@ impl<'db> FluidTimeline<'db> {
             // every iteration is another, and one a type built entirely out of `Unknown`
             // never acquires a marker for. skipping either stores the value raw, which
             // un-widens whatever the last iteration had settled
-            if !any_over_type(db, *ty, false, |inner| inner.is_divergent())
-                && !ty.is_deeply_nested(db)
+            if !any_over_type(db, env, *ty, false, |inner| inner.is_divergent())
+                && !ty.is_deeply_nested(db, env)
             {
                 return;
             }
             *ty = match previous_ty {
-                Some(previous_ty) => ty.cycle_normalized(db, previous_ty, cycle),
-                None => ty.recursive_type_normalized(db, cycle),
+                Some(previous_ty) => ty.cycle_normalized(db, env, previous_ty, cycle),
+                None => ty.recursive_type_normalized(db, env, cycle),
             };
         };
 
@@ -240,6 +242,7 @@ impl<'db> FluidFold<'db, '_> {
     fn record(
         &mut self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         anchor: ExpressionNodeKey,
         kind: FluidEventKind,
         constraint: Option<Type<'db>>,
@@ -255,7 +258,10 @@ impl<'db> FluidFold<'db, '_> {
         let (solution, solution_promoted) = if self.poisoned {
             (None, None)
         } else {
-            (Some(self.build(db, false)), Some(self.build(db, true)))
+            (
+                Some(self.build(db, env, false)),
+                Some(self.build(db, env, true)),
+            )
         };
         self.events.push(FluidEvent {
             anchor,
@@ -268,7 +274,12 @@ impl<'db> FluidFold<'db, '_> {
 
     /// build the cumulative solution, matching the promotion policy of
     /// [`TypeInferenceBuilder::solve_fluid_specialization`]
-    fn build(&mut self, db: &'db dyn Db, promote: bool) -> Type<'db> {
+    fn build(
+        &mut self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        promote: bool,
+    ) -> Type<'db> {
         let file = self.file;
         let specialization = self
             .builder
@@ -277,8 +288,8 @@ impl<'db> FluidFold<'db, '_> {
                 Some(if promote && typevar.widens_literal_solutions(db) {
                     // see the note in `solve_fluid_specialization`
                     lower
-                        .promote_in(db, file)
-                        .promote_singletons_recursively(db)
+                        .promote_in(db, env, file)
+                        .promote_singletons_recursively(db, env)
                 } else {
                     lower
                 })
@@ -360,6 +371,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         callable_type: Type<'db>,
         tcx: TypeContext<'db>,
     ) -> Type<'db> {
+        let env = self.program_environment();
         let fluid_def = if tcx.annotation().is_none() && callable_type.is_class_literal() {
             self.fluid_candidate_definition(ast::ExprRef::Call(call_expr))
         } else {
@@ -373,11 +385,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let ty = self.infer_call_expression_impl(call_expr, callable_type, tcx);
 
         if let Some(fluid_def) = fluid_def
-            && let Some((class_literal, _)) = ty.class_specialization(self.db())
+            && let Some((class_literal, _)) = ty.class_specialization(self.db(), env)
             && let Some(generic_context) = class_literal.generic_context(self.db())
         {
-            let identity_instance =
-                Type::instance(self.db(), class_literal.identity_specialization(self.db()));
+            let identity_instance = Type::instance(
+                self.db(),
+                env,
+                class_literal.identity_specialization(self.db()),
+            );
             return self.fluid_eventual_type(fluid_def, identity_instance, generic_context, ty);
         }
 
@@ -394,6 +409,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         arguments: &ast::Arguments,
         bindings: &mut crate::types::Bindings<'db>,
     ) {
+        let env = self.program_environment();
         if !self.fluid_specializations_enabled() {
             return;
         }
@@ -441,7 +457,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         continue;
                     }
 
-                    let Some(specialization) = overload.specialization(db) else {
+                    let Some(specialization) = overload.specialization(db, env) else {
                         continue;
                     };
                     let Some(matched) = overload
@@ -465,10 +481,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         // if a typevar solved from this parameter occurs in the return
                         // type.
                         let shared_variance = std::cell::Cell::new(TypeVarVariance::Bivariant);
-                        let shares_typevar = any_over_type(db, parameter_ty, false, |ty| {
+                        let shares_typevar = any_over_type(db, env, parameter_ty, false, |ty| {
                             ty.as_typevar().is_some_and(|typevar| {
                                 let shared = std::cell::Cell::new(false);
-                                return_ty.visit_specialization(db, |return_part, variance| {
+                                return_ty.visit_specialization(db, env, |return_part, variance| {
                                     if return_part.as_typevar().is_some_and(|return_typevar| {
                                         return_typevar.identity(db) == typevar.identity(db)
                                     }) {
@@ -499,7 +515,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                 let constraints = ConstraintSetBuilder::new();
                                 let inferable = signature_context.inferable_typevars(db);
                                 let mut builder =
-                                    SpecializationBuilder::new(db, &constraints, inferable);
+                                    SpecializationBuilder::new(db, env, &constraints, inferable);
                                 if builder.infer(parameter_ty, eventual).is_ok() {
                                     let eventual_specialization =
                                         builder.build_with(signature_context, |_, bounds| {
@@ -537,6 +553,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         generic_context: GenericContext<'db>,
         upto: ExpressionNodeKey,
     ) -> FluidConstraints<'db> {
+        let env = self.program_environment();
         let db = self.db();
         let uses = self.index.fluid_uses(candidate_def);
 
@@ -614,7 +631,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     if use_.role == FluidUseRole::TypeContextual {
                         if let Some(adoption) =
                             statement_use_types.fluid_adoption(use_.use_expression)
-                            && !adoption.has_unspecialized_type_var(db)
+                            && !adoption.has_unspecialized_type_var(db, env)
                             && self.fluid_constraint_binds_typevars(
                                 identity_instance,
                                 generic_context,
@@ -647,7 +664,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                 .iter()
                                 .copied()
                                 .filter(|constraint| {
-                                    !constraint.has_unspecialized_type_var(db)
+                                    !constraint.has_unspecialized_type_var(db, env)
                                         && self.fluid_constraint_binds_typevars(
                                             identity_instance,
                                             generic_context,
@@ -698,6 +715,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         generic_context: GenericContext<'db>,
         creation: Type<'db>,
     ) -> FluidTimeline<'db> {
+        let env = self.program_environment();
         let db = self.db();
         let uses = self.index.fluid_uses(candidate_def);
 
@@ -707,7 +725,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let constraint_sets = ConstraintSetBuilder::new();
         let inferable = generic_context.inferable_typevars(db);
         let mut fold = FluidFold {
-            builder: SpecializationBuilder::new(db, &constraint_sets, inferable),
+            builder: SpecializationBuilder::new(db, env, &constraint_sets, inferable),
             identity_instance,
             generic_context,
             file: self.file(),
@@ -729,7 +747,13 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 FluidUseRole::Read => {}
 
                 FluidUseRole::Escape => {
-                    fold.record(db, use_.use_expression, FluidEventKind::EscapeLock, None);
+                    fold.record(
+                        db,
+                        env,
+                        use_.use_expression,
+                        FluidEventKind::EscapeLock,
+                        None,
+                    );
                     break;
                 }
 
@@ -739,7 +763,13 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     let Some(statement) = use_.statement else {
                         // Constraint-bearing roles always carry a statement; be
                         // conservative if one is somehow missing.
-                        fold.record(db, use_.use_expression, FluidEventKind::EscapeLock, None);
+                        fold.record(
+                            db,
+                            env,
+                            use_.use_expression,
+                            FluidEventKind::EscapeLock,
+                            None,
+                        );
                         break;
                     };
 
@@ -754,6 +784,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             generic_context.repeat_specialization(db, Type::Divergent(divergent));
                         fold.record(
                             db,
+                            env,
                             use_.use_expression,
                             FluidEventKind::Constrain,
                             Some(
@@ -771,7 +802,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     if use_.role == FluidUseRole::TypeContextual {
                         if let Some(adoption) =
                             statement_use_types.fluid_adoption(use_.use_expression)
-                            && !adoption.has_unspecialized_type_var(db)
+                            && !adoption.has_unspecialized_type_var(db, env)
                             && self.fluid_constraint_binds_typevars(
                                 identity_instance,
                                 generic_context,
@@ -780,6 +811,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         {
                             fold.record(
                                 db,
+                                env,
                                 use_.use_expression,
                                 FluidEventKind::AdoptLock,
                                 Some(adoption),
@@ -803,7 +835,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     // literals.
                     if seen_statements.insert(statement) {
                         for constraint in use_constraints.iter().copied() {
-                            if constraint.has_unspecialized_type_var(db)
+                            if constraint.has_unspecialized_type_var(db, env)
                                 || !self.fluid_constraint_binds_typevars(
                                     identity_instance,
                                     generic_context,
@@ -824,6 +856,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                 .unwrap_or(constraint);
                             fold.record(
                                 db,
+                                env,
                                 use_.use_expression,
                                 FluidEventKind::Constrain,
                                 Some(resolved),
@@ -953,10 +986,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         generic_context: GenericContext<'db>,
         constraint: Type<'db>,
     ) -> bool {
+        let env = self.program_environment();
         let db = self.db();
         let constraints = ConstraintSetBuilder::new();
         let inferable = generic_context.inferable_typevars(db);
-        let mut builder = SpecializationBuilder::new(db, &constraints, inferable);
+        let mut builder = SpecializationBuilder::new(db, env, &constraints, inferable);
 
         if builder.infer(identity_instance, constraint).is_err() {
             // An incompatible context still hands the value to another observer.
@@ -983,10 +1017,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         constraint_instances: impl IntoIterator<Item = Type<'db>>,
         promote: bool,
     ) -> Option<Type<'db>> {
+        let env = self.program_environment();
         let db = self.db();
         let constraints = ConstraintSetBuilder::new();
         let inferable = generic_context.inferable_typevars(db);
-        let mut builder = SpecializationBuilder::new(db, &constraints, inferable);
+        let mut builder = SpecializationBuilder::new(db, env, &constraints, inferable);
 
         for constraint in constraint_instances {
             builder.infer(identity_instance, constraint).ok()?;
@@ -1004,8 +1039,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 // element type, which is what a layout is chosen from, so a module that
                 // asked for strict numerics has to get one here too.
                 lower
-                    .promote_in(db, file)
-                    .promote_singletons_recursively(db)
+                    .promote_in(db, env, file)
+                    .promote_singletons_recursively(db, env)
             } else {
                 lower
             })
@@ -1025,6 +1060,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         generic_context: GenericContext<'db>,
         creation: Type<'db>,
     ) -> Type<'db> {
+        let env = self.program_environment();
         self.fluid_creation = Some(creation);
 
         let timeline =
@@ -1047,9 +1083,13 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         // re-solve can lose structure that the constructor inference produced (e.g.
         // the `Top[...]` materialization of a ParamSpec specialization).
         if eventual.is_none()
-            && !any_over_type(self.db(), creation, false, |ty| {
-                ty.as_literal_value().is_some() || ty.is_singleton(self.db())
-            })
+            && !any_over_type(
+                self.db(),
+                self.program_environment(),
+                creation,
+                false,
+                |ty| ty.as_literal_value().is_some() || ty.is_singleton(self.db(), env),
+            )
         {
             // A fluid empty collection is `Never`-specialized, which is the precise type
             // for flow-sensitive uses (recorded above as `fluid_creation`). Its public
@@ -1081,8 +1121,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         generic_context: GenericContext<'db>,
         creation: Type<'db>,
     ) -> Type<'db> {
+        let env = self.program_environment();
         let db = self.db();
-        let Some((_, specialization)) = creation.class_specialization(db) else {
+        let Some((_, specialization)) = creation.class_specialization(db, env) else {
             return creation;
         };
         if !specialization.types(db).iter().all(Type::is_never) {
@@ -1119,6 +1160,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         fallback: Type<'db>,
         tcx: TypeContext<'db>,
     ) -> Type<'db> {
+        let env = self.program_environment();
         let db = self.db();
 
         if !self.is_fluid_candidate(candidate_def) {
@@ -1144,7 +1186,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             return fallback;
         };
 
-        let Some((class_literal, _)) = creation.class_specialization(db) else {
+        let Some((class_literal, _)) = creation.class_specialization(db, env) else {
             // The creation type contains a cycle-recovery placeholder; fall back
             // until the fixpoint converges.
             return fallback;
@@ -1152,7 +1194,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let Some(generic_context) = class_literal.generic_context(db) else {
             return fallback;
         };
-        let identity_instance = Type::instance(db, class_literal.identity_specialization(db));
+        let identity_instance = Type::instance(db, env, class_literal.identity_specialization(db));
 
         let use_key = ExpressionNodeKey::from(use_expr);
         let view =
@@ -1191,8 +1233,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // places no requirement on the specialization and observes the narrow
             // type as-is; a structured one (`def f[T](t: list[T])`) solves its
             // typevars against the promoted view.
-            if annotation.has_unspecialized_type_var(db)
-                && annotation.class_specialization(db).is_some()
+            if annotation.has_unspecialized_type_var(db, env)
+                && annotation.class_specialization(db, env).is_some()
             {
                 if let (Some(timeline), Some(index)) = (timeline, snapshot) {
                     return timeline.solution(index, true).unwrap_or(fallback);

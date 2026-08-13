@@ -99,7 +99,7 @@ impl State<'_> {
 fn isinstance_call(lhs: Expr, rhs: Expr, negate: bool) -> Expr {
     let call = Expr::Call(ExprCall {
         node_index: AtomicNodeIndex::NONE,
-        range: TextRange::default(),
+        range_start: ruff_text_size::TextSize::default(),
         func: Box::new(Expr::Name(ExprName {
             node_index: AtomicNodeIndex::NONE,
             range: TextRange::default(),
