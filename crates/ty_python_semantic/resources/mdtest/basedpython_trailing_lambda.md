@@ -703,6 +703,31 @@ bad: int = f:
     print(it)
 ```
 
+## a declaration takes one too
+
+A declaration binds the call's return like any other value. `let` still declares the name `Final`
+around the block; `var` does not.
+
+```by
+def f(a: (int) -> None) -> str:
+    a(1)
+    return "done"
+
+let declared = f:
+    print(it)
+
+var mutable = f:
+    print(it)
+
+reveal_type(declared)  # revealed: str
+reveal_type(mutable)  # revealed: str
+
+mutable = "other"
+
+# error: [invalid-assignment] "Reassignment of `Final` symbol `declared` is not allowed"
+declared = "other"
+```
+
 ## the call is still checked as a call
 
 ```by

@@ -644,6 +644,10 @@ impl<'src> Parser<'src> {
                     {
                         return self.parse_property_accessors(stmt, start);
                     }
+                    // a declaration's value is an expression like any other, so a
+                    // statement expression standing in it is held to the same rule
+                    // as on an assignment — which this path does not go through
+                    self.validate_statement_expressions(&stmt);
                     return stmt;
                 }
 
@@ -1184,9 +1188,7 @@ impl<'src> Parser<'src> {
         self.bump(TokenKind::Class);
         let name = self.parse_identifier();
         self.bump(TokenKind::Equal);
-        let value = self
-            .parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
-            .expr;
+        let value = self.parse_declaration_value();
         // Synthetic annotation pointing at the "class" keyword text in the source
         // so the transform can identify this form.
         let class_range = TextRange::new(start, name.range.start());
@@ -1202,8 +1204,7 @@ impl<'src> Parser<'src> {
             range: class_range,
             node_index: AtomicNodeIndex::NONE,
         });
-        self.eat(TokenKind::Semi);
-        self.eat(TokenKind::Newline);
+        self.eat_declaration_terminator();
         Stmt::AnnAssign(ast::StmtAnnAssign {
             target: Box::new(target),
             annotation: Box::new(annotation),
@@ -1212,6 +1213,39 @@ impl<'src> Parser<'src> {
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         })
+    }
+
+    /// basedpython: parses the initializer of a declaration form — the value in
+    /// `let a = value`, `var a: T = value`, `class a = value` — as the same
+    /// expression an ordinary assignment's right-hand side is, so a trailing
+    /// lambda block can stand there too:
+    ///
+    /// ```text
+    /// let a = f:
+    ///     print(it)
+    /// ```
+    ///
+    /// A declaration binds exactly one name, which is what a block's value
+    /// requires, so unlike the assignment path there is no target shape to reject.
+    fn parse_declaration_value(&mut self) -> Expr {
+        let value = self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or());
+        self.parse_trailing_lambda_value(value).expr
+    }
+
+    /// basedpython: consumes the `;` / newline that ends a declaration form.
+    ///
+    /// These forms are parsed outside [`Parser::parse_single_simple_statement`],
+    /// so each terminates itself. When the value carried a suite — a statement
+    /// expression such as `let a = match x:`, or a trailing lambda block — that
+    /// suite has already consumed this statement's newline, and the flag saying so
+    /// is cleared here rather than left to make the *next* statement skip its own
+    /// terminator.
+    fn eat_declaration_terminator(&mut self) {
+        if std::mem::take(&mut self.expr_consumed_suite) {
+            return;
+        }
+        self.eat(TokenKind::Semi);
+        self.eat(TokenKind::Newline);
     }
 
     /// Parses `let x = 5` → produces a synthetic `AnnAssign` that the
@@ -1246,22 +1280,16 @@ impl<'src> Parser<'src> {
         // read-only attribute (lowers to `NAME: Final[T]`) and a bare untyped
         // `let NAME` declares an uninitialized `Final`. otherwise consume the
         // `= value`
-        let value = if self.eat(TokenKind::Equal) {
-            Some(Box::new(
-                self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
-                    .expr,
-            ))
-        } else {
-            None
-        };
+        let value = self
+            .eat(TokenKind::Equal)
+            .then(|| Box::new(self.parse_declaration_value()));
         let target = Expr::Name(ast::ExprName {
             id: name.id.clone(),
             ctx: ExprContext::Store,
             range: name.range,
             node_index: AtomicNodeIndex::NONE,
         });
-        self.eat(TokenKind::Semi);
-        self.eat(TokenKind::Newline);
+        self.eat_declaration_terminator();
         Stmt::AnnAssign(ast::StmtAnnAssign {
             target: Box::new(target),
             annotation: Box::new(annotation),
@@ -1302,17 +1330,14 @@ impl<'src> Parser<'src> {
             marker
         };
         self.expect(TokenKind::Equal);
-        let value = self
-            .parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
-            .expr;
+        let value = self.parse_declaration_value();
         let target = Expr::Name(ast::ExprName {
             id: name.id.clone(),
             ctx: ExprContext::Store,
             range: name.range,
             node_index: AtomicNodeIndex::NONE,
         });
-        self.eat(TokenKind::Semi);
-        self.eat(TokenKind::Newline);
+        self.eat_declaration_terminator();
         Stmt::AnnAssign(ast::StmtAnnAssign {
             target: Box::new(target),
             annotation: Box::new(annotation),
@@ -1354,10 +1379,9 @@ impl<'src> Parser<'src> {
             self.bump(TokenKind::Name);
         }
         let name = self.parse_identifier();
-        let value = self.eat(TokenKind::Equal).then(|| {
-            self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
-                .expr
-        });
+        let value = self
+            .eat(TokenKind::Equal)
+            .then(|| self.parse_declaration_value());
         let target = Expr::Name(ast::ExprName {
             id: name.id.clone(),
             ctx: ExprContext::Store,
@@ -1370,8 +1394,7 @@ impl<'src> Parser<'src> {
             range: TextRange::new(modifier_start, name.range.start()),
             node_index: AtomicNodeIndex::NONE,
         });
-        self.eat(TokenKind::Semi);
-        self.eat(TokenKind::Newline);
+        self.eat_declaration_terminator();
         Stmt::AnnAssign(ast::StmtAnnAssign {
             target: Box::new(target),
             annotation: Box::new(annotation),
@@ -1404,8 +1427,7 @@ impl<'src> Parser<'src> {
             range: newtype_range,
             node_index: AtomicNodeIndex::NONE,
         });
-        self.eat(TokenKind::Semi);
-        self.eat(TokenKind::Newline);
+        self.eat_declaration_terminator();
         Stmt::AnnAssign(ast::StmtAnnAssign {
             target: Box::new(target),
             annotation: Box::new(annotation),
@@ -1435,8 +1457,7 @@ impl<'src> Parser<'src> {
             range: kw_range,
             node_index: AtomicNodeIndex::NONE,
         });
-        self.eat(TokenKind::Semi);
-        self.eat(TokenKind::Newline);
+        self.eat_declaration_terminator();
         Stmt::AnnAssign(ast::StmtAnnAssign {
             target: Box::new(target),
             annotation: Box::new(annotation),
@@ -1479,22 +1500,16 @@ impl<'src> Parser<'src> {
             node_index: AtomicNodeIndex::NONE,
             is_typeof: false,
         });
-        let value = if self.eat(TokenKind::Equal) {
-            Some(Box::new(
-                self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
-                    .expr,
-            ))
-        } else {
-            None
-        };
+        let value = self
+            .eat(TokenKind::Equal)
+            .then(|| Box::new(self.parse_declaration_value()));
         let target = Expr::Name(ast::ExprName {
             id: name.id.clone(),
             ctx: ExprContext::Store,
             range: name.range,
             node_index: AtomicNodeIndex::NONE,
         });
-        self.eat(TokenKind::Semi);
-        self.eat(TokenKind::Newline);
+        self.eat_declaration_terminator();
         Stmt::AnnAssign(ast::StmtAnnAssign {
             target: Box::new(target),
             annotation: Box::new(annotation),
@@ -1540,14 +1555,9 @@ impl<'src> Parser<'src> {
         let annotation_expr = self
             .parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
             .expr;
-        let assigned = if self.eat(TokenKind::Equal) {
-            Some(Box::new(
-                self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
-                    .expr,
-            ))
-        } else {
-            None
-        };
+        let assigned = self
+            .eat(TokenKind::Equal)
+            .then(|| Box::new(self.parse_declaration_value()));
         let target = Expr::Name(ast::ExprName {
             id: name.id.clone(),
             ctx: ExprContext::Store,
@@ -1583,8 +1593,7 @@ impl<'src> Parser<'src> {
             is_typeof: false,
         });
         let value = assigned;
-        self.eat(TokenKind::Semi);
-        self.eat(TokenKind::Newline);
+        self.eat_declaration_terminator();
         Stmt::AnnAssign(ast::StmtAnnAssign {
             target: Box::new(target),
             annotation: Box::new(annotation),
@@ -5683,17 +5692,27 @@ impl<'src> Parser<'src> {
         value: ParsedExpr,
         targets: &[Expr],
     ) -> ParsedExpr {
-        if !self.at_trailing_lambda_block() {
-            return value;
-        }
-
-        if !matches!(targets, [Expr::Name(_)]) {
+        if self.at_trailing_lambda_block() && !matches!(targets, [Expr::Name(_)]) {
             self.add_error(
                 ParseErrorType::OtherError(
                     "a trailing lambda block's value binds a single name".to_string(),
                 ),
                 self.current_token_range(),
             );
+            return value;
+        }
+
+        self.parse_trailing_lambda_value(value)
+    }
+
+    /// basedpython: wraps `value` as a trailing lambda block when a `:` and an
+    /// indented suite follow it, and returns `value` untouched when none does.
+    ///
+    /// The caller has already established that a block may bind here — that the
+    /// value belongs to a single name. See [`Parser::try_parse_trailing_lambda_value`]
+    /// for what the wrapper is and why the target has to be one name.
+    fn parse_trailing_lambda_value(&mut self, value: ParsedExpr) -> ParsedExpr {
+        if !self.at_trailing_lambda_block() {
             return value;
         }
 

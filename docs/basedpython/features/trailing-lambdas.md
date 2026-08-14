@@ -72,10 +72,11 @@ def _trailing_lambda_0(it=None):
 result = f(2, a=_trailing_lambda_0)
 ```
 
-an annotation works the same way (`result: str = f(2):`). the target has to be a
-single name, though: a block's value is worked out together with the binding its
-target makes, and only one binding can do that — so neither a chain
-(`a = b = f:`) nor an unpacking (`a, b = f:`) takes a block
+an annotation works the same way (`result: str = f(2):`), as does a declaration
+(`let result = f(2):`, `var result = f(2):`). the target has to be a single name,
+though: a block's value is worked out together with the binding its target makes,
+and only one binding can do that — so neither a chain (`a = b = f:`) nor an
+unpacking (`a, b = f:`) takes a block
 
 ## binding
 
