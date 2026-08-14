@@ -1,0 +1,18 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{\n    inferred_return_types: true, inferred_raises: true,\n    ..InlayHintSettings::none()\n})"
+---
+
+def f()[ -> 1]:
+    return 1
+
+def g():
+    print('hi')
+
+def h(a: int)[ -> "x" | None]:
+    if a:
+        return 'x'
+    return None
+
+def raiser()[ -> Never][ raises TypeError]:
+    raise TypeError

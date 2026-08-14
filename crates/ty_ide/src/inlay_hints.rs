@@ -22,7 +22,8 @@ use ty_python_semantic::reified::inferred_reified_type_param_names;
 use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
     InlayHintCallArgumentDetails, hintable_parameter_type, inferred_override, inferred_raises,
-    inferred_type_param_variance, inlay_hint_call_argument_details, is_reveal_type_function,
+    inferred_return_annotation, inferred_type_param_variance, inherited_parameter_annotation,
+    inlay_hint_call_argument_details, is_reveal_type_function, is_union_special_form,
     numeric_promotion, trailing_lambda_implicit_parameters, type_parameter_names,
 };
 use ty_python_semantic::types::{DisplaySettings, Type, TypeDetail};
@@ -353,7 +354,7 @@ impl InlayHint {
 
     /// The arms the typing spec's numeric promotion adds to a `float` /
     /// `complex` type expression.
-    fn numeric_promotion(position: TextSize, arms: &'static str) -> Self {
+    fn numeric_promotion(position: TextSize, arms: String) -> Self {
         Self {
             position,
             kind: InlayHintKind::NumericPromotion,
@@ -382,14 +383,23 @@ impl InlayHint {
     }
 
     /// The parameters a source never spells, shown where they would be written.
+    ///
+    /// `leading_space` separates the hint from the character it sits after: one
+    /// written inside a parameter list abuts a `(` or a `,` that already spaces
+    /// it, but a trailing lambda's sits directly after the block's `:`.
     fn implicit_parameters(
         db: &dyn Db,
         env: &ProgramEnvironment<'_>,
         position: TextSize,
         parameters: &[(&str, Option<Type>)],
+        leading_space: bool,
         parameter_follows: bool,
     ) -> Self {
         let mut parts = Vec::new();
+
+        if leading_space {
+            parts.push(" ".into());
+        }
 
         for (index, (name, ty)) in parameters.iter().enumerate() {
             if index > 0 {
@@ -413,8 +423,27 @@ impl InlayHint {
         }
     }
 
-    /// The inferred type of an unannotated lambda parameter.
-    fn lambda_parameter_type(
+    /// basedpython: the return type recovered for a `def` that leaves its
+    /// annotation out, shown where the annotation would be written.
+    fn inferred_return(
+        db: &dyn Db,
+        env: &ProgramEnvironment<'_>,
+        position: TextSize,
+        returned: Type,
+    ) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::Type,
+            label: InlayHintLabel {
+                parts: vec![format!(" -> {}", returned.display(db, env)).into()],
+            },
+            text_edits: vec![],
+        }
+    }
+
+    /// The type of a parameter the source leaves unannotated, shown where the
+    /// annotation would be written.
+    fn parameter_type(
         db: &dyn Db,
         env: &ProgramEnvironment<'_>,
         position: TextSize,
@@ -697,6 +726,24 @@ pub struct InlayHintSettings {
     /// ```
     pub lambda_parameter_types: bool,
 
+    /// basedpython: whether to show the type an unannotated parameter takes from
+    /// the method it overrides or the overloads it implements.
+    ///
+    /// ```by
+    /// class B(A):
+    ///     def f(self, a": int"): ...
+    /// ```
+    pub inherited_parameter_types: bool,
+
+    /// basedpython: whether to show the return type recovered for a `def` that
+    /// leaves its annotation out.
+    ///
+    /// ```by
+    /// def f()" -> 1":
+    ///     return 1
+    /// ```
+    pub inferred_return_types: bool,
+
     /// basedpython: whether to show the arguments a call site fills implicitly
     /// from the `context` declarations in scope.
     ///
@@ -743,6 +790,8 @@ impl InlayHintSettings {
             implicit_parameters: false,
             implicit_self: false,
             lambda_parameter_types: false,
+            inherited_parameter_types: false,
+            inferred_return_types: false,
             implicit_arguments: false,
             template_binding_types: false,
             resolved_templates: false,
@@ -764,6 +813,8 @@ impl InlayHintSettings {
             implicit_parameters,
             implicit_self,
             lambda_parameter_types,
+            inherited_parameter_types,
+            inferred_return_types,
             implicit_arguments,
             template_binding_types,
             resolved_templates,
@@ -782,6 +833,8 @@ impl InlayHintSettings {
             || implicit_parameters
             || implicit_self
             || lambda_parameter_types
+            || inherited_parameter_types
+            || inferred_return_types
             || implicit_arguments
             || template_binding_types
             || resolved_templates
@@ -804,6 +857,8 @@ impl Default for InlayHintSettings {
             implicit_parameters: true,
             implicit_self: true,
             lambda_parameter_types: true,
+            inherited_parameter_types: true,
+            inferred_return_types: true,
             implicit_arguments: true,
             template_binding_types: true,
             resolved_templates: true,
@@ -840,6 +895,10 @@ struct InlayHintVisitor<'a, 'db> {
     in_type_expression: bool,
     /// Whether we are inside a `lambda`'s parameter list.
     in_lambda: bool,
+    /// The operand of a union in a type expression currently being visited, and what the
+    /// operands written beside it denote. Read by numeric promotion, which adds nothing an
+    /// operand already spells.
+    union_siblings: Option<(TextRange, Vec<Type<'db>>)>,
     /// The class whose body we are directly inside, if any.
     enclosing_class: Option<Type<'db>>,
 }
@@ -867,6 +926,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             source_type: file.file(db).source_type(db),
             in_type_expression: false,
             in_lambda: false,
+            union_siblings: None,
             enclosing_class: None,
         }
     }
@@ -1145,15 +1205,52 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
-        let Some(arms) = expr
-            .inferred_type(&self.model)
-            .and_then(|ty| numeric_promotion(self.db, env, self.model.file(), ty))
-        else {
+        let arms = {
+            // the siblings belong to one operand, so anything nested inside that operand — the
+            // `float` of `list[float] | int` — sits in a union of its own and has none
+            let siblings = match &self.union_siblings {
+                Some((operand, siblings)) if *operand == expr.range() => siblings.as_slice(),
+                _ => &[][..],
+            };
+
+            expr.inferred_type(&self.model)
+                .and_then(|ty| numeric_promotion(self.db, env, self.model.file(), ty, siblings))
+        };
+
+        let Some(arms) = arms else {
             return;
         };
 
         self.hints
             .push(InlayHint::numeric_promotion(expr.range().end(), arms));
+    }
+
+    /// Visit the operands of a union written in a type expression, each knowing what the
+    /// operands written beside it already denote.
+    ///
+    /// A union is the one place a promoted arm can already be spelled: `float | int` names two
+    /// arms whichever way it is read, so the promotion adds nothing there.
+    fn visit_union_operands(&mut self, operands: &[&'a Expr]) {
+        let types: Vec<_> = operands
+            .iter()
+            .map(|operand| operand.inferred_type(&self.model))
+            .collect();
+
+        let outer = self.union_siblings.take();
+
+        for (index, operand) in operands.iter().enumerate() {
+            let siblings = types
+                .iter()
+                .enumerate()
+                .filter(|(sibling, _)| *sibling != index)
+                .filter_map(|(_, ty)| *ty)
+                .collect();
+
+            self.union_siblings = Some((operand.range(), siblings));
+            self.visit_expr(operand);
+        }
+
+        self.union_siblings = outer;
     }
 
     /// Hint the type a `reveal_type` call reveals, at the end of its line.
@@ -1203,6 +1300,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             env,
             position,
             &[(parameter.name.as_str(), ty)],
+            false,
             self.parameter_follows(position),
         ));
     }
@@ -1238,6 +1336,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             env,
             colon + TextSize::from(1),
             &parameters,
+            true,
             false,
         ));
     }
@@ -1265,11 +1364,68 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        self.hints.push(InlayHint::lambda_parameter_type(
+        self.hints.push(InlayHint::parameter_type(
             self.db,
             env,
             parameter.name.range().end(),
             ty,
+        ));
+    }
+
+    /// basedpython: hint the type an unannotated parameter of a `def` takes from
+    /// the method it overrides or the overloads it implements.
+    ///
+    /// A lambda's parameters are typed from the call site instead, and are hinted
+    /// under their own setting.
+    fn add_inherited_parameter_type(&mut self, parameter: &ast::Parameter) {
+        let env = &self.model.program_environment();
+        if !self.settings.inherited_parameter_types
+            || self.in_lambda
+            || parameter.annotation.is_some()
+            || parameter.range().is_empty()
+        {
+            return;
+        }
+
+        let Some(ty) = inherited_parameter_annotation(&self.model, parameter) else {
+            return;
+        };
+
+        self.hints.push(InlayHint::parameter_type(
+            self.db,
+            env,
+            parameter.name.range().end(),
+            ty,
+        ));
+    }
+
+    /// basedpython: hint the return type recovered for a `def` that leaves its
+    /// annotation out, where the annotation would be written.
+    ///
+    /// This runs before the `raises` hint, which sits in the same place when
+    /// there is no annotation, so the two read in the order they are written:
+    /// `def f() -> int raises TypeError`.
+    fn add_inferred_return(&mut self, function: &ast::StmtFunctionDef) {
+        let env = &self.model.program_environment();
+        if !self.settings.inferred_return_types
+            || function.returns.is_some()
+            || function.is_asserts_return
+        {
+            return;
+        }
+
+        let Some(returned) = function
+            .inferred_type(&self.model)
+            .and_then(|ty| inferred_return_annotation(self.db, ty))
+        else {
+            return;
+        };
+
+        self.hints.push(InlayHint::inferred_return(
+            self.db,
+            env,
+            function.parameters.end(),
+            returned,
         ));
     }
 
@@ -1367,6 +1523,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 return;
             }
             Stmt::FunctionDef(function) => {
+                self.add_inferred_return(function);
                 self.add_inferred_raises(function);
                 self.add_inferred_reification(function);
                 self.add_inferred_override(function);
@@ -1420,6 +1577,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
         if self.enter_node(parameter.into()).is_traverse() {
             self.add_implicit_self(parameter);
             self.add_lambda_parameter_type(parameter);
+            self.add_inherited_parameter_type(parameter);
         }
 
         source_order::walk_parameter(self, parameter);
@@ -1454,6 +1612,36 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 let in_lambda = std::mem::replace(&mut self.in_lambda, true);
                 source_order::walk_expr(self, expr);
                 self.in_lambda = in_lambda;
+            }
+            // a union in a type expression, written either way. its operands are visited by
+            // hand so each one knows what the others already spell
+            Expr::BinOp(binop)
+                if self.in_type_expression && matches!(binop.op, ast::Operator::BitOr) =>
+            {
+                if !self.enter_node(expr.into()).is_traverse() {
+                    return;
+                }
+
+                let mut operands = Vec::new();
+                flatten_bit_or(expr, &mut operands);
+                self.visit_union_operands(&operands);
+            }
+            Expr::Subscript(subscript)
+                if self.in_type_expression
+                    && subscript
+                        .value
+                        .inferred_type(&self.model)
+                        .is_some_and(is_union_special_form) =>
+            {
+                if !self.enter_node(expr.into()).is_traverse() {
+                    return;
+                }
+
+                self.add_type_argument_names(subscript);
+                self.visit_expr(&subscript.value);
+
+                let operands: Vec<_> = subscript_arguments(&subscript.slice).collect();
+                self.visit_union_operands(&operands);
             }
             Expr::Subscript(subscript) if self.in_type_expression => {
                 self.add_type_argument_names(subscript);
@@ -1528,6 +1716,19 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 source_order::walk_expr(self, expr);
             }
         }
+    }
+}
+
+/// The operands a `|` union writes, flattened across the whole chain: `a | b | c` names three
+/// arms, not a union holding a union.
+fn flatten_bit_or<'a>(expr: &'a Expr, operands: &mut Vec<&'a Expr>) {
+    if let Expr::BinOp(binop) = expr
+        && matches!(binop.op, ast::Operator::BitOr)
+    {
+        flatten_bit_or(&binop.left, operands);
+        flatten_bit_or(&binop.right, operands);
+    } else {
+        operands.push(expr);
     }
 }
 
@@ -2060,7 +2261,7 @@ Source with applied edits:
 
         assert_snapshot!(test.inlay_hints(), @"
 
-        def deco[Parameters: (*: *, **: *), R](fn: (**Parameters) -> R):
+        def deco[Parameters: (*: *, **: *), R](fn: (**Parameters) -> R)[ -> def inner(**Parameters@deco) -> R@deco]:
             def inner(*args: *Parameters, **kwargs: **Parameters) -> R:
                 positional[: *Parameters@deco] = args
                 keyword[: **Parameters@deco] = kwargs
@@ -6788,7 +6989,7 @@ Source with applied edits:
         def foo(x: int) -> str: ...
         @overload
         def foo(x: str) -> int: ...
-        def foo(x):
+        def foo(x[: int | str])[ -> str | int]:
             return x
 
         foo([x=]42)
@@ -6857,7 +7058,7 @@ Source with applied edits:
         def S(name: str, is_symmetric: Optional[bool] = None) -> str: ...
         @overload
         def S(*names: str, is_symmetric: Optional[bool] = None) -> Sequence[str]: ...
-        def S():
+        def S()[ -> Sequence[str]]:
             pass
 
         b[: Sequence[str]] = S('x', 'y')
@@ -6923,7 +7124,7 @@ Source with applied edits:
         def f(x: int) -> str: ...
         @overload
         def f(x: str, y: str) -> int: ...
-        def f(x):
+        def f(x[: int | str])[ -> str | int]:
             return x
 
         f([x=][])
@@ -9716,6 +9917,36 @@ Source with applied edits:
         }));
     }
 
+    /// An arm the union already writes is not one the promotion adds — `float |
+    /// int` names two arms whichever way it is read — so only the arms missing
+    /// from the union are hinted. A `float` nested inside an operand sits in a
+    /// union of its own and keeps all of its arms.
+    #[test]
+    fn numeric_promotions_already_written_in_the_union() {
+        let mut test = inlay_hint_test(
+            "
+            from typing import Union
+
+            def f(
+                a: float | int,
+                b: int | float,
+                c: complex | int,
+                d: complex | float,
+                e: float | str,
+                f: Union[float, int],
+                g: Union[float, str],
+                h: list[float] | int,
+                i: str | float | int,
+            ) -> None: ...
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            numeric_promotions: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
     #[test]
     fn basedpython_numeric_promotions_are_not_hinted() {
         let mut test = basedpython_inlay_hint_test(
@@ -9765,6 +9996,108 @@ Source with applied edits:
 
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
             lambda_parameter_types: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// An unannotated method takes its parameter types from the method it
+    /// overrides, so the hint says what the override left out. A method that
+    /// overrides nothing has only an anonymous hole to offer, which says no more
+    /// than the missing annotation did.
+    #[test]
+    fn basedpython_inherited_parameter_types() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A:
+                def f(self, a: int, b: str = 'x') -> None: ...
+
+            class B(A):
+                def f(self, a, b='y') -> None: ...
+
+            class C:
+                def f(self, a) -> None: ...
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inherited_parameter_types: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// An overload implementation takes its parameter types from the overloads
+    /// it implements, the same way an override takes them from its base.
+    #[test]
+    fn basedpython_inherited_parameter_types_from_overloads() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            from typing import overload
+
+            @overload
+            def f(a: int) -> int: ...
+            @overload
+            def f(a: str) -> str: ...
+            def f(a): ...
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inherited_parameter_types: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// The return type of a `def` that leaves its annotation out is recovered
+    /// from the body, and shown where the annotation would go — ahead of a
+    /// `raises` clause, which is written after it.
+    ///
+    /// `None` is what such a `def` already means, so it is not worth a hint.
+    #[test]
+    fn basedpython_inferred_return_types() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def f():
+                return 1
+
+            def g():
+                print('hi')
+
+            def h(a: int):
+                if a:
+                    return 'x'
+                return None
+
+            def raiser():
+                raise TypeError
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_return_types: true,
+            inferred_raises: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// A written return annotation is the source's own answer, and an
+    /// `init(...)` is given its `-> None` by the parser, so neither is hinted.
+    #[test]
+    fn basedpython_declared_return_types_are_not_hinted() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def f() -> int:
+                return 1
+
+            def guard(a: object) -> asserts a:
+                assert a
+
+            class C:
+                init(a: int)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_return_types: true,
             ..InlayHintSettings::none()
         }));
     }

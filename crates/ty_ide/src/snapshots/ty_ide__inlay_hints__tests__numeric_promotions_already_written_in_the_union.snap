@@ -1,0 +1,18 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ numeric_promotions: true, ..InlayHintSettings::none() })"
+---
+
+from typing import Union
+
+def f(
+    a: float | int,
+    b: int | float,
+    c: complex[ | float] | int,
+    d: complex | float,
+    e: float[ | int] | str,
+    f: Union[float, int],
+    g: Union[float[ | int], str],
+    h: list[float[ | int]] | int,
+    i: str | float | int,
+) -> None: ...

@@ -30,6 +30,8 @@ Settings: WorkspaceSettings {
         implicit_parameters: true,
         implicit_self: true,
         lambda_parameter_types: true,
+        inherited_parameter_types: true,
+        inferred_return_types: true,
         implicit_arguments: true,
         template_binding_types: true,
         resolved_templates: true,
