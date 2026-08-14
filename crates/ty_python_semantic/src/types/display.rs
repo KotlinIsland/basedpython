@@ -17,7 +17,7 @@ use ruff_source_file::LineColumn;
 use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use ty_module_resolver::file_to_module;
+use ty_module_resolver::{KnownModule, Module, file_to_module};
 
 use crate::Db;
 use crate::place::{DefinedPlace, Place, builtins_symbol, global_symbol};
@@ -1042,7 +1042,22 @@ fn importable_module_of<'db>(
     {
         return None;
     }
-    Some(module.name(db).as_str().to_owned())
+    Some(public_module_name(db, &module).to_owned())
+}
+
+/// The name a module should be written under, which is its own name unless the module is a
+/// private implementation detail that another module is the public face of.
+///
+/// The only such module is `_collections_abc`, where the `collections.abc` ABCs (`Mapping`,
+/// `Iterator`, …) are defined; `collections.abc` is nothing but `from _collections_abc import *`,
+/// and `typing` re-exports the same classes again. Naming the private module in a diagnostic
+/// would point at a spelling nobody writes.
+pub(super) fn public_module_name<'db>(db: &'db dyn Db, module: &Module<'db>) -> &'db str {
+    if module.known(db) == Some(KnownModule::CollectionsAbcInternal) {
+        KnownModule::CollectionsAbc.as_str()
+    } else {
+        module.name(db).as_str()
+    }
 }
 
 /// Returns the qualified name components for a scope, excluding the item itself.
@@ -1086,8 +1101,7 @@ pub(super) fn qualified_name_components_from_scope(
     }
 
     if let Some(module) = file_to_module(db, file.resolver_file(db)) {
-        let module_name = module.name(db);
-        name_parts.push(module_name.as_str().to_string());
+        name_parts.push(public_module_name(db, &module).to_string());
     }
 
     name_parts.reverse();

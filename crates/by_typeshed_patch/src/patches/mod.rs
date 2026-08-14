@@ -6,6 +6,7 @@ pub mod any_to_dynamic;
 pub mod arrow_callable;
 pub mod builtins_tweaks;
 pub mod cleanup;
+pub mod collections_abc_home;
 pub mod container_overlapping;
 pub mod context_manager_abstract;
 pub mod dead_symbols;

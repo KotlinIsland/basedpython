@@ -50,14 +50,14 @@ impl Patch for ContainerMembershipOverlapping {
 
     fn target_symbols(&self) -> &'static [&'static str] {
         &[
-            "typing.Container",
-            "typing.Collection",
-            "typing.Mapping",
-            "typing.Sequence",
-            "typing.AbstractSet",
-            "typing.KeysView",
-            "typing.ValuesView",
-            "typing.ItemsView",
+            "_collections_abc.Container",
+            "_collections_abc.Collection",
+            "_collections_abc.Mapping",
+            "_collections_abc.Sequence",
+            "_collections_abc.AbstractSet",
+            "_collections_abc.KeysView",
+            "_collections_abc.ValuesView",
+            "_collections_abc.ItemsView",
             "builtins.tuple",
             "builtins.list",
             "builtins.set",
@@ -69,14 +69,16 @@ impl Patch for ContainerMembershipOverlapping {
 
     fn rewrite(&self, module_path: &Path, parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
         match module_qualname(module_path).as_deref() {
-            Some("typing") => rewrite_typing(parsed, source),
+            // the ABCs live in `_collections_abc`; before
+            // `collections_abc_home` has moved them there they are still in `typing`
+            Some("_collections_abc" | "typing") => rewrite_abcs(parsed, source),
             Some("builtins") => rewrite_builtins(parsed),
             _ => Vec::new(),
         }
     }
 }
 
-fn rewrite_typing(parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
+fn rewrite_abcs(parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
     let mut edits = Vec::new();
     remove_stale_comments(source, &mut edits);
     for stmt in &parsed.syntax().body {
@@ -344,6 +346,9 @@ class Mapping[out Key, out Value](Collection[Key]):
     def __contains__(self, key: Overlapping[Key], /) -> bool
     def __eq__(self, other: object, /) -> bool
 ";
+        // the ABCs are in `_collections_abc`; they are only in `typing` for as
+        // long as it takes `collections_abc_home` to move them out of it
+        assert_eq!(run("_collections_abc.byi", src), expected);
         assert_eq!(run("typing.byi", src), expected);
     }
 

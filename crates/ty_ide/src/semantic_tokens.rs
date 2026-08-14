@@ -2539,10 +2539,10 @@ def decorator(func: Callable[P, int]) -> Callable[P, str]: ...
         "\"P\"" @ 55..58: String
         "decorator" @ 65..74: Function [definition]
         "func" @ 75..79: Parameter [definition]
-        "Callable" @ 81..89: Variable
+        "Callable" @ 81..89: Class
         "P" @ 90..91: TypeParameter
         "int" @ 93..96: Class
-        "Callable" @ 102..110: Variable
+        "Callable" @ 102..110: Class
         "P" @ 111..112: TypeParameter
         "str" @ 114..117: Class
         "#);
@@ -3275,16 +3275,16 @@ c.callback()
         "P" @ 78..79: TypeParameter [definition]
         "R" @ 81..82: TypeParameter [definition]
         "function" @ 84..92: Parameter [definition]
-        "Callable" @ 94..102: Variable
+        "Callable" @ 94..102: Class
         "P" @ 103..104: TypeParameter
         "R" @ 106..107: TypeParameter
-        "Callable" @ 113..121: Variable
+        "Callable" @ 113..121: Class
         "P" @ 122..123: TypeParameter
         "R" @ 125..126: TypeParameter
         "function" @ 140..148: Parameter
         "C" @ 156..157: Class [definition]
         "callback" @ 163..171: Variable [definition]
-        "Callable" @ 173..181: Variable
+        "Callable" @ 173..181: Class
         "None" @ 186..190: BuiltinConstant
         "None" @ 202..206: BuiltinConstant
         "decorate" @ 213..221: Decorator

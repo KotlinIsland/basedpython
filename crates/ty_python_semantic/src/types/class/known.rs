@@ -1508,22 +1508,24 @@ impl KnownClass {
             | Self::NotImplementedType
             | Self::WrapperDescriptorType => KnownModule::Types,
             Self::NoneType | Self::SupportsKeysAndGetItem => KnownModule::Typeshed,
+            Self::SpecialForm
+            | Self::TypeVar
+            | Self::StdlibAlias
+            | Self::ProtocolMeta
+            | Self::ParamSpec
+            | Self::SupportsIndex => KnownModule::Typing,
+            // the `collections.abc` ABCs are defined in `_collections_abc`, which is
+            // what both `collections.abc` and `typing` re-export them from
             Self::Awaitable
             | Self::Generator
             | Self::AsyncGenerator
-            | Self::SpecialForm
-            | Self::TypeVar
-            | Self::StdlibAlias
             | Self::Iterable
             | Self::Iterator
             | Self::AsyncIterator
             | Self::Sequence
             | Self::Mapping
             | Self::MutableMapping
-            | Self::ProtocolMeta
-            | Self::ParamSpec
-            | Self::Hashable
-            | Self::SupportsIndex => KnownModule::Typing,
+            | Self::Hashable => KnownModule::CollectionsAbcInternal,
             Self::TypeAliasType
             | Self::ExtensionsTypeVar
             | Self::ExtensionsTypeVarTuple
@@ -1953,6 +1955,13 @@ impl KnownClass {
             | Self::Awaitable
             | Self::Generator
             | Self::AsyncGenerator
+            | Self::Hashable
+            | Self::Iterable
+            | Self::Iterator
+            | Self::AsyncIterator
+            | Self::Sequence
+            | Self::Mapping
+            | Self::MutableMapping
             | Self::Template
             | Self::Path
             | Self::FunctoolsPartial
@@ -1982,16 +1991,9 @@ impl KnownClass {
             Self::SpecialForm
             | Self::TypeAliasType
             | Self::NoDefaultType
-            | Self::Hashable
             | Self::SupportsIndex
             | Self::ParamSpecArgs
             | Self::ParamSpecKwargs
-            | Self::Iterable
-            | Self::Iterator
-            | Self::AsyncIterator
-            | Self::Sequence
-            | Self::Mapping
-            | Self::MutableMapping
             | Self::ProtocolMeta
             | Self::NewType => {
                 matches!(module, KnownModule::Typing | KnownModule::TypingExtensions)

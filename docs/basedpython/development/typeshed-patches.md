@@ -192,6 +192,38 @@ idempotent, and both the unions upstream spells out by hand (`float | None`) and
 the constraint lists that already carry an `int` beside the `float`
 (`array[Element in (int, float, str)]`) come out unchanged
 
+## worked example: `collections-abc-home`
+
+every other patch rewrites one module in place. this one moves code between two:
+upstream declares `Mapping`, `Iterator`, `Sequence` and the rest of the
+`collections.abc` ABCs in `typing.pyi`, and has `_collections_abc.pyi` import
+them straight back, which is the opposite of what python does. the patch takes
+the class statements out of `typing` and puts them in `_collections_abc`, and
+gives `typing` the re-export import in exchange
+
+a cross-module move fits the per-file `Patch` trait because the decision is taken
+once, in `scan`, before any file is rewritten: `scan` reads `typing.byi` and
+records the text to move. `rewrite` then cuts it when it is handed `typing`, and
+inserts it when it is handed `_collections_abc`, so neither call needs to know
+which file the walk reached first
+
+two consequences are worth knowing before writing another patch like it:
+
+- **it is registered first** in `all_post_patches()`. the moved text is the raw
+    post-conversion form, and the patches that polish it — `container-overlapping`,
+    `property-to-let`, `final-modifier` — must see it in its new home rather than
+    in the copy about to be cut. a patch that names its target module therefore
+    has to name `_collections_abc` too
+- **`scan` returning nothing is what makes it idempotent.** on every run after
+    the first, `typing` has no class statements left to move, so both halves of
+    the patch are no-ops
+
+`Callable` is the one name it rewrites instead of moving. typeshed spells it
+`Callable: _SpecialForm`, which defines nothing; the runtime has a real ABC with
+an abstract `__call__`, so that is what the patch writes. ty still reads a
+subscripted `Callable` as its own callable type rather than as an instance of
+that class, the same way it does for the `class Any` typeshed already writes out
+
 ## adding a new patch
 
 1. create `crates/by_typeshed_patch/src/patches/<name>.rs` implementing `Patch`,

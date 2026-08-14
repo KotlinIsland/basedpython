@@ -329,9 +329,13 @@ impl SpecialFormType {
     /// module is still observable.
     pub(super) fn rewrap_for_import_module(self, name: &str, import_module: KnownModule) -> Self {
         match (self, name, import_module) {
-            (Self::TypingCallable, "Callable", KnownModule::CollectionsAbcInternal) => {
-                Self::CollectionsAbcCallable
-            }
+            // `Callable` is defined in `_collections_abc`; `typing` re-exports it, and
+            // `typing_extensions` re-exports it again from there
+            (
+                Self::CollectionsAbcCallable,
+                "Callable",
+                KnownModule::Typing | KnownModule::TypingExtensions,
+            ) => Self::TypingCallable,
             _ => self,
         }
     }
@@ -829,7 +833,10 @@ impl SpecialFormType {
 
             SpecialFormType::TypeQualifier(qualifier) => qualifier.definition_modules(),
 
-            SpecialFormType::CollectionsAbcCallable => &[KnownModule::CollectionsAbc],
+            SpecialFormType::CollectionsAbcCallable => &[
+                KnownModule::CollectionsAbc,
+                KnownModule::CollectionsAbcInternal,
+            ],
 
             SpecialFormType::AlwaysTruthy
             | SpecialFormType::AlwaysFalsy
