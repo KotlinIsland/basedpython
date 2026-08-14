@@ -1,0 +1,14 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ implicit_arguments: true, ..InlayHintSettings::none() })"
+---
+
+def f(context a: int) -> None: ...
+def each(fn: (int) -> None) -> None: ...
+def against(fn: int.() -> None) -> None: ...
+
+each:
+    f([a=it])
+
+against:
+    f([a=self])
