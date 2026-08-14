@@ -154,7 +154,7 @@ pub(crate) struct DefinedPlace<'db> {
 }
 
 impl<'db> DefinedPlace<'db> {
-    fn new(ty: Type<'db>) -> Self {
+    pub(crate) fn new(ty: Type<'db>) -> Self {
         Self {
             ty,
             origin: TypeOrigin::Inferred,

@@ -166,7 +166,7 @@ mod class;
 mod class_base;
 pub(crate) mod conformance;
 mod constraints;
-mod context;
+pub(crate) mod context;
 mod context_manager;
 pub mod context_params;
 pub(crate) mod context_sensitive;
@@ -2967,7 +2967,7 @@ impl<'db> Type<'db> {
     }
 
     /// Create a promotable bytes literal.
-    fn bytes_literal(db: &'db dyn Db, bytes: &[u8]) -> Self {
+    pub(crate) fn bytes_literal(db: &'db dyn Db, bytes: &[u8]) -> Self {
         Self::LiteralValue(LiteralValueType::promotable(BytesLiteralType::new(
             db, bytes,
         )))
@@ -7890,7 +7890,7 @@ impl<'db> Type<'db> {
     /// Use this only when an over-approximation is sound, such as constructor inference or a
     /// source-side relation. Target-side subtype checks must use [`Self::to_instance`].
     #[must_use]
-    fn to_instance_approximation(
+    pub(crate) fn to_instance_approximation(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,

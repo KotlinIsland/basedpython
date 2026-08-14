@@ -95,6 +95,9 @@ use ty_python_core::{
 };
 
 use crate::Db;
+use crate::assumed::{is_below_stop_line, seeded_place};
+use crate::types::Type;
+use ruff_text_size::Ranged as _;
 
 /// Returns an iterator over the steps that resolve a value for a place load.
 pub(crate) fn resolve_place_load<'db, 'ast>(
@@ -726,6 +729,15 @@ pub(crate) enum PlaceLoadSourceKind<'db> {
         /// The place within `scope`.
         id: ScopedPlaceId,
     },
+    /// The type a debugger observed this place holding.
+    ///
+    /// Only ever produced for a program carrying assumptions, which is only ever a debugger's —
+    /// see [`crate::assumed`]. It supersedes the bindings rather than joining them because it is
+    /// not a claim about what the source says: it is what the value *was*, at a line the program
+    /// really reached, and the seed only survives to here if nothing between that line and this
+    /// use can have changed it.
+    Observed(Type<'db>),
+
     /// A source represented by a specialized query or rule.
     Implicit(ImplicitPlaceLoad<'db>),
 }
@@ -911,6 +923,19 @@ impl<'db> PlaceLoadResolutionContext<'db, '_> {
                 }
 
                 let use_id = expr_ref.scoped_use_id(self.db, self.file);
+
+                // A seeded program is a debugger's, and every other program's map is empty — so
+                // this is a lookup that finds nothing and allocates nothing on the ordinary path.
+                // Below the stop line only: a use above it ran before the observation was taken
+                if let Some(observed) = seeded_place(self.db, self.scope, place_expr)
+                    && is_below_stop_line(self.db, self.scope, expr_ref.range())
+                {
+                    return Some((
+                        PlaceLoadSourceKind::Observed(observed),
+                        Some((scope, ConstraintKey::UseId(use_id))),
+                    ));
+                }
+
                 Some((
                     PlaceLoadSourceKind::Bindings(use_def.bindings_at_use(use_id)),
                     Some((scope, ConstraintKey::UseId(use_id))),

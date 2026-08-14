@@ -8,6 +8,7 @@ use ty_module_resolver::{ResolverEnvironment, SearchPaths};
 use ty_site_packages::PythonVersionWithSource;
 
 use crate::ProgramFile;
+use crate::assumptions::Assumptions;
 
 // Re-export the misconfiguration strategy types from ty_module_resolver.
 pub use ty_module_resolver::{FallibleStrategy, MisconfigurationStrategy, UseDefaultStrategy};
@@ -19,6 +20,15 @@ pub struct Program<'db> {
 
     #[returns(copy)]
     pub resolver_environment: ResolverEnvironment<'db>,
+
+    /// What a debugger observed about the running program, when this is a seeded program.
+    ///
+    /// `None` for every program that is not one, which is every program a checker, a formatter or
+    /// an editor's ordinary diagnostics run under. Being part of the interned key is the point: a
+    /// seeded reading of a file and an unseeded one are separate semantic identities, so neither
+    /// can leak into the other and Salsa caches both. See [`crate::assumptions`].
+    #[returns(copy)]
+    pub assumptions: Option<Assumptions<'db>>,
 }
 
 impl get_size2::GetSize for Program<'_> {}
@@ -34,7 +44,21 @@ impl<'db> Program<'db> {
 
         let resolver_environment =
             ResolverEnvironment::new(db, python_version.version, &search_paths);
-        Program::new(db, python_platform, resolver_environment)
+        Program::new(db, python_platform, resolver_environment, None)
+    }
+
+    /// The same program, reading the source as a debugger found it at one line.
+    ///
+    /// Everything else about it is unchanged, so the seeded analysis resolves the same modules
+    /// against the same search paths on the same Python version — the one difference is what the
+    /// names are known to hold.
+    pub fn seeded(self, db: &'db dyn Db, assumptions: Assumptions<'db>) -> Self {
+        Program::new(
+            db,
+            self.python_platform(db).clone(),
+            self.resolver_environment(db),
+            Some(assumptions),
+        )
     }
 
     pub fn python_version(self, db: &'db dyn Db) -> PythonVersion {

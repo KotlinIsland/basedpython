@@ -13003,6 +13003,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                 place.into()
             }
+            // Definitely bound: the debugger read a value out of the frame, so there is no
+            // question of the name being unbound at this point. `DefinedPlace::new` is already
+            // `AlwaysDefined`
+            PlaceLoadSourceKind::Observed(ty) => Place::Defined(DefinedPlace::new(ty)).into(),
             PlaceLoadSourceKind::DefinitionsFromOwningScope { scope, id } => place_by_id(
                 db,
                 scope,

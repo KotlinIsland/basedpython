@@ -64,6 +64,7 @@ pub use types::visibility::private_symbols;
 pub use types::{DisplaySettings, ProgramEnvironment, TypeQualifiers};
 
 pub mod api_lockfile;
+mod assumed;
 mod db;
 pub mod dependencies;
 pub mod django_settings;

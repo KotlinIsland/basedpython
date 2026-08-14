@@ -18,16 +18,17 @@ use smallvec::SmallVec;
 use ty_module_resolver::ModuleName;
 
 use crate::frozen::{FrozenMap, FrozenSet};
-use crate::place::ScopedPlaceId;
+pub use crate::place::ScopedPlaceId;
 pub use crate::statement::{Statement, StatementNodeKey};
 use ast_ids::AstIds;
 pub use ast_ids::ExpressionNodeKey;
 use builder::SemanticIndexBuilder;
+pub use definition::DefinitionState;
 use definition::{Definition, DefinitionNodeKey, Definitions};
 use expression::Expression;
 use narrowing_constraints::ScopedNarrowingConstraint;
 use node_key::NodeKey;
-pub use place::{PlaceExprRef, PlaceTable};
+pub use place::{PlaceExpr, PlaceExprRef, PlaceTable};
 use predicate::{CaseNamePredicateKind, PatternPredicate};
 pub use reachability_constraints::ReachabilityConstraintsBuilder;
 use reachability_constraints::ScopedReachabilityConstraintId;
@@ -41,6 +42,7 @@ pub use use_def::{
 };
 use use_def::{EnclosingSnapshotKey, ScopedEnclosingSnapshotId};
 
+pub mod assumptions;
 pub mod ast_ids;
 pub mod ast_node_ref;
 mod builder;
@@ -68,6 +70,7 @@ pub use db::Db;
 pub use db::TestProgramDb;
 pub mod program;
 pub mod program_file;
+pub use assumptions::{Assumptions, ClassName, Observation, Observed};
 pub use program::Program;
 pub use program_file::ProgramFile;
 
