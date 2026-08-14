@@ -17,9 +17,19 @@ use ty_python_semantic::types::ide_support::{resolved_call_signature, typed_dict
 use ty_python_semantic::types::{KnownInstanceType, Type, TypeAliasType, TypeVarVariance};
 
 use ty_python_semantic::types::format::{SpecLanguage, spec_language};
-use ty_python_semantic::{HasType, SemanticModel, TypeQualifiers};
+use ty_python_semantic::{HasType, SemanticModel, TypeQualifiers, with_display_for_file};
 
 pub fn hover<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    offset: TextSize,
+) -> Option<RangedValue<Hover<'db>>> {
+    // the signature strings a hover carries are rendered here rather than at
+    // display time, so they have to be spelled in the file's own syntax now
+    with_display_for_file(db, file.file(db), || hover_inner(db, file, offset))
+}
+
+fn hover_inner<'db>(
     db: &'db dyn Db,
     file: ProgramFile<'db>,
     offset: TextSize,
@@ -402,18 +412,23 @@ pub struct DisplayHover<'db, 'a> {
 impl fmt::Display for DisplayHover<'_, '_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let db = self.db;
-        let mut first = true;
-        let env = ProgramEnvironment::from_file(self.hover.program_file);
-        for content in &self.hover.contents {
-            if !first {
-                self.kind.horizontal_line().fmt(f)?;
+        let file = self.hover.program_file;
+        // a hover shows the type as the reader would write it in this file:
+        // `1` in a basedpython file, `Literal[1]` in a python one
+        with_display_for_file(db, file.file(db), || {
+            let mut first = true;
+            let env = ProgramEnvironment::from_file(file);
+            for content in &self.hover.contents {
+                if !first {
+                    self.kind.horizontal_line().fmt(f)?;
+                }
+
+                content.display(db, &env, self.kind).fmt(f)?;
+                first = false;
             }
 
-            content.display(db, &env, self.kind).fmt(f)?;
-            first = false;
-        }
-
-        Ok(())
+            Ok(())
+        })
     }
 }
 
@@ -7070,6 +7085,71 @@ def function():
           |    ^- Cursor offset
           |    |
           |    source
+        ");
+    }
+
+    /// a hover is read as source, so a basedpython file spells the type the way
+    /// it would be written there: `1`, not `Literal[1]`
+    #[test]
+    fn hover_basedpython_literal() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                r#"
+                a<CURSOR> = 1
+                "#,
+            )
+            .build();
+
+        assert_snapshot!(test.hover(), @"
+        1
+        ---------------------------------------------
+        ```python
+        1
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.by:2:1
+          |
+        2 | a = 1
+          | ^- Cursor offset
+          | |
+          | source
+        ");
+    }
+
+    /// the signature a hover shows is rendered up front rather than at display
+    /// time, so it needs the file's spelling too
+    #[test]
+    fn hover_basedpython_call_signature() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                r#"
+                from typing import Literal
+
+                def f(x: Literal[1]) -> None:
+                    return None
+
+                f<CURSOR>(1)
+                "#,
+            )
+            .build();
+
+        assert_snapshot!(test.hover(), @"
+        def f(x: 1)
+        ---------------------------------------------
+        ```python
+        def f(x: 1)
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.by:7:1
+          |
+        7 | f(1)
+          | ^- Cursor offset
+          | |
+          | source
         ");
     }
 

@@ -13,7 +13,7 @@ use ty_ide::{
     completion,
 };
 use ty_project::{ProjectDatabase, SemanticDb as _};
-use ty_python_semantic::ProgramEnvironment;
+use ty_python_semantic::{ProgramEnvironment, with_display_for_file};
 
 use crate::capabilities::ResolvedClientCapabilities;
 use crate::document::{PositionExt, ToRangeExt};
@@ -91,100 +91,104 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
 
         // Safety: we just checked that completions is not empty.
         let max_index_len = OneIndexed::new(completions.len()).unwrap().digits().get();
-        let items: Vec<CompletionItem> = completions
-            .into_iter()
-            .enumerate()
-            .map(|(i, comp)| {
-                let kind = comp.kind.map(ty_kind_to_lsp_kind);
-                // a format spec clause has no type to show, so it carries its
-                // own few words instead
-                let type_display = comp
-                    .ty
-                    .map(|ty| ty.display(db, &env).to_string())
-                    .or_else(|| comp.detail.as_ref().map(ToString::to_string));
-                let import_edit = comp.import.as_ref().and_then(|edit| {
-                    let range = edit
-                        .range()
-                        .to_lsp_range(db, file, snapshot.encoding())?
-                        .local_range();
-                    Some(TextEdit {
-                        range,
-                        new_text: edit.content().map(ToString::to_string).unwrap_or_default(),
-                    })
-                });
+        // the type shown beside a suggestion is spelled in the syntax of the
+        // file being completed: `1`, not `Literal[1]`, in a basedpython file
+        let items: Vec<CompletionItem> = with_display_for_file(db, file, || {
+            completions
+                .into_iter()
+                .enumerate()
+                .map(|(i, comp)| {
+                    let kind = comp.kind.map(ty_kind_to_lsp_kind);
+                    // a format spec clause has no type to show, so it carries its
+                    // own few words instead
+                    let type_display = comp
+                        .ty
+                        .map(|ty| ty.display(db, &env).to_string())
+                        .or_else(|| comp.detail.as_ref().map(ToString::to_string));
+                    let import_edit = comp.import.as_ref().and_then(|edit| {
+                        let range = edit
+                            .range()
+                            .to_lsp_range(db, file, snapshot.encoding())?
+                            .local_range();
+                        Some(TextEdit {
+                            range,
+                            new_text: edit.content().map(ToString::to_string).unwrap_or_default(),
+                        })
+                    });
 
-                let label = comp.label().to_string();
-                let import_suffix = comp
-                    .module_name
-                    .and_then(|name| import_edit.is_some().then(|| format!(" (import {name})")));
-                let (label, label_details) = if snapshot
-                    .resolved_client_capabilities()
-                    .supports_completion_item_label_details()
-                {
-                    let label_details = CompletionItemLabelDetails {
-                        detail: import_suffix,
-                        description: type_display.clone(),
-                    };
-                    (label, Some(label_details))
-                } else {
-                    let label = import_suffix
-                        .map(|suffix| format!("{label}{suffix}"))
-                        .unwrap_or(label);
-                    (label, None)
-                };
-
-                let documentation = comp.documentation.map(|docstring| {
-                    let (kind, value) = if snapshot
+                    let label = comp.label().to_string();
+                    let import_suffix = comp.module_name.and_then(|name| {
+                        import_edit.is_some().then(|| format!(" (import {name})"))
+                    });
+                    let (label, label_details) = if snapshot
                         .resolved_client_capabilities()
-                        .prefers_markdown_in_completion()
+                        .supports_completion_item_label_details()
                     {
-                        (lsp_types::MarkupKind::Markdown, docstring.render_markdown())
+                        let label_details = CompletionItemLabelDetails {
+                            detail: import_suffix,
+                            description: type_display.clone(),
+                        };
+                        (label, Some(label_details))
                     } else {
-                        (
-                            lsp_types::MarkupKind::PlainText,
-                            docstring.render_plaintext(),
-                        )
+                        let label = import_suffix
+                            .map(|suffix| format!("{label}{suffix}"))
+                            .unwrap_or(label);
+                        (label, None)
                     };
 
-                    Documentation::MarkupContent(lsp_types::MarkupContent { kind, value })
-                });
-                let insert_text = comp.insert.map(String::from);
-                let insert_text_format = match comp.insert_text_format {
-                    CompletionInsertTextFormat::PlainText => None,
-                    CompletionInsertTextFormat::Snippet => Some(InsertTextFormat::Snippet),
-                };
-                // A completion that says what it replaces is one the client's own
-                // idea of the word under the cursor would get wrong, so the range
-                // is spelled out as an edit rather than left to be guessed.
-                let text_edit = comp.replace.and_then(|replace| {
-                    let range = replace
-                        .to_lsp_range(db, file, snapshot.encoding())?
-                        .local_range();
-                    Some(lsp_types::CompletionItemTextEdit::TextEdit(TextEdit {
-                        range,
-                        new_text: insert_text.clone().unwrap_or_else(|| label.clone()),
-                    }))
-                });
+                    let documentation = comp.documentation.map(|docstring| {
+                        let (kind, value) = if snapshot
+                            .resolved_client_capabilities()
+                            .prefers_markdown_in_completion()
+                        {
+                            (lsp_types::MarkupKind::Markdown, docstring.render_markdown())
+                        } else {
+                            (
+                                lsp_types::MarkupKind::PlainText,
+                                docstring.render_plaintext(),
+                            )
+                        };
 
-                CompletionItem {
-                    label,
-                    kind,
-                    sort_text: Some(format!("{i:-max_index_len$}")),
-                    detail: type_display,
-                    label_details,
-                    insert_text,
-                    insert_text_format,
-                    filter_text: comp.filter.map(String::from),
-                    text_edit,
-                    additional_text_edits: import_edit.map(|edit| vec![edit]),
-                    documentation,
-                    command: comp
-                        .command
-                        .and_then(|command| to_lsp_command(command, client_capabilities)),
-                    ..Default::default()
-                }
-            })
-            .collect();
+                        Documentation::MarkupContent(lsp_types::MarkupContent { kind, value })
+                    });
+                    let insert_text = comp.insert.map(String::from);
+                    let insert_text_format = match comp.insert_text_format {
+                        CompletionInsertTextFormat::PlainText => None,
+                        CompletionInsertTextFormat::Snippet => Some(InsertTextFormat::Snippet),
+                    };
+                    // A completion that says what it replaces is one the client's own
+                    // idea of the word under the cursor would get wrong, so the range
+                    // is spelled out as an edit rather than left to be guessed.
+                    let text_edit = comp.replace.and_then(|replace| {
+                        let range = replace
+                            .to_lsp_range(db, file, snapshot.encoding())?
+                            .local_range();
+                        Some(lsp_types::CompletionItemTextEdit::TextEdit(TextEdit {
+                            range,
+                            new_text: insert_text.clone().unwrap_or_else(|| label.clone()),
+                        }))
+                    });
+
+                    CompletionItem {
+                        label,
+                        kind,
+                        sort_text: Some(format!("{i:-max_index_len$}")),
+                        detail: type_display,
+                        label_details,
+                        insert_text,
+                        insert_text_format,
+                        filter_text: comp.filter.map(String::from),
+                        text_edit,
+                        additional_text_edits: import_edit.map(|edit| vec![edit]),
+                        documentation,
+                        command: comp
+                            .command
+                            .and_then(|command| to_lsp_command(command, client_capabilities)),
+                        ..Default::default()
+                    }
+                })
+                .collect()
+        });
         let len = items.len();
         let response = CompletionResponse::CompletionList(CompletionList {
             is_incomplete: true,
