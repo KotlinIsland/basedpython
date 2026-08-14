@@ -9718,6 +9718,31 @@ Source with applied edits:
         }));
     }
 
+    /// a trailing lambda block's implicit names fill `context` parameters too.
+    /// nothing is written for them, so unlike a `context` declaration they have
+    /// no definition for the hint to navigate to.
+    #[test]
+    fn basedpython_implicit_context_arguments_from_a_block() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def f(context a: int) -> None: ...
+            def each(fn: (int) -> None) -> None: ...
+            def against(fn: int.() -> None) -> None: ...
+
+            each:
+                f()
+
+            against:
+                f()
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            implicit_arguments: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
     #[test]
     fn basedpython_string_tag_argument_is_not_hinted() {
         let mut test = basedpython_inlay_hint_test(
