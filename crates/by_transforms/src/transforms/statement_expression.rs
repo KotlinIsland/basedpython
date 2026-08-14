@@ -54,7 +54,7 @@ use ruff_text_size::{Ranged, TextRange};
 use std::collections::HashSet;
 
 use super::ast_driver::{AstPass, Fragment, PassContext};
-use super::source_util::{line_indent, line_start, temporary_name};
+use super::source_util::{line_indent, line_start, temporary_name, value_separator_start};
 
 pub(crate) struct StatementExpressionPass<'src> {
     source: &'src str,
@@ -158,18 +158,11 @@ impl Lower<'_> {
 
         let temp = self.next_temp();
 
-        // everything the statement says before its value — `a = `, `return `, or
-        // nothing at all for an expression statement. it is re-emitted as text
-        // rather than as a passthrough span so that the copy below the statement
-        // is not itself rewritten by the edits that move it
-        let prefix = self.statement_prefix(stmt, tail);
-
         let mut fragments = Vec::new();
         if let Expr::Statement(statement) = tail {
-            self.emit_root(statement, &temp, &indent, &prefix, &mut fragments);
+            self.emit_root(statement, stmt, tail, &temp, &indent, &mut fragments);
         } else {
             Self::emit_value(tail, &temp, &indent, &mut fragments);
-            fragments.push(Fragment::Lit(format!("\n{indent}{prefix}{temp}")));
             // the replaced range starts after the line's existing indentation,
             // so the first emitted line must not repeat it
             if let Some(Fragment::Lit(first)) = fragments.first_mut()
@@ -177,6 +170,7 @@ impl Lower<'_> {
             {
                 *first = rest.to_string();
             }
+            self.push_prefix(stmt, tail, &temp, &indent, &mut fragments);
         }
         self.template_edits.push((stmt.range(), fragments));
     }
@@ -187,9 +181,10 @@ impl Lower<'_> {
     fn emit_root(
         &mut self,
         statement: &ExprStatement,
+        stmt: &Stmt,
+        tail: &Expr,
         temp: &str,
         indent: &str,
-        prefix: &str,
         out: &mut Vec<Fragment>,
     ) {
         let values = self.redirect_values(&statement.stmt, temp);
@@ -200,7 +195,7 @@ impl Lower<'_> {
         // diverges. (a statement that reaches its end without a value is
         // `non-exhaustive-statement-expression`, which ty has already reported)
         if values > 0 {
-            out.push(Fragment::Lit(format!("\n{indent}{prefix}{temp}")));
+            self.push_prefix(stmt, tail, temp, indent, out);
         }
     }
 
@@ -244,27 +239,37 @@ impl Lower<'_> {
         ));
     }
 
-    /// The text the statement says before its value — `a = `, `return `, or
-    /// nothing at all for an expression statement.
+    /// Emits, on a line of its own, everything the statement says before its
+    /// value — `a = `, `let a = `, `return ` — followed by `temp`.
     ///
-    /// Any parentheses wrapping the value are dropped: an expression's range
-    /// excludes them, so the raw slice would end in an unmatched `(` and the
-    /// closing `)` falls inside the range being replaced. A line-continuation
-    /// backslash is dropped for the same reason — the copy below the statement
-    /// is a line of its own.
-    fn statement_prefix(&self, stmt: &Stmt, tail: &Expr) -> String {
-        let start = usize::from(stmt.range().start());
-        let mut end = usize::from(tail.range().start());
-        while end > start {
-            let byte = self.source.as_bytes()[end - 1];
-            if byte == b'(' || byte == b'\\' || byte.is_ascii_whitespace() {
-                end -= 1;
-            } else {
-                break;
-            }
-        }
-        // one separating space, so `a =` reads `a = <temp>`
-        format!("{} ", self.source[start..end].trim_end())
+    /// The prefix is emitted as a passthrough span rather than copied out as
+    /// text, because a pass may be rewriting the prefix itself: a `let`
+    /// declaration lowers by replacing `let a =` with `a: Final =`. The driver
+    /// claims every edit inside a template's range and materializes only what
+    /// the template's passthrough spans cover, so a prefix copied as text takes
+    /// that rewrite down with it and the `let` reaches the output.
+    ///
+    /// The span runs all the way to the value, so that a rewrite of the whole
+    /// prefix is contained by it. What separates the two — whitespace, an
+    /// opening parenthesis, a line continuation — cannot be re-emitted verbatim
+    /// (see [`value_separator_start`]), so it is normalised to a single space by
+    /// an edit of its own. A prefix rewrite starts earlier and therefore wins
+    /// over that edit under the driver's first-wins overlap rule, which is why
+    /// no other pass has to know where this boundary lies.
+    fn push_prefix(
+        &mut self,
+        stmt: &Stmt,
+        tail: &Expr,
+        temp: &str,
+        indent: &str,
+        out: &mut Vec<Fragment>,
+    ) {
+        let prefix = TextRange::new(stmt.range().start(), tail.range().start());
+        let separator = TextRange::new(value_separator_start(self.source, prefix), prefix.end());
+        self.text_edits.push((separator, " ".to_owned()));
+        out.push(Fragment::Lit(format!("\n{indent}")));
+        out.push(Fragment::Src(prefix));
+        out.push(Fragment::Lit(temp.to_owned()));
     }
 
     /// Emits the block that computes `expr` into `temp` at `indent`.
@@ -749,6 +754,79 @@ mod tests {
             &Config::test_default(),
         );
         assert!(err.is_err(), "expected a transpile error, got: {err:?}");
+    }
+
+    /// the moved prefix carries the statement's own lowering with it: a
+    /// declaration's keyword is rewritten by an edit on the very range the
+    /// prefix occupies, and re-emitting the prefix as text would drop that edit
+    /// and leak the keyword into the output
+    #[test]
+    fn a_declarations_lowering_survives_the_moved_prefix() {
+        for (declaration, lowered) in [
+            ("let a", "a: Final"),
+            ("var a", "a"),
+            ("let a: int", "a: Final[int]"),
+            ("final a: int", "a: Final[int]"),
+            ("private a: int", "a: int"),
+        ] {
+            let out = check(&format!(
+                "b: int? = None\n{declaration} = b ?? raise ValueError()\nprint(a)\n"
+            ));
+            assert!(
+                out.contains(&format!("{lowered} = __by_stmt_expr_0__\nprint(a)")),
+                "`{declaration}`, got:\n{out}"
+            );
+            assert!(!out.contains(declaration), "`{declaration}`, got:\n{out}");
+        }
+    }
+
+    /// the suite-bearing form moves the same prefix, so it lowers the same way
+    #[test]
+    fn a_declaration_takes_a_suite_bearing_value() {
+        let out = check(indoc! {"
+            let a = match 1:
+                case 1:
+                    2
+                case _:
+                    3
+            print(a)
+        "});
+        assert!(
+            out.contains(indoc! {"
+                match 1:
+                    case 1:
+                        __by_stmt_expr_0__ = 2
+                    case _:
+                        __by_stmt_expr_0__ = 3
+                a: Final = __by_stmt_expr_0__
+            "}),
+            "got:\n{out}"
+        );
+    }
+
+    /// the prefix is re-emitted from source, so the separator before the value —
+    /// which may be an unbalanced `(` — is normalised rather than carried along
+    #[test]
+    fn a_moved_prefix_normalises_its_separator() {
+        let parenthesized = check(indoc! {"
+            b: int? = None
+            let a = (b ?? raise ValueError())
+            print(a)
+        "});
+        assert!(
+            parenthesized.contains("a: Final = __by_stmt_expr_0__"),
+            "got:\n{parenthesized}"
+        );
+
+        let spaced = check(indoc! {"
+            b: int? = None
+            let a   =   b ?? raise ValueError()
+            print(a)
+        "});
+        assert!(
+            spaced.contains("a: Final = __by_stmt_expr_0__"),
+            "got:\n{spaced}"
+        );
     }
 
     #[test]
