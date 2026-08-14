@@ -117,19 +117,16 @@ impl Default for PyFormatOptions {
 impl PyFormatOptions {
     /// Otherwise sets the defaults. Returns none if the extension is unknown
     pub fn from_extension(path: &Path) -> Self {
-        let is_basedpython = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext == "by" || ext == "byi");
-        Self {
-            is_basedpython,
-            ..Self::from_source_type(PySourceType::from(path))
-        }
+        Self::from_source_type(PySourceType::from(path))
     }
 
+    /// The source type decides whether basedpython surface syntax is written back out.
+    /// A stub counts: `.byi` carries variance keywords, `protocol`, `let` and the rest
+    /// of the surface just as `.by` does — the vendored typeshed is written in it
     pub fn from_source_type(source_type: PySourceType) -> Self {
         Self {
             source_type,
+            is_basedpython: source_type.is_basedpython(),
             ..Self::default()
         }
     }

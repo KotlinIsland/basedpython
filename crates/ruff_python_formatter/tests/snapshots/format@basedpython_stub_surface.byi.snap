@@ -1,0 +1,57 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/basedpython_stub_surface.byi
+---
+## Input
+```python
+# a stub is written in basedpython too, so the whole surface has to survive a
+# reformat. dropping any of it here would be a silent semantic change: a
+# covariant parameter would come back invariant, and `protocol` would come back
+# as a plain class
+protocol Iterable[out Element]:
+    abstract def __iter__(self) -> Iterator[Element]
+
+protocol Sized(metaclass=ABCMeta):
+    abstract def __len__(self) -> int
+
+class Pair[in out Key, in Sink, out Value]:
+    let key: Key
+    let value: Value
+    def send(self, sink: Sink) -> None
+
+class Bounded[Element: int, Text in (str, bytes), Defaulted = int]:
+    let element: Element
+
+protocol Callable[in Parameters: (*: *, **: *), out Return]:
+    abstract def __call__(self, *args: *Parameters, **kwargs: **Parameters) -> Return
+
+final class Frozen:
+    final size: int
+```
+
+## Output
+```python
+# a stub is written in basedpython too, so the whole surface has to survive a
+# reformat. dropping any of it here would be a silent semantic change: a
+# covariant parameter would come back invariant, and `protocol` would come back
+# as a plain class
+protocol Iterable[out Element]:
+    abstract def __iter__(self) -> Iterator[Element]
+
+protocol Sized(metaclass=ABCMeta):
+    abstract def __len__(self) -> int
+
+class Pair[in out Key, in Sink, out Value]:
+    let key: Key
+    let value: Value
+    def send(self, sink: Sink) -> None
+
+class Bounded[Element: int, Text in (str, bytes), Defaulted = int]:
+    let element: Element
+
+protocol Callable[in Parameters: (*: *, **: *), out Return]:
+    abstract def __call__(self, *args: *Parameters, **kwargs: **Parameters) -> Return
+
+final class Frozen:
+    final size: int
+```

@@ -89,7 +89,7 @@ from typing import ByteString as ByteString, ClassVar, runtime_checkable  # noqa
 /// parameters bound is the top-parameters form, so `Parameters` ranges over
 /// every parameter list
 const CALLABLE: &str = r#"@runtime_checkable
-protocol Callable[Parameters: (*: *, **: *), out Return](metaclass=ABCMeta):
+protocol Callable[in Parameters: (*: *, **: *), out Return](metaclass=ABCMeta):
     """A callable is anything that can be applied to an argument list.
 
     `Callable[[int], str]` describes a callable taking a single `int` and
