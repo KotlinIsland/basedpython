@@ -719,6 +719,30 @@ impl<'db> Type<'db> {
         }
     }
 
+    /// The value a literal type stands for, written the way a source writes it —
+    /// `1`, `"a"`, `True` — rather than as the type spelling `Literal[1]`.
+    ///
+    /// Returns `None` for anything that is not one concrete literal value, which
+    /// includes `LiteralString` and an enum member (whose value is the type it
+    /// was declared with, not a value of its own).
+    pub fn display_value<'env>(
+        self,
+        db: &'db dyn Db,
+        env: &'env ProgramEnvironment<'db>,
+    ) -> Option<impl fmt::Display + use<'env, 'db>> {
+        match self.as_literal_value_kind()? {
+            LiteralValueTypeKind::Int(_)
+            | LiteralValueTypeKind::Bool(_)
+            | LiteralValueTypeKind::String(_)
+            | LiteralValueTypeKind::Bytes(_)
+            | LiteralValueTypeKind::Float(_)
+            | LiteralValueTypeKind::Complex(_) => {
+                Some(self.representation(db, env, DisplaySettings::default()))
+            }
+            LiteralValueTypeKind::LiteralString | LiteralValueTypeKind::Enum(_) => None,
+        }
+    }
+
     fn representation<'env>(
         self,
         db: &'db dyn Db,

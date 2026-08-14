@@ -4637,6 +4637,21 @@ pub(crate) fn based_enum_unit_member_names<'db>(
     (!names.is_empty()).then_some(names)
 }
 
+/// True when a based enum lowers to an idiomatic `enum.Enum` — every variant is
+/// payload-less and the body declares no assignment members.
+///
+/// Such an enum's members are written out as `Red = auto()`, so each one takes
+/// the integer the generator counts out. Every other based enum lowers to a
+/// sealed hierarchy where a unit variant is a singleton instance of its own
+/// subclass, with no such value behind it.
+pub(crate) fn based_enum_is_idiomatic<'db>(
+    db: &'db dyn Db,
+    class: StaticClassLiteral<'db>,
+) -> bool {
+    let module = parsed_module(db, class.program_file(db).python_file(db)).load(db);
+    class.node(db, &module).is_all_unit_enum()
+}
+
 /// The class a unit variant's *value* is an instance of.
 ///
 /// An all-unit based enum lowers to an idiomatic `enum.Enum`, where a member's

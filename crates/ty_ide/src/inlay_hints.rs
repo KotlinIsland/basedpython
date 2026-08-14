@@ -21,10 +21,11 @@ use ty_python_core::ProgramFile;
 use ty_python_semantic::reified::inferred_reified_type_param_names;
 use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
-    InlayHintCallArgumentDetails, hintable_parameter_type, inferred_override, inferred_raises,
-    inferred_return_annotation, inferred_type_param_variance, inherited_parameter_annotation,
-    inlay_hint_call_argument_details, is_reveal_type_function, is_union_special_form,
-    numeric_promotion, trailing_lambda_implicit_parameters, type_parameter_names,
+    InlayHintCallArgumentDetails, hintable_parameter_type, implicit_enum_member_value,
+    inferred_override, inferred_raises, inferred_return_annotation, inferred_type_param_variance,
+    inherited_parameter_annotation, inlay_hint_call_argument_details, is_reveal_type_function,
+    is_union_special_form, numeric_promotion, trailing_lambda_implicit_parameters,
+    type_parameter_names,
 };
 use ty_python_semantic::types::{DisplaySettings, Type, TypeDetail};
 use ty_python_semantic::{HasType, SemanticModel, with_display_for_file};
@@ -365,6 +366,19 @@ impl InlayHint {
         }
     }
 
+    /// The value an enum member takes without the source writing one, shown
+    /// after the declaration that leaves it out.
+    fn enum_member_value(position: TextSize, value: &str) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::EnumValue,
+            label: InlayHintLabel {
+                parts: vec![format!(" {value}").into()],
+            },
+            text_edits: vec![],
+        }
+    }
+
     /// The type a `reveal_type` call reveals, shown at the end of its line.
     fn revealed_type(
         db: &dyn Db,
@@ -483,6 +497,8 @@ pub enum InlayHintKind {
     NumericPromotion,
     /// The type a `reveal_type` call reveals
     RevealedType,
+    /// The value an enum member takes without the source writing one
+    EnumValue,
     /// basedpython: a parameter the source never spells (`it`, `self`)
     ImplicitParameter,
     /// basedpython: an argument a call site fills from a `context` declaration
@@ -755,6 +771,15 @@ pub struct InlayHintSettings {
     /// ```
     pub implicit_arguments: bool,
 
+    /// Whether to show the value an enum member takes without the source
+    /// writing one.
+    ///
+    /// ```by
+    /// enum class Color:
+    ///     case Red" 1", Green" 2"
+    /// ```
+    pub enum_values: bool,
+
     /// django templates: whether to show the element type a `{% for %}` binding
     /// takes.
     ///
@@ -793,6 +818,7 @@ impl InlayHintSettings {
             inherited_parameter_types: false,
             inferred_return_types: false,
             implicit_arguments: false,
+            enum_values: false,
             template_binding_types: false,
             resolved_templates: false,
         }
@@ -816,6 +842,7 @@ impl InlayHintSettings {
             inherited_parameter_types,
             inferred_return_types,
             implicit_arguments,
+            enum_values,
             template_binding_types,
             resolved_templates,
         } = *self;
@@ -836,6 +863,7 @@ impl InlayHintSettings {
             || inherited_parameter_types
             || inferred_return_types
             || implicit_arguments
+            || enum_values
             || template_binding_types
             || resolved_templates
     }
@@ -860,6 +888,7 @@ impl Default for InlayHintSettings {
             inherited_parameter_types: true,
             inferred_return_types: true,
             implicit_arguments: true,
+            enum_values: true,
             template_binding_types: true,
             resolved_templates: true,
         }
@@ -1059,6 +1088,34 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
                     .push(InlayHint::inferred_reification(type_param.range().start()));
             }
         }
+    }
+
+    /// Hint the value an enum member takes when its declaration does not write
+    /// one, at `position` — after `auto()`, or after a `case` variant's name.
+    fn add_enum_member_value(&mut self, name: &str, position: TextSize) {
+        if !self.settings.enum_values {
+            return;
+        }
+
+        let Some(class_ty) = self.enclosing_class else {
+            return;
+        };
+
+        let env = &self.model.program_environment();
+        let Some(value) = implicit_enum_member_value(self.db, env, class_ty, name) else {
+            return;
+        };
+
+        // a value ty only knows the type of — an enum with a mixin whose
+        // `auto()` it cannot follow — says nothing a reader wants written here
+        let Some(rendered) = value.display_value(self.db, env) else {
+            return;
+        };
+
+        self.hints.push(InlayHint::enum_member_value(
+            position,
+            &rendered.to_string(),
+        ));
     }
 
     /// basedpython: hint `override` on a method that overrides a superclass
@@ -1475,6 +1532,11 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
 
         match stmt {
             Stmt::Assign(assign) => {
+                // the value goes where `auto()` stands in for it
+                if let [Expr::Name(target)] = assign.targets.as_slice() {
+                    self.add_enum_member_value(&target.id, assign.value.range().end());
+                }
+
                 if !type_hint_is_excessive_for_expr(&assign.value) {
                     self.assignment_rhs = Some(&*assign.value);
                 }
@@ -1539,6 +1601,12 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 self.add_inferred_variances(class.type_params.as_deref(), |model| {
                     class.inferred_type(model)
                 });
+
+                // a `case` variant is a member declaration with nowhere to write
+                // a value, so it goes after the name — `case Red 1, Green 2`
+                if class.is_enum_variant() {
+                    self.add_enum_member_value(&class.name.id, class.range().end());
+                }
 
                 let enclosing_class =
                     std::mem::replace(&mut self.enclosing_class, class.inferred_type(&self.model));
@@ -4129,6 +4197,179 @@ Source with applied edits:
         14 + k: list[int | float] = [-1, -2.0]
            |
         "#);
+    }
+
+    /// an `auto()` member leaves its value to the enum, so the value it hands
+    /// out is shown where the call stands in for it
+    #[test]
+    fn enum_auto_values() {
+        let mut test = inlay_hint_test(
+            r#"
+            from enum import Enum, auto
+
+            class Color(Enum):
+                RED = auto()
+                GREEN = 7
+                BLUE = auto()
+            "#,
+        );
+
+        assert_snapshot!(test.inlay_hints(), @"
+
+        from enum import Enum, auto
+
+        class Color(Enum):
+            RED = auto()[ 1]
+            GREEN = 7
+            BLUE = auto()[ 2]
+        ");
+    }
+
+    /// annotating an enum member is an error, and ty reads the value off the
+    /// annotation rather than the `auto()` — so there is nothing to show
+    #[test]
+    fn annotated_enum_auto_values_are_not_hinted() {
+        let mut test = inlay_hint_test(
+            r#"
+            from enum import Enum, auto
+
+            class Color(Enum):
+                RED: int = auto()
+                BLUE: int = auto()
+            "#,
+        );
+
+        assert_snapshot!(test.inlay_hints(), @"
+
+        from enum import Enum, auto
+
+        class Color(Enum):
+            RED: int = auto()
+            BLUE: int = auto()
+        ");
+    }
+
+    /// a `StrEnum`'s `auto()` names the member rather than counting
+    #[test]
+    fn enum_auto_string_values() {
+        let mut test = inlay_hint_test(
+            r#"
+            from enum import StrEnum, auto
+
+            class Color(StrEnum):
+                RED = auto()
+                BLUE = auto()
+            "#,
+        );
+
+        assert_snapshot!(test.inlay_hints(), @r#"
+
+        from enum import StrEnum, auto
+
+        class Color(StrEnum):
+            RED = auto()[ "red"]
+            BLUE = auto()[ "blue"]
+        "#);
+    }
+
+    /// a `Flag`'s `auto()` doubles rather than counts, which ty models as
+    /// counting — so there is no value here that is ty's to report
+    #[test]
+    fn enum_flag_auto_values_are_not_hinted() {
+        let mut test = inlay_hint_test(
+            r#"
+            from enum import Flag, IntFlag, auto
+
+            class Style(Flag):
+                BOLD = auto()
+                ITALIC = auto()
+                UNDERLINE = auto()
+
+            class Perm(IntFlag):
+                READ = auto()
+                WRITE = auto()
+                EXECUTE = auto()
+            "#,
+        );
+
+        assert_snapshot!(test.inlay_hints(), @"
+
+        from enum import Flag, IntFlag, auto
+
+        class Style(Flag):
+            BOLD = auto()
+            ITALIC = auto()
+            UNDERLINE = auto()
+
+        class Perm(IntFlag):
+            READ = auto()
+            WRITE = auto()
+            EXECUTE = auto()
+        ");
+    }
+
+    /// an enum whose mixin's `auto()` behaviour ty cannot follow has no value to
+    /// show, only the type one would have
+    #[test]
+    fn enum_auto_values_of_an_unmodelled_mixin() {
+        let mut test = inlay_hint_test(
+            r#"
+            from enum import Enum, auto
+
+            class Color(bytes, Enum):
+                RED = auto()
+                BLUE = auto()
+            "#,
+        );
+
+        assert_snapshot!(test.inlay_hints(), @"
+
+        from enum import Enum, auto
+
+        class Color(bytes, Enum):
+            RED = auto()
+            BLUE = auto()
+        ");
+    }
+
+    /// a `case` variant has nowhere to write a value, so the one the lowering
+    /// counts out is shown after the name
+    #[test]
+    fn based_enum_case_values() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            enum class Color:
+                case Red, Green
+                case Blue
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints(), @"
+
+        enum class Color:
+            case Red[ 1], Green[ 2]
+            case Blue[ 3]
+        ");
+    }
+
+    /// a payload-bearing enum lowers to a sealed hierarchy, where a unit variant
+    /// is a singleton of its own subclass rather than a counted-out value
+    #[test]
+    fn payload_enum_case_values_are_not_hinted() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            enum class Shape:
+                case Circle(radius: int)
+                case Point
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints(), @"
+
+        enum class Shape:
+            case Circle(radius: int)
+            case Point
+        ");
     }
 
     #[test]
