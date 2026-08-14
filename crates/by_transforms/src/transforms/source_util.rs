@@ -74,6 +74,34 @@ pub(crate) fn temporary_name(kind: &str, index: impl Display) -> String {
     format!("__by_{kind}_{index}__")
 }
 
+/// Where the text between a statement's own words and its value begins.
+///
+/// A statement's *prefix* is everything it says before that value — `a = ` in
+/// `a = 1`, `let a = ` in `let a = 1`, `return ` in `return 1`. `prefix` spans
+/// from the statement's start to the value's, and this is the offset within it
+/// where the statement stops speaking and mere separation starts: the
+/// whitespace after the `=`, an opening parenthesis (an expression's range
+/// begins inside any parentheses around it), or a line-continuation backslash.
+///
+/// A pass that *relocates* a prefix — [`statement_expression`] moves it below
+/// the statement it wrapped — re-emits it as a passthrough span so that a pass
+/// rewriting the prefix still applies. It cannot re-emit this separator
+/// verbatim, because an unmatched `(` would land in the output with its closing
+/// `)` left behind in the range being replaced.
+///
+/// [`statement_expression`]: super::statement_expression
+pub(crate) fn value_separator_start(source: &str, prefix: TextRange) -> TextSize {
+    let start = usize::from(prefix.start());
+    let mut at = usize::from(prefix.end());
+    while at > start
+        && let byte = source.as_bytes()[at - 1]
+        && (byte == b'(' || byte == b'\\' || byte.is_ascii_whitespace())
+    {
+        at -= 1;
+    }
+    TextSize::try_from(at).expect("offset within the source fits u32")
+}
+
 /// Byte offset of the start of the line containing `pos`. Lines begin at
 /// either offset 0 or one byte past the previous `\n`
 pub(crate) fn line_start(source: &str, pos: TextSize) -> TextSize {
