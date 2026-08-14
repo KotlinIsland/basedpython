@@ -154,7 +154,8 @@ fn inlay_hint_kind(inlay_hint_kind: &InlayHintKind) -> lsp_types::InlayHintKind 
         | InlayHintKind::TypeArgument
         | InlayHintKind::Override
         | InlayHintKind::NumericPromotion
-        | InlayHintKind::RevealedType => lsp_types::InlayHintKind::Type,
+        | InlayHintKind::RevealedType
+        | InlayHintKind::EnumValue => lsp_types::InlayHintKind::Type,
         InlayHintKind::CallArgumentName
         | InlayHintKind::ImplicitParameter
         | InlayHintKind::ImplicitArgument => lsp_types::InlayHintKind::Parameter,

@@ -467,6 +467,37 @@ reveal_type(Berry.__members__)  # revealed: MappingProxyType[str, Berry]
 reveal_type(Berry["Straw"])  # revealed: Berry
 ```
 
+## an all-unit enum's member values are counted out
+
+the lowering writes `auto()` for each variant in turn, so the value each member takes is known
+exactly, not just that it is an `int`:
+
+```by
+enum class Fruit:
+    case Apple, Pear
+    case Plum
+
+reveal_type(Fruit.Apple.value)  # revealed: 1
+reveal_type(Fruit.Pear.value)  # revealed: 2
+reveal_type(Fruit.Plum.value)  # revealed: 3
+
+def juice(f: Fruit) -> int:
+    return f.value
+
+assert Fruit.Plum.value == 3
+```
+
+a payload-bearing enum lowers to a sealed hierarchy instead, where a unit variant is a singleton of
+its own subclass rather than a counted-out member, so there is no such value to report:
+
+```by
+enum class Shape:
+    case Circle(radius: int)
+    case Point
+
+reveal_type(Shape.Point)  # revealed: Shape.Point
+```
+
 ## constants in an enum body stay constants
 
 an assignment member disqualifies the idiomatic-`Enum` lowering (python's `Enum` would turn the

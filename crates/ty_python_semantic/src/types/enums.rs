@@ -553,7 +553,7 @@ impl<'db> EnumMetadata<'db> {
     /// data types normalize the value directly. A literal is preserved when its runtime class
     /// matches an inherited `_value_` annotation; otherwise, the annotation describes the
     /// normalized value.
-    fn value_type(
+    pub(super) fn value_type(
         &self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
@@ -1056,13 +1056,23 @@ pub(crate) fn enum_metadata<'db>(
     // basedpython all-unit `enum class Color: Red; Green` lowers to an idiomatic
     // `Enum` whose members are the unit-variant names. they are nested class defs
     // on the surface rather than `NAME = value` assignments, so synthesize the
-    // metadata directly (each member's value is an `auto()`-style int)
+    // metadata directly
     if let Some(names) = crate::types::class::based_enum_unit_member_names(db, class) {
         let int_ty = KnownClass::Int.to_instance(db, env);
+        // an idiomatic lowering writes `Red = auto()` for each variant in turn,
+        // so the values it counts out are known exactly. a payload-bearing enum
+        // instead makes each unit variant a singleton of its own subclass, whose
+        // `.value` no declaration decides
+        let idiomatic = crate::types::class::based_enum_is_idiomatic(db, class);
         let mut members = FxIndexMap::default();
         let mut auto_members = FxHashSet::default();
-        for name in names {
-            members.insert(name.clone(), int_ty);
+        for (index, name) in names.into_iter().enumerate() {
+            let value = if idiomatic {
+                i64::try_from(index + 1).map_or(int_ty, Type::int_literal)
+            } else {
+                int_ty
+            };
+            members.insert(name.clone(), value);
             auto_members.insert(name);
         }
         if members.is_empty() {

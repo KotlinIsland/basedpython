@@ -12,6 +12,7 @@ use crate::types::class::{DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTup
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::context_sensitive::for_each_candidate;
 use crate::types::dedicated::django;
+use crate::types::enums::enum_metadata;
 use crate::types::extensions::{applicable_extensions, resolve_extension_member};
 use crate::types::function::FunctionDecorators;
 use crate::types::generics::GenericContext;
@@ -3387,6 +3388,39 @@ pub fn inferred_type_param_variance<'db>(
         TypeVarVariance::Invariant => Some(ast::Variance::Invariant),
         TypeVarVariance::Bivariant => None,
     }
+}
+
+/// The `.value` the enum `class` gives its member `name` when the declaration
+/// does not write one — python's `auto()`, and a based enum's `case` variant,
+/// both of which leave the value to the enum machinery.
+///
+/// The result is only as precise as ty's model of the enum: a member whose value
+/// ty cannot pin down comes back as the widened type (`int`), so a caller that
+/// wants to show the value must ask for a literal one.
+///
+/// Returns `None` when `class` is not an enum, or `name` is not a member of it
+/// whose value the enum generates. A `Flag` is excluded outright: its `auto()`
+/// doubles rather than counts, and ty models it as counting.
+pub fn implicit_enum_member_value<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: Type<'db>,
+    name: &str,
+) -> Option<Type<'db>> {
+    let Type::ClassLiteral(class) = class else {
+        return None;
+    };
+    if Type::ClassLiteral(class).is_subtype_of(db, env, KnownClass::Flag.to_subclass_of(db, env)) {
+        return None;
+    }
+
+    let metadata = enum_metadata(db, class)?;
+    let name = Name::new(name);
+    if !metadata.auto_members.contains(&name) {
+        return None;
+    }
+
+    metadata.value_type(db, env, &name)
 }
 
 /// basedpython: the superclass whose member `name` the class member `member`

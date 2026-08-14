@@ -376,6 +376,7 @@ pub struct InlayHintOptions {
     inherited_parameter_types: Option<bool>,
     inferred_return_types: Option<bool>,
     implicit_arguments: Option<bool>,
+    enum_values: Option<bool>,
     template_binding_types: Option<bool>,
     resolved_templates: Option<bool>,
 }
@@ -399,6 +400,7 @@ impl InlayHintOptions {
             inherited_parameter_types: self.inherited_parameter_types.unwrap_or(true),
             inferred_return_types: self.inferred_return_types.unwrap_or(true),
             implicit_arguments: self.implicit_arguments.unwrap_or(true),
+            enum_values: self.enum_values.unwrap_or(true),
             template_binding_types: self.template_binding_types.unwrap_or(true),
             resolved_templates: self.resolved_templates.unwrap_or(true),
         }

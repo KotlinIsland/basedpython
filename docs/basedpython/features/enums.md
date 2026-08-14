@@ -201,7 +201,9 @@ an enum whose variants are **all unit** (no payloads) lowers to an idiomatic
 `class Color(Enum): Red = auto(); Green = auto()`. this is the form the reverse
 transform recognises. because the lowering is a real `Enum`, the type checker
 models the class with the `Enum` base too: members expose `name` / `value` and
-the class iterates like any python enum
+the class iterates like any python enum. the `auto()` calls are written in
+declaration order, so each member's value is known exactly — `Color.Green.value`
+is `2`
 
 a top-level **assignment** in the body disqualifies that form, even when every
 variant is unit: python's `Enum` would turn `MAX = 10` into a member, so

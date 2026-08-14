@@ -33,6 +33,7 @@ Settings: WorkspaceSettings {
         inherited_parameter_types: true,
         inferred_return_types: true,
         implicit_arguments: true,
+        enum_values: true,
         template_binding_types: true,
         resolved_templates: true,
     },

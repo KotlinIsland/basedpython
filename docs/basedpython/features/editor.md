@@ -118,6 +118,7 @@ on
 | `inheritedParameterTypes` | the type a parameter takes from the method it overrides     |
 | `inferredReturnTypes`     | the return type of a `def` that leaves it out               |
 | `implicitArguments`       | the [context arguments](context-parameters.md) a call fills |
+| `enumValues`              | the value an [enum](enums.md) member takes implicitly       |
 | `templateBindingTypes`    | a django template `{% for %}` binding's element type        |
 | `resolvedTemplates`       | the file a django `{% extends %}` name resolves to          |
 
