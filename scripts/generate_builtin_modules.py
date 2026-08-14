@@ -83,7 +83,7 @@ def generate_module():
         }
 
         # First, add a case for the modules that are in all versions.
-        ubiquitous_modules = set.intersection(*modules_by_version.values())
+        ubiquitous_modules = set.intersection(*modules_by_version.values())  # ty: ignore[refutable-unpacking]
 
         print("(_, ")
         for i, module in enumerate(sorted(ubiquitous_modules)):

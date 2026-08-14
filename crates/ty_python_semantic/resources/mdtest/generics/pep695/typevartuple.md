@@ -327,6 +327,7 @@ def f(i: int, s: str, b: bool, t: tuple[int, str], vt: tuple[int, ...]) -> None:
     reveal_type(with_prefix(i, s, b))  # revealed: tuple[int, *tuple[Unknown, ...]]
     reveal_type(with_prefix(*t))  # revealed: tuple[int, *tuple[Unknown, ...]]
     reveal_type(with_prefix(i, *t))  # revealed: tuple[int, *tuple[Unknown, ...]]
+    # error: [refutable-unpacking]
     reveal_type(with_prefix(*vt))  # revealed: tuple[int, *tuple[Unknown, ...]]
     reveal_type(with_prefix(i, *vt))  # revealed: tuple[int, *tuple[Unknown, ...]]
 

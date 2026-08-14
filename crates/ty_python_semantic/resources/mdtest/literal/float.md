@@ -101,6 +101,7 @@ def f(x: str, y: list[str]) -> None:
     reveal_type(float(x))  # revealed: final float
     # python accepts underscores and surrounding whitespace, which we don't parse
     reveal_type(float("1_000.5"))  # revealed: final float
+    # error: [refutable-unpacking]
     reveal_type(float(*y))  # revealed: final float
 ```
 

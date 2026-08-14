@@ -205,7 +205,9 @@ def g(c: Character):
         ...
 
     [x for x in c]  # error: [iteration-over-character]
-    a, = c  # error: [iteration-over-character]
+    # error: [iteration-over-character]
+    # error: [refutable-unpacking] "`Character` may not have exactly 1 element, which would raise `ValueError` when unpacked"
+    a, = c
     print(*c)  # error: [iteration-over-character]
 
 def h(s: str):

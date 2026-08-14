@@ -215,7 +215,7 @@ class LspTest(ABC):
             pytest.skip(f"{self.tool.name()} doesn't support LSP")
             return
 
-        await self.client.start_io(*lsp_cmd, cwd=self.cwd)
+        await self.client.start_io(*lsp_cmd, cwd=self.cwd)  # ty: ignore[refutable-unpacking]
 
         await self.client.initialize_async(
             lsp.InitializeParams(
