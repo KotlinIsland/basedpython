@@ -1851,6 +1851,118 @@ def _inherited_mixed_instance(x: InheritedCustomNextValueChild):
     reveal_type(x.value)  # revealed: str | Literal[1]
 ```
 
+### Using `auto()` with `Flag`
+
+```toml
+[environment]
+python-version = "3.11"
+```
+
+A `Flag`'s `_generate_next_value_` doubles where `Enum`'s counts, so each generated value sets one
+bit more than the last and members can be combined as a bit set. `IntFlag` inherits the same
+generator:
+
+```py
+from enum import Flag, IntFlag, auto
+
+class Style(Flag):
+    BOLD = auto()
+    ITALIC = auto()
+    UNDERLINE = auto()
+
+reveal_type(Style.BOLD.value)  # revealed: Literal[1]
+reveal_type(Style.ITALIC.value)  # revealed: Literal[2]
+reveal_type(Style.UNDERLINE.value)  # revealed: Literal[4]
+
+class Permission(IntFlag):
+    READ = auto()
+    WRITE = auto()
+    EXECUTE = auto()
+
+reveal_type(Permission.EXECUTE.value)  # revealed: Literal[4]
+```
+
+The generated value is the power of two just above the highest bit any previous value set, so it
+picks up from a value the source writes out rather than from the number of members:
+
+```py
+class FromWritten(Flag):
+    A = 4
+    B = auto()
+
+reveal_type(FromWritten.B.value)  # revealed: Literal[8]
+```
+
+A written value that is not itself a single bit still only decides where the next one starts:
+
+```py
+class FromCombined(Flag):
+    A = 3
+    B = auto()
+
+reveal_type(FromCombined.B.value)  # revealed: Literal[4]
+```
+
+From 3.11 the generator reads the largest value written so far, so a value written out of order does
+not lower the ones after it:
+
+```py
+class Descending(Flag):
+    A = 4
+    B = 1
+    C = auto()
+
+reveal_type(Descending.C.value)  # revealed: Literal[8]
+```
+
+A value ty cannot pin down leaves every value after it unknown, since any of them could be the
+largest:
+
+```py
+def f(n: int):
+    class Dynamic(Flag):
+        A = n
+        B = auto()
+        C = auto()
+
+    reveal_type(Dynamic.B.value)  # revealed: int
+    reveal_type(Dynamic.C.value)  # revealed: int
+```
+
+### Using `auto()` with `Flag` before python 3.11
+
+```toml
+[environment]
+python-version = "3.10"
+```
+
+Older versions read the value written *last* rather than the largest one written so far. That only
+shows when the values are not ascending:
+
+```py
+from enum import Flag, auto
+
+class Descending(Flag):
+    A = 4
+    B = 1
+    C = auto()
+
+reveal_type(Descending.C.value)  # revealed: Literal[2]
+```
+
+Reading only the last value means a value ty cannot pin down stops mattering as soon as another one
+is written out:
+
+```py
+def f(n: int):
+    class Dynamic(Flag):
+        A = n
+        B = 1
+        C = auto()
+
+    reveal_type(Dynamic.C.value)  # revealed: Literal[2]
+```
+
 ### `auto()` after an alias
 
 Even when a declaration becomes an alias, its original value is included in the `last_values` passed

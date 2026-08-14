@@ -1,6 +1,7 @@
 use crate::ProgramEnvironment;
 use compact_str::ToCompactString;
 use ruff_db::parsed::parsed_module;
+use ruff_python_ast::PythonVersion;
 use ruff_python_ast::name::Name;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -216,6 +217,61 @@ impl<'db> EnumValueConstruction<'db> {
             value_ty
         };
         self.normalize_value(db, env, value)
+    }
+}
+
+/// What a `Flag`'s `_generate_next_value_` reads when it generates the next
+/// `auto()` value.
+///
+/// Unlike `Enum`, which counts, `Flag` doubles: each generated value is the
+/// power of two just above the highest bit any previous member value set, so
+/// members can be combined as a bit set. python 3.11 changed which previous
+/// value the generator reads — the largest one written so far, where older
+/// versions read the one written last. That only shows when the values are not
+/// ascending, as in `A = 4; B = 1; C = auto()`, which generates `8` on 3.11 and
+/// `2` before it.
+#[derive(Clone, Copy, Debug)]
+enum FlagAutoSeed {
+    /// No member has been declared yet, so the generator falls back to `start`.
+    Empty,
+    /// The value the generator will read.
+    Known(i64),
+    /// A member value ty cannot pin down, leaving the next value unknowable.
+    Unknown,
+}
+
+impl FlagAutoSeed {
+    /// Folds in the value of the member declared next. `value` is `None` for a
+    /// value that is not a known integer literal.
+    fn observe(self, value: Option<i64>, reads_largest_value: bool) -> Self {
+        match (self, value) {
+            (_, None) => Self::Unknown,
+            (Self::Known(seed), Some(value)) if reads_largest_value => Self::Known(seed.max(value)),
+            // a value that was never pinned down could still be the largest, so
+            // the largest-wins rule cannot recover from one; reading the last
+            // value written does, on the very next member that has one
+            (Self::Unknown, Some(_)) if reads_largest_value => Self::Unknown,
+            (_, Some(value)) => Self::Known(value),
+        }
+    }
+
+    /// The value the next `auto()` takes, or `None` when ty cannot pin it down.
+    fn next_value(self) -> Option<i64> {
+        match self {
+            // the `start` the enum machinery passes the generator, which no
+            // spelling of a `Flag` class changes
+            Self::Empty => Some(1),
+            Self::Unknown => None,
+            // `2 ** (high_bit + 1)`, where `high_bit` is `value.bit_length() - 1`.
+            // python's `bit_length` ignores the sign, and answers `0` for `0`,
+            // which is why this is a shift by the bit length itself
+            Self::Known(seed) => {
+                let bit_length = u64::BITS - seed.unsigned_abs().leading_zeros();
+                // a value this large is beyond what ty spells as an int literal,
+                // even though python would keep doubling
+                (bit_length < i64::BITS - 1).then(|| 1i64 << bit_length)
+            }
+        }
     }
 }
 
@@ -1114,6 +1170,14 @@ pub(crate) fn enum_metadata<'db>(
     let mut prev_bool_literal = None;
     let ignored_names = enum_ignored_names(db, scope_id);
 
+    let is_flag = Type::ClassLiteral(ClassLiteral::Static(class)).is_subtype_of(
+        db,
+        &env,
+        KnownClass::Flag.to_subclass_of(db, &env),
+    );
+    let flag_reads_largest_value = env.python_version(db) >= PythonVersion::PY311;
+    let mut flag_seed = FlagAutoSeed::Empty;
+
     // Look up custom construction methods, falling back to parent enum classes. An opaque binding
     // still shadows methods from classes later in the MRO.
     let data_type = inherited_enum_data_type(db, &env, ClassLiteral::Static(class));
@@ -1211,6 +1275,14 @@ pub(crate) fn enum_metadata<'db>(
                                         )
                                     {
                                         Type::string_literal(db, &*name.to_lowercase())
+                                    } else if is_flag {
+                                        // a `Flag` doubles rather than counts, so its
+                                        // generated values stay one bit apart and can be
+                                        // combined — `IntFlag` inherits the same generator
+                                        flag_seed.next_value().map_or_else(
+                                            || KnownClass::Int.to_instance(db, &env),
+                                            Type::int_literal,
+                                        )
                                     } else {
                                         let custom_mixins: SmallVec<[Option<KnownClass>; 1]> =
                                             class
@@ -1311,6 +1383,9 @@ pub(crate) fn enum_metadata<'db>(
             // following `auto()` knows to widen its result to `int`.
             prev_value_was_non_literal_int = value_ty.as_int_like_literal().is_none()
                 && value_ty.is_assignable_to(db, &env, KnownClass::Int.to_instance(db, &env));
+            // a `Flag`'s generator reads the values already declared, this one
+            // included — whether it was written out or generated in turn
+            flag_seed = flag_seed.observe(value_ty.as_int_like_literal(), flag_reads_largest_value);
             prev_bool_literal =
                 value_ty
                     .as_literal_value_kind()
