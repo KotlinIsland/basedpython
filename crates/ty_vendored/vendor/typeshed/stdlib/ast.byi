@@ -2112,7 +2112,7 @@ if sys.version_info < (3, 14):
     class Num(Constant, metaclass=_ABC):
         """Deprecated AST node class. Use ast.Constant instead"""
 
-        def __new__(cls, n: complex, **kwargs: Unpack[_Attributes]) -> Constant
+        def __new__(cls, n: int | float | complex, **kwargs: Unpack[_Attributes]) -> Constant
 
     @deprecated("Removed in Python 3.14. Use `ast.Constant` instead.")
     class Str(Constant, metaclass=_ABC):

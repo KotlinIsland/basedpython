@@ -35,7 +35,7 @@ if sys.platform != "win32":
         final RLIMIT_UMTXP: int
 
     final class struct_rusage(
-        structseq[float], tuple[float, float, int, int, int, int, int, int, int, int, int, int, int, int, int, int]
+        structseq[int | float], tuple[float, float, int, int, int, int, int, int, int, int, int, int, int, int, int, int]
     ):
         """struct_rusage: Result from getrusage.
 

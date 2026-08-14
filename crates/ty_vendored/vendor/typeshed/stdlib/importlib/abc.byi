@@ -133,7 +133,7 @@ class SourceLoader(_bootstrap_external.SourceLoader, ResourceLoader, ExecutionLo
     """
 
     @deprecated("Deprecated since Python 3.3. Use `importlib.resources.abc.SourceLoader.path_stats` instead.")
-    override def path_mtime(self, path: str) -> float:
+    override def path_mtime(self, path: str) -> int | float:
         """Return the (int) modification time for the path (str)."""
 
     override def set_data(self, path: str, data: bytes):

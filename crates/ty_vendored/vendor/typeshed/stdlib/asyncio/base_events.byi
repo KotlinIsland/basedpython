@@ -46,8 +46,8 @@ class Server(AbstractServer):
             protocol_factory: _ProtocolFactory,
             ssl_context: _SSLContext,
             backlog: int,
-            ssl_handshake_timeout: float | None,
-            ssl_shutdown_timeout: float | None = None,
+            ssl_handshake_timeout: int | float | None,
+            ssl_shutdown_timeout: int | float | None = None,
         ) -> None
     else:
         def __init__(
@@ -57,7 +57,7 @@ class Server(AbstractServer):
             protocol_factory: _ProtocolFactory,
             ssl_context: _SSLContext,
             backlog: int,
-            ssl_handshake_timeout: float | None,
+            ssl_handshake_timeout: int | float | None,
         ) -> None
 
     if sys.version_info >= (3, 13):
@@ -142,7 +142,7 @@ class BaseEventLoop(AbstractEventLoop):
         """
 
     override def call_later[*Args](
-        self, delay: float, callback: (*Args) -> object, *args: *Args, context: Context | None = None
+        self, delay: int | float, callback: (*Args) -> object, *args: *Args, context: Context | None = None
     ) -> TimerHandle:
         """Arrange for a callback to be called at a given time.
 
@@ -161,7 +161,7 @@ class BaseEventLoop(AbstractEventLoop):
         """
 
     override def call_at[*Args](
-        self, when: float, callback: (*Args) -> object, *args: *Args, context: Context | None = None
+        self, when: int | float, callback: (*Args) -> object, *args: *Args, context: Context | None = None
     ) -> TimerHandle:
         """Like call_later(), but uses an absolute time.
 
@@ -259,9 +259,9 @@ class BaseEventLoop(AbstractEventLoop):
             sock: None = None,
             local_addr: (str, int) | None = None,
             server_hostname: str | None = None,
-            ssl_handshake_timeout: float | None = None,
-            ssl_shutdown_timeout: float | None = None,
-            happy_eyeballs_delay: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
+            ssl_shutdown_timeout: int | float | None = None,
+            happy_eyeballs_delay: int | float | None = None,
             interleave: int | None = None,
             all_errors: bool = False,
         ) -> (Transport, ProtocolT):
@@ -289,9 +289,9 @@ class BaseEventLoop(AbstractEventLoop):
             sock: socket,
             local_addr: None = None,
             server_hostname: str | None = None,
-            ssl_handshake_timeout: float | None = None,
-            ssl_shutdown_timeout: float | None = None,
-            happy_eyeballs_delay: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
+            ssl_shutdown_timeout: int | float | None = None,
+            happy_eyeballs_delay: int | float | None = None,
             interleave: int | None = None,
             all_errors: bool = False,
         ) -> (Transport, ProtocolT)
@@ -309,9 +309,9 @@ class BaseEventLoop(AbstractEventLoop):
             sock: None = None,
             local_addr: (str, int) | None = None,
             server_hostname: str | None = None,
-            ssl_handshake_timeout: float | None = None,
-            ssl_shutdown_timeout: float | None = None,
-            happy_eyeballs_delay: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
+            ssl_shutdown_timeout: int | float | None = None,
+            happy_eyeballs_delay: int | float | None = None,
             interleave: int | None = None,
         ) -> (Transport, ProtocolT):
             """Connect to a TCP server.
@@ -338,9 +338,9 @@ class BaseEventLoop(AbstractEventLoop):
             sock: socket,
             local_addr: None = None,
             server_hostname: str | None = None,
-            ssl_handshake_timeout: float | None = None,
-            ssl_shutdown_timeout: float | None = None,
-            happy_eyeballs_delay: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
+            ssl_shutdown_timeout: int | float | None = None,
+            happy_eyeballs_delay: int | float | None = None,
             interleave: int | None = None,
         ) -> (Transport, ProtocolT)
     else:
@@ -357,8 +357,8 @@ class BaseEventLoop(AbstractEventLoop):
             sock: None = None,
             local_addr: (str, int) | None = None,
             server_hostname: str | None = None,
-            ssl_handshake_timeout: float | None = None,
-            happy_eyeballs_delay: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
+            happy_eyeballs_delay: int | float | None = None,
             interleave: int | None = None,
         ) -> (Transport, ProtocolT):
             """Connect to a TCP server.
@@ -385,8 +385,8 @@ class BaseEventLoop(AbstractEventLoop):
             sock: socket,
             local_addr: None = None,
             server_hostname: str | None = None,
-            ssl_handshake_timeout: float | None = None,
-            happy_eyeballs_delay: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
+            happy_eyeballs_delay: int | float | None = None,
             interleave: int | None = None,
         ) -> (Transport, ProtocolT)
 
@@ -406,8 +406,8 @@ class BaseEventLoop(AbstractEventLoop):
             reuse_address: bool | None = None,
             reuse_port: bool | None = None,
             keep_alive: bool | None = None,
-            ssl_handshake_timeout: float | None = None,
-            ssl_shutdown_timeout: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
+            ssl_shutdown_timeout: int | float | None = None,
             start_serving: bool = True,
         ) -> Server:
             """Create a TCP server.
@@ -439,8 +439,8 @@ class BaseEventLoop(AbstractEventLoop):
             reuse_address: bool | None = None,
             reuse_port: bool | None = None,
             keep_alive: bool | None = None,
-            ssl_handshake_timeout: float | None = None,
-            ssl_shutdown_timeout: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
+            ssl_shutdown_timeout: int | float | None = None,
             start_serving: bool = True,
         ) -> Server
     elif sys.version_info >= (3, 11):
@@ -457,8 +457,8 @@ class BaseEventLoop(AbstractEventLoop):
             ssl: _SSLContext = None,
             reuse_address: bool | None = None,
             reuse_port: bool | None = None,
-            ssl_handshake_timeout: float | None = None,
-            ssl_shutdown_timeout: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
+            ssl_shutdown_timeout: int | float | None = None,
             start_serving: bool = True,
         ) -> Server:
             """Create a TCP server.
@@ -489,8 +489,8 @@ class BaseEventLoop(AbstractEventLoop):
             ssl: _SSLContext = None,
             reuse_address: bool | None = None,
             reuse_port: bool | None = None,
-            ssl_handshake_timeout: float | None = None,
-            ssl_shutdown_timeout: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
+            ssl_shutdown_timeout: int | float | None = None,
             start_serving: bool = True,
         ) -> Server
     else:
@@ -507,7 +507,7 @@ class BaseEventLoop(AbstractEventLoop):
             ssl: _SSLContext = None,
             reuse_address: bool | None = None,
             reuse_port: bool | None = None,
-            ssl_handshake_timeout: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
             start_serving: bool = True,
         ) -> Server:
             """Create a TCP server.
@@ -538,7 +538,7 @@ class BaseEventLoop(AbstractEventLoop):
             ssl: _SSLContext = None,
             reuse_address: bool | None = None,
             reuse_port: bool | None = None,
-            ssl_handshake_timeout: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
             start_serving: bool = True,
         ) -> Server
 
@@ -551,8 +551,8 @@ class BaseEventLoop(AbstractEventLoop):
             *,
             server_side: bool = False,
             server_hostname: str | None = None,
-            ssl_handshake_timeout: float | None = None,
-            ssl_shutdown_timeout: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
+            ssl_shutdown_timeout: int | float | None = None,
         ) -> Transport | None:
             """Upgrade transport to TLS.
 
@@ -566,8 +566,8 @@ class BaseEventLoop(AbstractEventLoop):
             sock: socket,
             *,
             ssl: _SSLContext = None,
-            ssl_handshake_timeout: float | None = None,
-            ssl_shutdown_timeout: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
+            ssl_shutdown_timeout: int | float | None = None,
         ) -> (Transport, ProtocolT)
     else:
         override async def start_tls(
@@ -578,7 +578,7 @@ class BaseEventLoop(AbstractEventLoop):
             *,
             server_side: bool = False,
             server_hostname: str | None = None,
-            ssl_handshake_timeout: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
         ) -> Transport | None:
             """Upgrade transport to TLS.
 
@@ -592,7 +592,7 @@ class BaseEventLoop(AbstractEventLoop):
             sock: socket,
             *,
             ssl: _SSLContext = None,
-            ssl_handshake_timeout: float | None = None,
+            ssl_handshake_timeout: int | float | None = None,
         ) -> (Transport, ProtocolT)
 
     override async def sock_sendfile(
@@ -776,7 +776,7 @@ class BaseEventLoop(AbstractEventLoop):
     override def get_debug(self) -> bool
     override def set_debug(self, enabled: bool)
     if sys.version_info >= (3, 12):
-        async def shutdown_default_executor(self, timeout: float | None = None) -> None:
+        async def shutdown_default_executor(self, timeout: int | float | None = None) -> None:
             """Schedule the shutdown of the default executor.
 
             The timeout parameter specifies the amount of time the executor will

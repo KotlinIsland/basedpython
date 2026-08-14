@@ -13,7 +13,7 @@ final nanj: complex
 final tau: float
 
 type _F = SupportsFloat | SupportsIndex
-private type C = SupportsFloat | SupportsComplex | SupportsIndex | complex
+private type C = SupportsFloat | SupportsComplex | SupportsIndex | int | float | complex
 
 def acos(z: C, /) -> complex:
     """Return the arc cosine of z."""

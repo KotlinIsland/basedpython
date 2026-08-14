@@ -599,7 +599,7 @@ def PEM_cert_to_DER_cert(pem_cert_string: str) -> bytes:
     """
 
 def get_server_certificate(
-    addr: (str, int), ssl_version: int = _SSLMethod.PROTOCOL_TLS_CLIENT, ca_certs: str | None = None, timeout: float = ...
+    addr: (str, int), ssl_version: int = _SSLMethod.PROTOCOL_TLS_CLIENT, ca_certs: str | None = None, timeout: int | float = ...
 ) -> str:
     """Retrieve the certificate from the server at the specified address,
     and return it as a PEM-encoded string.

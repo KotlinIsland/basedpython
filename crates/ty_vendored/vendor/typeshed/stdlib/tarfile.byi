@@ -155,7 +155,7 @@ class TarFile:
             errorlevel: 0 | 1 | 2 | None = None,  # default 1
             copybufsize: int | None = None,  # undocumented
             stream: bool = False,
-            mtime: float | None = None,
+            mtime: int | float | None = None,
         ) -> None:
             """Open an (uncompressed) tar archive 'name'. 'mode' is either 'r' to
             read from an existing archive, 'a' to append data to an existing
@@ -1158,7 +1158,7 @@ class TarInfo:
         self,
         *,
         name: str = ...,
-        mtime: float = ...,
+        mtime: int | float = ...,
         mode: int = ...,
         linkname: str = ...,
         uid: int = ...,

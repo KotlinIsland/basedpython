@@ -129,6 +129,69 @@ class Mapping[out Key, out Value](Collection[Key]):
 `MutableMapping`, whose `_KT`/`_VT` stayed invariant, becomes
 `class MutableMapping[in out Key, in out Value](Mapping[Key, Value])`
 
+## worked example: `numeric-promotion`
+
+python's typing spec reads a `float` annotation as `int | float`, and upstream
+typeshed is written against that rule. basedpython has no such rule, and the
+vendored stubs are `.byi`, so nothing supplies the missing arm — the stub has to
+say it. this patch writes the union out, in every position the special case is
+actually about:
+
+```python
+def sleep(secs: float) -> None       # ->  def sleep(secs: int | float) -> None
+def mean[T in (float, Decimal)]()    # ->  def mean[T in (int | float, Decimal)]()
+```
+
+what counts as such a position is the whole design, and it is a question of
+**direction** rather than of which syntactic slot the annotation sits in. a
+parameter accepts; a return, a `let`, a module constant, an attribute, a class
+base and a type-variable default all produce. crucially, **each callable
+parameter list along the way flips which it is**, exactly as contravariance does:
+
+```by
+def config(xscrollcommand: (float, float) -> object)   # tk hands these in: exact
+def kde(...) -> (int | float) -> float                 # you call this one: widened
+```
+
+widening a callback's own parameters does not admit an `int` — it demands the
+caller's function accept one, rejecting the obvious `def cb(a: float, b: float)`
+
+two more things accept alongside parameters: type-variable constraints and
+bounds, which a call solves from its arguments (`statistics.mean([1, 2])`), and
+type aliases used for nothing but parameters — whether an alias qualifies depends
+on where it is *used*, which no single file can see, so `numeric_promotion::scan`
+decides it once over the whole tree, the way `private_names::scan` does for the
+`private` conversions
+
+nothing is widened where the union could not be spelled anyway: inside
+`type[...]`, which names a class rather than a value of it, or in a union arm
+whose all-`int` reading already sits beside it (`list[int] | list[float]` covers
+both, while `list[int | float]` — `list` being invariant — would cover neither)
+
+### the corrections table
+
+direction gets the syntax right; what it cannot know is what CPython does
+*inside*. `CORRECTIONS` in the patch is one entry per such fact, each carrying
+the reason it is true:
+
+- `colorsys.hls_to_rgb` short-circuits with `return l, l, l`, so it hands an
+    argument straight back and `hls_to_rgb(0, 1, 0)` is `(1, 1, 1)`
+- `socketserver.BaseServer.timeout` is documented as a knob to set, and
+    `subprocess.TimeoutExpired.timeout` is raised with the caller's own value
+- `Fraction + int` is a `Fraction`, never a `float`, because an earlier overload
+    answers first — so the float overload must not grow an `int`
+- the sequence portion of `os.stat_result` is ten integers: `os.stat(f)[7]` is an
+    `int` while `os.stat(f).st_atime` is a `float`
+
+every entry was checked against a running interpreter rather than reasoned about,
+and `corrections_all_apply` fails if one stops matching the tree, so an upstream
+rename is caught instead of silently turning a correction into a no-op
+
+widening only adds an arm that is not already reachable, so the patch is
+idempotent, and both the unions upstream spells out by hand (`float | None`) and
+the constraint lists that already carry an `int` beside the `float`
+(`array[Element in (int, float, str)]`) come out unchanged
+
 ## adding a new patch
 
 1. create `crates/by_typeshed_patch/src/patches/<name>.rs` implementing `Patch`,

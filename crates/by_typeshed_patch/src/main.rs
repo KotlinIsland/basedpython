@@ -68,7 +68,7 @@ fn run() -> Result<()> {
         bail!("not a directory: {}", root.display());
     }
 
-    let patches = all_patches();
+    let patches = all_patches(&root);
     let post_patches = all_post_patches(&root);
     if patches.is_empty() && post_patches.is_empty() {
         eprintln!("no patches registered; nothing to do");

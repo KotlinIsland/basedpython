@@ -40,6 +40,44 @@ value-position uses of `float` / `complex` (calls like `float(x)`,
 `isinstance(y, float)`) are left alone — they refer to the class object, not
 to the type
 
+## the standard library
+
+the vendored typeshed is basedpython too, so nothing is promoted while reading
+it either. the stubs say what they accept instead:
+
+```by
+import math
+import time
+
+time.sleep(1)          # fine: `sleep` really does take an `int`
+reveal_type(math.pi)   # float, not `int | float`
+reveal_type(.0.real)   # float
+```
+
+the two are separate questions. `time.sleep` accepts an `int` because sleeping
+for one second works, so its stub says `int | float`. `math.pi` is never an
+`int`, so its stub says `float` — and a `float` read out of the standard library
+stays a `float` instead of a union you have to narrow away
+
+an attribute is answered the same way, by what the library actually keeps in it.
+`socketserver` documents `timeout` as a knob to set, and only ever hands it to a
+selector, so an `int` is one of the things it holds:
+
+```by
+import os
+import socketserver
+
+class Server(socketserver.TCPServer):
+    timeout = 5
+
+def stamp(st: os.stat_result) -> float:
+    return st.st_atime   # computed by the library, so exactly a float
+```
+
+each of these is a fact about what cpython does, checked against a running
+interpreter — `os.stat(f)[7]` really is an `int` while `os.stat(f).st_atime` is a
+`float`, and the stubs now say so
+
 ## interop with `.py`
 
 a `.py` file imported into a `.by` file keeps python's typing-spec meaning of

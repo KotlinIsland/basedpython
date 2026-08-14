@@ -20,7 +20,7 @@ class Connection:
     )
     init(self, _in: dynamic, _out: dynamic)
     def close(self)
-    def poll(self, timeout: float = 0.0) -> bool
+    def poll(self, timeout: int | float = 0.0) -> bool
 
 class Listener:
     _backlog_queue: Queue[dynamic] | None

@@ -342,7 +342,7 @@ class Connection:
         def __init__(
             self,
             database: StrOrBytesPath,
-            timeout: float = 5.0,
+            timeout: int | float = 5.0,
             detect_types: int = 0,
             isolation_level: _IsolationLevel = "DEFERRED",
             check_same_thread: bool = True,
@@ -355,7 +355,7 @@ class Connection:
         def __init__(
             self,
             database: StrOrBytesPath,
-            timeout: float = 5.0,
+            timeout: int | float = 5.0,
             detect_types: int = 0,
             isolation_level: _IsolationLevel = "DEFERRED",
             check_same_thread: bool = True,
@@ -567,7 +567,7 @@ class Connection:
         pages: int = -1,
         progress: ((int, int, int) -> object) | None = None,
         name: str = "main",
-        sleep: float = 0.25,
+        sleep: int | float = 0.25,
     ):
         """Makes a backup of the database."""
 

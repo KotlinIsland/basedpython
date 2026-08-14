@@ -100,8 +100,8 @@ class IMAP4:
     welcome: bytes
     capabilities: (*: str)
     PROTOCOL_VERSION: str
-    init(self, host: str = "", port: int = 143, timeout: float | None = None)
-    def open(self, host: str = "", port: int = 143, timeout: float | None = None):
+    init(self, host: str = "", port: int = 143, timeout: int | float | None = None)
+    def open(self, host: str = "", port: int = 143, timeout: int | float | None = None):
         """Setup connection to remote server on "host:port"
             (default: localhost:standard IMAP4 port).
         This connection will be used by the routines:
@@ -281,7 +281,7 @@ class IMAP4:
         """
 
     if sys.version_info >= (3, 14):
-        def idle(self, duration: float | None = None) -> Idler:
+        def idle(self, duration: int | float | None = None) -> Idler:
             """Return an iterable IDLE context manager producing untagged responses.
             If the argument is not None, limit iteration to 'duration' seconds.
 
@@ -515,12 +515,12 @@ if sys.version_info >= (3, 14):
         Note: The name and structure of this class are subject to change.
         """
 
-        init(self, imap: IMAP4, duration: float | None = None)
+        init(self, imap: IMAP4, duration: int | float | None = None)
         def __enter__(self) -> Self
         def __exit__(self, exc_type: object, exc_val: Unused, exc_tb: Unused) -> False
         def __iter__(self) -> Self
         def __next__(self) -> (str, float | None)
-        def burst(self, interval: float = 0.1) -> Generator[(str, float | None)]:
+        def burst(self, interval: int | float = 0.1) -> Generator[(str, float | None)]:
             """Yield a burst of responses no more than 'interval' seconds apart.
 
             with M.idle() as idler:
@@ -549,7 +549,7 @@ class IMAP4_SSL(IMAP4):
 
     if sys.version_info >= (3, 12):
         def __init__(
-            self, host: str = "", port: int = 993, *, ssl_context: SSLContext | None = None, timeout: float | None = None
+            self, host: str = "", port: int = 993, *, ssl_context: SSLContext | None = None, timeout: int | float | None = None
         ) -> None
     else:
         def __init__(
@@ -559,7 +559,7 @@ class IMAP4_SSL(IMAP4):
             keyfile: None = None,
             certfile: None = None,
             ssl_context: SSLContext | None = None,
-            timeout: float | None = None,
+            timeout: int | float | None = None,
         ) -> None
         @deprecated(
             "The `keyfile`, `certfile` parameters are deprecated since Python 3.6; "
@@ -572,7 +572,7 @@ class IMAP4_SSL(IMAP4):
             keyfile: StrOrBytesPath | None = None,
             certfile: StrOrBytesPath | None = None,
             ssl_context: None = None,
-            timeout: float | None = None,
+            timeout: int | float | None = None,
         ) -> None
 
         keyfile: StrOrBytesPath | None
@@ -585,7 +585,7 @@ class IMAP4_SSL(IMAP4):
     else:
         file: IO[dynamic]
 
-    override def open(self, host: str = "", port: int | None = 993, timeout: float | None = None):
+    override def open(self, host: str = "", port: int | None = 993, timeout: int | float | None = None):
         """Setup connection to remote server on "host:port".
             (default: localhost:standard IMAP4 SSL port).
         This connection will be used by the routines:
@@ -615,7 +615,7 @@ class IMAP4_stream(IMAP4):
     process: subprocess.Popen[bytes]
     writefile: IO[dynamic]
     readfile: IO[dynamic]
-    override def open(self, host: str | None = None, port: int | None = None, timeout: float | None = None):
+    override def open(self, host: str | None = None, port: int | None = None, timeout: int | float | None = None):
         """Setup a stream connection.
         This connection will be used by the routines:
             read, readline, send, shutdown.
@@ -645,7 +645,7 @@ def Int2AP(num: SupportsAbs[SupportsInt]) -> bytes:
 def ParseFlags(resp: ReadableBuffer) -> (*: bytes):
     """Convert IMAP4 flags response to python tuple."""
 
-private type TimeLike = float | time.struct_time | time._TimeTuple | datetime | str
+private type TimeLike = int | float | time.struct_time | time._TimeTuple | datetime | str
 
 def Time2Internaldate(date_time: TimeLike) -> str:
     """Convert date_time to IMAP4 INTERNALDATE representation.

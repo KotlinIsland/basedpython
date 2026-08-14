@@ -76,7 +76,7 @@ class Future[in out Element]:
                 order that they were added.
         """
 
-    def result(self, timeout: float | None = None) -> Element:
+    def result(self, timeout: int | float | None = None) -> Element:
         """Return the result of the call that the future represents.
 
         Args:
@@ -126,7 +126,7 @@ class Future[in out Element]:
         Should only be used by Executor implementations and unit tests.
         """
 
-    def exception(self, timeout: float | None = None) -> BaseException | None:
+    def exception(self, timeout: int | float | None = None) -> BaseException | None:
         """Return the exception raised by the call that the future represents.
 
         Args:
@@ -176,7 +176,7 @@ class Executor:
             self,
             fn: (...) -> Element,
             *iterables: Iterable[dynamic],
-            timeout: float | None = None,
+            timeout: int | float | None = None,
             chunksize: int = 1,
             buffersize: int | None = None,
         ) -> Iterator[Element]:
@@ -209,7 +209,7 @@ class Executor:
 
     else:
         def map[Element](
-            self, fn: (...) -> Element, *iterables: Iterable[dynamic], timeout: float | None = None, chunksize: int = 1
+            self, fn: (...) -> Element, *iterables: Iterable[dynamic], timeout: int | float | None = None, chunksize: int = 1
         ) -> Iterator[Element]:
             """Returns an iterator equivalent to map(fn, iter).
 
@@ -262,9 +262,9 @@ private protocol AsCompletedFuture[out Element]:
     _state: str
     _waiters: list[_Waiter]
     # Not used by as_completed, but needed to propagate the generic type
-    def result(self, timeout: float | None = None) -> Element
+    def result(self, timeout: int | float | None = None) -> Element
 
-def as_completed[Element](fs: Iterable[AsCompletedFuture[Element]], timeout: float | None = None) -> Iterator[Future[Element]]:
+def as_completed[Element](fs: Iterable[AsCompletedFuture[Element]], timeout: int | float | None = None) -> Iterator[Future[Element]]:
     """An iterator over the given futures that yields each as it completes.
 
     Args:
@@ -289,7 +289,7 @@ class DoneAndNotDoneFutures[in out Element](NamedTuple):
     done: set[Future[Element]]
     not_done: set[Future[Element]]
 
-def wait[Element](fs: Iterable[Future[Element]], timeout: float | None = None, return_when: str = "ALL_COMPLETED") -> DoneAndNotDoneFutures[Element]:
+def wait[Element](fs: Iterable[Future[Element]], timeout: int | float | None = None, return_when: str = "ALL_COMPLETED") -> DoneAndNotDoneFutures[Element]:
     """Wait for the futures in the given sequence to complete.
 
     Args:

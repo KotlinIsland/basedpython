@@ -1709,7 +1709,7 @@ def getfqdn(name: str = "") -> str:
 if sys.version_info >= (3, 11):
     def create_connection(
         address: (str | None, bytes | str | int | None),
-        timeout: float | None = ...,
+        timeout: int | float | None = ...,
         source_address: _Address | None = None,
         *,
         all_errors: bool = False,
@@ -1730,7 +1730,7 @@ if sys.version_info >= (3, 11):
 
 else:
     def create_connection(
-        address: (str | None, int), timeout: float | None = ..., source_address: _Address | None = None
+        address: (str | None, int), timeout: int | float | None = ..., source_address: _Address | None = None
     ) -> socket:
         """Connect to *address* and return the socket object.
 

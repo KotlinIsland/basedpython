@@ -90,7 +90,7 @@ def parsedate_to_datetime(data: str) -> datetime.datetime
 def mktime_tz(data: PDTZ) -> int:
     """Turn a 10-tuple as returned by parsedate_tz() into a POSIX timestamp."""
 
-def formatdate(timeval: float | None = None, localtime: bool = False, usegmt: bool = False) -> str:
+def formatdate(timeval: int | float | None = None, localtime: bool = False, usegmt: bool = False) -> str:
     """Returns a date string as specified by RFC 2822, e.g.:
 
     Fri, 09 Nov 2001 01:08:47 -0000

@@ -52,9 +52,9 @@ class FunctionProfile:
 
     ncalls: str
     tottime: float
-    percall_tottime: float
+    percall_tottime: int | float
     cumtime: float
-    percall_cumtime: float
+    percall_cumtime: int | float
     file_name: str
     line_number: int
 
@@ -62,7 +62,7 @@ class FunctionProfile:
 class StatsProfile:
     """Class for keeping track of an item in inventory."""
 
-    total_tt: float
+    total_tt: int | float
     func_profiles: dict[str, FunctionProfile]
 
 private type SortArgDict = dict[str, ((*: (int, int)), str)]

@@ -23,5 +23,5 @@ else:
         def detach(self) -> int:
             """Get the fd.  This should only be called once."""
 
-def stop(timeout: float | None = None):
+def stop(timeout: int | float | None = None):
     """Stop the background thread and clear registered resources."""

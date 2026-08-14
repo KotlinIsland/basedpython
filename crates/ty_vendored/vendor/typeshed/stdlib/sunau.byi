@@ -166,7 +166,7 @@ class Au_write:
     def getnchannels(self) -> int
     def setsampwidth(self, sampwidth: int)
     def getsampwidth(self) -> int
-    def setframerate(self, framerate: float)
+    def setframerate(self, framerate: int | float)
     def getframerate(self) -> int
     def setnframes(self, nframes: int)
     def getnframes(self) -> int

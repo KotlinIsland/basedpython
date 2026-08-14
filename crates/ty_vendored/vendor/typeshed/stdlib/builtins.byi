@@ -627,59 +627,59 @@ class float:
     def conjugate(self) -> float:
         """Return self, the complex conjugate of any float."""
 
-    def __add__(self, value: float, /) -> float:
+    def __add__(self, value: int | float, /) -> float:
         """Return self+value."""
 
-    def __sub__(self, value: float, /) -> float:
+    def __sub__(self, value: int | float, /) -> float:
         """Return self-value."""
 
-    def __mul__(self, value: float, /) -> float:
+    def __mul__(self, value: int | float, /) -> float:
         """Return self*value."""
 
-    def __floordiv__(self, value: float, /) -> float:
+    def __floordiv__(self, value: int | float, /) -> float:
         """Return self//value."""
 
-    def __truediv__(self, value: float, /) -> float:
+    def __truediv__(self, value: int | float, /) -> float:
         """Return self/value."""
 
-    def __mod__(self, value: float, /) -> float:
+    def __mod__(self, value: int | float, /) -> float:
         """Return self%value."""
 
-    def __divmod__(self, value: float, /) -> (float, float):
+    def __divmod__(self, value: int | float, /) -> (float, float):
         """Return divmod(self, value)."""
 
     def __pow__(self, value: int, mod: None = None, /) -> float:
         """Return pow(self, value, mod)."""
     # positive __value -> float; negative __value -> complex
     # return type must be Any as `float | complex` causes too many false-positive errors
-    def __pow__(self, value: float, mod: None = None, /) -> dynamic
+    def __pow__(self, value: int | float, mod: None = None, /) -> dynamic
 
-    def __radd__(self, value: float, /) -> float:
+    def __radd__(self, value: int | float, /) -> float:
         """Return value+self."""
 
-    def __rsub__(self, value: float, /) -> float:
+    def __rsub__(self, value: int | float, /) -> float:
         """Return value-self."""
 
-    def __rmul__(self, value: float, /) -> float:
+    def __rmul__(self, value: int | float, /) -> float:
         """Return value*self."""
 
-    def __rfloordiv__(self, value: float, /) -> float:
+    def __rfloordiv__(self, value: int | float, /) -> float:
         """Return value//self."""
 
-    def __rtruediv__(self, value: float, /) -> float:
+    def __rtruediv__(self, value: int | float, /) -> float:
         """Return value/self."""
 
-    def __rmod__(self, value: float, /) -> float:
+    def __rmod__(self, value: int | float, /) -> float:
         """Return value%self."""
 
-    def __rdivmod__(self, value: float, /) -> (float, float):
+    def __rdivmod__(self, value: int | float, /) -> (float, float):
         """Return divmod(value, self)."""
 
     def __rpow__(self, value: PositiveInteger, mod: None = None, /) -> float:
         """Return pow(value, self, mod)."""
     def __rpow__(self, value: NegativeInteger, mod: None = None, /) -> complex
     # Returning `complex` for the general case gives too many false-positive errors.
-    def __rpow__(self, value: float, mod: None = None, /) -> dynamic
+    def __rpow__(self, value: int | float, mod: None = None, /) -> dynamic
 
     def __getnewargs__(self) -> (float,)
     def __trunc__(self) -> int:
@@ -700,10 +700,10 @@ class float:
 
     override def __eq__(self, value: object, /) -> bool
     override def __ne__(self, value: object, /) -> bool
-    def __lt__(self, value: float, /) -> bool
-    def __le__(self, value: float, /) -> bool
-    def __gt__(self, value: float, /) -> bool
-    def __ge__(self, value: float, /) -> bool
+    def __lt__(self, value: int | float, /) -> bool
+    def __le__(self, value: int | float, /) -> bool
+    def __gt__(self, value: int | float, /) -> bool
+    def __ge__(self, value: int | float, /) -> bool
     def __neg__(self) -> float:
         """-self"""
 
@@ -727,7 +727,7 @@ class float:
         """Formats the float according to format_spec."""
 
     if sys.version_info >= (3, 14):
-        class def from_number(cls, number: float | SupportsIndex | SupportsFloat, /) -> Self:
+        class def from_number(cls, number: int | float | SupportsIndex | SupportsFloat, /) -> Self:
             """Convert real number to a floating-point number."""
 
 @disjoint_base
@@ -743,10 +743,10 @@ class complex:
     # Python doesn't currently accept SupportsComplex for the second argument
     def __new__(
         cls,
-        real: complex | SupportsComplex | SupportsFloat | SupportsIndex = 0,
-        imag: complex | SupportsFloat | SupportsIndex = 0,
+        real: int | float | complex | SupportsComplex | SupportsFloat | SupportsIndex = 0,
+        imag: int | float | complex | SupportsFloat | SupportsIndex = 0,
     ) -> Self
-    def __new__(cls, real: str | SupportsComplex | SupportsFloat | SupportsIndex | complex) -> Self
+    def __new__(cls, real: str | SupportsComplex | SupportsFloat | SupportsIndex | int | float | complex) -> Self
 
     let real: float
 
@@ -755,34 +755,34 @@ class complex:
     def conjugate(self) -> complex:
         """Return the complex conjugate of its argument. (3-4j).conjugate() == 3+4j."""
 
-    def __add__(self, value: complex, /) -> complex:
+    def __add__(self, value: int | float | complex, /) -> complex:
         """Return self+value."""
 
-    def __sub__(self, value: complex, /) -> complex:
+    def __sub__(self, value: int | float | complex, /) -> complex:
         """Return self-value."""
 
-    def __mul__(self, value: complex, /) -> complex:
+    def __mul__(self, value: int | float | complex, /) -> complex:
         """Return self*value."""
 
-    def __pow__(self, value: complex, mod: None = None, /) -> complex:
+    def __pow__(self, value: int | float | complex, mod: None = None, /) -> complex:
         """Return pow(self, value, mod)."""
 
-    def __truediv__(self, value: complex, /) -> complex:
+    def __truediv__(self, value: int | float | complex, /) -> complex:
         """Return self/value."""
 
-    def __radd__(self, value: complex, /) -> complex:
+    def __radd__(self, value: int | float | complex, /) -> complex:
         """Return value+self."""
 
-    def __rsub__(self, value: complex, /) -> complex:
+    def __rsub__(self, value: int | float | complex, /) -> complex:
         """Return value-self."""
 
-    def __rmul__(self, value: complex, /) -> complex:
+    def __rmul__(self, value: int | float | complex, /) -> complex:
         """Return value*self."""
 
-    def __rpow__(self, value: complex, mod: None = None, /) -> complex:
+    def __rpow__(self, value: int | float | complex, mod: None = None, /) -> complex:
         """Return pow(value, self, mod)."""
 
-    def __rtruediv__(self, value: complex, /) -> complex:
+    def __rtruediv__(self, value: int | float | complex, /) -> complex:
         """Return value/self."""
 
     override def __eq__(self, value: object, /) -> bool
@@ -808,7 +808,7 @@ class complex:
             """Convert this value to exact type complex."""
 
     if sys.version_info >= (3, 14):
-        class def from_number(cls, number: complex | SupportsComplex | SupportsFloat | SupportsIndex, /) -> Self:
+        class def from_number(cls, number: int | float | complex | SupportsComplex | SupportsFloat | SupportsIndex, /) -> Self:
             """Convert number to a complex floating-point number."""
 
 @type_check_only
@@ -2404,7 +2404,7 @@ final class memoryview[in out I = int](Sequence[I]):
 
     def cast(self, format: "c" | "@c", shape: list[int] | (*: int) = ...) -> memoryview[bytes]:
         """Cast a memoryview to a new format or shape."""
-    def cast(self, format: "f" | "@f" | "d" | "@d", shape: list[int] | (*: int) = ...) -> memoryview[float]
+    def cast(self, format: "f" | "@f" | "d" | "@d", shape: list[int] | (*: int) = ...) -> memoryview[int | float]
     def cast(self, format: "?", shape: list[int] | (*: int) = ...) -> memoryview[bool]
     def cast(self, format: IntegerFormats, shape: list[int] | (*: int) = ...) -> memoryview
 
@@ -4164,20 +4164,20 @@ def pow(base: int, exp: NegativeInteger, mod: None = None) -> float
 # int base & positive-int exp -> int; int base & negative-int exp -> float
 # return type must be Any as `int | float` causes too many false-positive errors
 def pow(base: int, exp: int, mod: None = None) -> dynamic
-def pow(base: PositiveInteger, exp: float, mod: None = None) -> float
-def pow(base: NegativeInteger, exp: float, mod: None = None) -> complex
-def pow(base: float, exp: int, mod: None = None) -> float
+def pow(base: PositiveInteger, exp: int | float, mod: None = None) -> float
+def pow(base: NegativeInteger, exp: int | float, mod: None = None) -> complex
+def pow(base: int | float, exp: int, mod: None = None) -> float
 
 # float base & float exp could return float or complex
 # return type must be Any (same as complex base, complex exp),
 # as `float | complex` causes too many false-positive errors
-def pow(base: float, exp: complex | SupportsSomeKindOfPow, mod: None = None) -> dynamic
-def pow(base: complex, exp: complex | SupportsSomeKindOfPow, mod: None = None) -> complex
+def pow(base: int | float, exp: int | float | complex | SupportsSomeKindOfPow, mod: None = None) -> dynamic
+def pow(base: int | float | complex, exp: int | float | complex | SupportsSomeKindOfPow, mod: None = None) -> complex
 def pow[E, Element](base: SupportsPow2[E, Element], exp: E, mod: None = None) -> Element
 def pow[E, Element](base: SupportsPow3NoneOnly[E, Element], exp: E, mod: None = None) -> Element
 def pow[E, M, Element](base: SupportsPow3[E, M, Element], exp: E, mod: M) -> Element
-def pow(base: SupportsSomeKindOfPow, exp: float, mod: None = None) -> dynamic
-def pow(base: SupportsSomeKindOfPow, exp: complex, mod: None = None) -> complex
+def pow(base: SupportsSomeKindOfPow, exp: int | float, mod: None = None) -> dynamic
+def pow(base: SupportsSomeKindOfPow, exp: int | float | complex, mod: None = None) -> complex
 
 quit: _sitebuiltins.Quitter
 

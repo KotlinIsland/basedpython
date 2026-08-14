@@ -35,12 +35,12 @@ class ExitNow(Exception)
 def read(obj: dynamic)
 def write(obj: dynamic)
 def readwrite(obj: dynamic, flags: int)
-def poll(timeout: float = 0.0, map: _MapType | None = None)
-def poll2(timeout: float = 0.0, map: _MapType | None = None)
+def poll(timeout: int | float = 0.0, map: _MapType | None = None)
+def poll2(timeout: int | float = 0.0, map: _MapType | None = None)
 
 poll3 = poll2
 
-def loop(timeout: float = 30.0, use_poll: bool = False, map: _MapType | None = None, count: int | None = None)
+def loop(timeout: int | float = 30.0, use_poll: bool = False, map: _MapType | None = None, count: int | None = None)
 
 # Not really subclass of socket.socket; it's only delegation.
 # It is not covariant to it.

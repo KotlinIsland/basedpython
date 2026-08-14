@@ -204,7 +204,7 @@ class BaseServer:
     """
 
     server_address: _Address
-    timeout: float | None
+    timeout: int | float | None
     RequestHandlerClass: (dynamic, _RetAddress, Self) -> BaseRequestHandler
     init(
         self, server_address: _Address, RequestHandlerClass: (dynamic, _RetAddress, Self) -> BaseRequestHandler
@@ -217,7 +217,7 @@ class BaseServer:
         Respects self.timeout.
         """
 
-    def serve_forever(self, poll_interval: float = 0.5):
+    def serve_forever(self, poll_interval: int | float = 0.5):
         """Handle one request at a time until shutdown.
 
         Polls for shutdown every poll_interval seconds. Ignores
@@ -410,7 +410,7 @@ if sys.platform != "win32":
     class ForkingMixIn:
         """Mix-in class to handle each request in a new process."""
 
-        timeout: float | None  # undocumented
+        timeout: int | float | None  # undocumented
         active_children: set[int] | None  # undocumented
         max_children: int  # undocumented
         block_on_close: bool
@@ -501,7 +501,7 @@ class StreamRequestHandler(BaseRequestHandler):
 
     rbufsize: ClassVar[int]  # undocumented
     wbufsize: ClassVar[int]  # undocumented
-    timeout: ClassVar[float | None]  # undocumented
+    timeout: ClassVar[int | float | None]  # undocumented
     disable_nagle_algorithm: ClassVar[bool]  # undocumented
     connection: dynamic  # undocumented
     rfile: BufferedIOBase

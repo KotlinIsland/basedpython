@@ -18,7 +18,7 @@ class SimpleQueue[in out Element]:
     def empty(self) -> bool:
         """Return True if the queue is empty, False otherwise (not reliable!)."""
 
-    def get(self, block: bool = True, timeout: float | None = None) -> Element:
+    def get(self, block: bool = True, timeout: int | float | None = None) -> Element:
         """Remove and return an item from the queue.
 
         If optional args 'block' is true and 'timeout' is None (the
@@ -38,7 +38,7 @@ class SimpleQueue[in out Element]:
         raise the Empty exception.
         """
 
-    def put(self, item: Element, block: bool = True, timeout: float | None = None):
+    def put(self, item: Element, block: bool = True, timeout: int | float | None = None):
         """Put the item on the queue.
 
         The optional 'block' and 'timeout' arguments are ignored, as this

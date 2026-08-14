@@ -239,9 +239,9 @@ class SocketHandler(Handler):
     sock: socket | None  # undocumented
     closeOnError: bool  # undocumented
     retryTime: float | None  # undocumented
-    retryStart: float  # undocumented
-    retryFactor: float  # undocumented
-    retryMax: float  # undocumented
+    retryStart: int | float  # undocumented
+    retryFactor: int | float  # undocumented
+    retryMax: int | float  # undocumented
     init(self, host: str, port: int | None):
         """
         Initializes the handler with a specific host address and port.
@@ -251,7 +251,7 @@ class SocketHandler(Handler):
         logging call.
         """
 
-    def makeSocket(self, timeout: float = 1) -> socket:  # timeout is undocumented
+    def makeSocket(self, timeout: int | float = 1) -> socket:  # timeout is undocumented
         """
         A factory method which allows subclasses to define the precise
         type of socket they want.
@@ -348,13 +348,13 @@ class SysLogHandler(Handler):
     facility_names: ClassVar[dict[str, int]]  # undocumented
     priority_map: ClassVar[dict[str, str]]  # undocumented
     if sys.version_info >= (3, 14):
-        timeout: float | None
+        timeout: int | float | None
         def __init__(
             self,
             address: (str, int) | str = ("localhost", 514),
             facility: str | int = 1,
             socktype: SocketKind | None = None,
-            timeout: float | None = None,
+            timeout: int | float | None = None,
         ) -> None:
             """
             Initialize a handler.
@@ -467,7 +467,7 @@ class SMTPHandler(Handler):
     toaddrs: list[str]  # undocumented
     subject: str  # undocumented
     secure: tuple[()] | (str,) | (str, str) | None  # undocumented
-    timeout: float  # undocumented
+    timeout: int | float  # undocumented
     init(
         self,
         mailhost: str | (str, int),
@@ -476,7 +476,7 @@ class SMTPHandler(Handler):
         subject: str,
         credentials: (str, str) | None = None,
         secure: tuple[()] | (str,) | (str, str) | None = None,
-        timeout: float = 5.0,
+        timeout: int | float = 5.0,
     ):
         """
         Initialize the handler.

@@ -375,7 +375,7 @@ class SequenceMatcher[in out Element]:
         is (int,).
         """
 
-def get_close_matches(word: AnyStr, possibilities: Iterable[AnyStr], n: int = 3, cutoff: float = 0.6) -> list[AnyStr]:
+def get_close_matches(word: AnyStr, possibilities: Iterable[AnyStr], n: int = 3, cutoff: int | float = 0.6) -> list[AnyStr]:
     """Use SequenceMatcher to return list of the best "good enough" matches.
 
     word is a sequence for which close matches are desired (typically a
@@ -404,7 +404,7 @@ def get_close_matches(word: AnyStr, possibilities: Iterable[AnyStr], n: int = 3,
     ['except']
     """
 def get_close_matches[Element](
-    word: Sequence[Element], possibilities: Iterable[Sequence[Element]], n: int = 3, cutoff: float = 0.6
+    word: Sequence[Element], possibilities: Iterable[Sequence[Element]], n: int = 3, cutoff: int | float = 0.6
 ) -> list[Sequence[Element]]
 
 class Differ:

@@ -137,7 +137,7 @@ class GzipFile(BaseStream):
         mode: ReadBinaryMode,
         compresslevel: int = 9,
         fileobj: _ReadableFileobj | None = None,
-        mtime: float | None = None,
+        mtime: int | float | None = None,
     ):
         """Constructor for the GzipFile class.
 
@@ -181,7 +181,7 @@ class GzipFile(BaseStream):
         mode: ReadBinaryMode,
         compresslevel: int = 9,
         fileobj: _ReadableFileobj | None = None,
-        mtime: float | None = None,
+        mtime: int | float | None = None,
     )
     init(
         self,
@@ -189,7 +189,7 @@ class GzipFile(BaseStream):
         mode: WriteBinaryMode,
         compresslevel: int = 9,
         fileobj: _WritableFileobj | None = None,
-        mtime: float | None = None,
+        mtime: int | float | None = None,
     )
     init(
         self,
@@ -197,7 +197,7 @@ class GzipFile(BaseStream):
         mode: WriteBinaryMode,
         compresslevel: int = 9,
         fileobj: _WritableFileobj | None = None,
-        mtime: float | None = None,
+        mtime: int | float | None = None,
     )
     init(
         self,
@@ -205,7 +205,7 @@ class GzipFile(BaseStream):
         mode: str | None = None,
         compresslevel: int = 9,
         fileobj: _ReadableFileobj | _WritableFileobj | None = None,
-        mtime: float | None = None,
+        mtime: int | float | None = None,
     )
 
     if sys.version_info < (3, 12):
@@ -250,7 +250,7 @@ class _GzipReader(DecompressReader):
     init(self, fp: _ReadableFileobj)
 
 if sys.version_info >= (3, 15):
-    def compress(data: SizedBuffer, compresslevel: int = 6, *, mtime: float = 0) -> bytes:
+    def compress(data: SizedBuffer, compresslevel: int = 6, *, mtime: int | float = 0) -> bytes:
         """Compress data in one shot and return the compressed string.
 
         compresslevel sets the compression level in range of 0-9.
@@ -259,7 +259,7 @@ if sys.version_info >= (3, 15):
         """
 
 elif sys.version_info >= (3, 14):
-    def compress(data: SizedBuffer, compresslevel: int = 9, *, mtime: float = 0) -> bytes:
+    def compress(data: SizedBuffer, compresslevel: int = 9, *, mtime: int | float = 0) -> bytes:
         """Compress data in one shot and return the compressed string.
 
         compresslevel sets the compression level in range of 0-9.
@@ -268,7 +268,7 @@ elif sys.version_info >= (3, 14):
         """
 
 else:
-    def compress(data: SizedBuffer, compresslevel: int = 9, *, mtime: float | None = None) -> bytes:
+    def compress(data: SizedBuffer, compresslevel: int = 9, *, mtime: int | float | None = None) -> bytes:
         """Compress data in one shot and return the compressed string.
 
         compresslevel sets the compression level in range of 0-9.

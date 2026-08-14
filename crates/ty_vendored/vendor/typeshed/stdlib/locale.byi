@@ -221,7 +221,7 @@ if sys.version_info < (3, 13):
 
 if sys.version_info < (3, 12):
     @deprecated("Deprecated since Python 3.7; removed in Python 3.12. Use `locale.format_string()` instead.")
-    def format(percent: _str, value: float | Decimal, grouping: bool = False, monetary: bool = False, *additional: dynamic) -> _str:
+    def format(percent: _str, value: int | float | Decimal, grouping: bool = False, monetary: bool = False, *additional: dynamic) -> _str:
         """Deprecated, use format_string instead."""
 
 def format_string(f: _str, val: dynamic, grouping: bool = False, monetary: bool = False) -> _str:
@@ -233,7 +233,7 @@ def format_string(f: _str, val: dynamic, grouping: bool = False, monetary: bool 
     fourth parameter monetary is true.
     """
 
-def currency(val: float | Decimal, symbol: bool = True, grouping: bool = False, international: bool = False) -> _str:
+def currency(val: int | float | Decimal, symbol: bool = True, grouping: bool = False, international: bool = False) -> _str:
     """Formats val according to the currency settings
     in the current locale.
     """
@@ -244,13 +244,13 @@ def delocalize(string: _str) -> _str:
 def localize(string: _str, grouping: bool = False, monetary: bool = False) -> _str:
     """Parses a string as locale number according to the locale settings."""
 
-def atof(string: _str, func: (_str) -> float = ...) -> float:
+def atof(string: _str, func: (_str) -> (int | float) = ...) -> int | float:
     """Parses a string as a float according to the locale settings."""
 
 def atoi(string: _str) -> int:
     """Converts a string to an integer according to the locale settings."""
 
-def str(val: float) -> _str:
+def str(val: int | float) -> _str:
     """Convert float to string, taking the locale into account."""
 
 locale_alias: dict[_str, _str]  # undocumented

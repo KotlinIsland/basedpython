@@ -139,7 +139,7 @@ if sys.version_info >= (3, 13):
     __all__ += ["kde", "kde_random"]
 
 # Most functions in this module accept homogeneous collections of one of these types
-private type Number = float | Decimal | Fraction
+private type Number = int | float | Decimal | Fraction
 
 # Used in mode, multimode
 
@@ -192,7 +192,7 @@ def geometric_mean(data: Iterable[SupportsFloat]) -> float:
 
     """
 
-def mean[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT]) -> NumberT:
+def mean[NumberT in (int | float, Decimal, Fraction)](data: Iterable[NumberT]) -> NumberT:
     """Return the sample arithmetic mean of data.
 
     >>> mean([1, 2, 3, 4, 4])
@@ -210,7 +210,7 @@ def mean[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT]) -> Numb
 
     """
 
-def harmonic_mean[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], weights: Iterable[Number] | None = None) -> NumberT:
+def harmonic_mean[NumberT in (int | float, Decimal, Fraction)](data: Iterable[NumberT], weights: Iterable[Number] | None = None) -> NumberT:
     """Return the harmonic mean of data.
 
     The harmonic mean is the reciprocal of the arithmetic mean of the
@@ -235,7 +235,7 @@ def harmonic_mean[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT]
 
     """
 
-def median[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT]) -> NumberT:
+def median[NumberT in (int | float, Decimal, Fraction)](data: Iterable[NumberT]) -> NumberT:
     """Return the median (middle value) of numeric data.
 
     When the number of data points is odd, return the middle data point.
@@ -321,7 +321,7 @@ if sys.version_info >= (3, 11):
         """
 
 else:
-    def median_grouped[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], interval: NumberT | float = 1) -> NumberT | float:
+    def median_grouped[NumberT in (int | float, Decimal, Fraction)](data: Iterable[NumberT], interval: NumberT | int | float = 1) -> NumberT | float:
         """Return the 50th percentile (median) of grouped continuous data.
 
         >>> median_grouped([1, 2, 2, 3, 4, 4, 4, 4, 4, 5])
@@ -387,7 +387,7 @@ def multimode[HashableT: Hashable](data: Iterable[HashableT]) -> list[HashableT]
 
     """
 
-def pstdev[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], mu: NumberT | None = None) -> NumberT:
+def pstdev[NumberT in (int | float, Decimal, Fraction)](data: Iterable[NumberT], mu: NumberT | None = None) -> NumberT:
     """Return the square root of the population variance.
 
     See ``pvariance`` for arguments and other details.
@@ -397,7 +397,7 @@ def pstdev[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], mu: N
 
     """
 
-def pvariance[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], mu: NumberT | None = None) -> NumberT:
+def pvariance[NumberT in (int | float, Decimal, Fraction)](data: Iterable[NumberT], mu: NumberT | None = None) -> NumberT:
     """Return the population variance of ``data``.
 
     data should be a sequence or iterable of Real-valued numbers, with at least one
@@ -433,7 +433,7 @@ def pvariance[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], mu
 
     """
 
-def quantiles[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], *, n: int = 4, method: "inclusive" | "exclusive" = "exclusive") -> list[NumberT]:
+def quantiles[NumberT in (int | float, Decimal, Fraction)](data: Iterable[NumberT], *, n: int = 4, method: "inclusive" | "exclusive" = "exclusive") -> list[NumberT]:
     """Divide *data* into *n* continuous intervals with equal probability.
 
     Returns a list of (n - 1) cut points separating the intervals.
@@ -451,7 +451,7 @@ def quantiles[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], *,
 
     """
 
-def stdev[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], xbar: NumberT | None = None) -> NumberT:
+def stdev[NumberT in (int | float, Decimal, Fraction)](data: Iterable[NumberT], xbar: NumberT | None = None) -> NumberT:
     """Return the square root of the sample variance.
 
     See ``variance`` for arguments and other details.
@@ -461,7 +461,7 @@ def stdev[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], xbar: 
 
     """
 
-def variance[NumberT in (float, Decimal, Fraction)](data: Iterable[NumberT], xbar: NumberT | None = None) -> NumberT:
+def variance[NumberT in (int | float, Decimal, Fraction)](data: Iterable[NumberT], xbar: NumberT | None = None) -> NumberT:
     """Return the sample variance of data.
 
     data should be an iterable of Real-valued numbers, with at least two
@@ -504,7 +504,7 @@ class NormalDist:
     """Normal distribution of a random variable"""
 
     __slots__ = {"_mu": "Arithmetic mean of a normal distribution", "_sigma": "Standard deviation of a normal distribution"}
-    init(self, mu: float = 0.0, sigma: float = 1.0):
+    init(self, mu: int | float = 0.0, sigma: int | float = 1.0):
         """NormalDist where mu is the mean and sigma is the standard deviation."""
 
     let mean: float
@@ -523,13 +523,13 @@ class NormalDist:
     def samples(self, n: SupportsIndex, *, seed: Seed | None = None) -> list[float]:
         """Generate *n* samples for a given mean and standard deviation."""
 
-    def pdf(self, x: float) -> float:
+    def pdf(self, x: int | float) -> float:
         """Probability density function.  P(x <= X < x+dx) / dx"""
 
-    def cdf(self, x: float) -> float:
+    def cdf(self, x: int | float) -> float:
         """Cumulative distribution function.  P(X <= x)"""
 
-    def inv_cdf(self, p: float) -> float:
+    def inv_cdf(self, p: int | float) -> float:
         """Inverse cumulative distribution function.  x : P(X <= x) = p
 
         Finds the value of the random variable such that the probability of
@@ -563,7 +563,7 @@ class NormalDist:
         separate the normal distribution in to 100 equal sized groups.
         """
 
-    def zscore(self, x: float) -> float:
+    def zscore(self, x: int | float) -> float:
         """Compute the Standard Score.  (x - mean) / stdev
 
         Describes *x* in terms of the number of standard deviations
@@ -573,7 +573,7 @@ class NormalDist:
     override def __eq__(x1, x2: object) -> bool:
         """Two NormalDist objects are equal if their mu and sigma are both equal."""
 
-    def __add__(x1, x2: float | NormalDist) -> NormalDist:
+    def __add__(x1, x2: int | float | NormalDist) -> NormalDist:
         """Add a constant or another NormalDist instance.
 
         If *other* is a constant, translate mu by the constant,
@@ -584,7 +584,7 @@ class NormalDist:
         independent or if they are jointly normally distributed.
         """
 
-    def __sub__(x1, x2: float | NormalDist) -> NormalDist:
+    def __sub__(x1, x2: int | float | NormalDist) -> NormalDist:
         """Subtract a constant or another NormalDist instance.
 
         If *other* is a constant, translate by the constant mu,
@@ -595,14 +595,14 @@ class NormalDist:
         independent or if they are jointly normally distributed.
         """
 
-    def __mul__(x1, x2: float) -> NormalDist:
+    def __mul__(x1, x2: int | float) -> NormalDist:
         """Multiply both mu and sigma by a constant.
 
         Used for rescaling, perhaps to change measurement units.
         Sigma is scaled with the absolute value of the constant.
         """
 
-    def __truediv__(x1, x2: float) -> NormalDist:
+    def __truediv__(x1, x2: int | float) -> NormalDist:
         """Divide both mu and sigma by a constant.
 
         Used for rescaling, perhaps to change measurement units.
@@ -616,7 +616,7 @@ class NormalDist:
         """Negates mu while keeping sigma the same."""
 
     __radd__ = __add__
-    def __rsub__(x1, x2: float | NormalDist) -> NormalDist:
+    def __rsub__(x1, x2: int | float | NormalDist) -> NormalDist:
         """Subtract a NormalDist from a constant or another NormalDist."""
 
     __rmul__ = __mul__
@@ -763,7 +763,7 @@ else:
 
 if sys.version_info >= (3, 13):
     type _Kernel = "normal" | "gauss" | "logistic" | "sigmoid" | "rectangular" | "uniform" | "triangular" | "parabolic" | "epanechnikov" | "quartic" | "biweight" | "triweight" | "cosine"
-    def kde(data: Sequence[float], h: float, kernel: _Kernel = "normal", *, cumulative: bool = False) -> (float) -> float:
+    def kde(data: Sequence[int | float], h: int | float, kernel: _Kernel = "normal", *, cumulative: bool = False) -> (int | float) -> float:
         """Kernel Density Estimation:  Create a continuous probability density
         function or cumulative distribution function from discrete samples.
 
@@ -864,7 +864,7 @@ if sys.version_info >= (3, 13):
         """
 
     def kde_random(
-        data: Sequence[float], h: float, kernel: _Kernel = "normal", *, seed: Seed | None = None
+        data: Sequence[int | float], h: int | float, kernel: _Kernel = "normal", *, seed: Seed | None = None
     ) -> () -> float:
         """Return a function that makes a random selection from the estimated
         probability density function created by kde(data, h, kernel).

@@ -546,7 +546,7 @@ class IntVar(Variable):
 class DoubleVar(Variable):
     """Value holder for float variables."""
 
-    init(self, master: Misc | None = None, value: float | None = None, name: str | None = None):
+    init(self, master: Misc | None = None, value: int | float | None = None, name: str | None = None):
         """Construct a float variable.
 
         MASTER can be given as master widget.
@@ -557,7 +557,7 @@ class DoubleVar(Variable):
         then the existing value is retained.
         """
 
-    override def set(self, value: float):
+    override def set(self, value: int | float):
         """Set the variable to VALUE."""
 
     initialize = set
@@ -597,8 +597,8 @@ def getboolean(s) -> bool:
 
 @type_check_only
 class _GridIndexInfo(TypedDict, total=False):
-    minsize: float | str
-    pad: float | str
+    minsize: int | float | str
+    pad: int | float | str
     uniform: str | None
     weight: int
 
@@ -1048,7 +1048,7 @@ class Misc:
     def winfo_exists(self) -> bool:
         """Return true if this widget exists."""
 
-    def winfo_fpixels(self, number: float | str) -> float:
+    def winfo_fpixels(self, number: int | float | str) -> float:
         """Return the number of pixels for the given distance NUMBER
         (e.g. "3c") as float.
         """
@@ -1080,7 +1080,7 @@ class Misc:
     def winfo_pathname(self, id: int, displayof: 0 | Misc | None = 0):
         """Return the pathname of the widget given by ID."""
 
-    def winfo_pixels(self, number: float | str) -> int:
+    def winfo_pixels(self, number: int | float | str) -> int:
         """Rounded integer value of winfo_fpixels."""
 
     def winfo_pointerx(self) -> int:
@@ -1399,8 +1399,8 @@ class Misc:
         index: int | str | list[int] | (*: int),
         cnf: _GridIndexInfo = {},
         *,
-        minsize: float | str = ...,
-        pad: float | str = ...,
+        minsize: int | float | str = ...,
+        pad: int | float | str = ...,
         uniform: str = ...,
         weight: int = ...,
     ) -> _GridIndexInfo | MaybeNone:  # can be None but annoying to check
@@ -1416,8 +1416,8 @@ class Misc:
         index: int | str | list[int] | (*: int),
         cnf: _GridIndexInfo = {},
         *,
-        minsize: float | str = ...,
-        pad: float | str = ...,
+        minsize: int | float | str = ...,
+        pad: int | float | str = ...,
         uniform: str = ...,
         weight: int = ...,
     ) -> _GridIndexInfo | MaybeNone:  # can be None but annoying to check
@@ -1430,7 +1430,7 @@ class Misc:
 
     columnconfigure = grid_columnconfigure
     rowconfigure = grid_rowconfigure
-    def grid_location(self, x: float | str, y: float | str) -> (int, int):
+    def grid_location(self, x: int | float | str, y: int | float | str) -> (int, int):
         """Return a tuple of column and row which identify the cell
         at which the pixel at position X and Y inside the container
         widget is located.
@@ -1496,32 +1496,32 @@ class Misc:
         sequence: str,
         *,
         above: Misc | int = ...,
-        borderwidth: float | str = ...,
+        borderwidth: int | float | str = ...,
         button: int = ...,
         count: int = ...,
         data: dynamic = ...,  # anything with usable str() value
         delta: int = ...,
         detail: str = ...,
         focus: bool = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         keycode: int = ...,
         keysym: str = ...,
         mode: str = ...,
         override: bool = ...,
         place: "PlaceOnTop" | "PlaceOnBottom" = ...,
         root: Misc | int = ...,
-        rootx: float | str = ...,
-        rooty: float | str = ...,
+        rootx: int | float | str = ...,
+        rooty: int | float | str = ...,
         sendevent: bool = ...,
         serial: int = ...,
         state: int | str = ...,
         subwindow: Misc | int = ...,
         time: int = ...,
         warp: bool = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
         when: "now" | "tail" | "head" | "mark" = ...,
-        x: float | str = ...,
-        y: float | str = ...,
+        x: int | float | str = ...,
+        y: int | float | str = ...,
     ):
         """Generate an event SEQUENCE. Additional
         keyword arguments specify parameter of the event
@@ -1586,7 +1586,7 @@ class XView:
         """Query and change the horizontal position of the view."""
     def xview(self, *args) -> None
 
-    def xview_moveto(self, fraction: float):
+    def xview_moveto(self, fraction: int | float):
         """Adjusts the view in the window so that FRACTION of the
         total width of the canvas is off-screen to the left.
         """
@@ -1595,7 +1595,7 @@ class XView:
         """Shift the x-view according to NUMBER which is measured in "units"
         or "pages" (WHAT).
         """
-    def xview_scroll(self, number: float | str, what: "pixels") -> None
+    def xview_scroll(self, number: int | float | str, what: "pixels") -> None
 
 class YView:
     """Mix-in class for querying and changing the vertical position
@@ -1606,7 +1606,7 @@ class YView:
         """Query and change the vertical position of the view."""
     def yview(self, *args) -> None
 
-    def yview_moveto(self, fraction: float):
+    def yview_moveto(self, fraction: int | float):
         """Adjusts the view in the window so that FRACTION of the
         total height of the canvas is off-screen to the top.
         """
@@ -1615,7 +1615,7 @@ class YView:
         """Shift the y-view according to NUMBER which is measured in
         "units" or "pages" (WHAT).
         """
-    def yview_scroll(self, number: float | str, what: "pixels") -> None
+    def yview_scroll(self, number: int | float | str, what: "pixels") -> None
 
 if sys.platform == "darwin":
     @type_check_only
@@ -1835,7 +1835,7 @@ class Wm:
 
     # wm_attributes: Set an attribute (old variant using string that starts with "-")
     def wm_attributes(self, option: str, /)
-    def wm_attributes(self, option: "-alpha", value: float, /) -> ""
+    def wm_attributes(self, option: "-alpha", value: int | float, /) -> ""
     def wm_attributes(self, option: "-fullscreen", value: bool, /) -> ""
     def wm_attributes(self, option: "-topmost", value: bool, /) -> ""
     if sys.platform == "darwin":
@@ -1897,7 +1897,7 @@ class Wm:
             def wm_attributes(
                 self,
                 *,
-                alpha: float = ...,
+                alpha: int | float = ...,
                 fullscreen: bool = ...,
                 modified: bool = ...,
                 notify: bool = ...,
@@ -1921,7 +1921,7 @@ class Wm:
             def wm_attributes(
                 self,
                 *,
-                alpha: float = ...,
+                alpha: int | float = ...,
                 transparentcolor: str = ...,
                 disabled: bool = ...,
                 fullscreen: bool = ...,
@@ -1943,7 +1943,7 @@ class Wm:
         else:
             # X11
             def wm_attributes(
-                self, *, alpha: float = ..., topmost: bool = ..., zoomed: bool = ..., fullscreen: bool = ..., type: str = ...
+                self, *, alpha: int | float = ..., topmost: bool = ..., zoomed: bool = ..., fullscreen: bool = ..., type: str = ...
             ) -> None:
                 """Return or sets platform specific attributes.
 
@@ -2220,21 +2220,21 @@ class Tk(Misc, Wm):
         cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         menu: Menu = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -2343,10 +2343,10 @@ class Pack:
         expand: bool | 0 | 1 = 0,
         fill: "none" | "x" | "y" | "both" = ...,
         side: "left" | "right" | "top" | "bottom" = ...,
-        ipadx: float | str = ...,
-        ipady: float | str = ...,
-        padx: float | str | (float | str, float | str) = ...,
-        pady: float | str | (float | str, float | str) = ...,
+        ipadx: int | float | str = ...,
+        ipady: int | float | str = ...,
+        padx: int | float | str | (int | float | str, int | float | str) = ...,
+        pady: int | float | str | (int | float | str, int | float | str) = ...,
         in_: Misc = ...,
         **kw: dynamic,  # allow keyword argument named 'in', see #4836
     ):
@@ -2403,15 +2403,15 @@ class Place:
         *,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         bordermode: "inside" | "outside" | "ignore" = ...,
-        width: float | str = ...,
-        height: float | str = ...,
-        x: float | str = ...,
-        y: float | str = ...,
+        width: int | float | str = ...,
+        height: int | float | str = ...,
+        x: int | float | str = ...,
+        y: int | float | str = ...,
         # str allowed for compatibility with place_info()
-        relheight: str | float = ...,
-        relwidth: str | float = ...,
-        relx: str | float = ...,
-        rely: str | float = ...,
+        relheight: str | int | float = ...,
+        relwidth: str | int | float = ...,
+        relx: str | int | float = ...,
+        rely: str | int | float = ...,
         in_: Misc = ...,
         **kw: dynamic,  # allow keyword argument named 'in', see #4836
     ):
@@ -2480,10 +2480,10 @@ class Grid:
         columnspan: int = ...,
         row: int = ...,
         rowspan: int = ...,
-        ipadx: float | str = ...,
-        ipady: float | str = ...,
-        padx: float | str | (float | str, float | str) = ...,
-        pady: float | str | (float | str, float | str) = ...,
+        ipadx: int | float | str = ...,
+        ipady: int | float | str = ...,
+        padx: int | float | str | (int | float | str, int | float | str) = ...,
+        pady: int | float | str | (int | float | str, int | float | str) = ...,
         sticky: (
             str | list[str] | (*: str)
         ) = ...,  # consists of letters 'n', 's', 'w', 'e', may contain repeats, may be empty
@@ -2603,28 +2603,28 @@ class Toplevel(BaseWidget, Wm):
         cnf: dict[str, dynamic] | None = {},
         *,
         background: str = ...,
-        bd: float | str = 0,
+        bd: int | float | str = 0,
         bg: str = ...,
-        border: float | str = 0,
-        borderwidth: float | str = 0,
+        border: int | float | str = 0,
+        borderwidth: int | float | str = 0,
         class_: str = "Toplevel",
         colormap: "new" | "" | Misc = "",
         container: bool = False,
         cursor: _Cursor = "",
-        height: float | str = 0,
+        height: int | float | str = 0,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = 0,
+        highlightthickness: int | float | str = 0,
         menu: Menu = ...,
         name: str = ...,
-        padx: float | str = 0,
-        pady: float | str = 0,
+        padx: int | float | str = 0,
+        pady: int | float | str = 0,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         screen: str = "",  # can't be changed after creating widget
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
         use: int = ...,
         visual: str | (str, int) = "",
-        width: float | str = 0,
+        width: int | float | str = 0,
     ):
         """Construct a toplevel widget with the parent MASTER.
 
@@ -2640,21 +2640,21 @@ class Toplevel(BaseWidget, Wm):
         cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         menu: Menu = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -2684,11 +2684,11 @@ class Button(Widget):
         activeforeground: str = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = "center",
         background: str = ...,
-        bd: float | str = ...,  # same as borderwidth
+        bd: int | float | str = ...,  # same as borderwidth
         bg: str = ...,  # same as background
         bitmap: str = "",
-        border: float | str = ...,  # same as borderwidth
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,  # same as borderwidth
+        borderwidth: int | float | str = ...,
         command: str | (() -> dynamic) = "",
         compound: "top" | "left" | "center" | "right" | "bottom" | "none" = "none",
         cursor: _Cursor = "",
@@ -2699,29 +2699,29 @@ class Button(Widget):
         foreground: str = ...,
         # width and height must be int for buttons containing just text, but
         # buttons with an image accept any screen units.
-        height: float | str = 0,
+        height: int | float | str = 0,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = 1,
+        highlightthickness: int | float | str = 1,
         image: _Image | str = "",
         justify: "left" | "center" | "right" = "center",
         name: str = ...,
         overrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" | "" = "",
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         repeatdelay: int = ...,
         repeatinterval: int = ...,
         state: "normal" | "active" | "disabled" = "normal",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
-        text: float | str = "",
+        text: int | float | str = "",
         # We allow the textvariable to be any Variable, not necessarily
         # StringVar. This is useful for e.g. a button that displays the value
         # of an IntVar.
         textvariable: Variable = ...,
         underline: int = -1,
-        width: float | str = 0,
-        wraplength: float | str = 0,
+        width: int | float | str = 0,
+        wraplength: int | float | str = 0,
     ):
         """Construct a button widget with the parent MASTER.
 
@@ -2750,11 +2750,11 @@ class Button(Widget):
         activeforeground: str = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
         bitmap: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         command: str | (() -> dynamic) = ...,
         compound: "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         cursor: _Cursor = ...,
@@ -2763,25 +2763,25 @@ class Button(Widget):
         fg: str = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         image: _Image | str = ...,
         justify: "left" | "center" | "right" = ...,
         overrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" | "" = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         repeatdelay: int = ...,
         repeatinterval: int = ...,
         state: "normal" | "active" | "disabled" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
+        text: int | float | str = ...,
         textvariable: Variable = ...,
         underline: int = ...,
-        width: float | str = ...,
-        wraplength: float | str = ...,
+        width: int | float | str = ...,
+        wraplength: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -2827,39 +2827,39 @@ class Canvas(Widget, XView, YView):
         cnf: dict[str, dynamic] | None = {},
         *,
         background: str = ...,
-        bd: float | str = 0,
+        bd: int | float | str = 0,
         bg: str = ...,
-        border: float | str = 0,
-        borderwidth: float | str = 0,
-        closeenough: float = 1.0,
+        border: int | float | str = 0,
+        borderwidth: int | float | str = 0,
+        closeenough: int | float = 1.0,
         confine: bool = True,
         cursor: _Cursor = "",
-        height: float | str = ...,  # see COORDINATES in canvas manual page
+        height: int | float | str = ...,  # see COORDINATES in canvas manual page
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         insertbackground: str = ...,
-        insertborderwidth: float | str = 0,
+        insertborderwidth: int | float | str = 0,
         insertofftime: int = 300,
         insertontime: int = 600,
-        insertwidth: float | str = 2,
+        insertwidth: int | float | str = 2,
         name: str = ...,
         offset=...,  # undocumented
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         # Setting scrollregion to None doesn't reset it back to empty,
         # but setting it to () does.
-        scrollregion: (float | str, float | str, float | str, float | str) | tuple[()] = (),
+        scrollregion: (int | float | str, int | float | str, int | float | str, int | float | str) | tuple[()] = (),
         selectbackground: str = ...,
-        selectborderwidth: float | str = 1,
+        selectborderwidth: int | float | str = 1,
         selectforeground: str = ...,
         # man page says that state can be 'hidden', but it can't
         state: "normal" | "disabled" = "normal",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
-        width: float | str = ...,
+        width: int | float | str = ...,
         xscrollcommand: str | ((float, float) -> object) = "",
-        xscrollincrement: float | str = 0,
+        xscrollincrement: int | float | str = 0,
         yscrollcommand: str | ((float, float) -> object) = "",
-        yscrollincrement: float | str = 0,
+        yscrollincrement: int | float | str = 0,
     ):
         """Construct a canvas widget with the parent MASTER.
 
@@ -2877,35 +2877,35 @@ class Canvas(Widget, XView, YView):
         cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
-        closeenough: float = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
+        closeenough: int | float = ...,
         confine: bool = ...,
         cursor: _Cursor = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         insertbackground: str = ...,
-        insertborderwidth: float | str = ...,
+        insertborderwidth: int | float | str = ...,
         insertofftime: int = ...,
         insertontime: int = ...,
-        insertwidth: float | str = ...,
+        insertwidth: int | float | str = ...,
         offset=...,  # undocumented
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
-        scrollregion: (float | str, float | str, float | str, float | str) | tuple[()] = ...,
+        scrollregion: (int | float | str, int | float | str, int | float | str, int | float | str) | tuple[()] = ...,
         selectbackground: str = ...,
-        selectborderwidth: float | str = ...,
+        selectborderwidth: int | float | str = ...,
         selectforeground: str = ...,
         state: "normal" | "disabled" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
         xscrollcommand: str | ((float, float) -> object) = ...,
-        xscrollincrement: float | str = ...,
+        xscrollincrement: int | float | str = ...,
         yscrollcommand: str | ((float, float) -> object) = ...,
-        yscrollincrement: float | str = ...,
+        yscrollincrement: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -2935,7 +2935,7 @@ class Canvas(Widget, XView, YView):
         """Add tag NEWTAG to all items below TAGORID."""
 
     def addtag_closest(
-        self, newtag: str, x: float | str, y: float | str, halo: float | str | None = None, start: str | int | None = None
+        self, newtag: str, x: int | float | str, y: int | float | str, halo: int | float | str | None = None, start: str | int | None = None
     ):
         """Add tag NEWTAG to item which is closest to pixel at X, Y.
         If several match take the top-most.
@@ -2943,12 +2943,12 @@ class Canvas(Widget, XView, YView):
         closest). If START is specified the next below this tag is taken.
         """
 
-    def addtag_enclosed(self, newtag: str, x1: float | str, y1: float | str, x2: float | str, y2: float | str):
+    def addtag_enclosed(self, newtag: str, x1: int | float | str, y1: int | float | str, x2: int | float | str, y2: int | float | str):
         """Add tag NEWTAG to all items in the rectangle defined
         by X1,Y1,X2,Y2.
         """
 
-    def addtag_overlapping(self, newtag: str, x1: float | str, y1: float | str, x2: float | str, y2: float | str):
+    def addtag_overlapping(self, newtag: str, x1: int | float | str, y1: int | float | str, x2: int | float | str, y2: int | float | str):
         """Add tag NEWTAG to all items which overlap the rectangle
         defined by X1,Y1,X2,Y2.
         """
@@ -2969,7 +2969,7 @@ class Canvas(Widget, XView, YView):
         """Return all items below TAGORID."""
 
     def find_closest(
-        self, x: float | str, y: float | str, halo: float | str | None = None, start: str | int | None = None
+        self, x: int | float | str, y: int | float | str, halo: int | float | str | None = None, start: str | int | None = None
     ) -> (*: int):
         """Return item which is closest to pixel at X, Y.
         If several match take the top-most.
@@ -2977,12 +2977,12 @@ class Canvas(Widget, XView, YView):
         closest). If START is specified the next below this tag is taken.
         """
 
-    def find_enclosed(self, x1: float | str, y1: float | str, x2: float | str, y2: float | str) -> (*: int):
+    def find_enclosed(self, x1: int | float | str, y1: int | float | str, x2: int | float | str, y2: int | float | str) -> (*: int):
         """Return all items in rectangle defined
         by X1,Y1,X2,Y2.
         """
 
-    def find_overlapping(self, x1: float | str, y1: float | str, x2: float | str, y2: float) -> (*: int):
+    def find_overlapping(self, x1: int | float | str, y1: int | float | str, x2: int | float | str, y2: int | float) -> (*: int):
         """Return all items which overlap the rectangle
         defined by X1,Y1,X2,Y2.
         """
@@ -3019,20 +3019,20 @@ class Canvas(Widget, XView, YView):
         function identified with FUNCID.
         """
 
-    def canvasx(self, screenx: float | str, gridspacing: float | str | None = None) -> float:
+    def canvasx(self, screenx: int | float | str, gridspacing: int | float | str | None = None) -> float:
         """Return the canvas x coordinate of pixel position SCREENX rounded
         to nearest multiple of GRIDSPACING units.
         """
 
-    def canvasy(self, screeny: float | str, gridspacing: float | str | None = None) -> float:
+    def canvasy(self, screeny: int | float | str, gridspacing: int | float | str | None = None) -> float:
         """Return the canvas y coordinate of pixel position SCREENY rounded
         to nearest multiple of GRIDSPACING units.
         """
 
     def coords(self, tagOrId: str | int, /) -> list[float]:
         """Return a list of coordinates for the item given in ARGS."""
-    def coords(self, tagOrId: str | int, args: list[int] | list[float] | (*: float), /) -> None
-    def coords(self, tagOrId: str | int, x1: float, y1: float, /, *args: float) -> None
+    def coords(self, tagOrId: str | int, args: list[int] | list[float] | (*: int | float), /) -> None
+    def coords(self, tagOrId: str | int, x1: int | float, y1: int | float, /, *args: int | float) -> None
 
     # create_foo() methods accept coords as a list or tuple, or as separate arguments.
     # Lists and tuples can be flat as in [1, 2, 3, 4], or nested as in [(1, 2), (3, 4)].
@@ -3048,70 +3048,70 @@ class Canvas(Widget, XView, YView):
 
     def create_line(
         self,
-        x0: float,
-        y0: float,
-        x1: float,
-        y1: float,
+        x0: int | float,
+        y0: int | float,
+        x1: int | float,
+        y1: int | float,
         /,
         *,
         activedash: str | int | list[int] | (*: int) = ...,
         activefill: str = ...,
         activestipple: str = ...,
-        activewidth: float | str = ...,
+        activewidth: int | float | str = ...,
         arrow: "first" | "last" | "both" = ...,
-        arrowshape: (float, float, float) = ...,
+        arrowshape: (int | float, int | float, int | float) = ...,
         capstyle: "round" | "projecting" | "butt" = ...,
         dash: str | int | list[int] | (*: int) = ...,
-        dashoffset: float | str = ...,
+        dashoffset: int | float | str = ...,
         disableddash: str | int | list[int] | (*: int) = ...,
         disabledfill: str = ...,
         disabledstipple: str = ...,
-        disabledwidth: float | str = ...,
+        disabledwidth: int | float | str = ...,
         fill: str = ...,
         joinstyle: "round" | "bevel" | "miter" = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         smooth: bool = ...,
-        splinesteps: float = ...,
+        splinesteps: int | float = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> int:
         """Create line with coordinates x1,y1,...,xn,yn."""
     def create_line(
         self,
-        xy_pair_0: (float, float),
-        xy_pair_1: (float, float),
+        xy_pair_0: (int | float, int | float),
+        xy_pair_1: (int | float, int | float),
         /,
         *,
         activedash: str | int | list[int] | (*: int) = ...,
         activefill: str = ...,
         activestipple: str = ...,
-        activewidth: float | str = ...,
+        activewidth: int | float | str = ...,
         arrow: "first" | "last" | "both" = ...,
-        arrowshape: (float, float, float) = ...,
+        arrowshape: (int | float, int | float, int | float) = ...,
         capstyle: "round" | "projecting" | "butt" = ...,
         dash: str | int | list[int] | (*: int) = ...,
-        dashoffset: float | str = ...,
+        dashoffset: int | float | str = ...,
         disableddash: str | int | list[int] | (*: int) = ...,
         disabledfill: str = ...,
         disabledstipple: str = ...,
-        disabledwidth: float | str = ...,
+        disabledwidth: int | float | str = ...,
         fill: str = ...,
         joinstyle: "round" | "bevel" | "miter" = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         smooth: bool = ...,
-        splinesteps: float = ...,
+        splinesteps: int | float = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> int
     def create_line(
         self,
         coords: (
-            (float, float, float, float)
-            | ((float, float), (float, float))
+            (int | float, int | float, int | float, int | float)
+            | ((int | float, int | float), (int | float, int | float))
             | list[int]
             | list[float]
             | list[(int, int)]
@@ -3122,33 +3122,33 @@ class Canvas(Widget, XView, YView):
         activedash: str | int | list[int] | (*: int) = ...,
         activefill: str = ...,
         activestipple: str = ...,
-        activewidth: float | str = ...,
+        activewidth: int | float | str = ...,
         arrow: "first" | "last" | "both" = ...,
-        arrowshape: (float, float, float) = ...,
+        arrowshape: (int | float, int | float, int | float) = ...,
         capstyle: "round" | "projecting" | "butt" = ...,
         dash: str | int | list[int] | (*: int) = ...,
-        dashoffset: float | str = ...,
+        dashoffset: int | float | str = ...,
         disableddash: str | int | list[int] | (*: int) = ...,
         disabledfill: str = ...,
         disabledstipple: str = ...,
-        disabledwidth: float | str = ...,
+        disabledwidth: int | float | str = ...,
         fill: str = ...,
         joinstyle: "round" | "bevel" | "miter" = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         smooth: bool = ...,
-        splinesteps: float = ...,
+        splinesteps: int | float = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> int
 
     def create_oval(
         self,
-        x0: float,
-        y0: float,
-        x1: float,
-        y1: float,
+        x0: int | float,
+        y0: int | float,
+        x1: int | float,
+        y1: int | float,
         /,
         *,
         activedash: str | int | list[int] | (*: int) = ...,
@@ -3156,30 +3156,30 @@ class Canvas(Widget, XView, YView):
         activeoutline: str = ...,
         activeoutlinestipple: str = ...,
         activestipple: str = ...,
-        activewidth: float | str = ...,
+        activewidth: int | float | str = ...,
         dash: str | int | list[int] | (*: int) = ...,
-        dashoffset: float | str = ...,
+        dashoffset: int | float | str = ...,
         disableddash: str | int | list[int] | (*: int) = ...,
         disabledfill: str = ...,
         disabledoutline: str = ...,
         disabledoutlinestipple: str = ...,
         disabledstipple: str = ...,
-        disabledwidth: float | str = ...,
+        disabledwidth: int | float | str = ...,
         fill: str = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         outline: str = ...,
-        outlineoffset: float | str = ...,
+        outlineoffset: int | float | str = ...,
         outlinestipple: str = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> int:
         """Create oval with coordinates x1,y1,x2,y2."""
     def create_oval(
         self,
-        xy_pair_0: (float, float),
-        xy_pair_1: (float, float),
+        xy_pair_0: (int | float, int | float),
+        xy_pair_1: (int | float, int | float),
         /,
         *,
         activedash: str | int | list[int] | (*: int) = ...,
@@ -3187,30 +3187,30 @@ class Canvas(Widget, XView, YView):
         activeoutline: str = ...,
         activeoutlinestipple: str = ...,
         activestipple: str = ...,
-        activewidth: float | str = ...,
+        activewidth: int | float | str = ...,
         dash: str | int | list[int] | (*: int) = ...,
-        dashoffset: float | str = ...,
+        dashoffset: int | float | str = ...,
         disableddash: str | int | list[int] | (*: int) = ...,
         disabledfill: str = ...,
         disabledoutline: str = ...,
         disabledoutlinestipple: str = ...,
         disabledstipple: str = ...,
-        disabledwidth: float | str = ...,
+        disabledwidth: int | float | str = ...,
         fill: str = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         outline: str = ...,
-        outlineoffset: float | str = ...,
+        outlineoffset: int | float | str = ...,
         outlinestipple: str = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> int
     def create_oval(
         self,
         coords: (
-            (float, float, float, float)
-            | ((float, float), (float, float))
+            (int | float, int | float, int | float, int | float)
+            | ((int | float, int | float), (int | float, int | float))
             | list[int]
             | list[float]
             | list[(int, int)]
@@ -3223,100 +3223,100 @@ class Canvas(Widget, XView, YView):
         activeoutline: str = ...,
         activeoutlinestipple: str = ...,
         activestipple: str = ...,
-        activewidth: float | str = ...,
+        activewidth: int | float | str = ...,
         dash: str | int | list[int] | (*: int) = ...,
-        dashoffset: float | str = ...,
+        dashoffset: int | float | str = ...,
         disableddash: str | int | list[int] | (*: int) = ...,
         disabledfill: str = ...,
         disabledoutline: str = ...,
         disabledoutlinestipple: str = ...,
         disabledstipple: str = ...,
-        disabledwidth: float | str = ...,
+        disabledwidth: int | float | str = ...,
         fill: str = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         outline: str = ...,
-        outlineoffset: float | str = ...,
+        outlineoffset: int | float | str = ...,
         outlinestipple: str = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> int
 
     def create_polygon(
         self,
-        x0: float,
-        y0: float,
-        x1: float,
-        y1: float,
+        x0: int | float,
+        y0: int | float,
+        x1: int | float,
+        y1: int | float,
         /,
-        *xy_pairs: float,
+        *xy_pairs: int | float,
         activedash: str | int | list[int] | (*: int) = ...,
         activefill: str = ...,
         activeoutline: str = ...,
         activeoutlinestipple: str = ...,
         activestipple: str = ...,
-        activewidth: float | str = ...,
+        activewidth: int | float | str = ...,
         dash: str | int | list[int] | (*: int) = ...,
-        dashoffset: float | str = ...,
+        dashoffset: int | float | str = ...,
         disableddash: str | int | list[int] | (*: int) = ...,
         disabledfill: str = ...,
         disabledoutline: str = ...,
         disabledoutlinestipple: str = ...,
         disabledstipple: str = ...,
-        disabledwidth: float | str = ...,
+        disabledwidth: int | float | str = ...,
         fill: str = ...,
         joinstyle: "round" | "bevel" | "miter" = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         outline: str = ...,
-        outlineoffset: float | str = ...,
+        outlineoffset: int | float | str = ...,
         outlinestipple: str = ...,
         smooth: bool = ...,
-        splinesteps: float = ...,
+        splinesteps: int | float = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> int:
         """Create polygon with coordinates x1,y1,...,xn,yn."""
     def create_polygon(
         self,
-        xy_pair_0: (float, float),
-        xy_pair_1: (float, float),
+        xy_pair_0: (int | float, int | float),
+        xy_pair_1: (int | float, int | float),
         /,
-        *xy_pairs: (float, float),
+        *xy_pairs: (int | float, int | float),
         activedash: str | int | list[int] | (*: int) = ...,
         activefill: str = ...,
         activeoutline: str = ...,
         activeoutlinestipple: str = ...,
         activestipple: str = ...,
-        activewidth: float | str = ...,
+        activewidth: int | float | str = ...,
         dash: str | int | list[int] | (*: int) = ...,
-        dashoffset: float | str = ...,
+        dashoffset: int | float | str = ...,
         disableddash: str | int | list[int] | (*: int) = ...,
         disabledfill: str = ...,
         disabledoutline: str = ...,
         disabledoutlinestipple: str = ...,
         disabledstipple: str = ...,
-        disabledwidth: float | str = ...,
+        disabledwidth: int | float | str = ...,
         fill: str = ...,
         joinstyle: "round" | "bevel" | "miter" = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         outline: str = ...,
-        outlineoffset: float | str = ...,
+        outlineoffset: int | float | str = ...,
         outlinestipple: str = ...,
         smooth: bool = ...,
-        splinesteps: float = ...,
+        splinesteps: int | float = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> int
     def create_polygon(
         self,
         coords: (
-            (*: float)
-            | (*: (float, float))
+            (*: int | float)
+            | (*: (int | float, int | float))
             | list[int]
             | list[float]
             | list[(int, int)]
@@ -3329,35 +3329,35 @@ class Canvas(Widget, XView, YView):
         activeoutline: str = ...,
         activeoutlinestipple: str = ...,
         activestipple: str = ...,
-        activewidth: float | str = ...,
+        activewidth: int | float | str = ...,
         dash: str | int | list[int] | (*: int) = ...,
-        dashoffset: float | str = ...,
+        dashoffset: int | float | str = ...,
         disableddash: str | int | list[int] | (*: int) = ...,
         disabledfill: str = ...,
         disabledoutline: str = ...,
         disabledoutlinestipple: str = ...,
         disabledstipple: str = ...,
-        disabledwidth: float | str = ...,
+        disabledwidth: int | float | str = ...,
         fill: str = ...,
         joinstyle: "round" | "bevel" | "miter" = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         outline: str = ...,
-        outlineoffset: float | str = ...,
+        outlineoffset: int | float | str = ...,
         outlinestipple: str = ...,
         smooth: bool = ...,
-        splinesteps: float = ...,
+        splinesteps: int | float = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> int
 
     def create_rectangle(
         self,
-        x0: float,
-        y0: float,
-        x1: float,
-        y1: float,
+        x0: int | float,
+        y0: int | float,
+        x1: int | float,
+        y1: int | float,
         /,
         *,
         activedash: str | int | list[int] | (*: int) = ...,
@@ -3365,30 +3365,30 @@ class Canvas(Widget, XView, YView):
         activeoutline: str = ...,
         activeoutlinestipple: str = ...,
         activestipple: str = ...,
-        activewidth: float | str = ...,
+        activewidth: int | float | str = ...,
         dash: str | int | list[int] | (*: int) = ...,
-        dashoffset: float | str = ...,
+        dashoffset: int | float | str = ...,
         disableddash: str | int | list[int] | (*: int) = ...,
         disabledfill: str = ...,
         disabledoutline: str = ...,
         disabledoutlinestipple: str = ...,
         disabledstipple: str = ...,
-        disabledwidth: float | str = ...,
+        disabledwidth: int | float | str = ...,
         fill: str = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         outline: str = ...,
-        outlineoffset: float | str = ...,
+        outlineoffset: int | float | str = ...,
         outlinestipple: str = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> int:
         """Create rectangle with coordinates x1,y1,x2,y2."""
     def create_rectangle(
         self,
-        xy_pair_0: (float, float),
-        xy_pair_1: (float, float),
+        xy_pair_0: (int | float, int | float),
+        xy_pair_1: (int | float, int | float),
         /,
         *,
         activedash: str | int | list[int] | (*: int) = ...,
@@ -3396,30 +3396,30 @@ class Canvas(Widget, XView, YView):
         activeoutline: str = ...,
         activeoutlinestipple: str = ...,
         activestipple: str = ...,
-        activewidth: float | str = ...,
+        activewidth: int | float | str = ...,
         dash: str | int | list[int] | (*: int) = ...,
-        dashoffset: float | str = ...,
+        dashoffset: int | float | str = ...,
         disableddash: str | int | list[int] | (*: int) = ...,
         disabledfill: str = ...,
         disabledoutline: str = ...,
         disabledoutlinestipple: str = ...,
         disabledstipple: str = ...,
-        disabledwidth: float | str = ...,
+        disabledwidth: int | float | str = ...,
         fill: str = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         outline: str = ...,
-        outlineoffset: float | str = ...,
+        outlineoffset: int | float | str = ...,
         outlinestipple: str = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> int
     def create_rectangle(
         self,
         coords: (
-            (float, float, float, float)
-            | ((float, float), (float, float))
+            (int | float, int | float, int | float, int | float)
+            | ((int | float, int | float), (int | float, int | float))
             | list[int]
             | list[float]
             | list[(int, int)]
@@ -3432,95 +3432,95 @@ class Canvas(Widget, XView, YView):
         activeoutline: str = ...,
         activeoutlinestipple: str = ...,
         activestipple: str = ...,
-        activewidth: float | str = ...,
+        activewidth: int | float | str = ...,
         dash: str | int | list[int] | (*: int) = ...,
-        dashoffset: float | str = ...,
+        dashoffset: int | float | str = ...,
         disableddash: str | int | list[int] | (*: int) = ...,
         disabledfill: str = ...,
         disabledoutline: str = ...,
         disabledoutlinestipple: str = ...,
         disabledstipple: str = ...,
-        disabledwidth: float | str = ...,
+        disabledwidth: int | float | str = ...,
         fill: str = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         outline: str = ...,
-        outlineoffset: float | str = ...,
+        outlineoffset: int | float | str = ...,
         outlinestipple: str = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> int
 
     def create_text(
         self,
-        x: float,
-        y: float,
+        x: int | float,
+        y: int | float,
         /,
         *,
         activefill: str = ...,
         activestipple: str = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
-        angle: float | str = ...,
+        angle: int | float | str = ...,
         disabledfill: str = ...,
         disabledstipple: str = ...,
         fill: str = ...,
         font: _FontDescription = ...,
         justify: "left" | "center" | "right" = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        text: float | str = ...,
-        width: float | str = ...,
+        text: int | float | str = ...,
+        width: int | float | str = ...,
     ) -> int:
         """Create text with coordinates x1,y1."""
     def create_text(
         self,
-        coords: (float, float) | list[int] | list[float],
+        coords: (int | float, int | float) | list[int] | list[float],
         /,
         *,
         activefill: str = ...,
         activestipple: str = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
-        angle: float | str = ...,
+        angle: int | float | str = ...,
         disabledfill: str = ...,
         disabledstipple: str = ...,
         fill: str = ...,
         font: _FontDescription = ...,
         justify: "left" | "center" | "right" = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         stipple: str = ...,
         tags: str | list[str] | (*: str) = ...,
-        text: float | str = ...,
-        width: float | str = ...,
+        text: int | float | str = ...,
+        width: int | float | str = ...,
     ) -> int
 
     def create_window(
         self,
-        x: float,
-        y: float,
+        x: int | float,
+        y: int | float,
         /,
         *,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
         window: Widget = ...,
     ) -> int:
         """Create window with coordinates x1,y1,x2,y2."""
     def create_window(
         self,
-        coords: (float, float) | list[int] | list[float],
+        coords: (int | float, int | float) | list[int] | list[float],
         /,
         *,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         state: "normal" | "hidden" | "disabled" = ...,
         tags: str | list[str] | (*: str) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
         window: Widget = ...,
     ) -> int
 
@@ -3573,7 +3573,7 @@ class Canvas(Widget, XView, YView):
     def move(self, *args):
         """Move an item TAGORID given in ARGS."""
 
-    def moveto(self, tagOrId: str | int, x: "" | float = "", y: "" | float = ""):
+    def moveto(self, tagOrId: str | int, x: "" | int | float = "", y: "" | int | float = ""):
         """Move the items given by TAGORID in the canvas coordinate
         space so that the first coordinate pair of the bottommost
         item with tag TAGORID is located at position (X,Y).
@@ -3619,7 +3619,7 @@ class Canvas(Widget, XView, YView):
         (optional above another item).
         """
 
-    def scale(self, tagOrId: str | int, xOrigin: float | str, yOrigin: float | str, xScale: float, yScale: float, /):
+    def scale(self, tagOrId: str | int, xOrigin: int | float | str, yOrigin: int | float | str, xScale: int | float, yScale: int | float, /):
         """Scale item TAGORID with XORIGIN, YORIGIN, XSCALE, YSCALE."""
 
     def scan_mark(self, x, y):
@@ -3661,11 +3661,11 @@ class Checkbutton(Widget):
         activeforeground: str = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = "center",
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
         bitmap: str = "",
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         command: str | (() -> dynamic) = "",
         compound: "top" | "left" | "center" | "right" | "bottom" | "none" = "none",
         cursor: _Cursor = "",
@@ -3673,10 +3673,10 @@ class Checkbutton(Widget):
         fg: str = ...,
         font: _FontDescription = "TkDefaultFont",
         foreground: str = ...,
-        height: float | str = 0,
+        height: int | float | str = 0,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = 1,
+        highlightthickness: int | float | str = 1,
         image: _Image | str = "",
         indicatoron: bool = True,
         justify: "left" | "center" | "right" = "center",
@@ -3695,21 +3695,21 @@ class Checkbutton(Widget):
         offvalue: dynamic = 0,
         onvalue: dynamic = 1,
         overrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" | "" = "",
-        padx: float | str = 1,
-        pady: float | str = 1,
+        padx: int | float | str = 1,
+        pady: int | float | str = 1,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         selectcolor: str = ...,
         selectimage: _Image | str = "",
         state: "normal" | "active" | "disabled" = "normal",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
-        text: float | str = "",
+        text: int | float | str = "",
         textvariable: Variable = ...,
         tristateimage: _Image | str = "",
         tristatevalue: dynamic = "",
         underline: int = -1,
         variable: Variable | "" = ...,
-        width: float | str = 0,
-        wraplength: float | str = 0,
+        width: int | float | str = 0,
+        wraplength: int | float | str = 0,
     ):
         """Construct a checkbutton widget with the parent MASTER.
 
@@ -3731,11 +3731,11 @@ class Checkbutton(Widget):
         activeforeground: str = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
         bitmap: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         command: str | (() -> dynamic) = ...,
         compound: "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         cursor: _Cursor = ...,
@@ -3743,10 +3743,10 @@ class Checkbutton(Widget):
         fg: str = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         image: _Image | str = ...,
         indicatoron: bool = ...,
         justify: "left" | "center" | "right" = ...,
@@ -3754,21 +3754,21 @@ class Checkbutton(Widget):
         offvalue: dynamic = ...,
         onvalue: dynamic = ...,
         overrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" | "" = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         selectcolor: str = ...,
         selectimage: _Image | str = ...,
         state: "normal" | "active" | "disabled" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
+        text: int | float | str = ...,
         textvariable: Variable = ...,
         tristateimage: _Image | str = ...,
         tristatevalue: dynamic = ...,
         underline: int = ...,
         variable: Variable | "" = ...,
-        width: float | str = ...,
-        wraplength: float | str = ...,
+        width: int | float | str = ...,
+        wraplength: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -3809,10 +3809,10 @@ class Entry(Widget, XView):
         cnf: dict[str, dynamic] | None = {},
         *,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = "xterm",
         disabledbackground: str = ...,
         disabledforeground: str = ...,
@@ -3822,12 +3822,12 @@ class Entry(Widget, XView):
         foreground: str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         insertbackground: str = ...,
-        insertborderwidth: float | str = 0,
+        insertborderwidth: int | float | str = 0,
         insertofftime: int = 300,
         insertontime: int = 600,
-        insertwidth: float | str = ...,
+        insertwidth: int | float | str = ...,
         invalidcommand: str | list[str] | (*: str) | (() -> bool) = "",
         invcmd: str | list[str] | (*: str) | (() -> bool) = "",  # same as invalidcommand
         justify: "left" | "center" | "right" = "left",
@@ -3835,7 +3835,7 @@ class Entry(Widget, XView):
         readonlybackground: str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "sunken",
         selectbackground: str = ...,
-        selectborderwidth: float | str = ...,
+        selectborderwidth: int | float | str = ...,
         selectforeground: str = ...,
         show: str = "",
         state: "normal" | "disabled" | "readonly" = "normal",
@@ -3866,10 +3866,10 @@ class Entry(Widget, XView):
         cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = ...,
         disabledbackground: str = ...,
         disabledforeground: str = ...,
@@ -3879,19 +3879,19 @@ class Entry(Widget, XView):
         foreground: str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         insertbackground: str = ...,
-        insertborderwidth: float | str = ...,
+        insertborderwidth: int | float | str = ...,
         insertofftime: int = ...,
         insertontime: int = ...,
-        insertwidth: float | str = ...,
+        insertwidth: int | float | str = ...,
         invalidcommand: str | list[str] | (*: str) | (() -> bool) = ...,
         invcmd: str | list[str] | (*: str) | (() -> bool) = ...,
         justify: "left" | "center" | "right" = ...,
         readonlybackground: str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         selectbackground: str = ...,
-        selectborderwidth: float | str = ...,
+        selectborderwidth: int | float | str = ...,
         selectforeground: str = ...,
         show: str = ...,
         state: "normal" | "disabled" | "readonly" = ...,
@@ -3978,25 +3978,25 @@ class Frame(Widget):
         cnf: dict[str, dynamic] | None = {},
         *,
         background: str = ...,
-        bd: float | str = 0,
+        bd: int | float | str = 0,
         bg: str = ...,
-        border: float | str = 0,
-        borderwidth: float | str = 0,
+        border: int | float | str = 0,
+        borderwidth: int | float | str = 0,
         class_: str = "Frame",  # can't be changed with configure()
         colormap: "new" | "" | Misc = "",  # can't be changed with configure()
         container: bool = False,  # can't be changed with configure()
         cursor: _Cursor = "",
-        height: float | str = 0,
+        height: int | float | str = 0,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = 0,
+        highlightthickness: int | float | str = 0,
         name: str = ...,
-        padx: float | str = 0,
-        pady: float | str = 0,
+        padx: int | float | str = 0,
+        pady: int | float | str = 0,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
         visual: str | (str, int) = "",  # can't be changed with configure()
-        width: float | str = 0,
+        width: int | float | str = 0,
     ):
         """Construct a frame widget with the parent MASTER.
 
@@ -4012,20 +4012,20 @@ class Frame(Widget):
         cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        highlightthickness: int | float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -4055,34 +4055,34 @@ class Label(Widget):
         activeforeground: str = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = "center",
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
         bitmap: str = "",
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         compound: "top" | "left" | "center" | "right" | "bottom" | "none" = "none",
         cursor: _Cursor = "",
         disabledforeground: str = ...,
         fg: str = ...,
         font: _FontDescription = "TkDefaultFont",
         foreground: str = ...,
-        height: float | str = 0,
+        height: int | float | str = 0,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = 0,
+        highlightthickness: int | float | str = 0,
         image: _Image | str = "",
         justify: "left" | "center" | "right" = "center",
         name: str = ...,
-        padx: float | str = 1,
-        pady: float | str = 1,
+        padx: int | float | str = 1,
+        pady: int | float | str = 1,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         state: "normal" | "active" | "disabled" = "normal",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
-        text: float | str = "",
+        text: int | float | str = "",
         textvariable: Variable = ...,
         underline: int = -1,
-        width: float | str = 0,
-        wraplength: float | str = 0,
+        width: int | float | str = 0,
+        wraplength: int | float | str = 0,
     ):
         """Construct a label widget with the parent MASTER.
 
@@ -4111,33 +4111,33 @@ class Label(Widget):
         activeforeground: str = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
         bitmap: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         compound: "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         cursor: _Cursor = ...,
         disabledforeground: str = ...,
         fg: str = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         image: _Image | str = ...,
         justify: "left" | "center" | "right" = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         state: "normal" | "active" | "disabled" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
+        text: int | float | str = ...,
         textvariable: Variable = ...,
         underline: int = ...,
-        width: float | str = ...,
-        wraplength: float | str = ...,
+        width: int | float | str = ...,
+        wraplength: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -4165,10 +4165,10 @@ class Listbox(Widget, XView, YView):
         *,
         activestyle: "dotbox" | "none" | "underline" = ...,
         background: str = ...,
-        bd: float | str = 1,
+        bd: int | float | str = 1,
         bg: str = ...,
-        border: float | str = 1,
-        borderwidth: float | str = 1,
+        border: int | float | str = 1,
+        borderwidth: int | float | str = 1,
         cursor: _Cursor = "",
         disabledforeground: str = ...,
         exportselection: bool | 0 | 1 = 1,
@@ -4178,7 +4178,7 @@ class Listbox(Widget, XView, YView):
         height: int = 10,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         justify: "left" | "center" | "right" = "left",
         # There's no tkinter.ListVar, but seems like bare tkinter.Variable
         # actually works for this:
@@ -4193,7 +4193,7 @@ class Listbox(Widget, XView, YView):
         name: str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         selectbackground: str = ...,
-        selectborderwidth: float | str = 0,
+        selectborderwidth: int | float | str = 0,
         selectforeground: str = ...,
         # from listbox man page: "The value of the [selectmode] option may be
         # arbitrary, but the default bindings expect it to be either single,
@@ -4227,10 +4227,10 @@ class Listbox(Widget, XView, YView):
         *,
         activestyle: "dotbox" | "none" | "underline" = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = ...,
         disabledforeground: str = ...,
         exportselection: bool = ...,
@@ -4240,12 +4240,12 @@ class Listbox(Widget, XView, YView):
         height: int = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         justify: "left" | "center" | "right" = ...,
         listvariable: Variable = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         selectbackground: str = ...,
-        selectborderwidth: float | str = ...,
+        selectborderwidth: int | float | str = ...,
         selectforeground: str = ...,
         selectmode: str | "single" | "browse" | "multiple" | "extended" = ...,  # noqa: Y051
         setgrid: bool = ...,
@@ -4290,7 +4290,7 @@ class Listbox(Widget, XView, YView):
     def index(self, index: str | int) -> int:
         """Return index of item identified with INDEX."""
 
-    def insert(self, index: str | int, *elements: str | float):
+    def insert(self, index: str | int, *elements: str | int | float):
         """Insert ELEMENTS at INDEX."""
 
     def nearest(self, y):
@@ -4349,13 +4349,13 @@ class Menu(Widget):
         cnf: dict[str, dynamic] | None = {},
         *,
         activebackground: str = ...,
-        activeborderwidth: float | str = ...,
+        activeborderwidth: int | float | str = ...,
         activeforeground: str = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = "arrow",
         disabledforeground: str = ...,
         fg: str = ...,
@@ -4388,13 +4388,13 @@ class Menu(Widget):
         cnf: dict[str, dynamic] | None = None,
         *,
         activebackground: str = ...,
-        activeborderwidth: float | str = ...,
+        activeborderwidth: int | float | str = ...,
         activeforeground: str = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = ...,
         disabledforeground: str = ...,
         fg: str = ...,
@@ -4699,11 +4699,11 @@ class Menubutton(Widget):
         activeforeground: str = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
         bitmap: str = "",
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         compound: "top" | "left" | "center" | "right" | "bottom" | "none" = "none",
         cursor: _Cursor = "",
         direction: "above" | "below" | "left" | "right" | "flush" = "below",
@@ -4711,25 +4711,25 @@ class Menubutton(Widget):
         fg: str = ...,
         font: _FontDescription = "TkDefaultFont",
         foreground: str = ...,
-        height: float | str = 0,
+        height: int | float | str = 0,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = 0,
+        highlightthickness: int | float | str = 0,
         image: _Image | str = "",
         indicatoron: bool = ...,
         justify: "left" | "center" | "right" = ...,
         menu: Menu = ...,
         name: str = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         state: "normal" | "active" | "disabled" = "normal",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
-        text: float | str = "",
+        text: int | float | str = "",
         textvariable: Variable = ...,
         underline: int = -1,
-        width: float | str = 0,
-        wraplength: float | str = 0,
+        width: int | float | str = 0,
+        wraplength: int | float | str = 0,
     ):
         """Construct a menubutton widget with the parent MASTER.
 
@@ -4749,11 +4749,11 @@ class Menubutton(Widget):
         activeforeground: str = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
         bitmap: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         compound: "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         cursor: _Cursor = ...,
         direction: "above" | "below" | "left" | "right" | "flush" = ...,
@@ -4761,24 +4761,24 @@ class Menubutton(Widget):
         fg: str = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         image: _Image | str = ...,
         indicatoron: bool = ...,
         justify: "left" | "center" | "right" = ...,
         menu: Menu = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         state: "normal" | "active" | "disabled" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
+        text: int | float | str = ...,
         textvariable: Variable = ...,
         underline: int = ...,
-        width: float | str = ...,
-        wraplength: float | str = ...,
+        width: int | float | str = ...,
+        wraplength: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -4807,27 +4807,27 @@ class Message(Widget):
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = "center",
         aspect: int = 150,
         background: str = ...,
-        bd: float | str = 1,
+        bd: int | float | str = 1,
         bg: str = ...,
-        border: float | str = 1,
-        borderwidth: float | str = 1,
+        border: int | float | str = 1,
+        borderwidth: int | float | str = 1,
         cursor: _Cursor = "",
         fg: str = ...,
         font: _FontDescription = "TkDefaultFont",
         foreground: str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = 0,
+        highlightthickness: int | float | str = 0,
         justify: "left" | "center" | "right" = "left",
         name: str = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
-        text: float | str = "",
+        text: int | float | str = "",
         textvariable: Variable = ...,
         # there's width but no height
-        width: float | str = 0,
+        width: int | float | str = 0,
     ):
         """Construct a message widget with the parent MASTER.
 
@@ -4844,25 +4844,25 @@ class Message(Widget):
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         aspect: int = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = ...,
         fg: str = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         justify: "left" | "center" | "right" = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
+        text: int | float | str = ...,
         textvariable: Variable = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -4892,11 +4892,11 @@ class Radiobutton(Widget):
         activeforeground: str = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = "center",
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
         bitmap: str = "",
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         command: str | (() -> dynamic) = "",
         compound: "top" | "left" | "center" | "right" | "bottom" | "none" = "none",
         cursor: _Cursor = "",
@@ -4904,32 +4904,32 @@ class Radiobutton(Widget):
         fg: str = ...,
         font: _FontDescription = "TkDefaultFont",
         foreground: str = ...,
-        height: float | str = 0,
+        height: int | float | str = 0,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = 1,
+        highlightthickness: int | float | str = 1,
         image: _Image | str = "",
         indicatoron: bool = True,
         justify: "left" | "center" | "right" = "center",
         name: str = ...,
         offrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         overrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" | "" = "",
-        padx: float | str = 1,
-        pady: float | str = 1,
+        padx: int | float | str = 1,
+        pady: int | float | str = 1,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         selectcolor: str = ...,
         selectimage: _Image | str = "",
         state: "normal" | "active" | "disabled" = "normal",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
-        text: float | str = "",
+        text: int | float | str = "",
         textvariable: Variable = ...,
         tristateimage: _Image | str = "",
         tristatevalue: dynamic = "",
         underline: int = -1,
         value: dynamic = "",
         variable: Variable | "" = ...,
-        width: float | str = 0,
-        wraplength: float | str = 0,
+        width: int | float | str = 0,
+        wraplength: int | float | str = 0,
     ):
         """Construct a radiobutton widget with the parent MASTER.
 
@@ -4951,11 +4951,11 @@ class Radiobutton(Widget):
         activeforeground: str = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
         bitmap: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         command: str | (() -> dynamic) = ...,
         compound: "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         cursor: _Cursor = ...,
@@ -4963,31 +4963,31 @@ class Radiobutton(Widget):
         fg: str = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         image: _Image | str = ...,
         indicatoron: bool = ...,
         justify: "left" | "center" | "right" = ...,
         offrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         overrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" | "" = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         selectcolor: str = ...,
         selectimage: _Image | str = ...,
         state: "normal" | "active" | "disabled" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
+        text: int | float | str = ...,
         textvariable: Variable = ...,
         tristateimage: _Image | str = ...,
         tristatevalue: dynamic = ...,
         underline: int = ...,
         value: dynamic = ...,
         variable: Variable | "" = ...,
-        width: float | str = ...,
-        wraplength: float | str = ...,
+        width: int | float | str = ...,
+        wraplength: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -5026,11 +5026,11 @@ class Scale(Widget):
         *,
         activebackground: str = ...,
         background: str = ...,
-        bd: float | str = 1,
+        bd: int | float | str = 1,
         bg: str = ...,
-        bigincrement: float = 0.0,
-        border: float | str = 1,
-        borderwidth: float | str = 1,
+        bigincrement: int | float = 0.0,
+        border: int | float | str = 1,
+        borderwidth: int | float | str = 1,
         # don't know why the callback gets string instead of float
         command: str | ((str) -> object) = "",
         cursor: _Cursor = "",
@@ -5038,28 +5038,28 @@ class Scale(Widget):
         fg: str = ...,
         font: _FontDescription = "TkDefaultFont",
         foreground: str = ...,
-        from_: float = 0.0,
+        from_: int | float = 0.0,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         label: str = "",
-        length: float | str = 100,
+        length: int | float | str = 100,
         name: str = ...,
         orient: "horizontal" | "vertical" = "vertical",
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         repeatdelay: int = 300,
         repeatinterval: int = 100,
-        resolution: float = 1.0,
+        resolution: int | float = 1.0,
         showvalue: bool = True,
-        sliderlength: float | str = 30,
+        sliderlength: int | float | str = 30,
         sliderrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "raised",
         state: "normal" | "active" | "disabled" = "normal",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
-        tickinterval: float = 0.0,
-        to: float = 100.0,
+        tickinterval: int | float = 0.0,
+        to: int | float = 100.0,
         troughcolor: str = ...,
         variable: IntVar | DoubleVar = ...,
-        width: float | str = 15,
+        width: int | float | str = 15,
     ):
         """Construct a scale widget with the parent MASTER.
 
@@ -5077,38 +5077,38 @@ class Scale(Widget):
         *,
         activebackground: str = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        bigincrement: float = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        bigincrement: int | float = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         command: str | ((str) -> object) = ...,
         cursor: _Cursor = ...,
         digits: int = ...,
         fg: str = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
-        from_: float = ...,
+        from_: int | float = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         label: str = ...,
-        length: float | str = ...,
+        length: int | float | str = ...,
         orient: "horizontal" | "vertical" = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         repeatdelay: int = ...,
         repeatinterval: int = ...,
-        resolution: float = ...,
+        resolution: int | float = ...,
         showvalue: bool = ...,
-        sliderlength: float | str = ...,
+        sliderlength: int | float | str = ...,
         sliderrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         state: "normal" | "active" | "disabled" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        tickinterval: float = ...,
-        to: float = ...,
+        tickinterval: int | float = ...,
+        to: int | float = ...,
         troughcolor: str = ...,
         variable: IntVar | DoubleVar = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -5125,13 +5125,13 @@ class Scale(Widget):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
-    def get(self) -> float:
+    def get(self) -> int | float:
         """Get the current value as integer or float."""
 
     def set(self, value):
         """Set the value to VALUE."""
 
-    def coords(self, value: float | None = None) -> (int, int):
+    def coords(self, value: int | float | None = None) -> (int, int):
         """Return a tuple (X,Y) of the point along the centerline of the
         trough that corresponds to VALUE or the current value if None is
         given.
@@ -5153,20 +5153,20 @@ class Scrollbar(Widget):
         activebackground: str = ...,
         activerelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "raised",
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         # There are many ways how the command may get called. Search for
         # 'SCROLLING COMMANDS' in scrollbar man page. There doesn't seem to
         # be any way to specify an overloaded callback function, so we say
         # that it can take any args while it can't in reality.
-        command: (...) -> (float, float) | None | str = "",
+        command: (...) -> (int | float, int | float) | None | str = "",
         cursor: _Cursor = "",
-        elementborderwidth: float | str = -1,
+        elementborderwidth: int | float | str = -1,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = 0,
+        highlightthickness: int | float | str = 0,
         jump: bool = False,
         name: str = ...,
         orient: "horizontal" | "vertical" = "vertical",
@@ -5175,7 +5175,7 @@ class Scrollbar(Widget):
         repeatinterval: int = 100,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
         troughcolor: str = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ):
         """Construct a scrollbar widget with the parent MASTER.
 
@@ -5194,16 +5194,16 @@ class Scrollbar(Widget):
         activebackground: str = ...,
         activerelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
-        command: (...) -> (float, float) | None | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
+        command: (...) -> (int | float, int | float) | None | str = ...,
         cursor: _Cursor = ...,
-        elementborderwidth: float | str = ...,
+        elementborderwidth: int | float | str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         jump: bool = ...,
         orient: "horizontal" | "vertical" = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
@@ -5211,7 +5211,7 @@ class Scrollbar(Widget):
         repeatinterval: int = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         troughcolor: str = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -5257,7 +5257,7 @@ class Scrollbar(Widget):
         of the slider position.
         """
 
-    def set(self, first: float | str, last: float | str):
+    def set(self, first: int | float | str, last: int | float | str):
         """Set the fractional values of the slider position (upper and
         lower ends as value between 0 and 1).
         """
@@ -5274,11 +5274,11 @@ class Text(Widget, XView, YView):
         *,
         autoseparators: bool = True,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
         blockcursor: bool = False,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = "xterm",
         endline: int | "" = "",
         exportselection: bool = True,
@@ -5288,33 +5288,33 @@ class Text(Widget, XView, YView):
         # width is always int, but height is allowed to be screen units.
         # This doesn't make any sense to me, and this isn't documented.
         # The docs seem to say that both should be integers.
-        height: float | str = 24,
+        height: int | float | str = 24,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         inactiveselectbackground: str = ...,
         insertbackground: str = ...,
-        insertborderwidth: float | str = 0,
+        insertborderwidth: int | float | str = 0,
         insertofftime: int = 300,
         insertontime: int = 600,
         insertunfocussed: "none" | "hollow" | "solid" = "none",
-        insertwidth: float | str = ...,
+        insertwidth: int | float | str = ...,
         maxundo: int = 0,
         name: str = ...,
-        padx: float | str = 1,
-        pady: float | str = 1,
+        padx: int | float | str = 1,
+        pady: int | float | str = 1,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         selectbackground: str = ...,
-        selectborderwidth: float | str = ...,
+        selectborderwidth: int | float | str = ...,
         selectforeground: str = ...,
         setgrid: bool = False,
-        spacing1: float | str = 0,
-        spacing2: float | str = 0,
-        spacing3: float | str = 0,
+        spacing1: int | float | str = 0,
+        spacing2: int | float | str = 0,
+        spacing3: int | float | str = 0,
         startline: int | "" = "",
         state: "normal" | "disabled" = "normal",
         # Literal inside Tuple doesn't actually work
-        tabs: float | str | (*: float | str) = "",
+        tabs: int | float | str | (*: int | float | str) = "",
         tabstyle: "tabular" | "wordprocessor" = "tabular",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
         undo: bool = False,
@@ -5354,42 +5354,42 @@ class Text(Widget, XView, YView):
         *,
         autoseparators: bool = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
         blockcursor: bool = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = ...,
         endline: int | "" = ...,
         exportselection: bool = ...,
         fg: str = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         inactiveselectbackground: str = ...,
         insertbackground: str = ...,
-        insertborderwidth: float | str = ...,
+        insertborderwidth: int | float | str = ...,
         insertofftime: int = ...,
         insertontime: int = ...,
         insertunfocussed: "none" | "hollow" | "solid" = ...,
-        insertwidth: float | str = ...,
+        insertwidth: int | float | str = ...,
         maxundo: int = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         selectbackground: str = ...,
-        selectborderwidth: float | str = ...,
+        selectborderwidth: int | float | str = ...,
         selectforeground: str = ...,
         setgrid: bool = ...,
-        spacing1: float | str = ...,
-        spacing2: float | str = ...,
-        spacing3: float | str = ...,
+        spacing1: int | float | str = ...,
+        spacing2: int | float | str = ...,
+        spacing3: int | float | str = ...,
         startline: int | "" = ...,
         state: "normal" | "disabled" = ...,
-        tabs: float | str | (*: float | str) = ...,
+        tabs: int | float | str | (*: int | float | str) = ...,
         tabstyle: "tabular" | "wordprocessor" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         undo: bool = ...,
@@ -5413,16 +5413,16 @@ class Text(Widget, XView, YView):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
-    override def bbox(self, index: str | float | _tkinter.Tcl_Obj | Widget) -> (int, int, int, int) | None:
+    override def bbox(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> (int, int, int, int) | None:
         """Return a tuple of (x,y,width,height) which gives the bounding
         box of the visible part of the character at the given index.
         """
 
     def compare(
         self,
-        index1: str | float | _tkinter.Tcl_Obj | Widget,
+        index1: str | int | float | _tkinter.Tcl_Obj | Widget,
         op: "<" | "<=" | "==" | ">=" | ">" | "!=",
-        index2: str | float | _tkinter.Tcl_Obj | Widget,
+        index2: str | int | float | _tkinter.Tcl_Obj | Widget,
     ) -> bool:
         """Return whether between index INDEX1 and index INDEX2 the
         relation OP is satisfied. OP is one of <, <=, ==, >=, >, or !=.
@@ -5431,8 +5431,8 @@ class Text(Widget, XView, YView):
     if sys.version_info >= (3, 13):
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             *,
             return_ints: True,
         ) -> int:
@@ -5454,8 +5454,8 @@ class Text(Widget, XView, YView):
             """
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg: WhatToCount | "update",
             /,
             *,
@@ -5463,8 +5463,8 @@ class Text(Widget, XView, YView):
         ) -> int
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg1: "update",
             arg2: WhatToCount,
             /,
@@ -5473,8 +5473,8 @@ class Text(Widget, XView, YView):
         ) -> int
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg1: WhatToCount,
             arg2: "update",
             /,
@@ -5483,8 +5483,8 @@ class Text(Widget, XView, YView):
         ) -> int
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg1: WhatToCount,
             arg2: WhatToCount,
             /,
@@ -5493,8 +5493,8 @@ class Text(Widget, XView, YView):
         ) -> (int, int)
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg1: WhatToCount | "update",
             arg2: WhatToCount | "update",
             arg3: WhatToCount | "update",
@@ -5504,15 +5504,15 @@ class Text(Widget, XView, YView):
         ) -> (*: int)
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             *,
             return_ints: False = False,
         ) -> (int,) | None
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg: WhatToCount | "update",
             /,
             *,
@@ -5520,8 +5520,8 @@ class Text(Widget, XView, YView):
         ) -> (int,) | None
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg1: "update",
             arg2: WhatToCount,
             /,
@@ -5530,8 +5530,8 @@ class Text(Widget, XView, YView):
         ) -> int | None
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg1: WhatToCount,
             arg2: "update",
             /,
@@ -5540,8 +5540,8 @@ class Text(Widget, XView, YView):
         ) -> int | None
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg1: WhatToCount,
             arg2: WhatToCount,
             /,
@@ -5550,8 +5550,8 @@ class Text(Widget, XView, YView):
         ) -> (int, int)
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg1: WhatToCount | "update",
             arg2: WhatToCount | "update",
             arg3: WhatToCount | "update",
@@ -5561,7 +5561,7 @@ class Text(Widget, XView, YView):
         ) -> (*: int)
     else:
         def count(
-            self, index1: str | float | _tkinter.Tcl_Obj | Widget, index2: str | float | _tkinter.Tcl_Obj | Widget
+            self, index1: str | int | float | _tkinter.Tcl_Obj | Widget, index2: str | int | float | _tkinter.Tcl_Obj | Widget
         ) -> (int,) | None:
             """Counts the number of relevant things between the two indices.
             If index1 is after index2, the result will be a negative number
@@ -5577,39 +5577,39 @@ class Text(Widget, XView, YView):
             """
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg: WhatToCount | "update",
             /,
         ) -> (int,) | None
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg1: "update",
             arg2: WhatToCount,
             /,
         ) -> int | None
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg1: WhatToCount,
             arg2: "update",
             /,
         ) -> int | None
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg1: WhatToCount,
             arg2: WhatToCount,
             /,
         ) -> (int, int)
         def count(
             self,
-            index1: str | float | _tkinter.Tcl_Obj | Widget,
-            index2: str | float | _tkinter.Tcl_Obj | Widget,
+            index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+            index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg1: WhatToCount | "update",
             arg2: WhatToCount | "update",
             arg3: WhatToCount | "update",
@@ -5624,11 +5624,11 @@ class Text(Widget, XView, YView):
     def debug(self, boolean: bool) -> None
 
     def delete(
-        self, index1: str | float | _tkinter.Tcl_Obj | Widget, index2: str | float | _tkinter.Tcl_Obj | Widget | None = None
+        self, index1: str | int | float | _tkinter.Tcl_Obj | Widget, index2: str | int | float | _tkinter.Tcl_Obj | Widget | None = None
     ):
         """Delete the characters between INDEX1 and INDEX2 (not included)."""
 
-    def dlineinfo(self, index: str | float | _tkinter.Tcl_Obj | Widget) -> (int, int, int, int, int) | None:
+    def dlineinfo(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> (int, int, int, int, int) | None:
         """Return tuple (x,y,width,height,baseline) giving the bounding box
         and baseline position of the visible part of the line containing
         the character at INDEX.
@@ -5636,8 +5636,8 @@ class Text(Widget, XView, YView):
 
     def dump(
         self,
-        index1: str | float | _tkinter.Tcl_Obj | Widget,
-        index2: str | float | _tkinter.Tcl_Obj | Widget | None = None,
+        index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+        index2: str | int | float | _tkinter.Tcl_Obj | Widget | None = None,
         command: None = None,
         *,
         all: bool = ...,
@@ -5661,8 +5661,8 @@ class Text(Widget, XView, YView):
         """
     def dump(
         self,
-        index1: str | float | _tkinter.Tcl_Obj | Widget,
-        index2: str | float | _tkinter.Tcl_Obj | Widget | None,
+        index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+        index2: str | int | float | _tkinter.Tcl_Obj | Widget | None,
         command: ((str, str, str) -> object) | str,
         *,
         all: bool = ...,
@@ -5674,8 +5674,8 @@ class Text(Widget, XView, YView):
     ) -> None
     def dump(
         self,
-        index1: str | float | _tkinter.Tcl_Obj | Widget,
-        index2: str | float | _tkinter.Tcl_Obj | Widget | None = None,
+        index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+        index2: str | int | float | _tkinter.Tcl_Obj | Widget | None = None,
         *,
         command: ((str, str, str) -> object) | str,
         all: bool = ...,
@@ -5740,19 +5740,19 @@ class Text(Widget, XView, YView):
         """
 
     def get(
-        self, index1: str | float | _tkinter.Tcl_Obj | Widget, index2: str | float | _tkinter.Tcl_Obj | Widget | None = None
+        self, index1: str | int | float | _tkinter.Tcl_Obj | Widget, index2: str | int | float | _tkinter.Tcl_Obj | Widget | None = None
     ) -> str:
         """Return the text from INDEX1 to INDEX2 (not included)."""
 
-    def image_cget(self, index: str | float | _tkinter.Tcl_Obj | Widget, option: "image" | "name") -> str:
+    def image_cget(self, index: str | int | float | _tkinter.Tcl_Obj | Widget, option: "image" | "name") -> str:
         """Return the value of OPTION of an embedded image at INDEX."""
-    def image_cget(self, index: str | float | _tkinter.Tcl_Obj | Widget, option: "padx" | "pady") -> int
+    def image_cget(self, index: str | int | float | _tkinter.Tcl_Obj | Widget, option: "padx" | "pady") -> int
     def image_cget(
-        self, index: str | float | _tkinter.Tcl_Obj | Widget, option: "align"
+        self, index: str | int | float | _tkinter.Tcl_Obj | Widget, option: "align"
     ) -> "baseline" | "bottom" | "center" | "top"
-    def image_cget(self, index: str | float | _tkinter.Tcl_Obj | Widget, option: str) -> dynamic
+    def image_cget(self, index: str | int | float | _tkinter.Tcl_Obj | Widget, option: str) -> dynamic
 
-    def image_configure(self, index: str | float | _tkinter.Tcl_Obj | Widget, cnf: str) -> (str, str, str, str, str | int):
+    def image_configure(self, index: str | int | float | _tkinter.Tcl_Obj | Widget, cnf: str) -> (str, str, str, str, str | int):
         """Query or modify the configuration options of an embedded image at INDEX.
 
         Similar to configure() except that it applies to the specified
@@ -5760,37 +5760,37 @@ class Text(Widget, XView, YView):
         """
     def image_configure(
         self,
-        index: str | float | _tkinter.Tcl_Obj | Widget,
+        index: str | int | float | _tkinter.Tcl_Obj | Widget,
         cnf: dict[str, dynamic] | None = None,
         *,
         align: "baseline" | "bottom" | "center" | "top" = ...,
         image: _Image | str = ...,
         name: str = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
     ) -> dict[str, (str, str, str, str, str | int)] | None
 
     def image_create(
         self,
-        index: str | float | _tkinter.Tcl_Obj | Widget,
+        index: str | int | float | _tkinter.Tcl_Obj | Widget,
         cnf: dict[str, dynamic] | None = {},
         *,
         align: "baseline" | "bottom" | "center" | "top" = ...,
         image: _Image | str = ...,
         name: str = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
     ) -> str:
         """Create an embedded image at INDEX."""
 
     override def image_names(self) -> (*: str):
         """Return all names of embedded images in this widget."""
 
-    def index(self, index: str | float | _tkinter.Tcl_Obj | Widget) -> str:
+    def index(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> str:
         """Return the index in the form line.char for INDEX."""
 
     def insert(
-        self, index: str | float | _tkinter.Tcl_Obj | Widget, chars: str, *args: str | list[str] | (*: str)
+        self, index: str | int | float | _tkinter.Tcl_Obj | Widget, chars: str, *args: str | list[str] | (*: str)
     ):
         """Insert CHARS before the characters at INDEX. An additional
         tag can be given in ARGS. Additional CHARS and tags can follow in ARGS.
@@ -5805,16 +5805,16 @@ class Text(Widget, XView, YView):
     def mark_names(self) -> (*: str):
         """Return all mark names."""
 
-    def mark_set(self, markName: str, index: str | float | _tkinter.Tcl_Obj | Widget):
+    def mark_set(self, markName: str, index: str | int | float | _tkinter.Tcl_Obj | Widget):
         """Set mark MARKNAME before the character at INDEX."""
 
     def mark_unset(self, *markNames: str):
         """Delete all marks in MARKNAMES."""
 
-    def mark_next(self, index: str | float | _tkinter.Tcl_Obj | Widget) -> str | None:
+    def mark_next(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> str | None:
         """Return the name of the next mark after INDEX."""
 
-    def mark_previous(self, index: str | float | _tkinter.Tcl_Obj | Widget) -> str | None:
+    def mark_previous(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> str | None:
         """Return the name of the previous mark before INDEX."""
 
     # **kw of peer_create is same as the kwargs of Text.__init__
@@ -5832,8 +5832,8 @@ class Text(Widget, XView, YView):
 
     def replace(
         self,
-        index1: str | float | _tkinter.Tcl_Obj | Widget,
-        index2: str | float | _tkinter.Tcl_Obj | Widget,
+        index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+        index2: str | int | float | _tkinter.Tcl_Obj | Widget,
         chars: str,
         *args: str | list[str] | (*: str),
     ):
@@ -5857,8 +5857,8 @@ class Text(Widget, XView, YView):
         def search(
             self,
             pattern: str,
-            index: str | float | _tkinter.Tcl_Obj | Widget,
-            stopindex: str | float | _tkinter.Tcl_Obj | Widget | None = None,
+            index: str | int | float | _tkinter.Tcl_Obj | Widget,
+            stopindex: str | int | float | _tkinter.Tcl_Obj | Widget | None = None,
             forwards: bool | None = None,
             backwards: bool | None = None,
             exact: bool | None = None,
@@ -5878,8 +5878,8 @@ class Text(Widget, XView, YView):
         def search_all(
             self,
             pattern: str,
-            index: str | float | _tkinter.Tcl_Obj | Widget,
-            stopindex: str | float | _tkinter.Tcl_Obj | Widget | None = None,
+            index: str | int | float | _tkinter.Tcl_Obj | Widget,
+            stopindex: str | int | float | _tkinter.Tcl_Obj | Widget | None = None,
             *,
             forwards: bool | None = None,
             backwards: bool | None = None,
@@ -5900,8 +5900,8 @@ class Text(Widget, XView, YView):
         def search(
             self,
             pattern: str,
-            index: str | float | _tkinter.Tcl_Obj | Widget,
-            stopindex: str | float | _tkinter.Tcl_Obj | Widget | None = None,
+            index: str | int | float | _tkinter.Tcl_Obj | Widget,
+            stopindex: str | int | float | _tkinter.Tcl_Obj | Widget | None = None,
             forwards: bool | None = None,
             backwards: bool | None = None,
             exact: bool | None = None,
@@ -5915,11 +5915,11 @@ class Text(Widget, XView, YView):
             empty string.
             """
 
-    def see(self, index: str | float | _tkinter.Tcl_Obj | Widget):
+    def see(self, index: str | int | float | _tkinter.Tcl_Obj | Widget):
         """Scroll such that the character at INDEX is visible."""
 
     def tag_add(
-        self, tagName: str, index1: str | float | _tkinter.Tcl_Obj | Widget, *args: str | float | _tkinter.Tcl_Obj | Widget
+        self, tagName: str, index1: str | int | float | _tkinter.Tcl_Obj | Widget, *args: str | int | float | _tkinter.Tcl_Obj | Widget
     ):
         """Add tag TAGNAME to all characters between INDEX1 and index2 in ARGS.
         Additional pairs of indices may follow in ARGS.
@@ -5957,27 +5957,27 @@ class Text(Widget, XView, YView):
         *,
         background: str = ...,
         bgstipple: str = ...,
-        borderwidth: float | str = ...,
-        border: float | str = ...,  # alias for borderwidth
+        borderwidth: int | float | str = ...,
+        border: int | float | str = ...,  # alias for borderwidth
         elide: bool = ...,
         fgstipple: str = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
         justify: "left" | "right" | "center" = ...,
-        lmargin1: float | str = ...,
-        lmargin2: float | str = ...,
+        lmargin1: int | float | str = ...,
+        lmargin2: int | float | str = ...,
         lmargincolor: str = ...,
-        offset: float | str = ...,
+        offset: int | float | str = ...,
         overstrike: bool = ...,
         overstrikefg: str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
-        rmargin: float | str = ...,
+        rmargin: int | float | str = ...,
         rmargincolor: str = ...,
         selectbackground: str = ...,
         selectforeground: str = ...,
-        spacing1: float | str = ...,
-        spacing2: float | str = ...,
-        spacing3: float | str = ...,
+        spacing1: int | float | str = ...,
+        spacing2: int | float | str = ...,
+        spacing3: int | float | str = ...,
         tabs: dynamic = ...,  # the exact type is kind of complicated, see manual page
         tabstyle: "tabular" | "wordprocessor" = ...,
         underline: bool = ...,
@@ -5999,14 +5999,14 @@ class Text(Widget, XView, YView):
         than the priority of BELOWTHIS.
         """
 
-    def tag_names(self, index: str | float | _tkinter.Tcl_Obj | Widget | None = None) -> (*: str):
+    def tag_names(self, index: str | int | float | _tkinter.Tcl_Obj | Widget | None = None) -> (*: str):
         """Return a list of all tag names."""
 
     def tag_nextrange(
         self,
         tagName: str,
-        index1: str | float | _tkinter.Tcl_Obj | Widget,
-        index2: str | float | _tkinter.Tcl_Obj | Widget | None = None,
+        index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+        index2: str | int | float | _tkinter.Tcl_Obj | Widget | None = None,
     ) -> (str, str) | tuple[()]:
         """Return a list of start and end index for the first sequence of
         characters between INDEX1 and INDEX2 which all have tag TAGNAME.
@@ -6016,8 +6016,8 @@ class Text(Widget, XView, YView):
     def tag_prevrange(
         self,
         tagName: str,
-        index1: str | float | _tkinter.Tcl_Obj | Widget,
-        index2: str | float | _tkinter.Tcl_Obj | Widget | None = None,
+        index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+        index2: str | int | float | _tkinter.Tcl_Obj | Widget | None = None,
     ) -> (str, str) | tuple[()]:
         """Return a list of start and end index for the first sequence of
         characters between INDEX1 and INDEX2 which all have tag TAGNAME.
@@ -6036,23 +6036,23 @@ class Text(Widget, XView, YView):
     def tag_remove(
         self,
         tagName: str,
-        index1: str | float | _tkinter.Tcl_Obj | Widget,
-        index2: str | float | _tkinter.Tcl_Obj | Widget | None = None,
+        index1: str | int | float | _tkinter.Tcl_Obj | Widget,
+        index2: str | int | float | _tkinter.Tcl_Obj | Widget | None = None,
     ):
         """Remove tag TAGNAME from all characters between INDEX1 and INDEX2."""
 
-    def window_cget(self, index: str | float | _tkinter.Tcl_Obj | Widget, option: "padx" | "pady") -> int:
+    def window_cget(self, index: str | int | float | _tkinter.Tcl_Obj | Widget, option: "padx" | "pady") -> int:
         """Return the value of OPTION of an embedded window at INDEX."""
     def window_cget(
-        self, index: str | float | _tkinter.Tcl_Obj | Widget, option: "stretch"
+        self, index: str | int | float | _tkinter.Tcl_Obj | Widget, option: "stretch"
     ) -> bool  # actually returns Literal[0, 1]
     def window_cget(
-        self, index: str | float | _tkinter.Tcl_Obj | Widget, option: "align"
+        self, index: str | int | float | _tkinter.Tcl_Obj | Widget, option: "align"
     ) -> "baseline" | "bottom" | "center" | "top"
-    def window_cget(self, index: str | float | _tkinter.Tcl_Obj | Widget, option: "create" | "window") -> str
-    def window_cget(self, index: str | float | _tkinter.Tcl_Obj | Widget, option: str) -> dynamic
+    def window_cget(self, index: str | int | float | _tkinter.Tcl_Obj | Widget, option: "create" | "window") -> str
+    def window_cget(self, index: str | int | float | _tkinter.Tcl_Obj | Widget, option: str) -> dynamic
 
-    def window_configure(self, index: str | float | _tkinter.Tcl_Obj | Widget, cnf: str) -> (str, str, str, str, str | int):
+    def window_configure(self, index: str | int | float | _tkinter.Tcl_Obj | Widget, cnf: str) -> (str, str, str, str, str | int):
         """Query or modify the configuration options of an embedded window at INDEX.
 
         Similar to configure() except that it applies to the specified
@@ -6060,13 +6060,13 @@ class Text(Widget, XView, YView):
         """
     def window_configure(
         self,
-        index: str | float | _tkinter.Tcl_Obj | Widget,
+        index: str | int | float | _tkinter.Tcl_Obj | Widget,
         cnf: dict[str, dynamic] | None = None,
         *,
         align: "baseline" | "bottom" | "center" | "top" = ...,
         create: str = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         stretch: bool | 0 | 1 = ...,
         window: Misc | str = ...,
     ) -> dict[str, (str, str, str, str, str | int)] | None
@@ -6074,13 +6074,13 @@ class Text(Widget, XView, YView):
     window_config = window_configure
     def window_create(
         self,
-        index: str | float | _tkinter.Tcl_Obj | Widget,
+        index: str | int | float | _tkinter.Tcl_Obj | Widget,
         cnf: dict[str, dynamic] | None = {},
         *,
         align: "baseline" | "bottom" | "center" | "top" = ...,
         create: str = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         stretch: bool | 0 | 1 = ...,
         window: Misc | str = ...,
     ):
@@ -6185,7 +6185,7 @@ class PhotoImage(Image, _PhotoImageLike):
         data: str | bytes = ...,  # not same as data argument of put()
         format: str = ...,
         file: StrOrBytesPath = ...,
-        gamma: float = ...,
+        gamma: int | float = ...,
         height: int = ...,
         palette: int | str = ...,
         width: int = ...,
@@ -6202,7 +6202,7 @@ class PhotoImage(Image, _PhotoImageLike):
         data: str | bytes = ...,
         format: str = ...,
         file: StrOrBytesPath = ...,
-        gamma: float = ...,
+        gamma: int | float = ...,
         height: int = ...,
         palette: int | str = ...,
         width: int = ...,
@@ -6498,10 +6498,10 @@ class Spinbox(Widget, XView):
         *,
         activebackground: str = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         buttonbackground: str = ...,
         buttoncursor: _Cursor = "",
         buttondownrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
@@ -6516,16 +6516,16 @@ class Spinbox(Widget, XView):
         font: _FontDescription = "TkTextFont",
         foreground: str = ...,
         format: str = "",
-        from_: float = 0.0,
+        from_: int | float = 0.0,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
-        increment: float = 1.0,
+        highlightthickness: int | float | str = ...,
+        increment: int | float = 1.0,
         insertbackground: str = ...,
-        insertborderwidth: float | str = 0,
+        insertborderwidth: int | float | str = 0,
         insertofftime: int = 300,
         insertontime: int = 600,
-        insertwidth: float | str = ...,
+        insertwidth: int | float | str = ...,
         invalidcommand: str | list[str] | (*: str) | (() -> bool) = "",
         invcmd: str | list[str] | (*: str) | (() -> bool) = "",
         justify: "left" | "center" | "right" = "left",
@@ -6535,12 +6535,12 @@ class Spinbox(Widget, XView):
         repeatdelay: int = 400,
         repeatinterval: int = 100,
         selectbackground: str = ...,
-        selectborderwidth: float | str = ...,
+        selectborderwidth: int | float | str = ...,
         selectforeground: str = ...,
         state: "normal" | "disabled" | "readonly" = "normal",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
         textvariable: Variable = ...,
-        to: float = 0.0,
+        to: int | float = 0.0,
         validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = "none",
         validatecommand: str | list[str] | (*: str) | (() -> bool) = "",
         vcmd: str | list[str] | (*: str) | (() -> bool) = "",
@@ -6585,10 +6585,10 @@ class Spinbox(Widget, XView):
         *,
         activebackground: str = ...,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         buttonbackground: str = ...,
         buttoncursor: _Cursor = ...,
         buttondownrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
@@ -6602,16 +6602,16 @@ class Spinbox(Widget, XView):
         font: _FontDescription = ...,
         foreground: str = ...,
         format: str = ...,
-        from_: float = ...,
+        from_: int | float = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
-        increment: float = ...,
+        highlightthickness: int | float | str = ...,
+        increment: int | float = ...,
         insertbackground: str = ...,
-        insertborderwidth: float | str = ...,
+        insertborderwidth: int | float | str = ...,
         insertofftime: int = ...,
         insertontime: int = ...,
-        insertwidth: float | str = ...,
+        insertwidth: int | float | str = ...,
         invalidcommand: str | list[str] | (*: str) | (() -> bool) = ...,
         invcmd: str | list[str] | (*: str) | (() -> bool) = ...,
         justify: "left" | "center" | "right" = ...,
@@ -6620,12 +6620,12 @@ class Spinbox(Widget, XView):
         repeatdelay: int = ...,
         repeatinterval: int = ...,
         selectbackground: str = ...,
-        selectborderwidth: float | str = ...,
+        selectborderwidth: int | float | str = ...,
         selectforeground: str = ...,
         state: "normal" | "disabled" | "readonly" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         textvariable: Variable = ...,
-        to: float = ...,
+        to: int | float = ...,
         validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = ...,
         validatecommand: str | list[str] | (*: str) | (() -> bool) = ...,
         vcmd: str | list[str] | (*: str) | (() -> bool) = ...,
@@ -6780,10 +6780,10 @@ class LabelFrame(Widget):
         cnf: dict[str, dynamic] | None = {},
         *,
         background: str = ...,
-        bd: float | str = 2,
+        bd: int | float | str = 2,
         bg: str = ...,
-        border: float | str = 2,
-        borderwidth: float | str = 2,
+        border: int | float | str = 2,
+        borderwidth: int | float | str = 2,
         class_: str = "Labelframe",  # can't be changed with configure()
         colormap: "new" | "" | Misc = "",  # can't be changed with configure()
         container: bool = False,  # undocumented, can't be changed with configure()
@@ -6791,21 +6791,21 @@ class LabelFrame(Widget):
         fg: str = ...,
         font: _FontDescription = "TkDefaultFont",
         foreground: str = ...,
-        height: float | str = 0,
+        height: int | float | str = 0,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = 0,
+        highlightthickness: int | float | str = 0,
         # 'ne' and 'en' are valid labelanchors, but only 'ne' is a valid _Anchor.
         labelanchor: "nw" | "n" | "ne" | "en" | "e" | "es" | "se" | "s" | "sw" | "ws" | "w" | "wn" = "nw",
         labelwidget: Misc = ...,
         name: str = ...,
-        padx: float | str = 0,
-        pady: float | str = 0,
+        padx: int | float | str = 0,
+        pady: int | float | str = 0,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "groove",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
-        text: float | str = "",
+        text: int | float | str = "",
         visual: str | (str, int) = "",  # can't be changed with configure()
-        width: float | str = 0,
+        width: int | float | str = 0,
     ):
         """Construct a labelframe widget with the parent MASTER.
 
@@ -6828,26 +6828,26 @@ class LabelFrame(Widget):
         cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = ...,
         fg: str = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         highlightbackground: str = ...,
         highlightcolor: str = ...,
-        highlightthickness: float | str = ...,
+        highlightthickness: int | float | str = ...,
         labelanchor: "nw" | "n" | "ne" | "en" | "e" | "es" | "se" | "s" | "sw" | "ws" | "w" | "wn" = ...,
         labelwidget: Misc = ...,
-        padx: float | str = ...,
-        pady: float | str = ...,
+        padx: int | float | str = ...,
+        pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
-        width: float | str = ...,
+        text: int | float | str = ...,
+        width: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -6874,27 +6874,27 @@ class PanedWindow(Widget):
         cnf: dict[str, dynamic] | None = {},
         *,
         background: str = ...,
-        bd: float | str = 1,
+        bd: int | float | str = 1,
         bg: str = ...,
-        border: float | str = 1,
-        borderwidth: float | str = 1,
+        border: int | float | str = 1,
+        borderwidth: int | float | str = 1,
         cursor: _Cursor = "",
-        handlepad: float | str = 8,
-        handlesize: float | str = 8,
-        height: float | str = "",
+        handlepad: int | float | str = 8,
+        handlesize: int | float | str = 8,
+        height: int | float | str = "",
         name: str = ...,
         opaqueresize: bool = True,
         orient: "horizontal" | "vertical" = "horizontal",
         proxybackground: str = "",
-        proxyborderwidth: float | str = 2,
+        proxyborderwidth: int | float | str = 2,
         proxyrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         sashcursor: _Cursor = "",
-        sashpad: float | str = 0,
+        sashpad: int | float | str = 0,
         sashrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
-        sashwidth: float | str = 3,
+        sashwidth: int | float | str = 3,
         showhandle: bool = False,
-        width: float | str = "",
+        width: int | float | str = "",
     ):
         """Construct a panedwindow widget with the parent MASTER.
 
@@ -6916,26 +6916,26 @@ class PanedWindow(Widget):
         cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
-        bd: float | str = ...,
+        bd: int | float | str = ...,
         bg: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: _Cursor = ...,
-        handlepad: float | str = ...,
-        handlesize: float | str = ...,
-        height: float | str = ...,
+        handlepad: int | float | str = ...,
+        handlesize: int | float | str = ...,
+        height: int | float | str = ...,
         opaqueresize: bool = ...,
         orient: "horizontal" | "vertical" = ...,
         proxybackground: str = ...,
-        proxyborderwidth: float | str = ...,
+        proxyborderwidth: int | float | str = ...,
         proxyrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         sashcursor: _Cursor = ...,
-        sashpad: float | str = ...,
+        sashpad: int | float | str = ...,
         sashrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
-        sashwidth: float | str = ...,
+        sashwidth: int | float | str = ...,
         showhandle: bool = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 

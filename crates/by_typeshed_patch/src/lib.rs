@@ -45,7 +45,11 @@ pub struct Edit {
 
 /// registry of every legacy-form patch, applied in pass 1 before the pep 695
 /// conversion. these see the `TypeVar(...)` + `Generic[...]` form
-pub fn all_patches() -> Vec<Box<dyn Patch>> {
+///
+/// `root` is the typeshed `stdlib/` directory, for the one patch whose decision
+/// depends on the rest of the tree (`numeric_promotion`, which has to know where
+/// a type alias is used before it can widen it)
+pub fn all_patches(root: &Path) -> Vec<Box<dyn Patch>> {
     // patches are added here as upstream syncs surface concrete drift. each
     // entry must have a corresponding module in `src/patches/` with tests
     vec![
@@ -55,6 +59,14 @@ pub fn all_patches() -> Vec<Box<dyn Patch>> {
         // conversion, so it belongs in the pass that a re-apply over the
         // committed tree also runs
         Box::new(patches::re_optional_groups::ReOptionalGroups),
+        // writes the typing spec's `float` / `complex` special case into the
+        // parameter annotations that rely on it. it reads only names and the
+        // shape of a type expression, both of which survive the pep 695
+        // conversion unchanged, so it belongs in the pass that a re-apply over
+        // the committed tree also runs
+        Box::new(patches::numeric_promotion::NumericPromotion::new(
+            patches::numeric_promotion::scan(root),
+        )),
     ]
 }
 

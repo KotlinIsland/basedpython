@@ -69,7 +69,7 @@ class Fraction(Rational):
         Fraction(147, 100)
 
         """
-    def __new__(cls, numerator: float | Decimal | str) -> Self
+    def __new__(cls, numerator: int | float | Decimal | str) -> Self
     if sys.version_info >= (3, 14):
         def __new__(cls, numerator: ConvertibleToIntegerRatio) -> Self:
             """Constructs a Rational.
@@ -103,7 +103,7 @@ class Fraction(Rational):
 
             """
 
-    class def from_float(cls, f: float) -> Self:
+    class def from_float(cls, f: int | float) -> Self:
         """Converts a finite float to a rational number, exactly.
 
         Beware that Fraction.from_float(0.3) != Fraction(3, 10).
@@ -226,13 +226,13 @@ class Fraction(Rational):
         def __pow__(a, b: complex) -> complex
 
     if sys.version_info >= (3, 14):
-        def __rpow__(b, a: float | Fraction, modulo: None = None) -> float:
+        def __rpow__(b, a: int | float | Fraction, modulo: None = None) -> float:
             """a ** b"""
-        def __rpow__(b, a: complex, modulo: None = None) -> complex
+        def __rpow__(b, a: int | float | complex, modulo: None = None) -> complex
     else:
-        override def __rpow__(b, a: float | Fraction) -> float:
+        override def __rpow__(b, a: int | float | Fraction) -> float:
             """a ** b"""
-        def __rpow__(b, a: complex) -> complex
+        def __rpow__(b, a: int | float | complex) -> complex
 
     override def __pos__(a) -> Fraction:
         """+a: Coerces a subclass instance to Fraction"""
@@ -296,7 +296,7 @@ class Fraction(Rational):
         """Conjugate is a no-op for Reals."""
 
     if sys.version_info >= (3, 14):
-        class def from_number(cls, number: float | Rational | ConvertibleToIntegerRatio) -> Self:
+        class def from_number(cls, number: int | float | Rational | ConvertibleToIntegerRatio) -> Self:
             """Converts a finite real number to a rational number, exactly.
 
             Beware that Fraction.from_number(0.3) != Fraction(3, 10).

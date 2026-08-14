@@ -41,11 +41,11 @@ if sys.platform != "win32":
         def register(self, fd: FileDescriptorLike, eventmask: int = 7, /)
         def modify(self, fd: FileDescriptorLike, eventmask: int, /)
         def unregister(self, fd: FileDescriptorLike, /)
-        def poll(self, timeout: float | None = None, /) -> list[(int, int)]
+        def poll(self, timeout: int | float | None = None, /) -> list[(int, int)]
 
 
 def select[R: FileDescriptorLike = Never, W: FileDescriptorLike = Never, X: FileDescriptorLike = Never](
-    rlist: Iterable[R], wlist: Iterable[W], xlist: Iterable[X], timeout: float | None = None, /
+    rlist: Iterable[R], wlist: Iterable[W], xlist: Iterable[X], timeout: int | float | None = None, /
 ) -> (list[R], list[W], list[X]):
     """Wait until one or more file descriptors are ready for some kind of I/O.
 
@@ -131,7 +131,7 @@ if sys.platform != "linux" and sys.platform != "win32":
             Further operations on the kqueue object will raise an exception.
             """
 
-        def control(self, changelist: Iterable[kevent] | None, maxevents: int, timeout: float | None = None, /) -> list[kevent]:
+        def control(self, changelist: Iterable[kevent] | None, maxevents: int, timeout: int | float | None = None, /) -> list[kevent]:
             """Calls the kernel kevent function.
 
             changelist
@@ -255,7 +255,7 @@ if sys.platform == "linux":
               the target file descriptor of the operation
             """
 
-        def poll(self, timeout: float | None = None, maxevents: int = -1) -> list[(int, int)]:
+        def poll(self, timeout: int | float | None = None, maxevents: int = -1) -> list[(int, int)]:
             """Wait for events on the epoll file descriptor.
 
               timeout
@@ -298,4 +298,4 @@ if sys.platform != "linux" and sys.platform != "darwin" and sys.platform != "win
         def register(self, fd: FileDescriptorLike, eventmask: int = ...)
         def modify(self, fd: FileDescriptorLike, eventmask: int = ...)
         def unregister(self, fd: FileDescriptorLike)
-        def poll(self, timeout: float | None = None) -> list[(int, int)]
+        def poll(self, timeout: int | float | None = None) -> list[(int, int)]

@@ -34,7 +34,7 @@ private type ActionCallback = (...) -> dynamic
 class Event(NamedTuple):
     """Event(time, priority, sequence, action, argument, kwargs)"""
 
-    time: float
+    time: int | float
     priority: dynamic
     sequence: int
     action: ActionCallback
@@ -42,16 +42,16 @@ class Event(NamedTuple):
     kwargs: dict[str, dynamic]
 
 class scheduler:
-    timefunc: () -> float
-    delayfunc: (float) -> object
+    timefunc: () -> (int | float)
+    delayfunc: (int | float) -> object
 
-    init(self, timefunc: () -> float = time.monotonic, delayfunc: (float) -> object = time.sleep):
+    init(self, timefunc: () -> (int | float) = time.monotonic, delayfunc: (float) -> object = time.sleep):
         """Initialize a new instance, passing the time and delay
         functions
         """
 
     def enterabs(
-        self, time: float, priority: dynamic, action: ActionCallback, argument: (*: dynamic) = (), kwargs: dict[str, dynamic] = ...
+        self, time: int | float, priority: dynamic, action: ActionCallback, argument: (*: dynamic) = (), kwargs: dict[str, dynamic] = ...
     ) -> Event:
         """Enter a new event in the queue at an absolute time.
 
@@ -61,7 +61,7 @@ class scheduler:
         """
 
     def enter(
-        self, delay: float, priority: dynamic, action: ActionCallback, argument: (*: dynamic) = (), kwargs: dict[str, dynamic] = ...
+        self, delay: int | float, priority: dynamic, action: ActionCallback, argument: (*: dynamic) = (), kwargs: dict[str, dynamic] = ...
     ) -> Event:
         """A variant that specifies the time as a relative time.
 
@@ -69,7 +69,7 @@ class scheduler:
 
         """
 
-    def run(self, blocking: bool = True) -> float | None:
+    def run(self, blocking: bool = True) -> int | float | None:
         """Execute events until the queue is empty.
         If blocking is False executes the scheduled events due to
         expire soonest (if any) and then return the deadline of the

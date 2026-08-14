@@ -76,7 +76,7 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
                 timeout: SupportsIndex | None = None,
                 *,
                 unbounditems: _AnyUnbound | None = None,
-                _delay: float = 0.01,
+                _delay: int | float = 0.01,
             ) -> None:
                 """Add the object to the queue.
 
@@ -122,12 +122,12 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
                 timeout: SupportsIndex | None = None,
                 *,
                 unbounditems: _AnyUnbound | None = None,
-                _delay: float = 0.01,
+                _delay: int | float = 0.01,
             ) -> None
 
         def put_nowait(self, obj: object, *, unbounditems: _AnyUnbound | None = None)
         if sys.version_info >= (3, 14):
-            def get(self, block: bool = True, timeout: SupportsIndex | None = None, *, _delay: float = 0.01) -> object:
+            def get(self, block: bool = True, timeout: SupportsIndex | None = None, *, _delay: int | float = 0.01) -> object:
                 """Return the next object from the queue.
 
                 If "block" is true, this blocks while the queue is empty.
@@ -138,7 +138,7 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
                 """
 
         else:
-            def get(self, timeout: SupportsIndex | None = None, *, _delay: float = 0.01) -> object
+            def get(self, timeout: SupportsIndex | None = None, *, _delay: int | float = 0.01) -> object
 
         def get_nowait(self) -> object:
             """Return the next object from the channel.

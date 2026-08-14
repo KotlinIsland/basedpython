@@ -346,7 +346,7 @@ def sinh(x: _SupportsFloatOrIndex, /) -> float:
     """Return the hyperbolic sine of x."""
 
 if sys.version_info >= (3, 12):
-    def sumprod(p: Iterable[float], q: Iterable[float], /) -> float:
+    def sumprod(p: Iterable[int | float], q: Iterable[int | float], /) -> int | float:
         """Return the sum of products of values from two iterables p and q.
 
         Roughly equivalent to:
