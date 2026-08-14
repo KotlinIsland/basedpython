@@ -515,3 +515,64 @@ def shallow_nesting() -> None:
     boxed: list[list[list[int]]] = [[[1]]]
     reveal_type(boxed)  # revealed: list[list[list[int]]]
 ```
+
+## a function whose return value nests itself widens rather than diverging
+
+An unannotated function can hand back a container built out of its own return value. Inferring its
+signature then asks what it returns in order to answer what it returns, and each round buries the
+answer one level deeper: `Box[Never]`, then `Box[Box[Never]]`, and so on. Nothing in the program
+says where that recursion stops, so the rounds never settle.
+
+The recovery is the same as for a container nested in a loop, but the growth has to be recognized
+first: by the first round the divergence marker has been solved away — `Box[Divergent]` comes back
+as `Box[Never]` — leaving nothing for the usual collapse to find. What gives the round away is that
+it added nothing but depth: its answer is the previous answer with one more layer around it. Once
+the marker is put back the nesting collapses and the iteration settles on the recursive type.
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Callable
+
+class Box[T]:
+    def __init__(self, make: Callable[[], T]) -> None:
+        self.make = make
+
+def factory():
+    return Box(factory)
+
+reveal_type(factory())  # revealed: Box[Divergent]
+
+# the binding that observes it is one construction further out, and stays finite
+outer = Box(factory)
+reveal_type(outer)  # revealed: Box[Box[Divergent]]
+
+# an unannotated factory that is not recursive is unaffected, and still inferred exactly
+def plain():
+    return 1
+
+def holder():
+    return Box(plain)
+
+reveal_type(holder())  # revealed: Box[Literal[1]]
+```
+
+## the recursive `defaultdict` factory converges
+
+The same shape reaches ty through the standard library, where it is a common idiom for a tree of
+arbitrary depth.
+
+```py
+from collections import defaultdict
+
+def tree():
+    return defaultdict(tree)
+
+reveal_type(tree())  # revealed: defaultdict[Unknown, Divergent]
+
+nested = defaultdict(tree)
+reveal_type(nested)  # revealed: defaultdict[Unknown, defaultdict[Unknown, Divergent]]
+```

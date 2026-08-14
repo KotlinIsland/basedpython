@@ -717,16 +717,35 @@ pub(crate) mod testing {
     }
 
     impl TestDb {
+        /// A database that does not record salsa events.
+        ///
+        /// The transpiler builds one of these per file it converts, so this is not
+        /// only a test fixture. Recording every salsa event costs a mutex and a push
+        /// per event and retains them all in an unbounded `Vec`, which is a large
+        /// price for something only [`Self::with_salsa_events`]'s callers read.
+        /// Worse, it turns a query that fails to converge into an out-of-memory kill
+        /// rather than a slow one, which hides what actually went wrong.
         pub fn new(project: ProjectMetadata) -> Self {
+            Self::build(project, false)
+        }
+
+        /// A database that records every salsa event, for tests that assert on which
+        /// queries ran. Read the events back with [`Self::take_salsa_events`].
+        #[cfg(any(test, feature = "testing"))]
+        pub fn with_salsa_events(project: ProjectMetadata) -> Self {
+            Self::build(project, true)
+        }
+
+        fn build(project: ProjectMetadata, record_events: bool) -> Self {
             let events = Events::default();
             let mut db = Self {
-                storage: salsa::Storage::new(Some(Box::new({
+                storage: salsa::Storage::new(record_events.then(|| {
                     let events = events.clone();
-                    move |event| {
+                    Box::new(move |event| {
                         let mut events = events.lock().unwrap();
                         events.push(event);
-                    }
-                }))),
+                    }) as _
+                })),
                 system: TestSystem::default(),
                 vendored: ty_vendored::file_system().clone(),
                 files: Files::default(),

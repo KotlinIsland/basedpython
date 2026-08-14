@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn cancelled_file_indexing_recovers_file_set() -> anyhow::Result<()> {
         let metadata = ProjectMetadata::new("test", SystemPathBuf::from("/test"));
-        let mut db = TestDb::new(metadata);
+        let mut db = TestDb::with_salsa_events(metadata);
         db.write_files((0..10_000).map(|index| (format!("/test/test_{index}.py"), "")))?;
         db.take_salsa_events();
 

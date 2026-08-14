@@ -1780,6 +1780,18 @@ impl<'db> Specialization<'db> {
         )
     }
 
+    /// `self` with its type arguments replaced by `types`, everything else kept.
+    pub(super) fn with_types(self, db: &'db dyn Db, types: Box<[Type<'db>]>) -> Self {
+        Self::new(
+            db,
+            self.generic_context(db),
+            types,
+            self.materialization_kind(db),
+            self.tuple_inner(db),
+            self.projections(db).to_vec().into_boxed_slice(),
+        )
+    }
+
     pub(super) fn recursive_type_normalized_impl(
         self,
         db: &'db dyn Db,
