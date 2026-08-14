@@ -140,6 +140,130 @@ context flag = True
 f()
 ```
 
+## a nearer scope holding the name shadows the declaration
+
+The lowering writes the resolved name at the call site, so a scope between the call and the
+declaration that binds that name would make the emitted argument read its value instead. Such a
+declaration is not offered at all.
+
+```by
+def f(context b: str): ...
+
+context s = "module"
+
+def g():
+    s = 1
+    f()  # error: [missing-context-argument]
+```
+
+## a trailing lambda block's `it` is a candidate
+
+A block binds the value its callback is called with as `it`, and nobody writes that binding. It is
+ambient in the block body the way a `context` declaration is ambient in its scope, so it fills a
+`context` parameter too.
+
+```by
+def f(context b: str): ...
+def each(fn: (str) -> None): ...
+
+each:
+    f()
+```
+
+## a receiver block's `self` is a candidate
+
+A block bound to a receiver callback spells the receiver `self`, which is likewise never written.
+
+```by
+def f(context b: str): ...
+def against(fn: str.() -> None): ...
+
+against:
+    f()
+```
+
+## a block that binds both a receiver and `it` is ambiguous
+
+`self` and `it` are two separate values, so a `context` parameter that both fit is no more
+resolvable than two matching declarations in one scope.
+
+```by
+def f(context b: str): ...
+def against(fn: str.(str) -> None): ...
+
+against:
+    f()  # error: [ambiguous-context-argument]
+```
+
+## an untyped `it` is not a candidate
+
+A callee whose callback shape cannot be inspected leaves `it` untyped, and an untyped `it` would be
+assignable to every `context` parameter — so it is not offered at all.
+
+```by
+def f(context b: str): ...
+def opaque(fn): ...
+
+opaque:
+    f()  # error: [missing-context-argument]
+```
+
+## a callback with no parameters leaves `it` untyped
+
+A callback the block has nothing to bind leaves `it` untyped for the same reason, and is likewise
+not offered.
+
+```by
+def f(context b: str): ...
+def once(fn: () -> None): ...
+
+once:
+    f()  # error: [missing-context-argument]
+```
+
+## only the innermost block's implicit names count
+
+Every block binds `it`, so a nested block always shadows the enclosing one's — and the two blocks'
+receivers share a name in the emitted code as well. Reaching past a nested block would name a value
+the call does not receive, so an enclosing block's implicit names are not offered.
+
+```by
+def f(context b: str): ...
+def outer(fn: (str) -> None): ...
+def inner(fn: (int) -> None): ...
+
+outer:
+    inner:
+        f()  # error: [missing-context-argument]
+```
+
+## a comprehension in the block that rebinds `it` shadows it
+
+The block's implicit names stay ambient inside a comprehension it opens, but a comprehension that
+binds `it` itself claims the name for its own loop variable.
+
+```by
+def f(context b: str): ...
+def each(fn: (str) -> None): ...
+
+each:
+    print([f() for it in range(3)])  # error: [missing-context-argument]
+```
+
+## a `context` declaration in the block shadows `it`
+
+The block's implicit names come first in its own scope, so a declaration that reuses one of their
+names replaces it rather than colliding with it.
+
+```by
+def f(context b: str): ...
+def each(fn: (str) -> None): ...
+
+each:
+    context it: str = "declared"
+    f()
+```
+
 ## `context` parameters must come last
 
 A positional parameter after a `context` parameter would shift explicit arguments onto it.

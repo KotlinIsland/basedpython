@@ -43,6 +43,9 @@ the rules:
 - in the scope containing the call, only declarations **lexically before**
     the call count. enclosing-scope declarations count regardless of position,
     matching how closed-over names are read late
+- a declaration a **nearer scope shadows** is not a candidate. the call site
+    passes the resolved name, so a scope in between holding that name would
+    have the call read its value instead
 - an **explicit argument** (positional or keyword) always wins; no resolution
     happens for a parameter that is matched
 
@@ -56,6 +59,31 @@ def f(context b: str) -> str:
 def g(x: int, context b: str) -> str:
     return f()  # ok — g's own `b` fills it
 ```
+
+## trailing lambda blocks
+
+a [trailing lambda](trailing-lambdas.md) block binds the value its callback is
+called with as `it`, and a block bound to an
+[implicit receiver](implicit-receivers.md) spells that receiver `self`. nobody
+writes either binding, so both are ambient in the block body the way a `context`
+declaration is ambient in its scope — and both fill `context` parameters:
+
+```by
+def log(message: str, context level: int): ...
+def at(level: int, fn: (int) -> None): ...
+
+at(2):
+    log("started")  # ok — the block's `it` fills `level`
+```
+
+only the innermost block's implicit names count. every block binds `it`, so a
+nested block always shadows the one around it, and reaching past it would name a
+value the call never receives. a callback both a receiver and an `it` fit is
+ambiguous, like any two candidates in one scope
+
+a block whose callback shape cannot be inspected — an unannotated callee
+parameter, or one with no argument for the block to bind — leaves `it` untyped,
+and an untyped `it` offers nothing rather than fitting every parameter
 
 ## parameter placement
 

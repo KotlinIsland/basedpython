@@ -1,5 +1,6 @@
 //! Abstraction over type/binding information consumed by transforms.
 
+use crate::transforms::trailing_lambda::RECEIVER_PARAMETER;
 use ruff_python_ast::helpers::is_dotted_name;
 use ruff_python_ast::{Expr, ExprCall, ExprName, ExprRef, Stmt, StmtClassDef};
 use ruff_python_parser::parse_expression;
@@ -445,8 +446,11 @@ pub(crate) trait TypeInfo {
     /// the implicit context arguments the lowering must append to `call`:
     /// `(parameter name, variable name)` pairs for each `context` parameter
     /// that no explicit argument matches, resolved from the `context`
-    /// declarations in scope at the call site. empty when the callee has no
-    /// context parameters or nothing resolves
+    /// declarations in scope at the call site — and from the names a trailing
+    /// lambda block binds implicitly, when the call is inside one. the variable
+    /// name is already the *emitted* one, so a block receiver comes back as the
+    /// lowering's receiver parameter rather than as `self`. empty when the
+    /// callee has no context parameters or nothing resolves
     fn implicit_context_arguments(&self, call: &ExprCall) -> Vec<(String, String)>;
 
     /// whether `expr`'s inferred type is a string — a `str` / `Character` /
@@ -1092,10 +1096,12 @@ impl TypeInfo for SemanticModel<'_> {
         )
         .into_iter()
         .map(|argument| {
-            (
-                argument.parameter.to_string(),
-                argument.variable.to_string(),
-            )
+            let variable = if argument.is_block_receiver {
+                RECEIVER_PARAMETER.to_string()
+            } else {
+                argument.variable.to_string()
+            };
+            (argument.parameter.to_string(), variable)
         })
         .collect()
     }
