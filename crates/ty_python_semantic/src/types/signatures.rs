@@ -1347,6 +1347,71 @@ impl<'db> Signature<'db> {
         }
     }
 
+    /// basedpython: fill in every parameter still without a type of its own from `expected` — the
+    /// callable that something declares the function itself to be.
+    ///
+    /// Positional parameters correspond by position and keyword-only parameters by name, the same
+    /// way a call binds arguments to them. A `*args` or `**kwargs` stands for a run of arguments
+    /// rather than one, so nothing corresponds to it and it keeps whatever type it had.
+    ///
+    /// Nothing is inherited from a parameter list that describes a run of arguments rather than a
+    /// parameter per position — `Callable[..., T]`, a `ParamSpec`, a `Concatenate` — since there is
+    /// nothing to line up against. A type variable is bound to the scope that declared it, so
+    /// copying one here would silently rebind it, and those parameters are left alone too.
+    pub(crate) fn inherit_unannotated_from_callable(
+        &mut self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        expected: &Signature<'db>,
+    ) {
+        if !expected.parameters().is_standard() {
+            return;
+        }
+
+        let mut expected_positional = expected
+            .parameters()
+            .iter()
+            .take_while(|parameter| parameter.is_positional());
+
+        for parameter in &mut Arc::make_mut(&mut self.parameters.data).value {
+            // advance the positional correspondence even for a parameter that is not going to be
+            // filled in, so that the parameters after it still line up
+            let corresponding = if parameter.is_positional() {
+                expected_positional.next()
+            } else if parameter.is_keyword_only() {
+                expected.parameters().iter().find(|candidate| {
+                    candidate.is_keyword_only() && candidate.name() == parameter.name()
+                })
+            } else {
+                None
+            };
+
+            // skip explicit annotations, and any parameter that already has a resolved type
+            // (e.g. `self`/`cls` after `add_implicit_self_annotation`)
+            if !parameter.inferred_annotation || !parameter.annotated_type.is_unknown() {
+                continue;
+            }
+            let Some(corresponding) = corresponding else {
+                continue;
+            };
+            if corresponding.inferred_annotation {
+                continue;
+            }
+            let inherited = corresponding.annotated_type;
+            // a gradual type says no more about the parameter than leaving it unannotated already
+            // did, and taking it would displace what a later source — the anonymous hole — has to
+            // say: `Callable[[Any], Any]` is how a callback that cannot be spelled out is written
+            if inherited.is_dynamic()
+                || inherited.has_typevar(db, env)
+                || inherited.has_unspecialized_type_var(db, env)
+            {
+                continue;
+            }
+            parameter.annotated_type = inherited;
+            parameter.inferred_annotation = false;
+        }
+    }
+
     /// basedpython: under `sound-types`, open an anonymous type parameter for every parameter
     /// still without a type of its own.
     ///

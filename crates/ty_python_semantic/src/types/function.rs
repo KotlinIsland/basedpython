@@ -82,7 +82,9 @@ use crate::types::diagnostic::{
 };
 use crate::types::display::DisplaySettings;
 use crate::types::generics::{ApplySpecialization, GenericContext, typing_self};
-use crate::types::infer::{infer_definition_types, nearest_enclosing_class, original_class_type};
+use crate::types::infer::{
+    function_known_decorators, infer_definition_types, nearest_enclosing_class, original_class_type,
+};
 use crate::types::inferred_signature::inferred_return_type;
 use crate::types::known_instance::DeprecatedInstance;
 use crate::types::list_members::all_members;
@@ -1114,6 +1116,18 @@ impl<'db> OverloadLiteral<'db> {
             raw_signature.return_ty = base_return;
         }
 
+        // basedpython: `@d` on `def f(i)` hands `f` straight to `d`, so a parameter left
+        // unannotated takes its type from the callable `d` declares it accepts — the same context
+        // that types the parameters of `d(lambda i: ...)`. this runs after the sources that say
+        // something about this parameter in particular (a sibling overload, an overridden base)
+        // and before the anonymous hole, which stands in only where nothing else answered
+        if !function_stmt_node.is_trailing_lambda
+            && raw_signature.has_inherited_annotations_to_fill(false)
+            && let Some(expected) = self.decorated_as_signature(db, env, function_stmt_node)
+        {
+            raw_signature.inherit_unannotated_from_callable(db, env, &expected);
+        }
+
         // basedpython: a parameter nothing else typed opens an anonymous type parameter, so
         // that what a call passes in stays connected to what it gets back
         if infers_unannotated_signatures(db, self.file(db)) {
@@ -1142,6 +1156,94 @@ impl<'db> OverloadLiteral<'db> {
         }
 
         raw_signature
+    }
+
+    /// basedpython: the callable that the innermost applied decorator declares this function to
+    /// be.
+    ///
+    /// `@d` on `def f(...)` hands the undecorated `f` to `d`, so the parameter that `d` receives it
+    /// as says what shape the function it is given is expected to have. Only the innermost
+    /// decorator sees the undecorated function; the ones outside it see whatever the one below
+    /// returned.
+    ///
+    /// `None` whenever nothing usable is declared: the decorator is overloaded or not inspectable,
+    /// the parameter it receives the function as is not a plain positional one, or the type of that
+    /// parameter is not a single non-overloaded callable.
+    fn decorated_as_signature(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        function_stmt_node: &ast::StmtFunctionDef,
+    ) -> Option<Signature<'db>> {
+        let decorator = self.innermost_applied_decorator(db, function_stmt_node)?;
+        let decorator_callable = decorator.try_upcast_to_callable(db, env)?.exactly_one()?;
+        // an overloaded decorator would take the function as a different parameter depending on
+        // how it is called, and which overload a call picks is decided by the very type this is
+        // trying to fill in
+        let [decorator_signature] = decorator_callable.signatures(db).overloads.as_slice() else {
+            return None;
+        };
+        let decorated = decorator_signature.parameters().iter().next()?;
+        if !decorated.is_positional() {
+            return None;
+        }
+        let expected = match decorated.annotated_type() {
+            // a callback protocol describes a function shape just as directly as a callable type
+            // does, and is the only one of the two that can spell a keyword-only parameter
+            expected @ (Type::ProtocolInstance(_) | Type::NominalInstance(_)) => {
+                expected.try_upcast_to_callable(db, env)?.exactly_one()?
+            }
+            // the parameter is often declared optional — `property`'s `fget` is
+            // `Callable[[Any], Any] | None` — and what a decoration passes it is the callable
+            expected => expected
+                .filter_union(db, Type::is_callable_type)
+                .as_callable()?,
+        };
+        let [expected_signature] = expected.signatures(db).overloads.as_slice() else {
+            return None;
+        };
+        Some(expected_signature.clone())
+    }
+
+    /// basedpython: the type of the innermost decorator that is applied to this function.
+    ///
+    /// A basedpython modifier keyword (`private def f()`) parses as a synthetic decorator that is
+    /// not a decoration at all, and a decorator that is recorded as a flag instead of being applied
+    /// (`@overload`, `@final`, `@staticmethod`) leaves the function's type as it was. Neither
+    /// changes what the decorator written above it is handed, so neither stands between this
+    /// function and the decorator that does decorate it.
+    fn innermost_applied_decorator(
+        self,
+        db: &'db dyn Db,
+        function_stmt_node: &ast::StmtFunctionDef,
+    ) -> Option<Type<'db>> {
+        let decorators = function_known_decorators(db, self.definition(db));
+        for decorator in function_stmt_node.decorator_list.iter().rev() {
+            let decorator_ty = decorators.expression_type(&decorator.expression)?;
+
+            // a synthetic marker is a keyword rather than a reference to anything, and resolves to
+            // `Unknown` for that reason. `Unknown` on a written `@…` is a decorator that could not
+            // be resolved, and what *that* hands on is anyone's guess, so it does hide the
+            // decorator above it
+            let is_marker =
+                matches!(&decorator.expression, ast::Expr::Name(name) if name.ctx.is_invalid());
+            if is_marker && decorator_ty.is_unknown() {
+                continue;
+            }
+
+            // the static-property marker is the one flag that is also applied: the flag says only
+            // how the getter's receiver is typed, while the descriptor it resolves to is the
+            // member's actual type
+            if !FunctionDecorators::from_decorator_type(db, decorator_ty)
+                .difference(FunctionDecorators::BY_STATIC_PROPERTY)
+                .is_empty()
+            {
+                continue;
+            }
+
+            return Some(decorator_ty);
+        }
+        None
     }
 
     /// basedpython: the return type this function would have if its return annotation were
