@@ -977,12 +977,12 @@ DECLARED_THEN_BOUND = 1
 ```py
 from typing import Final
 
-NO_ASSIGNMENT_A: Final  # error: [final-without-value] "`Final` symbol `NO_ASSIGNMENT_A` is not assigned a value"
-NO_ASSIGNMENT_B: Final[int]  # error: [final-without-value] "`Final` symbol `NO_ASSIGNMENT_B` is not assigned a value"
+NO_ASSIGNMENT_A: Final  # error: [final-without-value] "read-only symbol `NO_ASSIGNMENT_A` is not assigned a value"
+NO_ASSIGNMENT_B: Final[int]  # error: [final-without-value] "read-only symbol `NO_ASSIGNMENT_B` is not assigned a value"
 
 class C:
-    NO_ASSIGNMENT_A: Final  # error: [final-without-value] "`Final` symbol `NO_ASSIGNMENT_A` is not assigned a value"
-    NO_ASSIGNMENT_B: Final[int]  # error: [final-without-value] "`Final` symbol `NO_ASSIGNMENT_B` is not assigned a value"
+    NO_ASSIGNMENT_A: Final  # error: [final-without-value] "read-only symbol `NO_ASSIGNMENT_A` is not assigned a value"
+    NO_ASSIGNMENT_B: Final[int]  # error: [final-without-value] "read-only symbol `NO_ASSIGNMENT_B` is not assigned a value"
 
     DEFINED_IN_INIT: Final[int]
 
@@ -996,7 +996,7 @@ class C:
 from typing import Final
 
 def f():
-    x: Final[int]  # error: [final-without-value] "`Final` symbol `x` is not assigned a value"
+    x: Final[int]  # error: [final-without-value] "read-only symbol `x` is not assigned a value"
 ```
 
 ### `typing_extensions.Final` without value
@@ -1004,7 +1004,7 @@ def f():
 ```py
 from typing_extensions import Final
 
-TEXF_NO_VALUE: Final[str]  # error: [final-without-value] "`Final` symbol `TEXF_NO_VALUE` is not assigned a value"
+TEXF_NO_VALUE: Final[str]  # error: [final-without-value] "read-only symbol `TEXF_NO_VALUE` is not assigned a value"
 ```
 
 ### `Annotated[Final[...], ...]` without value
@@ -1012,7 +1012,7 @@ TEXF_NO_VALUE: Final[str]  # error: [final-without-value] "`Final` symbol `TEXF_
 ```py
 from typing import Annotated, Final
 
-ANNOTATED_FINAL: Annotated[  # error: [final-without-value] "`Final` symbol `ANNOTATED_FINAL` is not assigned a value"
+ANNOTATED_FINAL: Annotated[  # error: [final-without-value] "read-only symbol `ANNOTATED_FINAL` is not assigned a value"
     Final[int], "metadata"
 ]
 ```
@@ -1101,14 +1101,14 @@ from typing import Final
 if False:
     UNREACHABLE_MODULE_FINAL: Final[int]
 else:
-    # error: [final-without-value] "`Final` symbol `UNREACHABLE_MODULE_FINAL` is not assigned a value"
+    # error: [final-without-value] "read-only symbol `UNREACHABLE_MODULE_FINAL` is not assigned a value"
     UNREACHABLE_MODULE_FINAL: Final[str]
 
 class C:
     if False:
         x: Final[int]
     else:
-        x: Final[str]  # error: [final-without-value] "`Final` symbol `x` is not assigned a value"
+        x: Final[str]  # error: [final-without-value] "read-only symbol `x` is not assigned a value"
 ```
 
 ### Assignment in non-`__init__` method
@@ -1120,7 +1120,7 @@ initialized in `__init__`. Assignment in other methods does not satisfy the requ
 from typing import Final
 
 class E:
-    x: Final[int]  # error: [final-without-value] "`Final` symbol `x` is not assigned a value"
+    x: Final[int]  # error: [final-without-value] "read-only symbol `x` is not assigned a value"
 
     def setup(self):
         # error: [invalid-assignment] "Cannot assign to final attribute `x`"
@@ -1236,7 +1236,7 @@ class DeclareAndAssignInInit:
 
 # Case 6: Assignment outside __init__ should still fail
 class AssignmentOutsideInit:
-    attr6: Final[int]  # error: [final-without-value] "`Final` symbol `attr6` is not assigned a value"
+    attr6: Final[int]  # error: [final-without-value] "read-only symbol `attr6` is not assigned a value"
 
     def other_method(self):
         # error: [invalid-assignment] "Cannot assign to final attribute `attr6`"

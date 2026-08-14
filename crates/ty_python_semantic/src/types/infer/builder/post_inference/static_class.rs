@@ -1651,7 +1651,7 @@ fn check_class_final_without_value<'db>(
             )
         {
             builder.into_diagnostic(format_args!(
-                "`Final` symbol `{place}` is not assigned a value"
+                "read-only symbol `{place}` is not assigned a value"
             ));
         }
     }
