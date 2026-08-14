@@ -601,6 +601,32 @@ mod tests {
         );
     }
 
+    /// a declaration takes a block as its value like any assignment does, and
+    /// its own lowering still applies around the call the block stands for. each
+    /// shape below is a separate parser path, so they are checked together rather
+    /// than left to drift apart. the trailing `print` catches a declaration that
+    /// swallows the newline its block already consumed
+    #[test]
+    fn block_as_a_declaration_value() {
+        for (declaration, lowered) in [
+            ("let result", "result: Final"),
+            ("let result: str", "result: Final[str]"),
+            ("final result: str", "result: Final[str]"),
+            ("var result", "result"),
+            ("private result: str", "result: str"),
+        ] {
+            let out = check(&format!(
+                "def f(a: (int) -> None) -> str:\n    a(1)\n    return \"done\"\n\n{declaration} = f:\n    print(it)\nprint(result)\n"
+            ));
+            assert!(
+                out.contains(&format!(
+                    "def _trailing_lambda_0(it=None):\n    print(it)\n{lowered} = f(a=_trailing_lambda_0)\nprint(result)"
+                )),
+                "`{declaration}`, got:\n{out}"
+            );
+        }
+    }
+
     #[test]
     fn assignment_value_block_is_indented_with_its_statement() {
         let out = check(indoc! {"

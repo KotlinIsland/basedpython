@@ -44,3 +44,20 @@ def wrapper():
     inner   = f:
         print(it)
     return inner
+
+
+# a declaration takes a block as its value the same way an assignment does
+let d = f(2):
+    print(it)
+let e: int = f:
+    print(it)
+var g    =    f( 2 ):  # end-of-line on the header
+    print(it)
+private h: int = f:
+    print(it)
+
+
+def declaring():
+    let inner = f:
+        print(it)
+    return inner

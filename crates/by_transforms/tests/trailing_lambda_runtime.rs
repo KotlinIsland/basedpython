@@ -84,6 +84,15 @@ def annotated() -> str:
 
 assert annotated() == "done3", "block as an annotated local's value"
 
+# a `let` declaration takes a block as its value too, and the statement after it
+# still runs — the block consumed the declaration's newline
+seen_in_declaration: int = 0
+let declared = totalling:
+    seen_in_declaration = it
+after_declaration: str = "reached"
+assert declared == "done" and seen_in_declaration == 3, "block as a declaration's value"
+assert after_declaration == "reached", "the statement after a declaration's block runs"
+
 print("ok")
 "#;
 
