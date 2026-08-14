@@ -16,12 +16,12 @@ use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::{self as ast, AnyNodeRef};
 use ruff_text_size::{Ranged, TextSize};
 use ty_python_core::ProgramFile;
-use ty_python_semantic::SemanticModel;
 use ty_python_semantic::types::Type;
 use ty_python_semantic::types::ide_support::{
     CallSignatureDetails, CallSignatureParameter, call_signature_details,
     find_active_signature_from_details,
 };
+use ty_python_semantic::{SemanticModel, with_display_for_file};
 
 // TODO: We may want to add special-case handling for calls to constructors
 // so the class docstring is used in place of (or inaddition to) any docstring
@@ -75,6 +75,16 @@ pub struct SignatureHelpInfo<'db> {
 
 /// Signature help information for function calls at the given position
 pub fn signature_help<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    offset: TextSize,
+) -> Option<SignatureHelpInfo<'db>> {
+    // the parameter and signature labels are rendered here, so they have to be
+    // spelled in the syntax of the file the call is written in
+    with_display_for_file(db, file.file(db), || signature_help_inner(db, file, offset))
+}
+
+fn signature_help_inner<'db>(
     db: &'db dyn Db,
     file: ProgramFile<'db>,
     offset: TextSize,
@@ -1486,6 +1496,36 @@ def ab(a: int, *, c: int):
                 .map(Docstring::render_plaintext),
             Some("The real implementation\n".to_string())
         );
+    }
+
+    /// the labels are read as source, so a basedpython file spells the types
+    /// the way they would be written there: `1`, not `Literal[1]`
+    #[test]
+    fn signature_help_basedpython_labels() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                r#"
+        from typing import Literal
+
+        def f(x: Literal[1]) -> None:
+            return None
+
+        f(<CURSOR>
+        "#,
+            )
+            .build();
+
+        assert_snapshot!(test.signature_help_render(), @"
+
+        ============== active signature =============
+        (x: 1) -> None
+        ---------------------------------------------
+
+        -------------- active parameter -------------
+        x: 1
+        ---------------------------------------------
+        ");
     }
 
     impl CursorTest {

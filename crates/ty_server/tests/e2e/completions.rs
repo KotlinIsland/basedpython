@@ -782,6 +782,43 @@ x: Literal[\"apple\"] = \"app\"
     Ok(())
 }
 
+/// The type shown beside a suggestion is read as source, so in a basedpython
+/// file it is spelled the way it would be written there.
+#[test]
+fn completion_detail_uses_basedpython_display() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let foo = SystemPath::new("src/foo.by");
+    let foo_content = "\
+from typing import Literal
+x: Literal[\"apple\"] = \"app\"
+";
+
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(ClientOptions::default().with_auto_import(false))
+        .with_workspace(workspace_root, None)?
+        .with_file(foo, foo_content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(foo, foo_content, 1);
+
+    let completions = server.completion_request(&server.file_uri(foo), Position::new(1, 26));
+
+    insta::assert_json_snapshot!(completions, @r#"
+    [
+      {
+        "label": "apple",
+        "kind": 12,
+        "detail": "\"apple\"",
+        "sortText": "0",
+        "insertText": "apple"
+      }
+    ]
+    "#);
+
+    Ok(())
+}
+
 #[test]
 fn typed_dict_literal_key_completion_before_colon() -> Result<()> {
     let workspace_root = SystemPath::new("src");
