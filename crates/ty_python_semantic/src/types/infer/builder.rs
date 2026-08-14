@@ -79,11 +79,12 @@ use crate::types::diagnostic::{
     INVALID_TYPE_VARIABLE_CONSTRAINTS, INVALID_TYPE_VARIABLE_DEFAULT, INVALID_VARIANCE_DECLARATION,
     NARROWING_GUARD_AS_VALUE, NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST,
     NON_OVERLAPPING_TYPE_TEST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
-    POSSIBLY_MISSING_SUBMODULE, REFUTABLE_DESTRUCTURING, TypeCheckDiagnostics,
+    POSSIBLY_MISSING_SUBMODULE, REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING, TypeCheckDiagnostics,
     UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL,
     UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_YIELD,
     UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, YieldKind,
-    hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
+    display_required_elements, hint_if_stdlib_attribute_exists_on_other_versions,
+    refutable_unpacking_applies, report_attempted_protocol_instantiation,
     report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_bool_as_int,
     report_bool_as_int_assignment, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_capturing_case_name,
@@ -10642,6 +10643,66 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// basedpython: report a `*args` argument whose value is not known to have the
+    /// number of elements the call needs.
+    ///
+    /// This is the call-site half of [`REFUTABLE_UNPACKING`]. `f(*values)` binds the
+    /// parameters positionally out of `values`, so a `tuple[int, ...]` that turns out to
+    /// hold three elements is a `TypeError` against a two-parameter function, exactly as
+    /// `a, b = values` is a `ValueError`. ty matches a splat of known length element by
+    /// element and reports the ordinary arity errors; a splat of unknown length is
+    /// instead assumed to fill whatever is left, which is what makes it silent.
+    fn report_refutable_splat_arguments(&mut self, call: &ast::ExprCall, bindings: &Bindings<'db>) {
+        let db = self.db();
+        let env = self.program_environment();
+        for (argument_index, argument) in call.arguments.iter_source_order().enumerate() {
+            let ast::ArgOrKeyword::Arg(ast::Expr::Starred(starred)) = argument else {
+                continue;
+            };
+            let value_ty = self.expression_type(&starred.value);
+
+            // iterating a union collapses its members into one homogeneous element type,
+            // which loses the very thing this check reads: a union of fixed-length tuples
+            // has a bounded length, even though the collapsed spec is variable-length. so
+            // ask each member on its own, as unpacking assignments do
+            let members = match value_ty {
+                Type::Union(union) => union.elements(db),
+                _ => std::slice::from_ref(&value_ty),
+            };
+
+            for member_ty in members.iter().copied() {
+                // a value we cannot iterate is reported as such, and its fallback says
+                // nothing about a real length
+                let Ok(tuple) = member_ty.try_iterate(db, env) else {
+                    continue;
+                };
+                let length = tuple.len();
+                if !length.is_variable()
+                    || !refutable_unpacking_applies(db, member_ty, tuple.as_ref())
+                {
+                    continue;
+                }
+                let Some(demand) = bindings.splat_parameter_demand(argument_index) else {
+                    continue;
+                };
+                // the splat always yields at least its own minimum, so it only falls short
+                // of the required parameters when there are more of them than that
+                if demand.maximum.is_none() && demand.required <= length.minimum() {
+                    continue;
+                }
+                let Some(builder) = self.context.report_lint(&REFUTABLE_UNPACKING, starred) else {
+                    continue;
+                };
+                builder.into_diagnostic(format_args!(
+                    "`{value}` may not have {expected}, which would raise `TypeError` \
+                     when unpacked into this call",
+                    value = member_ty.display(db, env),
+                    expected = display_required_elements(demand.required, demand.maximum),
+                ));
+            }
+        }
+    }
+
     fn infer_call_expression(
         &mut self,
         call_expression: &ast::ExprCall,
@@ -12103,6 +12164,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         self.report_optional_object_arguments(call_expression, &bindings);
         self.report_bool_as_int_arguments(call_expression, &bindings);
+        self.report_refutable_splat_arguments(call_expression, &bindings);
 
         if let Some(class) = class {
             pydantic::report_discarded_extra_arguments(&self.context, class, arguments, &bindings);

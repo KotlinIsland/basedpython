@@ -311,30 +311,30 @@ def takes_at_least_two_positional_only(x: int, y: int, /, *args) -> None: ...
 # Test all of the above with a number of different splatted argument types
 
 def _(args: list[int]) -> None:
-    takes_zero(*args)
-    takes_one(*args)
-    takes_two(*args)
+    takes_zero(*args)  # error: [refutable-unpacking]
+    takes_one(*args)  # error: [refutable-unpacking]
+    takes_two(*args)  # error: [refutable-unpacking]
     takes_two(*b"ab")
     takes_two(*b"abc")  # error: [too-many-positional-arguments]
-    takes_two_positional_only(*args)
+    takes_two_positional_only(*args)  # error: [refutable-unpacking]
     takes_two_different(*args)  # error: [invalid-argument-type]
     takes_two_different_positional_only(*args)  # error: [invalid-argument-type]
     takes_at_least_zero(*args)
-    takes_at_least_one(*args)
-    takes_at_least_two(*args)
-    takes_at_least_two_positional_only(*args)
+    takes_at_least_one(*args)  # error: [refutable-unpacking]
+    takes_at_least_two(*args)  # error: [refutable-unpacking]
+    takes_at_least_two_positional_only(*args)  # error: [refutable-unpacking]
 
 def _(args: tuple[int, ...]) -> None:
-    takes_zero(*args)
-    takes_one(*args)
-    takes_two(*args)
-    takes_two_positional_only(*args)
+    takes_zero(*args)  # error: [refutable-unpacking]
+    takes_one(*args)  # error: [refutable-unpacking]
+    takes_two(*args)  # error: [refutable-unpacking]
+    takes_two_positional_only(*args)  # error: [refutable-unpacking]
     takes_two_different(*args)  # error: [invalid-argument-type]
     takes_two_different_positional_only(*args)  # error: [invalid-argument-type]
     takes_at_least_zero(*args)
-    takes_at_least_one(*args)
-    takes_at_least_two(*args)
-    takes_at_least_two_positional_only(*args)
+    takes_at_least_one(*args)  # error: [refutable-unpacking]
+    takes_at_least_two(*args)  # error: [refutable-unpacking]
+    takes_at_least_two_positional_only(*args)  # error: [refutable-unpacking]
 ```
 
 ### Fixed-length tuple argument
@@ -485,23 +485,23 @@ def takes_at_least_two_positional_only(x: int, y: int, /, *args) -> None: ...
 
 def _(args: tuple[int, *tuple[int, ...]]) -> None:
     takes_zero(*args)  # error: [too-many-positional-arguments]
-    takes_one(*args)
-    takes_two(*args)
-    takes_two_positional_only(*args)
+    takes_one(*args)  # error: [refutable-unpacking]
+    takes_two(*args)  # error: [refutable-unpacking]
+    takes_two_positional_only(*args)  # error: [refutable-unpacking]
     takes_two_different(*args)  # error: [invalid-argument-type]
     takes_two_different_positional_only(*args)  # error: [invalid-argument-type]
     takes_at_least_zero(*args)
     takes_at_least_one(*args)
-    takes_at_least_two(*args)
-    takes_at_least_two_positional_only(*args)
+    takes_at_least_two(*args)  # error: [refutable-unpacking]
+    takes_at_least_two_positional_only(*args)  # error: [refutable-unpacking]
 
 def _(args: tuple[int, *tuple[str, ...]]) -> None:
     takes_zero(*args)  # error: [too-many-positional-arguments]
-    takes_one(*args)
+    takes_one(*args)  # error: [refutable-unpacking]
     takes_two(*args)  # error: [invalid-argument-type]
     takes_two_positional_only(*args)  # error: [invalid-argument-type]
-    takes_two_different(*args)
-    takes_two_different_positional_only(*args)
+    takes_two_different(*args)  # error: [refutable-unpacking]
+    takes_two_different_positional_only(*args)  # error: [refutable-unpacking]
     takes_at_least_zero(*args)
     takes_at_least_one(*args)
     takes_at_least_two(*args)  # error: [invalid-argument-type]
@@ -510,8 +510,8 @@ def _(args: tuple[int, *tuple[str, ...]]) -> None:
 def _(args: tuple[int, int, *tuple[int, ...]]) -> None:
     takes_zero(*args)  # error: [too-many-positional-arguments]
     takes_one(*args)  # error: [too-many-positional-arguments]
-    takes_two(*args)
-    takes_two_positional_only(*args)
+    takes_two(*args)  # error: [refutable-unpacking]
+    takes_two_positional_only(*args)  # error: [refutable-unpacking]
     takes_two_different(*args)  # error: [invalid-argument-type]
     takes_two_different_positional_only(*args)  # error: [invalid-argument-type]
     takes_at_least_zero(*args)
@@ -522,8 +522,8 @@ def _(args: tuple[int, int, *tuple[int, ...]]) -> None:
 def _(args: tuple[int, int, *tuple[str, ...]]) -> None:
     takes_zero(*args)  # error: [too-many-positional-arguments]
     takes_one(*args)  # error: [too-many-positional-arguments]
-    takes_two(*args)
-    takes_two_positional_only(*args)
+    takes_two(*args)  # error: [refutable-unpacking]
+    takes_two_positional_only(*args)  # error: [refutable-unpacking]
     takes_two_different(*args)  # error: [invalid-argument-type]
     takes_two_different_positional_only(*args)  # error: [invalid-argument-type]
     takes_at_least_zero(*args)
@@ -534,8 +534,8 @@ def _(args: tuple[int, int, *tuple[str, ...]]) -> None:
 def _(args: tuple[int, *tuple[int, ...], int]) -> None:
     takes_zero(*args)  # error: [too-many-positional-arguments]
     takes_one(*args)  # error: [too-many-positional-arguments]
-    takes_two(*args)
-    takes_two_positional_only(*args)
+    takes_two(*args)  # error: [refutable-unpacking]
+    takes_two_positional_only(*args)  # error: [refutable-unpacking]
     takes_two_different(*args)  # error: [invalid-argument-type]
     takes_two_different_positional_only(*args)  # error: [invalid-argument-type]
     takes_at_least_zero(*args)
@@ -548,8 +548,8 @@ def _(args: tuple[int, *tuple[str, ...], int]) -> None:
     takes_one(*args)  # error: [too-many-positional-arguments]
     takes_two(*args)  # error: [invalid-argument-type]
     takes_two_positional_only(*args)  # error: [invalid-argument-type]
-    takes_two_different(*args)
-    takes_two_different_positional_only(*args)
+    takes_two_different(*args)  # error: [refutable-unpacking]
+    takes_two_different_positional_only(*args)  # error: [refutable-unpacking]
     takes_at_least_zero(*args)
     takes_at_least_one(*args)
     takes_at_least_two(*args)  # error: [invalid-argument-type]
@@ -581,30 +581,30 @@ class IntStarInt(tuple[int, *tuple[int, ...]]): ...
 
 def _(args: IntStarInt) -> None:
     takes_zero(*args)  # error: [too-many-positional-arguments]
-    takes_one(*args)
-    takes_two(*args)
-    takes_two_positional_only(*args)
+    takes_one(*args)  # error: [refutable-unpacking]
+    takes_two(*args)  # error: [refutable-unpacking]
+    takes_two_positional_only(*args)  # error: [refutable-unpacking]
     takes_two_different(*args)  # error: [invalid-argument-type]
     takes_two_different_positional_only(*args)  # error: [invalid-argument-type]
     takes_at_least_zero(*args)
     takes_at_least_one(*args)
-    takes_at_least_two(*args)
-    takes_at_least_two_positional_only(*args)
+    takes_at_least_two(*args)  # error: [refutable-unpacking]
+    takes_at_least_two_positional_only(*args)  # error: [refutable-unpacking]
 
 class IntStarStr(tuple[int, *tuple[str, ...]]): ...
 
 def _(args: IntStarStr) -> None:
     takes_zero(*args)  # error: [too-many-positional-arguments]
 
-    takes_one(*args)
+    takes_one(*args)  # error: [refutable-unpacking]
 
     # error: [invalid-argument-type]
     takes_two(*args)
     # error: [invalid-argument-type]
     takes_two_positional_only(*args)
 
-    takes_two_different(*args)
-    takes_two_different_positional_only(*args)
+    takes_two_different(*args)  # error: [refutable-unpacking]
+    takes_two_different_positional_only(*args)  # error: [refutable-unpacking]
 
     takes_at_least_zero(*args)
 
@@ -620,8 +620,8 @@ class IntIntStarInt(tuple[int, int, *tuple[int, ...]]): ...
 def _(args: IntIntStarInt) -> None:
     takes_zero(*args)  # error: [too-many-positional-arguments]
     takes_one(*args)  # error: [too-many-positional-arguments]
-    takes_two(*args)
-    takes_two_positional_only(*args)
+    takes_two(*args)  # error: [refutable-unpacking]
+    takes_two_positional_only(*args)  # error: [refutable-unpacking]
     takes_two_different(*args)  # error: [invalid-argument-type]
     takes_two_different_positional_only(*args)  # error: [invalid-argument-type]
     takes_at_least_zero(*args)
@@ -636,8 +636,8 @@ def _(args: IntIntStarStr) -> None:
 
     takes_one(*args)  # error: [too-many-positional-arguments]
 
-    takes_two(*args)
-    takes_two_positional_only(*args)
+    takes_two(*args)  # error: [refutable-unpacking]
+    takes_two_positional_only(*args)  # error: [refutable-unpacking]
 
     # error: [invalid-argument-type]
     takes_two_different(*args)
@@ -657,8 +657,8 @@ class IntStarIntInt(tuple[int, *tuple[int, ...], int]): ...
 def _(args: IntStarIntInt) -> None:
     takes_zero(*args)  # error: [too-many-positional-arguments]
     takes_one(*args)  # error: [too-many-positional-arguments]
-    takes_two(*args)
-    takes_two_positional_only(*args)
+    takes_two(*args)  # error: [refutable-unpacking]
+    takes_two_positional_only(*args)  # error: [refutable-unpacking]
     takes_two_different(*args)  # error: [invalid-argument-type]
     takes_two_different_positional_only(*args)  # error: [invalid-argument-type]
     takes_at_least_zero(*args)
@@ -678,8 +678,8 @@ def _(args: IntStarStrInt) -> None:
     # error: [invalid-argument-type]
     takes_two_positional_only(*args)
 
-    takes_two_different(*args)
-    takes_two_different_positional_only(*args)
+    takes_two_different(*args)  # error: [refutable-unpacking]
+    takes_two_different_positional_only(*args)  # error: [refutable-unpacking]
 
     takes_at_least_zero(*args)
 
@@ -755,16 +755,16 @@ def _(args: Literal["abc"]) -> None:
     takes_at_least_two_positional_only(*args)
 
 def _(args: str) -> None:
-    takes_zero(*args)
-    takes_one(*args)
-    takes_two(*args)
-    takes_two_positional_only(*args)
+    takes_zero(*args)  # error: [refutable-unpacking]
+    takes_one(*args)  # error: [refutable-unpacking]
+    takes_two(*args)  # error: [refutable-unpacking]
+    takes_two_positional_only(*args)  # error: [refutable-unpacking]
     takes_two_different(*args)  # error: [invalid-argument-type]
     takes_two_different_positional_only(*args)  # error: [invalid-argument-type]
     takes_at_least_zero(*args)
-    takes_at_least_one(*args)
-    takes_at_least_two(*args)
-    takes_at_least_two_positional_only(*args)
+    takes_at_least_one(*args)  # error: [refutable-unpacking]
+    takes_at_least_two(*args)  # error: [refutable-unpacking]
+    takes_at_least_two_positional_only(*args)  # error: [refutable-unpacking]
 ```
 
 ## Wrong argument type
@@ -927,7 +927,7 @@ def f10(args: tuple[int, ...] | tuple[int, str]) -> None:
 
 def f18(x: int = 0, y: int = 0) -> None: ...
 def f19(args: tuple[int, ...] | tuple[int, int]) -> None:
-    f18(*args)
+    f18(*args)  # error: [refutable-unpacking]
 
 # Union variadic unpacking also works when the non-defaulted parameters are covered by
 # the shortest union element, even if not all remaining parameters are defaulted.
@@ -1015,7 +1015,7 @@ def f(a: str, b: str, c: float) -> None: ...
 # Explicit keyword argument takes precedence over variable-length variadic expansion.
 # The list unpacking should only fill `a` and `b`, leaving `c` for the keyword argument.
 def _(args: list[str]) -> None:
-    f(*args, c=1.0)
+    f(*args, c=1.0)  # error: [refutable-unpacking]
 
 # Fixed-length tuple unpacking with keyword argument also works correctly.
 def _(args: tuple[str, str]) -> None:

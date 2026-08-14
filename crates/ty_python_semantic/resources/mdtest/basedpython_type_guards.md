@@ -332,7 +332,7 @@ def check(x: int | None) -> asserts x:
         raise ValueError
 
 def f(args: list[int | None]):
-    check(*args)
+    check(*args)  # error: [refutable-unpacking]
 ```
 
 ## a guard narrows a member of what it names

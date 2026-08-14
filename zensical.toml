@@ -99,6 +99,7 @@ features = [
     { "precise unsolved type variables" = "features/precise-unsolved-typevars.md" },
     { "regex group types" = "features/regex-groups.md" },
     { "boolean conditions" = "features/conditions.md" },
+    { "refutable unpacking" = "features/refutable-unpacking.md" },
     { "string formatting" = "features/string-formatting.md" },
   ] },
   { "type system" = [

@@ -1864,6 +1864,16 @@
             }
           ]
         },
+        "refutable-unpacking": {
+          "title": "detects an unpacking whose value is not known to have the number of elements the targets require",
+          "description": "## What it does\n\nChecks for an unpacking assignment whose value is not known to have the number\nof elements the targets require.\n\n## Why is this bad?\n\n`a, b = value` binds both names unconditionally, but the unpacking only succeeds\nif `value` yields exactly two elements. A `tuple[int, ...]`, a `list[int]`, or\nany other iterable whose length is not part of its type satisfies the annotation\nat every length, so nothing rules out a `ValueError` at runtime.\n\nA starred target absorbs any number of elements, so it only requires the ones\naround it: `a, *rest = value` still needs at least one element, and reports for\nthe same reason. A splatted argument is the same question against a parameter\nlist: `f(*value)` binds the parameters positionally, so a length that does not\nmatch raises `TypeError` rather than `ValueError`.\n\nThree values are left alone: one whose type is `Any`, which has opted out of\nchecking altogether; one whose element type is `Unknown`, which ty fills in\nwhere the code said nothing at all; and an unannotated parameter, whose type is\nbounded by what its function's body asks of it — including the unpacking itself.\n\n## Examples\n\n```python\ndef f() -> tuple[int, ...]:\n    return ()\n\n\ndef take(a: int, b: int) -> None: ...\n\n\na, b = f()  # error: [refutable-unpacking]\ntake(*f())  # error: [refutable-unpacking]\n```\n\nGive the value a length the type carries, or narrow it to one:\n\n```python\ndef f() -> tuple[int, int]:\n    return (1, 2)\n\n\na, b = f()\n\n\ndef g(values: tuple[int, ...]) -> None:\n    if len(values) == 2:\n        c, d = values  # ok — narrowed to `tuple[int, int]`\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "reified-classmethod": {
           "title": "detects classmethods with reified type parameters",
           "description": "## What it does\nChecks for classmethods whose type parameters are reified.\n\n## Why is this bad?\nA type parameter referenced in a value position is *reified*: the\nspecialization step (`f[int]`) becomes a runtime operation that\nrebuilds the function's closure with the type arguments. The\nclassmethod binding hides the underlying function behind an opaque\nbound method, so a reified classmethod can be neither specialized\nnor called at runtime.\n\n## Example\n\n```by\nclass C:\n    @classmethod\n    def make[T](cls) -> object:\n        return T()  # error: `T` is reified, but `make` is a classmethod\n```",

@@ -46,7 +46,7 @@ pub fn is_known_standard_library(minor_version: u8, module: &str) -> bool {
         modules_by_version[minor_version] = modules
 
     # First, add a case for the modules that are in all versions.
-    ubiquitous_modules = set.intersection(*modules_by_version.values())
+    ubiquitous_modules = set.intersection(*modules_by_version.values())  # ty: ignore[refutable-unpacking]
 
     f.write("(_, ")
     for i, module in enumerate(sorted(ubiquitous_modules)):

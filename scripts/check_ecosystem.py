@@ -76,7 +76,7 @@ class Repository(NamedTuple):
         )
 
         git_clone_process = await create_subprocess_exec(
-            *git_clone_command,
+            *git_clone_command,  # ty: ignore[refutable-unpacking]
             env={"GIT_TERMINAL_PROMPT": "0"},
         )
 
@@ -100,7 +100,9 @@ class Repository(NamedTuple):
     async def _get_commit(self: Self, checkout_dir: Path) -> str:
         """Return the commit sha for the repository in the checkout directory."""
         git_sha_process = await create_subprocess_exec(
-            *["git", "rev-parse", "HEAD"],
+            "git",
+            "rev-parse",
+            "HEAD",
             cwd=checkout_dir,
             stdout=PIPE,
         )

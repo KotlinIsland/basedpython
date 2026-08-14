@@ -1528,6 +1528,48 @@ impl<'db> Bindings<'db> {
         Some(overload_parameter_types(binding, overload, argument_count))
     }
 
+    /// basedpython: what the splatted argument at `argument_index` has to yield for the call
+    /// to bind — how many positional parameters it is the only source for, and how many it can
+    /// fill at all.
+    ///
+    /// A splat whose length is part of its type is matched element by element, so the ordinary
+    /// arity errors already cover it. One whose length is not is assumed to soak up every
+    /// remaining positional parameter, which is what keeps `f(*args)` quiet here and a
+    /// `TypeError` at runtime when the length turns out to be wrong.
+    ///
+    /// Returns `None` for union, overloaded, or errored callees, where there is no single
+    /// parameter list to demand anything of.
+    pub(crate) fn splat_parameter_demand(
+        &self,
+        argument_index: usize,
+    ) -> Option<SplatParameterDemand> {
+        let binding = self.single_element()?;
+        let (_, overload) = binding.matching_overloads().exactly_one().ok()?;
+        let parameters = overload.signature.parameters();
+        let matched = overload.matched_argument_for_call_argument(binding, argument_index)?;
+
+        let mut demand = SplatParameterDemand {
+            required: 0,
+            maximum: Some(0),
+        };
+        for matched_parameter in &matched.parameters {
+            let parameter = parameters.get(matched_parameter.index)?;
+            // an `*args` or `**kwargs` parameter takes however many are left, so nothing
+            // this splat yields beyond the parameters before it can be too many
+            if parameter.is_variadic() || parameter.is_keyword_variadic() {
+                demand.maximum = None;
+                continue;
+            }
+            if let Some(maximum) = &mut demand.maximum {
+                *maximum += 1;
+            }
+            if parameter.default_type().is_none() {
+                demand.required += 1;
+            }
+        }
+        Some(demand)
+    }
+
     /// Like [`Self::single_overload_parameter_types`], but for a *non-overloaded*
     /// callee it reads the parameter types even when the binding has argument
     /// errors.
@@ -7127,6 +7169,20 @@ pub struct MatchedArgument<'db> {
     /// elements must have been successfully matched. (That means that this can be `false` while
     /// the `parameters` field is non-empty.)
     pub matched: bool,
+}
+
+/// basedpython: how many elements a splatted argument has to yield for a call to bind.
+///
+/// See [`Bindings::splat_parameter_demand`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SplatParameterDemand {
+    /// Positional parameters the splat is the only source for that have no default, so the
+    /// call needs at least this many elements.
+    pub(crate) required: usize,
+
+    /// Positional parameters the splat can fill at all, or `None` when an `*args` parameter
+    /// absorbs whatever is left over.
+    pub(crate) maximum: Option<usize>,
 }
 
 /// One parameter matched to an argument.

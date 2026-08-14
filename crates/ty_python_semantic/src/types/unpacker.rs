@@ -21,7 +21,9 @@ use ty_python_core::scope::ScopeId;
 use ty_python_core::unpack::{UnpackKind, UnpackValue};
 
 use super::context::InferContext;
-use super::diagnostic::INVALID_ASSIGNMENT;
+use super::diagnostic::{
+    INVALID_ASSIGNMENT, REFUTABLE_UNPACKING, display_required_elements, refutable_unpacking_applies,
+};
 
 /// Unpacks the value expression type to their respective targets.
 pub(crate) struct Unpacker<'db, 'ast> {
@@ -248,7 +250,11 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
 
                 for ty in unpack_types.iter().copied() {
                     report_iteration_over_character(&self.context, ty, value_expr);
-                    let tuple = ty.try_iterate(self.db(), env).unwrap_or_else(|err| {
+                    let iterated = ty.try_iterate(self.db(), env);
+                    // a value we could not iterate has already been reported, and the
+                    // homogeneous fallback below says nothing about its real length
+                    let value_is_iterable = iterated.is_ok();
+                    let tuple = iterated.unwrap_or_else(|err| {
                         err.report_diagnostic(&self.context, ty, value_expr);
                         Cow::Owned(TupleSpec::homogeneous(err.fallback_element_type(db, env)))
                     });
@@ -284,6 +290,8 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
                                 }
                             }
                         }
+                    } else if value_is_iterable {
+                        self.report_refutable_unpacking(target, target_len, tuple.as_ref(), ty);
                     }
                 }
 
@@ -299,6 +307,49 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
                 // don't panic.
                 self.record_unknown_target_subtree(target);
             }
+        }
+    }
+
+    /// Reports an unpacking whose value is not known to have the number of elements
+    /// the targets require.
+    ///
+    /// `a, b = f()` where `f` returns `tuple[int, ...]` is accepted by the typing spec —
+    /// a variable-length tuple may well hold two elements — but it may hold any other
+    /// number instead, and the wrong number raises `ValueError`. The same goes for every
+    /// iterable whose length is not part of its type, such as a `list`.
+    fn report_refutable_unpacking(
+        &self,
+        target: &ast::Expr,
+        target_len: TupleLength,
+        value_tuple: &TupleSpec<'db>,
+        value_ty: Type<'db>,
+    ) {
+        let value_len = value_tuple.len();
+
+        // a value of known length has already been checked exactly, by `unpack_tuple`
+        if !value_len.is_variable() {
+            return;
+        }
+
+        // a starred target absorbs whatever is left over, so the targets accept every
+        // length at or above their minimum, and the value always yields at least its own
+        if target_len.is_variable() && value_len.minimum() >= target_len.minimum() {
+            return;
+        }
+
+        let db = self.db();
+        let env = self.context.program_environment();
+
+        if !refutable_unpacking_applies(db, value_ty, value_tuple) {
+            return;
+        }
+
+        if let Some(builder) = self.context.report_lint(&REFUTABLE_UNPACKING, target) {
+            builder.into_diagnostic(format_args!(
+                "`{value}` may not have {expected}, which would raise `ValueError` when unpacked",
+                value = value_ty.display(db, env),
+                expected = display_required_elements(target_len.minimum(), target_len.maximum()),
+            ));
         }
     }
 

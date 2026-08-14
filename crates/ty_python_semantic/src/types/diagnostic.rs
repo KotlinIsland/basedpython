@@ -92,6 +92,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNSOUND_YIELD);
     registry.register_lint(&INVALID_ASSIGNMENT);
     registry.register_lint(&REFUTABLE_DESTRUCTURING);
+    registry.register_lint(&REFUTABLE_UNPACKING);
     registry.register_lint(&ITERATION_OVER_CHARACTER);
     registry.register_lint(&INVALID_AWAIT);
     registry.register_lint(&INVALID_BASE);
@@ -526,6 +527,15 @@ declare_lint! {
     pub(crate) static REFUTABLE_DESTRUCTURING = {
         summary: "detects a destructuring binder whose pattern may not match, with nothing to handle the failure",
         status: LintStatus::stable("0.0.62"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    #[doc = include_str!("../../resources/lint_docs/refutable-unpacking.md")]
+    pub(crate) static REFUTABLE_UNPACKING = {
+        summary: "detects an unpacking whose value is not known to have the number of elements the targets require",
+        status: LintStatus::stable("0.0.71"),
         default_level: Level::Error,
     }
 }
@@ -7116,6 +7126,64 @@ pub(super) fn report_invalid_concatenate_last_arg<'db>(
             "Got `{}`",
             last_arg_type.display(db, env)
         ));
+    }
+}
+
+/// basedpython: whether [`REFUTABLE_UNPACKING`] has anything to say about unpacking a value
+/// of type `value_ty`, which iterates as `value_tuple`.
+pub(super) fn refutable_unpacking_applies<'db>(
+    db: &'db dyn Db,
+    value_ty: Type<'db>,
+    value_tuple: &TupleSpec<'db>,
+) -> bool {
+    // a value with no type at all is exempt from every check, not just this one
+    if value_ty.is_dynamic() {
+        return false;
+    }
+
+    // an element type of `Unknown` means nobody said what is in here — an unannotated
+    // `*args`, a bare `tuple`, a `NamedTuple` whose fields could not be read, `Never`. a
+    // length is not worth complaining about when the contents were never stated either.
+    // `Any` is a different matter: it is what someone writes to say the contents are
+    // anything, and `list[Any]` states the length just as precisely as `list[int]` does
+    if value_tuple
+        .variable_element_type(db)
+        .is_some_and(|element| element.is_unknown())
+    {
+        return false;
+    }
+
+    // the anonymous type parameter an unannotated parameter opens is bounded by what the body
+    // asks of it — including this very unpacking. reporting it would be complaining about a
+    // requirement read off the line doing the complaining
+    if value_ty.is_inferred_parameter_hole(db) {
+        return false;
+    }
+
+    // a string or bytes literal has exactly one length, but above a threshold ty stops writing
+    // it into the tuple spec, for performance. so the spec being variable-length does not mean
+    // the length is unknown
+    !matches!(value_ty, Type::LiteralValue(literal)
+    if matches!(
+        literal.kind(),
+        LiteralValueTypeKind::String(_) | LiteralValueTypeKind::Bytes(_)
+    ))
+}
+
+/// basedpython: describes how many elements an unpacking needs, for a
+/// [`REFUTABLE_UNPACKING`] message.
+///
+/// `maximum` is `None` when something absorbs whatever is left over — a starred assignment
+/// target, or an `*args` parameter at a call site.
+pub(super) fn display_required_elements(required: usize, maximum: Option<usize>) -> String {
+    let plural = |count: usize| if count == 1 { "" } else { "s" };
+    match maximum {
+        None => format!("at least {required} element{}", plural(required)),
+        Some(maximum) if maximum == required => {
+            format!("exactly {required} element{}", plural(required))
+        }
+        Some(maximum) if required == 0 => format!("at most {maximum} element{}", plural(maximum)),
+        Some(maximum) => format!("between {required} and {maximum} elements"),
     }
 }
 

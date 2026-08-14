@@ -192,7 +192,7 @@ class Iterable:
     def __iter__(self) -> Iterator:
         return Iterator()
 
-a, b = Iterable()
+a, b = Iterable()  # error: [refutable-unpacking]
 reveal_type(a)  # revealed: int
 reveal_type(b)  # revealed: int
 ```
@@ -208,7 +208,7 @@ class Iterable:
     def __iter__(self) -> Iterator:
         return Iterator()
 
-a, (b, c), d = (1, Iterable(), 2)
+a, (b, c), d = (1, Iterable(), 2)  # error: [refutable-unpacking]
 reveal_type(a)  # revealed: Literal[1]
 reveal_type(b)  # revealed: int
 reveal_type(c)  # revealed: int
@@ -229,7 +229,7 @@ reveal_type(b)  # revealed: Literal[2]
 
 ```py
 def _(value: list[int]):
-    a, b = value
+    a, b = value  # error: [refutable-unpacking]
     reveal_type(a)  # revealed: int
     reveal_type(b)  # revealed: int
 ```
@@ -238,6 +238,8 @@ def _(value: list[int]):
 
 ```py
 def _(value: list[list[int]]):
+    # error: [refutable-unpacking] "`list[list[int]]` may not have exactly 2 elements, which would raise `ValueError` when unpacked"
+    # error: [refutable-unpacking] "`list[int]` may not have exactly 2 elements, which would raise `ValueError` when unpacked"
     a, (b, c) = value
     reveal_type(a)  # revealed: list[int]
     reveal_type(b)  # revealed: int
@@ -249,6 +251,7 @@ def _(value: list[list[int]]):
 ```py
 def _(value: list[int]):
     # error: [not-iterable] "Object of type `int` is not iterable"
+    # error: [refutable-unpacking] "`list[int]` may not have exactly 2 elements, which would raise `ValueError` when unpacked"
     a, (b, c) = value
     reveal_type(a)  # revealed: int
     reveal_type(b)  # revealed: Unknown
@@ -259,7 +262,7 @@ def _(value: list[int]):
 
 ```py
 def _(value: list[int]):
-    a, *b, c = value
+    a, *b, c = value  # error: [refutable-unpacking]
     reveal_type(a)  # revealed: int
     reveal_type(b)  # revealed: list[int]
     reveal_type(c)  # revealed: int
@@ -271,7 +274,7 @@ def _(value: list[int]):
 
 ```py
 def _(value: tuple[int, ...]):
-    a, b = value
+    a, b = value  # error: [refutable-unpacking]
     reveal_type(a)  # revealed: int
     reveal_type(b)  # revealed: int
 ```
@@ -280,6 +283,8 @@ def _(value: tuple[int, ...]):
 
 ```py
 def _(value: tuple[tuple[int, ...], ...]):
+    # error: [refutable-unpacking] "`tuple[tuple[int, ...], ...]` may not have exactly 2 elements, which would raise `ValueError` when unpacked"
+    # error: [refutable-unpacking] "`tuple[int, ...]` may not have exactly 2 elements, which would raise `ValueError` when unpacked"
     a, (b, c) = value
     reveal_type(a)  # revealed: tuple[int, ...]
     reveal_type(b)  # revealed: int
@@ -291,6 +296,7 @@ def _(value: tuple[tuple[int, ...], ...]):
 ```py
 def _(value: tuple[int, ...]):
     # error: [not-iterable] "Object of type `int` is not iterable"
+    # error: [refutable-unpacking] "`tuple[int, ...]` may not have exactly 2 elements, which would raise `ValueError` when unpacked"
     a, (b, c) = value
     reveal_type(a)  # revealed: int
     reveal_type(b)  # revealed: Unknown
@@ -301,7 +307,7 @@ def _(value: tuple[int, ...]):
 
 ```py
 def _(value: tuple[int, ...]):
-    a, *b, c = value
+    a, *b, c = value  # error: [refutable-unpacking]
     reveal_type(a)  # revealed: int
     reveal_type(b)  # revealed: list[int]
     reveal_type(c)  # revealed: int
@@ -318,7 +324,7 @@ python-version = "3.11"
 
 ```py
 def _(value: tuple[int, *tuple[str, ...]]):
-    a, b = value
+    a, b = value  # error: [refutable-unpacking]
     reveal_type(a)  # revealed: int
     reveal_type(b)  # revealed: str
 ```
@@ -327,7 +333,7 @@ def _(value: tuple[int, *tuple[str, ...]]):
 
 ```py
 def _(value: tuple[int, int, *tuple[str, ...]]):
-    a, b = value
+    a, b = value  # error: [refutable-unpacking]
     reveal_type(a)  # revealed: int
     reveal_type(b)  # revealed: int
 ```
@@ -336,7 +342,7 @@ def _(value: tuple[int, int, *tuple[str, ...]]):
 
 ```py
 def _(value: tuple[int, *tuple[str, ...], int]):
-    a, b, c = value
+    a, b, c = value  # error: [refutable-unpacking]
     reveal_type(a)  # revealed: int
     reveal_type(b)  # revealed: str
     reveal_type(c)  # revealed: int
@@ -356,6 +362,8 @@ def _(value: tuple[int, int, int, *tuple[str, ...]]):
 
 ```py
 def _(value: tuple[str, *tuple[tuple[int, ...], ...]]):
+    # error: [refutable-unpacking] "`tuple[str, *tuple[tuple[int, ...], ...]]` may not have exactly 2 elements, which would raise `ValueError` when unpacked"
+    # error: [refutable-unpacking] "`tuple[int, ...]` may not have exactly 2 elements, which would raise `ValueError` when unpacked"
     a, (b, c) = value
     reveal_type(a)  # revealed: str
     reveal_type(b)  # revealed: int
@@ -367,6 +375,7 @@ def _(value: tuple[str, *tuple[tuple[int, ...], ...]]):
 ```py
 def _(value: tuple[str, *tuple[int, ...]]):
     # error: [not-iterable] "Object of type `int` is not iterable"
+    # error: [refutable-unpacking] "`tuple[str, *tuple[int, ...]]` may not have exactly 2 elements, which would raise `ValueError` when unpacked"
     a, (b, c) = value
     reveal_type(a)  # revealed: str
     reveal_type(b)  # revealed: Unknown
@@ -377,7 +386,7 @@ def _(value: tuple[str, *tuple[int, ...]]):
 
 ```py
 def _(value: tuple[int, *tuple[str, ...]]):
-    a, *b, c = value
+    a, *b, c = value  # error: [refutable-unpacking]
     reveal_type(a)  # revealed: int
     reveal_type(b)  # revealed: list[str]
     reveal_type(c)  # revealed: str
@@ -397,7 +406,7 @@ def _(value: tuple[int, *tuple[str, ...], int]):
 
 ```py
 def _(value: tuple[int, *tuple[str, ...], int]):
-    a, *b, c, d = value
+    a, *b, c, d = value  # error: [refutable-unpacking]
     reveal_type(a)  # revealed: int
     reveal_type(b)  # revealed: list[str]
     reveal_type(c)  # revealed: str
@@ -476,16 +485,16 @@ def f(x: MixedTupleSubclass):
     (a,) = x  # error: [invalid-assignment] "Too many values to unpack: Expected 1"
     reveal_type(a)  # revealed: Unknown
 
-    c, d = x
+    c, d = x  # error: [refutable-unpacking]
     reveal_type(c)  # revealed: I0
     reveal_type(d)  # revealed: I2
 
-    e, f, g = x
+    e, f, g = x  # error: [refutable-unpacking]
     reveal_type(e)  # revealed: I0
     reveal_type(f)  # revealed: I1
     reveal_type(g)  # revealed: I2
 
-    h, i, j, k = x
+    h, i, j, k = x  # error: [refutable-unpacking]
     reveal_type(h)  # revealed: I0
     reveal_type(i)  # revealed: I1
     reveal_type(j)  # revealed: I1
@@ -500,7 +509,7 @@ def f(x: MixedTupleSubclass):
     reveal_type(o)  # revealed: I1 | I2
     reveal_type(p)  # revealed: list[I1 | I2]
 
-    [o, p, q, *r] = x
+    [o, p, q, *r] = x  # error: [refutable-unpacking]
     reveal_type(o)  # revealed: I0
     reveal_type(p)  # revealed: I1 | I2
     reveal_type(q)  # revealed: I1 | I2
@@ -511,7 +520,7 @@ def f(x: MixedTupleSubclass):
     reveal_type(t)  # revealed: list[I1]
     reveal_type(u)  # revealed: I2
 
-    aa, bb, *cc, dd = x
+    aa, bb, *cc, dd = x  # error: [refutable-unpacking]
     reveal_type(aa)  # revealed: I0
     reveal_type(bb)  # revealed: I1
     reveal_type(cc)  # revealed: list[I1]
@@ -610,7 +619,7 @@ reveal_type(c)  # revealed: list[Literal["c", "d"]]
 from typing_extensions import LiteralString
 
 def _(s: LiteralString):
-    a, b, *c = s
+    a, b, *c = s  # error: [refutable-unpacking]
     reveal_type(a)  # revealed: LiteralString
     reveal_type(b)  # revealed: LiteralString
     reveal_type(c)  # revealed: list[LiteralString]
@@ -907,7 +916,7 @@ class Iterable:
     def __iter__(self) -> Iterator:
         return Iterator()
 
-(a, b), c = Iterable()
+(a, b), c = Iterable()  # error: [refutable-unpacking]
 reveal_type(a)  # revealed: int
 reveal_type(b)  # revealed: int | str
 reveal_type(c)  # revealed: tuple[int, int] | tuple[int, str]
@@ -925,7 +934,7 @@ class Iterable:
         return Iterator()
 
 def _(arg: tuple[int, str] | Iterable):
-    a, b = arg
+    a, b = arg  # error: [refutable-unpacking]
     reveal_type(a)  # revealed: int | bytes
     reveal_type(b)  # revealed: str | bytes
 ```
@@ -1027,7 +1036,7 @@ class Iterable:
         return Iterator()
 
 def _(arg: tuple[tuple[int, str], Iterable]):
-    for a, b in arg:
+    for a, b in arg:  # error: [refutable-unpacking]
         reveal_type(a)  # revealed: int | bytes
         reveal_type(b)  # revealed: str | bytes
 ```
@@ -1212,7 +1221,7 @@ class Iterable:
 
 def _(arg: tuple[tuple[int, str], Iterable]):
     # revealed: tuple[int | bytes, str | bytes]
-    [reveal_type((a, b)) for a, b in arg]
+    [reveal_type((a, b)) for a, b in arg]  # error: [refutable-unpacking]
 ```
 
 ## Empty

@@ -118,26 +118,26 @@ class TestClassifyProject:
         new = ProjectOutcome(
             error=panic(thread=4104, first_line=25, frames=9), outputs={}
         )
-        (diff,) = classify_project("mypy", old, new).diffs
+        (diff,) = classify_project("mypy", old, new).diffs  # ty: ignore[refutable-unpacking]
         assert diff.kind == "error-unchanged"
 
     def test_a_genuinely_changed_failure_is_reported(self):
         old = ProjectOutcome(error=panic(thread=1, first_line=10, frames=3), outputs={})
         new = ProjectOutcome(error="build: something else entirely", outputs={})
-        (diff,) = classify_project("mypy", old, new).diffs
+        (diff,) = classify_project("mypy", old, new).diffs  # ty: ignore[refutable-unpacking]
         assert diff.kind == "error-changed"
         assert diff.path == BUILD_PATH
 
     def test_a_new_failure_is_still_a_regression(self):
         old = ProjectOutcome(error=None, outputs={"a.py": b"x"})
         new = ProjectOutcome(error=panic(thread=1, first_line=10, frames=3), outputs={})
-        (diff,) = classify_project("mypy", old, new).diffs
+        (diff,) = classify_project("mypy", old, new).diffs  # ty: ignore[refutable-unpacking]
         assert diff.kind == "broken"
 
     def test_a_resolved_failure_is_still_an_improvement(self):
         old = ProjectOutcome(error=panic(thread=1, first_line=10, frames=3), outputs={})
         new = ProjectOutcome(error=None, outputs={"a.py": b"x"})
-        (diff,) = classify_project("mypy", old, new).diffs
+        (diff,) = classify_project("mypy", old, new).diffs  # ty: ignore[refutable-unpacking]
         assert diff.kind == "fixed"
 
 
@@ -246,7 +246,7 @@ class TestRenderDiffReport:
         reason = "setup failed:\nCloning into '/tmp/x'...\nresolved 40 packages\n"
         results = [ProjectDiff("AutoSplit", 0, [], reason)]
         body, _ = render_diff_report(results, "base", "head")
-        (item,) = [x for x in body.splitlines() if x.startswith("- `AutoSplit`")]
+        (item,) = [x for x in body.splitlines() if x.startswith("- `AutoSplit`")]  # ty: ignore[refutable-unpacking]
         assert "Cloning into" in item  # the whole reason is on the one line
 
     def test_a_project_failing_on_both_is_named_but_does_not_fail_the_job(self):
@@ -308,7 +308,7 @@ class TestRenderDiffReport:
         )
         results = [project("parso", "error-unchanged", err)]
         body, _ = render_diff_report(results, "base", "head")
-        (item,) = [x for x in body.splitlines() if x.startswith("- `parso`")]
+        (item,) = [x for x in body.splitlines() if x.startswith("- `parso`")]  # ty: ignore[refutable-unpacking]
         assert "stream did not contain valid UTF-8" in item
         assert "latin-1.py" in item
 
@@ -321,7 +321,7 @@ class TestRenderDiffReport:
         )
         results = [project("beartype", "error-unchanged", err)]
         body, _ = render_diff_report(results, "base", "head")
-        (item,) = [x for x in body.splitlines() if x.startswith("- `beartype`")]
+        (item,) = [x for x in body.splitlines() if x.startswith("- `beartype`")]  # ty: ignore[refutable-unpacking]
         assert "unresolved-reference" in item
 
     def test_a_panic_still_wins_over_the_line_scan(self):
@@ -331,7 +331,7 @@ class TestRenderDiffReport:
             )
         ]
         body, _ = render_diff_report(results, "base", "head")
-        (item,) = [x for x in body.splitlines() if x.startswith("- `mypy`")]
+        (item,) = [x for x in body.splitlines() if x.startswith("- `mypy`")]  # ty: ignore[refutable-unpacking]
         assert "panicked at execute.rs:731:9" in item
         assert "stack backtrace" not in item
 
