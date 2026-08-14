@@ -27,6 +27,13 @@ protocol Callable[in Parameters: (*: *, **: *), out Return]:
 
 final class Frozen:
     final size: int
+
+# a soft keyword is an ordinary name outside the construct it introduces, and
+# typeshed declares fields called `type` (`socket`, `asyncio.trsock`)
+class Socket:
+    let type: int
+    let match: str
+    var case: bytes
 ```
 
 ## Output
@@ -54,4 +61,11 @@ protocol Callable[in Parameters: (*: *, **: *), out Return]:
 
 final class Frozen:
     final size: int
+
+# a soft keyword is an ordinary name outside the construct it introduces, and
+# typeshed declares fields called `type` (`socket`, `asyncio.trsock`)
+class Socket:
+    let type: int
+    let match: str
+    var case: bytes
 ```

@@ -102,6 +102,17 @@ fn is_modifier_kw(text: &str) -> bool {
     )
 }
 
+/// Whether `kind` can be the name a basedpython declaration declares.
+///
+/// A soft keyword is a keyword only in the position that introduces it, so
+/// everywhere else it is an ordinary identifier and may be declared like one:
+/// `let type: int` declares a field called `type`, which is what both
+/// `socket.SocketType` and `asyncio.TransportSocket` have. Only the token kind
+/// differs from a plain name — [`Parser::parse_identifier`] already reads either.
+fn declares_a_name(kind: TokenKind) -> bool {
+    kind == TokenKind::Name || kind.is_soft_keyword()
+}
+
 /// The marker a modifier keyword contributes to the `def` or `class` it
 /// precedes, as the id of the synthetic decorator the `modifiers` transform
 /// reads. `None` for a keyword [`is_modifier_kw`] admits that modifies no
@@ -720,7 +731,7 @@ impl<'src> Parser<'src> {
 
         // `sentinel NAME` → lowered to `NAME = Sentinel("NAME")`
         if kw == "sentinel"
-            && self.peek() == TokenKind::Name
+            && declares_a_name(self.peek())
             && matches!(
                 self.peek_nth(1).0,
                 TokenKind::Newline | TokenKind::Semi | TokenKind::EndOfFile
@@ -736,7 +747,7 @@ impl<'src> Parser<'src> {
         // declaration: the variable becomes an implicit-argument candidate for
         // `context` parameters at later call sites
         if kw == "context"
-            && self.peek() == TokenKind::Name
+            && declares_a_name(self.peek())
             && matches!(self.peek_nth(1).0, TokenKind::Equal | TokenKind::Colon)
         {
             self.error_if_not_basedpython(
@@ -773,23 +784,24 @@ impl<'src> Parser<'src> {
                     ));
                     return Some(self.parse_with_modifier(start, DecoratorList::new()));
                 }
-                TokenKind::Type => {
-                    // `private type X = V`. only `private` is accepted: a type
-                    // alias is public by default, so the remaining modifiers
-                    // would be inert, and accepting-then-dropping them would
-                    // lose data on a format round-trip
-                    if idx != 1 || kw != "private" {
-                        return None;
-                    }
-                    // `type` is a soft keyword — require a real alias shape
-                    // (`NAME [` or `NAME =`), otherwise it is an identifier and
-                    // `private type` is not a declaration at all
-                    let (name_kind, after_name) = (self.peek_nth(idx).0, self.peek_nth(idx + 1).0);
-                    if !(name_kind == TokenKind::Name || name_kind.is_soft_keyword())
-                        || !matches!(after_name, TokenKind::Lsqb | TokenKind::Equal)
-                    {
-                        return None;
-                    }
+                // `private type X = V`. only `private` is accepted: a type alias
+                // is public by default, so the remaining modifiers would be
+                // inert, and accepting-then-dropping them would lose data on a
+                // format round-trip.
+                //
+                // `type` is a soft keyword, so the alias shape (`NAME [` or
+                // `NAME =`) is what tells this apart from `type` used as an
+                // ordinary name — which is why a `type` that fails the guard
+                // falls through to the name arm below rather than bailing out
+                TokenKind::Type
+                    if idx == 1
+                        && kw == "private"
+                        && declares_a_name(self.peek_nth(idx).0)
+                        && matches!(
+                            self.peek_nth(idx + 1).0,
+                            TokenKind::Lsqb | TokenKind::Equal
+                        ) =>
+                {
                     self.error_if_not_basedpython(
                         "`private` type aliases are not valid in .py files".to_string(),
                     );
@@ -808,7 +820,9 @@ impl<'src> Parser<'src> {
                     }
                     return Some(Stmt::TypeAlias(alias));
                 }
-                TokenKind::Name => {
+                // a soft keyword reaching here is not introducing its own
+                // construct, so it is an ordinary name and is read as one
+                kind if declares_a_name(kind) => {
                     let text = self.src_text(range);
                     if text == "let" {
                         // `let` only introduces a declaration when it is shaped
@@ -819,7 +833,7 @@ impl<'src> Parser<'src> {
                         // and don't let a tool that parses arbitrary text (e.g.
                         // ERA001 on the comment `# the OS will let us`) panic the
                         // parser
-                        if self.peek_nth(idx).0 != TokenKind::Name
+                        if !declares_a_name(self.peek_nth(idx).0)
                             || !matches!(
                                 self.peek_nth(idx + 1).0,
                                 TokenKind::Colon
@@ -848,7 +862,7 @@ impl<'src> Parser<'src> {
                         // behind. shape-gated exactly like `let` so an ordinary
                         // identifier named `var` is never hijacked
                         let following = self.peek_nth(idx + 1).0;
-                        if self.peek_nth(idx).0 != TokenKind::Name
+                        if !declares_a_name(self.peek_nth(idx).0)
                             || !matches!(
                                 following,
                                 TokenKind::Colon

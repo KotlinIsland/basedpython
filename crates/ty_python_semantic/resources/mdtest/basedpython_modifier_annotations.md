@@ -103,3 +103,28 @@ reveal_type(C.tag)  # revealed: str
 C.tag = "x"
 C.tag = 1  # error: [invalid-assignment]
 ```
+
+## a soft keyword can be the name
+
+`type`, `match` and `case` are keywords only where they introduce their own construct, so a
+declaration may name one — typeshed's `socket` and `asyncio.trsock` both declare a `type` field.
+
+```by
+class C:
+    let type: int = 0
+    override match: str = "m"
+    private case: bytes = b""
+
+def f(c: C) -> None:
+    reveal_type(c.type)  # revealed: int
+    reveal_type(c.match)  # revealed: str
+```
+
+The construct `type` does introduce still wins where its own shape appears.
+
+```by
+private type Alias = int
+
+def g(x: Alias) -> None:
+    reveal_type(x)  # revealed: int
+```
