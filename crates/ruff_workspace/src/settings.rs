@@ -249,13 +249,8 @@ impl FormatterSettings {
             },
         };
 
-        let is_basedpython = path
-            .and_then(|p| p.extension())
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| ext == "by");
-
         PyFormatOptions::from_source_type(source_type)
-            .with_is_basedpython(is_basedpython)
+            .with_is_basedpython(source_type.is_basedpython())
             .with_target_version(target_version)
             .with_indent_style(self.indent_style)
             .with_indent_width(self.indent_width)
@@ -362,6 +357,38 @@ impl fmt::Display for LineEnding {
             Self::Lf => write!(f, "lf"),
             Self::CrLf => write!(f, "crlf"),
             Self::Native => write!(f, "native"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ruff_python_ast::PySourceType;
+
+    use super::FormatterSettings;
+
+    /// The CLI has to write basedpython's surface syntax back out for a stub just as it does
+    /// for a module. It once decided this from the file extension and only recognised `.by`,
+    /// so formatting a `.byi` silently dropped every variance keyword and turned `protocol`
+    /// into a plain class — a semantic change, not a style one.
+    #[test]
+    fn stubs_format_as_basedpython() {
+        let settings = FormatterSettings::default();
+        for source_type in [PySourceType::BasedPython, PySourceType::BasedPythonStub] {
+            assert!(
+                settings
+                    .to_format_options(source_type, "", None)
+                    .is_basedpython(),
+                "{source_type:?}"
+            );
+        }
+        for source_type in [PySourceType::Python, PySourceType::Stub] {
+            assert!(
+                !settings
+                    .to_format_options(source_type, "", None)
+                    .is_basedpython(),
+                "{source_type:?}"
+            );
         }
     }
 }
