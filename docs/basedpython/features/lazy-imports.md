@@ -45,6 +45,9 @@ on python 3.15 and later, the PEP 810 `lazy` keyword is used directly.
 on older runtimes, a runtime polyfill is emitted. `from __future__` and
 `from x import *` are always left eager.
 
+the polyfill uses `sys` and `importlib` itself, so importing either stays eager
+under it — including as one name of a multi-name `import math, sys, time`
+
 set the target with `--min-version 3.15` on `by transpile`/`by build`/`by run`
 (`by check` uses `--python-version` for the same concept)
 
