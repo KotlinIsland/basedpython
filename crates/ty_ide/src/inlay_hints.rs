@@ -4272,10 +4272,10 @@ Source with applied edits:
         "#);
     }
 
-    /// a `Flag`'s `auto()` doubles rather than counts, which ty models as
-    /// counting — so there is no value here that is ty's to report
+    /// a `Flag`'s `auto()` doubles rather than counts, so its members are shown
+    /// the bits they set
     #[test]
-    fn enum_flag_auto_values_are_not_hinted() {
+    fn enum_flag_auto_values() {
         let mut test = inlay_hint_test(
             r#"
             from enum import Flag, IntFlag, auto
@@ -4297,14 +4297,14 @@ Source with applied edits:
         from enum import Flag, IntFlag, auto
 
         class Style(Flag):
-            BOLD = auto()
-            ITALIC = auto()
-            UNDERLINE = auto()
+            BOLD = auto()[ 1]
+            ITALIC = auto()[ 2]
+            UNDERLINE = auto()[ 4]
 
         class Perm(IntFlag):
-            READ = auto()
-            WRITE = auto()
-            EXECUTE = auto()
+            READ = auto()[ 1]
+            WRITE = auto()[ 2]
+            EXECUTE = auto()[ 4]
         ");
     }
 

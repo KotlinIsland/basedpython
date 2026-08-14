@@ -3399,8 +3399,7 @@ pub fn inferred_type_param_variance<'db>(
 /// wants to show the value must ask for a literal one.
 ///
 /// Returns `None` when `class` is not an enum, or `name` is not a member of it
-/// whose value the enum generates. A `Flag` is excluded outright: its `auto()`
-/// doubles rather than counts, and ty models it as counting.
+/// whose value the enum generates.
 pub fn implicit_enum_member_value<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -3410,9 +3409,6 @@ pub fn implicit_enum_member_value<'db>(
     let Type::ClassLiteral(class) = class else {
         return None;
     };
-    if Type::ClassLiteral(class).is_subtype_of(db, env, KnownClass::Flag.to_subclass_of(db, env)) {
-        return None;
-    }
 
     let metadata = enum_metadata(db, class)?;
     let name = Name::new(name);

@@ -722,9 +722,10 @@ impl<'db> Type<'db> {
     /// The value a literal type stands for, written the way a source writes it —
     /// `1`, `"a"`, `True` — rather than as the type spelling `Literal[1]`.
     ///
-    /// Returns `None` for anything that is not one concrete literal value, which
-    /// includes `LiteralString` and an enum member (whose value is the type it
-    /// was declared with, not a value of its own).
+    /// Returns `None` for anything that is not one concrete literal value: a
+    /// `LiteralString` or a template literal, which each stand for a *set* of
+    /// strings, and an enum member, whose value is the type it was declared
+    /// with rather than a value of its own.
     pub fn display_value<'env>(
         self,
         db: &'db dyn Db,
@@ -739,7 +740,9 @@ impl<'db> Type<'db> {
             | LiteralValueTypeKind::Complex(_) => {
                 Some(self.representation(db, env, DisplaySettings::default()))
             }
-            LiteralValueTypeKind::LiteralString | LiteralValueTypeKind::Enum(_) => None,
+            LiteralValueTypeKind::LiteralString
+            | LiteralValueTypeKind::Template(_)
+            | LiteralValueTypeKind::Enum(_) => None,
         }
     }
 
