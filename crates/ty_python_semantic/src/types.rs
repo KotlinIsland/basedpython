@@ -184,6 +184,7 @@ pub mod format;
 pub(crate) mod function;
 mod generics;
 pub mod ide_support;
+pub(crate) mod implicit_names;
 mod infer;
 pub(crate) mod inferred_signature;
 mod instance;

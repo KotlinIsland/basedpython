@@ -38,10 +38,10 @@ use crate::diagnostic::format_enumeration;
 use crate::place::{
     ConsideredDefinitions, DefinedPlace, Definedness, LookupError, Place, PlaceAndQualifiers,
     RequiresExplicitReExport, TypeOrigin, builtins_module_scope, class_body_implicit_symbol,
-    explicit_global_symbol, implicit_builtins_symbol, is_basedpython_implicit_typing_name,
-    known_module_symbol, loop_header_reachability, module_type_implicit_global_declaration,
-    module_type_implicit_global_symbol, place_by_id, place_from_bindings_with_reachability_cache,
-    place_from_declarations_with_reachability_cache, typing_extensions_symbol, typing_symbol,
+    explicit_global_symbol, implicit_builtins_symbol, loop_header_reachability,
+    module_type_implicit_global_declaration, module_type_implicit_global_symbol, place_by_id,
+    place_from_bindings_with_reachability_cache, place_from_declarations_with_reachability_cache,
+    typing_extensions_symbol,
 };
 use crate::place_load::{
     ImplicitPlaceLoad, PlaceExprPrefixLoad, PlaceExprPrefixLoads, PlaceLoadFailure, PlaceLoadMode,
@@ -109,6 +109,7 @@ use crate::types::function::{
 use crate::types::generics::{
     GenericContext, Specialization, SpecializationBuilder, bind_typevar, enclosing_binding_contexts,
 };
+use crate::types::implicit_names::{ImplicitNamePosition, implicit_name};
 use crate::types::infer::builder::named_tuple::NamedTupleKind;
 use crate::types::infer::builder::paramspec_validation::validate_paramspec_components;
 use crate::types::infer::{
@@ -12635,68 +12636,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let env = self.program_environment();
 
         let resolved_after_fallback = resolved
-            // basedpython only: `typing` members are implicitly available
-            // and emitted as `from typing import …` by the transpiler.
-            // version-gated names (e.g. `Self`, `LiteralString`) aren't in
-            // the older-version typing stub — fall through to
-            // `typing_extensions` so the implicit name still resolves
-            .or_fall_back_to(db, env, || {
-                if self.is_basedpython_file() && is_basedpython_implicit_typing_name(symbol_name) {
-                    typing_symbol(db, env, symbol_name)
-                        .or_fall_back_to(db, env, || typing_extensions_symbol(db, env, symbol_name))
-                } else {
-                    Place::Undefined.into()
-                }
-            })
-            // basedpython only: `dynamic` is the surface spelling of
-            // `typing.Any` in a type expression, lowered to `Any` by the
-            // transpiler. resolve the bare keyword to the `Any` special form so
-            // type checking matches. gated on type-expression position so a
-            // value-position `dynamic` stays an ordinary identifier; only
-            // reached when otherwise unbound, so a local `dynamic = …` binding
-            // still shadows it
+            // basedpython only: the names that mean a module member the file
+            // never imported — `Mapping`, `Character`, the `dynamic` spelling of
+            // `Any`. the transpiler emits the matching import during lowering;
+            // `implicit_names` is what both it and this resolution read. only
+            // reached when the name is otherwise unbound, so a local
+            // `Character = …` binding still shadows it
             .or_fall_back_to(db, env, || {
                 if self.is_basedpython_file()
-                    && symbol_name == "dynamic"
-                    && self
-                        .inference_flags()
-                        .contains(InferenceFlags::IN_TYPE_EXPRESSION)
+                    && let Some(implicit) = implicit_name(symbol_name)
+                    && (implicit.position == ImplicitNamePosition::Anywhere
+                        || self
+                            .inference_flags()
+                            .contains(InferenceFlags::IN_TYPE_EXPRESSION))
                 {
-                    typing_symbol(db, env, "Any")
-                } else {
-                    Place::Undefined.into()
-                }
-            })
-            // basedpython only: `Overlapping` is a `ty_extensions` special form
-            // used unqualified in the vendored typeshed (`Container.__contains__`
-            // and friends). resolve the bare name in a type expression so it
-            // doesn't require an import there. gated on type-expression position
-            // so a value-position `Overlapping` stays an ordinary identifier
-            .or_fall_back_to(db, env, || {
-                if self.is_basedpython_file()
-                    && symbol_name == "Overlapping"
-                    && self
-                        .inference_flags()
-                        .contains(InferenceFlags::IN_TYPE_EXPRESSION)
-                {
-                    known_module_symbol(db, env, KnownModule::TyExtensions, "Overlapping")
-                } else {
-                    Place::Undefined.into()
-                }
-            })
-            // basedpython only: `Character` (the single-character string type) is
-            // implicitly available in type expressions; the transpiler emits
-            // the matching `from ty_extensions import Character`. gated on
-            // type-expression position and only reached when otherwise
-            // unbound, so a local `Character = …` binding still shadows it
-            .or_fall_back_to(db, env, || {
-                if self.is_basedpython_file()
-                    && symbol_name == "Character"
-                    && self
-                        .inference_flags()
-                        .contains(InferenceFlags::IN_TYPE_EXPRESSION)
-                {
-                    known_module_symbol(db, env, KnownModule::TyExtensions, "Character")
+                    implicit.resolve(db, env)
                 } else {
                     Place::Undefined.into()
                 }

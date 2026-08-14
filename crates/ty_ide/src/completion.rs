@@ -31,7 +31,7 @@ use ty_python_semantic::types::ide_support::{
 };
 use ty_python_semantic::types::{SpecialFormType, UnionType};
 use ty_python_semantic::{
-    Completion as SemanticCompletion, NameKind, SemanticModel,
+    Completion as SemanticCompletion, NameKind, SemanticModel, implicit_names,
     types::{CycleDetector, KnownClass, Type},
 };
 
@@ -132,12 +132,18 @@ pub fn completion<'db>(
             }
             CompletionTargetAst::Scoped(scoped) => {
                 let env = model.program_environment();
+                // only basedpython's implicit names have to know what the scope
+                // already carries, so nothing else pays for collecting it
+                let mut in_scope = FxHashSet::default();
                 for semantic_completion in model.scoped_completions(scoped.node) {
                     let module_dependency_kind = if semantic_completion.builtin {
                         ModuleDependencyKind::Builtin
                     } else {
                         ModuleDependencyKind::Current
                     };
+                    if source_type.is_basedpython() {
+                        in_scope.insert(semantic_completion.name.clone());
+                    }
                     completions.add(
                         CompletionBuilder::from_semantic_completion(db, &env, semantic_completion)
                             .module_dependency_kind(module_dependency_kind),
@@ -148,6 +154,13 @@ pub fn completion<'db>(
                     &context.cursor,
                     &model,
                     source_type,
+                    &mut completions,
+                );
+                add_implicit_name_completions(
+                    &context.cursor,
+                    &model,
+                    source_type,
+                    &in_scope,
                     &mut completions,
                 );
                 add_compound_keyword_completions(&context.cursor, source_type, &mut completions);
@@ -185,6 +198,7 @@ pub fn completion<'db>(
                         program_file,
                         &parsed,
                         scoped,
+                        context.cursor.is_in_type_expression(&model),
                         |module_name: &ModuleName, symbol: &str| {
                             ImportRequest::import_from(module_name.as_str(), symbol)
                         },
@@ -2673,6 +2687,9 @@ pub(crate) fn unresolved_fixes<'db>(
         file,
         parsed,
         scoped,
+        // the name this fixes is unresolved, so it is not one of the names a
+        // basedpython file has without an import — those resolve
+        false,
         |module_name: &ModuleName, symbol: &str| {
             ImportRequest::import_from(module_name.as_str(), symbol).force()
         },
@@ -2687,6 +2704,7 @@ pub(crate) fn unresolved_fixes<'db>(
         file,
         parsed,
         scoped,
+        false,
         |module_name: &ModuleName, symbol: &str| {
             ImportRequest::import(module_name.as_str(), symbol).force()
         },
@@ -2762,6 +2780,46 @@ fn add_type_keyword_completions(
     }
     for &keyword in TYPE_KEYWORDS {
         completions.add(CompletionBuilder::keyword(keyword).context_specific(true));
+    }
+}
+
+/// basedpython: adds the names that mean a module member the file never
+/// imported — `Mapping`, `Character`, the `dynamic` spelling of `Any`.
+///
+/// They are written bare, so the completion for one inserts nothing but the
+/// name. That is also what tells them apart from the auto-import suggestions for
+/// the same names, which are suppressed in their favour.
+///
+/// A name `in_scope` already carries is left to the scope: whatever a file binds
+/// under one of these names is what the name means there, and offering the
+/// implicit meaning alongside it would be offering something the file cannot
+/// reach.
+fn add_implicit_name_completions<'db>(
+    cursor: &ContextCursor<'_>,
+    model: &SemanticModel<'db>,
+    source_type: PySourceType,
+    in_scope: &FxHashSet<CompactString>,
+    completions: &mut Completions<'db>,
+) {
+    if !source_type.is_basedpython() {
+        return;
+    }
+    let in_type_expression = cursor.is_in_type_expression(model);
+    for name in implicit_names() {
+        // both before asking for the type, which resolves the member in its
+        // module: there is no reason to pay for a name that is not on offer
+        if !completions.query.is_match(name) || in_scope.contains(name) {
+            continue;
+        }
+        let Some(ty) = model.implicit_name_type(name, in_type_expression) else {
+            continue;
+        };
+        completions.add(
+            Completion::builder(name)
+                .ty(ty)
+                .builtin(true)
+                .module_dependency_kind(ModuleDependencyKind::Builtin),
+        );
     }
 }
 
@@ -3549,6 +3607,9 @@ fn add_unimported_completions<'db>(
     file: ProgramFile<'db>,
     parsed: &ParsedModuleRef,
     scoped: ScopedTarget<'_>,
+    // basedpython: whether a type is being written here, which is where some of
+    // the names that need no import mean what they do
+    in_type_expression: bool,
     create_import_request: impl for<'a> Fn(&'a ModuleName, &'a str) -> ImportRequest<'a>,
     completions: &mut Completions<'db>,
 ) {
@@ -3566,6 +3627,7 @@ fn add_unimported_completions<'db>(
     let importer = Importer::new(db, &stylist, file, source.as_str(), parsed);
     let members = importer.members_in_scope_at(scoped.node, scoped.node.start());
     let importing_file = ImportingFile::File(source_file, file.resolver_environment(db));
+    let model = SemanticModel::new(db, file);
 
     for symbol in all_symbols(db, file, &completions.query.pattern) {
         if symbol.file() == source_file || symbol.module().is_known(db, KnownModule::Builtins) {
@@ -3583,6 +3645,14 @@ fn add_unimported_completions<'db>(
 
         // Don't suggest symbols that are already imported.
         if members.satisfies(db, importing_file, &request) {
+            continue;
+        }
+
+        // basedpython: nor an import of what the file already has without one.
+        // `Mapping` names `typing.Mapping` bare, and `typing_extensions` and
+        // `collections.abc` re-export that very class, so each of those imports
+        // is a second spelling of a completion the list already carries.
+        if model.import_is_implicitly_available(name, symbol.file(), in_type_expression) {
             continue;
         }
 
@@ -11321,6 +11391,87 @@ if foo:
             .as_deref()
             .unwrap_or_else(|| completion.label())
             .to_string()
+    }
+
+    /// basedpython: a `typing` member is available without an import, so it
+    /// completes to the bare name. The import of the same member — from
+    /// `typing`, from `typing_extensions`, or from the `collections.abc` that
+    /// re-exports it — would only be a second spelling of that, so it is left
+    /// out.
+    #[test]
+    fn basedpython_implicit_typing_name_completion() {
+        let snapshot = CursorTest::builder()
+            .source("main.by", "a: Mapping<CURSOR>")
+            .completion_test_builder()
+            .imports()
+            .module_names()
+            .filter(|c| c.name.starts_with("Mapping"))
+            .build()
+            .snapshot();
+
+        assert_snapshot!(snapshot, @r"
+        Mapping :: <no import required> :: <no import edit>
+        MappingView :: <no import required> :: <no import edit>
+        MappingProxyType :: types :: from types import MappingProxyType
+        ");
+    }
+
+    /// The same names in a python file are ordinary `typing` members, and an
+    /// import is the only way to reach them.
+    #[test]
+    fn implicit_typing_name_completion_is_basedpython_only() {
+        let snapshot = completion_test_builder("a: Mapping<CURSOR>")
+            .imports()
+            .module_names()
+            .filter(|c| c.name == "Mapping")
+            .build()
+            .snapshot();
+
+        assert_snapshot!(snapshot, @r"
+        Mapping :: typing :: from typing import Mapping
+
+        Mapping :: collections.abc :: from collections.abc import Mapping
+
+        Mapping :: typing_extensions :: from typing_extensions import Mapping
+        ");
+    }
+
+    /// basedpython: `Character` is a type and nothing else, so it is only
+    /// offered where a type is being written.
+    #[test]
+    fn basedpython_implicit_character_completion() {
+        let type_position = CursorTest::builder()
+            .source("main.by", "a: Charact<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import()
+            .build()
+            .snapshot();
+        assert_snapshot!(type_position, @"Character");
+
+        let value_position = CursorTest::builder()
+            .source("main.by", "a = Charact<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import()
+            .build()
+            .snapshot();
+        assert_snapshot!(value_position, @"<No completions found>");
+    }
+
+    /// basedpython: what a file binds under one of these names is what the name
+    /// means there, so the implicit meaning is not offered beside it — the class
+    /// declared here is the only `Mapping` on offer.
+    #[test]
+    fn basedpython_implicit_name_yields_to_a_binding() {
+        let snapshot = CursorTest::builder()
+            .source("main.by", "class Mapping: ...\n\na: Mapping<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import()
+            .type_signatures()
+            .filter(|c| c.name == "Mapping")
+            .build()
+            .snapshot();
+
+        assert_snapshot!(snapshot, @"Mapping :: <class 'Mapping'>");
     }
 
     /// basedpython: `main` completes to the whole entry point, since a

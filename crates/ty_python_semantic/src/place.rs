@@ -732,6 +732,11 @@ pub(crate) fn known_module_symbol<'db>(
 /// Lookup the type of `symbol` in the `typing` module namespace.
 ///
 /// Returns `Place::Undefined` if the `typing` module isn't available for some reason.
+///
+/// Inference reaches `typing` through [`known_module_symbol`] — the basedpython
+/// names that resolve there name their own modules — so only tests spell this
+/// shorthand now.
+#[cfg(test)]
 #[inline]
 pub(crate) fn typing_symbol<'db>(
     db: &'db dyn Db,
@@ -811,10 +816,11 @@ pub(crate) fn builtins_module_scope<'db>(
     core_module_scope(db, env, KnownModule::Builtins)
 }
 
-/// Get the scope of a core stdlib module.
+/// Get the scope of a module ty resolves by name.
 ///
-/// Can return `None` if a custom typeshed is used that is missing the core module in question.
-fn core_module_scope<'db>(
+/// Can return `None` if the module can't be resolved — a custom typeshed missing
+/// the stdlib module in question, say.
+pub(crate) fn core_module_scope<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     core_module: KnownModule,
