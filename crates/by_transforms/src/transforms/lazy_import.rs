@@ -18,6 +18,9 @@
 //!   - `import a.b` without an alias (binds the top package, which
 //!     `LazyLoader` does not register)
 //!   - bootstrap modules (`sys`, `importlib*`) — the helpers depend on them
+//!
+//! A multi-name `import a, b` mixing the two is split, keeping a plain import
+//! for the names that stay eager.
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
@@ -148,17 +151,21 @@ impl<'src> LazyImport<'src> {
             return;
         }
         let mut lines: Vec<String> = Vec::new();
-        let mut any_skipped = false;
+        // aliases that must stay eager, rendered back as they were written. the
+        // rewrite replaces the whole statement, so anything not lazified here
+        // has to be re-emitted as a plain import or its name is simply gone
+        let mut stays_eager: Vec<String> = Vec::new();
         for alias in &node.names {
             let module = alias.name.id.as_str();
-            if Self::is_bootstrap(module) {
-                any_skipped = true;
-                continue;
-            }
             // `import a.b` without `as` binds `a`, not `a.b`, so `LazyLoader`
             // on `a.b` would never trigger the lazy binding
-            if alias.asname.is_none() && module.contains('.') {
-                any_skipped = true;
+            let unlazifiable =
+                Self::is_bootstrap(module) || (alias.asname.is_none() && module.contains('.'));
+            if unlazifiable {
+                stays_eager.push(match &alias.asname {
+                    Some(a) => format!("{module} as {}", a.id),
+                    None => module.to_owned(),
+                });
                 continue;
             }
             let bind = match &alias.asname {
@@ -176,7 +183,12 @@ impl<'src> LazyImport<'src> {
             }
             return;
         }
-        let _ = any_skipped; // mixed-skip aliases are rare; we replace whole stmt
+        if !stays_eager.is_empty() {
+            // a statement mixing lazifiable modules with unlazifiable ones is
+            // split rather than rewritten wholesale, e.g. `import math, sys`
+            // becomes `import sys` plus a `_lazy_module("math")` binding
+            lines.insert(0, format!("import {}", stays_eager.join(", ")));
+        }
         let indent = self.line_indent(node.range());
         let separator = format!("\n{indent}");
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
@@ -879,6 +891,65 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, "import sys\n");
+    }
+
+    #[test]
+    fn polyfill_multi_name_splits_around_bootstrap() {
+        // the rewrite replaces the whole statement, so `sys` has to come back
+        // as a plain import — dropping it would leave the name unbound
+        check_polyfill_body(
+            "import math, sys, time\n",
+            indoc! {"
+                import sys
+                math = _lazy_module(\"math\")
+                time = _lazy_module(\"time\")
+            "},
+        );
+    }
+
+    #[test]
+    fn polyfill_multi_name_splits_around_dotted() {
+        check_polyfill_body(
+            "import os.path, json\n",
+            indoc! {"
+                import os.path
+                json = _lazy_module(\"json\")
+            "},
+        );
+    }
+
+    #[test]
+    fn polyfill_multi_name_keeps_eager_alias() {
+        check_polyfill_body(
+            "import sys as system, json\n",
+            indoc! {"
+                import sys as system
+                json = _lazy_module(\"json\")
+            "},
+        );
+    }
+
+    #[test]
+    fn polyfill_multi_name_all_unlazifiable_stays_written() {
+        // nothing to lazify, so the statement is left exactly as it was rather
+        // than being reconstructed
+        let out = transpile_polyfill("import sys, os.path\n");
+        assert_eq!(out, "import sys, os.path\n");
+    }
+
+    #[test]
+    fn polyfill_multi_name_nested_indent_preserved() {
+        check_polyfill_body(
+            indoc! {"
+                if True:
+                    import math, sys
+            "},
+            indoc! {"
+                if True:
+                    import sys
+                    math = _lazy_module(\"math\")
+            "},
+        );
     }
 
     #[test]

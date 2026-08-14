@@ -177,6 +177,30 @@ assert by_watched_mod.val == 7, "and it still resolves"
 print("ok")
 "#;
 
+/// a single `import` statement mixing modules that can be lazified with ones
+/// that can't. the rewrite replaces the whole statement, so every name it does
+/// not lazify has to be re-emitted as a plain import — dropping one leaves it
+/// unbound and the module dies with `NameError` at first use.
+///
+/// two kinds of alias can't be lazified: a bootstrap module (`sys`,
+/// `importlib`), which the polyfill preamble imports under a private name for
+/// its own use, and a dotted `import a.b` without `as`, which binds `a` rather
+/// than `a.b`
+const MIXED_MAIN: &str = r#"
+import math, sys, time
+import os.path, json as j
+import sys as system, textwrap
+
+assert math.floor(1.5) == 1, "a lazifiable module before an eager one still binds"
+assert sys.maxsize > 0, "a bootstrap module in the middle stays bound"
+assert time.gmtime(0).tm_year == 1970, "and the alias after it survives too"
+assert os.path.basename("a/b") == "b", "a dotted import binds its top package"
+assert j.dumps([1]) == "[1]", "an aliased lazifiable module beside it still works"
+assert system.maxsize == sys.maxsize, "an aliased bootstrap module keeps its alias"
+assert textwrap.indent("a", " ") == " a", "and the alias after that one binds too"
+print("ok")
+"#;
+
 /// an interpreter to run the transpiled output on. `$PYTHON` first, then the
 /// usual names; `None` (test skips) when none is found
 fn python() -> Option<String> {
@@ -276,6 +300,16 @@ fn a_name_is_claimed_only_once_the_module_is_lazy() {
         "lazy_window",
         &[("by_watched_mod", WATCHED_MODULE), ("main", WINDOW_MAIN)],
     );
+    run_main(&python, &dir);
+}
+
+#[test]
+fn an_unlazifiable_name_in_a_multi_name_import_stays_bound() {
+    let Some(python) = python() else {
+        eprintln!("skipping lazy-import runtime test: no python interpreter found");
+        return;
+    };
+    let dir = build_case("lazy_mixed", &[("main", MIXED_MAIN)]);
     run_main(&python, &dir);
 }
 
