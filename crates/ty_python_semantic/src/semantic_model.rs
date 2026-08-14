@@ -16,7 +16,9 @@ use ty_module_resolver::{
 
 use crate::Db;
 use crate::place::implicit_globals::all_implicit_module_globals;
+use crate::place::imported_symbol;
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
+use crate::types::implicit_names::{ImplicitNamePosition, implicit_name};
 use crate::types::list_members::{all_members, all_reachable_members};
 use crate::types::{
     CycleDetector, ProgramEnvironment, SpecialFormType, Type, TypeQualifiers, binding_type,
@@ -1268,6 +1270,62 @@ impl<'db> SemanticModel<'db> {
         completions.dedup_by(|c1, c2| c1.name == c2.name);
 
         completions
+    }
+
+    /// basedpython: the type the bare `name` has where it means a module member
+    /// the file never imported — `Mapping` is `typing.Mapping` — or `None` when
+    /// it means no such thing.
+    ///
+    /// `in_type_expression` says whether a type is being written at the
+    /// position asked about, since some of these names only carry their implicit
+    /// meaning there: a value-position `Character` is an ordinary identifier.
+    ///
+    /// A keyword spelling — `dynamic` for `Any` — is not one of these names. It
+    /// is a word of the language, offered and highlighted as one, and this
+    /// answers about what a *name* means.
+    pub fn implicit_name_type(&self, name: &str, in_type_expression: bool) -> Option<Type<'db>> {
+        if !self.file().source_type(self.db).is_basedpython() {
+            return None;
+        }
+        let implicit = implicit_name(name).filter(|implicit| !implicit.is_keyword)?;
+        if implicit.position == ImplicitNamePosition::TypeExpression && !in_type_expression {
+            return None;
+        }
+        implicit
+            .resolve(self.db, &self.program_environment())
+            .ignore_possibly_undefined()
+    }
+
+    /// basedpython: whether importing `name` from `file` would bind exactly what
+    /// the bare `name` already means here.
+    ///
+    /// An IDE offering to write that import is offering a second spelling of
+    /// something the file has already: `Mapping` names `typing.Mapping` with no
+    /// import, and `collections.abc` re-exports that very class.
+    ///
+    /// `in_type_expression` is as in [`SemanticModel::implicit_name_type`] — a
+    /// name that means nothing where the import would be used is a name the
+    /// import is the only way to reach.
+    pub fn import_is_implicitly_available(
+        &self,
+        name: &str,
+        file: File,
+        in_type_expression: bool,
+    ) -> bool {
+        let db = self.db;
+        let Some(implicit) = self.implicit_name_type(name, in_type_expression) else {
+            return false;
+        };
+        let program_file = ProgramFile::new(db, file, self.program_environment().program(db));
+        imported_symbol(
+            db,
+            &self.program_environment(),
+            Some(program_file),
+            name,
+            None,
+        )
+        .ignore_possibly_undefined()
+            == Some(implicit)
     }
 
     /// Returns `true` if the given class definition's name was previously

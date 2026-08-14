@@ -82,12 +82,24 @@ pub const IMPLICIT_TYPING_NAMES: &[&str] = &[
 
 /// whether `name` is a `typing` member implicitly available in basedpython source
 pub fn is_implicit_typing_name(name: &str) -> bool {
-    IMPLICIT_TYPING_NAMES.binary_search(&name).is_ok()
+    implicit_typing_name(name).is_some()
+}
+
+/// the [`IMPLICIT_TYPING_NAMES`] entry `name` matches
+///
+/// the entry outlives the borrowed name, so a caller that has to keep hold of
+/// the member it resolved — to look it up in the `typing` module later — can do
+/// so without copying it
+pub fn implicit_typing_name(name: &str) -> Option<&'static str> {
+    IMPLICIT_TYPING_NAMES
+        .binary_search(&name)
+        .ok()
+        .map(|index| IMPLICIT_TYPING_NAMES[index])
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{IMPLICIT_TYPING_NAMES, is_implicit_typing_name};
+    use super::{IMPLICIT_TYPING_NAMES, implicit_typing_name, is_implicit_typing_name};
 
     #[test]
     fn implicit_typing_names_sorted() {
@@ -103,5 +115,14 @@ mod tests {
         assert!(is_implicit_typing_name("ValuesView"));
         assert!(!is_implicit_typing_name("Protocol"));
         assert!(!is_implicit_typing_name("cast"));
+    }
+
+    /// the entry a name matches is the one in the table, so a caller may hold on
+    /// to it after the name it looked up is gone
+    #[test]
+    fn implicit_typing_name_returns_the_entry() {
+        let entry: Option<&'static str> = implicit_typing_name(&String::from("Mapping"));
+        assert_eq!(entry, Some("Mapping"));
+        assert_eq!(implicit_typing_name("cast"), None);
     }
 }

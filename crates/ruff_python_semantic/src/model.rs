@@ -814,8 +814,10 @@ impl<'a> SemanticModel<'a> {
     ///   available in a type position
     /// - the `typing` members basedpython auto-imports (`Optional`, `Sequence`, …)
     ///
-    /// the position gates mirror the fallbacks in ty's `infer_name_load`, so the
-    /// linter and the type checker agree on which names resolve. this deliberately
+    /// the names and their position gates mirror ty's `types::implicit_names`,
+    /// which is where the type checker answers the same question — the two are
+    /// separate because ruff cannot depend on ty's module resolver, so a name
+    /// added to one belongs in the other. this deliberately
     /// covers only names that are fixed strings: an enum member reached through
     /// context-sensitive resolution (`a: Color = Red`) is an arbitrary identifier
     /// whose resolution needs the expected type, which ruff has no access to, so

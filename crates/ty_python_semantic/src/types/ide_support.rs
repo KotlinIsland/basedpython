@@ -15,6 +15,7 @@ use crate::types::dedicated::django;
 use crate::types::extensions::{applicable_extensions, resolve_extension_member};
 use crate::types::function::FunctionDecorators;
 use crate::types::generics::GenericContext;
+use crate::types::implicit_names::{ImplicitNamePosition, implicit_name};
 use crate::types::infer::nearest_enclosing_function;
 use crate::types::list_members::all_end_of_scope_members;
 use crate::types::overrides::is_constructor_like_method;
@@ -218,7 +219,7 @@ pub fn definitions_for_name<'db>(
                 .collect();
         }
 
-        find_symbol_in_scope(db, builtins_scope, name_str)
+        resolved_definitions = find_symbol_in_scope(db, builtins_scope, name_str)
             .into_iter()
             .filter(|def| def.is_reexported(db))
             .flat_map(|def| {
@@ -230,10 +231,67 @@ pub fn definitions_for_name<'db>(
                     ImportAliasResolution::ResolveAliases,
                 )
             })
-            .collect()
-    } else {
-        resolved_definitions
+            .collect();
     }
+
+    if resolved_definitions.is_empty() {
+        resolved_definitions = implicit_name_definitions(db, &env, model, node, name_str);
+    }
+
+    resolved_definitions
+}
+
+/// basedpython: the definitions of the member a name with no import behind it
+/// means.
+///
+/// `Mapping` is `typing.Mapping` and `Character` is `ty_extensions.Character`
+/// without the file importing anything, so the member a click on one should land
+/// on is in another module's scope entirely, not this file's.
+fn implicit_name_definitions<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    model: &SemanticModel<'db>,
+    node: AnyNodeRef<'_>,
+    name_str: &str,
+) -> Vec<ResolvedDefinition<'db>> {
+    if !model.file().source_type(db).is_basedpython() {
+        return vec![];
+    }
+    // a keyword is not a reference to the member it means, so `dynamic` leads
+    // nowhere even though it resolves to `typing.Any`
+    let Some(implicit) = implicit_name(name_str).filter(|implicit| !implicit.is_keyword) else {
+        return vec![];
+    };
+
+    // Some of these names only mean the member where a type is being written: a
+    // value-position `Character` is an ordinary identifier, which resolves to
+    // nothing, and a click on one should lead nowhere. Rather than re-deriving
+    // the position here, ask whether the name resolved at all — a name that
+    // didn't is `Unknown`, which is never one of these members.
+    let Some(expr) = node.expr_name() else {
+        return vec![];
+    };
+    if implicit.position == ImplicitNamePosition::TypeExpression
+        && expr.inferred_type(model).is_none_or(|ty| ty.is_unknown())
+    {
+        return vec![];
+    }
+
+    let Some(scope) = implicit.resolving_module_scope(db, env) else {
+        return vec![];
+    };
+    find_symbol_in_scope(db, scope, implicit.member)
+        .into_iter()
+        .flat_map(|def| {
+            resolve_definition(
+                db,
+                env,
+                def,
+                Some(implicit.member),
+                ImportAliasResolution::ResolveAliases,
+            )
+        })
+        .collect()
 }
 
 /// Returns all resolved definitions for an attribute expression `x.y`.

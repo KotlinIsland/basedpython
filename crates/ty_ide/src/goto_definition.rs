@@ -51,6 +51,7 @@ pub(super) mod test {
         Annotation, Diagnostic, DiagnosticId, LintName, Severity, Span, SubDiagnostic,
         SubDiagnosticSeverity,
     };
+    use ruff_python_ast::PythonVersion;
     use ruff_text_size::Ranged;
 
     #[test]
@@ -1486,6 +1487,111 @@ a = Test()
         3 |     def __invert__(self) -> 'Test': ...
           |         ----------
         ");
+    }
+
+    /// basedpython: a `typing` member is written without an import, so there is
+    /// no binding in the file for the ordinary resolution to answer with — the
+    /// member it means is in `typing` itself.
+    #[test]
+    fn goto_definition_implicit_typing_name() {
+        let test = CursorTest::builder()
+            .source("main.by", "a: M<CURSOR>apping\n")
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+          --> main.by:LL:4
+           |
+        LL | a: Mapping
+           |    ^^^^^^^ Clicking here
+        info: Found 1 definition
+          --> stdlib/typing.byi:LL:7
+           |
+        LL | class Mapping[out Key, out Value](Collection[Key]):
+           |       -------
+        ");
+    }
+
+    /// basedpython makes these names available whatever the target version, so
+    /// one the `typing` stub only defines from a later version than the project
+    /// targets is taken from `typing_extensions` — which is where the transpiler
+    /// imports it from too, and navigation follows the same route, through that
+    /// module's re-export of the `typing` declaration.
+    #[test]
+    fn goto_definition_implicit_typing_name_added_after_the_target_version() {
+        let test = CursorTest::builder()
+            .python_version(PythonVersion::PY310)
+            .source(
+                "main.by",
+                "class C:\n    def f(self) -> Sel<CURSOR>f: ...\n",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+          --> main.by:LL:20
+           |
+        LL |     def f(self) -> Self: ...
+           |                    ^^^^ Clicking here
+        info: Found 2 definitions
+          --> stdlib/typing.byi:LL:5
+           |
+        LL |     Self: _SpecialForm
+           |     ----
+           |
+          ::: stdlib/typing_extensions.byi:LL:5
+           |
+        LL |     Self: _SpecialForm
+           |     ----
+        ");
+    }
+
+    /// The same name in a python file has nothing behind it.
+    #[test]
+    fn goto_definition_implicit_typing_name_is_basedpython_only() {
+        let test = cursor_test("a: M<CURSOR>apping\n");
+
+        assert_snapshot!(test.goto_definition(), @"No goto target found");
+    }
+
+    /// basedpython: `Character` comes from `ty_extensions` rather than `typing`,
+    /// and means the member only where a type is being written. The value
+    /// position below is an unresolved name, which leads nowhere.
+    #[test]
+    fn goto_definition_implicit_character() {
+        let test = CursorTest::builder()
+            .source("main.by", "a: Charact<CURSOR>er\n")
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+          --> main.by:LL:4
+           |
+        LL | a: Character
+           |    ^^^^^^^^^ Clicking here
+        info: Found 1 definition
+          --> stdlib/ty_extensions/__init__.pyi:LL:7
+           |
+        LL | class Character(str):
+           |       ---------
+        ");
+
+        let value_position = CursorTest::builder()
+            .source("main.by", "a = Charact<CURSOR>er\n")
+            .build();
+
+        assert_snapshot!(value_position.goto_definition(), @"No goto target found");
+    }
+
+    /// basedpython: `dynamic` is a word of the language rather than a name, so
+    /// it leads nowhere even though it means `typing.Any`.
+    #[test]
+    fn goto_definition_dynamic_keyword() {
+        let test = CursorTest::builder()
+            .source("main.by", "a: dyn<CURSOR>amic\n")
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"No goto target found");
     }
 
     /// basedpython: an operator whose dunder an `extension` supplies. The

@@ -1215,6 +1215,18 @@ def convert_to_number(value):
         assert_snapshot!(test.prepare_rename(), @"Cannot rename");
     }
 
+    /// basedpython: a name that means a `typing` member without an import is a
+    /// reference to that member, so renaming it is as impossible as renaming a
+    /// builtin.
+    #[test]
+    fn cannot_rename_implicit_typing_name() {
+        let test = CursorTest::builder()
+            .source("main.by", "a: M<CURSOR>apping\n")
+            .build();
+
+        assert_snapshot!(test.prepare_rename(), @"Cannot rename");
+    }
+
     #[test]
     fn cannot_rename_private_builtin_helper() {
         // Unresolved references must not resolve to a private typeshed helper that likely does not
