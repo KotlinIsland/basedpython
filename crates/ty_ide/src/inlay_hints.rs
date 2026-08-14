@@ -7112,7 +7112,7 @@ Source with applied edits:
         b[: Sequence[str]] = S('x', 'y')
         ---------------------------------------------
         info[inlay-hint-location]: Inlay Hint Target
-          --> stdlib/typing.byi:LL:7
+          --> stdlib/_collections_abc.byi:LL:7
            |
         LL | class Sequence[out Element](Reversible[Element], Collection[Element]):
            |       ^^^^^^^^

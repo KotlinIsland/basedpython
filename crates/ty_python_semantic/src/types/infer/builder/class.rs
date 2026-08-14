@@ -223,6 +223,15 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     Type::SpecialForm(SpecialFormType::NamedTuple)
                 }
                 (None, "Any") if in_typing_module() => Type::SpecialForm(SpecialFormType::Any),
+                // `_collections_abc` gives `Callable` a real class definition, the way
+                // the runtime does; `typing` and `collections.abc` both re-export it.
+                // ty models a subscripted `Callable` as its own callable type rather
+                // than an instance of that class, so the name denotes the special form
+                (None, "Callable")
+                    if known_module() == Some(KnownModule::CollectionsAbcInternal) =>
+                {
+                    Type::SpecialForm(SpecialFormType::CollectionsAbcCallable)
+                }
                 (None, "InitVar") if known_module() == Some(KnownModule::Dataclasses) => {
                     Type::SpecialForm(SpecialFormType::TypeQualifier(TypeQualifier::InitVar))
                 }

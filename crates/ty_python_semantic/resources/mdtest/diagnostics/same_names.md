@@ -223,7 +223,7 @@ from typing import Iterator
 def f() -> Iterator[str]:
     import bad
 
-    # error: [invalid-return-type] "Return type does not match returned value: expected `typing.Iterator[str]`, found `bad.Iterator[str]"
+    # error: [invalid-return-type] "Return type does not match returned value: expected `collections.abc.Iterator[str]`, found `bad.Iterator[str]"
     return bad.bad()
 ```
 

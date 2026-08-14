@@ -86,6 +86,11 @@ pub fn all_patches(root: &Path) -> Vec<Box<dyn Patch>> {
 pub fn all_post_patches(root: &Path) -> Vec<Box<dyn Patch>> {
     let private_names = patches::private_names::scan(root);
     vec![
+        // moves the `collections.abc` ABCs out of `typing` and into
+        // `_collections_abc`. it runs before every other post-patch so that the
+        // rest of them see the classes in their new home and rewrite them there,
+        // rather than polishing a copy in `typing` that is about to be cut
+        Box::new(patches::collections_abc_home::scan(root)),
         // widens invariant list/set/dict output typevars over the explicit-variance
         // form; runs first so later idiom patches (e.g. `any_to_dynamic`) still see
         // and normalise anything it introduces
