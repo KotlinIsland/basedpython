@@ -68,6 +68,34 @@ fn basedpython_let_keyword_never_panics() {
 }
 
 #[test]
+fn basedpython_declares_a_soft_keyword_name() {
+    // a soft keyword is a keyword only where it introduces its own construct, so
+    // everywhere else it names things like any identifier. typeshed has fields
+    // called `type` (`socket.SocketType.type`, `asyncio.TransportSocket.type`),
+    // and every declaration form has to accept one
+    for source in [
+        "let type: int",
+        "let match = 1",
+        "var case: bytes = b\"\"",
+        "final type: int",
+        "private match: str",
+        "override type: int = 1",
+        "sentinel type",
+        "context match = 1",
+    ] {
+        let parsed = parse_basedpython_module(source);
+        assert_eq!(parsed.syntax().body.len(), 1, "{source}");
+    }
+
+    // the one construct `type` does introduce still wins on its own shape
+    let parsed = parse_basedpython_module("private type Alias = int\n");
+    let [ruff_python_ast::Stmt::TypeAlias(alias)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a type alias");
+    };
+    assert!(alias.is_private);
+}
+
+#[test]
 fn basedpython_valueless_typed_let_parses_cleanly() {
     // `let x: T` with no initializer is a read-only declaration; it must parse
     // without error and produce an `AnnAssign` with no value
