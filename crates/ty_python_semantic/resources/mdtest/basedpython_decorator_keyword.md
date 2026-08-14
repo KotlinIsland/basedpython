@@ -52,6 +52,21 @@ def h() -> None: ...
 reveal_type(trace(h))  # revealed: int
 ```
 
+## the decorated function's unannotated parameters take their declared types
+
+a decoration hands the function to the decorator, so the callable the declaration says it accepts is
+type context for the decorated function's parameters. this is the same context that types the
+parameters of a lambda passed to `d` directly, and it is not particular to `decorator def` — see
+`bidirectional.md`
+
+```by
+decorator def d(fn: (int) -> None)
+
+@d
+def f(i):
+    reveal_type(i)  # revealed: int
+```
+
 ## multiple options
 
 ```by

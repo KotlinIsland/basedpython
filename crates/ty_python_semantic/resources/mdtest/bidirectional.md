@@ -1875,6 +1875,138 @@ _: list[int | str] = f12()  # error: [invalid-assignment]
 reveal_type(f12)  # revealed: () -> list[int]
 ```
 
+## Decorated function definitions
+
+A decoration hands the undecorated function to the decorator, so the callable that the decorator
+declares it accepts is type context for the function's parameters — the same context a lambda
+written at that argument position would be inferred under.
+
+### Basic
+
+```py
+from typing import Callable
+
+def d(fn: Callable[[int], object]) -> None: ...
+@d
+def f(i):
+    reveal_type(i)  # revealed: int
+
+d(lambda i: reveal_type(i))  # revealed: int
+```
+
+### An annotation the author wrote wins
+
+The declared callable is only consulted for a parameter that has no annotation of its own. A
+parameter it disagrees with is reported at the decoration, as any other argument would be.
+
+```py
+from typing import Callable
+
+def d(fn: Callable[[int], None]) -> None: ...
+
+# error: [invalid-argument-type] "Argument to function `d` is incorrect: Expected `(int, /) -> None`, found `def f(i: str)`"
+@d
+def f(i: str):
+    reveal_type(i)  # revealed: str
+```
+
+### Parameters correspond by position
+
+Parameters line up with the declared callable positionally, so a function that takes more parameters
+than the callable declares leaves the surplus ones untyped.
+
+```py
+from typing import Callable
+
+def d(fn: Callable[[int], None]) -> None: ...
+
+# error: [invalid-argument-type]
+@d
+def f(i, j):
+    reveal_type(i)  # revealed: int
+    reveal_type(j)  # revealed: j@f
+```
+
+### A callback protocol declares keyword-only parameters
+
+A `Callable` annotation can only declare positional parameters. A callback protocol can declare
+keyword-only ones too, and those correspond by name.
+
+```py
+from typing import Protocol
+
+class Handler(Protocol):
+    def __call__(self, request: int, *, verbose: str) -> None: ...
+
+def route(fn: Handler) -> None: ...
+@route
+def home(request, *, verbose):
+    reveal_type(request)  # revealed: int
+    reveal_type(verbose)  # revealed: str
+
+# error: [invalid-argument-type]
+@route
+def away(request, *, quiet):
+    reveal_type(quiet)  # revealed: quiet@away
+```
+
+### A decorator that accepts any callable says nothing
+
+A decorator declared over `Callable[..., T]`, or over a `ParamSpec`, accepts a function of any shape
+and so says nothing about any particular parameter.
+
+```py
+from typing import Callable
+
+def any_shape(fn: Callable[..., object]) -> None: ...
+@any_shape
+def f(i):
+    reveal_type(i)  # revealed: i@f
+
+def same_shape[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
+    return fn
+
+@same_shape
+def g(i):
+    reveal_type(i)  # revealed: i@g
+```
+
+### Only the innermost decorator sees the undecorated function
+
+Decorators apply from the bottom up, so the parameters are typed by the one written closest to the
+`def`. The decorators above it see whatever the one below them returned.
+
+```py
+from typing import Callable
+
+def inner(fn: Callable[[int], None]) -> Callable[[str], None]:
+    return lambda s: None
+
+def outer(fn: Callable[[str], None]) -> None: ...
+@outer
+@inner
+def f(i):
+    reveal_type(i)  # revealed: int
+```
+
+### A decorator recorded as a flag is not a decoration
+
+`@overload`, `@final`, `@override` and `@staticmethod` leave the function's type as it was, so they
+do not stand between the function and the decorator that does decorate it.
+
+```py
+from typing import Callable, final
+
+def d(fn: Callable[[int], None]) -> None: ...
+
+class C:
+    @d
+    @final
+    @staticmethod
+    def m(i):
+        reveal_type(i)  # revealed: int
+```
+
 ## Unified call inference
 
 Generic call arguments are inferred under fixpoint iteration, allowing constraints from call
