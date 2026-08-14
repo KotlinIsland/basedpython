@@ -14,12 +14,12 @@ use super::{
     MaterializationKind, SubclassOfType, Type, TypeAliasType, TypeVarVariance,
 };
 use crate::place::PlaceAndQualifiers;
-use crate::types::class::DynamicNamedTupleAnchor;
+use crate::types::class::{DynamicNamedTupleAnchor, GenericAlias, StaticClassLiteral};
 use crate::types::constraints::{
     ConstraintSet, ConstraintSetBuilder, IteratorConstraintsExtension, OwnedConstraintSet,
 };
 use crate::types::enums::is_single_member_enum;
-use crate::types::generics::walk_specialization;
+use crate::types::generics::{Specialization, walk_specialization};
 use crate::types::protocol_class::{
     ProtocolClass, has_all_protocol_members_defined, walk_protocol_instance_member,
     walk_protocol_interface,
@@ -520,6 +520,44 @@ impl<'db> NominalInstanceType<'db> {
             stop: to_u32(stop)?,
             step: to_u32(step)?,
         })
+    }
+
+    /// The generic class this is an instance of and the specialization it was made with,
+    /// when swapping that specialization would lose nothing else the instance carries.
+    ///
+    /// Restricted to the plain non-tuple case on purpose. A tuple, a regex match or
+    /// `sys.version_info` answers with more than the class and its arguments, and asking
+    /// any of them for their class runs a query — which a cycle recovery function, the only
+    /// caller of this, must not do: salsa rejects a recovery that takes a new dependency.
+    pub(super) fn generic_parts(
+        self,
+        db: &'db dyn Db,
+    ) -> Option<(StaticClassLiteral<'db>, Specialization<'db>)> {
+        let NominalInstanceInner::NonTuple(class) = self.0 else {
+            return None;
+        };
+        let ClassType::Generic(alias) = class.class(db) else {
+            return None;
+        };
+        Some((alias.origin(db), alias.specialization(db)))
+    }
+
+    /// This instance with the specialization from [`Self::generic_parts`] replaced.
+    pub(super) fn with_specialization(
+        self,
+        db: &'db dyn Db,
+        specialization: Specialization<'db>,
+    ) -> Option<Self> {
+        let NominalInstanceInner::NonTuple(class) = self.0 else {
+            return None;
+        };
+        let ClassType::Generic(alias) = class.class(db) else {
+            return None;
+        };
+        Some(Self(NominalInstanceInner::NonTuple(class.with_class(
+            db,
+            ClassType::Generic(GenericAlias::new(db, alias.origin(db), specialization)),
+        ))))
     }
 
     pub(super) fn recursive_type_normalized_impl(

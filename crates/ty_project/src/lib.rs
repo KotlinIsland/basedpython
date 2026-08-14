@@ -989,7 +989,7 @@ mod tests {
     #[test]
     fn check_file_skips_type_checking_when_file_cant_be_read() -> ruff_db::system::Result<()> {
         let project = ProjectMetadata::new("test", SystemPathBuf::from("/"));
-        let mut db = TestDb::new(project);
+        let mut db = TestDb::with_salsa_events(project);
         let path = SystemPath::new("test.py");
 
         db.write_file(path, "x = 10")?;

@@ -690,13 +690,27 @@ fn cmd_transpile_dir(dir: &Path, reverse: bool, config: &Config) -> anyhow::Resu
 /// deleting the original. Reverse transforms are single-file, so no project db
 /// is needed.
 ///
-/// A source the transpiler cannot read is reported and skipped rather than
-/// taking the project down with it — the same way ruff reports an unreadable
-/// file as an `IOError` diagnostic and lints the rest. Each file's original is
-/// removed only once its replacement is on disk, so nothing is ever left both
-/// deleted and unconverted.
-#[allow(clippy::print_stderr)]
+/// A source the transpiler cannot read, cannot convert, or that panics the
+/// checker underneath it is reported and skipped rather than taking the project
+/// down with it — the same way ruff reports an unreadable file as an `IOError`
+/// diagnostic and lints the rest, and the same way `by check` turns a panic
+/// while checking one file into a diagnostic against that file. Converting a
+/// tree is not all-or-nothing: one file the transpiler chokes on must not cost
+/// the caller every other file's conversion. Each file's original is removed
+/// only once its replacement is on disk, so nothing is ever left both deleted
+/// and unconverted.
 fn reverse_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
+    reverse_dir_converting(dir, config, by_transforms::reverse_transpile)
+}
+
+/// [`reverse_dir`], with the conversion of a single source given by the caller so
+/// a test can supply one that fails or panics on demand.
+#[allow(clippy::print_stderr)]
+fn reverse_dir_converting(
+    dir: &Path,
+    config: &Config,
+    convert: impl Fn(&str, &Config) -> Result<String, String> + std::panic::RefUnwindSafe,
+) -> anyhow::Result<ExitStatus> {
     let files = py_source_files(dir);
     if files.is_empty() {
         eprintln!("no .py files found");
@@ -722,8 +736,18 @@ fn reverse_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
             is_stub,
             ..config.clone()
         };
-        let output = by_transforms::reverse_transpile(&source, &file_config)
-            .map_err(|e| anyhow::anyhow!("{}: {e}", py.display()))?;
+        let converted = ruff_db::panic::catch_unwind(|| convert(&source, &file_config));
+        let output = match converted {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => {
+                skipped.push((py.as_path(), e));
+                continue;
+            }
+            Err(panic) => {
+                skipped.push((py.as_path(), panic.to_string()));
+                continue;
+            }
+        };
         let by = py.with_extension(if is_stub { "byi" } else { "by" });
         fs::write(&by, output).with_context(|| format!("{}", by.display()))?;
         fs::remove_file(py).with_context(|| format!("{}", py.display()))?;
@@ -1242,7 +1266,7 @@ pub(crate) fn cmd_version_by(output_format: crate::args::HelpFormat) -> ExitStat
 
 #[cfg(test)]
 mod tests {
-    use super::{is_hidden_within, module_relative_path, reverse_dir};
+    use super::{is_hidden_within, module_relative_path, reverse_dir, reverse_dir_converting};
     use crate::ExitStatus;
     use by_transforms::config::Config;
     use std::path::{Path, PathBuf};
@@ -1318,6 +1342,55 @@ mod tests {
         // untouched: neither converted nor deleted
         assert!(latin1.is_file());
         assert!(!dir.path().join("latin_1.by").exists());
+        Ok(())
+    }
+
+    /// a source whose conversion the transpiler gives up on is skipped the same
+    /// way an unreadable one is, rather than costing every other file in the tree
+    /// its conversion
+    #[test]
+    fn a_source_the_transpiler_rejects_is_skipped_not_fatal() -> anyhow::Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        std::fs::write(dir.path().join("good.py"), "x = 1\n")?;
+        let bad = dir.path().join("bad.py");
+        std::fs::write(&bad, "y = 2\n")?;
+
+        let status = reverse_dir_converting(dir.path(), &Config::default(), |source, _| {
+            if source.starts_with('y') {
+                Err("nope".to_string())
+            } else {
+                Ok(source.to_string())
+            }
+        })?;
+
+        assert!(matches!(status, ExitStatus::Failure));
+        assert!(dir.path().join("good.by").is_file());
+        assert!(bad.is_file());
+        assert!(!dir.path().join("bad.by").exists());
+        Ok(())
+    }
+
+    /// the checker underneath the transpiler can panic on one file — a salsa cycle
+    /// that will not converge, say. that must cost the caller that file, not the
+    /// whole tree, exactly as `by check` reports a panic against the file it was
+    /// checking and carries on
+    #[test]
+    fn a_source_that_panics_the_checker_is_skipped_not_fatal() -> anyhow::Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        std::fs::write(dir.path().join("good.py"), "x = 1\n")?;
+        let exploding = dir.path().join("exploding.py");
+        std::fs::write(&exploding, "y = 2\n")?;
+
+        let status = reverse_dir_converting(dir.path(), &Config::default(), |source, _| {
+            assert!(!source.starts_with('y'), "boom");
+            Ok(source.to_string())
+        })?;
+
+        assert!(matches!(status, ExitStatus::Failure));
+        assert!(dir.path().join("good.by").is_file());
+        // left exactly as it was found: neither converted nor deleted
+        assert!(exploding.is_file());
+        assert!(!dir.path().join("exploding.by").exists());
         Ok(())
     }
 }

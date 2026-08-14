@@ -1907,6 +1907,162 @@ impl<'db> Type<'db> {
         }
         .recursive_type_normalized_impl_with_cycle(db, env, cycle)
         .without_growing_tuple_lengths(db, env, previous)
+        .without_growing_self_nesting(db, env, previous, cycle)
+    }
+
+    /// basedpython: `self`, with a class nested inside itself that the fixed-point iteration
+    /// is burying one level deeper every round given up.
+    ///
+    /// An unannotated function whose return value is built out of its own return value gains a
+    /// level of nesting on every round:
+    ///
+    /// ```python
+    /// def factory():
+    ///     return Box(factory)
+    /// ```
+    ///
+    /// is inferred `Box[Never]`, then `Box[Box[Never]]`, then `Box[Box[Box[Never]]]`, and so on.
+    /// That depth is the iteration's own artefact — a round is only deeper because the round
+    /// before it was, and nothing in the program says where the recursion stops — so the rounds
+    /// never settle and the query runs until salsa gives up, or until the machine does.
+    ///
+    /// This is the same shape [`Self::without_growing_tuple_lengths`] handles for tuple lengths;
+    /// the dimension that grows here is how deeply a class sits inside itself. Cycle recovery
+    /// already knows how to collapse such a nesting, but only when it can *see* it: it looks for
+    /// the cycle's own `Divergent` marker, and by the first round that marker has been solved
+    /// away (`Box[Divergent]` comes back as `Box[Never]`), leaving nothing to recognize. So when
+    /// a round is seen to add nothing but depth, the marker is put back where it starts. The next
+    /// round then sees `Box[Divergent]` again, [`Self::recursive_type_normalized`] collapses it,
+    /// and the iteration converges on `Box[Divergent]` — the recursive type the program means.
+    fn without_growing_self_nesting(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        previous: Self,
+        cycle: &salsa::Cycle,
+    ) -> Self {
+        let Some(div) = cycle.head_ids().next().map(Type::divergent) else {
+            return self;
+        };
+        // deeper than last round is not on its own evidence of anything: an ordinary nested type
+        // is built up a level at a time too, and `list[dict[str, list[int] | int]]` is a type a
+        // program writes. what gives divergence away is that the round added *nothing but* depth
+        // — this round's answer is last round's answer with one more layer wrapped around it, so
+        // the round learned only what the round before it had already said
+        if self.self_nesting_depth(db, &mut Vec::new())
+            <= previous.self_nesting_depth(db, &mut Vec::new())
+            || !self.wraps(db, previous)
+        {
+            return self;
+        }
+        // one level is kept: collapsing `Box[…]` itself would throw away the class the program
+        // does name, not just the depth it doesn't
+        self.truncate_self_nesting(db, env, div, 1, &mut Vec::new())
+    }
+
+    /// Whether `inner` sits somewhere strictly inside `self`, as `Box[Never]` does in
+    /// `Box[Box[Never]]`.
+    fn wraps(self, db: &'db dyn Db, inner: Self) -> bool {
+        let mut parts: Vec<Type<'db>> = if let Type::Union(_) = self {
+            self.union_elements(db).collect()
+        } else {
+            vec![self]
+        };
+        while let Some(part) = parts.pop() {
+            if part != self && part == inner {
+                return true;
+            }
+            if let Type::Union(_) = part {
+                parts.extend(part.union_elements(db).filter(|element| *element != part));
+            } else if let Some((_, specialization)) = part.generic_instance_parts(db) {
+                parts.extend(specialization.types(db).iter().copied());
+            }
+        }
+        false
+    }
+
+    /// How many times any one class is nested inside itself along the deepest path through
+    /// `self`, e.g. 2 for `Box[Box[int]]` and 1 for `Box[list[int]]`.
+    ///
+    /// `ancestors` is the classes enclosing `self`, innermost last.
+    fn self_nesting_depth(
+        self,
+        db: &'db dyn Db,
+        ancestors: &mut Vec<StaticClassLiteral<'db>>,
+    ) -> usize {
+        if let Type::Union(_) = self {
+            return self
+                .union_elements(db)
+                .map(|element| element.self_nesting_depth(db, ancestors))
+                .max()
+                .unwrap_or(0);
+        }
+        let Some((origin, specialization)) = self.generic_instance_parts(db) else {
+            return 0;
+        };
+        let here = ancestors.iter().filter(|seen| **seen == origin).count() + 1;
+        ancestors.push(origin);
+        let deepest = specialization
+            .types(db)
+            .iter()
+            .map(|argument| argument.self_nesting_depth(db, ancestors))
+            .max()
+            .unwrap_or(0);
+        ancestors.pop();
+        here.max(deepest)
+    }
+
+    /// `self` with any class nested inside itself more than `budget` times replaced by `div`.
+    fn truncate_self_nesting(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        div: Type<'db>,
+        budget: usize,
+        ancestors: &mut Vec<StaticClassLiteral<'db>>,
+    ) -> Self {
+        if let Type::Union(_) = self {
+            let elements: Vec<_> = self
+                .union_elements(db)
+                .map(|element| element.truncate_self_nesting(db, env, div, budget, ancestors))
+                .collect();
+            return UnionType::from_elements_cycle_recovery(db, env, elements);
+        }
+        let (Type::NominalInstance(instance), Some((origin, specialization))) =
+            (self, self.generic_instance_parts(db))
+        else {
+            return self;
+        };
+        if ancestors.iter().filter(|seen| **seen == origin).count() >= budget {
+            return div;
+        }
+        ancestors.push(origin);
+        let arguments: Box<[_]> = specialization
+            .types(db)
+            .iter()
+            .map(|argument| argument.truncate_self_nesting(db, env, div, budget, ancestors))
+            .collect();
+        ancestors.pop();
+        if arguments.as_ref() == specialization.types(db) {
+            return self;
+        }
+        let truncated = specialization.with_types(db, arguments);
+        match instance.with_specialization(db, truncated) {
+            Some(instance) => Type::NominalInstance(instance),
+            None => self,
+        }
+    }
+
+    /// The class and specialization of `self` when it is an instance of a generic class whose
+    /// specialization can be swapped on its own.
+    fn generic_instance_parts(
+        self,
+        db: &'db dyn Db,
+    ) -> Option<(StaticClassLiteral<'db>, Specialization<'db>)> {
+        match self {
+            Type::NominalInstance(instance) => instance.generic_parts(db),
+            _ => None,
+        }
     }
 
     /// The elements of `self` when it is a union, and `self` itself otherwise.
