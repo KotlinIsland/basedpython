@@ -196,7 +196,7 @@ class _LoaderBasics:
         """This method is deprecated."""
 
 class SourceLoader(_LoaderBasics):
-    def path_mtime(self, path: str) -> float:
+    def path_mtime(self, path: str) -> int | float:
         """Optional method that returns the modification time (an int) for the
         specified path (a str).
 

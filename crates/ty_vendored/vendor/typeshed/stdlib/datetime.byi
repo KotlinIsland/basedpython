@@ -76,7 +76,7 @@ class date:
     max: ClassVar[date]
     resolution: ClassVar[timedelta]
     def __new__(cls, year: SupportsIndex, month: SupportsIndex, day: SupportsIndex) -> Self
-    class def fromtimestamp(cls, timestamp: float, /) -> Self:
+    class def fromtimestamp(cls, timestamp: int | float, /) -> Self:
         """Create a date from a POSIX timestamp.
 
         The timestamp is a number, e.g. created via time.time(), that is
@@ -328,13 +328,13 @@ class timedelta:
     resolution: ClassVar[timedelta]
     def __new__(
         cls,
-        days: float = 0,
-        seconds: float = 0,
-        microseconds: float = 0,
-        milliseconds: float = 0,
-        minutes: float = 0,
-        hours: float = 0,
-        weeks: float = 0,
+        days: int | float = 0,
+        seconds: int | float = 0,
+        microseconds: int | float = 0,
+        milliseconds: int | float = 0,
+        minutes: int | float = 0,
+        hours: int | float = 0,
+        weeks: int | float = 0,
     ) -> Self
     let days: int
 
@@ -366,10 +366,10 @@ class timedelta:
     def __abs__(self) -> timedelta:
         """abs(self)"""
 
-    def __mul__(self, value: float, /) -> timedelta:
+    def __mul__(self, value: int | float, /) -> timedelta:
         """Return self*value."""
 
-    def __rmul__(self, value: float, /) -> timedelta:
+    def __rmul__(self, value: int | float, /) -> timedelta:
         """Return value*self."""
 
     def __floordiv__(self, value: timedelta, /) -> int:
@@ -378,7 +378,7 @@ class timedelta:
 
     def __truediv__(self, value: timedelta, /) -> float:
         """Return self/value."""
-    def __truediv__(self, value: float, /) -> timedelta
+    def __truediv__(self, value: int | float, /) -> timedelta
 
     def __mod__(self, value: timedelta, /) -> timedelta:
         """Return self%value."""
@@ -429,19 +429,19 @@ class datetime(date):
     # didn't match the name in the C implementation,
     # meaning it is only *safe* to pass it as a keyword argument on 3.12+
     if sys.version_info >= (3, 12):
-        class def fromtimestamp(cls, timestamp: float, tz: TzInfo | None = None) -> Self:
+        class def fromtimestamp(cls, timestamp: int | float, tz: TzInfo | None = None) -> Self:
             """Create a datetime from a POSIX timestamp.
 
             The timestamp is a number, e.g. created via time.time(), that is
             interpreted as local time.
             """
     else:
-        override class def fromtimestamp(cls, timestamp: float, /, tz: TzInfo | None = None) -> Self:
+        override class def fromtimestamp(cls, timestamp: int | float, /, tz: TzInfo | None = None) -> Self:
             """timestamp[, tz] -> tz's local time from POSIX timestamp."""
 
     @classmethod
     @deprecated("Use timezone-aware objects to represent datetimes in UTC; e.g. by calling .fromtimestamp(datetime.timezone.utc)")
-    def utcfromtimestamp(cls, t: float, /) -> Self:
+    def utcfromtimestamp(cls, t: int | float, /) -> Self:
         """Create a naive UTC datetime from a POSIX timestamp."""
 
     class def now(cls, tz: TzInfo | None = None) -> Self:

@@ -7869,39 +7869,24 @@ impl<'db> Type<'db> {
                 {
                     return Ok(union);
                 }
-                let is_by_ext = |ext: Option<&str>| matches!(ext, Some("by" | "byi"));
                 let file = scope_id.file(db);
-                let (is_by, is_vendored) = match file.path(db) {
-                    ruff_db::files::FilePath::System(p) => (is_by_ext(p.extension()), false),
-                    ruff_db::files::FilePath::SystemVirtual(p) => (is_by_ext(p.extension()), false),
-                    ruff_db::files::FilePath::Vendored(_) => (false, true),
-                };
+                // the vendored typeshed is `.byi`, so it lands here with every
+                // other basedpython source: the promotion does not apply to it.
+                // the stubs say what they mean instead — the `numeric-promotion`
+                // typeshed patch writes `int | float` into every parameter that
+                // was relying on the spec to supply the `int`, and leaves the
+                // positions that only ever *produce* a number alone
+                //
                 // `strict-float` asks a `.py` module for the same numeric model a
                 // `.by` file has: `float` means float. it is not only a checking
                 // question — the wider annotation is why a `.py` `list[float]` cannot
                 // be an unboxed buffer, so this is what the compiler reads too
-                let is_by = is_by || (!is_vendored && db.analysis_settings(file).strict_float);
-                // the promotion is a rule about what a position *accepts*: an
-                // `int` is acceptable where a `float` is asked for. a *return*
-                // annotation accepts nothing, and `float.__mul__` returns a
-                // `float` and never an `int`, so promoting one only invents a
-                // union — which in a `.by` file, where the caller's own `float`
-                // is strict, is then not assignable back to it, making
-                // `def f(x: float) -> float: return x * 2.0` an error.
-                //
-                // held to the vendored stubs. a hand-written `.py` promotes on
-                // both sides, so tightening only its returns would break the
-                // pairing: `def f(x: float) -> float: return -x` reads `x` as
-                // `int | float` and would no longer be able to return it
-                let strict_return =
-                    is_vendored && inference_flags.contains(InferenceFlags::IN_RETURN_TYPE);
+                let is_by = file.source_type(db).is_basedpython()
+                    || db.analysis_settings(file).strict_float;
                 let ty = match class.known(db) {
-                    Some(KnownClass::Complex) if !is_by && !strict_return => {
-                        KnownUnion::Complex.to_type(db, env)
-                    }
+                    Some(KnownClass::Complex) if !is_by => KnownUnion::Complex.to_type(db, env),
                     Some(KnownClass::Float)
                         if !is_by
-                            && !strict_return
                             && !inference_flags
                                 .contains(InferenceFlags::DISABLE_INT_FLOAT_SPECIAL_CASE) =>
                     {

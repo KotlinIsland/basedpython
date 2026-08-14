@@ -62,7 +62,7 @@ class BaseProcess:
         an error to call this method if the child process is still running.
         """
 
-    def join(self, timeout: float | None = None):
+    def join(self, timeout: int | float | None = None):
         """
         Wait until child process terminates
         """

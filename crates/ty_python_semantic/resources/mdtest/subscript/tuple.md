@@ -129,18 +129,24 @@ from ty_extensions._internal import reveal_mro
 
 reveal_type(os.stat("my_file.txt"))  # revealed: stat_result
 reveal_type(os.stat("my_file.txt")[stat.ST_MODE])  # revealed: int
-reveal_type(os.stat("my_file.txt")[stat.ST_ATIME])  # revealed: int | float
+reveal_type(os.stat("my_file.txt")[stat.ST_ATIME])  # revealed: int
 
-# revealed: (<class 'stat_result'>, <class 'structseq[int | float]'>, <class 'tuple[int, int, int, int, int, int, int, int | float, int | float, int | float]'>, <class 'Sequence[int | float]'>, <class 'Reversible[int | float]'>, <class 'Collection[int | float]'>, <class 'Iterable[int | float]'>, <class 'Container[int | float]'>, typing.Protocol, typing.Generic, <class 'object'>)
+# revealed: (<class 'stat_result'>, <class 'structseq[int]'>, <class 'tuple[int, int, int, int, int, int, int, int, int, int]'>, <class 'Sequence[int]'>, <class 'Reversible[int]'>, <class 'Collection[int]'>, <class 'Iterable[int]'>, <class 'Container[int]'>, typing.Protocol, typing.Generic, <class 'object'>)
 reveal_mro(os.stat_result)
 
-# There are no specific overloads for the `float` elements in `os.stat_result`,
-# because the fallback `(self, index: SupportsIndex, /) -> int | float` overload
-# gives the right result for those elements in the tuple, and we aim to synthesize
-# the minimum number of overloads for any given tuple
+# The sequence portion of `os.stat_result` is ten integers. CPython fills the
+# in-sequence timestamp slots with integer seconds and exposes the fractional
+# `st_atime` only as a named member, so `os.stat(f)[7]` really is an `int` while
+# `os.stat(f).st_atime` is a `float`. Every element having one type, a single
+# overload answers for all of them
 #
-# revealed: Overload[(self, index: Literal[-10, -9, -8, -7, -6, -5, -4, 0, 1, 2, 3, 4, 5, 6], /) -> int, (self, index: SupportsIndex, /) -> int | float, (self, index: slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None], /) -> tuple[int | float, ...]]
+# revealed: Overload[(self, index: SupportsIndex, /) -> int, (self, index: slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None], /) -> tuple[int, ...]]
 reveal_type(os.stat_result.__getitem__)
+
+# and the named members, which is where the `float` lives
+def named(st: os.stat_result) -> None:
+    reveal_type(st.st_mode)  # revealed: int
+    reveal_type(st.st_atime)  # revealed: float
 ```
 
 But perhaps the most commonly used tuple subclass instance is the singleton `sys.version_info`:

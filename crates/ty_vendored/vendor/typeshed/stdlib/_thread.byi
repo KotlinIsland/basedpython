@@ -25,7 +25,7 @@ def _count() -> int:
     """
 
 final class RLock:
-    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+    def acquire(self, blocking: bool = True, timeout: int | float = -1) -> bool:
         """Lock the lock.
 
         `blocking` indicates whether we should wait
@@ -69,7 +69,7 @@ if sys.version_info >= (3, 13):
     final class _ThreadHandle:
         ident: int
 
-        def join(self, timeout: float | None = None, /)
+        def join(self, timeout: int | float | None = None, /)
         def is_done(self) -> bool
         def _set_done(self)
 
@@ -100,7 +100,7 @@ if sys.version_info >= (3, 13):
         will block until another thread unlocks it.  Deadlocks may ensue.
         """
 
-        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        def acquire(self, blocking: bool = True, timeout: int | float = -1) -> bool:
             """Lock the lock.
 
             Without argument, this blocks if the lock is already locked
@@ -123,7 +123,7 @@ if sys.version_info >= (3, 13):
             """Return whether the lock is in the locked state."""
 
         @deprecated("Obsolete synonym. Use `acquire()` instead.")
-        def acquire_lock(self, blocking: bool = True, timeout: float = -1) -> bool:  # undocumented
+        def acquire_lock(self, blocking: bool = True, timeout: int | float = -1) -> bool:  # undocumented
             """An obsolete synonym of acquire()."""
 
         @deprecated("Obsolete synonym. Use `release()` instead.")
@@ -157,7 +157,7 @@ else:
         will block until another thread unlocks it.  Deadlocks may ensue.
         """
 
-        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        def acquire(self, blocking: bool = True, timeout: int | float = -1) -> bool:
             """acquire(blocking=True, timeout=-1) -> bool
             (acquire_lock() is an obsolete synonym)
 
@@ -186,7 +186,7 @@ else:
             """
 
         @deprecated("Obsolete synonym. Use `acquire()` instead.")
-        def acquire_lock(self, blocking: bool = True, timeout: float = -1) -> bool:  # undocumented
+        def acquire_lock(self, blocking: bool = True, timeout: int | float = -1) -> bool:  # undocumented
             """acquire(blocking=True, timeout=-1) -> bool
             (acquire_lock() is an obsolete synonym)
 

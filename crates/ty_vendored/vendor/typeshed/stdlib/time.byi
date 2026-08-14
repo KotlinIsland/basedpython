@@ -33,7 +33,7 @@ if sys.version_info >= (3, 15):
     type _SupportsFloatOrIndex = SupportsFloat | SupportsIndex
 else:
     # before, time functions only accept (subclass of) float, *not* SupportsFloat
-    type _SupportsFloatOrIndex = float | SupportsIndex
+    type _SupportsFloatOrIndex = int | float | SupportsIndex
 
 altzone: int
 daylight: int
@@ -274,7 +274,7 @@ if sys.platform != "win32":
     def clock_gettime(clk_id: int, /) -> float:  # Unix only
         """Return the time of the specified clock clk_id as a float."""
 
-    def clock_settime(clk_id: int, time: float, /):  # Unix only
+    def clock_settime(clk_id: int, time: int | float, /):  # Unix only
         """clock_settime(clk_id, time)
 
         Set the time of the specified clock clk_id.

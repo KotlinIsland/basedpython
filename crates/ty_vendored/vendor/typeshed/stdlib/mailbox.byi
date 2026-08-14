@@ -440,7 +440,7 @@ class MaildirMessage(Message):
     def get_date(self) -> int:
         """Return delivery date of message, in seconds since the epoch."""
 
-    def set_date(self, date: float):
+    def set_date(self, date: int | float):
         """Set delivery date of message, in seconds since the epoch."""
 
     def get_info(self) -> str:

@@ -116,7 +116,7 @@ class NNTP:
         password: str | None = None,
         readermode: bool | None = None,
         usenetrc: bool = False,
-        timeout: float = ...,
+        timeout: int | float = ...,
     ):
         """Initialize an instance.  Arguments:
         - host: hostname to connect to
@@ -369,7 +369,7 @@ class NNTP_SSL(NNTP):
         ssl_context: ssl.SSLContext | None = None,
         readermode: bool | None = None,
         usenetrc: bool = False,
-        timeout: float = ...,
+        timeout: int | float = ...,
     ):
         """This works identically to NNTP.__init__, except for the change
         in default port and the `ssl_context` argument for SSL connections.

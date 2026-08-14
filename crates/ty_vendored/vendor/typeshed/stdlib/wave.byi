@@ -201,7 +201,7 @@ class Wave_write:
     def getnchannels(self) -> int
     def setsampwidth(self, sampwidth: int)
     def getsampwidth(self) -> int
-    def setframerate(self, framerate: float)
+    def setframerate(self, framerate: int | float)
     def getframerate(self) -> int
     if sys.version_info >= (3, 15):
         def setformat(self, format: int)

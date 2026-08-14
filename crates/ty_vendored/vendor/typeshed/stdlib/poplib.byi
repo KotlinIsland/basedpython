@@ -75,7 +75,7 @@ class POP3:
     sock: socket.socket
     file: BinaryIO
     welcome: bytes
-    init(self, host: str, port: int = 110, timeout: float = ...)
+    init(self, host: str, port: int = 110, timeout: int | float = ...)
     def getwelcome(self) -> bytes
     def set_debuglevel(self, level: int)
     def user(self, user: str) -> bytes:
@@ -204,7 +204,7 @@ class POP3_SSL(POP3):
 
     if sys.version_info >= (3, 12):
         def __init__(
-            self, host: str, port: int = 995, *, timeout: float = ..., context: ssl.SSLContext | None = None
+            self, host: str, port: int = 995, *, timeout: int | float = ..., context: ssl.SSLContext | None = None
         ) -> None
         def stls(self, context: dynamic = None) -> Never:
             """The method unconditionally raises an exception since the
@@ -219,7 +219,7 @@ class POP3_SSL(POP3):
             port: int = 995,
             keyfile: None = None,
             certfile: None = None,
-            timeout: float = ...,
+            timeout: int | float = ...,
             context: ssl.SSLContext | None = None,
         ) -> None
         @deprecated(
@@ -232,7 +232,7 @@ class POP3_SSL(POP3):
             port: int = 995,
             keyfile: StrOrBytesPath | None = None,
             certfile: StrOrBytesPath | None = None,
-            timeout: float = ...,
+            timeout: int | float = ...,
             context: None = None,
         ) -> None
 

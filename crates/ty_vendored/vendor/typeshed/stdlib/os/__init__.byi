@@ -856,7 +856,7 @@ if sys.platform != "win32":
 final TMP_MAX: int  # Undocumented, but used by tempfile
 
 # ----- os classes (structures) -----
-final class stat_result(structseq[float], tuple[int, int, int, int, int, int, int, float, float, float]):
+final class stat_result(structseq[int], tuple[int, int, int, int, int, int, int, int, int, int]):
     """stat_result: Result from stat, fstat, or lstat.
 
     This object may be accessed either as a tuple of
@@ -3401,7 +3401,7 @@ if sys.version_info >= (3, 13) and sys.platform == "linux":
         """
 
     def timerfd_settime(
-        fd: FileDescriptor, /, *, flags: int = 0, initial: float = 0.0, interval: float = 0.0
+        fd: FileDescriptor, /, *, flags: int = 0, initial: int | float = 0.0, interval: int | float = 0.0
     ) -> (float, float):
         """Alter a timer file descriptor's internal timer in seconds.
 

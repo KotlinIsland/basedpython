@@ -170,7 +170,7 @@ else:
     def pthread_sigmask(how: int, mask: Iterable[int]) -> set[SIGNUM]:
         """Fetch and/or change the signal mask of the calling thread."""
 
-    def setitimer(which: int, seconds: float, interval: float = 0.0, /) -> (float, float):
+    def setitimer(which: int, seconds: int | float, interval: int | float = 0.0, /) -> (float, float):
         """Sets given itimer (one of ITIMER_REAL, ITIMER_VIRTUAL or ITIMER_PROF).
 
         The timer will fire after value seconds and after that every interval
@@ -234,7 +234,7 @@ else:
 
             let si_band: int
 
-        def sigtimedwait(sigset: Iterable[int], timeout: float, /) -> struct_siginfo | None:
+        def sigtimedwait(sigset: Iterable[int], timeout: int | float, /) -> struct_siginfo | None:
             """Like sigwaitinfo(), but with a timeout.
 
             The timeout is specified in seconds, rounded up to nanoseconds.

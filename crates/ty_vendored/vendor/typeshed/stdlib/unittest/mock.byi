@@ -980,16 +980,16 @@ class PropertyMock(Mock):
 
 if sys.version_info >= (3, 13):
     class ThreadingMixin(Base):
-        final DEFAULT_TIMEOUT: float | None = None
+        final DEFAULT_TIMEOUT: int | float | None = None
 
-        init(self, /, *args: dynamic, timeout: float | None | _SentinelObject = ..., **kwargs: dynamic)
+        init(self, /, *args: dynamic, timeout: int | float | None | _SentinelObject = ..., **kwargs: dynamic)
         # Same as `NonCallableMock.reset_mock.`
         def reset_mock(self, visited: dynamic = None, *, return_value: bool = False, side_effect: bool = False):
             """
             See :func:`.Mock.reset_mock()`
             """
 
-        def wait_until_called(self, *, timeout: float | None | _SentinelObject = ...):
+        def wait_until_called(self, *, timeout: int | float | None | _SentinelObject = ...):
             """Wait until the mock object is called.
 
             `timeout` - time to wait for in seconds, waits forever otherwise.

@@ -73,7 +73,7 @@ class BaseContext:
             """Returns two connection object connected by a pipe"""
 
     def Barrier(
-        self, parties: int, action: (...) -> object | None = None, timeout: float | None = None
+        self, parties: int, action: (...) -> object | None = None, timeout: int | float | None = None
     ) -> synchronize.Barrier:
         """Returns a barrier object"""
 

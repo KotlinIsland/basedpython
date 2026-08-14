@@ -51,7 +51,7 @@ class _CertInfo(TypedDict):
     caIssuers: NotRequired[(*: str) | None]
     crlDistributionPoints: NotRequired[(*: str) | None]
 
-def RAND_add(string: str | ReadableBuffer, entropy: float, /):
+def RAND_add(string: str | ReadableBuffer, entropy: int | float, /):
     """Mix string into the OpenSSL PRNG state.
 
     entropy (a float) is a lower bound on the entropy contained in

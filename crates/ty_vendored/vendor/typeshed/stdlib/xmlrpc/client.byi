@@ -187,7 +187,7 @@ class Marshaller:
     def dump_bool(self, value: bool, write: WriteCallback)
     def dump_long(self, value: int, write: WriteCallback)
     def dump_int(self, value: int, write: WriteCallback)
-    def dump_double(self, value: float, write: WriteCallback)
+    def dump_double(self, value: int | float, write: WriteCallback)
     def dump_unicode(self, value: str, write: WriteCallback, escape: (str) -> str = ...)
     def dump_bytes(self, value: ReadableBuffer, write: WriteCallback)
     def dump_array(self, value: Iterable[_Marshallable], write: WriteCallback)

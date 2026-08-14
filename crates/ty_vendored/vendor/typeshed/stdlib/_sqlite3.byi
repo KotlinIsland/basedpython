@@ -225,7 +225,7 @@ def complete_statement(statement: str) -> bool:
 if sys.version_info >= (3, 12):
     def connect(
         database: StrOrBytesPath,
-        timeout: float = 5.0,
+        timeout: int | float = 5.0,
         detect_types: int = 0,
         isolation_level: _IsolationLevel = "DEFERRED",
         check_same_thread: bool = True,
@@ -241,7 +241,7 @@ if sys.version_info >= (3, 12):
         """
     def connect[ConnectionT: Connection](
         database: StrOrBytesPath,
-        timeout: float,
+        timeout: int | float,
         detect_types: int,
         isolation_level: _IsolationLevel,
         check_same_thread: bool,
@@ -253,7 +253,7 @@ if sys.version_info >= (3, 12):
     ) -> ConnectionT
     def connect[ConnectionT: Connection](
         database: StrOrBytesPath,
-        timeout: float = 5.0,
+        timeout: int | float = 5.0,
         detect_types: int = 0,
         isolation_level: _IsolationLevel = "DEFERRED",
         check_same_thread: bool = True,
@@ -266,7 +266,7 @@ if sys.version_info >= (3, 12):
 else:
     def connect(
         database: StrOrBytesPath,
-        timeout: float = 5.0,
+        timeout: int | float = 5.0,
         detect_types: int = 0,
         isolation_level: _IsolationLevel = "DEFERRED",
         check_same_thread: bool = True,
@@ -280,7 +280,7 @@ else:
         """
     def connect[ConnectionT: Connection](
         database: StrOrBytesPath,
-        timeout: float,
+        timeout: int | float,
         detect_types: int,
         isolation_level: _IsolationLevel,
         check_same_thread: bool,
@@ -290,7 +290,7 @@ else:
     ) -> ConnectionT
     def connect[ConnectionT: Connection](
         database: StrOrBytesPath,
-        timeout: float = 5.0,
+        timeout: int | float = 5.0,
         detect_types: int = 0,
         isolation_level: _IsolationLevel = "DEFERRED",
         check_same_thread: bool = True,

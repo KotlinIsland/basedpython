@@ -332,7 +332,7 @@ class BaseManager:
             serializer: str = "pickle",
             ctx: BaseContext | None = None,
             *,
-            shutdown_timeout: float = 1.0,
+            shutdown_timeout: int | float = 1.0,
         ) -> None
     else:
         def __init__(
@@ -359,7 +359,7 @@ class BaseManager:
         """
 
     shutdown: _Finalize  # only available after start() was called
-    def join(self, timeout: float | None = None):  # undocumented
+    def join(self, timeout: int | float | None = None):  # undocumented
         """
         Join the manager process (if it has been spawned)
         """
@@ -395,7 +395,7 @@ class SyncManager(BaseManager):
     """
 
     def Barrier(
-        self, parties: int, action: (() -> None) | None = None, timeout: float | None = None
+        self, parties: int, action: (() -> None) | None = None, timeout: int | float | None = None
     ) -> threading.Barrier
     def BoundedSemaphore(self, value: int = 1) -> threading.BoundedSemaphore
     def Condition(self, lock: threading.Lock | threading._RLock | None = None) -> threading.Condition

@@ -64,12 +64,12 @@ def setup_master(master: tkinter.Misc | None = None):
     """
 
 private type Padding = (
-    float
+    int | float
     | str
-    | (float | str,)
-    | (float | str, float | str)
-    | (float | str, float | str, float | str)
-    | (float | str, float | str, float | str, float | str)
+    | (int | float | str,)
+    | (int | float | str, int | float | str)
+    | (int | float | str, int | float | str, int | float | str)
+    | (int | float | str, int | float | str, int | float | str, int | float | str)
 )
 
 # Last item (option value to apply) varies between different options so use Any.
@@ -95,10 +95,10 @@ private type LayoutSpec = list[(str, _Layout | None)]
 @type_check_only
 class _ElementCreateImageKwargs(TypedDict, total=False):
     border: Padding
-    height: float | str
+    height: int | float | str
     padding: Padding
     sticky: str
-    width: float | str
+    width: int | float | str
 
 private type ElementCreateArgsCrossPlatform = (
     # Could be any sequence here but types are not homogenous so just type it as tuple
@@ -117,8 +117,8 @@ if sys.platform == "win32" and sys.version_info >= (3, 13):
 
     @type_check_only
     class _ElementCreateVsapiKwargsSize(TypedDict):
-        width: float | str
-        height: float | str
+        width: int | float | str
+        height: int | float | str
 
     type _ElementCreateVsapiKwargsDict = (
         _ElementCreateVsapiKwargsPadding | _ElementCreateVsapiKwargsMargin | _ElementCreateVsapiKwargsSize
@@ -223,10 +223,10 @@ class Style:
         /,
         *imagespec: ImageStatespec,
         border: Padding = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         padding: Padding = ...,
         sticky: str = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> None:
         """Create a new element in the current theme of given etype."""
     def element_create(self, elementname: str, etype: "from", themename: str, fromelement: str = ..., /) -> None
@@ -266,8 +266,8 @@ class Style:
             vs_statespec: VsapiStatespec = ...,
             /,
             *,
-            width: float | str,
-            height: float | str,
+            width: int | float | str,
+            height: int | float | str,
         ) -> None
 
     def element_names(self) -> (*: str):
@@ -377,7 +377,7 @@ class Button(Widget):
         state: str = "normal",
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = "",
+        text: int | float | str = "",
         textvariable: tkinter.Variable = ...,
         underline: int = -1,
         width: int | "" = "",
@@ -407,7 +407,7 @@ class Button(Widget):
         state: str = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
+        text: int | float | str = ...,
         textvariable: tkinter.Variable = ...,
         underline: int = ...,
         width: int | "" = ...,
@@ -449,7 +449,7 @@ class Checkbutton(Widget):
         state: str = "normal",
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = "",
+        text: int | float | str = "",
         textvariable: tkinter.Variable = ...,
         underline: int = -1,
         # Seems like variable can be empty string, but actually setting it to
@@ -484,7 +484,7 @@ class Checkbutton(Widget):
         state: str = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
+        text: int | float | str = ...,
         textvariable: tkinter.Variable = ...,
         underline: int = ...,
         variable: tkinter.Variable = ...,
@@ -792,17 +792,17 @@ class Frame(Widget):
         self,
         master: tkinter.Misc | None = None,
         *,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         class_: str = "",
         cursor: tkinter._Cursor = "",
-        height: float | str = 0,
+        height: int | float | str = 0,
         name: str = ...,
         padding: Padding = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
-        width: float | str = 0,
+        width: int | float | str = 0,
     ):
         """Construct a Ttk Frame with parent master.
 
@@ -819,15 +819,15 @@ class Frame(Widget):
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: tkinter._Cursor = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         padding: Padding = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -854,8 +854,8 @@ class Label(Widget):
         *,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         background: str = "",
-        border: float | str = ...,  # alias for borderwidth
-        borderwidth: float | str = ...,  # undocumented
+        border: int | float | str = ...,  # alias for borderwidth
+        borderwidth: int | float | str = ...,  # undocumented
         class_: str = "",
         compound: "" | "text" | "image" | "top" | "left" | "center" | "right" | "bottom" | "none" = "",
         cursor: tkinter._Cursor = "",
@@ -869,11 +869,11 @@ class Label(Widget):
         state: str = "normal",
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
-        text: float | str = "",
+        text: int | float | str = "",
         textvariable: tkinter.Variable = ...,
         underline: int = -1,
         width: int | "" = "",
-        wraplength: float | str = ...,
+        wraplength: int | float | str = ...,
     ):
         """Construct a Ttk Label with parent master.
 
@@ -894,8 +894,8 @@ class Label(Widget):
         *,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         background: str = ...,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         compound: "" | "text" | "image" | "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         cursor: tkinter._Cursor = ...,
         font: _FontDescription = ...,
@@ -907,11 +907,11 @@ class Label(Widget):
         state: str = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
+        text: int | float | str = ...,
         textvariable: tkinter.Variable = ...,
         underline: int = ...,
         width: int | "" = ...,
-        wraplength: float | str = ...,
+        wraplength: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -939,11 +939,11 @@ class Labelframe(Widget):
         self,
         master: tkinter.Misc | None = None,
         *,
-        border: float | str = ...,
-        borderwidth: float | str = ...,  # undocumented
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,  # undocumented
         class_: str = "",
         cursor: tkinter._Cursor = "",
-        height: float | str = 0,
+        height: int | float | str = 0,
         labelanchor: "nw" | "n" | "ne" | "en" | "e" | "es" | "se" | "s" | "sw" | "ws" | "w" | "wn" = ...,
         labelwidget: tkinter.Misc = ...,
         name: str = ...,
@@ -951,9 +951,9 @@ class Labelframe(Widget):
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,  # undocumented
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
-        text: float | str = "",
+        text: int | float | str = "",
         underline: int = -1,
-        width: float | str = 0,
+        width: int | float | str = 0,
     ):
         """Construct a Ttk Labelframe with parent master.
 
@@ -971,19 +971,19 @@ class Labelframe(Widget):
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         cursor: tkinter._Cursor = ...,
-        height: float | str = ...,
+        height: int | float | str = ...,
         labelanchor: "nw" | "n" | "ne" | "en" | "e" | "es" | "se" | "s" | "sw" | "ws" | "w" | "wn" = ...,
         labelwidget: tkinter.Misc = ...,
         padding: Padding = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
+        text: int | float | str = ...,
         underline: int = ...,
-        width: float | str = ...,
+        width: int | float | str = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
@@ -1023,7 +1023,7 @@ class Menubutton(Widget):
         state: str = "normal",
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = "",
+        text: int | float | str = "",
         textvariable: tkinter.Variable = ...,
         underline: int = -1,
         width: int | "" = "",
@@ -1053,7 +1053,7 @@ class Menubutton(Widget):
         state: str = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
+        text: int | float | str = ...,
         textvariable: tkinter.Variable = ...,
         underline: int = ...,
         width: int | "" = ...,
@@ -1377,15 +1377,15 @@ class Progressbar(Widget):
         *,
         class_: str = "",
         cursor: tkinter._Cursor = "",
-        length: float | str = 100,
-        maximum: float = 100,
+        length: int | float | str = 100,
+        maximum: int | float = 100,
         mode: "determinate" | "indeterminate" = "determinate",
         name: str = ...,
         orient: "horizontal" | "vertical" = "horizontal",
         phase: int = 0,  # docs say read-only but assigning int to this works
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
-        value: float = 0.0,
+        value: int | float = 0.0,
         variable: tkinter.IntVar | tkinter.DoubleVar = ...,
     ):
         """Construct a Ttk Progressbar with parent master.
@@ -1406,14 +1406,14 @@ class Progressbar(Widget):
         cnf: dict[str, dynamic] | None = None,
         *,
         cursor: tkinter._Cursor = ...,
-        length: float | str = ...,
-        maximum: float = ...,
+        length: int | float | str = ...,
+        maximum: int | float = ...,
         mode: "determinate" | "indeterminate" = ...,
         orient: "horizontal" | "vertical" = ...,
         phase: int = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        value: float = ...,
+        value: int | float = ...,
         variable: tkinter.IntVar | tkinter.DoubleVar = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
@@ -1438,7 +1438,7 @@ class Progressbar(Widget):
         interval defaults to 50 milliseconds (20 steps/second) if omitted.
         """
 
-    def step(self, amount: float | None = None):
+    def step(self, amount: int | float | None = None):
         """Increments the value option by amount.
 
         amount defaults to 1.0 if omitted.
@@ -1468,7 +1468,7 @@ class Radiobutton(Widget):
         state: str = "normal",
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = "",
+        text: int | float | str = "",
         textvariable: tkinter.Variable = ...,
         underline: int = -1,
         value: dynamic = "1",
@@ -1499,7 +1499,7 @@ class Radiobutton(Widget):
         state: str = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        text: float | str = ...,
+        text: int | float | str = ...,
         textvariable: tkinter.Variable = ...,
         underline: int = ...,
         value: dynamic = ...,
@@ -1542,15 +1542,15 @@ class Scale(Widget, tkinter.Scale):
         class_: str = "",
         command: str | ((str) -> object) = "",
         cursor: tkinter._Cursor = "",
-        from_: float = 0,
-        length: float | str = 100,
+        from_: int | float = 0,
+        length: int | float | str = 100,
         name: str = ...,
         orient: "horizontal" | "vertical" = "horizontal",
         state: str = ...,  # undocumented
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        to: float = 1.0,
-        value: float = 0,
+        to: int | float = 1.0,
+        value: int | float = 0,
         variable: tkinter.IntVar | tkinter.DoubleVar = ...,
     ):
         """Construct a Ttk Scale with parent master.
@@ -1570,14 +1570,14 @@ class Scale(Widget, tkinter.Scale):
         *,
         command: str | ((str) -> object) = ...,
         cursor: tkinter._Cursor = ...,
-        from_: float = ...,
-        length: float | str = ...,
+        from_: int | float = ...,
+        length: int | float | str = ...,
         orient: "horizontal" | "vertical" = ...,
         state: str = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        to: float = ...,
-        value: float = ...,
+        to: int | float = ...,
+        value: int | float = ...,
         variable: tkinter.IntVar | tkinter.DoubleVar = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Modify or query scale options.
@@ -1594,14 +1594,14 @@ class Scale(Widget, tkinter.Scale):
         *,
         command: str | ((str) -> object) = ...,
         cursor: tkinter._Cursor = ...,
-        from_: float = ...,
-        length: float | str = ...,
+        from_: int | float = ...,
+        length: int | float | str = ...,
         orient: "horizontal" | "vertical" = ...,
         state: str = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
-        to: float = ...,
-        value: float = ...,
+        to: int | float = ...,
+        value: int | float = ...,
         variable: tkinter.IntVar | tkinter.DoubleVar = ...,
     ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
@@ -1618,7 +1618,7 @@ class Scale(Widget, tkinter.Scale):
         """
     def config(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
-    override def get(self, x: int | None = None, y: int | None = None) -> float:
+    override def get(self, x: int | None = None, y: int | None = None) -> int | float:
         """Get the current value of the value option, or the value
         corresponding to the coordinates x, y if they are specified.
 
@@ -1635,7 +1635,7 @@ class Scrollbar(Widget, tkinter.Scrollbar):
         master: tkinter.Misc | None = None,
         *,
         class_: str = "",
-        command: (...) -> (float, float) | None | str = "",
+        command: (...) -> (int | float, int | float) | None | str = "",
         cursor: tkinter._Cursor = "",
         name: str = ...,
         orient: "horizontal" | "vertical" = "vertical",
@@ -1657,7 +1657,7 @@ class Scrollbar(Widget, tkinter.Scrollbar):
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        command: (...) -> (float, float) | None | str = ...,
+        command: (...) -> (int | float, int | float) | None | str = ...,
         cursor: tkinter._Cursor = ...,
         orient: "horizontal" | "vertical" = ...,
         style: str = ...,
@@ -1682,7 +1682,7 @@ class Scrollbar(Widget, tkinter.Scrollbar):
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        command: (...) -> (float, float) | None | str = ...,
+        command: (...) -> (int | float, int | float) | None | str = ...,
         cursor: tkinter._Cursor = ...,
         orient: "horizontal" | "vertical" = ...,
         style: str = ...,
@@ -1819,8 +1819,8 @@ class Spinbox(Entry):
         font: _FontDescription = ...,  # undocumented
         foreground: str = ...,  # undocumented
         format: str = "",
-        from_: float = 0,
-        increment: float = 1,
+        from_: int | float = 0,
+        increment: int | float = 1,
         invalidcommand: str | list[str] | (*: str) | (() -> bool) = ...,  # undocumented
         justify: "left" | "center" | "right" = ...,  # undocumented
         name: str = ...,
@@ -1829,7 +1829,7 @@ class Spinbox(Entry):
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         textvariable: tkinter.Variable = ...,  # undocumented
-        to: float = 0,
+        to: int | float = 0,
         validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = "none",
         validatecommand: str | list[str] | (*: str) | (() -> bool) = "",
         values: list[str] | (*: str) = ...,
@@ -1863,8 +1863,8 @@ class Spinbox(Entry):
         font: _FontDescription = ...,
         foreground: str = ...,
         format: str = ...,
-        from_: float = ...,
-        increment: float = ...,
+        from_: int | float = ...,
+        increment: int | float = ...,
         invalidcommand: str | list[str] | (*: str) | (() -> bool) = ...,
         justify: "left" | "center" | "right" = ...,
         show=...,
@@ -1872,7 +1872,7 @@ class Spinbox(Entry):
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         textvariable: tkinter.Variable = ...,
-        to: float = ...,
+        to: int | float = ...,
         validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = ...,
         validatecommand: str | list[str] | (*: str) | (() -> bool) = ...,
         values: list[str] | (*: str) = ...,
@@ -2335,21 +2335,21 @@ class LabeledScale(Frame):
         self,
         master: tkinter.Misc | None = None,
         variable: tkinter.IntVar | tkinter.DoubleVar | None = None,
-        from_: float = 0,
-        to: float = 10,
+        from_: int | float = 0,
+        to: int | float = 10,
         *,
-        border: float | str = ...,
-        borderwidth: float | str = ...,
+        border: int | float | str = ...,
+        borderwidth: int | float | str = ...,
         class_: str = "",
         compound: "top" | "bottom" = "top",
         cursor: tkinter._Cursor = "",
-        height: float | str = 0,
+        height: int | float | str = 0,
         name: str = ...,
         padding: Padding = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
-        width: float | str = 0,
+        width: int | float | str = 0,
     ):
         """Construct a horizontal LabeledScale with parent master, a
         variable to be associated with the Ttk Scale widget and its range.

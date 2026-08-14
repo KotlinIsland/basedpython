@@ -63,7 +63,7 @@ def maxpp(fragment: Buffer, width: int, /) -> int:
 def minmax(fragment: Buffer, width: int, /) -> (int, int):
     """Return the minimum and maximum values of all samples in the sound fragment."""
 
-def mul(fragment: Buffer, width: int, factor: float, /) -> bytes:
+def mul(fragment: Buffer, width: int, factor: int | float, /) -> bytes:
     """Return a fragment that has all samples in the original fragment multiplied by the floating-point value factor."""
 
 def ratecv(
@@ -85,10 +85,10 @@ def reverse(fragment: Buffer, width: int, /) -> bytes:
 def rms(fragment: Buffer, width: int, /) -> int:
     """Return the root-mean-square of the fragment, i.e. sqrt(sum(S_i^2)/n)."""
 
-def tomono(fragment: Buffer, width: int, lfactor: float, rfactor: float, /) -> bytes:
+def tomono(fragment: Buffer, width: int, lfactor: int | float, rfactor: int | float, /) -> bytes:
     """Convert a stereo fragment to a mono fragment."""
 
-def tostereo(fragment: Buffer, width: int, lfactor: float, rfactor: float, /) -> bytes:
+def tostereo(fragment: Buffer, width: int, lfactor: int | float, rfactor: int | float, /) -> bytes:
     """Generate a stereo fragment from a mono fragment."""
 
 def ulaw2lin(fragment: Buffer, width: int, /) -> bytes:

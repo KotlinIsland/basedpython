@@ -24,7 +24,7 @@ from typing import TypeAlias
 
 __all__ = ["Timer", "timeit", "repeat", "default_timer"]
 
-type _Timer = () -> float
+type _Timer = () -> (int | float)
 private type Stmt = str | (() -> object)
 
 default_timer: _Timer
@@ -113,7 +113,7 @@ class Timer:
 
     if sys.version_info >= (3, 15):
         def autorange(
-            self, callback: ((int, float) -> object) | None = None, target_time: float = 0.2
+            self, callback: ((int, float) -> object) | None = None, target_time: int | float = 0.2
         ) -> (int, float):
             """Return the number of loops and time taken so that
             total time >= target_time (default is 0.2 seconds).

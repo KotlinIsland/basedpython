@@ -99,7 +99,7 @@ class array[in out Element in (int, float, str)](MutableSequence[Element]):
         cls: type[array[int]], typecode: IntTypeCode, initializer: bytes | bytearray | Iterable[int] = ..., /
     ) -> array[int]
     def __new__(
-        cls: type[array[float]], typecode: _FloatTypeCode, initializer: bytes | bytearray | Iterable[float] = ..., /
+        cls: type[array[float]], typecode: _FloatTypeCode, initializer: bytes | bytearray | Iterable[int | float] = ..., /
     ) -> array[float]
     if sys.version_info >= (3, 13):
         def __new__(

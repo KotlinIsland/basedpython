@@ -41,7 +41,7 @@ class TransportSocket:
     def getpeername(self) -> _RetAddress
     def getsockname(self) -> _RetAddress
     def getsockbyname(self) -> Never  # This method doesn't exist on socket, yet is passed through?
-    def settimeout(self, value: float | None)
+    def settimeout(self, value: int | float | None)
     def gettimeout(self) -> float | None
     def setblocking(self, flag: bool)
     if sys.version_info < (3, 11):

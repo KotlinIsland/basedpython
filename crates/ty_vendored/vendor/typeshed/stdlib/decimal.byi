@@ -135,8 +135,8 @@ if sys.version_info >= (3, 15):
     from _decimal export SPEC_VERSION
 
 type _Decimal = Decimal | int
-private type DecimalNew = Decimal | float | str | (int, Sequence[int], int)
-private type ComparableNum = Decimal | float | numbers.Rational
+private type DecimalNew = Decimal | int | float | str | (int, Sequence[int], int)
+private type ComparableNum = Decimal | int | float | numbers.Rational
 private type TrapType = type[DecimalException]
 
 # At runtime, these classes are implemented in C as part of "_decimal".
@@ -183,7 +183,7 @@ class Decimal:
 
     def __new__(cls, value: DecimalNew = "0", context: Context | None = None) -> Self
     if sys.version_info >= (3, 14):
-        class def from_number(cls, number: Decimal | float, /) -> Self:
+        class def from_number(cls, number: Decimal | int | float, /) -> Self:
             """Class method that converts a real number to a decimal number, exactly.
 
             >>> Decimal.from_number(314)              # int
@@ -194,7 +194,7 @@ class Decimal:
             Decimal('3.14')
             """
 
-    class def from_float(cls, f: float, /) -> Self:
+    class def from_float(cls, f: int | float, /) -> Self:
         """Class method that converts a float to a decimal number, exactly.
 
         Since 0.1 is not exactly representable in binary floating point,
@@ -783,7 +783,7 @@ class Context:
         limits.
         """
 
-    def create_decimal_from_float(self, f: float, /) -> Decimal:
+    def create_decimal_from_float(self, f: int | float, /) -> Decimal:
         """Create a new Decimal instance from float f.
 
         Unlike the Decimal.from_float() class method, this function observes

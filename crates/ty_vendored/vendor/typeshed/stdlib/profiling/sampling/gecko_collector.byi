@@ -61,9 +61,9 @@ class GeckoThreadSpill:
     sample_count: int
     marker_count: int
     init(self, directory: StrPath, tid: int)
-    def append_sample(self, stack_index: int, time_ms: float)
+    def append_sample(self, stack_index: int, time_ms: int | float)
     def append_marker(
-        self, name_idx: int, start_time: float, end_time: float, phase: int, category: int, data: dict[str, dynamic]
+        self, name_idx: int, start_time: int | float, end_time: int | float, phase: int, category: int, data: dict[str, dynamic]
     )
     def prepare_read(self)
 

@@ -368,7 +368,7 @@ class Thread:
 
         """
 
-    def join(self, timeout: float | None = None):
+    def join(self, timeout: int | float | None = None):
         """Wait until the thread terminates.
 
         This blocks the calling thread until the thread whose join() method is
@@ -454,7 +454,7 @@ final class _RLock:
     """
 
     _count: int
-    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+    def acquire(self, blocking: bool = True, timeout: int | float = -1) -> bool:
         """Acquire a lock, blocking or non-blocking.
 
         When invoked without arguments: if this thread already owns the lock,
@@ -524,12 +524,12 @@ class Condition:
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
     )
-    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool
+    def acquire(self, blocking: bool = True, timeout: int | float = -1) -> bool
     def release(self)
     if sys.version_info >= (3, 14):
         def locked(self) -> bool
 
-    def wait(self, timeout: float | None = None) -> bool:
+    def wait(self, timeout: int | float | None = None) -> bool:
         """Wait until notified or until a timeout occurs.
 
         If the calling thread has not acquired the lock when this method is
@@ -553,7 +553,7 @@ class Condition:
 
         """
 
-    def wait_for[Element](self, predicate: () -> Element, timeout: float | None = None) -> Element:
+    def wait_for[Element](self, predicate: () -> Element, timeout: int | float | None = None) -> Element:
         """Wait until a condition evaluates to True.
 
         predicate should be a callable which result will be interpreted as a
@@ -602,7 +602,7 @@ class Semaphore:
     _value: int
     init(self, value: int = 1)
     def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None)
-    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
+    def acquire(self, blocking: bool = True, timeout: int | float | None = None) -> bool:
         """Acquire a semaphore, decrementing the internal counter by one.
 
         When invoked without arguments: if the internal counter is larger than
@@ -627,7 +627,7 @@ class Semaphore:
 
         """
 
-    def __enter__(self, blocking: bool = True, timeout: float | None = None) -> bool:
+    def __enter__(self, blocking: bool = True, timeout: int | float | None = None) -> bool:
         """Acquire a semaphore, decrementing the internal counter by one.
 
         When invoked without arguments: if the internal counter is larger than
@@ -713,7 +713,7 @@ class Event:
 
         """
 
-    def wait(self, timeout: float | None = None) -> bool:
+    def wait(self, timeout: int | float | None = None) -> bool:
         """Block until the internal flag is true.
 
         If the internal flag is true on entry, return immediately. Otherwise,
@@ -746,12 +746,12 @@ class Timer(Thread):
     args: Iterable[dynamic]  # undocumented
     finished: Event  # undocumented
     function: (...) -> dynamic  # undocumented
-    interval: float  # undocumented
+    interval: int | float  # undocumented
     kwargs: Mapping[str, dynamic]  # undocumented
 
     init(
         self,
-        interval: float,
+        interval: int | float,
         function: (...) -> object,
         args: Iterable[dynamic] | None = None,
         kwargs: Mapping[str, dynamic] | None = None,
@@ -774,7 +774,7 @@ class Barrier:
 
     let broken: bool
 
-    init(self, parties: int, action: (() -> None) | None = None, timeout: float | None = None):
+    init(self, parties: int, action: (() -> None) | None = None, timeout: int | float | None = None):
         """Create a barrier, initialised to 'parties' threads.
 
         'action' is a callable which, when supplied, will be called by one of
@@ -784,7 +784,7 @@ class Barrier:
 
         """
 
-    def wait(self, timeout: float | None = None) -> int:
+    def wait(self, timeout: int | float | None = None) -> int:
         """Wait for the barrier.
 
         When the specified number of threads have started waiting, they are all

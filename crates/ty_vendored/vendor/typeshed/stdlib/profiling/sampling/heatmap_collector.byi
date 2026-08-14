@@ -43,10 +43,10 @@ class HeatmapCollector(Collector):
     def set_stats(
         self,
         sample_interval_usec: int,
-        duration_sec: float,
-        sample_rate: float,
-        error_rate: float | None = None,
-        missed_samples: float | None = None,
+        duration_sec: int | float,
+        sample_rate: int | float,
+        error_rate: int | float | None = None,
+        missed_samples: int | float | None = None,
         **kwargs: object,
     ):
         """Set profiling statistics to include in heatmap output.

@@ -394,24 +394,24 @@ class c_size_t(_SimpleCData[int]):  # alias for c_uint, c_ulong, or c_ulonglong
     __ctype_be__: ClassVar[type[Self]]
     __ctype_le__: ClassVar[type[Self]]
 
-class c_float(_SimpleCData[float]):
+class c_float(_SimpleCData[int | float]):
     _type_: ClassVar["f"]
     __ctype_be__: ClassVar[type[Self]]
     __ctype_le__: ClassVar[type[Self]]
 
-class c_double(_SimpleCData[float]):
+class c_double(_SimpleCData[int | float]):
     _type_: ClassVar["d"]
     __ctype_be__: ClassVar[type[Self]]
     __ctype_le__: ClassVar[type[Self]]
 
-class c_longdouble(_SimpleCData[float]):  # can be an alias for c_double
+class c_longdouble(_SimpleCData[int | float]):  # can be an alias for c_double
     _type_: ClassVar["d" | "g"]
 
 if sys.version_info >= (3, 14) and sys.platform != "win32":
     # NOTE: currently (3.14.4) the `__ctype_{be,le}__` attributes of these complex types are missing at runtime:
     # https://github.com/python/cpython/issues/148464
 
-    class c_double_complex(_SimpleCData[complex]):
+    class c_double_complex(_SimpleCData[int | float | complex]):
         if sys.version_info >= (3, 15):
             _type_: ClassVar["Zd"]
         else:
@@ -419,7 +419,7 @@ if sys.version_info >= (3, 14) and sys.platform != "win32":
         __ctype_be__: ClassVar[type[Self]]
         __ctype_le__: ClassVar[type[Self]]
 
-    class c_float_complex(_SimpleCData[complex]):
+    class c_float_complex(_SimpleCData[int | float | complex]):
         if sys.version_info >= (3, 15):
             _type_: ClassVar["Zf"]
         else:
@@ -427,7 +427,7 @@ if sys.version_info >= (3, 14) and sys.platform != "win32":
         __ctype_be__: ClassVar[type[Self]]
         __ctype_le__: ClassVar[type[Self]]
 
-    class c_longdouble_complex(_SimpleCData[complex]):
+    class c_longdouble_complex(_SimpleCData[int | float | complex]):
         if sys.version_info >= (3, 15):
             _type_: ClassVar["Zg"]
         else:

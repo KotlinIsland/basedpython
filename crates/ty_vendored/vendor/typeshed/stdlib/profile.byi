@@ -71,7 +71,7 @@ class Profile:
 
     bias: int
     stats: dict[Label, (int, int, int, int, dict[Label, (int, int, int, int)])]  # undocumented
-    init(self, timer: (() -> float) | None = None, bias: int | None = None)
+    init(self, timer: (() -> (int | float)) | None = None, bias: int | None = None)
     def set_cmd(self, cmd: str)
     def simulate_call(self, name: str)
     def simulate_cmd_complete(self)

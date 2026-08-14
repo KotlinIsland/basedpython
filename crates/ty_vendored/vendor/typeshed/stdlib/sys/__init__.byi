@@ -308,7 +308,7 @@ your system's :file:`float.h` for more information.
 
 # This class is not exposed at runtime. It calls itself sys.float_info.
 @type_check_only
-final class _float_info(structseq[float], tuple[float, int, int, float, int, int, int, int, float, int, int]):
+final class _float_info(structseq[int | float], tuple[float, int, int, float, int, int, int, int, float, int, int]):
     """sys.float_info
 
     A named tuple holding information about the float type. It contains low level
@@ -747,7 +747,7 @@ def setrecursionlimit(limit: int, /):
     dependent.
     """
 
-def setswitchinterval(interval: float, /):
+def setswitchinterval(interval: int | float, /):
     """Set the ideal thread switching delay inside the Python interpreter.
 
     The actual frequency of switching threads can be lower if the

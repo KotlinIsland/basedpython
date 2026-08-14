@@ -220,7 +220,7 @@ if sys.version_info < (3, 13):
 # alias we use for return types. Really, these two aliases should be the
 # same, but as per the "no union returns" typeshed policy, we'll return
 # Any instead.
-private type Color = str | (float, float, float)
+private type Color = str | (int | float, int | float, int | float)
 private type AnyColor = dynamic
 
 @type_check_only
@@ -232,16 +232,16 @@ class _PenState(TypedDict):
     pensize: int
     speed: int
     resizemode: "auto" | "user" | "noresize"
-    stretchfactor: (float, float)
-    shearfactor: float
+    stretchfactor: (int | float, int | float)
+    shearfactor: int | float
     outline: int
-    tilt: float
+    tilt: int | float
 
-private type Speed = str | float
-private type PolygonCoords = Sequence[(float, float)]
+private type Speed = str | int | float
+private type PolygonCoords = Sequence[(int | float, int | float)]
 
 if sys.version_info >= (3, 12):
-    class Vec2D(tuple[float, float]):
+    class Vec2D(tuple[int | float, int | float]):
         """A 2 dimensional vector class, used as a helper class
         for implementing turtle graphics.
         May be useful for turtle graphics programs also.
@@ -256,22 +256,22 @@ if sys.version_info >= (3, 12):
            a.rotate(angle) rotation
         """
 
-        def __new__(cls, x: float, y: float) -> Self
-        def __add__(self, other: (float, float)) -> Vec2D
+        def __new__(cls, x: int | float, y: int | float) -> Self
+        def __add__(self, other: (int | float, int | float)) -> Vec2D
 
-        def __mul__(self, other: Vec2D) -> float
-        def __mul__(self, other: float) -> Vec2D
+        def __mul__(self, other: Vec2D) -> int | float
+        def __mul__(self, other: int | float) -> Vec2D
 
-        def __rmul__(self, other: float) -> Vec2D
-        def __sub__(self, other: (float, float)) -> Vec2D
+        def __rmul__(self, other: int | float) -> Vec2D
+        def __sub__(self, other: (int | float, int | float)) -> Vec2D
         def __neg__(self) -> Vec2D
         def __abs__(self) -> float
-        def rotate(self, angle: float) -> Vec2D:
+        def rotate(self, angle: int | float) -> Vec2D:
             """rotate self counterclockwise by angle"""
 
 else:
     @disjoint_base
-    class Vec2D(tuple[float, float]):
+    class Vec2D(tuple[int | float, int | float]):
         """A 2 dimensional vector class, used as a helper class
         for implementing turtle graphics.
         May be useful for turtle graphics programs also.
@@ -286,17 +286,17 @@ else:
            a.rotate(angle) rotation
         """
 
-        def __new__(cls, x: float, y: float) -> Self
-        override def __add__(self, other: (float, float)) -> Vec2D
+        def __new__(cls, x: int | float, y: int | float) -> Self
+        override def __add__(self, other: (int | float, int | float)) -> Vec2D
 
-        override def __mul__(self, other: Vec2D) -> float
-        def __mul__(self, other: float) -> Vec2D
+        override def __mul__(self, other: Vec2D) -> int | float
+        def __mul__(self, other: int | float) -> Vec2D
 
-        override def __rmul__(self, other: float) -> Vec2D
-        def __sub__(self, other: (float, float)) -> Vec2D
+        override def __rmul__(self, other: int | float) -> Vec2D
+        def __sub__(self, other: (int | float, int | float)) -> Vec2D
         def __neg__(self) -> Vec2D
         def __abs__(self) -> float
-        def rotate(self, angle: float) -> Vec2D:
+        def rotate(self, angle: int | float) -> Vec2D:
             """rotate self counterclockwise by angle"""
 
 # Does not actually inherit from Canvas, but dynamically gets all methods of Canvas
@@ -361,7 +361,7 @@ class TurtleScreenBase:
         """
 
     def numinput(
-        self, title: str, prompt: str, default: float | None = None, minval: float | None = None, maxval: float | None = None
+        self, title: str, prompt: str, default: int | float | None = None, minval: int | float | None = None, maxval: int | float | None = None
     ) -> float | None:
         """Pop up a dialog window for input of a number.
 
@@ -428,7 +428,7 @@ class TurtleScreen(TurtleScreenBase):
     """
 
     init(
-        self, cv: Canvas, mode: "standard" | "logo" | "world" = "standard", colormode: float = 1.0, delay: int = 10
+        self, cv: Canvas, mode: "standard" | "logo" | "world" = "standard", colormode: int | float = 1.0, delay: int = 10
     )
     def clear(self):
         """Delete all drawings and all turtles from the TurtleScreen.
@@ -468,7 +468,7 @@ class TurtleScreen(TurtleScreenBase):
         """
     def mode(self, mode: "standard" | "logo" | "world") -> None
 
-    def setworldcoordinates(self, llx: float, lly: float, urx: float, ury: float):
+    def setworldcoordinates(self, llx: int | float, lly: int | float, urx: int | float, ury: int | float):
         """Set up a user defined coordinate-system.
 
         Arguments:
@@ -519,7 +519,7 @@ class TurtleScreen(TurtleScreenBase):
 
         """
 
-    def colormode(self, cmode: None = None) -> float:
+    def colormode(self, cmode: None = None) -> int | float:
         """Return the colormode or set it to 1.0 or 255.
 
         Optional argument:
@@ -533,7 +533,7 @@ class TurtleScreen(TurtleScreenBase):
         >>> screen.colormode(255)
         >>> pencolor(240,160,80)
         """
-    def colormode(self, cmode: float) -> None
+    def colormode(self, cmode: int | float) -> None
 
     def reset(self):
         """Reset all Turtles on the Screen to their initial state.
@@ -583,7 +583,7 @@ class TurtleScreen(TurtleScreenBase):
         (128.0, 0.0, 128.0)
         """
     def bgcolor(self, color: Color) -> None
-    def bgcolor(self, r: float, g: float, b: float) -> None
+    def bgcolor(self, r: int | float, g: int | float, b: int | float) -> None
 
     def tracer(self, n: None = None) -> int:
         """Turns turtle animation on/off and set delay for update drawings.
@@ -714,7 +714,7 @@ class TurtleScreen(TurtleScreenBase):
 
         """
 
-    def listen(self, xdummy: float | None = None, ydummy: float | None = None):
+    def listen(self, xdummy: int | float | None = None, ydummy: int | float | None = None):
         """Set focus on TurtleScreen (in order to collect key-events)
 
         No arguments.
@@ -847,7 +847,7 @@ class TNavigator:
         Will be overwritten by parent class
         """
 
-    def degrees(self, fullcircle: float = 360.0):
+    def degrees(self, fullcircle: int | float = 360.0):
         """Set angle measurement units to degrees.
 
         Optional argument:
@@ -884,12 +884,12 @@ class TNavigator:
         """
 
     if sys.version_info >= (3, 12):
-        def teleport(self, x: float | None = None, y: float | None = None, *, fill_gap: bool = False):
+        def teleport(self, x: int | float | None = None, y: int | float | None = None, *, fill_gap: bool = False):
             """To be overwritten by child class RawTurtle.
             Includes no TPen references.
             """
 
-    def forward(self, distance: float):
+    def forward(self, distance: int | float):
         """Move the turtle forward by the specified distance.
 
         Aliases: forward | fd
@@ -911,7 +911,7 @@ class TNavigator:
         (-50.00,0.00)
         """
 
-    def back(self, distance: float):
+    def back(self, distance: int | float):
         """Move the turtle backward by distance.
 
         Aliases: back | backward | bk
@@ -930,7 +930,7 @@ class TNavigator:
         (-30.00,0.00)
         """
 
-    def right(self, angle: float):
+    def right(self, angle: int | float):
         """Turn turtle right by angle units.
 
         Aliases: right | rt
@@ -950,7 +950,7 @@ class TNavigator:
         337.0
         """
 
-    def left(self, angle: float):
+    def left(self, angle: int | float):
         """Turn turtle left by angle units.
 
         Aliases: left | lt
@@ -982,7 +982,7 @@ class TNavigator:
         (0.00, 240.00)
         """
 
-    def xcor(self) -> float:
+    def xcor(self) -> int | float:
         """Return the turtle's x coordinate.
 
         No arguments.
@@ -995,7 +995,7 @@ class TNavigator:
         50.0
         """
 
-    def ycor(self) -> float:
+    def ycor(self) -> int | float:
         """Return the turtle's y coordinate
         ---
         No arguments.
@@ -1008,7 +1008,7 @@ class TNavigator:
         86.6025403784
         """
 
-    def goto(self, x: (float, float), y: None = None) -> None:
+    def goto(self, x: (int | float, int | float), y: None = None) -> None:
         """Move turtle to an absolute position.
 
         Aliases: setpos | setposition | goto:
@@ -1038,7 +1038,7 @@ class TNavigator:
         >>> turtle.pos()
         (0.00,0.00)
         """
-    def goto(self, x: float, y: float) -> None
+    def goto(self, x: int | float, y: int | float) -> None
 
     def home(self):
         """Move turtle to the origin - coordinates (0,0).
@@ -1052,7 +1052,7 @@ class TNavigator:
         >>> turtle.home()
         """
 
-    def setx(self, x: float):
+    def setx(self, x: int | float):
         """Set the turtle's first coordinate to x
 
         Argument:
@@ -1069,7 +1069,7 @@ class TNavigator:
         (10.00, 240.00)
         """
 
-    def sety(self, y: float):
+    def sety(self, y: int | float):
         """Set the turtle's second coordinate to y
 
         Argument:
@@ -1086,7 +1086,7 @@ class TNavigator:
         (0.00, -10.00)
         """
 
-    def distance(self, x: TNavigator | (float, float), y: None = None) -> float:
+    def distance(self, x: TNavigator | (int | float, int | float), y: None = None) -> float:
         """Return the distance from the turtle to (x,y) in turtle step units.
 
         Arguments:
@@ -1108,9 +1108,9 @@ class TNavigator:
         >>> turtle.distance(pen)
         77.0
         """
-    def distance(self, x: float, y: float) -> float
+    def distance(self, x: int | float, y: int | float) -> float
 
-    def towards(self, x: TNavigator | (float, float), y: None = None) -> float:
+    def towards(self, x: TNavigator | (int | float, int | float), y: None = None) -> float:
         """Return the angle of the line from the turtle's position to (x, y).
 
         Arguments:
@@ -1132,7 +1132,7 @@ class TNavigator:
         >>> turtle.towards(0,0)
         225.0
         """
-    def towards(self, x: float, y: float) -> float
+    def towards(self, x: int | float, y: int | float) -> float
 
     def heading(self) -> float:
         """Return the turtle's current heading.
@@ -1145,7 +1145,7 @@ class TNavigator:
         67.0
         """
 
-    def setheading(self, to_angle: float):
+    def setheading(self, to_angle: int | float):
         """Set the orientation of the turtle to to_angle.
 
         Aliases:  setheading | seth
@@ -1169,7 +1169,7 @@ class TNavigator:
         90
         """
 
-    def circle(self, radius: float, extent: float | None = None, steps: int | None = None):
+    def circle(self, radius: int | float, extent: int | float | None = None, steps: int | None = None):
         """Draw a circle with given radius.
 
         Arguments:
@@ -1363,7 +1363,7 @@ class TPen:
         (50.0, 193.0, 143.0)
         """
     def pencolor(self, color: Color) -> None
-    def pencolor(self, r: float, g: float, b: float) -> None
+    def pencolor(self, r: int | float, g: int | float, b: int | float) -> None
 
     def fillcolor(self) -> AnyColor:
         """Return or set the fillcolor.
@@ -1399,7 +1399,7 @@ class TPen:
         (255.0, 255.0, 255.0)
         """
     def fillcolor(self, color: Color) -> None
-    def fillcolor(self, r: float, g: float, b: float) -> None
+    def fillcolor(self, r: int | float, g: int | float, b: int | float) -> None
 
     def color(self) -> (AnyColor, AnyColor):
         """Return or set the pencolor and fillcolor.
@@ -1432,11 +1432,11 @@ class TPen:
         ((40.0, 80.0, 120.0), (160.0, 200.0, 240.0))
         """
     def color(self, color: Color) -> None
-    def color(self, r: float, g: float, b: float) -> None
+    def color(self, r: int | float, g: int | float, b: int | float) -> None
     def color(self, color1: Color, color2: Color) -> None
 
     if sys.version_info >= (3, 12):
-        def teleport(self, x: float | None = None, y: float | None = None, *, fill_gap: bool = False):
+        def teleport(self, x: int | float | None = None, y: int | float | None = None, *, fill_gap: bool = False):
             """To be overwritten by child class RawTurtle.
             Includes no TNavigator references.
             """
@@ -1538,9 +1538,9 @@ class TPen:
         pensize: int = ...,
         speed: int = ...,
         resizemode: "auto" | "user" | "noresize" = ...,
-        stretchfactor: (float, float) = ...,
+        stretchfactor: (int | float, int | float) = ...,
         outline: int = ...,
-        tilt: float = ...,
+        tilt: int | float = ...,
     ) -> None
 
     width = pensize
@@ -1660,7 +1660,7 @@ class RawTurtle(TPen, TNavigator):
     def shape(self, name: str) -> None
 
     # Unsafely overlaps when no arguments are provided
-    def shapesize(self) -> (float, float, float):
+    def shapesize(self) -> (int | float, int | float, int | float):
         """Set/return turtle's stretchfactors/outline. Set resizemode to "user".
 
         Optional arguments:
@@ -1682,10 +1682,10 @@ class RawTurtle(TPen, TNavigator):
         >>> turtle.shapesize(outline=8)
         """
     def shapesize(
-        self, stretch_wid: float | None = None, stretch_len: float | None = None, outline: float | None = None
+        self, stretch_wid: int | float | None = None, stretch_len: int | float | None = None, outline: int | float | None = None
     ) -> None
 
-    def shearfactor(self, shear: None = None) -> float:
+    def shearfactor(self, shear: None = None) -> int | float:
         """Set or return the current shearfactor.
 
         Optional argument: shear -- number, tangent of the shear angle
@@ -1704,10 +1704,10 @@ class RawTurtle(TPen, TNavigator):
         >>> turtle.shearfactor()
         >>> 0.5
         """
-    def shearfactor(self, shear: float) -> None
+    def shearfactor(self, shear: int | float) -> None
 
     # Unsafely overlaps when no arguments are provided
-    def shapetransform(self) -> (float, float, float, float):
+    def shapetransform(self) -> (int | float, int | float, int | float, int | float):
         """Set or return the current transformation matrix of the turtle shape.
 
         Optional arguments: t11, t12, t21, t22 -- numbers.
@@ -1728,7 +1728,7 @@ class RawTurtle(TPen, TNavigator):
         (4.0, -1.0, -0.0, 2.0)
         """
     def shapetransform(
-        self, t11: float | None = None, t12: float | None = None, t21: float | None = None, t22: float | None = None
+        self, t11: int | float | None = None, t12: int | float | None = None, t21: int | float | None = None, t22: int | float | None = None
     ) -> None
 
     def get_shapepoly(self) -> PolygonCoords | None:
@@ -1746,7 +1746,7 @@ class RawTurtle(TPen, TNavigator):
 
     if sys.version_info < (3, 13):
         @deprecated("Deprecated since Python 3.1; removed in Python 3.13. Use `tiltangle()` instead.")
-        def settiltangle(self, angle: float) -> None:
+        def settiltangle(self, angle: int | float) -> None:
             """Rotate the turtleshape to point in the specified direction
 
             Argument: angle -- number
@@ -1796,9 +1796,9 @@ class RawTurtle(TPen, TNavigator):
         >>> turtle.stamp()
         >>> turtle.fd(50)
         """
-    def tiltangle(self, angle: float) -> None
+    def tiltangle(self, angle: int | float) -> None
 
-    def tilt(self, angle: float):
+    def tilt(self, angle: int | float):
         """Rotate the turtleshape by angle.
 
         Argument:
@@ -1933,7 +1933,7 @@ class RawTurtle(TPen, TNavigator):
         >>> turtle.fd(50); turtle.dot(20, "blue"); turtle.fd(50)
         """
     def dot(self, size: int | None, color: Color, /) -> None
-    def dot(self, size: int | None, r: float, g: float, b: float, /) -> None
+    def dot(self, size: int | None, r: int | float, g: int | float, b: int | float, /) -> None
 
     def write(
         self, arg: object, move: bool = False, align: str = "left", font: (str, int, str) = ("Arial", 8, "normal")
@@ -2252,7 +2252,7 @@ def textinput(title: str, prompt: str) -> str | None:
     """
 
 def numinput(
-    title: str, prompt: str, default: float | None = None, minval: float | None = None, maxval: float | None = None
+    title: str, prompt: str, default: int | float | None = None, minval: int | float | None = None, maxval: int | float | None = None
 ) -> float | None:
     """Pop up a dialog window for input of a number.
 
@@ -2311,7 +2311,7 @@ def mode(mode: None = None) -> str:
     """
 def mode(mode: "standard" | "logo" | "world") -> None
 
-def setworldcoordinates(llx: float, lly: float, urx: float, ury: float):
+def setworldcoordinates(llx: int | float, lly: int | float, urx: int | float, ury: int | float):
     """Set up a user defined coordinate-system.
 
     Arguments:
@@ -2362,7 +2362,7 @@ def register_shape(name: str, shape: PolygonCoords | Shape | None = None):
 
     """
 
-def colormode(cmode: None = None) -> float:
+def colormode(cmode: None = None) -> int | float:
     """Return the colormode or set it to 1.0 or 255.
 
     Optional argument:
@@ -2376,7 +2376,7 @@ def colormode(cmode: None = None) -> float:
     >>> colormode(255)
     >>> pencolor(240,160,80)
     """
-def colormode(cmode: float) -> None
+def colormode(cmode: int | float) -> None
 
 def reset():
     """Delete the turtle's drawings and restore its default values.
@@ -2437,7 +2437,7 @@ def bgcolor() -> AnyColor:
     (128.0, 0.0, 128.0)
     """
 def bgcolor(color: Color) -> None
-def bgcolor(r: float, g: float, b: float) -> None
+def bgcolor(r: int | float, g: int | float, b: int | float) -> None
 
 def tracer(n: None = None) -> int:
     """Turns turtle animation on/off and set delay for update drawings.
@@ -2571,7 +2571,7 @@ def onkey(fun: () -> object, key: str):
 
     """
 
-def listen(xdummy: float | None = None, ydummy: float | None = None):
+def listen(xdummy: int | float | None = None, ydummy: int | float | None = None):
     """Set focus on TurtleScreen (in order to collect key-events)
 
     No arguments.
@@ -2690,7 +2690,7 @@ onkeyrelease = onkey
 
 # Functions copied from _Screen:
 
-def setup(width: float = 0.5, height: float = 0.75, startx: int | None = None, starty: int | None = None):
+def setup(width: int | float = 0.5, height: int | float = 0.75, startx: int | None = None, starty: int | None = None):
     """Set the size and position of the main window.
 
     Arguments:
@@ -2764,7 +2764,7 @@ def Screen() -> _Screen:
 
 # Functions copied from TNavigator:
 
-def degrees(fullcircle: float = 360.0):
+def degrees(fullcircle: int | float = 360.0):
     """Set angle measurement units to degrees.
 
     Optional argument:
@@ -2800,7 +2800,7 @@ def radians():
     1.5707963267948966
     """
 
-def forward(distance: float):
+def forward(distance: int | float):
     """Move the turtle forward by the specified distance.
 
     Aliases: forward | fd
@@ -2822,7 +2822,7 @@ def forward(distance: float):
     (-50.00,0.00)
     """
 
-def back(distance: float):
+def back(distance: int | float):
     """Move the turtle backward by distance.
 
     Aliases: back | backward | bk
@@ -2841,7 +2841,7 @@ def back(distance: float):
     (-30.00,0.00)
     """
 
-def right(angle: float):
+def right(angle: int | float):
     """Turn turtle right by angle units.
 
     Aliases: right | rt
@@ -2861,7 +2861,7 @@ def right(angle: float):
     337.0
     """
 
-def left(angle: float):
+def left(angle: int | float):
     """Turn turtle left by angle units.
 
     Aliases: left | lt
@@ -2893,7 +2893,7 @@ def pos() -> Vec2D:
     (0.00, 240.00)
     """
 
-def xcor() -> float:
+def xcor() -> int | float:
     """Return the turtle's x coordinate.
 
     No arguments.
@@ -2906,7 +2906,7 @@ def xcor() -> float:
     50.0
     """
 
-def ycor() -> float:
+def ycor() -> int | float:
     """Return the turtle's y coordinate
     ---
     No arguments.
@@ -2919,7 +2919,7 @@ def ycor() -> float:
     86.6025403784
     """
 
-def goto(x: (float, float), y: None = None) -> None:
+def goto(x: (int | float, int | float), y: None = None) -> None:
     """Move turtle to an absolute position.
 
     Aliases: setpos | setposition | goto:
@@ -2949,7 +2949,7 @@ def goto(x: (float, float), y: None = None) -> None:
     >>> pos()
     (0.00,0.00)
     """
-def goto(x: float, y: float) -> None
+def goto(x: int | float, y: int | float) -> None
 
 def home():
     """Move turtle to the origin - coordinates (0,0).
@@ -2963,7 +2963,7 @@ def home():
     >>> home()
     """
 
-def setx(x: float):
+def setx(x: int | float):
     """Set the turtle's first coordinate to x
 
     Argument:
@@ -2980,7 +2980,7 @@ def setx(x: float):
     (10.00, 240.00)
     """
 
-def sety(y: float):
+def sety(y: int | float):
     """Set the turtle's second coordinate to y
 
     Argument:
@@ -2997,7 +2997,7 @@ def sety(y: float):
     (0.00, -10.00)
     """
 
-def distance(x: TNavigator | (float, float), y: None = None) -> float:
+def distance(x: TNavigator | (int | float, int | float), y: None = None) -> float:
     """Return the distance from the turtle to (x,y) in turtle step units.
 
     Arguments:
@@ -3019,9 +3019,9 @@ def distance(x: TNavigator | (float, float), y: None = None) -> float:
     >>> distance(pen)
     77.0
     """
-def distance(x: float, y: float) -> float
+def distance(x: int | float, y: int | float) -> float
 
-def towards(x: TNavigator | (float, float), y: None = None) -> float:
+def towards(x: TNavigator | (int | float, int | float), y: None = None) -> float:
     """Return the angle of the line from the turtle's position to (x, y).
 
     Arguments:
@@ -3043,7 +3043,7 @@ def towards(x: TNavigator | (float, float), y: None = None) -> float:
     >>> towards(0,0)
     225.0
     """
-def towards(x: float, y: float) -> float
+def towards(x: int | float, y: int | float) -> float
 
 def heading() -> float:
     """Return the turtle's current heading.
@@ -3056,7 +3056,7 @@ def heading() -> float:
     67.0
     """
 
-def setheading(to_angle: float):
+def setheading(to_angle: int | float):
     """Set the orientation of the turtle to to_angle.
 
     Aliases:  setheading | seth
@@ -3080,7 +3080,7 @@ def setheading(to_angle: float):
     90
     """
 
-def circle(radius: float, extent: float | None = None, steps: int | None = None):
+def circle(radius: int | float, extent: int | float | None = None, steps: int | None = None):
     """Draw a circle with given radius.
 
     Arguments:
@@ -3265,7 +3265,7 @@ def pencolor() -> AnyColor:
     (50.0, 193.0, 143.0)
     """
 def pencolor(color: Color) -> None
-def pencolor(r: float, g: float, b: float) -> None
+def pencolor(r: int | float, g: int | float, b: int | float) -> None
 
 def fillcolor() -> AnyColor:
     """Return or set the fillcolor.
@@ -3301,7 +3301,7 @@ def fillcolor() -> AnyColor:
     (255.0, 255.0, 255.0)
     """
 def fillcolor(color: Color) -> None
-def fillcolor(r: float, g: float, b: float) -> None
+def fillcolor(r: int | float, g: int | float, b: int | float) -> None
 
 def color() -> (AnyColor, AnyColor):
     """Return or set the pencolor and fillcolor.
@@ -3334,7 +3334,7 @@ def color() -> (AnyColor, AnyColor):
     ((40.0, 80.0, 120.0), (160.0, 200.0, 240.0))
     """
 def color(color: Color) -> None
-def color(r: float, g: float, b: float) -> None
+def color(r: int | float, g: int | float, b: int | float) -> None
 def color(color1: Color, color2: Color) -> None
 
 def showturtle():
@@ -3433,9 +3433,9 @@ def pen(
     pensize: int = ...,
     speed: int = ...,
     resizemode: "auto" | "user" | "noresize" = ...,
-    stretchfactor: (float, float) = ...,
+    stretchfactor: (int | float, int | float) = ...,
     outline: int = ...,
-    tilt: float = ...,
+    tilt: int | float = ...,
 ) -> None
 
 width = pensize
@@ -3496,7 +3496,7 @@ def shape(name: None = None) -> str:
 def shape(name: str) -> None
 
 if sys.version_info >= (3, 12):
-    def teleport(x: float | None = None, y: float | None = None, *, fill_gap: bool = False):
+    def teleport(x: int | float | None = None, y: int | float | None = None, *, fill_gap: bool = False):
         """Instantly move turtle to an absolute position.
 
         Arguments:
@@ -3533,7 +3533,7 @@ if sys.version_info >= (3, 12):
         """
 
 # Unsafely overlaps when no arguments are provided
-def shapesize() -> (float, float, float):
+def shapesize() -> (int | float, int | float, int | float):
     """Set/return turtle's stretchfactors/outline. Set resizemode to "user".
 
     Optional arguments:
@@ -3554,9 +3554,9 @@ def shapesize() -> (float, float, float):
     >>> shapesize(5, 5, 12)
     >>> shapesize(outline=8)
     """
-def shapesize(stretch_wid: float | None = None, stretch_len: float | None = None, outline: float | None = None) -> None
+def shapesize(stretch_wid: int | float | None = None, stretch_len: int | float | None = None, outline: int | float | None = None) -> None
 
-def shearfactor(shear: None = None) -> float:
+def shearfactor(shear: None = None) -> int | float:
     """Set or return the current shearfactor.
 
     Optional argument: shear -- number, tangent of the shear angle
@@ -3575,10 +3575,10 @@ def shearfactor(shear: None = None) -> float:
     >>> shearfactor()
     >>> 0.5
     """
-def shearfactor(shear: float) -> None
+def shearfactor(shear: int | float) -> None
 
 # Unsafely overlaps when no arguments are provided
-def shapetransform() -> (float, float, float, float):
+def shapetransform() -> (int | float, int | float, int | float, int | float):
     """Set or return the current transformation matrix of the turtle shape.
 
     Optional arguments: t11, t12, t21, t22 -- numbers.
@@ -3599,7 +3599,7 @@ def shapetransform() -> (float, float, float, float):
     (4.0, -1.0, -0.0, 2.0)
     """
 def shapetransform(
-    t11: float | None = None, t12: float | None = None, t21: float | None = None, t22: float | None = None
+    t11: int | float | None = None, t12: int | float | None = None, t21: int | float | None = None, t22: int | float | None = None
 ) -> None
 
 def get_shapepoly() -> PolygonCoords | None:
@@ -3617,7 +3617,7 @@ def get_shapepoly() -> PolygonCoords | None:
 
 if sys.version_info < (3, 13):
     @deprecated("Deprecated since Python 3.1; removed in Python 3.13. Use `tiltangle()` instead.")
-    def settiltangle(angle: float) -> None:
+    def settiltangle(angle: int | float) -> None:
         """Rotate the turtleshape to point in the specified direction
 
         Argument: angle -- number
@@ -3667,9 +3667,9 @@ def tiltangle(angle: None = None) -> float:
     >>> stamp()
     >>> fd(50)
     """
-def tiltangle(angle: float) -> None
+def tiltangle(angle: int | float) -> None
 
-def tilt(angle: float):
+def tilt(angle: int | float):
     """Rotate the turtleshape by angle.
 
     Argument:
@@ -3804,7 +3804,7 @@ def dot(size: int | Color | None = None) -> None:
     >>> fd(50); dot(20, "blue"); fd(50)
     """
 def dot(size: int | None, color: Color, /) -> None
-def dot(size: int | None, r: float, g: float, b: float, /) -> None
+def dot(size: int | None, r: int | float, g: int | float, b: int | float, /) -> None
 
 def write(arg: object, move: bool = False, align: str = "left", font: (str, int, str) = ("Arial", 8, "normal")):
     """Write text at the current turtle position.

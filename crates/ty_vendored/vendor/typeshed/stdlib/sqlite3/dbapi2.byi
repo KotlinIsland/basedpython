@@ -232,9 +232,9 @@ Date = date
 Time = time
 Timestamp = datetime
 
-def DateFromTicks(ticks: float) -> Date
-def TimeFromTicks(ticks: float) -> Time
-def TimestampFromTicks(ticks: float) -> Timestamp
+def DateFromTicks(ticks: int | float) -> Date
+def TimeFromTicks(ticks: int | float) -> Time
+def TimestampFromTicks(ticks: int | float) -> Timestamp
 
 if sys.version_info < (3, 14):
     # Deprecated in 3.12, removed in 3.14.

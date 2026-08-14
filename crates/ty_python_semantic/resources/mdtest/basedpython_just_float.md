@@ -118,11 +118,10 @@ x: float = 1  # accepted: `float` here is the local alias for `int`
 
 ## arithmetic on a `float` stays a `float`
 
-The promotion says an `int` is acceptable *where a `float` is asked for* — it is a rule about what a
-position accepts. A return annotation accepts nothing, and `float.__mul__` returns a `float` and
-never an `int`, so a promoted return would only invent a union. In a `.by` file, where the writer's
-own `float` is strict, that union was then not assignable back to it, and basic numeric code did not
-type-check at all.
+The vendored typeshed is `.byi`, so nothing is promoted while reading it: the stubs spell out what
+they accept instead. `float.__mul__` takes an `int | float` because `1.0 * 2` works, and returns a
+`float` because the result never is an `int`. So arithmetic composes with a strict `float` the way
+the writer expects.
 
 ```by
 import math
@@ -148,12 +147,84 @@ def f(x: float, y: float) -> None:
     reveal_type(round(x, 2))  # revealed: float
 ```
 
-A stub *parameter* still promotes, so mixing an `int` into the arithmetic is accepted exactly as
+A stub parameter says `int | float`, so mixing an `int` into the arithmetic is accepted exactly as
 python accepts it.
 
 ```by
 def f(x: float) -> float:
     return x * 9 / 5 + 32
+```
+
+## a value read out of the standard library is exact
+
+A stub position a value only ever comes *out* of — a property, a module constant, a named-tuple
+field — is a `float` and not a union. There is nothing to accept there, so there is nothing for the
+typing spec's `int` to be doing.
+
+```by
+import math
+import sys
+import time
+
+reveal_type(.0.real)  # revealed: float
+reveal_type(.0.imag)  # revealed: float
+reveal_type(math.pi)  # revealed: float
+reveal_type(math.inf)  # revealed: float
+reveal_type(sys.float_info.epsilon)  # revealed: float
+reveal_type(time.time())  # revealed: float
+```
+
+## a standard-library parameter accepts an `int`
+
+`math.sqrt(2)` really does work, so the stub says `int | float` rather than leaving the `int` to the
+typing spec. The same goes for every other parameter upstream typeshed wrote as a bare `float`.
+
+```by
+import math
+
+reveal_type(math.sqrt(2))  # revealed: float
+reveal_type(math.hypot(3, 4.0))  # revealed: float
+reveal_type(round(1.0, 2))  # revealed: float
+```
+
+## a constrained type variable is solved from the argument
+
+`statistics.mean` is generic over a constraint list that upstream writes as `float`, meaning
+`int | float`. The constraint is reached by the argument a call supplies, so it is widened like a
+parameter and a list of `int`s still has a mean.
+
+```by
+import statistics
+
+reveal_type(statistics.mean([1, 2, 3]))  # revealed: int | float
+reveal_type(statistics.mean([1.0, 2.0]))  # revealed: int | float
+```
+
+## an attribute says what the library really keeps in it
+
+An attribute is read as well as written, so the stub cannot answer the question by position alone —
+it has to say what the library actually stores. `socketserver` documents `timeout` as a knob to set
+and only ever forwards it to a selector, so an `int` is one of the things it holds.
+
+```by
+import socketserver
+
+class Server(socketserver.TCPServer):
+    timeout = 5
+
+def f(server: socketserver.TCPServer) -> None:
+    reveal_type(server.timeout)  # revealed: int | float | None
+    server.timeout = 5
+```
+
+An attribute the library computes, rather than one it is handed, keeps the type it computes.
+
+```by
+import os
+
+def f(st: os.stat_result) -> None:
+    reveal_type(st.st_atime)  # revealed: float
+    reveal_type(st.st_size)  # revealed: int
 ```
 
 ## a `.py` file still promotes on both sides
