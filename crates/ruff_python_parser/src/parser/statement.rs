@@ -6,6 +6,7 @@ use ruff_python_ast::{
     self as ast, AtomicNodeIndex, DecoratorList, ExceptHandler, Expr, ExprContext, IpyEscapeKind,
     Operator, Pattern, PythonVersion, Stmt, Suite, Variance, WithItem,
 };
+use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::error::StarTupleKind;
@@ -166,6 +167,16 @@ fn param_prefix_declares_attribute(prefix: &str) -> bool {
 /// keyword — the synthesised attribute is then name-mangled (`self.__name`).
 fn param_prefix_is_private(prefix: &str) -> bool {
     prefix.split_whitespace().any(|word| word == "private")
+}
+
+/// The range of the `let` keyword inside a parameter's modifier prefix (the
+/// source span from the parameter node start to its name). `None` for a prefix
+/// that binds with `var` (or does not bind at all), whose attribute is mutable.
+fn param_prefix_let_range(source: &str, prefix: TextRange) -> Option<TextRange> {
+    SimpleTokenizer::new(source, prefix)
+        .skip_trivia()
+        .find(|token| token.kind == SimpleTokenKind::Name && &source[token.range] == "let")
+        .map(|token| token.range)
 }
 
 /// A zero-width synthetic `self` parameter injected into an `init(...)` whose
@@ -4942,10 +4953,44 @@ impl<'src> Parser<'src> {
             range: name_range,
             node_index: AtomicNodeIndex::NONE,
         });
-        let stmt = match &param.annotation {
-            Some(ann) => Stmt::AnnAssign(ast::StmtAnnAssign {
+        // `let` binds read-only state, exactly like a class-body `let x: T`, so the
+        // synthesised declaration carries the same `__let__` marker. That is what
+        // makes a class covariant in a type parameter it only stores: without it
+        // the attribute reads as writable and pins the parameter invariant
+        let let_range = param_prefix_let_range(
+            self.source,
+            TextRange::new(param.range.start(), param.name.range.start()),
+        );
+        let let_marker = |range| {
+            Expr::Name(ast::ExprName {
+                id: Name::new_static("__let__"),
+                ctx: ExprContext::Invalid,
+                range,
+                node_index: AtomicNodeIndex::NONE,
+            })
+        };
+        let annotation = match (&param.annotation, let_range) {
+            // `let a: T` — the declared type rides in the marker's slice, as it
+            // does for the class-body form
+            (Some(ann), Some(let_range)) => Some(Box::new(Expr::Subscript(ast::ExprSubscript {
+                range: TextRange::new(let_range.start(), ann.range().end()),
+                value: Box::new(let_marker(let_range)),
+                slice: ann.clone(),
+                ctx: ExprContext::Load,
+                node_index: AtomicNodeIndex::NONE,
+                is_typeof: false,
+            }))),
+            // `let a` — a bare marker: read-only, with the type left to the value
+            (None, Some(let_range)) => Some(Box::new(let_marker(let_range))),
+            // `var a: T` — an ordinary, writable declaration
+            (Some(ann), None) => Some(ann.clone()),
+            // `var a` — no declaration at all
+            (None, None) => None,
+        };
+        let stmt = match annotation {
+            Some(annotation) => Stmt::AnnAssign(ast::StmtAnnAssign {
                 target: Box::new(attr_target),
-                annotation: ann.clone(),
+                annotation,
                 value: Some(Box::new(value_expr)),
                 simple: false,
                 range: param.range,

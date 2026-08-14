@@ -421,6 +421,15 @@ impl<'src> Modifiers<'src> {
     }
 
     fn process_ann_assign(&mut self, node: &StmtAnnAssign) {
+        // every modifier declaration binds a bare name (`let a: T`), so anything
+        // else is a parser-synthesised statement wearing a marker — the
+        // `self.<name>: __let__[T] = <name>` an `init(let a: T)` stands for. Those
+        // have no source of their own (their ranges point back at the parameter,
+        // out of statement order), and the `init_method` pass writes the real
+        // lowered line, so there is nothing to rewrite here
+        if !node.target.is_name_expr() {
+            return;
+        }
         let name = self.src(node.target.range()).to_owned();
 
         // `[modifiers] a: T [= v]` where no modifier carries meaning — erase only

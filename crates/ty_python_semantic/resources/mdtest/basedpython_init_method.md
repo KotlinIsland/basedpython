@@ -79,6 +79,47 @@ x = A(1)
 reveal_type(x.a)  # revealed: int
 ```
 
+## a `let` attribute is read-only, a `var` attribute is not
+
+The constructor binds a `let` parameter's attribute once, exactly like a class-body `let a: int`.
+Writing to it afterwards is rejected; the `var` counterpart accepts the write.
+
+```by
+class A:
+    init(let a: int, var b: int)
+
+x = A(1, 2)
+x.b = 3
+x.a = 3  # error: [invalid-assignment]
+```
+
+An unannotated `let` parameter declares read-only state too — only the attribute's type is left to
+the value.
+
+```by
+class Unannotated:
+    init(let a)
+
+Unannotated(1).a = 2  # error: [invalid-assignment]
+```
+
+## a class that only stores a `let` parameter is covariant
+
+Nothing can write to a `let` attribute, so a widened view of the class cannot corrupt it and the
+type parameter is inferred covariant. A `var` attribute is writable, which pins it invariant.
+
+```by
+class ReadOnly[T]:
+    init(let t: T)
+
+class Mutable[T]:
+    init(var t: T)
+
+def _(a: ReadOnly[int], b: Mutable[int]):
+    widened: ReadOnly[object] = a
+    also_widened: Mutable[object] = b  # error: [invalid-assignment]
+```
+
 ## `self` is implied when omitted
 
 The author may leave `self` out of the parameter list. It is still bound, so `let` / `var`

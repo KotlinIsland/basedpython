@@ -53,10 +53,32 @@ or, if unannotated, a bare assignment (`self.<name> = <name>`)
 
 a non-`let` parameter is just a parameter — no attribute is created for it
 
+the attribute is read-only, exactly as a class-body `let a: int` is: the
+constructor binds it and nothing else may write it
+
+```by
+class A:
+    init(let a: int)
+
+A(1).a = 2  # rejected
+```
+
+that is what lets a class be covariant in a type parameter it only stores —
+a widened view cannot corrupt an attribute nothing can write to:
+
+```by
+class Box[T]:
+    init(let t: T)
+
+def _(box: Box[int]):
+    widened: Box[object] = box
+```
+
 ## `var` and visibility modifiers
 
 `var` is the mutable counterpart of `let`; on an `init` parameter it
-self-assigns identically. a visibility modifier — `private` or `public` — may
+self-assigns identically, but the attribute stays writable — and a class that
+stores one is invariant in its type. a visibility modifier — `private` or `public` — may
 precede `let` / `var`. `private` name-mangles the synthesised attribute to
 `self.__name`, while the parameter itself keeps its declared name:
 
