@@ -310,6 +310,52 @@ mod tests {
     }
 
     #[test]
+    fn trailing_lambda_it_fills_a_context_parameter() {
+        check(
+            indoc! {r#"
+                def f(context b: str): ...
+                def each(fn: (str) -> None): ...
+
+                each:
+                    f()
+            "#},
+            indoc! {r#"
+                from typing import Callable
+                def f(b: str): ...
+                def each(fn: Callable[[str], None]): ...
+
+                def _trailing_lambda_0(it=None):
+                    f(b=it)
+                each(fn=_trailing_lambda_0)
+            "#},
+        );
+    }
+
+    #[test]
+    fn trailing_lambda_receiver_fills_a_context_parameter() {
+        // the block's receiver is spelled `self` in the source but has a name of
+        // its own in the lowering, which is what the injected argument must use
+        check(
+            indoc! {r#"
+                def f(context b: str): ...
+                def against(fn: str.() -> None): ...
+
+                against:
+                    f()
+            "#},
+            indoc! {r#"
+                from typing import Callable
+                def f(b: str): ...
+                def against(fn: Callable[[str], None]): ...
+
+                def _trailing_lambda_0(_by_self=None, it=None):
+                    f(b=_by_self)
+                against(fn=_trailing_lambda_0)
+            "#},
+        );
+    }
+
+    #[test]
     fn unresolved_call_left_alone() {
         // no declaration in scope: check errors, the lowering injects nothing
         check(

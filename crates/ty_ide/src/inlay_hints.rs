@@ -1148,7 +1148,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
                 (
                     &argument.parameter,
                     &argument.variable,
-                    Some(NavigationTarget::from(argument.declaration)),
+                    argument.declaration.map(NavigationTarget::from),
                 )
             })
             .collect();

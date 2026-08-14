@@ -22,9 +22,8 @@
 //! [trailing lambda]: crate::types::trailing_lambda
 
 use ruff_db::files::File;
-use ruff_db::parsed::parsed_module;
 use ruff_python_ast::{self as ast, Expr};
-use ty_python_core::scope::{ScopeId, ScopeKind};
+use ty_python_core::scope::ScopeId;
 use ty_python_core::{place_table, semantic_index};
 
 use crate::Db;
@@ -32,7 +31,7 @@ use crate::place::{ConsideredDefinitions, symbol};
 use crate::types::ProgramEnvironment;
 use crate::types::name_fallback::claimed_by_name_resolution;
 use crate::types::signatures::{Parameters, Signature};
-use crate::types::{Type, TypeContext, UnionType, infer_expression_types};
+use crate::types::{Type, UnionType};
 
 /// the single signature of `ty` when it is a callable that declares a receiver
 fn receiver_signature<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<&'db Signature<'db>> {
@@ -254,32 +253,12 @@ pub(crate) fn implicit_receiver_name<'db>(
     })
 }
 
-/// the receiver of the trailing lambda block `scope` is the body of. Walks out
-/// through comprehension scopes (which the block's body may open) but stops at the
-/// first function, class, or module scope: a nested definition is its own body,
-/// not the block's
+/// the receiver of the trailing lambda block `scope` is the body of
 fn trailing_lambda_scope_receiver<'db>(
     db: &'db dyn Db,
     file: File,
     scope: ScopeId<'db>,
 ) -> Option<Type<'db>> {
-    let index = semantic_index(db, db.program_file(file));
-    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
-    for (_, ancestor) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
-        match ancestor.kind() {
-            ScopeKind::Comprehension => continue,
-            ScopeKind::Function => {}
-            _ => return None,
-        }
-        let function = ancestor.node().as_function()?.node(&module);
-        if !function.is_trailing_lambda {
-            return None;
-        }
-        let callee = function.trailing_lambda_callee()?;
-        let expression = index.try_expression(callee)?;
-        let callee_ty = infer_expression_types(db, expression, TypeContext::default())
-            .try_expression_type(callee)?;
-        return crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee_ty);
-    }
-    None
+    let callee_ty = crate::types::trailing_lambda::enclosing_block_callee_type(db, file, scope)?;
+    crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee_ty)
 }

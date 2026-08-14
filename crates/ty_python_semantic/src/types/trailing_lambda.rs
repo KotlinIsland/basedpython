@@ -7,13 +7,50 @@
 //! are defaulted. the implicit `it` parameter takes its type from that
 //! parameter's declared callable type
 
+use ruff_db::files::File;
+use ruff_db::parsed::parsed_module;
 use ruff_python_ast::ParameterBorrow;
 use ruff_python_ast::name::Name;
+use ty_python_core::scope::{ScopeId, ScopeKind};
+use ty_python_core::semantic_index;
 
 use crate::Db;
-use crate::types::Type;
 use crate::types::signatures::{Parameter, Signature};
 use crate::types::soundness::single_signature;
+use crate::types::{Type, TypeContext, infer_expression_types};
+
+/// the type of the expression the trailing lambda block whose body `scope` is in
+/// is attached to. Walks out through comprehension scopes (which a block body
+/// may open) but stops at the first function, class, or module scope: a nested
+/// definition is its own body, not the block's.
+///
+/// The callee is inferred as a standalone expression (registered by the semantic
+/// index builder), which is independent of the enclosing definition's inference
+/// — so asking for it from inside the block body is not a cycle
+pub(crate) fn enclosing_block_callee_type<'db>(
+    db: &'db dyn Db,
+    file: File,
+    scope: ScopeId<'db>,
+) -> Option<Type<'db>> {
+    let index = semantic_index(db, db.program_file(file));
+    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+    for (_, ancestor) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
+        match ancestor.kind() {
+            ScopeKind::Comprehension => continue,
+            ScopeKind::Function => {}
+            _ => return None,
+        }
+        let function = ancestor.node().as_function()?.node(&module);
+        if !function.is_trailing_lambda {
+            return None;
+        }
+        let callee = function.trailing_lambda_callee()?;
+        let expression = index.try_expression(callee)?;
+        return infer_expression_types(db, expression, TypeContext::default())
+            .try_expression_type(callee);
+    }
+    None
+}
 
 /// basedpython: whether the callee's callback — its last declared parameter, the
 /// one a trailing block binds — is marked `once`.
