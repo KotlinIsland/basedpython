@@ -1,0 +1,12 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ inherited_parameter_types: true, ..InlayHintSettings::none() })"
+---
+
+from typing import overload
+
+@overload
+def f(a: int) -> int: ...
+@overload
+def f(a: str) -> str: ...
+def f(a[: int | str]): ...

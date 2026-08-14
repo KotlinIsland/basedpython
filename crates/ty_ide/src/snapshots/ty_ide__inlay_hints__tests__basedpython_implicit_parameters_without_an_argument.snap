@@ -12,5 +12,5 @@ def against(fn: str.() -> None) -> None:
 apply:
     print('hi')
 
-against:[self: str]
+against:[ self: str]
     print(upper())

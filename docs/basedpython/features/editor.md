@@ -100,24 +100,26 @@ each kind of hint can be turned off on its own through the
 `ty.inlayHints.<name>` setting your editor passes to the server. all default to
 on
 
-| setting                | shows                                                       |
-| ---------------------- | ----------------------------------------------------------- |
-| `variableTypes`        | the type of a variable the source does not annotate         |
-| `callArgumentNames`    | the parameter each positional argument fills                |
-| `inferredRaises`       | the [exception set](exceptions.md) of an undeclared `def`   |
-| `inferredVariance`     | the [variance](variance.md) inferred for a type parameter   |
-| `inferredReification`  | `reified` on a parameter the body reifies                   |
-| `inferredOverride`     | `override` on a method that overrides without saying so     |
-| `callTypeArguments`    | the type arguments inferred for a generic call              |
-| `typeArgumentNames`    | the parameter a positional type argument fills              |
-| `numericPromotions`    | the arms numeric promotion adds to `float` and `complex`    |
-| `revealedTypes`        | what a `reveal_type` call reveals                           |
-| `implicitParameters`   | a [trailing lambda](trailing-lambdas.md)'s `it`             |
-| `implicitSelf`         | the `self` an [`init(...)`](init-method.md) binds           |
-| `lambdaParameterTypes` | the type of an unannotated `lambda` parameter               |
-| `implicitArguments`    | the [context arguments](context-parameters.md) a call fills |
-| `templateBindingTypes` | a django template `{% for %}` binding's element type        |
-| `resolvedTemplates`    | the file a django `{% extends %}` name resolves to          |
+| setting                   | shows                                                       |
+| ------------------------- | ----------------------------------------------------------- |
+| `variableTypes`           | the type of a variable the source does not annotate         |
+| `callArgumentNames`       | the parameter each positional argument fills                |
+| `inferredRaises`          | the [exception set](exceptions.md) of an undeclared `def`   |
+| `inferredVariance`        | the [variance](variance.md) inferred for a type parameter   |
+| `inferredReification`     | `reified` on a parameter the body reifies                   |
+| `inferredOverride`        | `override` on a method that overrides without saying so     |
+| `callTypeArguments`       | the type arguments inferred for a generic call              |
+| `typeArgumentNames`       | the parameter a positional type argument fills              |
+| `numericPromotions`       | the arms numeric promotion adds to `float` and `complex`    |
+| `revealedTypes`           | what a `reveal_type` call reveals                           |
+| `implicitParameters`      | a [trailing lambda](trailing-lambdas.md)'s `it`             |
+| `implicitSelf`            | the `self` an [`init(...)`](init-method.md) binds           |
+| `lambdaParameterTypes`    | the type of an unannotated `lambda` parameter               |
+| `inheritedParameterTypes` | the type a parameter takes from the method it overrides     |
+| `inferredReturnTypes`     | the return type of a `def` that leaves it out               |
+| `implicitArguments`       | the [context arguments](context-parameters.md) a call fills |
+| `templateBindingTypes`    | a django template `{% for %}` binding's element type        |
+| `resolvedTemplates`       | the file a django `{% extends %}` name resolves to          |
 
 ## outline
 

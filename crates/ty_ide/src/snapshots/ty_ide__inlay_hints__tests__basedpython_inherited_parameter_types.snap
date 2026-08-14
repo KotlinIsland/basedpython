@@ -1,0 +1,13 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ inherited_parameter_types: true, ..InlayHintSettings::none() })"
+---
+
+class A:
+    def f(self, a: int, b: str = 'x') -> None: ...
+
+class B(A):
+    def f(self, a[: int], b[: str]='y') -> None: ...
+
+class C:
+    def f(self, a) -> None: ...

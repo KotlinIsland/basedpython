@@ -1,0 +1,13 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ inferred_return_types: true, ..InlayHintSettings::none() })"
+---
+
+def f() -> int:
+    return 1
+
+def guard(a: object) -> asserts a:
+    assert a
+
+class C:
+    init(a: int)

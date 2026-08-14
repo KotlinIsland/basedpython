@@ -18,11 +18,11 @@ class C:
 class D:
     init()
 
-apply:[it: int]
+apply:[ it: int]
     print(it)
 
-against:[self: str]
+against:[ self: str]
     print(upper())
 
-against_with:[self: str, it: int]
+against_with:[ self: str, it: int]
     print(upper(), it)

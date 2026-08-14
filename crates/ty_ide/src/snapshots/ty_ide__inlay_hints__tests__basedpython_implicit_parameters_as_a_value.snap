@@ -7,7 +7,7 @@ def apply(fn: (int) -> None) -> str:
     fn(1)
     return 'done'
 
-result[: str] = apply:[it: int]
+result[: str] = apply:[ it: int]
     print(it)
 
 ---------------------------------------------
@@ -19,7 +19,7 @@ LL | class str(Sequence[str]):
 info: Source
   --> main2.py:LL:10
    |
-LL | result[: str] = apply:[it: int]
+LL | result[: str] = apply:[ it: int]
    |          ^^^
 
 ---------------------------------------------

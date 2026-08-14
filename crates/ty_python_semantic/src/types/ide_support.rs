@@ -15,12 +15,15 @@ use crate::types::dedicated::django;
 use crate::types::extensions::{applicable_extensions, resolve_extension_member};
 use crate::types::function::FunctionDecorators;
 use crate::types::generics::GenericContext;
+use crate::types::infer::nearest_enclosing_function;
 use crate::types::list_members::all_end_of_scope_members;
 use crate::types::overrides::is_constructor_like_method;
-use crate::types::signatures::{ParameterKind, ParametersKind, Signature};
+use crate::types::signatures::{
+    ParameterKind, ParametersKind, ReturnCallableTypeVarScope, Signature,
+};
 use crate::types::{
     CallDunderError, CallableTypes, ClassBase, ClassLiteral, ClassType, KnownClass, KnownFunction,
-    KnownUnion, PropertyAccessorRole, SubclassOfInner, Type, TypeContext,
+    KnownUnion, PropertyAccessorRole, SpecialFormType, SubclassOfInner, Type, TypeContext,
     TypeVarBoundOrConstraints, TypeVarVariance, binding_type,
 };
 use crate::{Db, HasDefinition, HasType, ProgramEnvironment, SemanticModel};
@@ -3570,6 +3573,53 @@ pub fn trailing_lambda_implicit_parameters<'db>(
     parameters
 }
 
+/// basedpython: the type an unannotated parameter takes from somewhere other than its own
+/// source — the method it overrides, or the overloads it implements.
+///
+/// A parameter nothing else typed opens an anonymous type parameter, which says no more about
+/// the value than the missing annotation did, so it is not offered. Neither is the receiver,
+/// whose implicit `Self` is never written down.
+pub fn inherited_parameter_annotation<'db>(
+    model: &SemanticModel<'db>,
+    parameter: &ast::Parameter,
+) -> Option<Type<'db>> {
+    let db = model.db();
+    let index = semantic_index(db, db.program_file(model.file()));
+    let definition = index.try_definition(parameter)?;
+    let function = nearest_enclosing_function(db, index, definition.scope(db))?;
+
+    let signature = function.last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public);
+    let matched = signature
+        .parameters()
+        .iter()
+        .find(|candidate| candidate.name() == Some(&parameter.name.id))?;
+
+    // an annotation the source wrote is displayed by the source; an implicit receiver and an
+    // anonymous hole are the two types a signature holds that were never written anywhere
+    if !matched.should_annotation_be_displayed() {
+        return None;
+    }
+
+    let ty = matched.annotated_type();
+    (!ty.is_unknown() && !ty.is_inferred_parameter_hole(db)).then_some(ty)
+}
+
+/// basedpython: the return type recovered for a `def` that leaves its annotation out.
+///
+/// `None` is what such a `def` already means, so recovering it says nothing the source did not
+/// — the `redundant-return-annotation` lint reports writing it down.
+pub fn inferred_return_annotation<'db>(db: &'db dyn Db, function: Type<'db>) -> Option<Type<'db>> {
+    let Type::FunctionLiteral(function) = function else {
+        return None;
+    };
+
+    let return_ty = function
+        .last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public)
+        .return_ty;
+
+    (!return_ty.is_unknown() && !return_ty.is_none(db)).then_some(return_ty)
+}
+
 /// The type worth showing for a parameter the source leaves unannotated.
 ///
 /// A receiver's `Self` type says nothing the enclosing class does not already,
@@ -3883,25 +3933,51 @@ pub fn own_class_member_names<'db>(
 ///
 /// `float` means `int | float` and `complex` means `int | float | complex` in a
 /// `.py` file. basedpython opts out, so a `.by` file promotes nothing.
+///
+/// `siblings` is what the operands written beside this one in the same union
+/// already denote. An arm one of them spells is not added by the promotion —
+/// `float | int` is a union of exactly two arms however it is read — so showing
+/// it would ask the reader to write `int` a second time.
 pub fn numeric_promotion<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
     ty: Type<'db>,
-) -> Option<&'static str> {
+    siblings: &[Type<'db>],
+) -> Option<String> {
     if file.source_type(db).is_basedpython() {
         return None;
     }
 
     // a type expression stores what it evaluated to, so the promotion is only
     // visible as the union it produced
-    if ty == KnownUnion::Float.to_type(db, env) {
-        Some(" | int")
+    let arms: &[(&'static str, KnownClass)] = if ty == KnownUnion::Float.to_type(db, env) {
+        &[("int", KnownClass::Int)]
     } else if ty == KnownUnion::Complex.to_type(db, env) {
-        Some(" | float | int")
+        &[("float", KnownClass::Float), ("int", KnownClass::Int)]
     } else {
-        None
+        return None;
+    };
+
+    let mut rendered = String::new();
+    for (spelling, arm) in arms {
+        let arm = arm.to_instance(db, env);
+        if siblings
+            .iter()
+            .any(|sibling| arm.is_subtype_of(db, env, *sibling))
+        {
+            continue;
+        }
+        rendered.push_str(" | ");
+        rendered.push_str(spelling);
     }
+
+    (!rendered.is_empty()).then_some(rendered)
+}
+
+/// Whether `ty` is the `Union` special form, which spells the same union `|` does.
+pub fn is_union_special_form(ty: Type) -> bool {
+    matches!(ty, Type::SpecialForm(SpecialFormType::Union))
 }
 
 #[cfg(test)]
