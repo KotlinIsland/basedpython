@@ -102,8 +102,8 @@ reveal_type(str.empty())  # revealed: str
 
 ## a `type[…]` receiver is a class object too
 
-A parameter annotated `type[C]` holds a class object just as much as the name `C` does, so
-it reaches the same `static def` and `class def` members.
+A parameter annotated `type[C]` holds a class object just as much as the name `C` does, so it
+reaches the same `static def` and `class def` members.
 
 ```by
 class Widget:
@@ -139,8 +139,7 @@ def f(t: type[Gadget]):
     t.label()
 ```
 
-A subclass of the extended class reaches it as well, because `type[C]` covers every subclass
-of `C`.
+A subclass of the extended class reaches it as well, because `type[C]` covers every subclass of `C`.
 
 ```by
 class Base:

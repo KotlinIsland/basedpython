@@ -80,14 +80,12 @@ fn coding_cookie(bytes: &[u8]) -> Option<Cookie> {
     if let Some(cookie) = cookie_in_line(first) {
         return Some(cookie);
     }
-    // a declaration on line 2 only counts when line 1 could not have been code
-    let first_is_code = !first
+    // a declaration on line 2 only counts when line 1 could not have been code,
+    // which is to say line 1 is blank or a comment
+    let first_is_code = first
         .iter()
-        .all(|byte| byte.is_ascii_whitespace() || *byte == b'#')
-        && !first
-            .iter()
-            .find(|byte| !byte.is_ascii_whitespace())
-            .is_some_and(|byte| *byte == b'#');
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|byte| *byte != b'#');
     if first_is_code {
         return None;
     }

@@ -173,7 +173,10 @@ mod tests {
     // an attribute callee carries a tag just as a bare name does
     #[test]
     fn attribute_callee() {
-        check("line = doc.text(t\"hi {who}\")\n", "line = doc.text\"hi {who}\"\n");
+        check(
+            "line = doc.text(t\"hi {who}\")\n",
+            "line = doc.text\"hi {who}\"\n",
+        );
     }
 
     // the name the quote lands on is the attribute, so that is what the
