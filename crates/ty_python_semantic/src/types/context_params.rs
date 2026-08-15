@@ -308,7 +308,7 @@ fn collect_block_candidates<'db>(
     out: &mut Vec<Candidate<'db>>,
 ) {
     if let Some(ImplicitReceiverName::Receiver(ty)) =
-        implicit_receiver_name(db, env, file, scope, "self")
+        implicit_receiver_name(db, env, file, scope, "self", None)
     {
         out.push(Candidate {
             name: Name::new_static("self"),
@@ -317,7 +317,7 @@ fn collect_block_candidates<'db>(
         });
     }
 
-    if let Some(callee_ty) = enclosing_block_callee_type(db, file, scope)
+    if let Some(callee_ty) = enclosing_block_callee_type(db, scope)
         && let Some(ty) = trailing_lambda_it_type(db, callee_ty)
     {
         out.push(Candidate {

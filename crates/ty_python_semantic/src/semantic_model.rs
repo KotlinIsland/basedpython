@@ -791,6 +791,7 @@ impl<'db> SemanticModel<'db> {
             self.file(),
             scope.to_scope_id(self.db, self.file),
             name.id.as_str(),
+            Some(name),
         )?;
         Some(match resolved {
             crate::types::receivers::ImplicitReceiverName::Receiver(_) => {

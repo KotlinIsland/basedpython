@@ -705,6 +705,14 @@ impl<'db> Bindings<'db> {
         }
     }
 
+    /// basedpython: whether the call is callable at all and every argument found
+    /// a parameter to bind to. Read straight after
+    /// [`match_parameters`][Self::match_parameters] and before any type
+    /// checking, so it answers only whether the call's *shape* fits
+    pub(crate) fn parameters_matched(&self, db: &'db dyn Db) -> bool {
+        self.as_result(db).is_ok()
+    }
+
     fn error_priority(&self, db: &'db dyn Db) -> CallErrorPriority {
         self.elements
             .iter()

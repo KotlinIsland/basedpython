@@ -20,6 +20,7 @@ use crate::types::implicit_names::{ImplicitNamePosition, implicit_name};
 use crate::types::infer::nearest_enclosing_function;
 use crate::types::list_members::all_end_of_scope_members;
 use crate::types::overrides::is_constructor_like_method;
+use crate::types::receivers;
 use crate::types::signatures::{
     ParameterKind, ParametersKind, ReturnCallableTypeVarScope, Signature,
 };
@@ -41,6 +42,7 @@ use ty_module_resolver::{
     ImportingFile, Module, ModuleName, ResolverFile, resolve_module_confident,
 };
 use ty_python_core::definition::{Definition, DefinitionKind, NestedBindingExecution};
+use ty_python_core::scope::FileScopeId;
 use ty_python_core::{ProgramFile, attribute_scopes, global_scope, semantic_index, use_def_map};
 
 mod unreachable_code;
@@ -89,6 +91,14 @@ pub fn definitions_for_name<'db>(
     let Some(file_scope) = model.scope(node) else {
         return vec![];
     };
+
+    // basedpython: inside a trailing lambda block whose callback declares a
+    // receiver, the receiver outranks every binding outside the block, so it is
+    // asked first — walking the scopes would otherwise land on the binding the
+    // checker did *not* resolve the name to
+    if let Some(receiver) = block_receiver_definitions(model, node, file_scope, name_str) {
+        return receiver;
+    }
 
     let mut all_definitions = FxIndexSet::default();
 
@@ -242,6 +252,46 @@ pub fn definitions_for_name<'db>(
     resolved_definitions
 }
 
+/// basedpython: what a bare name in a trailing lambda block that resolves
+/// through the block's receiver navigates to.
+///
+/// `Some` for every name the receiver claims — including the ones it claims with
+/// nothing to navigate to, so that the scope walk cannot answer with a binding
+/// the checker did not resolve the name to. `self` is the receiver itself, which
+/// no `def` or assignment in the source declares; an `extension` member is a
+/// gap shared with the attribute form
+fn block_receiver_definitions<'db>(
+    model: &SemanticModel<'db>,
+    node: AnyNodeRef<'_>,
+    file_scope: FileScopeId,
+    name_str: &str,
+) -> Option<Vec<ResolvedDefinition<'db>>> {
+    let db = model.db();
+    let file = model.file();
+    if !file.source_type(db).is_basedpython() {
+        return None;
+    }
+    let resolved = receivers::implicit_receiver_name(
+        db,
+        &model.program_environment(),
+        file,
+        file_scope.to_scope_id(db, db.program_file(file)),
+        name_str,
+        node.expr_name(),
+    )?;
+    Some(match resolved {
+        receivers::ImplicitReceiverName::Member(_) => {
+            let receiver = receivers::block_receiver_type(
+                db,
+                file_scope.to_scope_id(db, db.program_file(file)),
+            )?;
+            definitions_for_member(model, receiver, name_str)
+        }
+        receivers::ImplicitReceiverName::Receiver(_)
+        | receivers::ImplicitReceiverName::ExtensionMember { .. } => Vec::new(),
+    })
+}
+
 /// basedpython: the definitions of the member a name with no import behind it
 /// means.
 ///
@@ -309,15 +359,25 @@ pub fn definitions_for_attribute<'db>(
     model: &SemanticModel<'db>,
     attribute: &ast::ExprAttribute,
 ) -> Vec<ResolvedDefinition<'db>> {
-    let db = model.db();
-    let name_str = attribute.attr.as_str();
-
-    let mut resolved = Vec::new();
-
     // Determine the type of the LHS
     let Some(lhs_ty) = attribute.value.inferred_type(model) else {
-        return resolved;
+        return Vec::new();
     };
+    definitions_for_member(model, lhs_ty, attribute.attr.as_str())
+}
+
+/// Returns all resolved definitions for the member `name_str` of `lhs_ty`, the
+/// part of [`definitions_for_attribute`] that does not need the access to be
+/// spelled as one. basedpython reads a member off a trailing lambda block's
+/// receiver from a bare name, which has no attribute expression to ask about
+fn definitions_for_member<'db>(
+    model: &SemanticModel<'db>,
+    lhs_ty: Type<'db>,
+    name_str: &str,
+) -> Vec<ResolvedDefinition<'db>> {
+    let db = model.db();
+
+    let mut resolved = Vec::new();
 
     let env = model.program_environment();
 

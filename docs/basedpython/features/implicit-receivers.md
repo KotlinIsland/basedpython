@@ -81,23 +81,56 @@ apply(fn=_trailing_lambda_0)
 the receiver lands in a parameter the source cannot spell, so nothing the block
 binds can redirect the members read off it
 
-as with `x.fn`, this is the last fallback. a name bound anywhere in the lexical
-chain — a block local, an enclosing function's local, a module global, a builtin —
-keeps its ordinary meaning, so a block can never capture a name out from under
-the scope around it:
+### priority
+
+unlike `x.fn`, this is not a fallback. the receiver joins the scope chain at the
+block's own level — *inside* the names the block itself binds, and *outside*
+everything else — so its members win over an enclosing function's local, a module
+global and a builtin alike:
 
 ```by
 imag: str = "shadow"
 
 apply:
-    print(imag)  # the module-level `imag`, not the receiver's
+    print(imag)  # the receiver's `imag`, not the module-level one
 ```
 
-`self` is no exception: inside a method, `self` is that method's own receiver,
-and the block's receiver is reachable only through its members
+only the block itself outranks it:
 
-a name that resolves nowhere and is not a member of the receiver stays an
-`unresolved-reference` error
+```by
+apply:
+    imag = "block"
+    print(imag)  # "block"
+```
+
+`self` is no exception. inside a method the block's `self` is the block's
+receiver, and the method's own receiver is not reachable from the body
+
+a call is the one thing that can turn the receiver down. a name used as a callee
+takes the receiver's member only if that member accepts the call, and otherwise
+carries on outwards to whatever else declares the name:
+
+```by
+class Repeater:
+    def emit(self, times: int): ...
+
+def apply(fn: Repeater.() -> None): ...
+
+def emit(label: str, times: int): ...
+
+apply:
+    emit(2)        # `self.emit`
+    emit("a", 2)   # the module-level `emit`
+```
+
+what counts is the *shape* of the call — how many positional arguments it passes
+and which keywords — never the types of the arguments. two candidates that differ
+only in what their parameters accept do not disambiguate this way; the receiver's
+wins and the call is checked against it.
+
+if no candidate anywhere accepts the call, the receiver's is used, so the call
+reports its own mismatch rather than an unresolved name. a name that resolves
+nowhere and is not a member of the receiver stays an `unresolved-reference` error
 
 a block still returns `None`, so the callback must be declared to return a type
 that accepts it — `int.() -> None`, not `int.() -> str` (see
