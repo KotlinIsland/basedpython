@@ -188,8 +188,9 @@ class C:
 ### a name the block binds keeps its own meaning
 
 the block itself is the one level of the tower inside the receiver. binding a name the receiver has
-a member for is what [`shadowed-receiver-member`](#assigning-a-name-the-receiver-has-a-member-for-binds-a-local)
-reports, since it reverses what every mention of that name in the block means
+a member for is what
+[`shadowed-receiver-member`](#assigning-a-name-the-receiver-has-a-member-for-binds-a-local) reports,
+since it reverses what every mention of that name in the block means
 
 ```by
 def apply(fn: int.() -> None) -> None:
@@ -250,9 +251,9 @@ apply:
 
 ## assigning a name the receiver has a member for binds a local
 
-Which of the two an assignment binds cannot depend on the receiver's type, since the binding is
-made before any type is known. So the local stands and the write is reported, because the same
-name read in a block that does not write it means the member.
+Which of the two an assignment binds cannot depend on the receiver's type, since the binding is made
+before any type is known. So the local stands and the write is reported, because the same name read
+in a block that does not write it means the member.
 
 ```by
 class Tag:
@@ -300,8 +301,8 @@ apply:
 
 ## an enclosing binding makes the assignment an ordinary capture
 
-A block is meant to write through to the scope around it, so a name that scope binds is not
-reported even when the receiver happens to have a member of that name.
+A block is meant to write through to the scope around it, so a name that scope binds is not reported
+even when the receiver happens to have a member of that name.
 
 ```by
 class Tag:

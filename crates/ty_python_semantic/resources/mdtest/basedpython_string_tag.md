@@ -112,8 +112,8 @@ def build(root: Tag, who: str) -> None:
 
 ## an attribute carries a tag
 
-The tag may be reached through an attribute, which is the spelling that survives a local of the
-same name shadowing it.
+The tag may be reached through an attribute, which is the spelling that survives a local of the same
+name shadowing it.
 
 ```toml
 [environment]
