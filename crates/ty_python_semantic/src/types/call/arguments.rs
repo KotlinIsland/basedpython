@@ -192,6 +192,16 @@ impl<'a, 'db> CallArguments<'a, 'db> {
             .collect()
     }
 
+    /// basedpython: create a [`CallArguments`] from argument *shapes* alone —
+    /// every argument is left untyped, so the result answers only how the call
+    /// matches a parameter list, never whether its arguments fit
+    pub(crate) fn from_argument_shapes(arguments: impl IntoIterator<Item = Argument<'a>>) -> Self {
+        arguments
+            .into_iter()
+            .map(|argument| (argument, None))
+            .collect()
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.items.len()
     }

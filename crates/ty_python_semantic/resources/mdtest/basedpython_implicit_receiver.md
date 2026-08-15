@@ -105,7 +105,10 @@ def apply(fn: (int) -> str) -> None:
 
 a trailing lambda block bound to a receiver callable sees the receiver's members unqualified, and
 spells the receiver itself `self`. the block's implicit `it` parameter is the callback's *own*
-argument — the one after the receiver
+argument — the one after the receiver.
+
+the receiver joins the scope tower at the block's own level: inside the names the block itself
+binds, and outside everything else
 
 ### the receiver's members are in scope
 
@@ -131,26 +134,7 @@ apply:
     reveal_type(bit_length())  # revealed: int
 ```
 
-### an enclosing `self` keeps its meaning
-
-the receiver is the last fallback, so a method's own `self` still wins — its members are the ones in
-scope unqualified either way
-
-```by
-def apply(fn: int.() -> None) -> None:
-    fn(1)
-
-class C:
-    def m(self) -> None:
-        apply:
-            reveal_type(self)  # revealed: Self@m
-            reveal_type(imag)  # revealed: 0
-```
-
-## an enclosing binding wins
-
-a name bound anywhere in the lexical chain keeps its ordinary meaning, so a block never captures a
-name out from under the scope around it
+### the receiver outranks a module global
 
 ```by
 def apply(fn: int.() -> None) -> None:
@@ -159,7 +143,95 @@ def apply(fn: int.() -> None) -> None:
 imag: str = "shadow"
 
 apply:
-    reveal_type(imag)  # revealed: str
+    reveal_type(imag)  # revealed: 0
+```
+
+### the receiver outranks an enclosing function's local
+
+```by
+def apply(fn: int.() -> None) -> None:
+    fn(1)
+
+def enclosing() -> None:
+    imag: str = "local"
+    apply:
+        reveal_type(imag)  # revealed: 0
+```
+
+### the receiver outranks a builtin
+
+```by
+class Formatter:
+    def format(self, value: int) -> str:
+        return str(value)
+
+def apply(fn: Formatter.() -> None) -> None: ...
+
+apply:
+    reveal_type(format(1))  # revealed: str
+```
+
+### the receiver is what `self` means
+
+a method's own `self` is outside the block, so it no longer reaches into it
+
+```by
+def apply(fn: int.() -> None) -> None:
+    fn(1)
+
+class C:
+    def m(self) -> None:
+        apply:
+            reveal_type(self)  # revealed: int
+```
+
+### a name the block binds keeps its own meaning
+
+the block itself is the one level of the tower inside the receiver
+
+```by
+def apply(fn: int.() -> None) -> None:
+    fn(1)
+
+apply:
+    imag = "block"
+    reveal_type(imag)  # revealed: "block"
+```
+
+### a call the receiver cannot take reaches past it
+
+a name used as a callee only claims the receiver's member when that member accepts the call. the
+walk is by the call's *shape* — how many positional arguments, and which keywords — so a call the
+receiver's member cannot bind carries on outwards to whatever else declares the name
+
+```by
+class Repeater:
+    def emit(self, times: int) -> int:
+        return times
+
+def apply(fn: Repeater.() -> None) -> None: ...
+
+def emit(label: str, times: int) -> str:
+    return label
+
+apply:
+    reveal_type(emit(2))  # revealed: int
+    reveal_type(emit("a", 2))  # revealed: str
+```
+
+### a call nothing else can take stays with the receiver
+
+no level of the tower has an applicable candidate, so the nearest one is used and the call reports
+its own mismatch rather than an unresolved name
+
+```by
+class Repeater:
+    def emit(self, times: int) -> None: ...
+
+def apply(fn: Repeater.() -> None) -> None: ...
+
+apply:
+    emit(1, 2)  # error: [too-many-positional-arguments]
 ```
 
 ## an unknown member
@@ -229,13 +301,9 @@ def receiver_of_protocol(fn: protocol(a: int).() -> None) -> None:
 
 ## names that resolve with no binding behind them
 
-the transpiler asks this rule about a raw name, with none of ty's name-resolution chain behind it,
-so the gate is the *wider* of the two shared name-fallback gates: it claims every name ty resolves
-without a binding, not just the ones the lexical chain owns. `Character` is the witness — implicitly
-available only *in* a type expression, so nothing else claims it in a value position, and the block
-must still not capture it as a receiver member
-
-### a receiver member named `Character` is not captured
+the basedpython names that resolve with nothing bound behind them — `Character`, `Some`, the
+implicitly available `typing` spellings — sit outside the block like any other name, so a receiver
+member of that spelling wins inside the block
 
 ```by
 class Lexer:
@@ -246,7 +314,7 @@ def apply(fn: Lexer.() -> None) -> None: ...
 
 apply:
     reveal_type(digit)  # revealed: str
-    Character  # error: [unresolved-reference]
+    reveal_type(Character)  # revealed: int
 ```
 
 ## `.py` files reject the syntax

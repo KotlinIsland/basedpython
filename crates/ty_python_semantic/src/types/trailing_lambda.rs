@@ -7,7 +7,6 @@
 //! are defaulted. the implicit `it` parameter takes its type from that
 //! parameter's declared callable type
 
-use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::ParameterBorrow;
 use ruff_python_ast::name::Name;
@@ -20,34 +19,63 @@ use crate::types::soundness::single_signature;
 use crate::types::{Type, TypeContext, infer_expression_types};
 
 /// the type of the expression the trailing lambda block whose body `scope` is in
-/// is attached to. Walks out through comprehension scopes (which a block body
-/// may open) but stops at the first function, class, or module scope: a nested
-/// definition is its own body, not the block's.
+/// is attached to
+pub(crate) fn enclosing_block_callee_type<'db>(
+    db: &'db dyn Db,
+    scope: ScopeId<'db>,
+) -> Option<Type<'db>> {
+    Some(enclosing_block(db, scope)?.1)
+}
+
+/// the trailing lambda block whose body `scope` is in: the block's own scope,
+/// and the type of the expression it is attached to. Walks out through
+/// comprehension scopes (which a block body may open) but stops at the first
+/// function, class, or module scope: a nested definition is its own body, not
+/// the block's.
 ///
 /// The callee is inferred as a standalone expression (registered by the semantic
 /// index builder), which is independent of the enclosing definition's inference
-/// — so asking for it from inside the block body is not a cycle
-pub(crate) fn enclosing_block_callee_type<'db>(
+/// — so asking for it from inside the block body is not a cycle.
+///
+/// Tracked because [implicit receiver] resolution asks it of *every* name a
+/// basedpython file loads, and the answer is a property of the scope alone.
+///
+/// Asking it that often is what makes it re-enter itself: inferring the callee
+/// can reach a definition whose own inference runs the block body, and the first
+/// name that body loads asks for the callee again. The cycle starts from "this
+/// scope is not a block body" and iterates, so a name resolved while the callee
+/// is still being worked out simply does not see the receiver — the same
+/// recovery the [extension] queries use
+///
+/// [implicit receiver]: crate::types::receivers::implicit_receiver_name
+/// [extension]: crate::types::extensions::extensions_in_module
+#[salsa::tracked(
+    returns(copy),
+    cycle_initial = |_, _, _| None,
+    heap_size = ruff_memory_usage::heap_size
+)]
+pub(crate) fn enclosing_block<'db>(
     db: &'db dyn Db,
-    file: File,
     scope: ScopeId<'db>,
-) -> Option<Type<'db>> {
-    let index = semantic_index(db, db.program_file(file));
-    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
-    for (_, ancestor) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
+) -> Option<(ScopeId<'db>, Type<'db>)> {
+    let program_file = db.program_file(scope.file(db));
+    let index = semantic_index(db, program_file);
+    for (ancestor_id, ancestor) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
         match ancestor.kind() {
             ScopeKind::Comprehension => continue,
             ScopeKind::Function => {}
             _ => return None,
         }
+        let module = parsed_module(db, program_file.python_file(db)).load(db);
         let function = ancestor.node().as_function()?.node(&module);
         if !function.is_trailing_lambda {
             return None;
         }
         let callee = function.trailing_lambda_callee()?;
         let expression = index.try_expression(callee)?;
-        return infer_expression_types(db, expression, TypeContext::default())
-            .try_expression_type(callee);
+        let callee_ty = infer_expression_types(db, expression, TypeContext::default())
+            .try_expression_type(callee)?;
+        return Some((ancestor_id.to_scope_id(db, program_file), callee_ty));
     }
     None
 }

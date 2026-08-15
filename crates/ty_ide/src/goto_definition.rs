@@ -1583,6 +1583,77 @@ a = Test()
         assert_snapshot!(value_position.goto_definition(), @"No goto target found");
     }
 
+    /// basedpython: a trailing lambda block's receiver outranks every binding
+    /// outside the block, so a name it claims must lead to the receiver's member
+    /// rather than to the module-level binding the scope walk would find.
+    #[test]
+    fn goto_definition_trailing_block_receiver_member() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+class Tag:
+    def text(self, t: str) -> None: ...
+
+def div(block: Tag.() -> None) -> None: ...
+
+def text(a: int, b: int) -> None: ...
+
+div:
+    te<CURSOR>xt(\"hi\")
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+          --> main.by:10:5
+           |
+        10 |     text(\"hi\")
+           |     ^^^^ Clicking here
+        info: Found 1 definition
+         --> main.by:3:9
+          |
+        3 |     def text(self, t: str) -> None: ...
+          |         ----
+        ");
+    }
+
+    /// basedpython: a call the receiver's member cannot take walks past it, and
+    /// the definition has to walk past it too.
+    #[test]
+    fn goto_definition_trailing_block_reaches_past_the_receiver() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+class Tag:
+    def text(self, t: str) -> None: ...
+
+def div(block: Tag.() -> None) -> None: ...
+
+def text(a: int, b: int) -> None: ...
+
+div:
+    te<CURSOR>xt(1, 2)
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+          --> main.by:10:5
+           |
+        10 |     text(1, 2)
+           |     ^^^^ Clicking here
+        info: Found 1 definition
+         --> main.by:7:5
+          |
+        7 | def text(a: int, b: int) -> None: ...
+          |     ----
+        ");
+    }
+
     /// basedpython: `dynamic` is a word of the language rather than a name, so
     /// it leads nowhere even though it means `typing.Any`.
     #[test]

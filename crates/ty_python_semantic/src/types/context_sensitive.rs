@@ -350,7 +350,7 @@ pub(crate) fn qualifier_for_unbound_name<'db>(
     // a trailing lambda block's receiver member answers *before* this fallback
     // does, so a receiver whose member happens to be an enum value keeps the
     // receiver-parameter lowering the checker resolved it to
-    if receivers::implicit_receiver_name(db, env, file, scope, name).is_some() {
+    if receivers::implicit_receiver_name(db, env, file, scope, name, None).is_some() {
         return None;
     }
     let enum_class = enum_class_of(db, resolved_type()?)?;

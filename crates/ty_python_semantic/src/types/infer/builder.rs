@@ -12692,10 +12692,29 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     fn infer_name_load(&mut self, name_node: &ast::ExprName, tcx: TypeContext<'db>) -> Type<'db> {
         let symbol_name = &name_node.id;
         let db = self.db();
+        let env = self.program_environment();
+
+        // basedpython only: inside a trailing lambda block whose callback
+        // declares a receiver (`int.() -> None`), the receiver is spelled `self`
+        // and its members are in scope unqualified. the receiver sits in the
+        // scope tower at the block's own level, so it is resolved *before* the
+        // ordinary lookup — only a name the block itself binds keeps its meaning
+        if self.is_basedpython_file()
+            && let Some(resolved) = receivers::implicit_receiver_name(
+                db,
+                env,
+                self.file(),
+                self.scope(),
+                symbol_name,
+                Some(name_node),
+            )
+        {
+            return resolved.ty();
+        }
+
         let expr = PlaceExpr::from_expr_name(name_node);
 
         let (resolved, _) = self.infer_place_load(expr, ast::ExprRef::Name(name_node));
-        let env = self.program_environment();
 
         let resolved_after_fallback = resolved
             // basedpython only: the names that mean a module member the file
@@ -12769,26 +12788,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         typevar.typevar(db),
                     )))
                     .into()
-                } else {
-                    Place::Undefined.into()
-                }
-            })
-            // basedpython only: inside a trailing lambda block whose callback
-            // declares a receiver (`int.() -> None`), the receiver is spelled
-            // `self` and its members are in scope unqualified. reached last, so a
-            // name bound anywhere in the lexical chain — or a builtin — keeps its
-            // ordinary meaning
-            .or_fall_back_to(db, env, || {
-                if self.is_basedpython_file()
-                    && let Some(resolved) = receivers::implicit_receiver_name(
-                        db,
-                        env,
-                        self.file(),
-                        self.scope(),
-                        symbol_name,
-                    )
-                {
-                    Place::bound(resolved.ty()).into()
                 } else {
                     Place::Undefined.into()
                 }

@@ -12,23 +12,30 @@
 //!   receiver's members are in scope unqualified (`imag` for an `int` receiver)
 //!   and the receiver itself is spelled `self`
 //!
-//! both are *last* fallbacks: a declared member, and any name something else
-//! already claims, keeps its ordinary meaning. that is what makes the forms
-//! purely additive — nothing that resolves today changes meaning. the block form
-//! gates on [`claimed_by_name_resolution`], the wider of the two shared
-//! [name-fallback](crate::types::name_fallback) gates, because the transpiler
-//! asks it about a raw name with no fallback chain behind it
+//! the attribute form is a *last* fallback: a declared member, and an applicable
+//! extension member, both keep their ordinary meaning, so it is purely additive.
+//!
+//! the block form is not. a block's receiver sits in the scope tower at the
+//! block's own level — inside the names the block itself binds, and outside
+//! everything else — so it is resolved *before* the ordinary lookup and outranks
+//! the enclosing function's locals, the module's globals and the builtins alike.
+//! see [`implicit_receiver_name`] for the one thing that can turn it down
 //!
 //! [trailing lambda]: crate::types::trailing_lambda
 
 use ruff_db::files::File;
+use ruff_db::parsed::parsed_module;
+use ruff_python_ast::visitor::{Visitor, walk_expr};
 use ruff_python_ast::{self as ast, Expr};
+use rustc_hash::FxHashMap;
+use ty_python_core::node_key::NodeKey;
 use ty_python_core::scope::ScopeId;
 use ty_python_core::{place_table, semantic_index};
 
 use crate::Db;
 use crate::place::{ConsideredDefinitions, symbol};
 use crate::types::ProgramEnvironment;
+use crate::types::call::{Argument, CallArguments};
 use crate::types::name_fallback::claimed_by_name_resolution;
 use crate::types::signatures::{Parameters, Signature};
 use crate::types::{Type, UnionType};
@@ -215,22 +222,73 @@ impl<'db> ImplicitReceiverName<'db> {
     }
 }
 
+/// basedpython: the receiver a trailing lambda block binds, for a use in
+/// `scope`. `None` when `scope` is not inside a block, or the block's callback
+/// declares no receiver
+pub(crate) fn block_receiver_type<'db>(db: &'db dyn Db, scope: ScopeId<'db>) -> Option<Type<'db>> {
+    let (_, callee_ty) = crate::types::trailing_lambda::enclosing_block(db, scope)?;
+    crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee_ty)
+}
+
 /// basedpython: what a bare `name` in a trailing lambda block resolves to when
 /// the block's callback declares a receiver: `self` is the receiver, and any
-/// other name is looked up as a member of it. `None` for a name that resolves
-/// anywhere else — both are the last fallback, so no existing binding is ever
-/// captured (a method's own `self` keeps its meaning)
+/// other name is looked up as a member of it.
+///
+/// The receiver sits in the scope tower at the block's own level, so it is
+/// resolved before the ordinary lookup: only a name the block itself binds — the
+/// implicit `it`, or anything the body assigns — keeps its meaning, and every
+/// name the receiver supplies outranks the enclosing function's locals, the
+/// module's globals and the builtins alike.
+///
+/// A *call* is the one thing that can turn the receiver down. `use_site` is the
+/// name node being resolved; when it is the callee of a call whose shape the
+/// receiver's member cannot accept, the walk continues outward to whatever else
+/// declares the name — `y(1)` reaching a module-level `def y(a: int)` past a
+/// receiver's nullary `y`. Applicability is decided by the call's *shape* alone
+/// (how many positional arguments, which keywords), never by the argument types,
+/// which are not yet inferred when a name is resolved. When no level of the
+/// tower has an applicable candidate the receiver's member is used anyway, so
+/// the call reports its own mismatch rather than an unresolved name
 pub(crate) fn implicit_receiver_name<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
     scope: ScopeId<'db>,
     name: &str,
+    use_site: Option<&ast::ExprName>,
 ) -> Option<ImplicitReceiverName<'db>> {
-    let receiver = trailing_lambda_scope_receiver(db, file, scope)?;
-    if claimed_by_name_resolution(db, env, file, scope, name) {
+    let (block_scope, callee_ty) = crate::types::trailing_lambda::enclosing_block(db, scope)?;
+    let receiver = crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee_ty)?;
+    if bound_within_block(db, file, scope, block_scope, name) {
         return None;
     }
+    let resolved = receiver_name(db, env, file, receiver, name)?;
+    // the receiver's candidate does not fit this call — so hand the name back to
+    // the levels of the tower outside the block, but only if one of them
+    // actually claims it. `claimed_by_name_resolution` covers the whole visible
+    // chain, and the bindings *inside* the block have already been ruled out
+    // above, so what it answers here is "does anything outside the block claim
+    // this name"
+    if let Some(use_site) = use_site
+        && let Some(arguments) =
+            block_scope_call_arguments(db, block_scope).get(&NodeKey::from_node(use_site))
+        && !accepts_call_shape(db, env, resolved.ty(), arguments)
+        && claimed_by_name_resolution(db, env, file, scope, name)
+    {
+        return None;
+    }
+    Some(resolved)
+}
+
+/// the receiver's own candidate for `name`, with no regard for what else is in
+/// scope: `self` is the receiver itself, and any other name is a member of it
+fn receiver_name<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    receiver: Type<'db>,
+    name: &str,
+) -> Option<ImplicitReceiverName<'db>> {
     if name == "self" {
         return Some(ImplicitReceiverName::Receiver(receiver));
     }
@@ -253,12 +311,121 @@ pub(crate) fn implicit_receiver_name<'db>(
     })
 }
 
-/// the receiver of the trailing lambda block `scope` is the body of
-fn trailing_lambda_scope_receiver<'db>(
-    db: &'db dyn Db,
+/// whether any scope from the use out to the block itself binds or declares
+/// `name` — the one level of the scope tower that sits *inside* the receiver, so
+/// the block's own `it` and anything its body assigns keep their meaning
+fn bound_within_block(
+    db: &dyn Db,
     file: File,
+    scope: ScopeId<'_>,
+    block_scope: ScopeId<'_>,
+    name: &str,
+) -> bool {
+    let index = semantic_index(db, db.program_file(file));
+    let block_scope = block_scope.file_scope_id(db);
+    for (ancestor_id, _) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
+        let ancestor_scope = ancestor_id.to_scope_id(db, db.program_file(file));
+        if place_table(db, ancestor_scope)
+            .symbol_by_name(name)
+            .is_some_and(|symbol| symbol.is_bound() || symbol.is_declared())
+        {
+            return true;
+        }
+        if ancestor_id == block_scope {
+            break;
+        }
+    }
+    false
+}
+
+/// whether `ty` can be called with a call of this shape, judged by matching the
+/// arguments to parameters and nothing more — no argument has a type yet
+fn accepts_call_shape<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+    arguments: &[ArgumentShape],
+) -> bool {
+    let arguments =
+        CallArguments::from_argument_shapes(arguments.iter().map(ArgumentShape::as_argument));
+    ty.bindings(db, env)
+        .match_parameters(db, env, &arguments)
+        .parameters_matched(db)
+}
+
+/// one argument of a call, as much of it as its *shape* records
+#[derive(Debug, Clone, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) enum ArgumentShape {
+    Positional,
+    /// a starred positional argument (`*args`), of unknown length
+    Variadic,
+    Keyword(ast::name::Name),
+    /// a double-starred argument (`**kwargs`), of unknown keys
+    Keywords,
+}
+
+impl ArgumentShape {
+    fn as_argument(&self) -> Argument<'_> {
+        match self {
+            Self::Positional => Argument::Positional,
+            Self::Variadic => Argument::Variadic,
+            Self::Keyword(name) => Argument::Keyword(name),
+            Self::Keywords => Argument::Keywords,
+        }
+    }
+}
+
+/// the shape of every call in the trailing lambda block `scope` whose callee is
+/// a bare name, keyed by that name's node.
+///
+/// Resolving a name against the block's receiver needs to know whether the name
+/// is being called and with what — which the AST answers and the name node on
+/// its own does not. Both the checker and the transpiler read this one map, so
+/// the two cannot disagree about which calls the receiver is applicable to.
+/// Tracked because a block resolves every one of its names against its receiver,
+/// and walking the body once per name would be quadratic
+#[salsa::tracked(returns(ref), heap_size = ruff_memory_usage::heap_size)]
+fn block_scope_call_arguments<'db>(
+    db: &'db dyn Db,
     scope: ScopeId<'db>,
-) -> Option<Type<'db>> {
-    let callee_ty = crate::types::trailing_lambda::enclosing_block_callee_type(db, file, scope)?;
-    crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee_ty)
+) -> FxHashMap<NodeKey, Box<[ArgumentShape]>> {
+    let mut collector = CallArgumentShapes {
+        shapes: FxHashMap::default(),
+    };
+    let file = scope.file(db);
+    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+    if let Some(function) = scope.node(db).as_function() {
+        for statement in &function.node(&module).body {
+            collector.visit_stmt(statement);
+        }
+    }
+    collector.shapes.shrink_to_fit();
+    collector.shapes
+}
+
+struct CallArgumentShapes {
+    shapes: FxHashMap<NodeKey, Box<[ArgumentShape]>>,
+}
+
+impl<'ast> Visitor<'ast> for CallArgumentShapes {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if let Expr::Call(call) = expr
+            && let Expr::Name(name) = call.func.as_ref()
+        {
+            let shapes = call
+                .arguments
+                .iter_source_order()
+                .map(|argument| match argument {
+                    ast::ArgOrKeyword::Arg(Expr::Starred(_)) => ArgumentShape::Variadic,
+                    ast::ArgOrKeyword::Arg(_) => ArgumentShape::Positional,
+                    ast::ArgOrKeyword::Keyword(keyword) => match &keyword.arg {
+                        Some(argument) => ArgumentShape::Keyword(argument.id.clone()),
+                        None => ArgumentShape::Keywords,
+                    },
+                })
+                .collect();
+            self.shapes.insert(NodeKey::from_node(name), shapes);
+        }
+        walk_expr(self, expr);
+    }
 }

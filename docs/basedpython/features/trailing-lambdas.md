@@ -142,9 +142,10 @@ preserved in place
 when the callback declares an [implicit receiver](implicit-receivers.md)
 (`str.(int) -> None`), the block binds that receiver itself, ahead of `it`: the
 body sees the receiver's members unqualified, spells the receiver `self`, and
-`it` is the callback's own argument — the one *after* the receiver. a name bound
-anywhere in the lexical chain keeps its ordinary meaning, so only names that
-would otherwise be unresolved resolve this way
+`it` is the callback's own argument — the one *after* the receiver. the receiver
+joins the scope chain at the block's own level, so its members outrank every
+binding outside the block — see
+[priority](implicit-receivers.md#priority)
 
 ```by
 def against(fn: str.(int) -> None):

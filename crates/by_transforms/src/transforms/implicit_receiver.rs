@@ -254,10 +254,9 @@ mod tests {
     }
 
     #[test]
-    fn an_enclosing_self_keeps_its_meaning() {
-        // the receiver is the *last* fallback, so a method's own `self` still
-        // wins — and the block's receiver parameter is a name the source cannot
-        // spell, so it cannot be shadowed either
+    fn the_receiver_outranks_an_enclosing_self() {
+        // the block's receiver sits nearer than anything outside the block, so
+        // `self` in the body is the receiver rather than the enclosing method's
         let out = check(indoc! {"
             def f(fn: str.() -> None) -> None:
                 fn(\"a\")
@@ -267,7 +266,10 @@ mod tests {
                     f:
                         print(self, upper())
         "});
-        assert!(out.contains("print(self, _by_self.upper())"), "got:\n{out}");
+        assert!(
+            out.contains("print(_by_self, _by_self.upper())"),
+            "got:\n{out}"
+        );
     }
 
     #[test]
@@ -352,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn trailing_block_leaves_resolvable_names_alone() {
+    fn the_receiver_outranks_a_module_global() {
         let out = check(indoc! {"
             def f(fn: int.() -> None) -> None:
                 fn(1)
@@ -362,6 +364,41 @@ mod tests {
             f:
                 print(imag)
         "});
+        assert!(out.contains("print(_by_self.imag)"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_block_binding_outranks_the_receiver() {
+        // the only level of the scope tower inside the receiver is the block
+        // itself, so a name the body binds keeps its own value
+        let out = check(indoc! {"
+            def f(fn: int.() -> None) -> None:
+                fn(1)
+
+            f:
+                imag = 2
+                print(imag)
+        "});
         assert!(out.contains("print(imag)"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_call_the_receiver_cannot_take_reaches_past_it() {
+        // the receiver's `emit` takes one argument, so the two-argument call
+        // walks on out to the module-level function of that name
+        let out = check(indoc! {"
+            class Repeater:
+                def emit(self, times: int) -> None: ...
+
+            def f(fn: Repeater.() -> None) -> None: ...
+
+            def emit(label: str, times: int) -> None: ...
+
+            f:
+                emit(2)
+                emit(\"a\", 2)
+        "});
+        assert!(out.contains("_by_self.emit(2)"), "got:\n{out}");
+        assert!(out.contains("\n    emit(\"a\", 2)"), "got:\n{out}");
     }
 }
