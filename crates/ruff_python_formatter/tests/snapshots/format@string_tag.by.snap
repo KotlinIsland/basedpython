@@ -30,6 +30,18 @@ detail = html"<i>{value + 1}</i>"
 
 # a plain call on the same name is still a call
 plain = sql(t"select 1")
+
+# an attribute carries a tag too, which is the spelling that survives a local of
+# the same name shadowing the tag
+
+
+class Doc:
+    def text(self, template: Template) -> str: ...
+
+
+doc = Doc()
+line = doc.text"hello {name}"
+interpolated = doc.text"{name} and {other}"
 ```
 
 ## Output
@@ -60,4 +72,16 @@ detail = html"<i>{value + 1}</i>"
 
 # a plain call on the same name is still a call
 plain = sql(t"select 1")
+
+# an attribute carries a tag too, which is the spelling that survives a local of
+# the same name shadowing the tag
+
+
+class Doc:
+    def text(self, template: Template) -> str: ...
+
+
+doc          = Doc()
+line         = doc.text"hello {name}"
+interpolated = doc.text"{name} and {other}"
 ```

@@ -1354,8 +1354,14 @@ impl<'src> Parser<'src> {
                 // glued to an identifier as a t-string, so a `TStringStart`
                 // abutting a name is `tag"..."` — a call receiving the
                 // template. lowered to `tag(t"...")`
+                //
+                // an attribute carries a tag as well (`root.text"…"`), which is
+                // the spelling that survives a local of the same name shadowing
+                // the tag. the receiver has to be the thing the quote is glued
+                // to, so only the trailing name of the attribute may carry it —
+                // that is what the range check below says
                 TokenKind::TStringStart
-                    if matches!(lhs, Expr::Name(_))
+                    if matches!(lhs, Expr::Name(_) | Expr::Attribute(_))
                         && lhs.range().end() == self.current_token_range().start() =>
                 {
                     self.error_if_not_basedpython(

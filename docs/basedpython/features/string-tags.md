@@ -92,6 +92,22 @@ root.div:
 
 both spellings lower to the same call on the receiver
 
+a tag may also be reached through an attribute, which is the spelling that
+still works when a local of the same name is in the way:
+
+```by
+doc.text"hello {who}"
+```
+
+→
+
+```python
+doc.text(t"hello {who}")
+```
+
+only the last name may carry the quote, since the tag is whatever the quote is
+glued to
+
 ## runtime
 
 `Template` is a python 3.14 type. on earlier targets the tag receives a

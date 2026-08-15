@@ -109,3 +109,42 @@ def build(root: Tag, who: str) -> None:
     root.div:
         reveal_type(text"hello {who}")  # revealed: int
 ```
+
+## an attribute carries a tag
+
+The tag may be reached through an attribute, which is the spelling that survives a local of the
+same name shadowing it.
+
+```toml
+[environment]
+python-version = "3.14"
+```
+
+```by
+from string.templatelib import Template
+
+class Doc:
+    def text(self, t: Template) -> int:
+        return 1
+
+def build(doc: Doc, who: str) -> None:
+    reveal_type(doc.text"hello {who}")  # revealed: int
+```
+
+## an attribute tag that does not exist is an error
+
+The attribute is looked up like any other name.
+
+```toml
+[environment]
+python-version = "3.14"
+```
+
+```by
+class Doc:
+    pass
+
+def build(doc: Doc) -> None:
+    # error: [unresolved-attribute]
+    doc.missing"oops"
+```
