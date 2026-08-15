@@ -1477,10 +1477,31 @@ fn analyze_single_pattern_predicate_kind<'db>(
 /// forms are conservatively treated as returning so that subsequent code remains reachable.
 ///
 /// Cycle recovery conservatively treats the call as returning so that a cyclic type inference
-/// dependency cannot make subsequent code unreachable.
+/// dependency cannot make subsequent code unreachable, and it goes on treating it that way for
+/// every later round of the cycle rather than only the first.
+///
+/// The answer a later round reaches is not worth more than the first one, because the only reason
+/// a call inside a cycle looks terminal is usually the cycle itself: the signature a function is
+/// given before its own inference has finished returns `Never`, and a call returning `Never` is
+/// exactly what this query calls terminal. So the rounds alternate — the provisional signature
+/// makes the call terminal, that makes the code after it unreachable, that gives the enclosing
+/// function a real signature, that makes the call non-terminal, and the round after starts over
+/// from the provisional signature again. Neither round ever repeats the one before it, so the
+/// iteration salsa runs to reach a fixed point has none to reach and eventually gives up.
+///
+/// Holding the conservative answer is what keeps that from happening. It costs a call that really
+/// does end the program the chance to be recognised as one, but only when it was reached through a
+/// cycle, which is where this query could not tell the two apart anyway.
 #[salsa::tracked(
     returns(copy),
     cycle_initial = |_, _, _, _, _| Truthiness::AlwaysTrue,
+    cycle_fn = |_, _, previous: &Truthiness, value, _, _, _| {
+        if previous.is_always_true() {
+            Truthiness::AlwaysTrue
+        } else {
+            value
+        }
+    },
     heap_size = get_size2::GetSize::get_heap_size
 )]
 fn analyze_non_terminal_call<'db>(
