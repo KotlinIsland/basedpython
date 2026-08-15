@@ -61,3 +61,14 @@ def declaring():
     let inner = f:
         print(it)
     return inner
+
+
+# a `return` takes a block as its value too
+def returning():
+    return f(2):
+        print(it)
+
+
+def returning_bare():
+    return    f:  # end-of-line on the header
+        print(it)

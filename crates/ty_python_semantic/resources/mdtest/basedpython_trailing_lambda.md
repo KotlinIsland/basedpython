@@ -728,6 +728,36 @@ mutable = "other"
 declared = "other"
 ```
 
+## a `return` takes one too
+
+The returned value is an expression like any other, so a block supplies it. The `def` the block
+lowers to is emitted before the `return`, so nothing depends on where in the suite it is written.
+
+```by
+def f(a: (int) -> None) -> str:
+    a(1)
+    return "done"
+
+def build() -> str:
+    return f:
+        print(it)
+
+reveal_type(build())  # revealed: str
+```
+
+The return type is checked against the block's call, not against the block.
+
+```by
+def f(a: (int) -> None) -> str:
+    a(1)
+    return "done"
+
+def build() -> int:
+    # error: [invalid-return-type]
+    return f:
+        print(it)
+```
+
 ## the call is still checked as a call
 
 ```by

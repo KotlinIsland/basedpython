@@ -78,6 +78,22 @@ though: a block's value is worked out together with the binding its target makes
 and only one binding can do that — so neither a chain (`a = b = f:`) nor an
 unpacking (`a, b = f:`) takes a block
 
+a `return` takes one too, so a builder api reads as one expression:
+
+```by
+def page() -> str:
+    return f(2):
+        print(it)
+```
+
+the `def` the block lowers to is emitted in front of the `return`, so the value
+is the call's however far down the suite the block was written
+
+these are the positions a suite can stand in. an argument list is not one of
+them — a block is delimited by indentation, and python suppresses the newline
+that starts an indented suite inside brackets — so an inner call keeps its own
+statement (`page.body:`) rather than nesting as `render(body: …)`
+
 ## binding
 
 the block binds the callee's *last declared parameter*, passed by keyword when
