@@ -36,7 +36,9 @@ use crate::Db;
 use crate::place::{ConsideredDefinitions, symbol};
 use crate::types::ProgramEnvironment;
 use crate::types::call::{Argument, CallArguments};
-use crate::types::name_fallback::claimed_by_name_resolution;
+use crate::types::name_fallback::{
+    claimed_by_enclosing_name_resolution, claimed_by_name_resolution,
+};
 use crate::types::signatures::{Parameters, Signature};
 use crate::types::{Type, UnionType};
 
@@ -309,6 +311,39 @@ fn receiver_name<'db>(
         ty: resolution.ty,
         resolution,
     })
+}
+
+/// basedpython: the receiver member a bare assignment inside a trailing lambda
+/// block shadows.
+///
+/// `href = "/x"` in a block binds a local, exactly as it does anywhere else —
+/// the binding is made before any type is known, so it cannot depend on what the
+/// receiver turns out to have. Once it does, that binding is the level of the
+/// tower *inside* the receiver, so every mention of the name in the block means
+/// the local — while the same name in a block that does not write it means the
+/// receiver's member. That reversal is what this reports.
+///
+/// `None` when a scope around the block already binds the name, since then the
+/// local is the ordinary capture the block is supposed to make.
+pub(crate) fn shadowed_receiver_member<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    scope: ScopeId<'db>,
+    name: &str,
+) -> Option<Type<'db>> {
+    if name == "self" {
+        return None;
+    }
+    let (_, callee_ty) = crate::types::trailing_lambda::enclosing_block(db, scope)?;
+    let receiver = crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee_ty)?;
+    if claimed_by_enclosing_name_resolution(db, file, scope, name) {
+        return None;
+    }
+    receiver
+        .member(db, env, name)
+        .place
+        .ignore_possibly_undefined()
 }
 
 /// whether any scope from the use out to the block itself binds or declares

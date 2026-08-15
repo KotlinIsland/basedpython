@@ -231,6 +231,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_FORMAT_SPEC);
     registry.register_lint(&IMPLICIT_OBJECT_REPR);
     registry.register_lint(&REDUNDANT_RETURN_ANNOTATION);
+    registry.register_lint(&SHADOWED_RECEIVER_MEMBER);
 
     // String annotations
     registry.register_lint(&ESCAPE_CHARACTER_IN_FORWARD_ANNOTATION);
@@ -2995,6 +2996,46 @@ declare_lint! {
     pub(crate) static REDUNDANT_RETURN_ANNOTATION = {
         summary: "detects an explicit `-> None` that is already the default",
         status: LintStatus::stable("0.0.62"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for an assignment to a bare name inside a [trailing lambda] block whose
+    /// receiver has a member of that name.
+    ///
+    /// ## Why is this bad?
+    /// The assignment binds a local, so the receiver's member is left untouched and
+    /// the write goes nowhere the author can see. Reading the same name in a block
+    /// that does not write it resolves to the member, so the two sides of the `=`
+    /// mean different things.
+    ///
+    /// Which of the two an assignment binds cannot depend on the receiver's type:
+    /// the binding is made before any type is known. So the local stands, and this
+    /// says so.
+    ///
+    /// Nothing is reported when a scope around the block already binds the name —
+    /// there the local is the ordinary capture a block is meant to make.
+    ///
+    /// ## Examples
+    /// ```by
+    /// class Tag:
+    ///     var href: str
+    ///
+    ///     def div(self, block: Tag.() -> None) -> None:
+    ///         block(self)
+    ///
+    /// def build(t: Tag) -> None:
+    ///     t.div:
+    ///         href = "/x"  # warning: binds a local; `t.href` is unchanged
+    ///         self.href = "/x"  # ok — writes the member
+    /// ```
+    ///
+    /// [trailing lambda]: https://basedpython.org/features/trailing-lambdas/
+    pub(crate) static SHADOWED_RECEIVER_MEMBER = {
+        summary: "detects a block assignment that binds a local instead of the receiver's member",
+        status: LintStatus::stable("0.0.71"),
         default_level: Level::Warn,
     }
 }

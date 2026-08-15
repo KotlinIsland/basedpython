@@ -188,6 +188,18 @@ with `nonlocal`. a name bound in no enclosing scope stays a plain block local,
 and an attribute or item target (`obj.x = …`) rebinds no name, so neither is
 declared
 
+a plain block local is still what you get when the block's
+[receiver](implicit-receivers.md) has a member of that name — which of the two
+an assignment binds cannot depend on a type, since the binding is made before
+any type is known. reading that name means the member and writing it does not,
+so the write is reported and asks you to spell it `self.href`:
+
+```by
+t.div:
+    href = "/x"     # warning[shadowed-receiver-member]: binds a local
+    self.href = "/x"  # sets the member
+```
+
 ty's flow analysis reflects the write too. a `once` block runs exactly once at
 the call site (like a `with` body), so an unconditional assignment narrows the
 enclosing binding definitely — a `reveal_type` after the block sees the block's
