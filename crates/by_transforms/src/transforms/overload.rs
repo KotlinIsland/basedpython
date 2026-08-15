@@ -79,6 +79,16 @@ impl State<'_> {
             .any(|d| matches!(&d.expression, Expr::Name(n) if n.id.as_str() == "__init_method__"))
     }
 
+    /// a `decorator def` expands to overload stubs plus a runtime dispatcher, so
+    /// its own pass writes the whole declaration — including the body a bodyless
+    /// one needs. adding `: ...` here as well would land inside that rewrite
+    fn is_decorator_keyword(&self, func: &StmtFunctionDef) -> bool {
+        func.decorator_list.iter().any(|dec| {
+            super::source_util::is_synthetic_decorator(self.source, dec)
+                && matches!(&dec.expression, Expr::Name(n) if n.id.as_str() == "decorator_keyword")
+        })
+    }
+
     fn push(&self, range: TextRange, repl: String) {
         self.edits.borrow_mut().push((range, repl));
     }
@@ -127,7 +137,7 @@ impl State<'_> {
                 i += 1;
                 continue;
             };
-            if Self::is_init_method(first) {
+            if Self::is_init_method(first) || self.is_decorator_keyword(first) {
                 i += 1;
                 continue;
             }
@@ -136,7 +146,7 @@ impl State<'_> {
             let mut run_end = i + 1;
             while run_end < body.len() {
                 if let Stmt::FunctionDef(f) = &body[run_end] {
-                    if f.name.id.as_str() == name {
+                    if f.name.id.as_str() == name && !self.is_decorator_keyword(f) {
                         run_end += 1;
                         continue;
                     }

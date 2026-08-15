@@ -81,10 +81,11 @@ impl State<'_> {
         super::source_util::line_indent(self.source, pos)
     }
 
-    fn find_byte_after(&self, pos: TextSize, byte: u8) -> Option<TextSize> {
-        let start = usize::from(pos);
+    fn find_byte_between(&self, range: TextRange, byte: u8) -> Option<TextSize> {
+        let start = usize::from(range.start());
+        let end = usize::from(range.end());
         let bytes = self.source.as_bytes();
-        for (i, &b) in bytes[start..].iter().enumerate() {
+        for (i, &b) in bytes[start..end].iter().enumerate() {
             if b == byte {
                 return TextSize::try_from(start + i).ok();
             }
@@ -211,23 +212,6 @@ impl State<'_> {
         };
         let _ = write!(header, "def {fn_name}({impl_sig_args}):");
 
-        let scan_from = func
-            .returns
-            .as_ref()
-            .map(|r| r.range().end())
-            .unwrap_or_else(|| params.range().end());
-        let Some(colon_pos) = self.find_byte_after(scan_from, b':') else {
-            return;
-        };
-        let header_end = colon_pos + TextSize::from(1);
-
-        self.push(TextRange::new(deco.range().start(), header_end), header);
-
-        let Some(first_stmt) = func.body.first() else {
-            return;
-        };
-        let body_first_pos = first_stmt.range().start();
-
         let recursive_kw_args: String = options
             .iter()
             .map(|o| {
@@ -241,6 +225,43 @@ impl State<'_> {
         } else {
             format!("{fn_name}(fn, {recursive_kw_args})")
         };
+
+        let dispatch = |prefix: &str| {
+            format!(
+                "{prefix}if fn is None:\n{body_indent}    def inner(fn):\n{body_indent}        return {recursive_call}\n{body_indent}    return inner\n{body_indent}"
+            )
+        };
+
+        // a `decorator def` with no body is a declaration — `decorator def d(fn)`
+        // means the same as `decorator def d(fn): ...`, just as a bodyless plain
+        // `def` does. the source carries no colon and no body statement to anchor
+        // edits on, so the whole declaration is replaced in one go
+        let Some(first_stmt) = func.body.first() else {
+            let body = dispatch(&format!("\n{body_indent}"));
+            self.push(
+                TextRange::new(deco.range().start(), func.range().end()),
+                format!("{header}{body}..."),
+            );
+            return;
+        };
+        let body_first_pos = first_stmt.range().start();
+
+        let scan_from = func
+            .returns
+            .as_ref()
+            .map(|r| r.range().end())
+            .unwrap_or_else(|| params.range().end());
+        let Some(colon_pos) =
+            self.find_byte_between(TextRange::new(scan_from, body_first_pos), b':')
+        else {
+            self.error(format!(
+                "`decorator def {fn_name}` has a body but no `:` ending its signature"
+            ));
+            return;
+        };
+        let header_end = colon_pos + TextSize::from(1);
+
+        self.push(TextRange::new(deco.range().start(), header_end), header);
 
         let is_inline_body = {
             let body_start = usize::from(body_first_pos);
@@ -263,11 +284,10 @@ impl State<'_> {
             String::new()
         };
 
-        let dispatch = format!(
-            "{prefix}if fn is None:\n{body_indent}    def inner(fn):\n{body_indent}        return {recursive_call}\n{body_indent}    return inner\n{body_indent}"
+        self.push(
+            TextRange::new(body_first_pos, body_first_pos),
+            dispatch(&prefix),
         );
-
-        self.push(TextRange::new(body_first_pos, body_first_pos), dispatch);
     }
 }
 
@@ -375,6 +395,74 @@ mod tests {
                             return d(fn, a=a, b=b)
                         return inner
                     return a + len(b)
+            "},
+        );
+    }
+
+    #[test]
+    fn bodyless_decorator_declaration() {
+        check(
+            "decorator def d(fn: (int) -> None)\n",
+            indoc! {"
+                from typing import Callable, overload
+                @overload
+                def d(fn: Callable[..., object], /) -> object: ...
+                @overload
+                def d() -> Callable[[Callable[..., object]], object]: ...
+                def d(fn=None):
+                    if fn is None:
+                        def inner(fn):
+                            return d(fn)
+                        return inner
+                    ...
+            "},
+        );
+    }
+
+    #[test]
+    fn bodyless_decorator_declaration_with_options() {
+        check(
+            "decorator def d(fn: (...) -> object, option: bool = False) -> int\n",
+            indoc! {"
+                from typing import Callable, overload
+                @overload
+                def d(fn: Callable[..., object], /) -> int: ...
+                @overload
+                def d(*, option: bool = ...) -> Callable[[Callable[..., object]], int]: ...
+                def d(fn=None, *, option=False):
+                    if fn is None:
+                        def inner(fn):
+                            return d(fn, option=option)
+                        return inner
+                    ...
+            "},
+        );
+    }
+
+    // the bodyless form used to scan the rest of the file for the colon that
+    // ends a signature, swallowing every statement up to the next one it found
+    #[test]
+    fn bodyless_decorator_leaves_later_statements_alone() {
+        check(
+            indoc! {"
+                decorator def d(fn: (int) -> None)
+
+                d(lambda i: None)
+            "},
+            indoc! {"
+                from typing import Callable, overload
+                @overload
+                def d(fn: Callable[..., object], /) -> object: ...
+                @overload
+                def d() -> Callable[[Callable[..., object]], object]: ...
+                def d(fn=None):
+                    if fn is None:
+                        def inner(fn):
+                            return d(fn)
+                        return inner
+                    ...
+
+                d(lambda i: None)
             "},
         );
     }

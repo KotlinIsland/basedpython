@@ -31,12 +31,20 @@ keyword-only and have defaults — they are the decorator's options
 - the function must have at least one positional parameter — the decorated callable
 - any remaining parameters are made keyword-only at the call site, and must have
     defaults
-- the `fn` parameter type is rendered as `Callable[..., object]` in the generated
-    overloads regardless of the user-written annotation. the user-written annotation
-    is preserved on the runtime impl for documentation but is not used for static
-    call-site typing
+- the `fn` parameter's declared type is what a decoration is checked against, and
+    is what gives the decorated function's parameters their types — see
+    [decorated function parameters](decorated-parameters.md)
 - the return type of the user-written function is preserved as the result type of
     applying the decorator
+
+## declaring one without a body
+
+like any other `def`, a `decorator def` can be written with no body at all — a
+declaration of the shape, with nothing to run
+
+```by
+decorator def route(fn: (int) -> None)
+```
 
 ## scope
 
