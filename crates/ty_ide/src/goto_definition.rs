@@ -1505,7 +1505,7 @@ a = Test()
         LL | a: Mapping
            |    ^^^^^^^ Clicking here
         info: Found 1 definition
-          --> stdlib/typing.byi:LL:7
+          --> stdlib/_collections_abc.byi:LL:7
            |
         LL | class Mapping[out Key, out Value](Collection[Key]):
            |       -------
