@@ -576,3 +576,48 @@ reveal_type(tree())  # revealed: defaultdict[Unknown, Divergent]
 nested = defaultdict(tree)
 reveal_type(nested)  # revealed: defaultdict[Unknown, defaultdict[Unknown, Divergent]]
 ```
+
+## a statement call whose callee is still being inferred
+
+a call on a line of its own is asked whether it returns before anything after it is checked, because
+a call that returns `Never` ends the scope. a method that is still having its own signature inferred
+has no return type yet, and the placeholder standing in for it until then returns `Never` — so on
+that round the call reads as terminal and the rest of `seek` is unreachable. that is what settles
+`seek`, which settles `record`, which makes the same call read as returning, and the round after
+that starts again from the placeholder.
+
+neither reading ever repeats the one before it, so the search for a fixed point has none to find.
+the round that saw the call return is the one that stands, and every later round of the same cycle
+keeps it.
+
+the types are read from inside a method rather than from the module: reading them from the module
+asks for `seek`'s signature before the class body is checked, which is not the order that reaches
+the cycle at all.
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```py
+class Reader:
+    def reset(self):
+        self.decoder = None
+
+    def record(self, chars):
+        self.used = 0
+
+    def seek(self, cookie):
+        self.record("")
+        self.decoder = self.reset()
+        self.record(self.decoder)
+        self.used = cookie
+
+    def check(self):
+        # nothing in either body ends the scope, so control reaches the end of both
+        reveal_type(self.seek(1))  # revealed: None
+        reveal_type(self.reset())  # revealed: None
+
+        reveal_type(self.decoder)  # revealed: None | Unknown
+        reveal_type(self.used)  # revealed: int | cookie@seek
+```
