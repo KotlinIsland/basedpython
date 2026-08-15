@@ -1884,6 +1884,16 @@
             }
           ]
         },
+        "shadowed-receiver-member": {
+          "title": "detects a block assignment that binds a local instead of the receiver's member",
+          "description": "## What it does\nChecks for an assignment to a bare name inside a [trailing lambda] block whose\nreceiver has a member of that name.\n\n## Why is this bad?\nThe assignment binds a local, so the receiver's member is left untouched and\nthe write goes nowhere the author can see. Reading the same name in a block\nthat does not write it resolves to the member, so the two sides of the `=`\nmean different things.\n\nWhich of the two an assignment binds cannot depend on the receiver's type:\nthe binding is made before any type is known. So the local stands, and this\nsays so.\n\nNothing is reported when a scope around the block already binds the name —\nthere the local is the ordinary capture a block is meant to make.\n\n## Examples\n```by\nclass Tag:\n    var href: str\n\n    def div(self, block: Tag.() -> None) -> None:\n        block(self)\n\ndef build(t: Tag) -> None:\n    t.div:\n        href = \"/x\"  # warning: binds a local; `t.href` is unchanged\n        self.href = \"/x\"  # ok — writes the member\n```\n\n[trailing lambda]: https://basedpython.org/features/trailing-lambdas/",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "shadowed-type-variable": {
           "title": "detects type variables that shadow type variables from outer scopes",
           "description": "## What it does\n\nChecks for type variables in nested generic classes or functions that shadow type variables\nfrom an enclosing scope.\n\n## Why is this bad?\n\nShadowing type variables makes the code confusing and is disallowed by the typing spec.\n\n## Examples\n\n```toml\n[environment]\npython-version = \"3.12\"\n```\n\n```python\nclass Outer[T]:\n    # `T` is already used by `Outer`\n    class Inner[T]: ...  # error\n\n    # `T` is already used by `Outer`\n    def method[T](self, x: T) -> T:  # error\n        return x\n```\n\n## References\n\n- [Typing spec: Generics](https://typing.python.org/en/latest/spec/generics.html#introduction)",

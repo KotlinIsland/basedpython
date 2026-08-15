@@ -3798,6 +3798,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     infer_assigned_ty(self, TypeContext::default());
                 }
 
+                self.report_shadowed_receiver_member(name);
                 self.infer_definition(name);
             }
             ast::Expr::Starred(ast::ExprStarred {
@@ -13266,6 +13267,38 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 Type::Never
             }
             ExprContext::Invalid => Type::unknown(),
+        }
+    }
+
+    /// basedpython: an assignment inside a trailing lambda block binds a local
+    /// even when the block's receiver has a member of that name, so the member
+    /// is left untouched. The binding is made before any type is known, so it
+    /// cannot be redirected here — but it can be reported.
+    fn report_shadowed_receiver_member(&mut self, name: &ast::ExprName) {
+        if !self.is_basedpython_file() {
+            return;
+        }
+        let db = self.db();
+        let env = self.program_environment();
+        let Some(member) =
+            receivers::shadowed_receiver_member(db, env, self.file(), self.scope(), &name.id)
+        else {
+            return;
+        };
+        if let Some(builder) = self
+            .context
+            .report_lint(&crate::types::diagnostic::SHADOWED_RECEIVER_MEMBER, name)
+        {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "Assigning `{}` binds a local, leaving the receiver's `{}` unchanged",
+                name.id, name.id
+            ));
+            diagnostic.info(format_args!(
+                "the receiver's `{}` is of type `{}`",
+                name.id,
+                member.display(db, env)
+            ));
+            diagnostic.help(format_args!("Write `self.{}` to set the member", name.id));
         }
     }
 
