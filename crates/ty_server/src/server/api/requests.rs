@@ -17,6 +17,7 @@ mod call_hierarchy_outgoing_calls;
 mod code_action;
 mod code_lens;
 mod completion;
+mod data_flow;
 mod diagnostic;
 mod doc_highlights;
 mod document_symbols;
@@ -48,6 +49,7 @@ pub(super) use call_hierarchy_outgoing_calls::CallHierarchyOutgoingCallsRequestH
 pub(super) use code_action::CodeActionRequestHandler;
 pub(super) use code_lens::CodeLensRequestHandler;
 pub(super) use completion::CompletionRequestHandler;
+pub(super) use data_flow::DataFlowRequestHandler;
 pub(super) use diagnostic::DocumentDiagnosticRequestHandler;
 pub(super) use doc_highlights::DocumentHighlightRequestHandler;
 pub(super) use document_symbols::DocumentSymbolRequestHandler;

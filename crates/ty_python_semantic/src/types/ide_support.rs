@@ -45,10 +45,12 @@ use ty_python_core::definition::{Definition, DefinitionKind, NestedBindingExecut
 use ty_python_core::scope::FileScopeId;
 use ty_python_core::{ProgramFile, attribute_scopes, global_scope, semantic_index, use_def_map};
 
+mod data_flow;
 mod unreachable_code;
 #[path = "ide_support/unused_bindings.rs"]
 mod unused_binding_support;
 
+pub use data_flow::{ConditionVerdict, DataFlow, data_flow};
 pub use resolve_definition::{ImportAliasResolution, ResolvedDefinition, map_stub_definition};
 use resolve_definition::{find_symbol_in_scope, resolve_definition};
 pub use unreachable_code::{UnreachableKind, UnreachableRange, unreachable_ranges};
