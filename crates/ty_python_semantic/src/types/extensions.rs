@@ -418,7 +418,15 @@ pub(crate) fn resolve_extension_members<'db>(
     let (receiver_class, instance) = if let Some(class) = receiver.nominal_class(db, env) {
         (class, Some(receiver))
     } else {
-        match receiver.to_class_type(db) {
+        // `type[C]` is a class object just as much as `C` itself is, so it
+        // reaches the same `class def` and `static def` members. `to_class_type`
+        // does not cover it — it answers only for a class written literally —
+        // so a `type[…]` receiver is unwrapped to the class it is a subclass of
+        let class_object = match receiver {
+            Type::SubclassOf(subclass_of) => subclass_of.subclass_of().into_class(db, env),
+            _ => receiver.to_class_type(db),
+        };
+        match class_object {
             Some(class) => (class, None),
             None => return Vec::new(),
         }

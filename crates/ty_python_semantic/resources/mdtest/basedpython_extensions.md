@@ -100,6 +100,63 @@ reveal_type(str.joined(["a", "b"]))  # revealed: str
 reveal_type(str.empty())  # revealed: str
 ```
 
+## a `type[…]` receiver is a class object too
+
+A parameter annotated `type[C]` holds a class object just as much as the name `C` does, so
+it reaches the same `static def` and `class def` members.
+
+```by
+class Widget:
+    pass
+
+extension Widget:
+    static def joined(parts: list[str]) -> str:
+        return "-".join(parts)
+
+    class def empty(cls) -> Widget:
+        return cls()
+
+    def label(self) -> str:
+        return "instance"
+
+def f(t: type[Widget]):
+    reveal_type(t.joined(["a", "b"]))  # revealed: str
+    reveal_type(t.empty())  # revealed: Widget
+```
+
+An instance member stays unreachable through it, exactly as it is through the class itself.
+
+```by
+class Gadget:
+    pass
+
+extension Gadget:
+    def label(self) -> str:
+        return "instance"
+
+def f(t: type[Gadget]):
+    # error: [unresolved-attribute]
+    t.label()
+```
+
+A subclass of the extended class reaches it as well, because `type[C]` covers every subclass
+of `C`.
+
+```by
+class Base:
+    pass
+
+class Derived(Base):
+    pass
+
+extension Base:
+    class def make(cls) -> Base:
+        return cls()
+
+def f(t: type[Derived]):
+    reveal_type(t.make())  # revealed: Base
+```
+
 ## extensions never shadow declared members
 
 ```by
