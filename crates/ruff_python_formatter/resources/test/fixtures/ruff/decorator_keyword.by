@@ -12,3 +12,10 @@ def f2() -> None: ...
 
 @cached(ttl=10)
 def f3() -> None: ...
+
+
+decorator def route(fn: (int) -> None)
+
+
+@route
+def home(request): ...
