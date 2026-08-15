@@ -2647,7 +2647,10 @@ impl<'src> Parser<'src> {
                 UnsupportedSyntaxErrorKind::StarTuple(StarTupleKind::Return),
             );
 
-            Box::new(parsed_expr.expr)
+            // basedpython: the returned value is an expression like any other, so
+            // a trailing lambda block may supply it — `return div:` followed by a
+            // suite returns what the call returns
+            Box::new(self.parse_trailing_lambda_value(parsed_expr).expr)
         });
 
         ast::StmtReturn {

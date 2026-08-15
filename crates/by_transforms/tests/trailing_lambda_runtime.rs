@@ -93,6 +93,15 @@ after_declaration: str = "reached"
 assert declared == "done" and seen_in_declaration == 3, "block as a declaration's value"
 assert after_declaration == "reached", "the statement after a declaration's block runs"
 
+# a `return` takes a block as its value, with the `def` hoisted in front of the
+# `return` so the value is the call's
+seen_in_return: int = 0
+def returning() -> str:
+    return totalling:
+        global seen_in_return
+        seen_in_return = it
+assert returning() == "done" and seen_in_return == 3, "block as a return's value"
+
 print("ok")
 "#;
 
