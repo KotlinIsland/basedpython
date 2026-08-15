@@ -95,7 +95,14 @@ fn instance_of<'db>(
     let resolved = resolve_module_confident(db, env.resolver_environment(db), &module)?;
     let file = ProgramFile::new(db, resolved.file(db)?, env.program(db));
 
-    let Place::Defined(defined) = imported_symbol(db, env, Some(file), &class.qualname, None).place
+    // What the debugger saw is the *generated* python's name, and basedpython renames a
+    // `private` declaration on the way out. So a `_Helper` with no such name in the source is
+    // looked up as the `Helper` it came from — see [`private_renames`]
+    let source_name = private_renames(db, file)
+        .get(&class.qualname)
+        .map_or(class.qualname.as_str(), Name::as_str);
+
+    let Place::Defined(defined) = imported_symbol(db, env, Some(file), source_name, None).place
     else {
         return None;
     };
@@ -446,4 +453,52 @@ for item in [1, 2, 3]:
              for it to become and no seed to make"
         );
     }
+}
+
+/// Module-level names basedpython renames on the way out, generated name first.
+///
+/// A `private class Helper` is `_Helper` in the emitted python, so that is the name a debugger
+/// reports for an instance of it — and it is not a name the `.by` source has. Without this, a fact
+/// about a private class resolves to nothing and the analysis is one seed short.
+///
+/// Computed from the source rather than read from `_by_sourcemap.py`. The map is a runtime artefact
+/// that lives as long as one `by run`, and this question is about a file the server already has
+/// open: `private` is a decorator in the AST, and what it renames to is a rule rather than a
+/// lookup. So there is nothing to emit, nothing to keep in step, and it works for a file that has
+/// never been run.
+///
+/// Only module level. A `private` member of a class is `__name`, which python then mangles per
+/// class — a different rule, for names that are attributes rather than the qualnames a fact
+/// carries.
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+pub(crate) fn private_renames<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+) -> FxHashMap<String, Name> {
+    let mut renamed = FxHashMap::default();
+    let parsed = parsed_module(db, file.python_file(db)).load(db);
+
+    for statement in parsed.suite() {
+        let (name, decorators) = match statement {
+            ast::Stmt::ClassDef(node) => (&node.name, &node.decorator_list),
+            ast::Stmt::FunctionDef(node) => (&node.name, &node.decorator_list),
+            _ => continue,
+        };
+        if decorators.iter().any(is_private) {
+            renamed.insert(format!("_{name}"), Name::new(name.as_str()));
+        }
+    }
+    renamed
+}
+
+/// Whether a decorator is basedpython's `private` modifier.
+///
+/// The modifier is written as a bare word before the declaration and parses as a decorator whose
+/// expression is the name `private`. A call — `@private(...)` — is somebody's own decorator that
+/// happens to share the name, and is left alone.
+fn is_private(decorator: &ast::Decorator) -> bool {
+    decorator
+        .expression
+        .as_name_expr()
+        .is_some_and(|name| name.id.as_str() == "private")
 }

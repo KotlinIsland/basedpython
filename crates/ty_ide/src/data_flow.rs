@@ -253,6 +253,67 @@ if value is None:
     }
 
     #[test]
+    fn a_private_class_is_resolved_from_the_name_the_debugger_saw() {
+        // basedpython renames a `private` declaration on the way out, so an instance of
+        // `private class Runner` is a `_Runner` at runtime — a name the source does not have.
+        // without the translation this observation resolves to nothing and the branch stays
+        // undecided, which is a fact lost rather than a wrong answer, but lost all the same
+        let found = at(
+            "\
+private class Runner:
+    pass
+
+thing = build()
+<CURSOR>
+if isinstance(thing, Runner):
+    ran = 1
+",
+            vec![(
+                "thing",
+                Observed::IsExactly(ClassName {
+                    module: "main".to_string(),
+                    qualname: "_Runner".to_string(),
+                }),
+            )],
+        );
+        assert!(
+            found
+                .iter()
+                .any(|f| f == "isinstance(thing, Runner): = true"),
+            "found {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_name_that_only_looks_renamed_is_not_invented() {
+        // an underscore is not evidence of anything. `_Runner` with no `private Runner` behind it
+        // is a class this file does not have, and guessing that it means `Runner` would be the
+        // analysis making up a type from a naming convention
+        let found = at(
+            "\
+class Runner:
+    pass
+
+thing = build()
+<CURSOR>
+if isinstance(thing, Runner):
+    ran = 1
+",
+            vec![(
+                "thing",
+                Observed::IsExactly(ClassName {
+                    module: "main".to_string(),
+                    qualname: "_Runner".to_string(),
+                }),
+            )],
+        );
+        assert!(
+            found.is_empty(),
+            "an underscore was read as a rename: {found:?}"
+        );
+    }
+
+    #[test]
     fn a_class_observation_settles_an_isinstance_check() {
         let found = at(
             "\
