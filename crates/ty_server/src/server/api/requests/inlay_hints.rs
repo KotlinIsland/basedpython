@@ -88,8 +88,8 @@ impl BackgroundDocumentRequestHandler for InlayHintRequestHandler {
                     label: inlay_hint_label(&hint.label, db, snapshot.encoding()),
                     kind: Some(inlay_hint_kind(&hint.kind)),
                     tooltip: None,
-                    padding_left: None,
-                    padding_right: None,
+                    padding_left: hint.padding_left.then_some(true),
+                    padding_right: hint.padding_right.then_some(true),
                     data: None,
                     text_edits: Some(
                         hint.text_edits
@@ -137,7 +137,7 @@ fn template_inlay_hint(
             TemplateInlayHintKind::Template => None,
         },
         tooltip: None,
-        padding_left: None,
+        padding_left: hint.padding_left.then_some(true),
         padding_right: None,
         data: None,
         text_edits: None,

@@ -8,7 +8,7 @@ def identity[T](x: T) -> T:
 
 a[: 1] = identity[[1]](1)
 b = (1, 'two')
-reveal_type(a)[  revealed: 1]
+reveal_type(a)[ revealed: 1]
 
 ---------------------------------------------
 info[inlay-hint-location]: Inlay Hint Target
