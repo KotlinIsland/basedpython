@@ -100,3 +100,183 @@ pub fn data_flow_at(
 
     conditions.chain(unreachable).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::cursor_test;
+    use ruff_python_ast::name::Name;
+    use ty_python_core::assumptions::{ClassName, Observed};
+
+    /// What the analysis says about a file, given what a debugger saw where `<CURSOR>` is.
+    ///
+    /// The whole feature end to end: source in, findings out. Every other test of this reads one
+    /// layer — which seeds survive, what an observation becomes — and none of them would notice if
+    /// the layers stopped agreeing.
+    ///
+    /// `<CURSOR>` marks the line the program is stopped on, which is what the test is really
+    /// about: everything below it is the question and everything above it has already run.
+    fn at(source: &str, observations: Vec<(&str, Observed)>) -> Vec<String> {
+        let test = cursor_test(source);
+        let file = test.cursor.file;
+        let text = ruff_db::source::source_text(&test.db, file);
+        let line = text[..usize::from(test.cursor.offset)]
+            .matches('\n')
+            .count()
+            + 1;
+        let observed = observations
+            .into_iter()
+            .map(|(name, observed)| Observation {
+                name: Name::new(name),
+                observed,
+            })
+            .collect();
+
+        data_flow_at(
+            &test.db,
+            test.program_file(file),
+            OneIndexed::from_zero_indexed(line - 1),
+            observed,
+        )
+        .into_iter()
+        .map(|finding| format!("{}: {}", &text[finding.range], finding.label()))
+        .collect()
+    }
+
+    #[test]
+    fn a_condition_the_source_cannot_decide_is_decided_by_what_was_observed() {
+        // `limit` comes from a call, so a checker reading this file alone can say only that it is
+        // an `int` and nothing about which way the branch goes. the debugger saw a 5
+        let found = at(
+            "\
+limit = compute()
+<CURSOR>
+if limit > 100:
+    over = 1
+",
+            vec![("limit", Observed::IsInt("5".to_string()))],
+        );
+        assert!(
+            found.iter().any(|f| f == "limit > 100: = false"),
+            "the observation should settle the branch, and found {found:?}"
+        );
+    }
+
+    #[test]
+    fn without_the_observation_the_same_file_settles_nothing() {
+        // the control for the test above. if this ever finds something, the feature is reporting
+        // ordinary static analysis as though a debugger had produced it
+        let found = at(
+            "\
+limit = compute()
+<CURSOR>
+if limit > 100:
+    over = 1
+",
+            Vec::new(),
+        );
+        assert!(
+            found.is_empty(),
+            "nothing was observed, and found {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_condition_above_the_stop_line_is_not_answered() {
+        // it already ran, and it ran before the observation was taken. answering it would be
+        // describing the wrong moment
+        let found = at(
+            "\
+limit = compute()
+if limit > 100:
+    over = 1
+<CURSOR>
+",
+            vec![("limit", Observed::IsInt("5".to_string()))],
+        );
+        assert!(
+            !found.iter().any(|f| f.starts_with("limit > 100")),
+            "a condition above the stop line was answered: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_name_a_loop_rebinds_around_the_stop_line_settles_nothing() {
+        // `item` is bound above the stop line and rebound by the back edge, so what was observed
+        // is true for this iteration and false for the next. this is the case the use-def map
+        // cannot see, and the one that would put a confident wrong answer on screen
+        let found = at(
+            "\
+for item in [1, 2, 3]:
+    <CURSOR>
+    if item > 2:
+        big = 1
+",
+            vec![("item", Observed::IsInt("1".to_string()))],
+        );
+        assert!(found.is_empty(), "a loop-bound name was seeded: {found:?}");
+    }
+
+    #[test]
+    fn a_binding_between_the_stop_and_the_use_wins_over_the_observation() {
+        let found = at(
+            "\
+limit = compute()
+<CURSOR>
+limit = other()
+if limit > 100:
+    over = 1
+",
+            vec![("limit", Observed::IsInt("5".to_string()))],
+        );
+        assert!(
+            found.is_empty(),
+            "the program's own assignment happens in between: {found:?}"
+        );
+    }
+
+    #[test]
+    fn an_is_none_check_is_settled_by_what_the_debugger_saw() {
+        let found = at(
+            "\
+value = lookup()
+<CURSOR>
+if value is None:
+    missing = 1
+",
+            vec![("value", Observed::IsNone)],
+        );
+        assert!(
+            found.iter().any(|f| f == "value is None: = true"),
+            "found {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_class_observation_settles_an_isinstance_check() {
+        let found = at(
+            "\
+class Runner:
+    pass
+
+thing = build()
+<CURSOR>
+if isinstance(thing, Runner):
+    ran = 1
+",
+            vec![(
+                "thing",
+                Observed::IsExactly(ClassName {
+                    module: "main".to_string(),
+                    qualname: "Runner".to_string(),
+                }),
+            )],
+        );
+        assert!(
+            found
+                .iter()
+                .any(|f| f == "isinstance(thing, Runner): = true"),
+            "found {found:?}"
+        );
+    }
+}
