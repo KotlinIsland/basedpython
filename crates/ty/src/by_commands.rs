@@ -559,10 +559,15 @@ pub(crate) fn cmd_transpile(
     }
 
     let (source, path) = match file {
-        Some(p) => (
-            fs::read_to_string(p).with_context(|| format!("{}", p.display()))?,
-            Some(p.as_path()),
-        ),
+        Some(p) => {
+            // a python source may declare its own encoding, which is decoded on
+            // the way in — everything downstream speaks utf-8
+            let bytes = fs::read(p).with_context(|| format!("{}", p.display()))?;
+            let decoded = crate::by_source_encoding::decode(&bytes)
+                .map_err(|e| anyhow::anyhow!("{e}"))
+                .with_context(|| format!("{}", p.display()))?;
+            (decoded.text, Some(p.as_path()))
+        }
         None => {
             let mut s = String::new();
             io::stdin()
@@ -719,14 +724,28 @@ fn reverse_dir_converting(
 
     let mut count = 0usize;
     let mut skipped: Vec<(&Path, String)> = Vec::new();
+    let mut recoded: Vec<(&Path, String)> = Vec::new();
     for py in &files {
         // a source that is not valid utf-8 is still valid python — PEP 263 lets
-        // a file declare its own encoding — but the transpiler only speaks
-        // utf-8, so such a file is left exactly as it was found
-        let source = match fs::read_to_string(py) {
-            Ok(source) => source,
+        // a file declare its own encoding — so it is decoded here rather than
+        // skipped. everything downstream speaks utf-8, so the declaration the
+        // file carried stops being true of it and is rewritten to say so
+        let bytes = match fs::read(py) {
+            Ok(bytes) => bytes,
             Err(e) => {
                 skipped.push((py.as_path(), e.to_string()));
+                continue;
+            }
+        };
+        let source = match crate::by_source_encoding::decode(&bytes) {
+            Ok(decoded) => {
+                if let Some(from) = decoded.recoded_from {
+                    recoded.push((py.as_path(), from));
+                }
+                decoded.text
+            }
+            Err(e) => {
+                skipped.push((py.as_path(), e));
                 continue;
             }
         };
@@ -754,6 +773,9 @@ fn reverse_dir_converting(
         count += 1;
     }
 
+    for (py, from) in &recoded {
+        eprintln!("re-encoded {} from {from} to utf-8", py.display());
+    }
     for (py, message) in &skipped {
         eprintln!("skipped {}: {message}", py.display());
     }
@@ -1321,18 +1343,42 @@ mod tests {
         assert!(!is_hidden_within(Path::new("/p/.hidden.by"), root));
     }
 
-    /// a source the transpiler cannot decode must not take the project down
-    /// with it: everything else still converts, the undecodable file is left
-    /// exactly as it was found, and the exit status still says something did
-    /// not convert
+    /// a source that declares its own encoding converts like any other, and the
+    /// declaration is rewritten to name what the converted file actually holds
     #[test]
-    fn a_source_that_is_not_utf8_is_skipped_not_fatal() -> anyhow::Result<()> {
+    fn a_source_that_declares_its_encoding_converts() -> anyhow::Result<()> {
         let dir = tempfile::TempDir::new()?;
-        let good = dir.path().join("good.py");
-        std::fs::write(&good, "x = 1\n")?;
         // PEP 263: a declared latin-1 encoding, and a byte no utf-8 decoder accepts
         let latin1 = dir.path().join("latin_1.py");
         std::fs::write(&latin1, b"# -*- coding: latin-1 -*-\ns = '\xdf'\n")?;
+
+        let status = reverse_dir(dir.path(), &Config::default())?;
+
+        assert!(matches!(status, ExitStatus::Success));
+        assert!(!latin1.exists());
+        let converted = std::fs::read_to_string(dir.path().join("latin_1.by"))?;
+        assert!(
+            converted.contains("coding: utf-8"),
+            "the declaration still names an encoding the file no longer has: {converted}"
+        );
+        assert!(
+            converted.contains('\u{df}'),
+            "the text did not survive decoding: {converted}"
+        );
+        Ok(())
+    }
+
+    /// a source this build cannot decode must not take the project down with it:
+    /// everything else still converts, the undecodable file is left exactly as it
+    /// was found, and the exit status still says something did not convert
+    #[test]
+    fn a_source_that_cannot_be_decoded_is_skipped_not_fatal() -> anyhow::Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        let good = dir.path().join("good.py");
+        std::fs::write(&good, "x = 1\n")?;
+        // an encoding with no built-in decoder, and bytes no utf-8 decoder accepts
+        let jis = dir.path().join("jis.py");
+        std::fs::write(&jis, b"# coding: shift_jis\ns = '\x82\xa0'\n")?;
 
         let status = reverse_dir(dir.path(), &Config::default())?;
 
@@ -1340,8 +1386,8 @@ mod tests {
         assert!(dir.path().join("good.by").is_file());
         assert!(!good.exists());
         // untouched: neither converted nor deleted
-        assert!(latin1.is_file());
-        assert!(!dir.path().join("latin_1.by").exists());
+        assert!(jis.is_file());
+        assert!(!dir.path().join("jis.by").exists());
         Ok(())
     }
 

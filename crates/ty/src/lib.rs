@@ -1,5 +1,6 @@
 mod args;
 mod by_commands;
+mod by_source_encoding;
 mod logging;
 mod printer;
 mod python_version;
