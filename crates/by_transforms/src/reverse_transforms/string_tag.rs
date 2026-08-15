@@ -3,8 +3,8 @@
 //!
 //! the forward transform lowers an abutting tag `tag"..."` to a call
 //! `tag(t"...")` (the native form on 3.14+). the reverse re-sugars that exact
-//! shape: a bare-name callee applied to a single positional t-string argument,
-//! with no keywords.
+//! shape: a bare-name or attribute callee applied to a single positional
+//! t-string argument, with no keywords.
 //!
 //! there is no provenance side-channel in the produced python, so the shape is
 //! the only signal that a call originated as a tag. re-sugaring is left off
@@ -44,11 +44,15 @@ impl<'src> StringTagReverse<'src> {
     /// the re-sugared `tag"..."` text for a call, or `None` if the call is not
     /// a round-trippable tag shape
     fn resugar(&self, call: &ExprCall) -> Option<String> {
-        // bare-name callee whose name is not a builtin string prefix
-        let Expr::Name(name) = call.func.as_ref() else {
-            return None;
+        // a callee the quote can be glued to: a bare name, or an attribute
+        // whose trailing name is what carries the tag. either way the name the
+        // quote lands on must not be a builtin string prefix
+        let tag_name = match call.func.as_ref() {
+            Expr::Name(name) => name.id.as_str(),
+            Expr::Attribute(attribute) => attribute.attr.as_str(),
+            _ => return None,
         };
-        if is_builtin_string_prefix(name.id.as_str()) {
+        if is_builtin_string_prefix(tag_name) {
             return None;
         }
         // exactly one positional argument, a t-string, no keywords
@@ -71,7 +75,7 @@ impl<'src> StringTagReverse<'src> {
         let body = literal
             .strip_prefix('t')
             .or_else(|| literal.strip_prefix('T'))?;
-        Some(format!("{}{body}", name.id.as_str()))
+        Some(format!("{}{body}", self.src(call.func.range())))
     }
 }
 
@@ -166,6 +170,19 @@ mod tests {
         check("q = sql(\"x\")\n", "q = sql(\"x\")\n");
     }
 
+    // an attribute callee carries a tag just as a bare name does
+    #[test]
+    fn attribute_callee() {
+        check("line = doc.text(t\"hi {who}\")\n", "line = doc.text\"hi {who}\"\n");
+    }
+
+    // the name the quote lands on is the attribute, so that is what the
+    // builtin-prefix rule applies to
+    #[test]
+    fn attribute_named_builtin_prefix_unchanged() {
+        check("doc.f(t\"x\")\n", "doc.f(t\"x\")\n");
+    }
+
     // round-trip stability: re-sugared output forward-transpiles back to the
     // same call shape (checked at 3.14 for the native form)
     #[test]
@@ -174,6 +191,19 @@ mod tests {
         let py = "q = sql(t\"select {x}\")\n";
         let by = reverse_transpile(py, &Config::test_default()).unwrap();
         assert_eq!(by, "q = sql\"select {x}\"\n");
+        let config = Config {
+            min_version: PythonVersion::PY314,
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(&by, &config).unwrap(), py);
+    }
+
+    #[test]
+    fn attribute_round_trips_through_forward() {
+        use crate::{PythonVersion, transpile};
+        let py = "line = doc.text(t\"hi {who}\")\n";
+        let by = reverse_transpile(py, &Config::test_default()).unwrap();
+        assert_eq!(by, "line = doc.text\"hi {who}\"\n");
         let config = Config {
             min_version: PythonVersion::PY314,
             ..Config::test_default()
