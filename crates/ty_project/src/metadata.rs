@@ -500,10 +500,28 @@ impl ProjectMetadata {
         &'a self,
         options: &'a Options,
     ) -> impl Iterator<Item = &'a Options> {
+        self.options_in_precedence_order_with_script(options, None)
+    }
+
+    /// As [`Self::options_in_precedence_order`], but with a PEP 723 script's own
+    /// `[tool.ty]` block layered in.
+    ///
+    /// The block speaks for one file, so it outranks the project's own configuration
+    /// and the user-level configuration. It loses to the command line — a `--warn`
+    /// flag is an instruction about this very run, and a script checked out of a
+    /// repository should not be able to talk its way out of it — and to a project
+    /// override that names the file, which is the project saying something about
+    /// this file specifically.
+    pub(crate) fn options_in_precedence_order_with_script<'a>(
+        &'a self,
+        options: &'a Options,
+        script: Option<&'a Options>,
+    ) -> impl Iterator<Item = &'a Options> {
         self.override_options
             .as_deref()
             .into_iter()
             .chain(self.uv_workspace_options.as_deref())
+            .chain(script)
             .chain(std::iter::once(options))
             .chain(
                 self.user_configuration

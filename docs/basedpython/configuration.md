@@ -114,7 +114,7 @@ top-level `rules` and `analysis`
 ## per-file configuration
 
 a [PEP 723](https://peps.python.org/pep-0723/) script carries its own
-configuration, which replaces the project's for that file alone:
+configuration, which applies to that file alone:
 
 ```by
 # /// script
@@ -125,5 +125,7 @@ configuration, which replaces the project's for that file alone:
 print(4 / 0)
 ```
 
-the project's own `rules` and `overrides` do not apply to a script that carries
-its own metadata
+the block is a layer, not a replacement: every rule it does not mention is
+whatever the project says. it beats the project's top-level `rules` and
+`analysis`, and loses to an `[[overrides]]` entry that matches the file and to
+anything given on the command line
