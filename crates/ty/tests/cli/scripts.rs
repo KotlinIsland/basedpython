@@ -2,8 +2,11 @@ use insta_cmd::assert_cmd_snapshot;
 
 use crate::CliTest;
 
+/// a script is held to the project's configuration like any other file. its own
+/// block outranks the project's top-level options, and a project override that
+/// names the file outranks the block.
 #[test]
-fn project_settings_and_overrides_do_not_apply() -> anyhow::Result<()> {
+fn project_settings_and_overrides_apply() -> anyhow::Result<()> {
     let case = CliTest::with_files([
         (
             "pyproject.toml",
@@ -27,6 +30,93 @@ fn project_settings_and_overrides_do_not_apply() -> anyhow::Result<()> {
             # ///
 
             print(missing)
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    error[unresolved-reference]: Name `missing` used when not defined
+     --> script.py:7:7
+      |
+    7 | print(missing)
+      |       ^^^^^^^
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+/// with no override naming the file, the script's own block wins over the
+/// project's top-level options.
+#[test]
+fn inline_settings_override_project_settings() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.ty.rules]
+            unresolved-reference = "ignore"
+            "#,
+        ),
+        (
+            "script.py",
+            r#"
+            # /// script
+            # [tool.ty.rules]
+            # unresolved-reference = "warn"
+            # ///
+
+            print(missing)
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[unresolved-reference]: Name `missing` used when not defined
+     --> script.py:7:7
+      |
+    7 | print(missing)
+      |       ^^^^^^^
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+/// the project supplies every rule the script's own block does not state.
+#[test]
+fn project_settings_fill_in_what_the_script_does_not_state() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.ty.rules]
+            unresolved-reference = "ignore"
+            division-by-zero = "ignore"
+            "#,
+        ),
+        (
+            "script.py",
+            r#"
+            # /// script
+            # [tool.ty.rules]
+            # unresolved-reference = "warn"
+            # ///
+
+            print(missing)
+            print(1 / 0)
             "#,
         ),
     ])?;
@@ -91,8 +181,9 @@ fn basedpython_metadata_applies() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// a script that configures nothing itself is configured entirely by its project.
 #[test]
-fn metadata_without_tool_ty_uses_default_settings() -> anyhow::Result<()> {
+fn metadata_without_tool_ty_uses_project_settings() -> anyhow::Result<()> {
     let case = CliTest::with_files([
         (
             "pyproject.toml",
@@ -117,22 +208,14 @@ fn metadata_without_tool_ty_uses_default_settings() -> anyhow::Result<()> {
         ),
     ])?;
 
-    assert_cmd_snapshot!(case.command(), @r#"
-    success: false
-    exit_code: 1
+    assert_cmd_snapshot!(case.command(), @"
+    success: true
+    exit_code: 0
     ----- stdout -----
-    error[invalid-assignment]: Object of type `Literal["not an int"]` is not assignable to `int`
-     --> script.py:6:14
-      |
-    6 | value: int = "not an int"
-      |        ---   ^^^^^^^^^^^^ Incompatible value of type `Literal["not an int"]`
-      |        |
-      |        Declared type
-
-    Found 1 diagnostic
+    All checks passed!
 
     ----- stderr -----
-    "#);
+    ");
 
     Ok(())
 }
