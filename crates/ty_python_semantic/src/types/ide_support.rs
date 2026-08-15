@@ -4026,6 +4026,10 @@ pub fn own_class_member_names<'db>(
 /// already denote. An arm one of them spells is not added by the promotion —
 /// `float | int` is a union of exactly two arms however it is read — so showing
 /// it would ask the reader to write `int` a second time.
+///
+/// The rendering opens on the `|` rather than on the space before it: the caller
+/// shows this after the operand it promotes, and the space that separates the
+/// two belongs to whatever draws it there.
 pub fn numeric_promotion<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -4056,7 +4060,11 @@ pub fn numeric_promotion<'db>(
         {
             continue;
         }
-        rendered.push_str(" | ");
+        if rendered.is_empty() {
+            rendered.push_str("| ");
+        } else {
+            rendered.push_str(" | ");
+        }
         rendered.push_str(spelling);
     }
 

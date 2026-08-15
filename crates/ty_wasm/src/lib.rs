@@ -621,6 +621,8 @@ impl Workspace {
                     self.position_encoding,
                 ),
                 kind: hint.kind.into(),
+                padding_left: hint.padding_left,
+                padding_right: hint.padding_right,
                 text_edits: hint
                     .text_edits
                     .into_iter()
@@ -1481,6 +1483,12 @@ pub struct InlayHint {
     pub position: Position,
 
     pub kind: InlayHintKind,
+
+    /// Whether the hint is drawn with a space between it and the source before it.
+    pub padding_left: bool,
+
+    /// Whether the hint is drawn with a space between it and the source after it.
+    pub padding_right: bool,
 
     #[wasm_bindgen(getter_with_clone)]
     pub text_edits: Vec<TextEdit>,

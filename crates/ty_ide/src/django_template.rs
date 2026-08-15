@@ -944,8 +944,12 @@ pub(crate) mod tests {
                         .next()
                         .unwrap_or_default();
 
+                    // padding is drawn by the client rather than carried in the
+                    // label, so a rendering shows it the way a reader sees it
+                    let padding = if hint.padding_left { " " } else { "" };
+
                     with_forward_slashes(format_args!(
-                        "{:?} at `{anchored}`: `{}`",
+                        "{:?} at `{anchored}`: `{padding}{}`",
                         hint.kind, hint.label
                     ))
                 })

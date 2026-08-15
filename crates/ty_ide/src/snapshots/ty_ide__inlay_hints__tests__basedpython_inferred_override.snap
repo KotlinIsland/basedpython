@@ -24,4 +24,4 @@ info: Source
  --> main2.py:8:6
   |
 8 |     [override ]def f(self) -> None: ...
-  |      ^^^^^^^^^
+  |      ^^^^^^^^

@@ -134,6 +134,54 @@ y = foo(Thing())
     Ok(())
 }
 
+/// A hint that needs a space between itself and the source it sits beside sends
+/// `paddingLeft` rather than a label that opens on a space, so that the client
+/// draws the gap and the label holds only what the hint says.
+#[test]
+fn a_hint_asks_the_client_for_the_space_beside_it() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let foo = SystemPath::new("src/foo.py");
+    let foo_content = "\
+def f(x: int) -> None:
+    reveal_type(x)
+";
+
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(ClientOptions::default())
+        .with_workspace(workspace_root, None)?
+        .with_file(foo, foo_content)?
+        .enable_inlay_hints(true)
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(foo, foo_content, 1);
+
+    let hints = server
+        .inlay_hints_request(foo, Range::new(Position::new(1, 0), Position::new(2, 0)))
+        .unwrap();
+
+    insta::assert_json_snapshot!(hints, @r#"
+    [
+      {
+        "position": {
+          "line": 1,
+          "character": 18
+        },
+        "label": [
+          {
+            "value": "revealed: int"
+          }
+        ],
+        "kind": 1,
+        "textEdits": [],
+        "paddingLeft": true
+      }
+    ]
+    "#);
+
+    Ok(())
+}
+
 /// Tests that disabling variable types inlay hints works correctly.
 #[test]
 fn variable_inlay_hints_disabled() -> Result<()> {

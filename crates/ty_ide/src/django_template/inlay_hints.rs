@@ -24,6 +24,9 @@ pub struct TemplateInlayHint {
     pub position: TextSize,
     pub label: String,
     pub kind: TemplateInlayHintKind,
+    /// Whether the client separates the hint from the template text before it,
+    /// rather than the label carrying a space of its own.
+    pub padding_left: bool,
 }
 
 /// what a template hint says
@@ -110,6 +113,7 @@ fn binding_types(
             position: binding.range.end(),
             label: format!(": {}", ty.display(db, env)),
             kind: TemplateInlayHintKind::Type,
+            padding_left: false,
         });
     }
 }
@@ -143,8 +147,9 @@ fn resolved_template(
 
     hints.push(TemplateInlayHint {
         position: literal.range.end(),
-        label: format!(" → {path}"),
+        label: format!("→ {path}"),
         kind: TemplateInlayHintKind::Template,
+        padding_left: true,
     });
 }
 

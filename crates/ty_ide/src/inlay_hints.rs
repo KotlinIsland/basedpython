@@ -35,6 +35,15 @@ pub struct InlayHint {
     pub position: TextSize,
     pub kind: InlayHintKind,
     pub label: InlayHintLabel,
+    /// Whether the client separates the hint from the source before it.
+    ///
+    /// A hint that needs a space there asks for one with this rather than
+    /// writing it into the label, so that the space is the client's own
+    /// rendering — outside any part that links somewhere, and stylable as the
+    /// gap it is rather than as label text.
+    pub padding_left: bool,
+    /// Whether the client separates the hint from the source after it.
+    pub padding_right: bool,
     pub text_edits: Vec<InlayHintTextEdit>,
 }
 
@@ -193,6 +202,8 @@ impl InlayHint {
             position,
             kind: InlayHintKind::Type,
             label: InlayHintLabel { parts: label_parts },
+            padding_left: false,
+            padding_right: false,
             text_edits,
         })
     }
@@ -211,6 +222,8 @@ impl InlayHint {
             position,
             kind: InlayHintKind::CallArgumentName,
             label: InlayHintLabel { parts: label_parts },
+            padding_left: false,
+            padding_right: false,
             text_edits: vec![],
         }
     }
@@ -227,8 +240,10 @@ impl InlayHint {
             position,
             kind: InlayHintKind::Raises,
             label: InlayHintLabel {
-                parts: vec![format!(" raises {}", raised.display(db, env)).into()],
+                parts: vec![format!("raises {}", raised.display(db, env)).into()],
             },
+            padding_left: true,
+            padding_right: false,
             text_edits: vec![],
         }
     }
@@ -237,9 +252,9 @@ impl InlayHint {
     /// none, shown where the keyword would be written.
     fn inferred_variance(position: TextSize, variance: ast::Variance) -> Self {
         let keyword = match variance {
-            ast::Variance::Covariant => "out ",
-            ast::Variance::Contravariant => "in ",
-            ast::Variance::Invariant => "in out ",
+            ast::Variance::Covariant => "out",
+            ast::Variance::Contravariant => "in",
+            ast::Variance::Invariant => "in out",
         };
 
         Self {
@@ -248,6 +263,8 @@ impl InlayHint {
             label: InlayHintLabel {
                 parts: vec![keyword.into()],
             },
+            padding_left: false,
+            padding_right: true,
             text_edits: vec![],
         }
     }
@@ -259,8 +276,10 @@ impl InlayHint {
             position,
             kind: InlayHintKind::Reification,
             label: InlayHintLabel {
-                parts: vec!["reified ".into()],
+                parts: vec!["reified".into()],
             },
+            padding_left: false,
+            padding_right: true,
             text_edits: vec![],
         }
     }
@@ -272,8 +291,10 @@ impl InlayHint {
             position,
             kind: InlayHintKind::Override,
             label: InlayHintLabel {
-                parts: vec![InlayHintLabelPart::new("override ").with_target(superclass)],
+                parts: vec![InlayHintLabelPart::new("override").with_target(superclass)],
             },
+            padding_left: false,
+            padding_right: true,
             text_edits: vec![],
         }
     }
@@ -312,6 +333,8 @@ impl InlayHint {
             position,
             kind: InlayHintKind::TypeArgument,
             label: InlayHintLabel { parts },
+            padding_left: false,
+            padding_right: false,
             text_edits: vec![],
         }
     }
@@ -337,6 +360,8 @@ impl InlayHint {
             position,
             kind: InlayHintKind::ImplicitArgument,
             label: InlayHintLabel { parts },
+            padding_left: false,
+            padding_right: false,
             text_edits: vec![],
         }
     }
@@ -349,12 +374,17 @@ impl InlayHint {
             label: InlayHintLabel {
                 parts: vec![InlayHintLabelPart::new(name), "=".into()],
             },
+            padding_left: false,
+            padding_right: false,
             text_edits: vec![],
         }
     }
 
     /// The arms the typing spec's numeric promotion adds to a `float` /
     /// `complex` type expression.
+    ///
+    /// `arms` is rendered without the space that separates the first `|` from
+    /// the operand written before it, because that space is the client's.
     fn numeric_promotion(position: TextSize, arms: String) -> Self {
         Self {
             position,
@@ -362,6 +392,8 @@ impl InlayHint {
             label: InlayHintLabel {
                 parts: vec![arms.into()],
             },
+            padding_left: true,
+            padding_right: false,
             text_edits: vec![],
         }
     }
@@ -373,8 +405,10 @@ impl InlayHint {
             position,
             kind: InlayHintKind::EnumValue,
             label: InlayHintLabel {
-                parts: vec![format!(" {value}").into()],
+                parts: vec![value.into()],
             },
+            padding_left: true,
+            padding_right: false,
             text_edits: vec![],
         }
     }
@@ -390,8 +424,10 @@ impl InlayHint {
             position,
             kind: InlayHintKind::RevealedType,
             label: InlayHintLabel {
-                parts: vec![format!("  revealed: {}", revealed.display(db, env)).into()],
+                parts: vec![format!("revealed: {}", revealed.display(db, env)).into()],
             },
+            padding_left: true,
+            padding_right: false,
             text_edits: vec![],
         }
     }
@@ -401,6 +437,9 @@ impl InlayHint {
     /// `leading_space` separates the hint from the character it sits after: one
     /// written inside a parameter list abuts a `(` or a `,` that already spaces
     /// it, but a trailing lambda's sits directly after the block's `:`.
+    ///
+    /// `parameter_follows` says a written parameter comes next, so the hint ends
+    /// on the separator that keeps the list reading as source.
     fn implicit_parameters(
         db: &dyn Db,
         env: &ProgramEnvironment<'_>,
@@ -410,10 +449,6 @@ impl InlayHint {
         parameter_follows: bool,
     ) -> Self {
         let mut parts = Vec::new();
-
-        if leading_space {
-            parts.push(" ".into());
-        }
 
         for (index, (name, ty)) in parameters.iter().enumerate() {
             if index > 0 {
@@ -426,13 +461,15 @@ impl InlayHint {
         }
 
         if parameter_follows {
-            parts.push(", ".into());
+            parts.push(",".into());
         }
 
         Self {
             position,
             kind: InlayHintKind::ImplicitParameter,
             label: InlayHintLabel { parts },
+            padding_left: leading_space,
+            padding_right: parameter_follows,
             text_edits: vec![],
         }
     }
@@ -449,8 +486,10 @@ impl InlayHint {
             position,
             kind: InlayHintKind::Type,
             label: InlayHintLabel {
-                parts: vec![format!(" -> {}", returned.display(db, env)).into()],
+                parts: vec![format!("-> {}", returned.display(db, env)).into()],
             },
+            padding_left: true,
+            padding_right: false,
             text_edits: vec![],
         }
     }
@@ -469,6 +508,8 @@ impl InlayHint {
             label: InlayHintLabel {
                 parts: vec![format!(": {}", ty.display(db, env)).into()],
             },
+            padding_left: false,
+            padding_right: false,
             text_edits: vec![],
         }
     }
@@ -524,10 +565,18 @@ pub struct InlayHintDisplay<'a> {
     inlay_hint: &'a InlayHint,
 }
 
+/// A hint as the client draws it, padding included, so that what a test reads is
+/// what a reader of the file sees.
 impl fmt::Display for InlayHintDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.inlay_hint.padding_left {
+            f.write_str(" ")?;
+        }
         for part in &self.inlay_hint.label.parts {
             write!(f, "{}", part.text)?;
+        }
+        if self.inlay_hint.padding_right {
+            f.write_str(" ")?;
         }
         Ok(())
     }
@@ -713,7 +762,7 @@ pub struct InlayHintSettings {
     /// line.
     ///
     /// ```python
-    /// reveal_type(1)"  revealed: Literal[1]"
+    /// reveal_type(1)" revealed: Literal[1]"
     /// ```
     pub revealed_types: bool,
 
@@ -2186,6 +2235,43 @@ mod tests {
             self.db.write_file(file_name, content).unwrap();
         }
 
+        /// Every hint as `«label»`, with a space the *client* draws written as
+        /// `_` and a space the label itself carries left as a space.
+        ///
+        /// A snapshot of the file cannot tell the two apart, because both reach
+        /// the reader as a space. This renders them apart, so that a label
+        /// growing an edge space back is a test failure rather than a silent
+        /// regression in what the hint asks the client to draw.
+        fn padded_hints(&mut self, settings: &InlayHintSettings) -> String {
+            inlay_hints(
+                &self.db,
+                ProgramFile::new(
+                    &self.db,
+                    self.file,
+                    self.db.program_environment().program(&self.db),
+                ),
+                self.range,
+                settings,
+            )
+            .into_iter()
+            .map(|hint| {
+                let label = hint
+                    .label
+                    .parts()
+                    .iter()
+                    .map(InlayHintLabelPart::text)
+                    .join("");
+                let padding = |padded: bool| if padded { "_" } else { "" };
+
+                format!(
+                    "«{}{label}{}»",
+                    padding(hint.padding_left),
+                    padding(hint.padding_right)
+                )
+            })
+            .join("\n")
+        }
+
         /// Returns the inlay hints for the given test case with custom settings.
         fn inlay_hints_with_settings(&mut self, settings: &InlayHintSettings) -> String {
             let hints = inlay_hints(
@@ -2214,6 +2300,12 @@ mod tests {
                 let end_position = hint.position.to_usize() + offset;
                 let mut hint_str = "[".to_string();
 
+                // padding is drawn by the client rather than carried in the
+                // label, so a snapshot shows it the way a reader would see it
+                if hint.padding_left {
+                    hint_str.push(' ');
+                }
+
                 for part in hint.label.parts() {
                     if let Some(target) = part.target().cloned() {
                         let part_position = u32::try_from(end_position + hint_str.len()).unwrap();
@@ -2226,6 +2318,10 @@ mod tests {
                 }
 
                 all_edits.extend(hint.text_edits);
+
+                if hint.padding_right {
+                    hint_str.push(' ');
+                }
 
                 hint_str.push(']');
                 offset += hint_str.len();
@@ -2309,6 +2405,100 @@ Source with applied edits:
 
             buf
         }
+    }
+
+    /// A hint that needs a space between itself and the source it sits beside
+    /// asks the client for one instead of writing it into its label, so that the
+    /// space is never part of a label part that links somewhere and never part
+    /// of what a client measures as the hint's text.
+    ///
+    /// `_` marks a space the client draws; a bare space is one the label carries.
+    #[test]
+    fn a_hint_leaves_the_space_beside_it_to_the_client() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class Base:
+                def f(self) -> None: ...
+
+            class Derived(Base):
+                def f(self):
+                    raise TypeError
+
+            class Source[T]:
+                def get(self) -> T: ...
+
+            def make[T]():
+                return T()
+            ",
+        );
+
+        assert_snapshot!(test.padded_hints(&InlayHintSettings {
+            inferred_return_types: true,
+            inferred_raises: true,
+            inferred_variance: true,
+            inferred_reification: true,
+            inferred_override: true,
+            ..InlayHintSettings::none()
+        }), @r"
+        «override_»
+        «_raises TypeError»
+        «out_»
+        «reified_»
+        «_-> T@make»
+        ");
+    }
+
+    /// The same, for the hints a `.py` file gets: one shown at the end of a line
+    /// and one shown between the operands of a union.
+    #[test]
+    fn a_python_hint_leaves_the_space_beside_it_to_the_client() {
+        let mut test = inlay_hint_test(
+            "
+            def f(x: float | None) -> None:
+                reveal_type(x)
+            ",
+        );
+
+        assert_snapshot!(test.padded_hints(&InlayHintSettings {
+            revealed_types: true,
+            numeric_promotions: true,
+            ..InlayHintSettings::none()
+        }), @r"
+        «_| int»
+        «_revealed: int | float | None»
+        ");
+    }
+
+    /// A hint written *inside* a parameter list is padded on the side that meets
+    /// a written parameter, and on neither side where the list's own `(` or `,`
+    /// already spaces it.
+    #[test]
+    fn an_implicit_parameter_is_padded_where_it_meets_written_source() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def apply(fn: (int) -> None) -> None:
+                fn(1)
+
+            class C:
+                init(a: int)
+
+            class D:
+                init()
+
+            apply:
+                print(it)
+            ",
+        );
+
+        assert_snapshot!(test.padded_hints(&InlayHintSettings {
+            implicit_parameters: true,
+            implicit_self: true,
+            ..InlayHintSettings::none()
+        }), @r"
+        «self,_»
+        «self»
+        «_it: int»
+        ");
     }
 
     /// a forwarded parameter pack's halves render in the starred spelling the file is

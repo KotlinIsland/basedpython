@@ -464,6 +464,10 @@ class PlaygroundServer
           column: hint.position.column,
         },
         kind: mapInlayHintKind(hint.kind),
+        // a hint that sits beside source asks the editor to draw the space
+        // between the two, rather than writing one into its own label
+        paddingLeft: hint.padding_left,
+        paddingRight: hint.padding_right,
         textEdits: hint.text_edits.map((edit: TextEdit) => ({
           range: tyRangeToMonacoRange(edit.range),
           text: edit.new_text,

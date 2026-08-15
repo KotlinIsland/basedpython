@@ -978,9 +978,17 @@ fn a_template_hints_a_loop_binding_and_the_file_an_include_resolves_to() -> Resu
     let rendered: Vec<_> = hints
         .iter()
         .map(|hint| match &hint.label {
-            // a resolved template reads as a path, so it carries the host's separator
+            // a resolved template reads as a path, so it carries the host's separator.
+            // the space that sets the hint off from the literal is padding the
+            // client draws rather than part of the label, so it is read from there
             lsp_types::Label::String(label) => {
-                format!("{:?} {label}", hint.position.character).replace('\\', "/")
+                let padding = if hint.padding_left == Some(true) {
+                    " "
+                } else {
+                    ""
+                };
+
+                format!("{:?} {padding}{label}", hint.position.character).replace('\\', "/")
             }
             parts @ lsp_types::Label::InlayHintLabelPartList(_) => format!("{parts:?}"),
         })
