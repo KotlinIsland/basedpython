@@ -175,3 +175,10 @@ echo 'x: int = 1' | by transpile
 `.py`, or with `--reverse` every `.py` → `.by`)
 
 stops at the first transpile error and prints a diagnostic
+
+a python source that declares its own encoding with a
+[PEP 263](https://peps.python.org/pep-0263/) comment is decoded as it is read.
+what is written back out is utf-8, so the declaration is rewritten to say `utf-8`
+— left alone it would name an encoding the file no longer has. utf-8 and the
+latin-1 family are decodable; a file declaring anything else is skipped and named
+rather than guessed at
