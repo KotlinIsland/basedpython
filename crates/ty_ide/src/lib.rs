@@ -7,6 +7,7 @@ mod all_symbols;
 mod call_hierarchy;
 mod code_action;
 mod completion;
+mod data_flow;
 mod django_template;
 mod doc_highlights;
 mod docstring;
@@ -42,6 +43,7 @@ pub use completion::{
     Completion, CompletionCapabilities, CompletionCommand, CompletionInsertTextFormat,
     CompletionKind, CompletionSettings, completion,
 };
+pub use data_flow::{Finding, FindingKind, data_flow_at};
 pub use django_template::{
     DisplayTemplateHover, DjangoChecker, DjangoCodeLens, DjangoLensAction, DjangoLensTarget,
     DjangoSymbol, PreparedTemplateRename, TemplateCompletion, TemplateEdit, TemplateHover,

@@ -77,6 +77,14 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::InlayHintRequestHandler::METHOD => background_document_request_task::<
             requests::InlayHintRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        // Sent while a debuggee is stopped, and re-sent on every step, so it is
+        // latency sensitive in the way completion is: the answer is stale the
+        // moment the program moves
+        requests::DataFlowRequestHandler::METHOD => background_document_request_task::<
+            requests::DataFlowRequestHandler,
+        >(
+            req, BackgroundSchedule::LatencySensitive
+        ),
         requests::SemanticTokensRequestHandler::METHOD => background_document_request_task::<
             requests::SemanticTokensRequestHandler,
         >(req, BackgroundSchedule::Worker),
