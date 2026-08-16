@@ -1,6 +1,8 @@
 mod args;
 mod by_commands;
+mod by_init;
 mod by_source_encoding;
+mod by_staging;
 mod logging;
 mod printer;
 mod python_version;
@@ -107,6 +109,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             module,
             args,
             min_version,
+            python,
             lowering,
             compiled,
         } => by_commands::cmd_run(
@@ -115,11 +118,30 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             min_version.as_deref(),
             &lowering,
             compiled,
+            python.as_deref(),
         ),
+        Command::Init {
+            path,
+            name,
+            lib,
+            app: _,
+            python_version,
+        } => {
+            let kind = if lib {
+                by_init::ProjectKind::Library
+            } else {
+                by_init::ProjectKind::Application
+            };
+            let version = python_version
+                .unwrap_or_else(|| by_commands::default_project_python_version().to_string());
+            by_init::cmd_init(path.as_deref(), name.as_deref(), kind, &version)
+        }
         Command::Build {
             min_version,
+            out,
+            print_manifest,
             lowering,
-        } => by_commands::cmd_build(min_version.as_deref(), &lowering),
+        } => by_commands::cmd_build(min_version.as_deref(), &lowering, &out, print_manifest),
         Command::Compile {
             files,
             output,

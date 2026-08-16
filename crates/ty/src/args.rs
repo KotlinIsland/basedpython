@@ -81,6 +81,12 @@ pub(crate) enum Command {
         /// [default: the version of the interpreter that will run it]
         #[arg(long, value_name = "VERSION")]
         min_version: Option<String>,
+        /// The interpreter to run on, or the environment holding it.
+        ///
+        /// Defaults to the project environment — the same one `by check`
+        /// resolves imports against — then `$PYTHON`, then `python3` on `PATH`.
+        #[arg(long, value_name = "PATH", alias = "venv")]
+        python: Option<PathBuf>,
         #[command(flatten)]
         lowering: LoweringArgs,
         /// Compile every imported module to a native extension first.
@@ -95,12 +101,52 @@ pub(crate) enum Command {
         compiled: bool,
     },
 
-    /// Transpile all .by files and write them to out/.
+    /// Start a new project.
+    ///
+    /// Writes a `pyproject.toml` that names the basedpython build backend, a
+    /// `src` layout, and a python version the checker, the transpiler and the
+    /// interpreter all agree on — so the project is installable, runnable and
+    /// publishable from the moment it exists.
+    Init {
+        /// Where to create the project [default: the current directory]
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+        /// The project's name [default: the directory's name]
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Create a library: no entry point, the same packaging.
+        #[arg(long, conflicts_with = "app")]
+        lib: bool,
+        /// Create an application, with an entry point `by run` uses. The default.
+        #[arg(long)]
+        app: bool,
+        /// The python version to target
+        /// [default: the version of the project environment's interpreter]
+        #[arg(long, value_name = "VERSION")]
+        python_version: Option<String>,
+    },
+
+    /// Build the project as python.
+    ///
+    /// The output is the whole project, not only the transpiled half: every `.by`
+    /// file becomes a `.py`, and every other file — a hand-written `.py`, a
+    /// `py.typed`, a template, a data file — is carried over to the same place.
+    /// What the previous build wrote and this one did not is deleted.
     Build {
         /// minimum Python version the output must run on
         /// [default: the project's configured python version]
         #[arg(long, value_name = "VERSION")]
         min_version: Option<String>,
+        /// Where to write the built project.
+        #[arg(short = 'o', long, value_name = "DIR", default_value = "out")]
+        out: PathBuf,
+        /// Report what the build read and produced, as `<kind> <value>` lines.
+        ///
+        /// `input <path>` for every file the project is made of — what a source
+        /// distribution has to carry to rebuild into the same thing — and
+        /// `package <name>` for every top-level package that came out.
+        #[arg(long)]
+        print_manifest: bool,
         #[command(flatten)]
         lowering: LoweringArgs,
     },

@@ -176,6 +176,36 @@ impl ModulePath {
         }
     }
 
+    /// Whether the directory this module *lives in* declares its `.by` sources
+    /// to be the authoritative surface.
+    ///
+    /// A basedpython library ships both halves: the transpiled `.py` python
+    /// imports, and the `.by` it was transpiled from. Only the `.by` still says
+    /// the things python cannot spell — `extension` blocks, `raises` clauses,
+    /// read-only `let`, sum types — so for type checking it is the better of the
+    /// two, and a `by.typed` marker beside them is how the package says so.
+    /// Without the marker the python wins, exactly as it did before any of this.
+    pub(super) fn by_typed(&self, resolver: &ResolverContext) -> bool {
+        let Some(path) = self.to_system_path() else {
+            return false;
+        };
+        let Some(directory) = path.parent() else {
+            return false;
+        };
+        directory_declares_by_typed(resolver, directory)
+    }
+
+    /// Whether this package directory itself carries the marker.
+    ///
+    /// A package declares it once, at the top: the resolution walk carries it
+    /// down to every module underneath, the same way `py.typed` is inherited.
+    pub(super) fn declares_by_typed(&self, resolver: &ResolverContext) -> bool {
+        let Some(path) = self.to_system_path() else {
+            return false;
+        };
+        directory_declares_by_typed(resolver, &path)
+    }
+
     /// Get the `py.typed` info for this package (not considering parent packages)
     pub(super) fn py_typed(&self, resolver: &ResolverContext) -> PyTyped {
         let Some(py_typed_contents) = self.to_system_path().and_then(|path| {
@@ -408,6 +438,21 @@ impl PartialEq<ModulePath> for VendoredPathBuf {
     fn eq(&self, other: &ModulePath) -> bool {
         other.eq(self)
     }
+}
+
+/// Whether `directory` is a package whose `.by` sources are authoritative.
+///
+/// The marker only counts inside a package. A stray `by.typed` loose in
+/// `site-packages` would otherwise re-point every top-level module in the
+/// environment, and no package has any business making that claim for its
+/// neighbours.
+fn directory_declares_by_typed(resolver: &ResolverContext, directory: &SystemPath) -> bool {
+    directory_contains_file(resolver.db, directory, &[crate::BY_TYPED])
+        && directory_contains_file(
+            resolver.db,
+            directory,
+            &["__init__.py", "__init__.pyi", "__init__.by", "__init__.byi"],
+        )
 }
 
 fn directory_contains_file(db: &dyn Db, directory: &SystemPath, names: &[&str]) -> bool {

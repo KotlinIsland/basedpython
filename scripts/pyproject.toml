@@ -21,6 +21,12 @@ line-length = 88
 [tool.ruff]
 extend = "../pyproject.toml"
 
+[tool.ty.environment]
+# `test_build_backend.py` tests `basedpython.build`, the PEP 517 backend that
+# ships in the `basedpython` wheel. it puts `../python` on `sys.path` to reach it,
+# and this is the same thing said to the checker
+root = [".", "../python"]
+
 [tool.ty.src]
 # `ty_benchmark` is a standalone project with its own pyproject.toml files, search paths, etc.
 exclude = ["./ty_benchmark"]

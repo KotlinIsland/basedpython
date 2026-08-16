@@ -63,8 +63,7 @@ see [configuration](configuration.md) for everything that can go in there
 
 ## building
 
-`by build` transpiles all `.by` files in the project and writes the output to
-`out/`, mirroring the source structure:
+`by build` writes the project to `out/` as python:
 
 ```sh
 by build
@@ -77,6 +76,10 @@ utils.by -> out/utils.py
 build complete (2 files)
 ```
 
+that is the whole project, not only its `.by` files — a hand-written `.py`
+module, a `py.typed`, a data file the program reads are all carried across to
+the same place, so `out/` runs the way the source does
+
 the generated `.py` files are ordinary python. run them with any python tool:
 
 ```sh
@@ -84,6 +87,13 @@ python out/main.py
 pytest out/
 mypy out/
 ruff check out/
+```
+
+to ship the project rather than run it, build a wheel — see
+[packaging](packaging.md):
+
+```sh
+uv build
 ```
 
 ## CI integration

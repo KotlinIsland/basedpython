@@ -1187,6 +1187,8 @@ struct ModuleResolutionCandidate {
     path: ModulePath,
     module: ResolvedModule,
     py_typed: PyTyped,
+    /// whether an enclosing package declared its `.by` sources authoritative
+    by_typed: bool,
     precedence: CandidatePrecedence,
 }
 
@@ -1204,6 +1206,7 @@ impl ModuleResolutionCandidate {
             path: search_path.to_module_path(),
             module: ResolvedModule::NamespacePackage,
             py_typed: PyTyped::Untyped,
+            by_typed: false,
             precedence,
         }
     }
@@ -1612,17 +1615,21 @@ fn resolve_component(
         return Err(());
     }
 
+    let by_typed = candidate.by_typed;
     let package_path = &mut candidate.path;
     package_path.push(module_name);
 
     // Check for a regular package first (highest priority)
     package_path.push("__init__");
-    if let Some(init) = resolve_file_module_with_filter(package_path, context, file_filter) {
+    if let Some(init) =
+        resolve_file_module_with_filter(package_path, context, file_filter, by_typed)
+    {
         // Remove the `__init__` component for any potential next step
         package_path.pop();
         candidate.py_typed = package_path
             .py_typed(context)
             .inherit_parent(candidate.py_typed);
+        candidate.by_typed = by_typed || package_path.declares_by_typed(context);
         if is_legacy_namespace_package(package_path, context, init) {
             candidate.module = ResolvedModule::LegacyNamespacePackage(init);
         } else {
@@ -1634,7 +1641,9 @@ fn resolve_component(
     // Check for a file module next
     package_path.pop();
 
-    if let Some(file_module) = resolve_file_module_with_filter(package_path, context, file_filter) {
+    if let Some(file_module) =
+        resolve_file_module_with_filter(package_path, context, file_filter, by_typed)
+    {
         candidate.module = ResolvedModule::Module(file_module);
         return Ok(());
     }
@@ -1701,13 +1710,19 @@ pub(super) fn resolve_file_module(
     module: &ModulePath,
     resolver_state: &ResolverContext,
 ) -> Option<File> {
-    resolve_file_module_with_filter(module, resolver_state, ComponentFileFilter::ByMode)
+    resolve_file_module_with_filter(module, resolver_state, ComponentFileFilter::ByMode, false)
 }
 
+/// Resolve `module` to a file.
+///
+/// `by_typed` is whether an enclosing package already declared its `.by` sources
+/// authoritative; a marker on the module's own directory counts for just as much,
+/// and is only looked for when there is a `.py` for it to outrank.
 fn resolve_file_module_with_filter(
     module: &ModulePath,
     resolver_state: &ResolverContext,
     filter: ComponentFileFilter,
+    by_typed: bool,
 ) -> Option<File> {
     let stub_file = if resolver_state.mode.is_typing() {
         module.with_pyi_extension().to_file(resolver_state)
@@ -1724,18 +1739,30 @@ fn resolve_file_module_with_filter(
         return stub_file.or(by_stub_file);
     }
 
-    stub_file
-        .or(by_stub_file)
-        .or_else(|| {
-            module
-                .with_py_extension()
-                .and_then(|path| path.to_file(resolver_state))
-        })
-        .or_else(|| {
-            module
-                .with_by_extension()
-                .and_then(|path| path.to_file(resolver_state))
-        })
+    let by_source = || {
+        module
+            .with_by_extension()
+            .and_then(|path| path.to_file(resolver_state))
+    };
+    let py_source = module
+        .with_py_extension()
+        .and_then(|path| path.to_file(resolver_state));
+
+    // a `.by` beside a `.py` is the source the `.py` was generated from, whether
+    // that happened in a wheel or in the project itself. which of the two answers
+    // is the module is the package's to declare
+    let source = match py_source {
+        Some(py_source) => {
+            if by_typed || module.by_typed(resolver_state) {
+                by_source().or(Some(py_source))
+            } else {
+                Some(py_source)
+            }
+        }
+        None => by_source(),
+    };
+
+    stub_file.or(by_stub_file).or(source)
 }
 
 /// Determines whether a package is a legacy namespace package.

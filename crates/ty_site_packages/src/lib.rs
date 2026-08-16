@@ -404,6 +404,41 @@ impl PythonEnvironment {
     pub fn is_virtual(&self) -> bool {
         matches!(self, Self::Virtual(_))
     }
+
+    /// This environment's `sys.prefix`.
+    pub fn sys_prefix(&self) -> &SystemPath {
+        match self {
+            Self::Virtual(env) => &env.root_path,
+            Self::System(env) => env.path.sys_prefix(),
+        }
+    }
+
+    /// The interpreter this environment runs, if it has one.
+    ///
+    /// Type checking only ever needs the search paths, but `by run` needs the
+    /// executable: a program transpiled for the project's python has to execute
+    /// on that python, or the checker's verdict and what actually runs are
+    /// answers about two different interpreters.
+    pub fn interpreter(&self, system: &dyn System) -> Option<SystemPathBuf> {
+        let sys_prefix = self.sys_prefix();
+        // a virtual environment on windows keeps its executable in `Scripts`,
+        // while a system install has it directly at the prefix
+        let directories = if cfg!(windows) {
+            vec![sys_prefix.join("Scripts"), sys_prefix.to_path_buf()]
+        } else {
+            vec![sys_prefix.join("bin")]
+        };
+        let names: &[&str] = if cfg!(windows) {
+            &["python.exe", "python3.exe"]
+        } else {
+            &["python3", "python"]
+        };
+
+        directories
+            .iter()
+            .flat_map(|directory| names.iter().map(|name| directory.join(name)))
+            .find(|candidate| system.is_file(candidate))
+    }
 }
 
 /// Enumeration of the subdirectories of `sys.prefix` that could contain a

@@ -846,6 +846,154 @@ Defaults to `false`.
 
 ---
 
+## `build`
+
+### `exclude`
+
+Files to keep out of the build output.
+
+The syntax is the same as `src.exclude`, and paths are anchored to the
+project root. Excluding a `.by` file keeps its transpiled output out of
+the build as well.
+
+**Default value**: `null`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.build]
+    exclude = [
+        "tests",
+        "**/*.snapshot",
+    ]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [build]
+    exclude = [
+        "tests",
+        "**/*.snapshot",
+    ]
+    ```
+
+---
+
+### `include`
+
+Files to carry into the build output verbatim, in addition to the ones
+that are there by default.
+
+`by build` mirrors the whole module tree: a `.by` file is transpiled, and
+every other file — a hand-written `.py`, a `py.typed` marker, a template,
+a data file — is copied to the same place in the output. `include` is for
+the files that sit *outside* a module root and still belong in the build,
+such as a data directory next to `src`.
+
+The syntax is the same as `src.include`, and paths are anchored to the
+project root. `exclude` takes precedence over `include`.
+
+**Default value**: `null`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.build]
+    include = [
+        "assets",
+    ]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [build]
+    include = [
+        "assets",
+    ]
+    ```
+
+---
+
+### `sources`
+
+Whether the build output carries the `.by` sources alongside the python
+they were transpiled into, with a `by.typed` marker naming them as the
+authoritative surface.
+
+This is what lets one basedpython project depend on another: a downstream
+python project reads the transpiled `.py` and is served perfectly, while a
+downstream basedpython project reads the `.by` and keeps the declarations
+that have no python spelling — `extension` blocks, `raises` clauses,
+read-only `let`, sum types.
+
+Enabled by default. Turn it off to ship python only.
+
+**Default value**: `true`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.build]
+    sources = false
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [build]
+    sources = false
+    ```
+
+---
+
+### `version-from`
+
+The module to read `__version__` from, when `[project]` declares
+`dynamic = ["version"]`.
+
+This is read when a wheel or a source distribution is built, not by the
+checker: a version has to be settled before the packaging backend sees the
+project, and the place it lives is a `.by` module that backend cannot
+read.
+
+The value is a path relative to the project root.
+
+**Default value**: `null`
+
+**Type**: `str`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.build]
+    version-from = "src/app/__init__.by"
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [build]
+    version-from = "src/app/__init__.by"
+    ```
+
+---
+
 ## `editor`
 
 ### `common-aliases`

@@ -59,6 +59,13 @@ Used to determine the name of the active Conda environment.
 Used to detect the path of an active Conda environment.
 If both `VIRTUAL_ENV` and `CONDA_PREFIX` are present, `VIRTUAL_ENV` will be preferred.
 
+### `PYTHON`
+
+The interpreter `by run` executes the transpiled program on.
+
+Overrides the project environment, and is itself overridden by
+`by run --python`.
+
 ### `PYTHONPATH`
 
 Adds additional directories to ty's search paths.

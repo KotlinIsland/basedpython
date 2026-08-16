@@ -10,7 +10,7 @@ files any python tool can read
     pydantic, sqlalchemy, pytest and django are modelled directly, so the magic
     they do at runtime checks like ordinary code
 - **a build system** — write code against the latest version of python, and ship wheels that are compatible with old ones, no more waiting for 5 years to use something
-- **basedpython, a python-like language that builds into python wheels**
+- **basedpython, a python-like language that builds into python wheels** — `uv build`, and see [packaging](packaging.md)
 - **compiles into high performance python extension modules**
 - **a language server, formatter and linter** — high performance and feature rich tooling
 

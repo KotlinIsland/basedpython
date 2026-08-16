@@ -53,11 +53,19 @@ Changelog = "https://github.com/KotlinIsland/basedpython/blob/main/CHANGELOG.md"
 # builds the standalone distribution crate, which produces both the `by`
 # (type-checker / transpiler) and `buff` (linter / formatter) binaries. maturin
 # packages every bin of the target crate as a console script, so the wheel ships
-# both. no python module: a single `python -m basedpython` would be ambiguous
-# between the two tools, so they're exposed purely as the `by` and `buff` scripts
+# both. the two tools are exposed purely as those scripts — a single
+# `python -m basedpython` would be ambiguous between them
+#
+# the python package alongside them is not an api: it is `basedpython.build`, the
+# PEP 517 backend a basedpython project names in its own `[build-system]`. it has
+# to be importable from the same distribution as `by`, because building a project
+# means running `by` and a backend that found a different one on `PATH` would be
+# transpiling with a version nobody chose
 [tool.maturin]
 bindings = "bin"
 manifest-path = "crates/basedpython/Cargo.toml"
+python-source = "python"
+module-name = "basedpython"
 strip = true
 
 [dependency-groups]

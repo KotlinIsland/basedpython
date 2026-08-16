@@ -69,6 +69,9 @@ basedpython = "index.md"
 "getting started" = "getting-started.md"
 
 [[project.nav]]
+packaging = "packaging.md"
+
+[[project.nav]]
 configuration = "configuration.md"
 
 [[project.nav]]

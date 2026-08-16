@@ -812,6 +812,9 @@ jobs:
       # same failure. Both are only observable in a `pull_request` run, so they
       # are covered by unit tests instead.
       - run: uv run --no-project --with pytest pytest scripts/test_check_ecosystem_roundtrip.py
+      # The build backend decides what the staged `pyproject.toml` says and where
+      # a dynamic version comes from. Neither is reachable from the Rust tests.
+      - run: uv run --no-project --with pytest pytest scripts/test_build_backend.py
       # Lint/format/type-check py-fuzzer
       # (dogfooding with ty is done in a separate job)
       - run: uv run --directory=./python/py-fuzzer mypy
