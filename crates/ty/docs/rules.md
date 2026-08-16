@@ -6085,22 +6085,19 @@ Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.71">0.0.71</a
 
 **What it does**
 
-Checks for an assignment to a bare name inside a [trailing lambda] block whose
-receiver has a member of that name.
+Checks for a declaration inside a [trailing lambda] block that gives the block a
+name the block's receiver already has a member for.
 
 **Why is this bad?**
 
-The assignment binds a local, so the receiver's member is left untouched and
-the write goes nowhere the author can see. Reading the same name in a block
-that does not write it resolves to the member, so the two sides of the `=`
-mean different things.
+The declaration takes the name away from the member for the whole block. A bare
+`href = "/x"` there writes the receiver's `href`, and reading `href` means the
+receiver's `href` — so a `let href` two lines away silently makes both mean
+something else.
 
-Which of the two an assignment binds cannot depend on the receiver's type:
-the binding is made before any type is known. So the local stands, and this
-says so.
-
-Nothing is reported when a scope around the block already binds the name —
-there the local is the ordinary capture a block is meant to make.
+Shadowing is what a declaration is for, so this is a warning rather than an error:
+it is how you ask for a name of your own when the receiver happens to have one
+already. Renaming the local says the same thing without the ambiguity.
 
 **Examples**
 
@@ -6113,8 +6110,8 @@ class Tag:
 
 def build(t: Tag) -> None:
     t.div:
-        href = "/x"  # warning: binds a local; `t.href` is unchanged
-        self.href = "/x"  # ok — writes the member
+        href = "/x"      # ok, writes `t.href`
+        let href = "/x"  # warning: shadows `t.href` for the whole block
 ```
 
 [trailing lambda]: https://basedpython.org/features/trailing-lambdas/

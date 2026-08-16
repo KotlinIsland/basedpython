@@ -47,6 +47,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::source_util::line_indent;
 use crate::type_info::{CaptureKind, TypeInfo};
+use ty_python_semantic::ImplicitReceiverReference;
 
 /// The parameter a block binds its callback's implicit receiver to. The body
 /// spells it `self`, which [`implicit_receiver`] rewrites to this name — a name
@@ -169,6 +170,15 @@ impl TrailingLambdaLower<'_, '_> {
                 continue;
             }
             seen.push(id);
+            // a bare assignment to one of the receiver's members is an attribute
+            // write, not a name binding, so there is nothing for the closure to
+            // capture and nothing to pre-initialize
+            if matches!(
+                self.types.implicit_receiver_name(name),
+                Some(ImplicitReceiverReference::Member)
+            ) {
+                continue;
+            }
             match self.types.trailing_block_capture(id, name_expr) {
                 Some(CaptureKind::Global) => globals.push(id),
                 Some(CaptureKind::Nonlocal) => nonlocals.push(id),

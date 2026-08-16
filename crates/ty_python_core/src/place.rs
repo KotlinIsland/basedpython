@@ -439,6 +439,22 @@ impl PlaceTableBuilder {
         }
     }
 
+    /// basedpython: [`Self::mark_bound`] for a bare assignment inside a trailing
+    /// lambda block, which may yet write to the block receiver's member instead.
+    #[track_caller]
+    pub(super) fn mark_bound_by_block_assignment(&mut self, id: ScopedPlaceId) {
+        match id {
+            ScopedPlaceId::Symbol(symbol_id) => {
+                self.symbol_mut(symbol_id).mark_bound_by_block_assignment();
+            }
+            // a member target (`obj.x = …`) rebinds no name, so the rule this
+            // flag exists for does not reach it
+            ScopedPlaceId::Member(member_id) => {
+                self.member_mut(member_id).mark_bound();
+            }
+        }
+    }
+
     /// basedpython: [`Self::mark_bound`] for a bare `case A:` capture, which only
     /// ever binds a symbol.
     #[track_caller]

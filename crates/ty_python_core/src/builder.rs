@@ -1405,6 +1405,24 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         self.current_place_table_mut().mark_bound_by_case_name(id);
     }
 
+    /// basedpython: [`Self::mark_place_bound`] for a bare assignment in a
+    /// trailing lambda block.
+    #[track_caller]
+    fn mark_place_bound_by_block_assignment(&mut self, id: ScopedPlaceId) {
+        self.current_place_table_mut()
+            .mark_bound_by_block_assignment(id);
+    }
+
+    /// basedpython: whether the scope being built is a trailing lambda block's
+    /// body, where a bare assignment writes to the block receiver's member
+    /// rather than binding a name of its own.
+    fn in_trailing_lambda_block(&self) -> bool {
+        matches!(
+            self.scopes[self.current_scope()].node(),
+            NodeWithScopeKind::Function(function) if function.node(self.module).is_trailing_lambda
+        )
+    }
+
     #[track_caller]
     fn mark_place_declared(&mut self, id: ScopedPlaceId) {
         self.current_place_table_mut().mark_declared(id);
@@ -1723,9 +1741,17 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             kind,
             DefinitionKind::MatchPattern(match_pattern) if match_pattern.is_case_name()
         );
+        // basedpython: a bare `href = …` in a trailing lambda block writes to the
+        // receiver's `href` when the receiver has one, so it is not the block
+        // taking the name for itself. a `let` or `var` declaration is, which is
+        // why only the plain assignment form is set apart here
+        let binds_by_block_assignment =
+            matches!(kind, DefinitionKind::Assignment(_)) && self.in_trailing_lambda_block();
         if category.is_binding() && !is_loop_header {
             if binds_by_case_name {
                 self.mark_place_bound_by_case_name(place);
+            } else if binds_by_block_assignment {
+                self.mark_place_bound_by_block_assignment(place);
             } else {
                 self.mark_place_bound(place);
             }

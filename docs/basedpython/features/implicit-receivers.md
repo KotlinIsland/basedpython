@@ -95,13 +95,39 @@ apply:
     print(imag)  # the receiver's `imag`, not the module-level one
 ```
 
-only the block itself outranks it:
+only the block itself outranks it, and only where the block *declares* the name:
 
 ```by
 apply:
-    imag = "block"
+    let imag = "block"
     print(imag)  # "block"
 ```
+
+a bare assignment declares nothing, so it does not take the name — it writes the
+receiver's member, and the reads around it go on meaning that member:
+
+```by
+apply:
+    href = "/x"    # sets the receiver's `href`
+    print(href)    # the receiver's `href`
+```
+
+→
+
+```python
+def _trailing_lambda_0(_by_self=None, it=None):
+    _by_self.href = "/x"
+    print(_by_self.href)
+```
+
+the write is checked against the member like any other attribute write, and it
+captures nothing — there is no name for the closure to write back to. where the
+receiver has no member of that name, a bare assignment is an ordinary block local,
+as it always was
+
+declaring a name the receiver has a member for is reported by
+`shadowed-receiver-member`: it is how you ask for a local of your own, and the
+warning is there because the two forms mean opposite things one line apart
 
 `self` is no exception. inside a method the block's `self` is the block's
 receiver, and the method's own receiver is not reachable from the body

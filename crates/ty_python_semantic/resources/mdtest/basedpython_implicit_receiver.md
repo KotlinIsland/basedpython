@@ -185,20 +185,65 @@ class C:
             reveal_type(self)  # revealed: int
 ```
 
-### a name the block binds keeps its own meaning
+### a name the block declares keeps its own meaning
 
-the block itself is the one level of the tower inside the receiver. binding a name the receiver has
-a member for is what
-[`shadowed-receiver-member`](#assigning-a-name-the-receiver-has-a-member-for-binds-a-local) reports,
-since it reverses what every mention of that name in the block means
+the block itself is the one level of the tower inside the receiver, and a declaration is how the
+block asks for that level. it shadows the receiver's member of the same name, which is worth saying
+out loud since a bare assignment to that name means the opposite
 
 ```by
 def apply(fn: int.() -> None) -> None:
     fn(1)
 
 apply:
-    imag = "block"  # error: [shadowed-receiver-member]
+    let imag = "block"  # error: [shadowed-receiver-member]
     reveal_type(imag)  # revealed: "block"
+```
+
+a name the receiver has nothing to answer for is an ordinary local, declared or not
+
+```by
+def apply(fn: int.() -> None) -> None:
+    fn(1)
+
+apply:
+    unrelated = "block"
+    reveal_type(unrelated)  # revealed: "block"
+```
+
+### a bare assignment writes the receiver's member
+
+a bare assignment declares nothing, so it does not take the name — it writes the member, and every
+mention of the name in the block goes on meaning that member
+
+```by
+class Tag:
+    var href: str
+
+    def __init__(self) -> None:
+        self.href = ""
+
+def apply(fn: Tag.() -> None) -> None: ...
+
+apply:
+    href = "/x"
+    reveal_type(href)  # revealed: str
+```
+
+the write is checked against the member, exactly as `self.href = …` is
+
+```by
+class Tag:
+    var href: str
+
+    def __init__(self) -> None:
+        self.href = ""
+
+def apply(fn: Tag.() -> None) -> None: ...
+
+apply:
+    # error: [invalid-assignment]
+    href = 123
 ```
 
 ### a call the receiver cannot take reaches past it
@@ -249,40 +294,6 @@ apply:
     nonesuch  # error: [unresolved-reference]
 ```
 
-## assigning a name the receiver has a member for binds a local
-
-Which of the two an assignment binds cannot depend on the receiver's type, since the binding is made
-before any type is known. So the local stands and the write is reported, because the same name read
-in a block that does not write it means the member.
-
-```by
-class Tag:
-    var href: str
-
-    def __init__(self) -> None:
-        self.href = ""
-
-def apply(fn: Tag.() -> None) -> None: ...
-
-apply:
-    href = "/x"  # error: [shadowed-receiver-member]
-```
-
-Writing the member is what the report asks for, and is not itself reported.
-
-```by
-class Tag:
-    var href: str
-
-    def __init__(self) -> None:
-        self.href = ""
-
-def apply(fn: Tag.() -> None) -> None: ...
-
-apply:
-    self.href = "/x"
-```
-
 ## a name no member answers for is an ordinary local
 
 ```by
@@ -299,10 +310,11 @@ apply:
     reveal_type(unrelated)  # revealed: "/x"
 ```
 
-## an enclosing binding makes the assignment an ordinary capture
+## the member wins over a binding outside the block
 
-A block is meant to write through to the scope around it, so a name that scope binds is not reported
-even when the receiver happens to have a member of that name.
+A block writes through to the scope around it, but the receiver outranks that scope — for reads and
+for writes alike, so both sides of the `=` mean the same thing. An outer binding of the same name is
+not reachable from the block.
 
 ```by
 class Tag:
@@ -317,6 +329,7 @@ href = "outer"
 
 apply:
     href = "/x"
+    reveal_type(href)  # revealed: str
 ```
 
 ## a plain callback block has no implicit members

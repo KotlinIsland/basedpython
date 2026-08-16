@@ -79,6 +79,22 @@ impl<'ast> Visitor<'ast> for ImplicitReceiverLower<'_> {
                     }
                 }
             }
+            // a bare assignment to one of the receiver's members writes the
+            // member, not a name of the block's own — `href = "/x"` is
+            // `self.href = "/x"`. only a member answers here: an extension adds
+            // behaviour rather than state, and `self` is the receiver itself
+            Expr::Name(name)
+                if name.ctx.is_store()
+                    && matches!(
+                        self.types.implicit_receiver_name(name),
+                        Some(ImplicitReceiverReference::Member)
+                    ) =>
+            {
+                self.edits.push((
+                    name.range(),
+                    vec![Fragment::Lit(format!("{RECEIVER_PARAMETER}.{}", name.id))],
+                ));
+            }
             // the receiver of a trailing lambda block, or one of its members,
             // used unqualified inside the block
             Expr::Name(name) => {
@@ -368,18 +384,57 @@ mod tests {
     }
 
     #[test]
-    fn a_block_binding_outranks_the_receiver() {
+    fn a_block_declaration_outranks_the_receiver() {
         // the only level of the scope tower inside the receiver is the block
-        // itself, so a name the body binds keeps its own value
+        // itself, so a name the body *declares* keeps its own value
         let out = check(indoc! {"
             def f(fn: int.() -> None) -> None:
                 fn(1)
 
             f:
-                imag = 2
+                let imag = 2
                 print(imag)
         "});
         assert!(out.contains("print(imag)"), "got:\n{out}");
+        assert!(!out.contains("_by_self.imag"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_bare_block_assignment_writes_the_receivers_member() {
+        // a bare assignment declares nothing, so it writes the member — and the
+        // reads around it go on meaning the member too
+        let out = check(indoc! {"
+            class Tag:
+                var href: str
+
+                def __init__(self) -> None:
+                    self.href = \"\"
+
+            def f(fn: Tag.() -> None) -> None: ...
+
+            f:
+                href = \"/x\"
+                print(href)
+        "});
+        assert!(out.contains("_by_self.href = \"/x\""), "got:\n{out}");
+        assert!(out.contains("print(_by_self.href)"), "got:\n{out}");
+        // an attribute write binds no name, so the closure captures nothing
+        assert!(!out.contains("nonlocal href"), "got:\n{out}");
+        assert!(!out.contains("href = None"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_bare_block_assignment_the_receiver_has_no_member_for_is_a_local() {
+        let out = check(indoc! {"
+            def f(fn: int.() -> None) -> None:
+                fn(1)
+
+            f:
+                unrelated = 2
+                print(unrelated)
+        "});
+        assert!(out.contains("print(unrelated)"), "got:\n{out}");
+        assert!(!out.contains("_by_self.unrelated"), "got:\n{out}");
     }
 
     #[test]
