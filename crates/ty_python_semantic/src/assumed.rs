@@ -665,7 +665,8 @@ def f():
             .build()
             .expect("valid TestDb setup");
 
-        let stopped = system_path_to_file(&db, "/src/stopped.py").expect("the fixture was written");
+        let stopped =
+            system_path_to_file(&db, "/src/stopped.py").expect("the fixture was written");
         let other = system_path_to_file(&db, "/src/other.py").expect("the fixture was written");
 
         let assumptions = Assumptions::new(
