@@ -1,4 +1,5 @@
-//! basedpython conversion dunders (`__from__`, `__into__`, `__of__`)
+//! basedpython conversions (`__from__`, `__into__`, `__of__`, and the adapter a
+//! callable gets where the site asked for one returning `None`)
 //!
 //! A conversion is a *call*, not a subtype relation: `Celsius` is never
 //! assignable to `Fahrenheit`, or `list[Celsius]` would be a `list[Fahrenheit]`
@@ -6,7 +7,7 @@
 //! relation stays out of the lattice and lives only at the positions where the
 //! transpiler can materialize the call.
 //!
-//! This module owns that rule for all four routes a value can be repaired by,
+//! This module owns that rule for all five routes a value can be repaired by,
 //! so every site asks one question and gets one answer:
 //!
 //! - `T.__from__(x)` — a classmethod on the target taking the source
@@ -18,6 +19,9 @@
 //!   emitted for one — the value already *is* what the protocol asks for at
 //!   runtime — but the route still lives here so that a site served by two
 //!   routes at once is reported rather than silently picked between
+//! - `_by_discard(f)` — the one route no type declares. a callable reaching a
+//!   site that asked for one returning `None` is wrapped in an adapter that
+//!   calls it and throws the result away. See [`discards_return`]
 //!
 //! More than one applicable route is an error rather than a precedence rule:
 //! `__from__` and `__into__` are hand-written bodies that can disagree, and
@@ -81,6 +85,10 @@ pub(crate) enum Route<'db> {
     /// `value.__into__()`. carries the *source* type, for diagnostics only —
     /// the lowered call names nothing
     Into(Type<'db>),
+    /// the value is a callable that returns something, and the site declared a
+    /// callable that returns `None`. it is wrapped in an adapter that calls it
+    /// and throws the result away
+    DiscardReturn,
 }
 
 impl<'db> Route<'db> {
@@ -101,6 +109,7 @@ impl<'db> Route<'db> {
             Route::From(class, source) => dunder(class, source, FROM),
             Route::Of(class, source) => dunder(class, source, OF),
             Route::Into(source) => format!("{}.{INTO}", source.display(db, env)),
+            Route::DiscardReturn => "discarding the return value".to_owned(),
         }
     }
 }
@@ -151,6 +160,9 @@ pub(crate) fn repair_conversion<'db>(
         routes.push(Route::Conformance(protocol));
     }
     dunder_routes(db, env, file, source, target, value, &mut routes);
+    if discards_return(db, env, source, target) {
+        routes.push(Route::DiscardReturn);
+    }
 
     let mut routes = routes.into_iter();
     let route = routes.next()?;
@@ -234,6 +246,80 @@ fn dunder_routes<'db>(
     {
         routes.push(Route::Into(source));
     }
+}
+
+/// would `source` fit `target` if its return value were thrown away?
+///
+/// This is kotlin's coercion to `Unit`, and it is a conversion here for the same
+/// reason it is not subtyping there: the adapter is a *different callable*, so
+/// `list[() -> int]` has to stay unrelated to `list[() -> None]`. Only a site the
+/// transpiler can wrap gets to ask, which is what keeps the relation out of the
+/// lattice — and out of the reach of the native backend, which picks a value
+/// representation from the declared type and would be picking it from a lie.
+///
+/// Nothing about the parameters is restated here: both halves below are ordinary
+/// assignability questions, so overloads, generics and parameter contravariance
+/// come from the relation rather than from a second implementation of it.
+///
+/// Two questions rather than one, because neither is sufficient alone:
+///
+/// 1. is the *return type* the only thing wrong? Asked by widening the target's
+///    return to `object`, which every type satisfies, and checking `source`
+///    against that — `source` itself, never a callable rebuilt from it.
+///    Upcasting to a callable is a lossy view: a reified generic is a two-step
+///    `f[...]()` that a plain callable has no slot for, and rebuilding from the
+///    view would quietly drop that and call the result repaired
+/// 2. does the adapter actually satisfy the target? Asked of `source` rebuilt
+///    with a `None` return, which is what the adapter's type is. A target that
+///    asks for more than a callable — a protocol with a `__call__` *and* other
+///    members — is not satisfied by an adapter, and only this half notices
+fn discards_return<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    source: Type<'db>,
+    target: Type<'db>,
+) -> bool {
+    if !target_discards_return(db, env, target) {
+        return false;
+    }
+    let Some(target_callables) = target.try_upcast_to_callable(db, env) else {
+        return false;
+    };
+    let anything = KnownClass::Object.to_instance(db, env);
+    let ignores_return = target_callables
+        .map(|callable| callable.with_return_type(db, anything))
+        .into_type(db, env);
+    if !source.is_assignable_to(db, env, ignores_return) {
+        return false;
+    }
+
+    let Some(source_callables) = source.try_upcast_to_callable(db, env) else {
+        return false;
+    };
+    let none = Type::none(db, env);
+    source_callables
+        .map(|callable| callable.with_return_type(db, none))
+        .into_type(db, env)
+        .is_assignable_to(db, env, target)
+}
+
+/// does `target` ask for a callable that returns exactly `None`?
+///
+/// Anything wider is a caller that may still read the value the adapter would
+/// have dropped: `-> object` already accepts every callable without one, and
+/// `-> int | None` would hand back a `None` where an `int` was promised
+pub(crate) fn target_discards_return<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    target: Type<'db>,
+) -> bool {
+    target
+        .try_upcast_to_callable(db, env)
+        .is_some_and(|callables| {
+            callables
+                .iter()
+                .all(|callable| callable.returns_only_none(db))
+        })
 }
 
 /// does calling `dunder` on `receiver` with `arguments` produce something the
@@ -911,6 +997,22 @@ pub struct ConversionImport {
     pub alias: String,
 }
 
+/// the name of the adapter [`ConversionRuntime::DiscardReturn`] defines, which
+/// is what the emitted `prefix` spells. The definition itself lives with the
+/// transpiler's other injected helpers, and is built from this
+pub const DISCARD_ADAPTER: &str = "_by_discard";
+
+/// a definition a conversion's emitted call needs that no module supplies.
+///
+/// The python text lives in the transpiler beside the other injected helpers;
+/// this only says which one the site needs, so that the lowering pass still
+/// never has to know which *route* it is emitting
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversionRuntime {
+    /// the adapter that calls a callable and throws its result away
+    DiscardReturn,
+}
+
 /// how the transpiler materializes one conversion
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConversionInfo {
@@ -933,6 +1035,10 @@ pub enum ConversionInfo {
         referenced_name: Option<String>,
         /// every name `prefix` spells that this file does not already bind
         imports: Vec<ConversionImport>,
+        /// a definition `prefix` spells that no module can supply, injected once
+        /// at the top of the file. `None` for a route that only names code that
+        /// already exists somewhere
+        runtime: Option<ConversionRuntime>,
     },
     /// the checker accepted the site, but the conversion cannot be spelled here.
     /// The transpiler reports this rather than skipping it: emitting nothing
@@ -967,6 +1073,7 @@ pub(crate) fn conversion_info<'db>(
             replaces_value: false,
             referenced_name: None,
             imports: Vec::new(),
+            runtime: None,
         },
         Route::From(class, source) => {
             dunder_call_info(db, env, from_file, model, anchor, class, FROM, source)
@@ -983,6 +1090,18 @@ pub(crate) fn conversion_info<'db>(
             replaces_value: false,
             referenced_name: None,
             imports: Vec::new(),
+            runtime: None,
+        },
+        // the adapter is injected above every statement in the file, so unlike a
+        // class this file declares there is no order for the site to fall foul
+        // of — which is why it names nothing for the import-time check to read
+        Route::DiscardReturn => ConversionInfo::Call {
+            prefix: format!("{DISCARD_ADAPTER}("),
+            suffix: ")".to_owned(),
+            replaces_value: false,
+            referenced_name: None,
+            imports: Vec::new(),
+            runtime: Some(ConversionRuntime::DiscardReturn),
         },
     }
 }
@@ -1032,6 +1151,7 @@ fn dunder_call_info<'db>(
             replaces_value,
             referenced_name: Some(name),
             imports: import.into_iter().collect(),
+            runtime: None,
         },
         Err(reason) => ConversionInfo::Rejected(reason),
     }
@@ -1085,6 +1205,7 @@ fn backing_call_info<'db>(
         replaces_value: false,
         referenced_name: Some(receiver),
         imports,
+        runtime: None,
     }
 }
 

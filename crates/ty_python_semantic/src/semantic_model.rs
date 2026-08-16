@@ -605,12 +605,14 @@ impl<'db> SemanticModel<'db> {
         };
         signature.iter().any(|overload| {
             overload.parameters().iter().any(|parameter| {
-                crate::types::conversions::may_convert(
-                    db,
-                    env,
-                    self.file.file(db),
-                    parameter.annotated_type(),
-                )
+                let parameter_type = parameter.annotated_type();
+                crate::types::conversions::may_convert(db, env, self.file.file(db), parameter_type)
+                    // a callable that returns something the parameter does not
+                    // want is repaired by an adapter rather than by a dunder, so
+                    // there is no class for `may_convert` to read it off. asked
+                    // of the parameter and not of the argument because only the
+                    // *declared* side decides whether a return may be dropped
+                    || crate::types::conversions::target_discards_return(db, env, parameter_type)
             })
         })
     }
