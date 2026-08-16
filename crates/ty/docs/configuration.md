@@ -808,6 +808,45 @@ Defaults to `false`.
 
 ---
 
+## `editor`
+
+### `common-aliases`
+
+The modules a name is a common alias of, keyed by the alias.
+
+A file that writes `np.` before importing anything almost always means numpy, because `np`
+is what numpy is conventionally imported as. The editor completes such a name as the module
+it names, and accepting one of those completions writes the `import numpy as np` that makes
+the name real.
+
+This adds aliases of your own to the ones ty already knows; an entry whose alias ty knows
+replaces it. An alias for a module the project does not have is never offered, so an entry
+for a module nobody installed costs nothing.
+
+Defaults to `{}`, which leaves ty's own aliases as they are.
+
+**Default value**: `{}`
+
+**Type**: `dict[str, str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.editor.common-aliases]
+    npt = "numpy.typing"
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [editor.common-aliases]
+    npt = "numpy.typing"
+    ```
+
+---
+
 ## `environment`
 
 ### `extra-paths`

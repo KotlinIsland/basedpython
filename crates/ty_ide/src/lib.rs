@@ -6,6 +6,7 @@ mod add_dependency;
 mod all_symbols;
 mod call_hierarchy;
 mod code_action;
+mod common_aliases;
 mod completion;
 mod data_flow;
 mod django_template;
@@ -430,6 +431,7 @@ mod tests {
     use ruff_python_trivia::textwrap::dedent;
     use ruff_text_size::TextSize;
     use ty_module_resolver::SearchPathSettings;
+    use ty_project::metadata::options::Options;
     use ty_project::{Db as _, ProjectMetadata, SemanticDb as _};
     use ty_python_core::ProgramFile;
     use ty_python_core::platform::PythonPlatform;
@@ -537,12 +539,17 @@ mod tests {
         snapshot_filters: Vec<(String, String)>,
         /// The python version to use.
         python_version: Option<PythonVersion>,
+        /// The `[tool.ty]` options the project is configured with.
+        options: Option<Options>,
     }
 
     impl CursorTestBuilder {
         pub(super) fn build(&self) -> CursorTest {
-            let mut db =
-                ty_project::TestDb::new(ProjectMetadata::new("test", SystemPathBuf::from("/")));
+            let mut metadata = ProjectMetadata::new("test", SystemPathBuf::from("/"));
+            if let Some(options) = self.options.clone() {
+                metadata.apply_override_options(options);
+            }
+            let mut db = ty_project::TestDb::new(metadata);
 
             if let Some(python_version) = self.python_version {
                 db.set_python_version(python_version);
@@ -641,11 +648,18 @@ mod tests {
             self
         }
 
+        /// Configure the project as a `[tool.ty]` table would.
+        pub(super) fn options(&mut self, options: Options) -> &mut CursorTestBuilder {
+            self.options = Some(options);
+            self
+        }
+
         /// Convert to a builder that supports site-packages (third-party dependencies).
         pub(super) fn with_site_packages(self) -> SitePackagesCursorTestBuilder {
             SitePackagesCursorTestBuilder {
                 sources: self.sources,
                 site_packages_sources: Vec::new(),
+                options: self.options,
             }
         }
     }
@@ -664,6 +678,7 @@ mod tests {
     pub(super) struct SitePackagesCursorTestBuilder {
         sources: Vec<Source>,
         site_packages_sources: Vec<Source>,
+        options: Option<Options>,
     }
 
     impl SitePackagesCursorTestBuilder {
@@ -671,8 +686,11 @@ mod tests {
             let project_root = SystemPathBuf::from("/src");
             let site_packages_path = SystemPathBuf::from("/site-packages");
 
-            let mut db =
-                ty_project::TestDb::new(ProjectMetadata::new("test", project_root.clone()));
+            let mut metadata = ProjectMetadata::new("test", project_root.clone());
+            if let Some(options) = self.options.clone() {
+                metadata.apply_override_options(options);
+            }
+            let mut db = ty_project::TestDb::new(metadata);
 
             // Write site-packages files first.
             for Source {

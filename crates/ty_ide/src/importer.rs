@@ -152,7 +152,11 @@ impl<'a> Importer<'a> {
             self.file.resolver_environment(self.db),
         );
         let request = request.avoid_conflicts(self.db, importing_file, members);
-        let mut symbol_text: Box<str> = request.member.unwrap_or(request.module).into();
+        let mut symbol_text: Box<str> = request
+            .member
+            .or(request.asname)
+            .unwrap_or(request.module)
+            .into();
         let Some(response) = self.find(importing_file, &request, members.at) else {
             let insertion = if let Some(future) = self.find_last_future_import(members.at) {
                 Insertion::end_of_statement(future.stmt, self.source, self.stylist)
@@ -382,7 +386,7 @@ impl<'ast> MembersInScope<'ast> {
         importing_file: ImportingFile<'_>,
         request: &ImportRequest<'_>,
     ) -> bool {
-        let symbol_text = request.member.unwrap_or(request.module);
+        let symbol_text = request.member.or(request.asname).unwrap_or(request.module);
         let Some(member) = self.find_member(symbol_text) else {
             return false;
         };
@@ -526,10 +530,13 @@ impl<'ast> AstImportKind<'ast> {
                 if request.force_style && !matches!(request.style, ImportStyle::Import) {
                     return None;
                 }
-                let alias = ast
-                    .names
-                    .iter()
-                    .find(|alias| alias.name.as_str() == request.module)?;
+                let alias = ast.names.iter().find(|alias| {
+                    // `import numpy` does not satisfy a request for `import numpy as np`: it
+                    // brings the module into scope, but not under the name that was asked for
+                    alias.name.as_str() == request.module
+                        && (request.asname.is_none()
+                            || alias.asname.as_ref().map(ast::Identifier::as_str) == request.asname)
+                })?;
                 Some(ImportResponseKind::Qualified { ast, alias })
             }
             AstImportKind::ImportFrom(ast) => {
@@ -575,6 +582,11 @@ pub(crate) struct ImportRequest<'a> {
     /// When `member` is absent, then this request reflects an import
     /// of the module itself. i.e., `import module`.
     member: Option<&'a str>,
+    /// The name to bind the module to (e.g., `np`, in `import numpy as np`).
+    ///
+    /// Only a request for a module itself carries one, since that is the
+    /// only import an alias is asked for today.
+    asname: Option<&'a str>,
     /// The preferred style to use when importing the symbol (e.g.,
     /// `import foo` or `from foo import bar`).
     ///
@@ -597,6 +609,7 @@ impl<'a> ImportRequest<'a> {
         Self {
             module,
             member: Some(member),
+            asname: None,
             style: ImportStyle::Import,
             force_style: false,
         }
@@ -610,6 +623,7 @@ impl<'a> ImportRequest<'a> {
         Self {
             module,
             member: Some(member),
+            asname: None,
             style: ImportStyle::ImportFrom,
             force_style: false,
         }
@@ -624,8 +638,18 @@ impl<'a> ImportRequest<'a> {
         Self {
             module,
             member: None,
+            asname: None,
             style: ImportStyle::Import,
             force_style: false,
+        }
+    }
+
+    /// Create a new [`ImportRequest`] for bringing the given module
+    /// into scope under a name of its own, as in `import numpy as np`.
+    pub(crate) fn module_as(module: &'a str, asname: &'a str) -> Self {
+        Self {
+            asname: Some(asname),
+            ..Self::module(module)
         }
     }
 
@@ -717,12 +741,17 @@ impl<'a> ImportRequest<'a> {
 
 impl std::fmt::Display for ImportRequest<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self.style {
-            ImportStyle::Import => write!(f, "import {}", self.module),
-            ImportStyle::ImportFrom => match self.member {
-                None => write!(f, "import {}", self.module),
-                Some(member) => write!(f, "from {} import {member}", self.module),
-            },
+        match (&self.style, self.member) {
+            (ImportStyle::ImportFrom, Some(member)) => {
+                write!(f, "from {} import {member}", self.module)
+            }
+            _ => {
+                write!(f, "import {}", self.module)?;
+                match self.asname {
+                    Some(asname) => write!(f, " as {asname}"),
+                    None => Ok(()),
+                }
+            }
         }
     }
 }

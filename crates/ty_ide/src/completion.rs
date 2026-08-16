@@ -35,10 +35,11 @@ use ty_python_semantic::{
     types::{CycleDetector, KnownClass, Type},
 };
 
+use crate::common_aliases;
 use crate::django_template::django_string_completions;
 use crate::docstring::Docstring;
 use crate::goto::Definitions;
-use crate::importer::{ImportRequest, Importer};
+use crate::importer::{ImportRequest, Importer, MembersInScope};
 use crate::symbols::QueryPattern;
 use crate::{Db, all_symbols, signature_help};
 use ruff_db::files::File;
@@ -129,11 +130,30 @@ pub fn completion<'db>(
                     capabilities,
                     &mut completions,
                 );
+                if settings.auto_import {
+                    add_aliased_module_completions(
+                        db,
+                        program_file,
+                        &parsed,
+                        &model,
+                        expr,
+                        &mut completions,
+                    );
+                }
             }
             CompletionTargetAst::Scoped(scoped) => {
                 let env = model.program_environment();
-                // only basedpython's implicit names have to know what the scope
-                // already carries, so nothing else pays for collecting it
+                // the aliases that could be offered here, which is usually none of them: a query
+                // is a subsequence of what it matches, so anything longer than a two- or
+                // three-letter alias rules every one of them out
+                let aliases: Vec<_> = if settings.auto_import {
+                    matching_aliases(db, &completions.query)
+                } else {
+                    Vec::new()
+                };
+                // only basedpython's implicit names and the aliases above have to know what the
+                // scope already carries, so nothing else pays for collecting it
+                let collect_in_scope = source_type.is_basedpython() || !aliases.is_empty();
                 let mut in_scope = FxHashSet::default();
                 for semantic_completion in model.scoped_completions(scoped.node) {
                     let module_dependency_kind = if semantic_completion.builtin {
@@ -141,7 +161,7 @@ pub fn completion<'db>(
                     } else {
                         ModuleDependencyKind::Current
                     };
-                    if source_type.is_basedpython() {
+                    if collect_in_scope {
                         in_scope.insert(semantic_completion.name.clone());
                     }
                     completions.add(
@@ -192,12 +212,27 @@ pub fn completion<'db>(
                     &context.cursor,
                     &mut completions,
                 );
-                if settings.auto_import {
+                // an import is only ever offered for something the user has begun to name: a
+                // query that matches everything would drag in every symbol of every module
+                if settings.auto_import && !completions.query.will_match_everything() {
+                    let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str());
+                    let importer =
+                        Importer::new(db, &stylist, program_file, source.as_str(), &parsed);
+                    let members = importer.members_in_scope_at(scoped.node, scoped.node.start());
+                    add_alias_completions(
+                        db,
+                        program_file,
+                        &importer,
+                        &members,
+                        &aliases,
+                        &in_scope,
+                        &mut completions,
+                    );
                     add_unimported_completions(
                         db,
                         program_file,
-                        &parsed,
-                        scoped,
+                        &importer,
+                        &members,
                         context.cursor.is_in_type_expression(&model),
                         |module_name: &ModuleName, symbol: &str| {
                             ImportRequest::import_from(module_name.as_str(), symbol)
@@ -2676,17 +2711,21 @@ pub(crate) fn unresolved_fixes<'db>(
     node: AnyNodeRef,
 ) -> Vec<ImportEdit> {
     let mut results = Vec::new();
-    let scoped = ScopedTarget { node };
     let query = UserQuery::exactly(symbol);
     let ctx = CollectionContext::none();
+
+    let source = source_text(db, file.file(db));
+    let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str());
+    let importer = Importer::new(db, &stylist, file, source.as_str(), parsed);
+    let members = importer.members_in_scope_at(node, node.start());
 
     // Request imports we could add to put the symbol in scope
     let mut completions = Completions::new(db, file, ctx.clone(), query.clone());
     add_unimported_completions(
         db,
         file,
-        parsed,
-        scoped,
+        &importer,
+        &members,
         // the name this fixes is unresolved, so it is not one of the names a
         // basedpython file has without an import — those resolve
         false,
@@ -2702,8 +2741,8 @@ pub(crate) fn unresolved_fixes<'db>(
     add_unimported_completions(
         db,
         file,
-        parsed,
-        scoped,
+        &importer,
+        &members,
         false,
         |module_name: &ModuleName, symbol: &str| {
             ImportRequest::import(module_name.as_str(), symbol).force()
@@ -2712,7 +2751,28 @@ pub(crate) fn unresolved_fixes<'db>(
     );
     results.extend(completions.into_qualifications(node.range()));
 
+    // an unresolved `np` is the name a common alias would have bound, so offer to write the
+    // import that binds it — the same one the completions above `np.` carry
+    results.extend(alias_import(db, file, &importer, &members, symbol));
+
     results
+}
+
+/// The import that would bind `symbol`, when it is a common alias of a module the project has.
+fn alias_import(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    importer: &Importer<'_>,
+    members: &MembersInScope<'_>,
+    symbol: &str,
+) -> Option<ImportEdit> {
+    let module_name = common_aliases::module_of(db, symbol)?;
+    SemanticModel::new(db, file).resolve_module_name(&module_name)?;
+
+    let request = ImportRequest::module_as(module_name.as_str(), symbol);
+    let label = request.to_string();
+    let edit = importer.import(request, members).import()?.clone();
+    Some(ImportEdit { label, edit })
 }
 
 /// Adds completions derived from keywords.
@@ -3605,8 +3665,8 @@ fn add_string_literal_completions<'db>(
 fn add_unimported_completions<'db>(
     db: &'db dyn Db,
     file: ProgramFile<'db>,
-    parsed: &ParsedModuleRef,
-    scoped: ScopedTarget<'_>,
+    importer: &Importer<'_>,
+    members: &MembersInScope<'_>,
     // basedpython: whether a type is being written here, which is where some of
     // the names that need no import mean what they do
     in_type_expression: bool,
@@ -3615,17 +3675,13 @@ fn add_unimported_completions<'db>(
 ) {
     // This is redundant since `all_symbols` will also bail
     // when the query can match everything. But we bail here
-    // to avoid building an `Importer` and other plausibly
-    // costly work when we know we won't use it.
+    // to avoid other plausibly costly work when we know we
+    // won't use it.
     if completions.query.will_match_everything() {
         return;
     }
 
     let source_file = file.file(db);
-    let source = source_text(db, source_file);
-    let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str());
-    let importer = Importer::new(db, &stylist, file, source.as_str(), parsed);
-    let members = importer.members_in_scope_at(scoped.node, scoped.node.start());
     let importing_file = ImportingFile::File(source_file, file.resolver_environment(db));
     let model = SemanticModel::new(db, file);
 
@@ -3656,7 +3712,7 @@ fn add_unimported_completions<'db>(
             continue;
         }
 
-        let import_action = importer.import(request, &members);
+        let import_action = importer.import(request, members);
 
         // N.B. We use `add_skip_query` here because `all_symbols`
         // already takes our query into account.
@@ -3674,6 +3730,125 @@ fn add_unimported_completions<'db>(
                     file.file(db),
                     symbol.module(),
                 )),
+        );
+    }
+}
+
+/// The aliases the user could be part-way through writing.
+///
+/// An alias is only ever offered as something to import, so this answers with nothing where
+/// auto-import would also answer with nothing: for a query that matches everything, the aliases
+/// would be twenty names nobody asked for.
+fn matching_aliases<'db>(db: &'db dyn Db, query: &UserQuery) -> Vec<(&'db str, ModuleName)> {
+    if query.will_match_everything() {
+        return Vec::new();
+    }
+    common_aliases::all(db)
+        .filter(|(alias, _)| query.is_match(alias))
+        .filter_map(|(alias, module)| Some((alias, ModuleName::new(module)?)))
+        .collect()
+}
+
+/// Adds a completion for each name that is an alias of a module the project has.
+///
+/// Accepting one writes the `import numpy as np` that binds the name, so this is the same offer
+/// auto-import makes for a symbol, for the module a name conventionally stands for.
+fn add_alias_completions<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    importer: &Importer<'_>,
+    members: &MembersInScope<'_>,
+    aliases: &[(&str, ModuleName)],
+    in_scope: &FxHashSet<CompactString>,
+    completions: &mut Completions<'db>,
+) {
+    let model = SemanticModel::new(db, file);
+    // a name the scope already carries is not free for an alias to take, whether it is a local,
+    // an import, or a builtin
+    let aliases = aliases
+        .iter()
+        .filter(|(alias, _)| !in_scope.contains(*alias))
+        .filter_map(|(alias, module_name)| Some((*alias, model.resolve_module_name(module_name)?)));
+
+    for (alias, module) in aliases {
+        let module_name = module.name(db);
+        let import_action = importer.import(
+            ImportRequest::module_as(module_name.as_str(), alias),
+            members,
+        );
+        // N.B. `matching_aliases` already took the query into account.
+        completions.add_skip_query(
+            Completion::builder(alias)
+                .kind(CompletionKind::Module)
+                .insert(import_action.symbol_text())
+                .qualified(module_name.as_str())
+                .module_name(module_name)
+                .import(import_action.import().cloned())
+                .module_dependency_kind(ModuleDependencyKind::from_module(
+                    db,
+                    file.file(db),
+                    module,
+                )),
+        );
+    }
+}
+
+/// Adds the members of the module an unbound `np.` names.
+///
+/// `np` means numpy in a file that never imported it just as surely as in one that did, so this
+/// offers what an `import numpy as np` would have made available, and carries that import along
+/// with whatever the user accepts.
+fn add_aliased_module_completions<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    parsed: &ParsedModuleRef,
+    model: &SemanticModel<'db>,
+    expr: &ast::ExprAttribute,
+    completions: &mut Completions<'db>,
+) {
+    let ast::Expr::Name(name) = &*expr.value else {
+        return;
+    };
+    let Some(module_name) = common_aliases::module_of(db, &name.id) else {
+        return;
+    };
+    // a name that already means something is not standing in for a module, whatever it is spelled
+    // like. an unbound one infers as `Unknown`, which is also what a binding of unknown type
+    // infers as, so the scope is asked about that case below
+    if expr
+        .value
+        .inferred_type(model)
+        .is_some_and(|ty| !ty.is_unknown())
+    {
+        return;
+    }
+    let Some(module) = model.resolve_module_name(&module_name) else {
+        return;
+    };
+
+    let source = source_text(db, file.file(db));
+    let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str());
+    let importer = Importer::new(db, &stylist, file, source.as_str(), parsed);
+    let members = importer.members_in_scope_at(expr.into(), expr.start());
+    if members.find_member(&name.id).is_some() {
+        return;
+    }
+
+    let import_action = importer.import(
+        ImportRequest::module_as(module_name.as_str(), &name.id),
+        &members,
+    );
+    let Some(import) = import_action.import() else {
+        return;
+    };
+    let env = model.program_environment();
+    let module_dependency_kind = ModuleDependencyKind::from_module(db, file.file(db), module);
+    for semantic_completion in model.module_completions(&module_name) {
+        completions.add(
+            CompletionBuilder::from_semantic_completion(db, &env, semantic_completion)
+                .module_name(module.name(db))
+                .import(import.clone())
+                .module_dependency_kind(module_dependency_kind),
         );
     }
 }
@@ -4687,6 +4862,7 @@ mod tests {
     use ruff_python_parser::{Mode, ParseOptions};
     use ruff_text_size::{TextRange, TextSize};
     use ty_module_resolver::ModuleName;
+    use ty_project::metadata::options::{EditorOptions, Options};
 
     use crate::CompletionCapabilities;
     use crate::completion::{Completion, completion};
@@ -13541,6 +13717,153 @@ def f():
             builder.build().snapshot(),
             @"Thing :: <no import required> :: <no import edit>",
         );
+    }
+
+    /// `dt` is a common alias of `datetime`, so `dt.` offers what the module has even though
+    /// nothing has imported it. Accepting one of these writes the import that binds `dt`.
+    #[test]
+    fn common_alias_offers_the_modules_members() {
+        let builder = completion_test_builder(
+            "\
+dt.timed<CURSOR>
+",
+        )
+        .module_names()
+        .imports();
+        assert_snapshot!(
+            builder.build().snapshot(),
+            @"timedelta :: datetime :: import datetime as dt",
+        );
+    }
+
+    /// The alias itself completes too, as the module it names.
+    #[test]
+    fn common_alias_completes_as_a_name() {
+        let builder = completion_test_builder(
+            "\
+d<CURSOR>
+",
+        )
+        .module_names()
+        .imports()
+        .filter(|c| c.name == "dt");
+        assert_snapshot!(
+            builder.build().snapshot(),
+            @"dt :: datetime :: import datetime as dt",
+        );
+    }
+
+    /// A name the file already binds means what the file says it means, so nothing is offered
+    /// for the module it happens to be an alias of.
+    #[test]
+    fn common_alias_yields_to_a_binding() {
+        let builder = completion_test_builder(
+            "\
+dt = 1
+dt.timed<CURSOR>
+",
+        )
+        .module_names()
+        .imports();
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found>");
+    }
+
+    /// Nor is the alias offered as a name to import when the scope already carries it.
+    #[test]
+    fn common_alias_is_not_offered_over_a_binding() {
+        let builder = completion_test_builder(
+            "\
+dt = 1
+d<CURSOR>
+",
+        )
+        .module_names()
+        .imports()
+        .filter(|c| c.name == "dt");
+        assert_snapshot!(
+            builder.build().snapshot(),
+            @"dt :: <no import required> :: <no import edit>",
+        );
+    }
+
+    /// Once the file writes the import, `dt` resolves on its own and the members come with no
+    /// import attached.
+    #[test]
+    fn common_alias_adds_no_import_once_it_is_written() {
+        let builder = completion_test_builder(
+            "\
+import datetime as dt
+
+dt.timed<CURSOR>
+",
+        )
+        .module_names()
+        .imports();
+        assert_snapshot!(
+            builder.build().snapshot(),
+            @"timedelta :: <no import required> :: <no import edit>",
+        );
+    }
+
+    /// An alias of a module the project does not have is not offered at all.
+    #[test]
+    fn common_alias_of_a_missing_module_is_not_offered() {
+        let builder = completion_test_builder(
+            "\
+np.ara<CURSOR>
+",
+        )
+        .module_names()
+        .imports();
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found>");
+    }
+
+    /// A project spells aliases of its own under `[tool.ty.editor]`.
+    #[test]
+    fn configured_common_alias_offers_the_modules_members() {
+        let builder = CursorTest::builder()
+            .options(common_aliases([("bo", "bureau")]))
+            .source("main.py", "bo.dep<CURSOR>")
+            .source("bureau/__init__.py", "def deposit(): ...\n")
+            .completion_test_builder()
+            .module_names()
+            .imports();
+        assert_snapshot!(
+            builder.build().snapshot(),
+            @"deposit :: bureau :: import bureau as bo",
+        );
+    }
+
+    /// A configured alias replaces the one ty knows by that name.
+    #[test]
+    fn configured_common_alias_replaces_a_known_one() {
+        let builder = CursorTest::builder()
+            .options(common_aliases([("dt", "bureau")]))
+            .source("main.py", "dt.<CURSOR>")
+            .source("bureau/__init__.py", "def deposit(): ...\n")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| matches!(c.name.as_str(), "deposit" | "timedelta"));
+        assert_snapshot!(
+            builder.build().snapshot(),
+            @"deposit :: bureau :: import bureau as dt",
+        );
+    }
+
+    /// Options configuring just the common aliases.
+    fn common_aliases<const N: usize>(aliases: [(&str, &str); N]) -> Options {
+        Options {
+            editor: Some(EditorOptions {
+                common_aliases: Some(
+                    aliases
+                        .into_iter()
+                        .map(|(alias, module)| (alias.to_string(), module.to_string()))
+                        .collect(),
+                ),
+            }),
+            ..Options::default()
+        }
     }
 
     #[test]

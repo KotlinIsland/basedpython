@@ -1111,18 +1111,23 @@ impl<'db> SemanticModel<'db> {
         self.submodule_completions(&module)
     }
 
-    /// Returns completions for symbols available in the given module as if
-    /// it were imported by this model's `File`.
-    fn module_completions(&self, module_name: &ModuleName) -> Vec<Completion<'db>> {
-        let db = self.db;
-        let Some(module) = resolve_module(
+    /// Resolves `module_name` as if it were imported by this model's `File`.
+    pub fn resolve_module_name(&self, module_name: &ModuleName) -> Option<Module<'db>> {
+        resolve_module(
             self.db,
             ImportingFile::File(
                 self.file(),
                 self.program_environment().resolver_environment(self.db),
             ),
             module_name,
-        ) else {
+        )
+    }
+
+    /// Returns completions for symbols available in the given module as if
+    /// it were imported by this model's `File`.
+    pub fn module_completions(&self, module_name: &ModuleName) -> Vec<Completion<'db>> {
+        let db = self.db;
+        let Some(module) = self.resolve_module_name(module_name) else {
             tracing::debug!("Could not resolve module from `{module_name:?}`");
             return vec![];
         };
