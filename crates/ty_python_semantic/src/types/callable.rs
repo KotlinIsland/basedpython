@@ -597,6 +597,41 @@ impl<'db> CallableType<'db> {
         )
     }
 
+    /// the same callable, with every overload returning `return_ty` instead.
+    ///
+    /// basedpython asks this to describe a callable it has not built yet: the
+    /// adapter that a `-> None` conversion site wraps a value in returns `None`
+    /// whatever the wrapped callable returned, and the relation between that
+    /// adapter and the declared type is what decides whether the site converts
+    /// at all. See [`crate::types::conversions`]
+    pub(crate) fn with_return_type(
+        self,
+        db: &'db dyn Db,
+        return_ty: Type<'db>,
+    ) -> CallableType<'db> {
+        CallableType::new(
+            db,
+            CallableSignature::from_overloads(
+                self.signatures(db)
+                    .iter()
+                    .map(|signature| signature.clone().with_return_type(return_ty)),
+            ),
+            self.kind(db),
+            self.provenance(db),
+        )
+    }
+
+    /// does every overload return exactly `None`?
+    ///
+    /// The question a conversion site asks of the *declared* type before it will
+    /// throw a return value away. Anything wider — `object`, `int | None` — is a
+    /// caller that may still read the value the adapter would have dropped
+    pub(crate) fn returns_only_none(self, db: &'db dyn Db) -> bool {
+        self.signatures(db)
+            .iter()
+            .all(|signature| signature.return_ty.is_none(db))
+    }
+
     /// Returns the reduced callable produced by partially applying selected overloads.
     pub(crate) fn partially_apply(
         db: &'db dyn Db,

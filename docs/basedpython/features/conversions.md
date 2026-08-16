@@ -33,6 +33,10 @@ after rust's `From` and `Into`. `__of__` is the third case rust has no name for:
 constructing a type from a written-out value, so that `1`, `None` and
 `[1, 2, foo()]` can stand for something that is not an `int`, `None` or a `list`.
 
+a fourth route needs no dunder at all: a callable reaching a site that asked for
+one returning `None` is wrapped in an adapter that
+[throws the result away](#discarding-a-return-value).
+
 they are ordinary methods. nothing is registered and nothing is monkeypatched —
 `Fahrenheit.__from__(c)` is a plain classmethod call, and the whole feature is
 the checker agreeing to insert it for you.
@@ -170,6 +174,89 @@ p: Path = _by_ext__Path____of__(Path, "/tmp/x")
 a type that declares the dunder itself wins, the same way an extension never
 shadows a declared member. this is how the builtin frozen containers get theirs;
 see [frozen container displays](frozen-displays.md).
+
+## discarding a return value
+
+a callable that returns something reaches a site that asked for one returning
+`None`:
+
+```by
+def on_click(cb: () -> None): ...
+
+def handler() -> int:
+    return 1
+
+on_click(handler)
+```
+
+→
+
+```python
+on_click(_by_discard(handler))
+```
+
+`_by_discard` calls what it wraps and throws the result away, so a callee that
+declared `None` really is handed `None`. it forwards every argument, compares
+equal to the callable it wraps and answers attributes off it, so a callback
+registered through one can still be found again:
+
+```by
+observers: list[() -> None] = []
+
+def subscribe(cb: () -> None):
+    observers.append(cb)
+
+def unsubscribe(cb: () -> None):
+    observers.remove(cb)      # finds the callback `subscribe` added
+```
+
+this is the one route that needs no dunder — nothing has to be declared, and it
+applies wherever a callable meets a callable type returning `None`.
+
+the site has to promise `None` and nothing else. `-> object` already accepts
+every callable and needs no adapter; any other return type still wants the
+value:
+
+```by
+def wants_object(cb: () -> object): ...
+def wants_str(cb: () -> str): ...
+
+wants_object(handler)         # fine, and unwrapped — `object` takes the `int`
+wants_str(handler)            # error: `int` is not assignable to `str`
+```
+
+only the return type is repaired. the adapter forwards its arguments unchanged,
+so a callable that takes the wrong ones is as unassignable as ever:
+
+```by
+def needs_argument(a: int) -> int: ...
+
+on_click(needs_argument)      # error
+```
+
+### why it is a conversion and not assignability
+
+kotlin has this feature, and it is worth being precise about what it does. `f(::foo)`
+passes an `Int`-returning function to a `() -> Unit` parameter, but the function
+type itself is not a subtype:
+
+```kotlin
+val g: () -> Int = ::foo
+f(g)                          // error: type mismatch
+```
+
+the same holds here: `() -> int` is not a `() -> None`. the adapter is a
+different object from the callable it wraps, so a relation built on it could not
+survive being carried inside a generic:
+
+```by
+handlers: list[() -> int] = [...]
+callbacks: list[() -> None] = handlers   # error
+```
+
+there is nowhere inside the list to write an adapter, and an element read back
+out would be a callable nobody wrapped. so the rule lives where the other
+conversions live — at sites the transpiler can write the adapter into.
 
 ## conversion sites
 

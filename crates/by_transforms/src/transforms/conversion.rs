@@ -2,13 +2,14 @@
 //!
 //! A conversion site is a position where the checker accepted a value that is
 //! not assignable to the type declared there, because some conversion repairs
-//! it. There are four, and ty resolves which one applies — this pass only emits
+//! it. There are five, and ty resolves which one applies — this pass only emits
 //! the call it was handed:
 //!
 //! ```text
 //! report(celsius)         →  report(Fahrenheit.__from__(celsius))
 //! v: Vec3 = [1.0, 2.0]    →  v: Vec3 = Vec3.__of__([1.0, 2.0])
 //! report(celsius)         →  report((celsius).__into__())
+//! on_click(handler)       →  on_click(_by_discard(handler))
 //! ```
 //!
 //! Which one it is never matters here: a conversion arrives as the text to put
@@ -25,9 +26,10 @@
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::{self as ast, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
-use ty_python_semantic::{ConversionInfo, PreludeDunderReceiver};
+use ty_python_semantic::{ConversionInfo, ConversionRuntime, PreludeDunderReceiver};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use super::wrapped_runtime::discard_return_runtime;
 use crate::type_info::TypeInfo;
 
 /// emit the conversion the checker resolved at every conversion site
@@ -119,6 +121,7 @@ impl TypeAwarePass for ConversionPass<'_> {
                 let ConversionInfo::Call {
                     referenced_name,
                     imports,
+                    runtime,
                     ..
                 } = info
                 else {
@@ -134,6 +137,15 @@ impl TypeAwarePass for ConversionPass<'_> {
                     rejected = true;
                     continue;
                 };
+                // a definition no module can supply, injected at the top of the
+                // file. `required_imports` dedupes, so several sites needing the
+                // same adapter still define it once
+                match runtime {
+                    Some(ConversionRuntime::DiscardReturn) => {
+                        ctx.required_imports.push(discard_return_runtime());
+                    }
+                    None => {}
+                }
                 for import in imports {
                     // always aliased: the class's own name may already mean
                     // something else here, and an import that rebinds it — or that

@@ -185,7 +185,8 @@ syntax inside a function body
 - [export imports](export-imports.md) — `from x export y`
 - [extensions](extensions.md) — add members to an existing type, and declare that
     it conforms to an existing protocol
-- [conversions (`__from__` / `__into__` / `__of__`)](conversions.md)
+- [conversions (`__from__` / `__into__` / `__of__`)](conversions.md) — and
+    discarding a callable's return where the site asked for `None`
 - [frozen container displays](frozen-displays.md) — `{1}` for a `frozenset`
 - [context parameters](context-parameters.md)
 - [local lifetimes (`local` / `once`)](local-lifetimes.md)

@@ -803,3 +803,158 @@ extension str(Show):
 
 frozen: frozenset[Show] = {"a"}  # error: [invalid-assignment]
 ```
+
+## a callable converts to one that returns `None`
+
+A site that declared a callable returning `None` throws the return value away, so a callable that
+returns something else reaches it through an adapter. This is the one route that needs no dunder:
+what repairs the value is code the transpiler writes, not code the type declares.
+
+```by
+def on_click(cb: () -> None) -> None: ...
+
+def handler() -> int:
+    return 1
+
+on_click(handler)
+on_click(lambda: 1)
+```
+
+## a callable value converts, not just one written out at the site
+
+The adapter forwards whatever it wraps, so it is honest about a callable that arrives in a variable
+just as it is about one named at the site.
+
+```by
+def on_click(cb: () -> None) -> None: ...
+
+def handler() -> int:
+    return 1
+
+held: () -> int = handler
+on_click(held)
+```
+
+## the site has to promise `None` before a return is dropped
+
+A wider return type is a caller that may still read the value the adapter would have dropped.
+`-> object` already accepts every callable without any repair, and `-> int` wants the value.
+
+```by
+def wants_object(cb: () -> object) -> None: ...
+def wants_int(cb: () -> int) -> None: ...
+
+def handler() -> str:
+    return "x"
+
+wants_object(handler)
+wants_int(handler)  # error: [invalid-argument-type]
+```
+
+## only the return type is repaired
+
+The adapter forwards its arguments unchanged, so it cannot repair a parameter list. A callable that
+takes the wrong arguments is as unassignable as it ever was.
+
+```by
+def on_click(cb: () -> None) -> None: ...
+
+def needs_argument(a: int) -> int:
+    return a
+
+on_click(needs_argument)  # error: [invalid-argument-type]
+```
+
+## discarding a return does not reach inside a generic
+
+The adapter is a *different callable* from the one it wraps, so this stays a conversion rather than
+a subtyping edge — exactly as `__from__` does, and for the same reason. There is nowhere inside a
+constructed generic to put the adapter, and an element read back out would be a callable no one
+wrapped.
+
+```by
+def handlers() -> list[() -> int]:
+    return []
+
+callbacks: list[() -> None] = handlers()  # error: [invalid-assignment]
+```
+
+## a callable that already returns `None` is left alone
+
+```by
+def on_click(cb: () -> None) -> None: ...
+
+def handler() -> None: ...
+
+on_click(handler)
+```
+
+## a discarded return is ambiguous beside a dunder that also applies
+
+A callable object may declare `__into__` as well, and the two produce different runtime values — the
+adapter forwards to `__call__`, `__into__` hands back whatever its body built. Which one runs must
+not depend on ordering, so the site is reported rather than resolved.
+
+```by
+def sink() -> None: ...
+
+class Handler:
+    def __call__(self) -> int:
+        return 1
+
+    def __into__(self) -> (() -> None):
+        return sink
+
+def on_click(cb: () -> None) -> None: ...
+
+on_click(Handler())  # error: [ambiguous-conversion]
+```
+
+## an `async` callable is not repaired by a synchronous adapter
+
+An `async def` returns a coroutine rather than the value its body produces, so the return type a
+site declares is `Coroutine[..., None]` and not `None`. Requiring the site to promise exactly `None`
+is what keeps the adapter away: wrapping one of these would return a coroutine that nothing ever
+awaits, and the call would silently do nothing.
+
+```by
+def on_click(cb: () -> Coroutine[object, object, None]) -> None: ...
+
+async def handler() -> int:
+    return 1
+
+on_click(handler)  # error: [invalid-argument-type]
+```
+
+## a reified generic is not repaired by an adapter
+
+A [reified generic](basedpython_reified_generics.md) is a two-step callable — `f[int]()` — and a
+plain callable has no slot for the specialization step. Reading it *as* a callable loses that step,
+so the question of whether only the return type is wrong is asked of the function itself rather than
+of a callable rebuilt from it.
+
+```by
+def f[T]():
+    print(T)
+
+callback: () -> None = f  # error: [invalid-assignment]
+```
+
+## a target that asks for more than a callable is not repaired
+
+The adapter is a callable and nothing else, so a protocol wanting other members alongside `__call__`
+is no better served by the wrapped callable than by the bare one.
+
+```by
+protocol Handler:
+    name: str
+
+    def __call__(self) -> None
+
+def on_click(cb: Handler) -> None: ...
+
+def handler() -> int:
+    return 1
+
+on_click(handler)  # error: [invalid-argument-type]
+```
