@@ -1,0 +1,23 @@
+---
+source: crates/ruff_server/tests/e2e/execute_command.rs
+expression: "execute_command(&mut server, \"ruff.applyOptimizeImports\", \"__init__.py\")"
+---
+{
+  "changes": {
+    "file://<temp_dir>/__init__.py": [
+      {
+        "range": {
+          "start": {
+            "line": 0,
+            "character": 0
+          },
+          "end": {
+            "line": 2,
+            "character": 0
+          }
+        },
+        "newText": "import os\nimport sys\n"
+      }
+    ]
+  }
+}

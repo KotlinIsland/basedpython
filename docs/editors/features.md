@@ -88,6 +88,20 @@ Server provides the following code actions:
 - Ignore a diagnostic with a `# noqa` comment.
 - Apply all quick fixes available in the document.
 - Organize imports in the document.
+- Optimize imports in the document: sort them, and remove the ones nothing uses.
+- Reformat the document and optimize its imports, as a single edit.
+
+`source.organizeImports.ruff` only sorts, because sorting is the whole of isort's job. When you also
+want unused imports removed — what an editor's *Optimize Imports* command usually means — ask for
+`source.optimizeImports.ruff` instead.
+
+`source.formatAndOptimizeImports.ruff` does that and then formats what it left behind, against a
+single buffer, so it comes back as one edit and one undo step. Requesting the import action and
+formatting separately gets you the same text, but only if your editor waits for the first edit to be
+applied before asking for the second.
+
+These last two are only returned when a request names them, so they never appear in the light bulb
+menu beside *Organize imports* and *Fix all*.
 
 <img
 src="https://astral.sh/static/GIF/v0.4.5/code_action_hx.gif"

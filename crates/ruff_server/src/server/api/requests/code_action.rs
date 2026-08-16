@@ -13,7 +13,10 @@ use crate::server::SupportedCodeAction;
 use crate::server::api::LSPResult;
 use crate::session::{Client, DocumentSnapshot};
 
-use super::code_action_resolve::{resolve_edit_for_fix_all, resolve_edit_for_organize_imports};
+use super::code_action_resolve::{
+    resolve_edit_for_fix_all, resolve_edit_for_format_and_optimize_imports,
+    resolve_edit_for_optimize_imports, resolve_edit_for_organize_imports,
+};
 
 pub(crate) struct CodeActions;
 
@@ -60,6 +63,7 @@ impl super::BackgroundDocumentRequestHandler for CodeActions {
         }
 
         let supported_code_actions = supported_code_actions(params.context.only.clone());
+        let asked_for = params.context.only.as_deref();
 
         let fixes = fixes_for_diagnostics(params.context.diagnostics)
             .with_failure_code(ErrorCode::InternalError)?;
@@ -120,8 +124,36 @@ impl super::BackgroundDocumentRequestHandler for CodeActions {
             }
         }
 
+        if is_python && !snapshot.is_notebook_cell() {
+            if named_in(asked_for, &crate::SOURCE_OPTIMIZE_IMPORTS_RUFF) {
+                response
+                    .push(optimize_imports(&snapshot).with_failure_code(ErrorCode::InternalError)?);
+            }
+            if named_in(asked_for, &crate::SOURCE_FORMAT_AND_OPTIMIZE_IMPORTS_RUFF) {
+                response.push(
+                    format_and_optimize_imports(&snapshot)
+                        .with_failure_code(ErrorCode::InternalError)?,
+                );
+            }
+        }
+
         Ok(Some(response))
     }
+}
+
+/// Whether a request asked for `kind` by name.
+///
+/// `optimizeImports` and `formatAndOptimizeImports` are what an editor runs on save or on commit,
+/// not something a reader picks out of a lightbulb menu — that menu already offers *Organize
+/// imports* and *Fix all*, and a second, near-identically named entry beside each would be a puzzle
+/// rather than a choice. So they are advertised in the server's capabilities and answered when a
+/// client names them, but they never appear in a request that just asks for everything.
+fn named_in(asked_for: Option<&[CodeActionKind]>, kind: &CodeActionKind) -> bool {
+    asked_for.is_some_and(|kinds| {
+        kinds
+            .iter()
+            .any(|requested| kind.as_str().starts_with(requested.as_str()))
+    })
 }
 
 fn quick_fix(
@@ -327,6 +359,60 @@ fn notebook_organize_imports(snapshot: &DocumentSnapshot) -> crate::Result<CodeA
         data,
         ..Default::default()
     }))
+}
+
+fn optimize_imports(snapshot: &DocumentSnapshot) -> crate::Result<CodeActionResponse> {
+    let (edit, data) = deferred_or_resolved(snapshot, |snapshot| {
+        resolve_edit_for_optimize_imports(
+            snapshot.query(),
+            snapshot.resolved_client_capabilities(),
+            snapshot.encoding(),
+        )
+    })?;
+
+    Ok(CodeActionResponse::CodeAction(types::CodeAction {
+        title: format!("{DIAGNOSTIC_NAME}: Optimize imports"),
+        kind: Some(crate::SOURCE_OPTIMIZE_IMPORTS_RUFF),
+        edit,
+        data,
+        ..Default::default()
+    }))
+}
+
+fn format_and_optimize_imports(snapshot: &DocumentSnapshot) -> crate::Result<CodeActionResponse> {
+    let (edit, data) = deferred_or_resolved(snapshot, |snapshot| {
+        resolve_edit_for_format_and_optimize_imports(snapshot)
+    })?;
+
+    Ok(CodeActionResponse::CodeAction(types::CodeAction {
+        title: format!("{DIAGNOSTIC_NAME}: Format document and optimize imports"),
+        kind: Some(crate::SOURCE_FORMAT_AND_OPTIMIZE_IMPORTS_RUFF),
+        edit,
+        data,
+        ..Default::default()
+    }))
+}
+
+/// Fills in either the edit or the payload a `codeAction/resolve` request needs to compute it,
+/// depending on whether the client defers edit resolution.
+fn deferred_or_resolved(
+    snapshot: &DocumentSnapshot,
+    resolve: impl FnOnce(&DocumentSnapshot) -> crate::Result<types::WorkspaceEdit>,
+) -> crate::Result<(Option<types::WorkspaceEdit>, Option<serde_json::Value>)> {
+    if snapshot
+        .resolved_client_capabilities()
+        .code_action_deferred_edit_resolution
+    {
+        Ok((
+            None,
+            Some(
+                serde_json::to_value(snapshot.query().make_key().into_uri())
+                    .expect("document uri should serialize"),
+            ),
+        ))
+    } else {
+        Ok((Some(resolve(snapshot)?), None))
+    }
 }
 
 /// If `action_filter` is `None`, this returns [`SupportedCodeActionKind::all()`]. Otherwise,

@@ -277,6 +277,12 @@ pub(crate) enum SupportedCodeAction {
     /// Maps to `source.organizeImports` and `source.organizeImports.ruff` code action kinds.
     /// This is a source action that applies import sorting fixes to the currently open document.
     SourceOrganizeImports,
+    /// Maps to the `source.optimizeImports.ruff` code action kind. Sorts imports *and* removes the
+    /// ones nothing uses, which is what an editor's *Optimize Imports* means.
+    SourceOptimizeImports,
+    /// Maps to the `source.formatAndOptimizeImports.ruff` code action kind. Runs
+    /// [`Self::SourceOptimizeImports`] and the formatter against one buffer, as a single edit.
+    SourceFormatAndOptimizeImports,
     /// Maps to the `notebook.source.fixAll` and `notebook.source.fixAll.ruff` code action kinds.
     /// This is a source action, specifically for notebooks, that applies all safe fixes
     /// to the currently open document.
@@ -294,6 +300,8 @@ impl SupportedCodeAction {
             Self::QuickFix => CodeActionKind::QuickFix,
             Self::SourceFixAll => crate::SOURCE_FIX_ALL_RUFF,
             Self::SourceOrganizeImports => crate::SOURCE_ORGANIZE_IMPORTS_RUFF,
+            Self::SourceOptimizeImports => crate::SOURCE_OPTIMIZE_IMPORTS_RUFF,
+            Self::SourceFormatAndOptimizeImports => crate::SOURCE_FORMAT_AND_OPTIMIZE_IMPORTS_RUFF,
             Self::NotebookSourceFixAll => crate::NOTEBOOK_SOURCE_FIX_ALL_RUFF,
             Self::NotebookSourceOrganizeImports => crate::NOTEBOOK_SOURCE_ORGANIZE_IMPORTS_RUFF,
         }
@@ -311,6 +319,8 @@ impl SupportedCodeAction {
             Self::QuickFix,
             Self::SourceFixAll,
             Self::SourceOrganizeImports,
+            Self::SourceOptimizeImports,
+            Self::SourceFormatAndOptimizeImports,
             Self::NotebookSourceFixAll,
             Self::NotebookSourceOrganizeImports,
         ]
@@ -324,6 +334,11 @@ pub(crate) enum SupportedCommand {
     Format,
     FixAll,
     OrganizeImports,
+    /// Sorts imports *and* removes the ones nothing uses, which is what an editor's
+    /// *Optimize Imports* means. [`Self::OrganizeImports`] only sorts, matching isort.
+    OptimizeImports,
+    /// [`Self::OptimizeImports`] and [`Self::Format`] against one buffer, as a single edit.
+    FormatAndOptimizeImports,
 }
 
 impl SupportedCommand {
@@ -332,6 +347,8 @@ impl SupportedCommand {
             Self::FixAll => "Fix all auto-fixable problems",
             Self::Format => "Format document",
             Self::OrganizeImports => "Format imports",
+            Self::OptimizeImports => "Optimize imports",
+            Self::FormatAndOptimizeImports => "Format document and optimize imports",
             Self::Debug => "Print debug information",
         }
     }
@@ -342,16 +359,20 @@ impl SupportedCommand {
             SupportedCommand::Format => "ruff.applyFormat",
             SupportedCommand::FixAll => "ruff.applyAutofix",
             SupportedCommand::OrganizeImports => "ruff.applyOrganizeImports",
+            SupportedCommand::OptimizeImports => "ruff.applyOptimizeImports",
+            SupportedCommand::FormatAndOptimizeImports => "ruff.applyFormatAndOptimizeImports",
             SupportedCommand::Debug => "ruff.printDebugInformation",
         }
     }
 
     /// Returns all the commands that the server currently supports.
-    const fn all() -> [SupportedCommand; 4] {
+    const fn all() -> [SupportedCommand; 6] {
         [
             SupportedCommand::Format,
             SupportedCommand::FixAll,
             SupportedCommand::OrganizeImports,
+            SupportedCommand::OptimizeImports,
+            SupportedCommand::FormatAndOptimizeImports,
             SupportedCommand::Debug,
         ]
     }
@@ -365,6 +386,8 @@ impl FromStr for SupportedCommand {
             "ruff.applyAutofix" => Self::FixAll,
             "ruff.applyFormat" => Self::Format,
             "ruff.applyOrganizeImports" => Self::OrganizeImports,
+            "ruff.applyOptimizeImports" => Self::OptimizeImports,
+            "ruff.applyFormatAndOptimizeImports" => Self::FormatAndOptimizeImports,
             "ruff.printDebugInformation" => Self::Debug,
             _ => return Err(anyhow::anyhow!("Invalid command `{name}`")),
         })
