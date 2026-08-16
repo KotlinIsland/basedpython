@@ -2061,6 +2061,28 @@ impl UserQuery {
             .unwrap_or(false)
     }
 
+    /// The text a client should match a completion for `name` against, when the
+    /// user reached the name only by writing it in another case.
+    ///
+    /// ty folds case when it decides what the typed text reaches, so writing
+    /// `false` finds `False`. But a client filters the list it is handed a
+    /// second time, and one that does not fold case throws that suggestion
+    /// straight back out — which is how typing `false` ends up offering
+    /// `filterfalse` and nothing else. Handing the client the typed text as the
+    /// thing to match keeps the suggestion in the list the user sees.
+    ///
+    /// This is deliberately generous about what a client would keep: a name
+    /// whose letters appear in the typed order, anywhere in it, is left alone,
+    /// because some client will find it. Only a name that no case-sensitive
+    /// matcher could reach is given a filter text of its own.
+    fn filter_text_folding_case(&self, name: &str) -> Option<CompactString> {
+        let typed = self.exact.as_deref()?;
+        if typed.is_empty() || is_subsequence(typed, name) {
+            return None;
+        }
+        Some(CompactString::from(typed))
+    }
+
     fn match_quality(&self, name: &str) -> MatchQuality {
         let Some(query) = self.exact.as_deref() else {
             return MatchQuality::Fuzzy;
@@ -2080,6 +2102,15 @@ impl UserQuery {
             MatchQuality::Fuzzy
         }
     }
+}
+
+/// Whether `needle`'s characters appear in `haystack` in order, which is the
+/// loosest thing a completion client calls a match.
+fn is_subsequence(needle: &str, haystack: &str) -> bool {
+    let mut haystack = haystack.chars();
+    needle
+        .chars()
+        .all(|wanted| haystack.any(|found| found == wanted))
 }
 
 #[derive(Clone, Debug)]
@@ -2791,7 +2822,16 @@ fn add_keyword_completions<'db>(
         ("False", Type::bool_literal(false)),
     ];
     for (name, ty) in keyword_values {
-        completions.add(CompletionBuilder::keyword(name).ty(ty).builtin(true));
+        let mut builder = CompletionBuilder::keyword(name).ty(ty).builtin(true);
+        // `true`, `false` and `none` are how a reader of most other languages
+        // spells these three, so they are worth reaching from that spelling.
+        // ty finds them there because it folds case, but a client filters the
+        // list a second time and a case-sensitive one drops them right back
+        // out, so each has to say what the client should match instead
+        if let Some(filter) = completions.query.filter_text_folding_case(name) {
+            builder = builder.filter_text(filter);
+        }
+        completions.add(builder);
     }
 
     // Note that we specifically omit the `type` keyword here, since
@@ -11451,6 +11491,57 @@ from dataclasses import dataclass
         )
         .build()
         .contains("True");
+    }
+
+    /// The typed text a completion asks the client to match it against, or the
+    /// text the client would match by default when it asks for nothing else.
+    #[track_caller]
+    fn client_match_text<'a>(test: &'a CompletionTest<'a>, name: &str) -> &'a str {
+        let completion = test
+            .completions()
+            .iter()
+            .find(|completion| completion.name == name)
+            .unwrap_or_else(|| panic!("expected completions to include `{name}`"));
+        completion.filter.as_deref().unwrap_or(completion.label())
+    }
+
+    /// `True`, `False` and `None` are the words a reader of another language
+    /// writes in lower case, and ty finds them from that spelling. A client
+    /// filters the list a second time, so each has to say what to match against
+    /// or the client drops it right back out.
+    #[test]
+    fn lowercase_spelling_reaches_true_false_and_none() {
+        for (typed, keyword) in [("tru", "True"), ("fals", "False"), ("non", "None")] {
+            let builder = completion_test_builder(&format!("a = {typed}<CURSOR>\n"));
+            let test = builder.build();
+            assert_eq!(client_match_text(&test, keyword), typed);
+        }
+    }
+
+    /// A name the typed text already reaches as written is left to the client's
+    /// own matcher, whatever that matcher is.
+    #[test]
+    fn a_spelling_the_client_can_match_says_nothing_extra() {
+        let builder = completion_test_builder("a = Fal<CURSOR>\n");
+        let test = builder.build();
+        assert_eq!(client_match_text(&test, "False"), "False");
+    }
+
+    /// The three keywords have this arrangement to themselves. Every other name
+    /// is left to the client's own matching, so a client that drops a name
+    /// written in another case goes on dropping it — the list a strict client
+    /// shows is otherwise flooded with the weak matches it was built to hide.
+    #[test]
+    fn only_the_three_keywords_say_what_to_match() {
+        let builder = completion_test_builder(
+            "\
+class Widget: ...
+
+a = widg<CURSOR>
+",
+        );
+        let test = builder.build();
+        assert_eq!(client_match_text(&test, "Widget"), "Widget");
     }
 
     #[test]
