@@ -127,3 +127,68 @@ on
 a [property](properties.md) is one member in the source, so it is one entry in
 the outline — not the getter, backing field and setter it lowers into. enum
 variants and an extension's methods appear under their declarations
+
+## debugger facts
+
+while a program is stopped, an editor knows something no checker does: what the
+names in the current frame actually hold. the server takes those readings and
+answers what the code below the stop line will do, rather than what it could do
+
+given a debugger stopped on line 5 holding `limit = 5`:
+
+```by
+def compute() -> int: ...
+
+limit = compute()
+# stopped here
+if limit > 100:     # = false
+    over = 1        # will not run
+```
+
+nothing in the source decides that branch — `compute()` returns an `int` and any
+`int` is possible. the reading of `limit` is what settles it
+
+this is the checker's ordinary reachability analysis, reading the file under one
+extra assumption. it does not change the diagnostics you already see: a seeded
+reading and an unseeded one are separate questions, and the ordinary one is what
+the squiggles come from
+
+the editor asks with a custom request, `by/dataFlowAt`:
+
+```json
+{
+  "textDocument": { "uri": "file:///src/main.by" },
+  "line": 5,
+  "observations": [{ "name": "limit", "observed": "isInt", "text": "5" }]
+}
+```
+
+`line` is one-based and is the line the program is stopped on. that line is
+answered along with everything below it, because nothing on it has run yet.
+a name may be a dotted path — `self.limit` — spelled as the source spells it
+
+| `observed`     | carries                        | means                    |
+| -------------- | ------------------------------ | ------------------------ |
+| `isNone`       |                                | the value is `None`      |
+| `isBool`       | `value`                        | exactly this `bool`      |
+| `isInt`        | `text`, decimal                | exactly this integer     |
+| `isStr`        | `text`                         | exactly this string      |
+| `isBytes`      | `bytes`, an array of numbers   | exactly these bytes      |
+| `isExactly`    | `module`, `qualname`           | `type(value)` is this    |
+| `isEnumMember` | `module`, `qualname`, `member` | this member of this enum |
+
+the answer is a list of findings, each with a `range`, a `kind` of `condition`
+or `unreachable`, a `taken` for a condition, and a `label` to draw
+
+an empty answer is the ordinary case. only readings the server can express as a
+type produce anything, and only where nothing can have changed the name in
+between:
+
+- a binding at or below the stop line is the program's own assignment, and wins
+    over a reading taken before it
+- a name a loop around the stop line rebinds is refused, because the reading is
+    true of this iteration and not of the next
+- an observation applies only to the scope the program is actually stopped in.
+    one frame's `limit` is not another's, and a name that scope does not itself
+    bind — a global it only reads, an attribute it never assigns — is a value
+    nothing in that scope can vouch for

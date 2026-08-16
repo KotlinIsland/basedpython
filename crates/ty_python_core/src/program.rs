@@ -21,12 +21,12 @@ pub struct Program<'db> {
     #[returns(copy)]
     pub resolver_environment: ResolverEnvironment<'db>,
 
-    /// What a debugger observed about the running program, when this is a seeded program.
+    /// what a debugger observed about the running program, when this is a seeded program
     ///
     /// `None` for every program that is not one, which is every program a checker, a formatter or
-    /// an editor's ordinary diagnostics run under. Being part of the interned key is the point: a
+    /// an editor's ordinary diagnostics run under. being part of the interned key is the point: a
     /// seeded reading of a file and an unseeded one are separate semantic identities, so neither
-    /// can leak into the other and Salsa caches both. See [`crate::assumptions`].
+    /// can leak into the other and salsa caches both. see [`crate::assumptions`]
     #[returns(copy)]
     pub assumptions: Option<Assumptions<'db>>,
 }
@@ -47,11 +47,12 @@ impl<'db> Program<'db> {
         Program::new(db, python_platform, resolver_environment, None)
     }
 
-    /// The same program, reading the source as a debugger found it at one line.
+    /// the same program, reading the source as a debugger found it at one line
     ///
-    /// Everything else about it is unchanged, so the seeded analysis resolves the same modules
-    /// against the same search paths on the same Python version — the one difference is what the
-    /// names are known to hold.
+    /// everything else about it is unchanged, so the seeded analysis resolves the same modules
+    /// against the same search paths on the same python version — the one difference is what the
+    /// names are known to hold
+    #[must_use]
     pub fn seeded(self, db: &'db dyn Db, assumptions: Assumptions<'db>) -> Self {
         Program::new(
             db,

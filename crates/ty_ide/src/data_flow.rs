@@ -1,13 +1,13 @@
-//! What a stopped program's own state says about the code it has not run yet.
+//! what a stopped program's own state says about the code it has not run yet
 //!
-//! An editor with a debugger attached knows something no checker does: what the names in a frame
-//! actually hold. This is where that gets spent — the branches below the stop line, answered as
+//! an editor with a debugger attached knows something no checker does: what the names in a frame
+//! actually hold. this is where that gets spent — the branches below the stop line, answered as
 //! the definite `true` or `false` they will be rather than as the "could go either way" the source
-//! alone can support.
+//! alone can support
 //!
-//! The analysis is not a second one. It is the checker's own reachability machinery, reading the
+//! the analysis is not a second one. it is the checker's own reachability machinery, reading the
 //! same file under a program that pins some names to what was observed — see
-//! [`ty_python_core::assumptions`] and `ty_python_semantic::assumed`.
+//! [`ty_python_core::assumptions`] and `ty_python_semantic::assumed`
 
 use ruff_source_file::OneIndexed;
 use ruff_text_size::TextRange;
@@ -17,32 +17,32 @@ use ty_python_semantic::types::ide_support::{UnreachableRange, data_flow};
 
 use crate::Db;
 
-/// One thing the runtime state settles about code that has not run.
+/// one thing the runtime state settles about code that has not run
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
-    /// The source it is about.
+    /// the source it is about
     pub range: TextRange,
-    /// What is settled.
+    /// what is settled
     pub kind: FindingKind,
 }
 
-/// What kind of thing was settled.
+/// what kind of thing was settled
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FindingKind {
-    /// This condition will go this way.
+    /// this condition will go this way
     Condition {
-        /// Which way.
+        /// which way
         taken: bool,
     },
-    /// This code will not run.
+    /// this code will not run
     Unreachable,
 }
 
 impl Finding {
-    /// What to show a reader beside the source.
+    /// what to show a reader beside the source
     ///
-    /// Short on purpose: it is drawn inline, in the editor font, beside code somebody is reading
-    /// while stopped in a debugger.
+    /// short on purpose: it is drawn inline, in the editor font, beside code somebody is reading
+    /// while stopped in a debugger
     pub fn label(&self) -> &'static str {
         match self.kind {
             FindingKind::Condition { taken: true } => "= true",
@@ -52,15 +52,16 @@ impl Finding {
     }
 }
 
-/// What the program's own state decides about the code below `line`.
+/// what the program's own state decides about the code at and below `line`
 ///
-/// `line` is one-based, and is the line the program is stopped on. Everything answered is strictly
-/// below it: the statement on the stop line has not finished, so it is not something the state
-/// "predicts".
+/// `line` is one-based, and is the line the program is stopped on. that line is itself answered,
+/// because nothing on it has run yet: a condition written there is still ahead of the program, and
+/// a binding written there has not taken effect. everything above it already ran, and ran before
+/// the observation was taken, so none of it is answered
 ///
-/// An empty answer is the ordinary case and is not a failure. Most conditions depend on something
+/// an empty answer is the ordinary case and is not a failure. most conditions depend on something
 /// the debugger could not observe — a call's result, an object with a `__bool__` of its own — and
-/// the honest answer for those is nothing at all.
+/// the honest answer for those is nothing at all
 pub fn data_flow_at(
     db: &dyn Db,
     file: ProgramFile<'_>,
@@ -72,10 +73,16 @@ pub fn data_flow_at(
         return Vec::new();
     }
 
+    // the assumptions hold the line as a `u32` to keep the interned value small. a file with more
+    // lines than that is not one a debugger stopped in, so there is nothing to answer about it
+    let Ok(stop_line) = u32::try_from(line.get()) else {
+        return Vec::new();
+    };
+
     let source = ruff_db::source::source_text(db, source_file);
     let below = ruff_db::source::line_index(db, source_file).line_start(line, &source);
 
-    let assumptions = Assumptions::new(db, line.get() as u32, observations.into_boxed_slice());
+    let assumptions = Assumptions::new(db, source_file, stop_line, observations.into_boxed_slice());
     let seeded = file.program(db).seeded(db, assumptions);
     let seeded_file = ProgramFile::new(db, source_file, seeded);
 
@@ -108,14 +115,14 @@ mod tests {
     use ruff_python_ast::name::Name;
     use ty_python_core::assumptions::{ClassName, Observed};
 
-    /// What the analysis says about a file, given what a debugger saw where `<CURSOR>` is.
+    /// what the analysis says about a file, given what a debugger saw where `<CURSOR>` is
     ///
-    /// The whole feature end to end: source in, findings out. Every other test of this reads one
+    /// the whole feature end to end: source in, findings out. every other test of this reads one
     /// layer — which seeds survive, what an observation becomes — and none of them would notice if
-    /// the layers stopped agreeing.
+    /// the layers stopped agreeing
     ///
     /// `<CURSOR>` marks the line the program is stopped on, which is what the test is really
-    /// about: everything below it is the question and everything above it has already run.
+    /// about: everything below it is the question and everything above it has already run
     fn at(source: &str, observations: Vec<(&str, Observed)>) -> Vec<String> {
         let test = cursor_test(source);
         let file = test.cursor.file;
@@ -311,6 +318,196 @@ if isinstance(thing, Runner):
             found.is_empty(),
             "an underscore was read as a rename: {found:?}"
         );
+    }
+
+    #[test]
+    fn a_function_below_the_stop_line_is_not_seeded_from_the_frame_above_it() {
+        // `f` has not been called and will not be until after `limit = other()`, so what the
+        // module-level `limit` held at the stop line says nothing about what `f` will read. the
+        // module scope refuses this seed on its own; the point of the test is that `f`'s scope,
+        // which binds no `limit` at all and so has no binding to refuse it with, refuses it too
+        let found = at(
+            "\
+limit = compute()
+<CURSOR>
+limit = other()
+def f():
+    if limit > 100:
+        over = 1
+",
+            vec![("limit", Observed::IsInt("5".to_string()))],
+        );
+        assert!(
+            found.is_empty(),
+            "a global rebound below the stop line was seeded inside a function: {found:?}"
+        );
+    }
+
+    #[test]
+    fn an_observation_of_one_frames_local_does_not_reach_another_scopes_name() {
+        // the debugger read `caller`'s local `limit`. `helper` has a `limit` too, and it is a
+        // different name that only happens to be spelled the same — reading the first as the
+        // second is how a confident wrong answer gets on screen
+        let found = at(
+            "\
+def caller():
+    limit = 5
+    <CURSOR>
+    helper()
+
+def helper():
+    if limit > 100:
+        over = 1
+",
+            vec![("limit", Observed::IsInt("5".to_string()))],
+        );
+        assert!(
+            found.is_empty(),
+            "an observation crossed into a scope it was never about: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_seed_reaches_the_rest_of_the_function_it_was_observed_in() {
+        // the other side of the two tests above: within the one scope the program is stopped in,
+        // a seed is exactly as useful as it is at module level
+        let found = at(
+            "\
+def run():
+    limit = compute()
+    <CURSOR>
+    if limit > 100:
+        over = 1
+",
+            vec![("limit", Observed::IsInt("5".to_string()))],
+        );
+        assert!(
+            found.iter().any(|f| f == "limit > 100: = false"),
+            "found {found:?}"
+        );
+    }
+
+    #[test]
+    fn an_attribute_the_stopped_method_assigns_is_seeded() {
+        // a dotted path is a place like any other, so an observation of one carries as far as the
+        // scope that assigns it — and no further, because a scope that only reads `self.limit` has
+        // no binding of it to say what could have happened to it in between
+        let found = at(
+            "\
+class Runner:
+    def go(self):
+        self.limit = compute()
+        <CURSOR>
+        if self.limit > 100:
+            over = 1
+",
+            vec![("self.limit", Observed::IsInt("5".to_string()))],
+        );
+        assert!(
+            found.iter().any(|f| f == "self.limit > 100: = false"),
+            "found {found:?}"
+        );
+    }
+
+    #[test]
+    fn an_attribute_the_stopped_method_only_reads_is_refused() {
+        let found = at(
+            "\
+class Runner:
+    def go(self):
+        <CURSOR>
+        if self.limit > 100:
+            over = 1
+",
+            vec![("self.limit", Observed::IsInt("5".to_string()))],
+        );
+        assert!(
+            found.is_empty(),
+            "an attribute this scope never assigns has no binding to vouch for it: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_condition_on_the_stop_line_is_answered() {
+        // the program is stopped *before* running this line, so the condition on it is still
+        // ahead of the program and the observation describes the moment it will be read
+        let found = at(
+            "\
+limit = compute()
+<CURSOR>if limit > 100:
+    over = 1
+",
+            vec![("limit", Observed::IsInt("5".to_string()))],
+        );
+        assert!(
+            found.iter().any(|f| f == "limit > 100: = false"),
+            "found {found:?}"
+        );
+    }
+
+    #[test]
+    fn an_enum_member_settles_a_comparison_against_that_member() {
+        // the class alone cannot decide this — an instance of `Color` is ambiguous against
+        // `Color.RED`. the member is the whole value of the observation
+        let found = at(
+            "\
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    BLUE = 2
+
+c = pick()
+<CURSOR>
+if c is Color.RED:
+    r = 1
+",
+            vec![(
+                "c",
+                Observed::IsEnumMember {
+                    class: ClassName {
+                        module: "main".to_string(),
+                        qualname: "Color".to_string(),
+                    },
+                    member: Name::new("RED"),
+                },
+            )],
+        );
+        assert!(
+            found.iter().any(|f| f == "c is Color.RED: = true"),
+            "found {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_member_the_enum_does_not_have_settles_nothing() {
+        // falling back to the bare class would be reporting a reading the file contradicts as
+        // though it were one the file supports
+        let found = at(
+            "\
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    BLUE = 2
+
+c = pick()
+<CURSOR>
+if c is Color.RED:
+    r = 1
+",
+            vec![(
+                "c",
+                Observed::IsEnumMember {
+                    class: ClassName {
+                        module: "main".to_string(),
+                        qualname: "Color".to_string(),
+                    },
+                    member: Name::new("GREEN"),
+                },
+            )],
+        );
+        assert!(found.is_empty(), "found {found:?}");
     }
 
     #[test]
