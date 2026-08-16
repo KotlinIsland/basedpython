@@ -13,6 +13,17 @@
         }
       ]
     },
+    "build": {
+      "description": "Configures what `by build` writes, and what a wheel of this project carries.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BuildOptions"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "editor": {
       "description": "Configures the parts of the editor experience that type checking does not decide.",
       "anyOf": [
@@ -252,6 +263,52 @@
       "items": {
         "$ref": "#/definitions/string"
       }
+    },
+    "BuildOptions": {
+      "type": "object",
+      "properties": {
+        "exclude": {
+          "description": "Files to keep out of the build output.\n\nThe syntax is the same as `src.exclude`, and paths are anchored to the\nproject root. Excluding a `.by` file keeps its transpiled output out of\nthe build as well.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Array_of_string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "include": {
+          "description": "Files to carry into the build output verbatim, in addition to the ones\nthat are there by default.\n\n`by build` mirrors the whole module tree: a `.by` file is transpiled, and\nevery other file — a hand-written `.py`, a `py.typed` marker, a template,\na data file — is copied to the same place in the output. `include` is for\nthe files that sit *outside* a module root and still belong in the build,\nsuch as a data directory next to `src`.\n\nThe syntax is the same as `src.include`, and paths are anchored to the\nproject root. `exclude` takes precedence over `include`.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Array_of_string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sources": {
+          "description": "Whether the build output carries the `.by` sources alongside the python\nthey were transpiled into, with a `by.typed` marker naming them as the\nauthoritative surface.\n\nThis is what lets one basedpython project depend on another: a downstream\npython project reads the transpiled `.py` and is served perfectly, while a\ndownstream basedpython project reads the `.by` and keeps the declarations\nthat have no python spelling — `extension` blocks, `raises` clauses,\nread-only `let`, sum types.\n\nEnabled by default. Turn it off to ship python only.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "version-from": {
+          "description": "The module to read `__version__` from, when `[project]` declares\n`dynamic = [\"version\"]`.\n\nThis is read when a wheel or a source distribution is built, not by the\nchecker: a version has to be settled before the packaging backend sees the\nproject, and the place it lives is a `.by` module that backend cannot\nread.\n\nThe value is a path relative to the project root.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "CommonAliases": {
       "type": "object",

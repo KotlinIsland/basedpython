@@ -5,7 +5,7 @@ use crate::glob::{
     PortableGlobKind,
 };
 use crate::metadata::python_version::SupportedPythonVersion;
-use crate::metadata::settings::{OverrideSettings, SrcSettings};
+use crate::metadata::settings::{BuildSettings, OverrideSettings, SrcSettings};
 
 use super::settings::{EditorSettings, Override, Settings, TerminalSettings};
 use crate::metadata::value::{RelativeGlobPattern, RelativePathBuf};
@@ -109,6 +109,11 @@ pub struct Options {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[option_group]
     pub run: Option<RunOptions>,
+
+    /// Configures what `by build` writes, and what a wheel of this project carries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option_group]
+    pub build: Option<BuildOptions>,
 
     /// Configures the parts of the editor experience that type checking does not decide.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -476,6 +481,17 @@ impl Options {
             });
         let src = strategy.fallback(src, |_| SrcSettings::default())?;
 
+        let build = self
+            .build
+            .or_default()
+            .to_settings(db, project_root, &mut diagnostics)
+            .map_err(|err| ToSettingsError {
+                diagnostic: err,
+                output_format: terminal.output_format,
+                color: colored::control::SHOULD_COLORIZE.should_colorize(),
+            });
+        let build = strategy.fallback(build, |_| BuildSettings::default())?;
+
         let mut analysis_diagnostics = Vec::new();
         let analysis = self
             .analysis
@@ -515,6 +531,7 @@ impl Options {
             rules: Arc::new(rules),
             terminal,
             src,
+            build,
             analysis,
             editor,
             overrides,
@@ -1417,6 +1434,8 @@ enum GlobFilterContext {
     SrcRoot,
     /// Override configuration context
     Overrides,
+    /// Build output configuration context
+    Build,
 }
 
 impl GlobFilterContext {
@@ -1424,6 +1443,7 @@ impl GlobFilterContext {
         match self {
             Self::SrcRoot => "src.include",
             Self::Overrides => "overrides.include",
+            Self::Build => "build.include",
         }
     }
 
@@ -1431,6 +1451,7 @@ impl GlobFilterContext {
         match self {
             Self::SrcRoot => "src.exclude",
             Self::Overrides => "overrides.exclude",
+            Self::Build => "build.exclude",
         }
     }
 }
@@ -1581,6 +1602,137 @@ pub struct RunOptions {
         "#
     )]
     pub main: Option<RangedValue<String>>,
+}
+
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    Combine,
+    Serialize,
+    Deserialize,
+    OptionsMetadata,
+    get_size2::GetSize,
+)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct BuildOptions {
+    /// Files to carry into the build output verbatim, in addition to the ones
+    /// that are there by default.
+    ///
+    /// `by build` mirrors the whole module tree: a `.by` file is transpiled, and
+    /// every other file — a hand-written `.py`, a `py.typed` marker, a template,
+    /// a data file — is copied to the same place in the output. `include` is for
+    /// the files that sit *outside* a module root and still belong in the build,
+    /// such as a data directory next to `src`.
+    ///
+    /// The syntax is the same as `src.include`, and paths are anchored to the
+    /// project root. `exclude` takes precedence over `include`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"null"#,
+        value_type = r#"list[str]"#,
+        example = r#"
+            include = [
+                "assets",
+            ]
+        "#
+    )]
+    pub include: Option<RangedValue<Vec<RelativeGlobPattern>>>,
+
+    /// Files to keep out of the build output.
+    ///
+    /// The syntax is the same as `src.exclude`, and paths are anchored to the
+    /// project root. Excluding a `.by` file keeps its transpiled output out of
+    /// the build as well.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"null"#,
+        value_type = r#"list[str]"#,
+        example = r#"
+            exclude = [
+                "tests",
+                "**/*.snapshot",
+            ]
+        "#
+    )]
+    pub exclude: Option<RangedValue<Vec<RelativeGlobPattern>>>,
+
+    /// Whether the build output carries the `.by` sources alongside the python
+    /// they were transpiled into, with a `by.typed` marker naming them as the
+    /// authoritative surface.
+    ///
+    /// This is what lets one basedpython project depend on another: a downstream
+    /// python project reads the transpiled `.py` and is served perfectly, while a
+    /// downstream basedpython project reads the `.by` and keeps the declarations
+    /// that have no python spelling — `extension` blocks, `raises` clauses,
+    /// read-only `let`, sum types.
+    ///
+    /// Enabled by default. Turn it off to ship python only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"true"#,
+        value_type = "bool",
+        example = r#"
+            sources = false
+        "#
+    )]
+    pub sources: Option<bool>,
+
+    /// The module to read `__version__` from, when `[project]` declares
+    /// `dynamic = ["version"]`.
+    ///
+    /// This is read when a wheel or a source distribution is built, not by the
+    /// checker: a version has to be settled before the packaging backend sees the
+    /// project, and the place it lives is a `.by` module that backend cannot
+    /// read.
+    ///
+    /// The value is a path relative to the project root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"null"#,
+        value_type = "str",
+        example = r#"
+            version-from = "src/app/__init__.by"
+        "#
+    )]
+    pub version_from: Option<RangedValue<String>>,
+}
+
+impl BuildOptions {
+    fn to_settings(
+        &self,
+        db: &dyn Db,
+        project_root: &SystemPath,
+        diagnostics: &mut Vec<OptionDiagnostic>,
+    ) -> Result<BuildSettings, Box<OptionDiagnostic>> {
+        let include = build_include_filter(
+            db,
+            project_root,
+            self.include.as_ref(),
+            GlobFilterContext::Build,
+            diagnostics,
+        )?;
+        // no default patterns of its own: the build is already bounded by
+        // `src.exclude`, defaults and all, and applying them a second time here
+        // would re-drop whatever a negation there deliberately took back
+        let exclude = build_exclude_filter(
+            db,
+            project_root,
+            self.exclude.as_ref(),
+            &[],
+            GlobFilterContext::Build,
+            diagnostics,
+        )?;
+
+        Ok(BuildSettings {
+            files: IncludeExcludeFilter::new(include, exclude),
+            sources: self.sources.unwrap_or(true),
+        })
+    }
 }
 
 #[derive(

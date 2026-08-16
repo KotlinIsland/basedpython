@@ -7,6 +7,9 @@ use ty_python_semantic::lint::RuleSelection;
 
 use crate::metadata::options::{FileOptions, InnerOverrideOptions, Options, OutputFormat};
 use crate::metadata::script::script_metadata;
+use ruff_db::system::SystemPath;
+
+use crate::glob::{GlobFilterCheckMode, IncludeResult};
 use crate::{Db, glob::IncludeExcludeFilter};
 
 /// The resolved [`super::Options`] for the project.
@@ -27,6 +30,7 @@ pub struct Settings {
     pub(super) rules: Arc<RuleSelection>,
     pub(super) terminal: TerminalSettings,
     pub(super) src: SrcSettings,
+    pub(super) build: BuildSettings,
     pub(super) analysis: AnalysisSettings,
     pub(super) editor: EditorSettings,
 
@@ -45,6 +49,10 @@ impl Settings {
 
     pub fn src(&self) -> &SrcSettings {
         &self.src
+    }
+
+    pub fn build(&self) -> &BuildSettings {
+        &self.build
     }
 
     pub(crate) fn to_rules(&self) -> Arc<RuleSelection> {
@@ -127,11 +135,78 @@ pub struct SrcSettings {
     pub(crate) files: IncludeExcludeFilter,
 }
 impl SrcSettings {
+    /// Whether this file is part of the project's own source.
+    ///
+    /// The file set the checker walks is derived from this; a build asks it too,
+    /// so that a file the project excludes from itself does not turn up in what
+    /// the project ships.
+    pub fn is_file_included(&self, path: &SystemPath) -> bool {
+        matches!(
+            self.files
+                .is_file_included(path, GlobFilterCheckMode::Adhoc),
+            IncludeResult::Included { .. }
+        )
+    }
+
+    /// Whether a walk should descend into this directory.
+    pub fn is_directory_included(&self, path: &SystemPath) -> bool {
+        !matches!(
+            self.files
+                .is_directory_maybe_included(path, GlobFilterCheckMode::Adhoc),
+            IncludeResult::Excluded
+        )
+    }
+
     pub(crate) fn default() -> Self {
         Self {
             respect_ignore_files: true,
             exclude_scripts: false,
             files: IncludeExcludeFilter::default(),
+        }
+    }
+}
+
+/// The resolved `[tool.basedpython.build]` options.
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub struct BuildSettings {
+    pub(super) files: IncludeExcludeFilter,
+    pub(super) sources: bool,
+}
+
+impl BuildSettings {
+    /// Whether this file belongs in the build output.
+    ///
+    /// The filter is the only thing consulted here: the build walks the module
+    /// tree itself, so "is this file part of the project at all" has already been
+    /// decided by the time a path reaches this.
+    pub fn is_file_included(&self, path: &SystemPath) -> bool {
+        matches!(
+            self.files
+                .is_file_included(path, GlobFilterCheckMode::Adhoc),
+            IncludeResult::Included { .. }
+        )
+    }
+
+    /// Whether the build walk should descend into this directory.
+    pub fn is_directory_included(&self, path: &SystemPath) -> bool {
+        !matches!(
+            self.files
+                .is_directory_maybe_included(path, GlobFilterCheckMode::Adhoc),
+            IncludeResult::Excluded
+        )
+    }
+
+    /// Whether the output carries the `.by` sources alongside their transpiled python.
+    pub fn sources(&self) -> bool {
+        self.sources
+    }
+}
+
+impl Default for BuildSettings {
+    fn default() -> Self {
+        Self {
+            files: IncludeExcludeFilter::default(),
+            sources: true,
         }
     }
 }

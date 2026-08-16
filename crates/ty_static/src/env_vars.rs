@@ -79,6 +79,12 @@ impl EnvVars {
     /// Used to detect an activated virtual environment.
     pub const VIRTUAL_ENV: &'static str = "VIRTUAL_ENV";
 
+    /// The interpreter `by run` executes the transpiled program on.
+    ///
+    /// Overrides the project environment, and is itself overridden by
+    /// `by run --python`.
+    pub const PYTHON: &'static str = "PYTHON";
+
     /// Adds additional directories to ty's search paths.
     /// The format is the same as the shell’s PATH:
     /// one or more directory pathnames separated by os appropriate pathsep

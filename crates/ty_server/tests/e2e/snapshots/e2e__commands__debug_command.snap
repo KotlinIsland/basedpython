@@ -180,6 +180,23 @@ Settings: Settings {
             },
         },
     },
+    build: BuildSettings {
+        files: IncludeExcludeFilter {
+            include: IncludeFilter(
+                [
+                    "**",
+                ],
+                ..
+            ),
+            exclude: ExcludeFilter {
+                ignore: Gitignore(
+                    [],
+                    ..
+                ),
+            },
+        },
+        sources: true,
+    },
     analysis: AnalysisSettings {
         strict_generic_narrowing: false,
         strict_equality_semantics: false,

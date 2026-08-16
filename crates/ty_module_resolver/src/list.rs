@@ -273,7 +273,12 @@ impl<'db> Lister<'db> {
             return;
         }
 
-        let Some(file) = module_path.to_file(&self.context()) else {
+        // which file *is* this module is resolution's decision, not the walk's: a
+        // `.pyi` outranks a `.py`, and a `.by` outranks a `.py` in a package that
+        // declares its sources authoritative. taking whichever file the directory
+        // happened to yield first would mean a name meant one thing when it was
+        // offered and another when it was used
+        let Some(file) = resolve_file_module(&module_path, &self.context()) else {
             return;
         };
         self.add_module(

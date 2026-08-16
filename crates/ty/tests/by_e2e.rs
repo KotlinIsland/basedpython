@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn transpile(source: &str) -> String {
@@ -2926,4 +2927,771 @@ fn a_lazy_from_import_resolves_a_submodule_and_refuses_a_missing_name_as_python_
          \x20   print(type(e).__name__, str(e), e.name, e.path, sep='|')\n",
     );
     assert_eq!(ours, theirs);
+}
+
+// ── building a project, not just its `.by` files ─────────────────────────────
+
+/// a project is its hand-written python too. an output tree holding only the
+/// transpiled half is not a project: the first `import` of a `.py` sibling
+/// fails, and there is nothing the author can do about it from the `.by` side
+#[test]
+fn build_carries_a_python_module_into_the_output() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "from helper import shout\n").unwrap();
+    fs::write(
+        dir.path().join("helper.py"),
+        "def shout(text: str) -> str:\n    return text.upper()\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("out/helper.py")).unwrap(),
+        "def shout(text: str) -> str:\n    return text.upper()\n",
+        "a hand-written python module belongs in the output verbatim"
+    );
+}
+
+/// and its data. a program that opens a file beside itself is the ordinary case,
+/// not an exotic one
+#[test]
+fn build_carries_data_files_into_the_output() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package = dir.path().join("app");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(package.join("settings.json"), "{\"key\": 1}\n").unwrap();
+    fs::write(package.join("py.typed"), "").unwrap();
+    fs::write(package.join("template.html"), "<p>hi</p>\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    let out = dir.path().join("out").join("app");
+    assert_eq!(
+        fs::read_to_string(out.join("settings.json")).unwrap(),
+        "{\"key\": 1}\n"
+    );
+    assert!(out.join("py.typed").exists());
+    assert!(out.join("template.html").exists());
+}
+
+/// a stub is not a module: emitting `a.byi` as `a.py` would put a body-less
+/// definition where python imports the implementation, and shadow the real
+/// module at runtime
+#[test]
+fn build_writes_a_stub_as_a_stub() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
+    fs::write(dir.path().join("shapes.byi"), "def area() -> int: ...\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert!(
+        dir.path().join("out/shapes.pyi").exists(),
+        "a `.byi` builds to a `.pyi`:\n{stderr}"
+    );
+    assert!(
+        !dir.path().join("out/shapes.py").exists(),
+        "a stub emitted as a module shadows the implementation"
+    );
+}
+
+/// `a.by` and a hand-written `a.py` are both the module `a`. picking one and
+/// carrying on means the build disagrees with what python will import, so this
+/// is reported rather than resolved
+#[test]
+fn build_refuses_two_sources_that_are_one_module() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("thing.by"), "x = 1\n").unwrap();
+    fs::write(dir.path().join("thing.py"), "x = 2\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a collision must fail the build:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("same module"),
+        "the collision must say what is wrong:\n{stderr}"
+    );
+}
+
+/// an output tree that only ever grows keeps a module that was deleted months
+/// ago importable — locally, where nobody notices, and then in the wheel built
+/// from the same tree, where somebody does
+#[test]
+fn build_deletes_output_the_project_no_longer_has() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("kept.by"), "x = 1\n").unwrap();
+    fs::write(dir.path().join("removed.by"), "y = 2\n").unwrap();
+
+    let build = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_by"))
+            .arg("build")
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to spawn by");
+        assert!(
+            output.status.success(),
+            "by build failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    build();
+    assert!(dir.path().join("out/removed.py").exists());
+
+    fs::remove_file(dir.path().join("removed.by")).unwrap();
+    build();
+
+    assert!(dir.path().join("out/kept.py").exists());
+    assert!(
+        !dir.path().join("out/removed.py").exists(),
+        "output for a source that is gone must not survive the next build"
+    );
+}
+
+/// only what the build itself wrote is ever deleted — anything else in the
+/// output directory was put there by somebody
+#[test]
+fn build_leaves_output_it_never_wrote_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
+    fs::create_dir_all(dir.path().join("out")).unwrap();
+    fs::write(dir.path().join("out/theirs.txt"), "hands off\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dir.path().join("out/theirs.txt").exists());
+}
+
+#[test]
+fn build_writes_where_out_says() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["build", "--out", "elsewhere"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert!(dir.path().join("elsewhere/main.py").exists());
+    assert!(!dir.path().join("out").exists());
+}
+
+/// the output directory is not an input to itself, wherever it is put
+#[test]
+fn build_does_not_read_its_own_output() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
+
+    for _ in 0..2 {
+        let output = Command::new(env!("CARGO_BIN_EXE_by"))
+            .args(["build", "--out", "elsewhere"])
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to spawn by");
+        assert!(
+            output.status.success(),
+            "by build failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    assert!(
+        !dir.path().join("elsewhere/elsewhere").exists(),
+        "a second build must not copy the first build's output into itself"
+    );
+}
+
+/// a source distribution has to carry exactly what the build read, and a wheel
+/// exactly the packages it produced. both are the build's answers
+#[test]
+fn build_reports_what_it_read_and_what_it_produced() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package = dir.path().join("src").join("app");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(dir.path().join("README.md"), "# app\n").unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(package.join("helper.py"), "x = 1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["build", "--print-manifest"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let listed: Vec<&str> = stdout.lines().collect();
+    assert!(
+        output.status.success(),
+        "by build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for expected in ["README.md", "src/app/__init__.by", "src/app/helper.py"] {
+        let expected = format!(
+            "input {}",
+            expected.replace('/', std::path::MAIN_SEPARATOR_STR)
+        );
+        assert!(
+            listed.contains(&expected.as_str()),
+            "`{expected}` is part of this project:\n{stdout}"
+        );
+    }
+    assert!(
+        listed.contains(&"package app"),
+        "the package the wheel ships:\n{stdout}"
+    );
+    assert_eq!(
+        listed
+            .iter()
+            .filter(|line| line.ends_with("__init__.by"))
+            .count(),
+        1,
+        "a source that produced two outputs is still one input:\n{stdout}"
+    );
+}
+
+/// `tests` beside `src` is a package python can import and a package nobody
+/// installs. a wheel that shipped it would put a top-level `tests` module into
+/// every environment the project is installed into
+#[test]
+fn build_does_not_ship_what_lives_outside_the_source_root() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let package = dir.path().join("src").join("app");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    let tests = dir.path().join("tests");
+    fs::create_dir_all(&tests).unwrap();
+    fs::write(tests.join("__init__.py"), "").unwrap();
+    fs::write(tests.join("test_it.py"), "def test_x(): pass\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["build", "--print-manifest"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let listed: Vec<&str> = stdout.lines().collect();
+    assert!(
+        output.status.success(),
+        "by build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(listed.contains(&"package app"), "{stdout}");
+    assert!(
+        !listed.contains(&"package tests"),
+        "`tests` is not part of the distribution:\n{stdout}"
+    );
+    // it is still built, because it is still the project — running the tests out
+    // of the output tree is the point of building them
+    assert!(dir.path().join("out/tests/test_it.py").exists());
+    assert!(
+        !dir.path().join("out/tests/by.typed").exists(),
+        "a marker only speaks for what the project ships"
+    );
+}
+
+/// the marker is what tells a downstream basedpython project to read the `.by`
+/// beside a module rather than the python it was transpiled into
+#[test]
+fn build_marks_a_package_as_carrying_its_sources() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package = dir.path().join("app");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(package.join("deep.by"), "x = 1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    let out = dir.path().join("out").join("app");
+    assert!(
+        out.join("by.typed").exists(),
+        "expected a marker:\n{stderr}"
+    );
+    assert!(
+        out.join("deep.by").exists(),
+        "the marker is a claim about sources, which have to be there:\n{stderr}"
+    );
+    assert!(out.join("deep.py").exists());
+}
+
+#[test]
+fn build_ships_python_only_when_the_project_says_so() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n\
+         \n[tool.basedpython.build]\nsources = false\n",
+    )
+    .unwrap();
+    let package = dir.path().join("app");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    let out = dir.path().join("out").join("app");
+    assert!(out.join("__init__.py").exists());
+    assert!(
+        !out.join("__init__.by").exists(),
+        "`sources = false` ships python only"
+    );
+    // the marker still goes out. its precedence claim is vacuous without sources
+    // — there is no `.by` to prefer — but its contents are what declare which
+    // dependencies this project hands out on purpose, and a python-only build has
+    // those too
+    assert!(
+        out.join("by.typed").exists(),
+        "the marker carries the export declaration, sources or no sources"
+    );
+}
+
+#[test]
+fn build_honours_the_configured_exclusions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n\
+         \n[tool.basedpython.build]\nexclude = [\"secrets.json\"]\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
+    fs::write(dir.path().join("secrets.json"), "{}\n").unwrap();
+    fs::write(dir.path().join("public.json"), "{}\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert!(dir.path().join("out/public.json").exists());
+    assert!(
+        !dir.path().join("out/secrets.json").exists(),
+        "an excluded file must not reach the output"
+    );
+}
+
+/// a directory ty's defaults drop can be taken back with a negated exclude, and
+/// the build has to honour that for every file in it — not just the `.by` ones.
+/// re-dropping the rest would leave the transpiled half of a directory the
+/// project deliberately re-included
+#[test]
+fn build_carries_a_directory_a_negated_exclude_takes_back() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n\
+         \n[tool.basedpython.src]\nexclude = [\"!dist\"]\n",
+    )
+    .unwrap();
+    let generated = dir.path().join("dist");
+    fs::create_dir_all(&generated).unwrap();
+    fs::write(generated.join("kept.by"), "x = 1\n").unwrap();
+    fs::write(generated.join("kept.json"), "{}\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert!(
+        dir.path().join("out/dist/kept.py").exists(),
+        "the re-included `.by` builds:\n{stderr}"
+    );
+    assert!(
+        dir.path().join("out/dist/kept.json").exists(),
+        "and so does everything beside it:\n{stderr}"
+    );
+}
+
+/// the rule follows the module tree rather than the name `src`. a `src` that is
+/// itself a package is not a source root, so the module really is `src.mymod` —
+/// and a wheel that dropped the `src` component would ship a package under a name
+/// nothing imports
+#[test]
+fn build_ships_a_source_directory_that_is_itself_a_package() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"mymod\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let package = dir.path().join("src").join("mymod");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(dir.path().join("src").join("__init__.py"), "").unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["build", "--print-manifest"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "by build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.lines().any(|line| line == "package src"),
+        "`src.mymod` is the module, so `src` is the package:\n{stdout}"
+    );
+    assert!(dir.path().join("out/src/mymod/__init__.py").exists());
+}
+
+// ── running a project, not just its `.by` files ──────────────────────────────
+
+/// the same hole at run time, where it is fatal rather than untidy: `by run`
+/// executes out of a directory it stages, so a `.py` module missing from it
+/// cannot be imported at all
+#[test]
+fn run_imports_a_python_module_beside_the_transpiled_ones() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "from helper import shout\n\nprint(shout(\"mixed\"))\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("helper.py"),
+        "def shout(text: str) -> str:\n    return text.upper()\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "MIXED");
+}
+
+#[test]
+fn run_reads_a_data_file_beside_the_program() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "from pathlib import Path\n\n\
+         print(Path(__file__).parent.joinpath(\"greeting.txt\").read_text().strip())\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("greeting.txt"), "read from disk\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "read from disk"
+    );
+}
+
+/// running a project on an interpreter older than it targets used to fail as a
+/// `SyntaxError` inside generated code, in a temporary directory that was
+/// already deleted. it is knowable before anything runs, so it is said before
+/// anything runs
+#[test]
+fn run_refuses_an_interpreter_older_than_the_project_targets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // the environment is named rather than discovered, so the version the project
+    // is refused for is the version of the interpreter it would actually have run
+    // on — probing whatever `python3` resolves to says nothing about the one
+    // `by run` would pick
+    let environment = python_environment(&dir.path().join(".venv"));
+    let (major, minor) = environment.version;
+    let unreachable = format!("{major}.{}", minor + 1);
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        format!(
+            "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n\
+             requires-python = \">={unreachable}\"\n\
+             \n[tool.basedpython.environment]\npython = \".venv\"\n"
+        ),
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.by"), "print(1)\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .env_remove("PYTHON")
+        .env_remove("VIRTUAL_ENV")
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a project that cannot run on this interpreter must say so:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("targets python {unreachable}")),
+        "the message has to name both versions:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("--min-version"),
+        "and what to do about it:\n{stderr}"
+    );
+}
+
+/// A real virtual environment, and the version of the interpreter in it.
+///
+/// `python -m venv` rather than a directory shaped like one: this is what
+/// discovery looks for, `by run` has to be able to *execute* what it finds, and
+/// on windows a python is not something a shell script can stand in for.
+///
+/// The version comes back because it is the thing a project has to declare it
+/// targets. Probing whatever `python3` resolves to says nothing about the
+/// interpreter `by run` would pick, which is the whole question here.
+struct Environment {
+    version: (u8, u8),
+}
+
+fn python_environment(root: &Path) -> Environment {
+    let status = Command::new("python3")
+        .args(["-m", "venv", "--without-pip"])
+        .arg(root)
+        .status()
+        .expect("python3 is needed to run this test");
+    assert!(
+        status.success(),
+        "could not create a virtual environment at {}",
+        root.display()
+    );
+    Environment {
+        version: interpreter_version(&interpreter_in(root)),
+    }
+}
+
+fn interpreter_in(root: &Path) -> PathBuf {
+    if cfg!(windows) {
+        root.join("Scripts").join("python.exe")
+    } else {
+        root.join("bin").join("python3")
+    }
+}
+
+fn interpreter_version(python: &Path) -> (u8, u8) {
+    let output = Command::new(python)
+        .args([
+            "-c",
+            "import sys; print(f'{sys.version_info[0]} {sys.version_info[1]}')",
+        ])
+        .output()
+        .unwrap_or_else(|error| panic!("could not run {}: {error}", python.display()));
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    let mut parts = rendered.split_whitespace();
+    let major = parts.next().expect("a major version").parse().unwrap();
+    let minor = parts.next().expect("a minor version").parse().unwrap();
+    (major, minor)
+}
+
+/// the version of the interpreter `by run` would pick, so a test can name one
+/// that is definitely newer
+fn running_python_version() -> (u8, u8) {
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            "import sys; print(f'{sys.version_info[0]} {sys.version_info[1]}')",
+        ])
+        .output()
+        .expect("python3 is needed to run this test");
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    let mut parts = rendered.split_whitespace();
+    let major = parts.next().unwrap().parse().unwrap();
+    let minor = parts.next().unwrap().parse().unwrap();
+    (major, minor)
+}
+
+/// the shim `by run` puts in the tree it executes is written through the same
+/// staging as everything else, so a project file of that name is a reported
+/// collision rather than a silent overwrite
+#[test]
+fn run_refuses_a_project_file_that_collides_with_its_shim() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "print(1)\n").unwrap();
+    fs::write(dir.path().join("_by_runner.py"), "x = 1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "expected a refusal:\n{stderr}");
+    assert!(stderr.contains("_by_runner.py"), "{stderr}");
+    assert!(stderr.contains("same module"), "{stderr}");
+}
+
+/// a compiler's output directory is not project source, and it is the one most
+/// likely to be enormous — this used to be copied in full on every build and
+/// every run
+#[test]
+fn build_does_not_carry_a_compilers_output_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
+    let artifacts = dir.path().join("target").join("debug");
+    fs::create_dir_all(&artifacts).unwrap();
+    fs::write(artifacts.join("blob"), "an enormous binary").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert!(dir.path().join("out").join("main.py").exists());
+    assert!(
+        !dir.path().join("out").join("target").exists(),
+        "a build directory must not be carried into the build:\n{stderr}"
+    );
+}
+
+// ── starting a project ───────────────────────────────────────────────────────
+
+/// what `by init` writes has to be a project the rest of the toolchain accepts,
+/// or it is a template for a thing that does not work
+#[test]
+fn init_writes_a_project_that_builds_and_runs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (major, minor) = running_python_version();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args([
+            "init",
+            "demo",
+            "--python-version",
+            &format!("{major}.{minor}"),
+        ])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by init failed:\n{stderr}");
+
+    let project = dir.path().join("demo");
+    let pyproject = fs::read_to_string(project.join("pyproject.toml")).unwrap();
+    assert!(pyproject.contains("build-backend = \"basedpython.build\""));
+    assert!(project.join("src/demo/__init__.by").exists());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("run")
+        .current_dir(&project)
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        output.status.success(),
+        "a new project has to run:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "hello from basedpython"
+    );
+}
+
+#[test]
+fn init_refuses_to_write_over_a_project() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"already-here\"\nversion = \"9.9.9\"\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("init")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "expected a refusal:\n{stderr}");
+    assert!(stderr.contains("already exists"), "{stderr}");
+    assert!(
+        fs::read_to_string(dir.path().join("pyproject.toml"))
+            .unwrap()
+            .contains("9.9.9"),
+        "the existing project must be untouched"
+    );
 }

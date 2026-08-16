@@ -19,7 +19,8 @@ by <COMMAND>
 <dt><a href="#by-version"><code>by version</code></a></dt><dd><p>Display ty's version</p></dd>
 <dt><a href="#by-explain"><code>by explain</code></a></dt><dd><p>Explain rules and other parts of ty</p></dd>
 <dt><a href="#by-run"><code>by run</code></a></dt><dd><p>Transpile and run a module with <code>python -m &lt;module&gt;</code></p></dd>
-<dt><a href="#by-build"><code>by build</code></a></dt><dd><p>Transpile all .by files and write them to out/</p></dd>
+<dt><a href="#by-init"><code>by init</code></a></dt><dd><p>Start a new project</p></dd>
+<dt><a href="#by-build"><code>by build</code></a></dt><dd><p>Build the project as python</p></dd>
 <dt><a href="#by-compile"><code>by compile</code></a></dt><dd><p>Compile .by and .py files to native CPython extension modules</p></dd>
 <dt><a href="#by-generate-api-file"><code>by generate-api-file</code></a></dt><dd><p>Generate an api lockfile (<code>api.lock</code>) summarising the public type-level surface of the project</p></dd>
 <dt><a href="#by-transpile"><code>by transpile</code></a></dt><dd><p>Transpile a file to stdout, or a whole directory in place (reads stdin if no path given)</p></dd>
@@ -247,13 +248,43 @@ by run [OPTIONS] [MODULE] [ARGS]...
 </dd><dt id="by-run--help"><a href="#by-run--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help (see a summary with '-h')</p>
 </dd><dt id="by-run--min-version"><a href="#by-run--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the output must run on [default: the version of the interpreter that will run it]</p>
 </dd><dt id="by-run--no-unique-loop-bindings"><a href="#by-run--no-unique-loop-bindings"><code>--no-unique-loop-bindings</code></a></dt><dd><p>leave a closure made inside a loop sharing the loop's one binding, as python does, instead of binding the values of the iteration it was made in</p>
+</dd><dt id="by-run--python"><a href="#by-run--python"><code>--python</code></a>, <code>--venv</code> <i>path</i></dt><dd><p>The interpreter to run on, or the environment holding it.</p>
+<p>Defaults to the project environment — the same one <code>by check</code> resolves imports against — then <code>$PYTHON</code>, then <code>python3</code> on <code>PATH</code>.</p>
 </dd><dt id="by-run--runtime-raises-checks"><a href="#by-run--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
 </dd><dt id="by-run--soundness"><a href="#by-run--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
 <p>[default: default]</p></dd></dl>
 
+## by init
+
+Start a new project.
+
+Writes a `pyproject.toml` that names the basedpython build backend, a `src` layout, and a python version the checker, the transpiler and the interpreter all agree on — so the project is installable, runnable and publishable from the moment it exists.
+
+<h3 class="cli-reference">Usage</h3>
+
+```
+by init [OPTIONS] [PATH]
+```
+
+<h3 class="cli-reference">Arguments</h3>
+
+<dl class="cli-reference"><dt id="by-init--path"><a href="#by-init--path"><code>PATH</code></a></dt><dd><p>Where to create the project [default: the current directory]</p>
+</dd></dl>
+
+<h3 class="cli-reference">Options</h3>
+
+<dl class="cli-reference"><dt id="by-init--app"><a href="#by-init--app"><code>--app</code></a></dt><dd><p>Create an application, with an entry point <code>by run</code> uses. The default</p>
+</dd><dt id="by-init--help"><a href="#by-init--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help (see a summary with '-h')</p>
+</dd><dt id="by-init--lib"><a href="#by-init--lib"><code>--lib</code></a></dt><dd><p>Create a library: no entry point, the same packaging</p>
+</dd><dt id="by-init--name"><a href="#by-init--name"><code>--name</code></a> <i>name</i></dt><dd><p>The project's name [default: the directory's name]</p>
+</dd><dt id="by-init--python-version"><a href="#by-init--python-version"><code>--python-version</code></a> <i>version</i></dt><dd><p>The python version to target [default: the version of the project environment's interpreter]</p>
+</dd></dl>
+
 ## by build
 
-Transpile all .by files and write them to out/
+Build the project as python.
+
+The output is the whole project, not only the transpiled half: every `.by` file becomes a `.py`, and every other file — a hand-written `.py`, a `py.typed`, a template, a data file — is carried over to the same place. What the previous build wrote and this one did not is deleted.
 
 <h3 class="cli-reference">Usage</h3>
 
@@ -263,9 +294,12 @@ by build [OPTIONS]
 
 <h3 class="cli-reference">Options</h3>
 
-<dl class="cli-reference"><dt id="by-build--help"><a href="#by-build--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help</p>
+<dl class="cli-reference"><dt id="by-build--help"><a href="#by-build--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help (see a summary with '-h')</p>
 </dd><dt id="by-build--min-version"><a href="#by-build--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the output must run on [default: the project's configured python version]</p>
 </dd><dt id="by-build--no-unique-loop-bindings"><a href="#by-build--no-unique-loop-bindings"><code>--no-unique-loop-bindings</code></a></dt><dd><p>leave a closure made inside a loop sharing the loop's one binding, as python does, instead of binding the values of the iteration it was made in</p>
+</dd><dt id="by-build--out"><a href="#by-build--out"><code>--out</code></a>, <code>-o</code> <i>dir</i></dt><dd><p>Where to write the built project</p>
+<p>[default: out]</p></dd><dt id="by-build--print-manifest"><a href="#by-build--print-manifest"><code>--print-manifest</code></a></dt><dd><p>Report what the build read and produced, as <code>&lt;kind&gt; &lt;value&gt;</code> lines.</p>
+<p><code>input &lt;path&gt;</code> for every file the project is made of — what a source distribution has to carry to rebuild into the same thing — and <code>package &lt;name&gt;</code> for every top-level package that came out.</p>
 </dd><dt id="by-build--runtime-raises-checks"><a href="#by-build--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
 </dd><dt id="by-build--soundness"><a href="#by-build--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
 <p>[default: default]</p></dd></dl>

@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read};
@@ -17,10 +17,13 @@ use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
 use ruff_text_size::TextRange;
 use sha2::{Digest, Sha256};
 use ty_project::{Db, ProjectDatabase, ProjectMetadata};
+use ty_site_packages::{PythonEnvironment, SysPrefixPathOrigin};
+use ty_static::EnvVars;
 use walkdir::WalkDir;
 
 use crate::ExitStatus;
 use crate::args::LoweringArgs;
+use crate::by_staging::{Staging, relative_destination, transpiled_destination};
 
 /// The python version the emitted code must run on when `--min-version` is not
 /// given: the one the project configures (`environment.python-version`, else the
@@ -42,6 +45,27 @@ fn configured_min_version(cwd: &Path) -> PythonVersion {
         .to_string()
         .parse()
         .unwrap_or_else(|_| Config::default().min_version)
+}
+
+/// The python version the project *declares* it targets, if it declares one —
+/// `environment.python-version`, or the `requires-python` lower bound.
+///
+/// Distinct from [`configured_min_version`], which fills in a default when the
+/// project says nothing. A default is not a declaration, and treating it as one
+/// refuses to run every project without a `requires-python` on anything but the
+/// newest python there is — which is a thing nobody asked for and a thing the
+/// author cannot act on.
+fn declared_min_version(cwd: &Path) -> Option<PythonVersion> {
+    let sys_cwd = SystemPath::from_std_path(cwd)?;
+    let system = OsSystem::new(sys_cwd);
+    let metadata = ProjectMetadata::discover(sys_cwd, &system).ok()?;
+    let declared = metadata
+        .options()
+        .environment
+        .as_ref()?
+        .python_version
+        .as_ref()?;
+    declared.to_string().parse().ok()
 }
 
 /// The transpile config for a command whose `--min-version` is optional.
@@ -122,8 +146,11 @@ pub(crate) fn cmd_run(
     min_version: Option<&str>,
     lowering: &LoweringArgs,
     compiled: bool,
+    python_flag: Option<&Path>,
 ) -> anyhow::Result<ExitStatus> {
-    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let interpreter = discover_interpreter(python_flag, &cwd);
+    let python = interpreter.path.clone();
     // `run` executes on a specific interpreter, so by default target *its*
     // version: the emitted code (dataclass `slots=`, PEP 695 syntax, …) must
     // match what that python actually supports. an explicit `--min-version`
@@ -133,13 +160,13 @@ pub(crate) fn cmd_run(
     let mut config = match (min_version, probed) {
         (Some(flag), probed) => {
             let config = parse_version(flag)?;
-            if let Some(interpreter) = probed
-                && config.min_version > interpreter
+            if let Some(found) = probed
+                && config.min_version > found
             {
                 anyhow::bail!(
-                    "--min-version {flag} is newer than `{python}` ({interpreter}), \
-                     which could not run the emitted code — \
-                     set PYTHON to a {flag}+ interpreter"
+                    "--min-version {flag} is newer than the interpreter this would run on: \
+                     `{python}` is {found}, from {}",
+                    interpreter.origin
                 );
             }
             config
@@ -150,11 +177,27 @@ pub(crate) fn cmd_run(
         },
         (None, None) => Config::default(),
     };
+    // a program written for the python the project declares cannot be run by an
+    // older one: the source itself may use syntax that python has no lowering
+    // for (`match`, for one), and the failure lands as a `SyntaxError` inside
+    // generated code rather than as anything the author can act on
+    if let Some(found) = probed
+        && let Some(configured) = declared_min_version(&cwd)
+    {
+        if min_version.is_none() && found < configured {
+            anyhow::bail!(
+                "this project targets python {configured}, but the interpreter this would run on \
+                 is {found}: `{python}`, from {}\n       \
+                 use an interpreter that is {configured} or newer, or pass \
+                 `--min-version {found}` to build for this one",
+                interpreter.origin
+            );
+        }
+    }
     lowering.apply(&mut config)?;
-    let cwd = std::env::current_dir().context("failed to get current directory")?;
     let tmp = tempfile::TempDir::new().context("failed to create temp directory")?;
 
-    let (db, handles, rebuilder, root) = build_project_db(&cwd, BY_SOURCES)?;
+    let (db, handles, rebuilder, root) = build_project_db(&cwd, BY_SOURCES, None)?;
     if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Failure);
@@ -178,6 +221,7 @@ pub(crate) fn cmd_run(
     // each generated `.py` paired with its source `.by` and the line table that
     // lifts generated line numbers back to `.by` lines (for traceback rewriting)
     let mut traceback_entries: Vec<TracebackEntry> = Vec::new();
+    let mut staging = Staging::new(tmp.path());
     let ok = render_check_and_transpile(
         &db,
         &handles,
@@ -185,16 +229,21 @@ pub(crate) fn cmd_run(
         CheckGate::AllErrors,
         &rebuilder,
         |emitted| {
-            let py = tmp
-                .path()
-                .join(module_relative_path(&roots, &root, emitted.by_path));
-            traceback_entries.push(write_module(py, emitted)?);
+            let relative = transpiled_destination(&roots, &root, emitted.by_path);
+            traceback_entries.push(stage_module(&mut staging, &relative, emitted)?);
             Ok(())
         },
     )?;
     if !ok {
         return Ok(ExitStatus::Failure);
     }
+    // a program is its data as much as its modules: a `.py` module it imports, a
+    // json file it opens, a template it renders. running out of a directory
+    // holding only the transpiled half fails on the first of them
+    stage_verbatim(&db, &root, &roots, &mut staging)?;
+    stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
+    write_traceback_runtime(&mut staging, &traceback_entries)?;
+    staging.finish()?;
 
     if compiled {
         // the extension lands beside the generated `.py`, and python's finder
@@ -257,15 +306,18 @@ pub(crate) fn cmd_run(
         }
     }
 
-    write_traceback_runtime(tmp.path(), &traceback_entries)?;
-
     let status = Command::new(&python)
         .arg(BY_RUNNER_FILENAME)
         .arg(&module)
         .args(args)
         .current_dir(tmp.path())
         .status()
-        .with_context(|| format!("{python}: failed to execute"))?;
+        .with_context(|| {
+            format!(
+                "could not run `{python}`, the interpreter from {}",
+                interpreter.origin
+            )
+        })?;
 
     let code = status.code().unwrap_or(1);
     // drop the temp dir explicitly: `process::exit` skips destructors, so
@@ -292,37 +344,162 @@ fn module_roots(db: &ProjectDatabase, cwd: &Path) -> Vec<PathBuf> {
     roots
 }
 
-/// Where `bpy`'s transpiled python goes, relative to the output root.
+/// The source roots a distribution's packages come from.
 ///
-/// The tree mirrored is the *module* tree, not the directory tree: a src-layout
-/// project's `src/pkg/main.by` is the module `pkg.main`, so it has to land at
-/// `pkg/main.py`. Mirroring the directory instead emits `src/pkg/main.py`,
-/// whose module is `src.pkg.main` — a name nothing imports, and one `run.main`
-/// cannot sensibly be set to.
-fn module_relative_path(roots: &[PathBuf], root: &Path, bpy: &Path) -> PathBuf {
-    let relative = roots
+/// The project root is always a module root — it is what lets `tests/` and a
+/// script beside it resolve their imports — but for a src-layout project it is
+/// not where the *distribution* lives. `src/app` is a package of this project;
+/// `tests` beside it is not something anyone installs. So when the project
+/// declares somewhere for its modules to live, that is where they live, and the
+/// root counts only when it is the only answer.
+fn packaging_roots(roots: &[PathBuf], root: &Path) -> Vec<PathBuf> {
+    let declared: Vec<PathBuf> = roots
         .iter()
-        .find_map(|candidate| bpy.strip_prefix(candidate).ok())
-        .or_else(|| bpy.strip_prefix(root).ok())
-        .unwrap_or(bpy);
-    // whatever happened above, the result has to be *relative*: joined onto the
-    // output directory an absolute path replaces it outright, so every emitted
-    // file would land outside the output tree. keeping only the named components
-    // also drops any `..`, which would climb back out of it
-    relative
-        .components()
-        .filter_map(|component| match component {
-            std::path::Component::Normal(name) => Some(name),
-            _ => None,
+        .filter(|candidate| candidate.as_path() != root)
+        .cloned()
+        .collect();
+    if declared.is_empty() {
+        vec![root.to_path_buf()]
+    } else {
+        declared
+    }
+}
+
+/// The top-level packages the build produced, as a distribution would ship them.
+fn staged_packages(staging: &Staging, roots: &[PathBuf], root: &Path) -> Vec<String> {
+    let packaging = packaging_roots(roots, root);
+    let mut packages: Vec<String> = staging
+        .entries()
+        .filter(|(_, source)| {
+            source.is_some_and(|source| {
+                packaging
+                    .iter()
+                    .any(|candidate| source.starts_with(candidate))
+            })
         })
-        .collect::<PathBuf>()
-        .with_extension("py")
+        .filter_map(|(destination, _)| {
+            let mut components = destination.components();
+            let package = components.next()?;
+            let rest: PathBuf = components.collect();
+            matches!(
+                rest.to_str(),
+                Some("__init__.py" | "__init__.pyi" | "__init__.by" | "__init__.byi")
+            )
+            .then(|| package.as_os_str().to_str().map(str::to_owned))
+            .flatten()
+        })
+        .collect();
+    packages.sort();
+    packages.dedup();
+    packages
+}
+
+/// Carry every file the transpiler did not produce into the output tree.
+///
+/// This is what makes the output a project rather than a heap of transpiled
+/// modules: a hand-written `.py` sibling, a `py.typed`, a template, a fixture —
+/// all of it lands in the same relative place, so the output imports and reads
+/// data exactly the way the source tree does.
+fn stage_verbatim(
+    db: &ProjectDatabase,
+    root: &Path,
+    roots: &[PathBuf],
+    staging: &mut Staging,
+) -> anyhow::Result<()> {
+    let settings = db.project().settings(db);
+    let build = settings.build();
+    // a file the project excludes from itself is not part of what it ships, so
+    // `src.exclude` bounds the build and `build.exclude` narrows it further
+    let src = settings.src();
+    let out = staging.out().to_path_buf();
+
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| {
+            // the output tree is not an input to itself, wherever `--out` put it
+            if entry.path() == out {
+                return false;
+            }
+            if !may_hold_build_content(entry) {
+                return false;
+            }
+            !entry.file_type().is_dir()
+                || SystemPath::from_std_path(entry.path()).is_none_or(|path| {
+                    build.is_directory_included(path) && src.is_directory_included(path)
+                })
+        })
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        if entry.path_is_symlink() || !entry.file_type().is_file() {
+            continue;
+        }
+        let extension = path.extension().and_then(OsStr::to_str);
+        // a `.by` is an input, and it is carried over only to be read by a
+        // downstream basedpython project — never for python to import
+        if matches!(extension, Some("by" | "byi")) && !build.sources() {
+            continue;
+        }
+        let Some(system_path) = SystemPath::from_std_path(path) else {
+            continue;
+        };
+        if !build.is_file_included(system_path) || !src.is_file_included(system_path) {
+            continue;
+        }
+        staging.copy(&relative_destination(roots, root, path), path)?;
+    }
+    Ok(())
+}
+
+/// Write the `by.typed` marker into every package the build ships.
+///
+/// The marker says two things to a project that installs this one, and both are
+/// things nothing else can tell it. Its presence says the `.by` beside a module is
+/// the authoritative surface, to be read in preference to the python it was
+/// transpiled into — the same bargain `py.typed` strikes for inline annotations.
+/// Its contents say which of this project's dependencies are part of its own
+/// interface, which a `pyproject.toml` cannot, because nothing installs one.
+///
+/// Only the packages the project *ships* are marked, and they are read off what
+/// was written rather than off the source layout — a `tests` package beside `src`
+/// is neither shipped nor anybody else's business.
+#[allow(clippy::print_stderr)]
+fn stage_by_typed_markers(
+    db: &ProjectDatabase,
+    staging: &mut Staging,
+    roots: &[PathBuf],
+    root: &Path,
+) -> anyhow::Result<()> {
+    let exported = db
+        .project()
+        .settings(db)
+        .analysis()
+        .exported_dependencies
+        .clone()
+        .unwrap_or_default();
+    // written whether or not the `.by` sources went with it: the precedence claim
+    // is vacuous without them — nothing to prefer — but the export declaration is
+    // not, and a python-only build still has dependencies it hands out on purpose
+    let marker = ty_module_resolver::Marker::render(&exported);
+
+    for package in staged_packages(staging, roots, root) {
+        staging.write(
+            &Path::new(&package).join(ty_module_resolver::BY_TYPED),
+            None,
+            &marker,
+        )?;
+    }
+
+    if !exported.is_empty() {
+        eprintln!("exporting {}", exported.join(", "));
+    }
+    Ok(())
 }
 
 /// The dotted module name a file laid out at `relative` will be imported under.
 ///
 /// The tree the generated python is written into *is* the module tree — every
-/// file lands at [`module_relative_path`] — so the name is that path with its
+/// file lands at [`transpiled_destination`] — so the name is that path with its
 /// separators turned into dots. `pkg/__init__.py` is the package `pkg` itself,
 /// which is the name a class defined in it reports as its `__module__`.
 ///
@@ -421,6 +598,106 @@ fn configured_main(db: &ProjectDatabase) -> Option<String> {
     Some((**main).clone())
 }
 
+/// The python version a brand new project should target.
+///
+/// The environment it will be developed in is the right answer when there is
+/// one: the version the checker targets, the version the transpiler emits for,
+/// and the version that runs the result should be one version rather than three.
+/// A project being created usually has no environment yet, though, and the bare
+/// `python3` that turns up on `PATH` instead is whatever the operating system
+/// shipped years ago. Pinning a new project to that is how a project ends up
+/// targeting 3.9 for its whole life without anyone choosing to.
+pub(crate) fn default_project_python_version() -> PythonVersion {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let interpreter = discover_interpreter(None, &cwd);
+    if interpreter.is_from_path {
+        return ruff_python_ast::PythonVersion::latest()
+            .to_string()
+            .parse()
+            .unwrap_or_else(|_| Config::default().min_version);
+    }
+    detect_python_version(&interpreter.path).unwrap_or_else(|| Config::default().min_version)
+}
+
+/// The interpreter `by run` executes on, and how it was chosen.
+struct Interpreter {
+    path: String,
+    origin: String,
+    /// whether this is the bare `python3` off `PATH` — the last resort, and the
+    /// only origin that says nothing about what the project targets
+    is_from_path: bool,
+}
+
+/// Find the interpreter to run the program on.
+///
+/// The project environment comes first, because that is the environment the
+/// project *is*: `by check` resolved this project's imports against it, so
+/// running against a different python answers a question nobody asked. An
+/// explicit choice still wins over discovery — `--python` for this one run,
+/// `$PYTHON` for a shell that has already decided — and a bare `python3` off
+/// `PATH` is the last resort rather than the first.
+fn discover_interpreter(flag: Option<&Path>, root: &Path) -> Interpreter {
+    let named = |path: String, origin: &str| Interpreter {
+        path,
+        origin: origin.to_owned(),
+        is_from_path: false,
+    };
+
+    if let Some(flag) = flag {
+        // a `--python` may name the interpreter itself or the environment it
+        // lives in, the same way `by check --python` does
+        if flag.is_file() {
+            return named(flag.display().to_string(), "`--python`");
+        }
+        if let Some(interpreter) =
+            interpreter_in_environment(flag, SysPrefixPathOrigin::PythonCliFlag)
+        {
+            return named(interpreter, "`--python`");
+        }
+        return named(flag.display().to_string(), "`--python`");
+    }
+
+    if let Ok(python) = std::env::var(EnvVars::PYTHON) {
+        return named(python, "`PYTHON`");
+    }
+
+    if let Some(sys_root) = SystemPath::from_std_path(root) {
+        let system = OsSystem::new(sys_root);
+        if let Ok(Some(environment)) = PythonEnvironment::discover(sys_root, &system)
+            && let Some(interpreter) = environment.interpreter(&system)
+        {
+            // discovery ends by falling back to whatever python is on `PATH`,
+            // which is an interpreter but not a *project* environment — the
+            // difference matters to anything asking what this project targets
+            let is_from_path = matches!(
+                environment.origin(),
+                SysPrefixPathOrigin::PythonBinary | SysPrefixPathOrigin::SelfEnvironment
+            );
+            return Interpreter {
+                path: interpreter.to_string(),
+                origin: environment.origin().to_string(),
+                is_from_path,
+            };
+        }
+    }
+
+    Interpreter {
+        path: "python3".to_owned(),
+        origin: "`PATH`".to_owned(),
+        is_from_path: true,
+    }
+}
+
+/// The interpreter inside the environment rooted at `path`, if there is one.
+fn interpreter_in_environment(path: &Path, origin: SysPrefixPathOrigin) -> Option<String> {
+    let sys_path = SystemPath::from_std_path(path)?;
+    let system = OsSystem::new(sys_path);
+    let environment = PythonEnvironment::new(sys_path, origin, &system).ok()?;
+    environment
+        .interpreter(&system)
+        .map(|interpreter| interpreter.to_string())
+}
+
 /// Probe `python`'s `major.minor` version (e.g. `3.9`) so `run` can target the
 /// interpreter it will execute on. Returns `None` if the interpreter can't be
 /// run or its output can't be parsed.
@@ -442,20 +719,30 @@ fn detect_python_version(python: &str) -> Option<PythonVersion> {
 pub(crate) fn cmd_build(
     min_version: Option<&str>,
     lowering: &LoweringArgs,
+    out: &Path,
+    print_manifest: bool,
 ) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let mut config = version_config(min_version, &cwd)?;
     lowering.apply(&mut config)?;
-    let out = cwd.join("out");
 
-    let (db, handles, rebuilder, root) = build_project_db(&cwd, BY_SOURCES)?;
+    // the output directory is settled before the project is read, because it is
+    // the one directory the project must not be read *from*: it holds a copy of
+    // every source this build is about to write. canonical, because that is what
+    // the paths it is compared against are — creating it first is what makes
+    // canonicalizing it possible
+    let out = cwd.join(out);
+    fs::create_dir_all(&out).with_context(|| format!("could not create {}", out.display()))?;
+    let out = fs::canonicalize(&out).unwrap_or(out);
+
+    let (db, handles, rebuilder, root) = build_project_db(&cwd, BY_SOURCES, Some(&out))?;
     if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Success);
     }
     let file_count = handles.len();
     let roots = module_roots(&db, &root);
-    let mut packages: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut staging = Staging::new(&out);
     // `out/` outlives the build that wrote it — it is what a test runner, a
     // debugger or an editor plugin sees — so the sourcemap goes with it. this is
     // the directory where a `.by` really can be saved after the transpile, which
@@ -468,14 +755,8 @@ pub(crate) fn cmd_build(
         CheckGate::ParseErrorsOnly,
         &rebuilder,
         |emitted| {
-            let relative = module_relative_path(&roots, &root, emitted.by_path);
-            if relative.components().count() > 1
-                && let Some(package) = relative.components().next()
-            {
-                packages.insert(out.join(package));
-            }
-
-            let entry = write_module(out.join(relative), emitted)?;
+            let relative = transpiled_destination(&roots, &root, emitted.by_path);
+            let entry = stage_module(&mut staging, &relative, emitted)?;
             eprintln!(
                 "{} -> {}",
                 emitted.by_path.display(),
@@ -487,41 +768,38 @@ pub(crate) fn cmd_build(
     )? {
         return Ok(ExitStatus::Failure);
     }
-    write_sourcemap_module(&out, &entries)?;
 
-    write_markers(&db, &packages)?;
+    stage_verbatim(&db, &root, &roots, &mut staging)?;
+    stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
+    write_sourcemap_module(&mut staging, &entries)?;
+    if print_manifest {
+        print_build_manifest(&staging, &roots, &root)?;
+    }
+    staging.finish()?;
 
     eprintln!("\nbuild complete ({file_count} files)");
     Ok(ExitStatus::Success)
 }
 
-/// Writes the `by.typed` marker into every package the build emitted.
+/// Report what the build read and what it produced, as `<kind> <value>` lines.
 ///
-/// The marker is what tells a project that installs this one that its packages
-/// are basedpython's, and it carries the one thing a `pyproject.toml` cannot tell
-/// them: which of this project's dependencies are part of its own interface.
-/// Nothing installs a `pyproject.toml`, and this rides along inside the package.
-#[allow(clippy::print_stderr)]
-fn write_markers(db: &ProjectDatabase, packages: &BTreeSet<PathBuf>) -> anyhow::Result<()> {
-    let exported = db
-        .project()
-        .settings(db)
-        .analysis()
-        .exported_dependencies
-        .clone()
-        .unwrap_or_default();
-    let marker = ty_module_resolver::Marker::render(&exported);
+/// Two questions, both of which only the build can answer: which files this
+/// project is made of — a source distribution has to carry exactly those, since
+/// they are what rebuilds into the same wheel — and which top-level packages came
+/// out. Answering them here rather than in the packaging layer keeps one answer
+/// to "what is this project", instead of a second one that has to be kept in step.
+#[allow(clippy::print_stdout)]
+fn print_build_manifest(staging: &Staging, roots: &[PathBuf], root: &Path) -> anyhow::Result<()> {
+    use std::io::Write as _;
 
-    for package in packages {
-        let path = package.join(ty_module_resolver::BY_TYPED);
-        fs::create_dir_all(package)?;
-        fs::write(&path, &marker)?;
+    let mut stdout = io::stdout().lock();
+    for input in staging.inputs() {
+        let relative = input.strip_prefix(root).unwrap_or(input);
+        writeln!(stdout, "input {}", relative.display())?;
     }
-
-    if !exported.is_empty() {
-        eprintln!("exporting {}", exported.join(", "));
+    for package in staged_packages(staging, roots, root) {
+        writeln!(stdout, "package {package}")?;
     }
-
     Ok(())
 }
 
@@ -588,7 +866,7 @@ pub(crate) fn cmd_compile(
     // gradual, and `--no-any` would then fail on noise
     // `compile` embeds fallback source produced by the untyped transpile, which
     // takes no db, so the rebuilder the other commands thread through is unused here
-    let (db, project, _rebuilder, _root) = build_project_db(&cwd, COMPILABLE_SOURCES)?;
+    let (db, project, _rebuilder, _root) = build_project_db(&cwd, COMPILABLE_SOURCES, None)?;
 
     // the database holds the whole project so a type imported from a sibling
     // resolves, but only the files that were *asked for* are checked and emitted.
@@ -895,6 +1173,11 @@ const NON_SOURCE_DIRS: &[&str] = &[
     "dist",
     "node_modules",
     "out",
+    // rust's build directory, which a basedpython project has whenever it also
+    // has an extension crate — and which the build would otherwise copy in full.
+    // a project that really does have a package called `target` can take it back
+    // with `exclude = ["!target"]`
+    "target",
 ];
 
 fn cmd_transpile_dir(dir: &Path, reverse: bool, config: &Config) -> anyhow::Result<ExitStatus> {
@@ -1006,7 +1289,7 @@ fn reverse_dir_converting(
 /// build`, but written in place rather than to `out/`).
 #[allow(clippy::print_stderr)]
 fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
-    let (db, handles, rebuilder, _root) = build_project_db(dir, BY_SOURCES)?;
+    let (db, handles, rebuilder, _root) = build_project_db(dir, BY_SOURCES, None)?;
     if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Success);
@@ -1049,6 +1332,24 @@ fn py_source_files(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Whether the build walk may descend into this entry.
+///
+/// Narrower than [`may_contain_sources`] on purpose, for the same reason
+/// [`is_hidden_within`] is: this walk applies the project's own `src` and `build`
+/// filters as it goes, so everything ty's `src.exclude` defaults already drop is
+/// covered — and re-dropping it here would take back a file that a negated
+/// exclude deliberately re-included. Only the directories ty's defaults *leave*
+/// (and hidden ones) still have to be turned away.
+fn may_hold_build_content(entry: &walkdir::DirEntry) -> bool {
+    if entry.depth() == 0 || !entry.file_type().is_dir() {
+        return true;
+    }
+    entry
+        .file_name()
+        .to_str()
+        .is_some_and(|name| !name.starts_with('.') && !NON_SOURCE_DIRS_TY_ALLOWS.contains(&name))
+}
+
 /// Whether a project walk may descend into this entry: hidden directories
 /// (`.claude`, `.git`, `.venv`, …) and [`NON_SOURCE_DIRS`] never hold
 /// first-party source. The walk root itself is always entered, even when the
@@ -1086,17 +1387,20 @@ struct TracebackEntry {
     py_digest: String,
 }
 
-/// write one emitted module out and describe it, in that order: the digests
-/// are over the bytes that just landed on disk
-fn write_module(py_path: PathBuf, emitted: &Transpiled<'_>) -> anyhow::Result<TracebackEntry> {
-    if let Some(parent) = py_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    fs::write(&py_path, emitted.python)
-        .with_context(|| format!("failed to write {}", py_path.display()))?;
+/// stage one emitted module and describe it, in that order: the digests are over
+/// the bytes that just landed on disk
+///
+/// it goes through the staging rather than straight to the path, so that a module
+/// two sources both claim is reported, and so that the file is one the manifest
+/// knows about and a later build can clean up
+fn stage_module(
+    staging: &mut Staging,
+    relative: &Path,
+    emitted: &Transpiled<'_>,
+) -> anyhow::Result<TracebackEntry> {
+    staging.write(relative, Some(emitted.by_path), emitted.python)?;
     Ok(TracebackEntry {
-        py_path,
+        py_path: staging.out().join(relative),
         by_path: fs::canonicalize(emitted.by_path)
             .unwrap_or_else(|_| emitted.by_path.to_path_buf()),
         line_map: emitted.line_map.to_vec(),
@@ -1121,7 +1425,7 @@ fn content_digest(bytes: &[u8]) -> String {
 /// both tables are keyed by the generated path exactly as written here. a
 /// consumer that normalises those keys — the runner shim resolves symlinks, for
 /// one — has to keep the original key to reach the entry's digests
-fn write_sourcemap_module(dir: &Path, entries: &[TracebackEntry]) -> anyhow::Result<()> {
+fn write_sourcemap_module(staging: &mut Staging, entries: &[TracebackEntry]) -> anyhow::Result<()> {
     use std::fmt::Write as _;
 
     let mut map_src = String::from(
@@ -1167,20 +1471,21 @@ fn write_sourcemap_module(dir: &Path, entries: &[TracebackEntry]) -> anyhow::Res
     }
     map_src.push_str("}\n");
 
-    fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
-    fs::write(dir.join(BY_SOURCEMAP_FILENAME), map_src)
-        .with_context(|| "failed to write sourcemap module")?;
-    Ok(())
+    staging.write(Path::new(BY_SOURCEMAP_FILENAME), None, &map_src)
 }
 
 /// write the sourcemap module + runner shim into the run dir. the shim runs the
 /// target module and, on an uncaught exception, rewrites traceback frames in
 /// generated files back to their `.by` source location
-fn write_traceback_runtime(dir: &Path, entries: &[TracebackEntry]) -> anyhow::Result<()> {
-    write_sourcemap_module(dir, entries)?;
-    fs::write(dir.join(BY_RUNNER_FILENAME), BY_RUNNER_SRC)
-        .with_context(|| "failed to write runner shim")?;
-    Ok(())
+fn write_traceback_runtime(
+    staging: &mut Staging,
+    entries: &[TracebackEntry],
+) -> anyhow::Result<()> {
+    write_sourcemap_module(staging, entries)?;
+    // through the staging, so that a project of its own with this name is
+    // reported as the collision it is rather than silently overwritten by a shim
+    // it knows nothing about
+    staging.write(Path::new(BY_RUNNER_FILENAME), None, BY_RUNNER_SRC)
 }
 
 /// Render a string as a python string literal (double-quoted, minimal escaping).
@@ -1403,6 +1708,7 @@ const NON_SOURCE_DIRS_TY_ALLOWS: &[&str] = &[
     ".pytest_cache",
     "build",
     "out",
+    "target",
 ];
 
 /// Whether `path` sits inside a hidden or build-output directory under `root`.
@@ -1423,7 +1729,11 @@ fn is_hidden_within(path: &Path, root: &Path) -> bool {
 /// extension is in `extensions`
 /// — the same set `by check` walks, so `src.exclude` and the ignore files it
 /// honours apply here too — and the means to build the same project again.
-fn build_project_db(cwd: &Path, extensions: &[&str]) -> anyhow::Result<ProjectBuild> {
+fn build_project_db(
+    cwd: &Path,
+    extensions: &[&str],
+    output: Option<&Path>,
+) -> anyhow::Result<ProjectBuild> {
     // the project root must be canonicalized the same way the included files
     // are (below) so it stays a path *prefix* of them: otherwise a file's
     // search path isn't recognized as first-party and boundary diagnostics
@@ -1460,6 +1770,10 @@ fn build_project_db(cwd: &Path, extensions: &[&str]) -> anyhow::Result<ProjectBu
         // dependencies, not this project's sources — emitting them would write
         // a parallel tree nobody asked for
         .filter(|(path, _)| !is_hidden_within(path, &canonical_cwd))
+        // nor is the last build's output. it holds a copy of every `.by` source
+        // this build is about to read, and reading those instead would build the
+        // project into itself, one directory deeper each time
+        .filter(|(path, _)| output.is_none_or(|output| !path.starts_with(output)))
         .collect();
     // the walk is over a hash set, so order is arbitrary; emit deterministically
     sources.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -1674,33 +1988,11 @@ pub(crate) fn cmd_version_by(output_format: crate::args::HelpFormat) -> ExitStat
 mod tests {
     use super::{
         BY_SOURCEMAP_FILENAME, TracebackEntry, content_digest, dotted_module_name,
-        is_hidden_within, module_relative_path, reverse_dir, reverse_dir_converting,
-        write_sourcemap_module,
+        is_hidden_within, reverse_dir, reverse_dir_converting, write_sourcemap_module,
     };
     use crate::ExitStatus;
     use by_transforms::config::Config;
     use std::path::{Path, PathBuf};
-
-    /// the output tree mirrors the module tree, so a src-layout project's source
-    /// root is stripped rather than mirrored
-    #[test]
-    fn a_module_root_is_stripped() {
-        let roots = vec![PathBuf::from("/p/src"), PathBuf::from("/p")];
-        assert_eq!(
-            module_relative_path(&roots, Path::new("/p"), Path::new("/p/src/pkg/main.by")),
-            PathBuf::from("pkg/main.py")
-        );
-    }
-
-    /// the deepest root wins: a file under `src` is `pkg.main`, not `src.pkg.main`
-    #[test]
-    fn the_deepest_root_wins() {
-        let roots = vec![PathBuf::from("/p/src"), PathBuf::from("/p")];
-        assert_eq!(
-            module_relative_path(&roots, Path::new("/p"), Path::new("/p/top.by")),
-            PathBuf::from("top.py")
-        );
-    }
 
     /// a compiled module carries its name into every type it emits, and cpython
     /// reads a class's `__module__` off the front of that — so the name of a file
@@ -1731,22 +2023,6 @@ mod tests {
         );
         // and at the root there is no package for it to be, so there is no name
         assert_eq!(dotted_module_name(Path::new("__init__.py")), None);
-    }
-
-    /// a root that shares no prefix with the file — which is what `canonicalize`
-    /// and `current_dir` disagreeing produced on windows — must not leave the
-    /// path absolute: joining that onto the output directory discards the output
-    /// directory entirely, so every emitted file lands outside it
-    #[test]
-    fn a_root_that_does_not_match_still_yields_a_relative_path() {
-        let unrelated = vec![PathBuf::from("/other/src")];
-        let emitted =
-            module_relative_path(&unrelated, Path::new("/other"), Path::new("/p/pkg/main.by"));
-        assert!(
-            emitted.is_relative(),
-            "an absolute result escapes the output directory: {}",
-            emitted.display()
-        );
     }
 
     #[test]
@@ -1888,7 +2164,8 @@ mod tests {
             py_digest: content_digest(b"the generated python"),
         }];
 
-        write_sourcemap_module(dir.path(), &entries)?;
+        let mut staging = crate::by_staging::Staging::new(dir.path());
+        write_sourcemap_module(&mut staging, &entries)?;
         let emitted = std::fs::read_to_string(dir.path().join(BY_SOURCEMAP_FILENAME))?;
 
         assert!(
