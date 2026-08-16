@@ -36,7 +36,7 @@ pub(crate) enum FormatResult {
 }
 
 impl FormatResult {
-    fn into_formatted(self) -> Option<String> {
+    pub(crate) fn into_formatted(self) -> Option<String> {
         match self {
             Self::Formatted(formatted) => Some(formatted),
             Self::Unchanged => None,

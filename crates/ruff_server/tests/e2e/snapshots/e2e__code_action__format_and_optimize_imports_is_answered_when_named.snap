@@ -1,0 +1,29 @@
+---
+source: crates/ruff_server/tests/e2e/code_action.rs
+expression: actions
+---
+[
+  {
+    "title": "Ruff: Format document and optimize imports",
+    "kind": "source.formatAndOptimizeImports.ruff",
+    "edit": {
+      "changes": {
+        "file://<temp_dir>/test.py": [
+          {
+            "range": {
+              "start": {
+                "line": 0,
+                "character": 0
+              },
+              "end": {
+                "line": 5,
+                "character": 0
+              }
+            },
+            "newText": "import abc\nimport sys\n\nx = {\"a\": 1}\n"
+          }
+        ]
+      }
+    }
+  }
+]

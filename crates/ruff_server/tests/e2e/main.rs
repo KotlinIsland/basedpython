@@ -29,6 +29,7 @@ mod capabilities;
 mod code_action;
 mod custom_extension;
 mod diagnostics;
+mod execute_command;
 mod hover;
 mod notebook;
 mod workspace;
@@ -876,7 +877,29 @@ impl TestServer {
         self.await_response::<CodeActionRequest>(&id)
     }
 
-    #[expect(dead_code)]
+    /// Send a `textDocument/codeAction` request that asks for `only` these kinds.
+    pub(crate) fn code_action_request_only(
+        &mut self,
+        path: impl AsRef<Path>,
+        only: Vec<lsp_types::CodeActionKind>,
+    ) -> Option<Vec<CodeActionResponse>> {
+        let params = CodeActionParams {
+            text_document: TextDocumentIdentifier {
+                uri: self.file_uri(path),
+            },
+            range: lsp_types::Range::default(),
+            context: CodeActionContext {
+                diagnostics: vec![],
+                only: Some(only),
+                trigger_kind: None,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        };
+        let id = self.send_request::<CodeActionRequest>(params);
+        self.await_response::<CodeActionRequest>(&id)
+    }
+
     pub(crate) fn respond(&mut self, request_id: RequestId, result: impl serde::Serialize) {
         let response = Response::new_ok(request_id, result);
         self.send(Message::Response(response));
@@ -1088,6 +1111,33 @@ impl TestServerBuilder {
             .workspace
             .get_or_insert_default()
             .configuration = Some(enabled);
+        self
+    }
+
+    /// Advertises that the client fetches a code action's edit in a follow-up
+    /// `codeAction/resolve` request rather than expecting it inline. This is what a real editor
+    /// does, so it is the path a code action's edit usually takes.
+    pub(crate) fn enable_code_action_edit_resolution(mut self, enabled: bool) -> Self {
+        let code_action = self
+            .client_capabilities
+            .text_document
+            .get_or_insert_default()
+            .code_action
+            .get_or_insert_default();
+        code_action.data_support = Some(enabled);
+        code_action.resolve_support = enabled.then(|| lsp_types::ClientCodeActionResolveOptions {
+            properties: vec!["edit".to_string()],
+        });
+        self
+    }
+
+    /// Lets the server ask the client to apply a workspace edit, which is how the
+    /// `workspace/executeCommand` handlers deliver their result.
+    pub(crate) fn enable_apply_edit(mut self, enabled: bool) -> Self {
+        self.client_capabilities
+            .workspace
+            .get_or_insert_default()
+            .apply_edit = Some(enabled);
         self
     }
 

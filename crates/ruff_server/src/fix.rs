@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use ruff_python_ast::{SourceType, TomlSourceType};
+use ruff_python_ast::{PySourceType, SourceType, TomlSourceType};
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -10,6 +10,7 @@ use crate::{
     session::DocumentQuery,
 };
 use ruff_linter::package::PackageRoot;
+use ruff_linter::source_kind::SourceKind;
 use ruff_linter::{
     linter::FixerResult,
     packaging::detect_package_root,
@@ -23,31 +24,24 @@ use ruff_source_file::LineIndex;
 /// number of notebook cells.
 pub(crate) type Fixes = FxHashMap<lsp_types::Uri, Vec<lsp_types::TextEdit>>;
 
-pub(crate) fn fix_all(
+/// The source a document started from, and the source the linter's fixer produced from it.
+pub(crate) struct FixedSource {
+    source: SourceKind,
+    fixed: SourceKind,
+}
+
+/// Runs the linter's fixer over a Python document and returns what it started from and what it
+/// produced.
+///
+/// `None` means there is nothing to apply, for one of three reasons: the document is excluded from
+/// linting, it has a syntax error (so no fix could be trusted), or the fixer left it untouched.
+fn fixed_python_source(
     query: &DocumentQuery,
     linter_settings: &LinterSettings,
-    encoding: PositionEncoding,
-) -> crate::Result<Fixes> {
+    source_type: PySourceType,
+) -> crate::Result<Option<FixedSource>> {
     let settings = query.settings();
     let document_path = query.virtual_file_path();
-
-    // If the document is excluded, return an empty list of fixes.
-    if is_document_excluded_for_linting(
-        &document_path,
-        &settings.file_resolver,
-        linter_settings,
-        query.text_document_language_id(),
-    ) {
-        return Ok(Fixes::default());
-    }
-
-    let source_type = match query.source_type_for_lint() {
-        SourceType::Python(source_type) => source_type,
-        SourceType::Toml(source_type @ (TomlSourceType::Pyproject | TomlSourceType::Ruff)) => {
-            return fix_toml(query, linter_settings, source_type, encoding);
-        }
-        SourceType::Toml(_) | SourceType::Markdown => return Ok(Fixes::default()),
-    };
     let source_kind = query.make_python_source_kind(source_type);
 
     let file_path = query.file_path();
@@ -85,13 +79,83 @@ pub(crate) fn fix_all(
 
     if result.has_invalid_syntax() {
         // If there's a syntax error, then there won't be any fixes to apply.
-        return Ok(Fixes::default());
+        return Ok(None);
     }
 
     // fast path: if `transformed` is still borrowed, no changes were made and we can return early
     if let Cow::Borrowed(_) = transformed {
+        return Ok(None);
+    }
+
+    Ok(Some(FixedSource {
+        fixed: transformed.into_owned(),
+        source: source_kind,
+    }))
+}
+
+/// Applies `linter_settings`' fixes to a Python **text** document and returns the fixed source.
+///
+/// Returns `None` when there is nothing to change. Notebooks are excluded: their cells are fixed as
+/// a group by [`fix_all`], which cannot be expressed as one string.
+pub(crate) fn fix_all_text(
+    query: &DocumentQuery,
+    linter_settings: &LinterSettings,
+) -> crate::Result<Option<String>> {
+    if query.as_notebook().is_some() {
+        return Ok(None);
+    }
+
+    let settings = query.settings();
+    if is_document_excluded_for_linting(
+        &query.virtual_file_path(),
+        &settings.file_resolver,
+        linter_settings,
+        query.text_document_language_id(),
+    ) {
+        return Ok(None);
+    }
+
+    let SourceType::Python(source_type) = query.source_type_for_lint() else {
+        return Ok(None);
+    };
+
+    Ok(fixed_python_source(query, linter_settings, source_type)?
+        .map(|fixed| fixed.fixed.source_code().to_string()))
+}
+
+pub(crate) fn fix_all(
+    query: &DocumentQuery,
+    linter_settings: &LinterSettings,
+    encoding: PositionEncoding,
+) -> crate::Result<Fixes> {
+    let settings = query.settings();
+    let document_path = query.virtual_file_path();
+
+    // If the document is excluded, return an empty list of fixes.
+    if is_document_excluded_for_linting(
+        &document_path,
+        &settings.file_resolver,
+        linter_settings,
+        query.text_document_language_id(),
+    ) {
         return Ok(Fixes::default());
     }
+
+    let source_type = match query.source_type_for_lint() {
+        SourceType::Python(source_type) => source_type,
+        SourceType::Toml(source_type @ (TomlSourceType::Pyproject | TomlSourceType::Ruff)) => {
+            return fix_toml(query, linter_settings, source_type, encoding);
+        }
+        SourceType::Toml(_) | SourceType::Markdown => return Ok(Fixes::default()),
+    };
+
+    let Some(FixedSource {
+        source: source_kind,
+        fixed: transformed,
+    }) = fixed_python_source(query, linter_settings, source_type)?
+    else {
+        return Ok(Fixes::default());
+    };
 
     if let (Some(source_notebook), Some(modified_notebook)) =
         (source_kind.as_ipy_notebook(), transformed.as_ipy_notebook())
@@ -174,7 +238,7 @@ fn fix_toml(
     ))
 }
 
-fn text_document_fixes(
+pub(crate) fn text_document_fixes(
     query: &DocumentQuery,
     source: &str,
     modified: &str,

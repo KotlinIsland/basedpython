@@ -119,6 +119,24 @@ impl super::SyncRequestHandler for ExecuteCommand {
                         .set_fixes_for_document(fixes, snapshot.query().version())
                         .with_failure_code(ErrorCode::InternalError)?;
                 }
+                SupportedCommand::OptimizeImports => {
+                    let fixes = super::code_action_resolve::optimize_imports_edit(
+                        snapshot.query(),
+                        snapshot.encoding(),
+                    )
+                    .with_failure_code(ErrorCode::InternalError)?;
+                    edit_tracker
+                        .set_fixes_for_document(fixes, snapshot.query().version())
+                        .with_failure_code(ErrorCode::InternalError)?;
+                }
+                SupportedCommand::FormatAndOptimizeImports => {
+                    let fixes =
+                        super::code_action_resolve::format_and_optimize_imports_edit(&snapshot)
+                            .with_failure_code(ErrorCode::InternalError)?;
+                    edit_tracker
+                        .set_fixes_for_document(fixes, snapshot.query().version())
+                        .with_failure_code(ErrorCode::InternalError)?;
+                }
                 SupportedCommand::Debug => {
                     unreachable!("The debug command should have already been handled")
                 }

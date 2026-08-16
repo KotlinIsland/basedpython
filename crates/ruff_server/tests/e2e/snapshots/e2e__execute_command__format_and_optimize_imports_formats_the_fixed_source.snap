@@ -1,0 +1,23 @@
+---
+source: crates/ruff_server/tests/e2e/execute_command.rs
+expression: "execute_command(&mut server, \"ruff.applyFormatAndOptimizeImports\", \"test.py\")"
+---
+{
+  "changes": {
+    "file://<temp_dir>/test.py": [
+      {
+        "range": {
+          "start": {
+            "line": 0,
+            "character": 0
+          },
+          "end": {
+            "line": 2,
+            "character": 0
+          }
+        },
+        "newText": "x = {\"a\": 1}\n"
+      }
+    ]
+  }
+}

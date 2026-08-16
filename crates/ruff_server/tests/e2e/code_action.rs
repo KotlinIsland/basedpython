@@ -260,3 +260,114 @@ fn invalid_code_action_resolve_data_returns_unchanged_action() -> Result<()> {
 
     Ok(())
 }
+
+/// A module whose imports are both out of order and partly unused, and whose body needs
+/// reformatting — so an action that does only part of the job is visibly distinguishable.
+const NEEDS_EVERYTHING: &str =
+    "import sys\nimport os\nimport abc\n\nx = {  'a' : 1 }\nprint(sys.argv, abc.ABC)\n";
+
+/// The two save-time source actions are not offered to a request that just asks for everything.
+///
+/// The lightbulb menu already has *Organize imports* and *Fix all*; a near-identically named entry
+/// beside each would be a puzzle rather than a choice, so they are answered only when named.
+#[test]
+fn save_time_actions_are_not_offered_unasked() -> Result<()> {
+    let mut server = TestServerBuilder::new()?.with_workspace(".")?.build();
+
+    server.open_text_document("test.py", NEEDS_EVERYTHING, 1);
+
+    let actions = server
+        .code_action_request("test.py", vec![])
+        .expect("Expected Some response");
+
+    let kinds: Vec<_> = actions
+        .iter()
+        .filter_map(|action| match action {
+            CodeActionResponse::CodeAction(action) => action.kind.as_ref(),
+            CodeActionResponse::Command(_) => None,
+        })
+        .map(CodeActionKind::as_str)
+        .collect();
+
+    assert!(
+        !kinds.contains(&"source.optimizeImports.ruff")
+            && !kinds.contains(&"source.formatAndOptimizeImports.ruff"),
+        "Unasked-for source actions leaked into the menu: {kinds:?}"
+    );
+
+    Ok(())
+}
+
+/// Asked for by name, `optimizeImports` resolves to an edit that both sorts and drops the unused
+/// import — the half `source.organizeImports` leaves behind.
+#[test]
+fn optimize_imports_is_answered_when_named() -> Result<()> {
+    let mut server = TestServerBuilder::new()?.with_workspace(".")?.build();
+
+    server.open_text_document("test.py", NEEDS_EVERYTHING, 1);
+
+    let actions = server
+        .code_action_request_only(
+            "test.py",
+            vec![CodeActionKind::new("source.optimizeImports.ruff")],
+        )
+        .expect("Expected Some response");
+
+    assert_json_snapshot!(actions);
+
+    Ok(())
+}
+
+/// The composite resolves to one edit covering both the import pass and the formatter.
+#[test]
+fn format_and_optimize_imports_is_answered_when_named() -> Result<()> {
+    let mut server = TestServerBuilder::new()?.with_workspace(".")?.build();
+
+    server.open_text_document("test.py", NEEDS_EVERYTHING, 1);
+
+    let actions = server
+        .code_action_request_only(
+            "test.py",
+            vec![CodeActionKind::new("source.formatAndOptimizeImports.ruff")],
+        )
+        .expect("Expected Some response");
+
+    assert_json_snapshot!(actions);
+
+    Ok(())
+}
+
+/// The path a real editor takes: the action comes back without an edit, and the edit arrives from a
+/// follow-up `codeAction/resolve`. This is what the PyCharm plugin uses, so the composite has to
+/// survive the round trip rather than only working when the edit is inlined.
+#[test]
+fn format_and_optimize_imports_resolves_deferred() -> Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(".")?
+        .enable_code_action_edit_resolution(true)
+        .build();
+
+    server.open_text_document("test.py", NEEDS_EVERYTHING, 1);
+
+    let actions = server
+        .code_action_request_only(
+            "test.py",
+            vec![CodeActionKind::new("source.formatAndOptimizeImports.ruff")],
+        )
+        .expect("Expected Some response");
+
+    let [CodeActionResponse::CodeAction(action)] = actions.as_slice() else {
+        panic!("Expected exactly one code action, got {actions:?}");
+    };
+    assert!(
+        action.edit.is_none(),
+        "A deferred action should carry no edit until it is resolved"
+    );
+
+    let request_id = server.send_request::<CodeActionResolveRequest>(action.clone());
+    let resolved = server.await_response::<CodeActionResolveRequest>(&request_id);
+
+    assert_json_snapshot!(resolved.edit);
+
+    Ok(())
+}
