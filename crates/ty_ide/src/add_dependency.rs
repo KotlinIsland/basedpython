@@ -4,10 +4,16 @@
 //! because the edit lands in `pyproject.toml` — a different file to the one the
 //! diagnostic is in, and not a Python file at all, which is what every fix
 //! applier in the tree assumes it is rewriting.
+//!
+//! A project uv manages is offered `uv add` instead of that edit, because
+//! declaring the dependency is only half of what makes the import work: nothing
+//! is installed by writing a name into `pyproject.toml`, so an unresolved import
+//! stays unresolved until something syncs the environment. See [`AddDependency`].
 
 use ruff_db::files::{File, system_path_to_file};
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
+use ruff_db::system::{SystemPath, SystemPathBuf};
 use ruff_diagnostics::Edit;
 use ruff_python_ast as ast;
 use ruff_python_ast::find_node::covering_node;
@@ -32,21 +38,23 @@ pub(crate) fn code_actions(db: &dyn Db, file: File, range: TextRange) -> Vec<Qui
         return Vec::new();
     };
 
-    let manifest_path = db.project().root(db).join("pyproject.toml");
+    let root = db.project().root(db).to_path_buf();
+    let manifest_path = root.join("pyproject.toml");
     let Ok(manifest) = system_path_to_file(db, &manifest_path) else {
         return Vec::new();
     };
     let source = source_text(db, manifest);
+    let uv_manages = uv_manages(db, &root);
 
     // the main dependency list first: it is what an import from shipped code
     // needs, and the answer most of the time
-    let mut targets = vec![Target::Project];
+    let mut targets = vec![DependencyTarget::Project];
     if let Some(declared) = db.dependency_manifest(file) {
         for group in declared.groups() {
             match &group.name {
                 GroupName::Project => {}
-                GroupName::Extra(name) => targets.push(Target::Extra(name.to_string())),
-                GroupName::Group(name) => targets.push(Target::Group(name.to_string())),
+                GroupName::Extra(name) => targets.push(DependencyTarget::Extra(name.to_string())),
+                GroupName::Group(name) => targets.push(DependencyTarget::Group(name.to_string())),
             }
         }
     }
@@ -54,7 +62,28 @@ pub(crate) fn code_actions(db: &dyn Db, file: File, range: TextRange) -> Vec<Qui
     targets
         .into_iter()
         .filter_map(|target| {
+            // what `pyproject.toml` already declares is what decides whether this
+            // target is worth offering, so it is read either way — `uv add` on a
+            // requirement that is already there would be a no-op action
             let updated = declare(&source, &target, distribution.as_str())?;
+            let preferred = matches!(target, DependencyTarget::Project);
+
+            if uv_manages {
+                let add = AddDependency {
+                    root: root.clone(),
+                    distribution: distribution.as_str().to_string(),
+                    target,
+                };
+
+                return Some(QuickFix {
+                    title: format!("Run `uv {}`", add.arguments().join(" ")),
+                    edits: Vec::new(),
+                    preferred,
+                    create: None,
+                    add_dependency: Some(add),
+                });
+            }
+
             let edit = minimal_edit(&source, &updated)?;
             Some(QuickFix {
                 title: format!("Declare `{distribution}` in {}", target.describe()),
@@ -62,11 +91,70 @@ pub(crate) fn code_actions(db: &dyn Db, file: File, range: TextRange) -> Vec<Qui
                     file: manifest,
                     edit,
                 }],
-                preferred: matches!(target, Target::Project),
+                preferred,
                 create: None,
+                add_dependency: None,
             })
         })
         .collect()
+}
+
+/// Whether uv is the thing that installs this project's dependencies.
+///
+/// A `uv.lock` says so — in the project itself, or in the workspace it is a
+/// member of, which is where the lock of a workspace lives. uv is then asked for
+/// as well, since an action that names a command must be able to run it.
+fn uv_manages(db: &dyn Db, root: &SystemPath) -> bool {
+    let system = db.system();
+
+    root.ancestors()
+        .any(|directory| system.is_file(&directory.join("uv.lock")))
+        && ty_project::metadata::uv::executable(system).is_ok()
+}
+
+/// A dependency to declare by running `uv add`.
+///
+/// The command does what the edit alone cannot: `uv add` writes the requirement
+/// into `pyproject.toml`, resolves it into `uv.lock`, and installs it into the
+/// environment. Only the last of those makes the import that prompted the action
+/// resolve, so for a project uv manages this is offered in place of the edit
+/// rather than alongside it.
+///
+/// uv is run from [`Self::root`] and left to select the environment itself, the
+/// same `.venv` beside the project that ty resolves when nothing says otherwise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddDependency {
+    /// The directory uv is run in — the project's own, which is what tells uv
+    /// whose `pyproject.toml` the requirement belongs in.
+    pub root: SystemPathBuf,
+
+    /// The distribution to add.
+    pub distribution: String,
+
+    /// Where in the manifest it is added.
+    pub target: DependencyTarget,
+}
+
+impl AddDependency {
+    /// The arguments to `uv` that add this dependency.
+    pub fn arguments(&self) -> Vec<String> {
+        let mut arguments = vec!["add".to_string()];
+
+        match &self.target {
+            DependencyTarget::Project => {}
+            DependencyTarget::Extra(extra) => {
+                arguments.push("--optional".to_string());
+                arguments.push(extra.clone());
+            }
+            DependencyTarget::Group(group) => {
+                arguments.push("--group".to_string());
+                arguments.push(group.clone());
+            }
+        }
+
+        arguments.push(self.distribution.clone());
+        arguments
+    }
 }
 
 /// The module an import statement covering `range` names.
@@ -128,18 +216,18 @@ fn distribution_to_declare(
 
 /// A place in a `pyproject.toml` that a requirement can be declared.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Target {
+pub enum DependencyTarget {
     Project,
     Extra(String),
     Group(String),
 }
 
-impl Target {
+impl DependencyTarget {
     fn describe(&self) -> String {
         match self {
-            Target::Project => "the project's dependencies".to_string(),
-            Target::Extra(name) => format!("extra `{name}`"),
-            Target::Group(name) => format!("dependency group `{name}`"),
+            DependencyTarget::Project => "the project's dependencies".to_string(),
+            DependencyTarget::Extra(name) => format!("extra `{name}`"),
+            DependencyTarget::Group(name) => format!("dependency group `{name}`"),
         }
     }
 }
@@ -148,7 +236,7 @@ impl Target {
 ///
 /// Format-preserving: everything but the inserted entry comes back byte for
 /// byte, which is what lets the caller reduce it to an edit of the entry alone.
-fn declare(source: &str, target: &Target, name: &str) -> Option<String> {
+fn declare(source: &str, target: &DependencyTarget, name: &str) -> Option<String> {
     let mut document: DocumentMut = source.parse().ok()?;
     let array = requirements_array(&mut document, target)?;
 
@@ -174,16 +262,19 @@ fn declare(source: &str, target: &Target, name: &str) -> Option<String> {
 
 /// The array `target` names, adding the tables on the way to it if they are not
 /// already there.
-fn requirements_array<'a>(document: &'a mut DocumentMut, target: &Target) -> Option<&'a mut Array> {
+fn requirements_array<'a>(
+    document: &'a mut DocumentMut,
+    target: &DependencyTarget,
+) -> Option<&'a mut Array> {
     let table = |item: &'a mut Item| item.as_table_mut();
     let new_table = || Item::Table(Table::new());
     let new_array = || Item::Value(Value::Array(Array::new()));
 
     let item = match target {
-        Target::Project => table(document.entry("project").or_insert_with(new_table))?
+        DependencyTarget::Project => table(document.entry("project").or_insert_with(new_table))?
             .entry("dependencies")
             .or_insert_with(new_array),
-        Target::Extra(extra) => {
+        DependencyTarget::Extra(extra) => {
             let project = table(document.entry("project").or_insert_with(new_table))?;
             // `[project]` is only on the way to the extras here. an empty one
             // that is implicit is not written out; one with keys of its own is
@@ -196,7 +287,7 @@ fn requirements_array<'a>(document: &'a mut DocumentMut, target: &Target) -> Opt
             .entry(extra)
             .or_insert_with(new_array)
         }
-        Target::Group(group) => table(
+        DependencyTarget::Group(group) => table(
             document
                 .entry("dependency-groups")
                 .or_insert_with(new_table),
@@ -285,14 +376,19 @@ mod tests {
     use super::*;
     use ruff_text_size::Ranged;
 
-    fn declared(source: &str, target: &Target, name: &str) -> Option<String> {
+    fn declared(source: &str, target: &DependencyTarget, name: &str) -> Option<String> {
         declare(source, target, name)
     }
 
     #[test]
     fn adds_to_an_empty_project_table() {
         assert_eq!(
-            declared("[project]\nname = \"mine\"\n", &Target::Project, "numpy").as_deref(),
+            declared(
+                "[project]\nname = \"mine\"\n",
+                &DependencyTarget::Project,
+                "numpy"
+            )
+            .as_deref(),
             Some("[project]\nname = \"mine\"\ndependencies = [\"numpy\"]\n")
         );
     }
@@ -302,7 +398,7 @@ mod tests {
         assert_eq!(
             declared(
                 "[project]\ndependencies = [\"requests\"]\n",
-                &Target::Project,
+                &DependencyTarget::Project,
                 "numpy"
             )
             .as_deref(),
@@ -315,7 +411,7 @@ mod tests {
         assert_eq!(
             declared(
                 "[project]\ndependencies = [\n    \"requests\",\n]\n",
-                &Target::Project,
+                &DependencyTarget::Project,
                 "numpy"
             )
             .as_deref(),
@@ -334,7 +430,7 @@ dependencies = [\"requests\"]
 [tool.ty]
 respect-ignore-files = true
 ";
-        let updated = declared(source, &Target::Project, "numpy").unwrap();
+        let updated = declared(source, &DependencyTarget::Project, "numpy").unwrap();
         assert!(updated.contains("# a project"));
         assert!(updated.contains("name = \"mine\"       # its name"));
         assert!(updated.contains("respect-ignore-files = true"));
@@ -344,12 +440,12 @@ respect-ignore-files = true
     #[test]
     fn a_missing_table_is_created() {
         assert_eq!(
-            declared("", &Target::Group("dev".to_string()), "pytest").as_deref(),
+            declared("", &DependencyTarget::Group("dev".to_string()), "pytest").as_deref(),
             Some("[dependency-groups]\ndev = [\"pytest\"]\n")
         );
         // `[project]` is only on the way to the extras, so it is not written out
         assert_eq!(
-            declared("", &Target::Extra("cli".to_string()), "click").as_deref(),
+            declared("", &DependencyTarget::Extra("cli".to_string()), "click").as_deref(),
             Some("[project.optional-dependencies]\ncli = [\"click\"]\n")
         );
     }
@@ -359,7 +455,7 @@ respect-ignore-files = true
         assert_eq!(
             declared(
                 "[project]\nname = \"mine\"\n",
-                &Target::Extra("cli".to_string()),
+                &DependencyTarget::Extra("cli".to_string()),
                 "click"
             )
             .as_deref(),
@@ -374,7 +470,7 @@ respect-ignore-files = true
         assert_eq!(
             declared(
                 "[dependency-groups]\ndev = [\"pytest\"]\n",
-                &Target::Group("dev".to_string()),
+                &DependencyTarget::Group("dev".to_string()),
                 "ruff"
             )
             .as_deref(),
@@ -392,7 +488,7 @@ respect-ignore-files = true
         ] {
             let source = format!("[project]\ndependencies = [\"{existing}\"]\n");
             assert_eq!(
-                declared(&source, &Target::Project, "numpy"),
+                declared(&source, &DependencyTarget::Project, "numpy"),
                 None,
                 "`{existing}` already declares numpy",
             );
@@ -404,7 +500,7 @@ respect-ignore-files = true
         assert!(
             declared(
                 "[project]\ndependencies = [\"numpy-financial\"]\n",
-                &Target::Project,
+                &DependencyTarget::Project,
                 "numpy"
             )
             .is_some()
@@ -413,7 +509,10 @@ respect-ignore-files = true
 
     #[test]
     fn invalid_toml_declares_nothing() {
-        assert_eq!(declared("[project", &Target::Project, "numpy"), None);
+        assert_eq!(
+            declared("[project", &DependencyTarget::Project, "numpy"),
+            None
+        );
     }
 
     #[test]
@@ -434,31 +533,95 @@ respect-ignore-files = true
         assert!(minimal_edit("same", "same").is_none());
     }
 
+    /// A manifest with a dependency group, which is two targets to offer.
+    const GROUPED: &str = "\
+[project]
+name = \"mine\"
+dependencies = []
+
+[dependency-groups]
+dev = []
+";
+
+    /// A project to offer actions in.
+    struct Project {
+        /// The project's own directory, which is where its `pyproject.toml` and
+        /// its `main.py` go.
+        root: SystemPathBuf,
+        /// Files written outside the project directory — a workspace's `uv.lock`.
+        elsewhere: Vec<(SystemPathBuf, String)>,
+        /// Whether this machine has a uv to run.
+        uv_installed: bool,
+    }
+
+    impl Project {
+        fn new() -> Self {
+            Self {
+                root: SystemPathBuf::from("/"),
+                elsewhere: Vec::new(),
+                uv_installed: false,
+            }
+        }
+
+        /// A project uv manages: it has a lock file, and uv is there to run.
+        fn managed_by_uv(mut self) -> Self {
+            self.uv_installed = true;
+            self.file("uv.lock", "version = 1")
+        }
+
+        fn rooted_at(mut self, root: &str) -> Self {
+            self.root = SystemPathBuf::from(root);
+            self
+        }
+
+        fn file(mut self, path: &str, content: &str) -> Self {
+            self.elsewhere
+                .push((SystemPathBuf::from(path), content.to_string()));
+            self
+        }
+
+        /// The actions offered for `reported` in `source`.
+        ///
+        /// `reported` stands in for what the diagnostic is anchored on, which is
+        /// the module name for both import forms.
+        fn actions(&self, manifest: &str, source: &str, reported: &str) -> Vec<QuickFix> {
+            use ruff_db::system::{DbWithTestSystem, DbWithWritableSystem};
+            use ty_project::ProjectMetadata;
+            use ty_static::EnvVars;
+
+            let mut db = ty_project::TestDb::new(ProjectMetadata::new("test", self.root.clone()));
+            db.init_program().unwrap();
+            db.write_file(self.root.join("pyproject.toml"), manifest)
+                .unwrap();
+            db.write_file(self.root.join("main.py"), source).unwrap();
+            for (path, content) in &self.elsewhere {
+                db.write_file(path, content).unwrap();
+            }
+
+            if self.uv_installed {
+                // there is no uv to find on a test system's path, so it is named
+                // outright, which is the other way ty finds one
+                db.test_system().set_env_var(EnvVars::UV, "/uv");
+            }
+
+            let file = system_path_to_file(&db, self.root.join("main.py")).unwrap();
+            let start = source
+                .find(reported)
+                .expect("`reported` should be in source");
+            let range = TextRange::at(
+                TextSize::try_from(start).unwrap(),
+                TextSize::try_from(reported.len()).unwrap(),
+            );
+
+            code_actions(&db, file, range)
+        }
+    }
+
     /// The actions offered for `reported` in `source`, as `(title, the
     /// `pyproject.toml` the action produces)` pairs.
-    ///
-    /// `reported` stands in for what the diagnostic is anchored on, which is the
-    /// module name for both import forms.
     fn offered(manifest: &str, source: &str, reported: &str) -> Vec<(String, String)> {
-        use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
-        use ty_project::ProjectMetadata;
-
-        let mut db =
-            ty_project::TestDb::new(ProjectMetadata::new("test", SystemPathBuf::from("/")));
-        db.init_program().unwrap();
-        db.write_file("pyproject.toml", manifest).unwrap();
-        db.write_file("main.py", source).unwrap();
-
-        let file = system_path_to_file(&db, "main.py").unwrap();
-        let start = source
-            .find(reported)
-            .expect("`reported` should be in source");
-        let range = TextRange::at(
-            TextSize::try_from(start).unwrap(),
-            TextSize::try_from(reported.len()).unwrap(),
-        );
-
-        code_actions(&db, file, range)
+        Project::new()
+            .actions(manifest, source, reported)
             .into_iter()
             .map(|action| {
                 let edit = &action.edits[0];
@@ -468,6 +631,35 @@ respect-ignore-files = true
                     edit.edit.content().unwrap_or_default(),
                 );
                 (action.title, applied)
+            })
+            .collect()
+    }
+
+    /// The actions offered in `project`, as `(title, the command line it runs)`
+    /// pairs.
+    fn commanded(
+        project: &Project,
+        manifest: &str,
+        source: &str,
+        reported: &str,
+    ) -> Vec<(String, String)> {
+        project
+            .actions(manifest, source, reported)
+            .into_iter()
+            .map(|action| {
+                let add = action
+                    .add_dependency
+                    .as_ref()
+                    .expect("the action to add a dependency");
+
+                // an action that runs `uv add` must not also carry the edit that
+                // declares the requirement: uv writes that line itself
+                assert!(action.edits.is_empty());
+
+                (
+                    action.title.clone(),
+                    format!("uv {}", add.arguments().join(" ")),
+                )
             })
             .collect()
     }
@@ -488,15 +680,7 @@ respect-ignore-files = true
 
     #[test]
     fn every_declared_group_is_offered() {
-        let manifest = "\
-[project]
-name = \"mine\"
-dependencies = []
-
-[dependency-groups]
-dev = []
-";
-        let titles: Vec<_> = offered(manifest, "import pytest\n", "pytest")
+        let titles: Vec<_> = offered(GROUPED, "import pytest\n", "pytest")
             .into_iter()
             .map(|(title, _)| title)
             .collect();
@@ -508,6 +692,104 @@ dev = []
                 "Declare `pytest` in dependency group `dev`",
             ]
         );
+    }
+
+    #[test]
+    fn a_uv_project_is_offered_the_command_that_installs() {
+        assert_eq!(
+            commanded(
+                &Project::new().managed_by_uv(),
+                GROUPED,
+                "import pytest\n",
+                "pytest"
+            ),
+            [
+                (
+                    "Run `uv add pytest`".to_string(),
+                    "uv add pytest".to_string()
+                ),
+                (
+                    "Run `uv add --group dev pytest`".to_string(),
+                    "uv add --group dev pytest".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_extra_is_added_as_an_optional_dependency() {
+        let manifest = "\
+[project]
+name = \"mine\"
+dependencies = []
+
+[project.optional-dependencies]
+cli = []
+";
+        let commands: Vec<_> = commanded(
+            &Project::new().managed_by_uv(),
+            manifest,
+            "import click\n",
+            "click",
+        )
+        .into_iter()
+        .map(|(_, command)| command)
+        .collect();
+
+        assert_eq!(commands, ["uv add click", "uv add --optional cli click"]);
+    }
+
+    #[test]
+    fn a_workspace_member_is_managed_by_the_workspaces_lock() {
+        // a workspace locks once, at its root, and `uv add` run from the member
+        // is what puts the requirement in the member's own manifest
+        let project = Project::new()
+            .rooted_at("/packages/mine")
+            .managed_by_uv()
+            .file(
+                "/pyproject.toml",
+                "[tool.uv.workspace]\nmembers = [\"packages/*\"]\n",
+            );
+
+        assert!(
+            commanded(&project, GROUPED, "import numpy\n", "numpy")
+                .iter()
+                .any(|(_, command)| command == "uv add numpy")
+        );
+    }
+
+    #[test]
+    fn a_project_uv_does_not_manage_is_offered_the_edit() {
+        // no `uv.lock`, so nothing here says uv is what installs this project's
+        // dependencies, and an edit is all that is offered
+        let manifest = "[project]\nname = \"mine\"\ndependencies = []\n";
+        let actions = Project::new().actions(manifest, "import numpy\n", "numpy");
+
+        assert!(actions[0].add_dependency.is_none());
+        assert!(!actions[0].edits.is_empty());
+    }
+
+    #[test]
+    fn a_uv_project_without_uv_installed_is_offered_the_edit() {
+        let project = Project {
+            uv_installed: false,
+            ..Project::new().managed_by_uv()
+        };
+        let manifest = "[project]\nname = \"mine\"\ndependencies = []\n";
+        let actions = project.actions(manifest, "import numpy\n", "numpy");
+
+        assert!(actions[0].add_dependency.is_none());
+        assert!(!actions[0].edits.is_empty());
+    }
+
+    #[test]
+    fn a_requirement_already_declared_is_not_offered_to_uv_either() {
+        let manifest = "[project]\nname = \"mine\"\ndependencies = [\"numpy\"]\n";
+        let actions = Project::new()
+            .managed_by_uv()
+            .actions(manifest, "import numpy\n", "numpy");
+
+        assert!(actions.is_empty());
     }
 
     #[test]

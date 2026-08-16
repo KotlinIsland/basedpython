@@ -12,6 +12,8 @@ use crate::document::{RangeExt, ToRangeExt};
 use crate::server::Result;
 use crate::server::api::RequestHandler;
 use crate::server::api::diagnostics::DiagnosticData;
+use crate::server::api::requests::execute_command::add_dependency_command;
+
 use crate::server::api::traits::{BackgroundDocumentRequestHandler, RetriableRequestHandler};
 use crate::session::DocumentSnapshot;
 use crate::session::client::Client;
@@ -118,20 +120,37 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
                         )])
                     });
 
-                    actions.push(CodeActionResponse::CodeAction(lsp_types::CodeAction {
-                        title: action.title,
-                        kind: Some(CodeActionKind::QuickFix),
-                        diagnostics: Some(vec![diagnostic.clone()]),
-                        edit: Some(lsp_types::WorkspaceEdit {
-                            changes: document_changes
-                                .is_none()
-                                .then(|| to_lsp_edits(db, encoding, action.edits))
-                                .flatten(),
+                    // an action that installs something reaches past the files
+                    // the editor can edit, so it asks the server to run the
+                    // command instead. the client runs a command after the edit
+                    // of the same action, so an action may carry both
+                    let command = action
+                        .add_dependency
+                        .as_ref()
+                        .map(|add| add_dependency_command(&action.title, add));
+
+                    let changes = document_changes
+                        .is_none()
+                        .then(|| to_lsp_edits(db, encoding, action.edits))
+                        .flatten();
+
+                    // an action that only runs a command changes no file itself,
+                    // and an empty edit is not something to hand a client
+                    let edit = (changes.is_some() || document_changes.is_some()).then_some(
+                        lsp_types::WorkspaceEdit {
+                            changes,
                             document_changes,
                             change_annotations: None,
-                        }),
+                        },
+                    );
+
+                    actions.push(CodeActionResponse::CodeAction(lsp_types::CodeAction {
+                        title: action.title.clone(),
+                        kind: Some(CodeActionKind::QuickFix),
+                        diagnostics: Some(vec![diagnostic.clone()]),
+                        edit,
                         is_preferred: Some(action.preferred),
-                        command: None,
+                        command,
                         disabled: None,
                         data: None,
                         tags: None,
@@ -148,7 +167,7 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
     }
 }
 
-/// The edits of an action, in the files they belong to.
+/// The edits of an action, in the files they belong to, or `None` if it has none.
 ///
 /// An action can change a file other than the one its diagnostic is in — adding a
 /// missing dependency edits `pyproject.toml` — so each edit carries its own file
@@ -175,7 +194,7 @@ fn to_lsp_edits(
             });
     }
 
-    Some(lsp_edits)
+    (!lsp_edits.is_empty()).then_some(lsp_edits)
 }
 
 fn range_intersect(range: &lsp_types::Range, other: &lsp_types::Range) -> bool {

@@ -27,7 +27,7 @@ pub mod pyproject;
 pub mod python_version;
 pub(crate) mod script;
 pub mod settings;
-mod uv;
+pub mod uv;
 pub mod value;
 
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]

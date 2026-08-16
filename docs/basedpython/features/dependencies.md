@@ -23,7 +23,9 @@ for everyone who installs the project fresh, never for the person who wrote it
 ## what is checked
 
 **`undeclared-dependency`** — the module comes from a distribution no group declares. it is only
-in the environment because something else pulled it in
+in the environment because something else pulled it in, and the report says which declared
+dependency that was — read from the install metadata, so it names a real requirement rather than a
+guess
 
 **`misplaced-dependency`** — the module comes from a distribution declared only in a dependency
 group, and the import is in code the project ships. nothing installs a dependency group alongside
@@ -62,6 +64,34 @@ dependency-groups = ["*"]
 `project` names `[project].dependencies`, an extra or a dependency group is named by its own name,
 and `*` names every group
 
+## what a library hands out
+
+part of a library's interface can be made of another distribution: `pandas` hands you numpy
+arrays, and nobody using pandas chose numpy. a library says which of its dependencies are part of
+what it hands out, and then a project that depends on it may import those without declaring them
+itself
+
+```toml
+# the library's pyproject.toml
+[project]
+name = "my-lib"
+dependencies = ["numpy"]
+
+[tool.basedpython.analysis]
+exported-dependencies = ["numpy"]
+```
+
+`by build` writes that into the `by.typed` marker inside the built package, because that is what
+the library's users have — a `pyproject.toml` is not installed alongside a package, and the marker
+is
+
+two limits keep the claim honest. a distribution can only export what it depends on itself, so
+naming something unrelated says nothing. and the permission travels one link: `fastapi` exporting
+`starlette` does not hand you `starlette`'s dependencies unless `starlette` exports them in turn
+
+an export is also only as available as the dependency that makes it. what a dependency group hands
+out is still a dependency group's, so shipped code cannot reach it
+
 ## an extra is not a dependency group
 
 an extra is installed for anyone who asks for it, so shipped code may import one. whether the
@@ -78,8 +108,23 @@ are asking for it rather than browsing
 ## adding a dependency
 
 an editor offers a quick fix on both checks, and on an import that resolves to nothing at all: one
-action per group the project declares, each adding the requirement to `pyproject.toml`. formatting
-and comments elsewhere in the file are left alone
+action per group the project declares
+
+in a project uv manages — one with a `uv.lock`, its own or its workspace's — the action runs
+`uv add`, and says so:
+
+```text
+Run `uv add numpy`
+Run `uv add --group dev numpy`
+```
+
+that installs it as well as declaring it, which is what an import that resolves to nothing needs:
+a name written into `pyproject.toml` doesn't put anything in the environment. what uv prints goes
+to the editor's log, and the project is re-read when it finishes, so the warning goes away on its
+own
+
+anywhere else the action edits `pyproject.toml` directly, adding the requirement to the list.
+formatting and comments elsewhere in the file are left alone
 
 for a module that isn't installed, the distribution's name can only be guessed from the module's —
 right most of the time, and wrong for the likes of `yaml`, which `PyYAML` installs. for one that

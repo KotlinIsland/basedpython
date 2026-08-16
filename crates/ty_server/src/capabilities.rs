@@ -56,6 +56,8 @@ pub(crate) enum SupportedCommand {
     Debug,
     /// Run the project's `manage.py` with the given arguments.
     RunManage,
+    /// Declare and install a dependency by running `uv add`.
+    AddDependency,
 }
 
 impl SupportedCommand {
@@ -64,12 +66,17 @@ impl SupportedCommand {
         match self {
             SupportedCommand::Debug => "ty.printDebugInformation",
             SupportedCommand::RunManage => "ty.runManageCommand",
+            SupportedCommand::AddDependency => "ty.addDependency",
         }
     }
 
     /// Returns all the commands that the server currently supports.
-    const fn all() -> [SupportedCommand; 2] {
-        [SupportedCommand::Debug, SupportedCommand::RunManage]
+    const fn all() -> [SupportedCommand; 3] {
+        [
+            SupportedCommand::Debug,
+            SupportedCommand::RunManage,
+            SupportedCommand::AddDependency,
+        ]
     }
 }
 
@@ -80,6 +87,7 @@ impl FromStr for SupportedCommand {
         Ok(match name {
             "ty.printDebugInformation" => Self::Debug,
             "ty.runManageCommand" => Self::RunManage,
+            "ty.addDependency" => Self::AddDependency,
             _ => return Err(anyhow::anyhow!("Invalid command `{name}`")),
         })
     }

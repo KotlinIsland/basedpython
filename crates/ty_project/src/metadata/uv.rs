@@ -16,19 +16,27 @@ pub(super) struct UvWorkspace {
     python_version: Option<RangedValue<SupportedPythonVersion>>,
 }
 
+/// The uv to run, or why there is none to run.
+///
+/// `UV` names one outright; otherwise it is looked up on the path. A caller that
+/// is deciding whether to *offer* something uv would do needs the same answer as
+/// the caller about to run it, which is why this is asked rather than assumed.
+pub fn executable(system: &dyn System) -> Result<SystemPathBuf, WhichError> {
+    match system.env_var(EnvVars::UV) {
+        Ok(uv) => Ok(SystemPathBuf::from(uv)),
+        Err(_) => system.which("uv"),
+    }
+}
+
 impl UvWorkspace {
     pub(super) fn discover(
         path: &SystemPath,
         system: &dyn System,
     ) -> Result<Self, UvWorkspaceError> {
-        let uv = match system.env_var(EnvVars::UV) {
-            Ok(uv) => uv,
-            Err(_) => system
-                .which("uv")
-                .map(SystemPathBuf::into_string)
-                .map_err(uv_executable_error)
-                .map_err(UvWorkspaceError::Invocation)?,
-        };
+        let uv = executable(system)
+            .map_err(uv_executable_error)
+            .map_err(UvWorkspaceError::Invocation)?
+            .into_string();
 
         // `uv check` has already selected and synchronized the environment. Keep this query
         // read-only so package selection and `--isolated` aren't overwritten by a second sync.

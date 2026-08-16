@@ -1,0 +1,87 @@
+---
+source: crates/ty_server/tests/e2e/code_actions.rs
+expression: code_actions
+---
+[
+  {
+    "title": "Run `uv add numpy`",
+    "kind": "quickfix",
+    "diagnostics": [
+      {
+        "range": {
+          "start": {
+            "line": 0,
+            "character": 7
+          },
+          "end": {
+            "line": 0,
+            "character": 12
+          }
+        },
+        "severity": 1,
+        "code": "unresolved-import",
+        "codeDescription": {
+          "href": "https://ty.dev/rules#unresolved-import"
+        },
+        "source": "ty",
+        "message": "Cannot resolve imported module `numpy`\n\ninfo: Searched in the following paths during module resolution:\ninfo:   1. <temp_dir>/src (first-party code)\ninfo:   2. vendored://stdlib (stdlib typeshed stubs vendored by ty)\ninfo: make sure your Python environment is properly configured: https://docs.astral.sh/ty/modules/#python-environment"
+      }
+    ],
+    "isPreferred": true,
+    "command": {
+      "title": "Run `uv add numpy`",
+      "command": "ty.addDependency",
+      "arguments": [
+        {
+          "distribution": "numpy",
+          "root": "<temp_dir>/src"
+        }
+      ]
+    }
+  },
+  {
+    "title": "Ignore 'unresolved-import' for this line",
+    "kind": "quickfix",
+    "diagnostics": [
+      {
+        "range": {
+          "start": {
+            "line": 0,
+            "character": 7
+          },
+          "end": {
+            "line": 0,
+            "character": 12
+          }
+        },
+        "severity": 1,
+        "code": "unresolved-import",
+        "codeDescription": {
+          "href": "https://ty.dev/rules#unresolved-import"
+        },
+        "source": "ty",
+        "message": "Cannot resolve imported module `numpy`\n\ninfo: Searched in the following paths during module resolution:\ninfo:   1. <temp_dir>/src (first-party code)\ninfo:   2. vendored://stdlib (stdlib typeshed stubs vendored by ty)\ninfo: make sure your Python environment is properly configured: https://docs.astral.sh/ty/modules/#python-environment"
+      }
+    ],
+    "isPreferred": false,
+    "edit": {
+      "changes": {
+        "file://<temp_dir>/src/foo.py": [
+          {
+            "range": {
+              "start": {
+                "line": 0,
+                "character": 12
+              },
+              "end": {
+                "line": 0,
+                "character": 12
+              }
+            },
+            "newText": "  # ty: ignore[unresolved-import]"
+          }
+        ]
+      }
+    }
+  }
+]

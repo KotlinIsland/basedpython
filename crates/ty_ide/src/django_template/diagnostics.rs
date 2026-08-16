@@ -1043,6 +1043,7 @@ pub(crate) fn code_actions(
             edits: Vec::new(),
             preferred: true,
             create: Some(destination),
+            add_dependency: None,
         });
     }
 
@@ -1057,6 +1058,7 @@ pub(crate) fn code_actions(
         }],
         preferred: false,
         create: None,
+        add_dependency: None,
     });
 
     actions

@@ -52,6 +52,7 @@ tracing = { workspace = true }
 ruff_python_parser = { workspace = true }
 ruff_ranged_value = { workspace = true }
 ty_project = { workspace = true, features = ["testing"] }
+ty_static = { workspace = true }
 
 camino = { workspace = true }
 insta = { workspace = true, features = ["filters"] }

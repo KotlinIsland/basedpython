@@ -152,6 +152,13 @@ pub struct AnalysisSettings {
     /// Only a project that ships several unrelated modules needs to say.
     pub shipped_modules: Option<Box<[Box<str>]>>,
 
+    /// The dependencies this project hands to its own users, which a build writes
+    /// into the `by.typed` its package ships.
+    ///
+    /// Nothing about checking *this* project reads it: it is a statement to the
+    /// projects that depend on this one, and they read it from the marker.
+    pub exported_dependencies: Option<Box<[Box<str>]>>,
+
     /// Whether `float` and `complex` annotations mean *only* themselves, rather than
     /// admitting the wider numeric types the typing spec's special case allows.
     ///
@@ -297,6 +304,7 @@ impl Default for AnalysisSettings {
             replace_imports_with_any: ModuleGlobSet::empty(),
             dependency_groups: None,
             shipped_modules: None,
+            exported_dependencies: None,
             strict_float: false,
             disable_fluid_specializations: false,
             sound_types: false,

@@ -207,6 +207,44 @@ Defaults to `false`.
 
 ---
 
+### `exported-dependencies`
+
+The dependencies this project hands to its own users.
+
+A library whose interface is partly made of another distribution's types — one that
+returns numpy arrays, or takes a pydantic model — can say so, and then a project
+that depends on this one may import those distributions without declaring them
+itself.
+
+Only what the project already depends on can be exported, and the claim only
+travels one link: exporting a distribution does not export whatever *it* depends
+on, unless that distribution exports it in turn.
+
+This is written into the `by.typed` marker when the project is built, because that
+is what its users have — a `pyproject.toml` is not installed with the package.
+
+**Default value**: `null`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    exported-dependencies = ["numpy"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    exported-dependencies = ["numpy"]
+    ```
+
+---
+
 ### `implicit-object-repr-exempt-types`
 
 A list of classes never reported as an
@@ -1384,6 +1422,44 @@ Defaults to `false`.
     [overrides.analysis]
     # Turn off fluid specializations
     disable-fluid-specializations = true
+    ```
+
+---
+
+#### `exported-dependencies`
+
+The dependencies this project hands to its own users.
+
+A library whose interface is partly made of another distribution's types — one that
+returns numpy arrays, or takes a pydantic model — can say so, and then a project
+that depends on this one may import those distributions without declaring them
+itself.
+
+Only what the project already depends on can be exported, and the claim only
+travels one link: exporting a distribution does not export whatever *it* depends
+on, unless that distribution exports it in turn.
+
+This is written into the `by.typed` marker when the project is built, because that
+is what its users have — a `pyproject.toml` is not installed with the package.
+
+**Default value**: `null`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    exported-dependencies = ["numpy"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    exported-dependencies = ["numpy"]
     ```
 
 ---

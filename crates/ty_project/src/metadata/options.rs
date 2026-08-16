@@ -2162,6 +2162,29 @@ pub struct AnalysisOptions {
         "#
     )]
     pub shipped_modules: Option<Vec<RangedValue<String>>>,
+
+    /// The dependencies this project hands to its own users.
+    ///
+    /// A library whose interface is partly made of another distribution's types — one that
+    /// returns numpy arrays, or takes a pydantic model — can say so, and then a project
+    /// that depends on this one may import those distributions without declaring them
+    /// itself.
+    ///
+    /// Only what the project already depends on can be exported, and the claim only
+    /// travels one link: exporting a distribution does not export whatever *it* depends
+    /// on, unless that distribution exports it in turn.
+    ///
+    /// This is written into the `by.typed` marker when the project is built, because that
+    /// is what its users have — a `pyproject.toml` is not installed with the package.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"null"#,
+        value_type = "list[str]",
+        example = r#"
+            exported-dependencies = ["numpy"]
+        "#
+    )]
+    pub exported_dependencies: Option<Vec<RangedValue<String>>>,
 }
 
 impl AnalysisOptions {
@@ -2188,6 +2211,7 @@ impl AnalysisOptions {
             implicit_object_repr_report_types,
             dependency_groups,
             shipped_modules,
+            exported_dependencies,
         } = self;
 
         let AnalysisSettings {
@@ -2209,6 +2233,7 @@ impl AnalysisOptions {
             implicit_object_repr_report_types: implicit_object_repr_report_types_default,
             dependency_groups: dependency_groups_default,
             shipped_modules: shipped_modules_default,
+            exported_dependencies: exported_dependencies_default,
         } = AnalysisSettings::default();
 
         let allowed_unresolved_imports =
@@ -2301,6 +2326,15 @@ impl AnalysisOptions {
                         .collect::<Box<[Box<str>]>>()
                 })
                 .or(shipped_modules_default),
+            exported_dependencies: exported_dependencies
+                .as_ref()
+                .map(|exported| {
+                    exported
+                        .iter()
+                        .map(|name| Box::from(&***name))
+                        .collect::<Box<[Box<str>]>>()
+                })
+                .or(exported_dependencies_default),
         }
     }
 }

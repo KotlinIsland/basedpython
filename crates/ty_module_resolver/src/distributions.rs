@@ -13,7 +13,8 @@
 use ruff_db::files::{directory_listing, system_path_to_file};
 use ruff_db::source::source_text;
 use ruff_db::system::SystemPath;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
 
 use crate::db::Db;
 use crate::environment::ResolverEnvironment;
@@ -200,6 +201,198 @@ pub fn distribution_index<'db>(
     }
 }
 
+/// What each installed distribution says it requires.
+///
+/// This answers "why is this here?" about something the project never asked for:
+/// the requirement edges lead back from it to the dependency that did ask.
+#[derive(Debug, Default, Eq, PartialEq, get_size2::GetSize)]
+pub struct RequirementIndex {
+    /// A distribution to the installed distributions it requires, sorted.
+    ///
+    /// Only edges to something installed are kept. An edge to a distribution
+    /// that is not in the environment leads nowhere, and this is only ever
+    /// walked towards something that is.
+    requirements: FxHashMap<DistributionName, Box<[DistributionName]>>,
+}
+
+impl RequirementIndex {
+    /// The installed distributions `distribution` requires.
+    pub fn requirements_of(&self, distribution: &DistributionName) -> &[DistributionName] {
+        self.requirements
+            .get(distribution)
+            .map_or(&[], |requirements| requirements)
+    }
+
+    /// The shortest way `target` is reached from one of `roots`.
+    ///
+    /// The answer is the path up to and including whatever requires `target`
+    /// directly, so its first element is the root that explains the install and
+    /// its last is the distribution that names `target` outright. `None` when no
+    /// root reaches it, which is what a missing or unreadable `METADATA` looks
+    /// like from here.
+    ///
+    /// Ties are broken by name so that the same environment always gives the
+    /// same answer.
+    ///
+    /// Only requirements `follow` accepts are walked, which is what lets the same
+    /// search answer a narrower question than "what pulled this in" — the caller
+    /// asking which requirements are *exported* walks the same graph with fewer
+    /// edges.
+    pub fn path_from<'a>(
+        &'a self,
+        roots: &[&DistributionName],
+        target: &DistributionName,
+        follow: impl Fn(&DistributionName, &DistributionName) -> bool,
+    ) -> Option<Vec<&'a DistributionName>> {
+        let mut roots = roots.to_vec();
+        roots.sort_unstable();
+        roots.dedup();
+
+        // the distribution each one was first reached from, which is both the
+        // visited set and what the path is rebuilt from
+        let mut reached_from: FxHashMap<&DistributionName, Option<&DistributionName>> =
+            FxHashMap::default();
+        let mut frontier: VecDeque<&DistributionName> = VecDeque::new();
+
+        for root in roots {
+            let Some((installed, _)) = self.requirements.get_key_value(root) else {
+                continue;
+            };
+            if reached_from.insert(installed, None).is_none() {
+                frontier.push_back(installed);
+            }
+        }
+
+        while let Some(distribution) = frontier.pop_front() {
+            for required in self.requirements_of(distribution) {
+                if !follow(distribution, required) {
+                    continue;
+                }
+
+                if required == target {
+                    let mut path = vec![distribution];
+                    let mut step = distribution;
+                    while let Some(Some(previous)) = reached_from.get(step) {
+                        path.push(previous);
+                        step = previous;
+                    }
+                    path.reverse();
+                    return Some(path);
+                }
+
+                if reached_from.insert(required, Some(distribution)).is_none() {
+                    frontier.push_back(required);
+                }
+            }
+        }
+
+        None
+    }
+}
+
+/// What every installed distribution requires, read from its `METADATA`.
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+pub fn requirement_index<'db>(
+    db: &'db dyn Db,
+    resolver_environment: ResolverEnvironment<'db>,
+) -> RequirementIndex {
+    let _span = tracing::debug_span!("requirement_index").entered();
+
+    let mut requirements: FxHashMap<DistributionName, Vec<DistributionName>> = FxHashMap::default();
+
+    for site_packages in resolver_environment.search_paths(db).site_packages_paths() {
+        index_requirements(db, site_packages, &mut requirements);
+    }
+
+    let installed: FxHashSet<&DistributionName> = requirements.keys().collect();
+    let kept: Vec<_> = requirements
+        .iter()
+        .map(|(distribution, required)| {
+            let mut required: Vec<_> = required
+                .iter()
+                .filter(|name| installed.contains(name))
+                .cloned()
+                .collect();
+            required.sort_unstable();
+            required.dedup();
+            (distribution.clone(), required.into_boxed_slice())
+        })
+        .collect();
+
+    RequirementIndex {
+        requirements: kept.into_iter().collect(),
+    }
+}
+
+fn index_requirements(
+    db: &dyn Db,
+    site_packages: &SystemPath,
+    requirements: &mut FxHashMap<DistributionName, Vec<DistributionName>>,
+) {
+    let Ok(listing) = directory_listing(db, site_packages) else {
+        tracing::debug!("Failed to list `{site_packages}` when indexing requirements");
+        return;
+    };
+
+    for (name, file_type) in listing.iter() {
+        if !file_type.is_directory() {
+            continue;
+        }
+        let Some(distribution) = distribution_name_from_dist_info(name) else {
+            continue;
+        };
+
+        // a distribution with no readable `METADATA` is still installed, and so
+        // still something another distribution can require: it is entered with
+        // no requirements of its own rather than left out
+        let entry = requirements.entry(distribution).or_default();
+
+        let metadata = site_packages.join(name).join("METADATA");
+        let Ok(metadata) = system_path_to_file(db, &metadata) else {
+            tracing::debug!("No `METADATA` for `{name}` in `{site_packages}`");
+            continue;
+        };
+
+        entry.extend(required_distributions(&source_text(db, metadata)));
+    }
+}
+
+/// The distributions a `METADATA` file's `Requires-Dist` fields name.
+///
+/// Only what is installed alongside the distribution itself counts, so a
+/// requirement an extra brings in — `Requires-Dist: pytest; extra == "dev"` — is
+/// left out: whether that extra was asked for is not something the installed
+/// metadata records, and claiming it explains an install would be a guess.
+///
+/// The fields stop at the first empty line, after which `METADATA` carries the
+/// project's own description and any line in it could look like a field. Empty
+/// means empty: a field's value can run over several lines, and every line after
+/// the first is indented — including the ones separating the paragraphs of a
+/// license, which is what a long `License` field is made of.
+fn required_distributions(metadata: &str) -> impl Iterator<Item = DistributionName> {
+    metadata
+        .lines()
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .take_while(|line| !line.is_empty())
+        .filter_map(|line| {
+            let requirement = line.strip_prefix("Requires-Dist:")?.trim();
+            let (requirement, marker) = match requirement.split_once(';') {
+                Some((requirement, marker)) => (requirement, marker),
+                None => (requirement, ""),
+            };
+
+            if marker.contains("extra") {
+                return None;
+            }
+
+            let name = requirement
+                .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+                .next()?;
+
+            (!name.is_empty()).then(|| DistributionName::new(name))
+        })
+}
+
 fn index_site_packages(
     db: &dyn Db,
     site_packages: &SystemPath,
@@ -240,7 +433,7 @@ fn index_site_packages(
 /// The escaping a wheel applies to the name (`absl-py` becomes `absl_py`) is not
 /// undone here: [`DistributionName`] compares normalized, and both spellings
 /// normalize alike.
-fn distribution_name_from_dist_info(directory: &str) -> Option<DistributionName> {
+pub(crate) fn distribution_name_from_dist_info(directory: &str) -> Option<DistributionName> {
     let stem = directory.strip_suffix(".dist-info")?;
     // the version never contains `-`: PEP 440 spells a local version with `+`,
     // and the escaped name never contains one either
@@ -295,7 +488,7 @@ const MODULE_SUFFIXES: &[&str] = &[".py", ".pyi", ".by", ".byi", ".so", ".pyd"];
 const METADATA_DIRECTORIES: &[&str] = &[".dist-info", ".data", ".egg-info"];
 
 /// The first field of a `RECORD` line, which is a CSV record.
-fn record_path(line: &str) -> Option<&str> {
+pub(crate) fn record_path(line: &str) -> Option<&str> {
     let line = line.trim_end_matches(['\r', '\n']);
     if line.is_empty() {
         return None;
@@ -599,6 +792,60 @@ types_requests-2.32.0.dist-info/RECORD,,
             .unwrap();
 
             assert_eq!(owners(&db, "extra"), ["PyJWT"]);
+        }
+    }
+    mod requirements {
+        use super::*;
+
+        fn required(metadata: &str) -> Vec<String> {
+            required_distributions(metadata)
+                .map(|name| name.to_string())
+                .collect()
+        }
+
+        #[test]
+        fn a_field_that_runs_over_several_lines_does_not_end_the_fields() {
+            // a real `METADATA` carries the whole license text in one field, and
+            // the empty-looking lines between its paragraphs are the field's, not
+            // the end of the block that `Requires-Dist` is in
+            let metadata = "\
+Metadata-Version: 2.1
+Name: pandas
+License: BSD 3-Clause License
+        
+         Redistribution is permitted.
+Requires-Dist: numpy>=1.26.0; python_version < \"3.14\"
+Requires-Dist: python-dateutil>=2.8.2
+
+pandas is a data analysis library.
+
+Requires-Dist: not-a-field-down-here
+";
+
+            assert_eq!(required(metadata), ["numpy", "python-dateutil"]);
+        }
+
+        #[test]
+        fn a_requirement_an_extra_brings_in_is_left_out() {
+            let metadata = "\
+Name: pandas
+Requires-Dist: numpy>=1.26.0
+Requires-Dist: pytest>=7.3.2; extra == \"test\"
+";
+
+            assert_eq!(required(metadata), ["numpy"]);
+        }
+
+        #[test]
+        fn the_version_and_the_extras_of_a_requirement_are_not_part_of_its_name() {
+            let metadata = "\
+Name: mine
+Requires-Dist: uvicorn[standard]>=0.30
+Requires-Dist: httpx (>=0.27)
+Requires-Dist: attrs
+";
+
+            assert_eq!(required(metadata), ["uvicorn", "httpx", "attrs"]);
         }
     }
 }

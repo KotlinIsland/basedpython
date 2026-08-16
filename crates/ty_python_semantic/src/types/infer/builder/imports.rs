@@ -1,8 +1,8 @@
 use ruff_python_ast as ast;
 use ruff_text_size::{Ranged, TextRange};
 use ty_module_resolver::{
-    ImportingFile, KnownModule, Module, ModuleName, ModuleNameResolutionError, ModuleResolveMode,
-    resolve_module, search_paths,
+    DistributionName, ImportingFile, KnownModule, Module, ModuleName, ModuleNameResolutionError,
+    ModuleResolveMode, resolve_module, search_paths,
 };
 
 use crate::{
@@ -385,13 +385,32 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let Some(builder) = self.context.report_lint(&UNDECLARED_DEPENDENCY, range) else {
                     return;
                 };
-                let mut diagnostic = builder.into_diagnostic(format_args!(
-                    "`{root}` comes from `{distribution}`, which this project does not depend on",
-                    root = module_name.first_component(),
-                ));
+                let root = module_name.first_component();
+                let mut diagnostic = if names_the_distribution(root, distribution) {
+                    builder.into_diagnostic(format_args!(
+                        "This project does not directly depend on `{distribution}`"
+                    ))
+                } else {
+                    builder.into_diagnostic(format_args!(
+                        "`{root}` comes from `{distribution}`, \
+                         which this project does not directly depend on"
+                    ))
+                };
+
+                match dependencies::installed_because(db, self.file(), distribution).as_deref() {
+                    Some([declared]) => diagnostic.info(format_args!(
+                        "It is installed because `{declared}` requires it"
+                    )),
+                    Some([declared, .., requires]) => diagnostic.info(format_args!(
+                        "It is installed because `{declared}` requires it, through `{requires}`"
+                    )),
+                    Some([]) | None => {
+                        diagnostic.info("It is only installed because something else requires it");
+                    }
+                }
+
                 diagnostic.info(format_args!(
-                    "It is only installed because something else depends on it; \
-                     add `{distribution}` to the project's dependencies"
+                    "Add `{distribution}` to the project's dependencies"
                 ));
             }
 
@@ -402,11 +421,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let Some(builder) = self.context.report_lint(&MISPLACED_DEPENDENCY, range) else {
                     return;
                 };
-                let mut diagnostic = builder.into_diagnostic(format_args!(
-                    "`{root}` comes from `{distribution}`, which is declared in {groups}",
-                    root = module_name.first_component(),
-                    groups = format_groups(&declared_in),
-                ));
+                let root = module_name.first_component();
+                let groups = format_groups(&declared_in);
+                let mut diagnostic = if names_the_distribution(root, distribution) {
+                    builder
+                        .into_diagnostic(format_args!("`{distribution}` is declared in {groups}"))
+                } else {
+                    builder.into_diagnostic(format_args!(
+                        "`{root}` comes from `{distribution}`, which is declared in {groups}"
+                    ))
+                };
                 diagnostic.info(
                     "Nothing installs a dependency group alongside the project, \
                      so this import fails for everyone who installs it",
@@ -847,6 +871,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             module,
         );
     }
+}
+
+/// Whether the module a diagnostic is about is named after its distribution.
+///
+/// `numpy` installs `numpy`, and saying so twice in one sentence reads as a
+/// mistake. `PyJWT` installs `jwt`, and then the distribution's name is the whole
+/// point of the sentence, because it is not the name that was imported.
+fn names_the_distribution(root: &str, distribution: &DistributionName) -> bool {
+    DistributionName::new(root).normalized() == distribution.normalized()
 }
 
 /// The groups a distribution is declared in, as a diagnostic reads them.

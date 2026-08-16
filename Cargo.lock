@@ -4821,6 +4821,7 @@ dependencies = [
  "ty_project",
  "ty_python_core",
  "ty_python_semantic",
+ "ty_static",
  "ty_vendored",
 ]
 
@@ -4846,6 +4847,7 @@ dependencies = [
  "strum_macros",
  "tempfile",
  "thiserror 2.0.19",
+ "toml 1.1.4+spec-1.1.0",
  "tracing",
  "ty_vendored",
 ]

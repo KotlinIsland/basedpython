@@ -128,6 +128,16 @@
             "null"
           ]
         },
+        "exported-dependencies": {
+          "description": "The dependencies this project hands to its own users.\n\nA library whose interface is partly made of another distribution's types — one that\nreturns numpy arrays, or takes a pydantic model — can say so, and then a project\nthat depends on this one may import those distributions without declaring them\nitself.\n\nOnly what the project already depends on can be exported, and the claim only\ntravels one link: exporting a distribution does not export whatever *it* depends\non, unless that distribution exports it in turn.\n\nThis is written into the `by.typed` marker when the project is built, because that\nis what its users have — a `pyproject.toml` is not installed with the package.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/string"
+          }
+        },
         "implicit-object-repr-exempt-types": {
           "description": "A list of classes never reported as an\n[`implicit-object-repr`](rules.md#implicit-object-repr).\n\nA class deriving from one of these is exempt too, so listing a base opts out a whole\nhierarchy.\n\nEntries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be\nspelled bare (`int`).",
           "type": [
@@ -2100,7 +2110,7 @@
         },
         "undeclared-dependency": {
           "title": "detects imports of a distribution the project does not depend on",
-          "description": "## What it does\n\nChecks for imports of an installed distribution the project never declared\na dependency on.\n\n## Why is this bad?\n\nThe import only works because something else the project depends on\nhappened to pull the distribution in. Nothing keeps that true: the\ndependency that brought it can drop it, or move to a version that no longer\nneeds it, and then the import fails for everyone installing the project\nfresh — while continuing to work in the environment it was written in.\n\nDepending on something means saying so.\n\n## Examples\n\n`requests` installs `charset_normalizer`, but a project that only declares\n`requests` has not declared `charset_normalizer`:\n\n```toml\n[project]\nname = \"my-lib\"\ndependencies = [\"requests\"]\n```\n\n```python\nimport charset_normalizer  # error: [undeclared-dependency]\n```\n\nAdding it to `[project].dependencies` fixes the import. In an editor this\nis offered as a quick fix.\n\n## Configuration\n\nThe check is only made when the project says what it depends on: a project\nwith no `[project]` table, an environment with no install metadata, and a\nmodule ty cannot attribute to a distribution are all cases where nothing is\nreported.",
+          "description": "## What it does\n\nChecks for imports of an installed distribution the project never declared\na dependency on.\n\n## Why is this bad?\n\nThe import only works because something else the project depends on\nhappened to pull the distribution in. Nothing keeps that true: the\ndependency that brought it can drop it, or move to a version that no longer\nneeds it, and then the import fails for everyone installing the project\nfresh — while continuing to work in the environment it was written in.\n\nDepending on something means saying so.\n\n## Examples\n\n`requests` installs `charset_normalizer`, but a project that only declares\n`requests` has not declared `charset_normalizer`:\n\n```toml\n[project]\nname = \"my-lib\"\ndependencies = [\"requests\"]\n```\n\n```python\nimport charset_normalizer  # error: [undeclared-dependency]\n```\n\nAdding it to `[project].dependencies` fixes the import. In an editor this\nis offered as a quick fix.\n\n## Configuration\n\nThe check is only made when the project says what it depends on: a project\nwith no `[project]` table, an environment with no install metadata, and a\nmodule ty cannot attribute to a distribution are all cases where nothing is\nreported.\n\nA dependency can also declare that part of what it hands out is another\ndistribution, and then importing that one is not reported:\n\n```toml\n# the dependency's own pyproject.toml\n[tool.basedpython.analysis]\nexported-dependencies = [\"numpy\"]\n```\n\nA build writes this into the `by.typed` marker its package ships, which is\nwhat the projects depending on it read.",
           "default": "warn",
           "oneOf": [
             {

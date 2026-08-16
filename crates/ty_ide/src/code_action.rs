@@ -1,4 +1,5 @@
 use crate::add_dependency;
+use crate::add_dependency::AddDependency;
 use crate::completion;
 use crate::django_template::django_template_code_actions;
 
@@ -25,6 +26,9 @@ pub struct QuickFix {
     /// A file the action creates, for a fix to a reference to something that
     /// isn't there yet.
     pub create: Option<SystemPathBuf>,
+    /// A dependency for the client to have `uv` add, for a fix that no edit can
+    /// carry out on its own because it has to reach the environment.
+    pub add_dependency: Option<AddDependency>,
 }
 
 /// An edit and the file it applies to.
@@ -47,6 +51,7 @@ impl QuickFix {
                 .collect(),
             preferred,
             create: None,
+            add_dependency: None,
         }
     }
 }
