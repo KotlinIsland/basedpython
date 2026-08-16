@@ -77,7 +77,7 @@ pub enum Mode {
     /// anon NT literal for `ExprTuple` with `is_anon_named_tuple`,
     /// `typeof X` for `ExprSubscript` with `is_typeof`, `out X` / `in X` /
     /// `in out X` for a use-site variance marker subscript, `<value> cast
-    /// <type>` for `ExprCall` with `is_cast`, `private type X = V` for
+    /// <type>` for `ExprCall` with a `cast_kind`, `private type X = V` for
     /// `StmtTypeAlias` with `is_private`. Modifier-keyword
     /// decorators (whose source range does not start with `@`) are
     /// preserved as-is when this mode is active. Use when re-rendering an
@@ -312,9 +312,7 @@ impl<'a> Generator<'a> {
                 let marker = &function.decorator_list[0].expression;
                 statement!({
                     match marker {
-                        Expr::Call(call)
-                            if !call.is_cast && !call.is_checked_cast && !call.is_string_tag =>
-                        {
+                        Expr::Call(call) if call.cast_kind.is_none() && !call.is_string_tag => {
                             self.unparse_expr(&call.func, precedence::MAX);
                             self.p("(");
                             let mut first = true;
@@ -1467,8 +1465,7 @@ impl<'a> Generator<'a> {
                 arguments,
                 range_start: _,
                 node_index: _,
-                is_cast: _,
-                is_checked_cast: _,
+                cast_kind: _,
                 is_string_tag: _,
             }) => {
                 self.unparse_expr(func, precedence::MAX);

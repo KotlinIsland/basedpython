@@ -1,23 +1,27 @@
-# basedpython: `cast?` checked cast
+# basedpython: `cast!` and `cast?`
 
-In basedpython, `<value> cast? <type>` is a *checked* cast: at runtime it yields the value when
-`isinstance(value, type)` holds and `None` otherwise, so its type is `type | None`. The transpiler
-lowers it to a `_checked_cast(value, type)` helper call.
+basedpython has two casts that verify the value at runtime, for the downcasts the plain `cast`
+rejects. `<value> cast! <type>` raises a `TypeError` on a mismatch, so its type is the target;
+`<value> cast? <type>` yields `None` instead, so its type is `<type> | None`.
 
 ## simple checked cast
 
 ```by
 def f(a: object):
-    b = a cast? int
-    reveal_type(b)  # revealed: int | None
+    b = a cast! int
+    reveal_type(b)  # revealed: int
+    c = a cast? int
+    reveal_type(c)  # revealed: int | None
 ```
 
 ## checked cast to union
 
 ```by
 def f(a: object):
-    b = a cast? int | str
-    reveal_type(b)  # revealed: int | str | None
+    b = a cast! int | str
+    reveal_type(b)  # revealed: int | str
+    c = a cast? int | str
+    reveal_type(c)  # revealed: int | str | None
 ```
 
 ## checked cast in call argument
@@ -27,12 +31,13 @@ def g(x: int | None) -> int | None:
     return x
 
 def f(a: object):
+    reveal_type(g(a cast! int))  # revealed: int | None
     reveal_type(g(a cast? int))  # revealed: int | None
 ```
 
 ## the value operand is a value position
 
-The value keeps its own type; only the result is `type | None`.
+The value keeps its own type; only the result is the target.
 
 ```by
 def f(a: object):
@@ -41,12 +46,237 @@ def f(a: object):
     reveal_type(b)  # revealed: int | None
 ```
 
+## erased type arguments
+
+A checked cast validates its value with `isinstance`, which can only test a class. A builtin
+container erases its type arguments at runtime, so only the origin is checkable and the argument
+claim goes unverified.
+
+```by
+def f(a: object):
+    # error: [erased-cast-argument] "Type arguments of `list[int]` are erased at runtime"
+    b = a cast! list[int]
+    reveal_type(b)  # revealed: list[int]
+```
+
+`cast?` narrows to `<type> | None`, and warns the same way.
+
+```by
+def f(a: object):
+    # error: [erased-cast-argument] "Type arguments of `dict[str, int]` are erased at runtime"
+    b = a cast? dict[str, int]
+    reveal_type(b)  # revealed: dict[str, int] | None
+```
+
+A bare target claims no arguments, so there is nothing to erase — only the unrelated
+`missing-type-argument` fires.
+
+```by
+def f(a: object):
+    # error: [missing-type-argument] "Missing type argument for generic class `list` (expected 1 type argument)"
+    b = a cast! list
+    reveal_type(b)  # revealed: list[Unknown]
+```
+
+A *user* generic's instances carry `__orig_class__`, so its arguments are checked in full.
+
+```by
+class A[T]:
+    def __init__(self, t: T): ...
+
+def f(a: object):
+    b = a cast! A[int]
+    reveal_type(b)  # revealed: A[int]
+```
+
+The plain `cast` never reaches a runtime check at all, so it drops no argument claim and stays
+silent — even for a builtin target.
+
+```by
+def f(a: list[int]):
+    b = a cast list[int]  # no erased-cast-argument: nothing is checked
+    reveal_type(b)  # revealed: list[int]
+```
+
+## a statically-proven upcast is not erased
+
+When the value is already the target statically, a checked cast verifies nothing at runtime, so no
+argument claim is dropped — `erased-cast-argument` must stay silent even for a builtin target.
+`B[int]` subclasses `list[int]`, so the argument is already guaranteed.
+
+```by
+class B[T](list[T]): ...
+
+def f():
+    b = B[int]() cast! list[int]  # no erased-cast-argument: already a `list[int]`
+    reveal_type(b)  # revealed: list[int]
+```
+
+The same holds for a subscripted protocol target, whose runtime `isinstance` would otherwise be an
+error. Since the argument is covariant `object`, an `A[int]` is already a `Sequence[object]`.
+
+```by
+from collections.abc import Sequence
+
+class A[T](Sequence[T]):
+    def __getitem__(self, i): ...
+    def __len__(self): ...
+
+def f():
+    a = A[int]() cast! Sequence[object]
+    reveal_type(a)  # revealed: Sequence[object]
+```
+
+A dynamic value is *not* a subtype of a concrete target, so its check is kept and the argument is
+still reported as erased.
+
+```by
+def f(a):
+    # error: [erased-cast-argument] "Type arguments of `list[int]` are erased at runtime"
+    b = a cast! list[int]
+    reveal_type(b)  # revealed: list[int]
+```
+
+## user generic arguments are checked, not assumed
+
+`T` is invariant here, so an `A[str]` is not an `A[int]`. These assertions run for real: the
+divergence harness executes every checker-clean block.
+
+```by
+class A[T]:
+    t: T
+    def __init__(self, t: T):
+        self.t = t
+
+def f(x: object) -> A[int] | None:
+    return x cast? A[int]
+
+assert f(A(1)) is not None
+assert f(A("")) is None  # right base, wrong argument
+assert f(1) is None  # wrong base
+```
+
+## a reified type parameter is checked, not assumed
+
+A cast shares the `is`-test's engine, so a value whose type is carried by a *reified* type parameter
+carries the answer in a runtime cell. `def f[T](data: list[T])` casting to `list[int]` lowers to
+`T == int`, which verifies the argument exactly — so `erased-cast-argument` must stay silent.
+
+```by
+def f[T](data: list[T]):
+    x = data cast? list[int]  # no erased-cast-argument: `T == int` decides it
+    reveal_type(x)  # revealed: list[int] | None
+```
+
+These assertions run for real — the reified cell distinguishes the specializations:
+
+```by
+def f[T](data: list[T]) -> list[int] | None:
+    return data cast? list[int]
+
+assert f([1, 2]) is not None
+assert f(["a"]) is None
+```
+
+## a union target is decomposed per arm
+
+A union cast is the disjunction of its arms, each lowered by its own kind — never a single
+`isinstance` against a tuple holding a parameterized arm, which would be a runtime error.
+
+```by
+class A[T]:
+    t: T
+    def __init__(self, t: T): ...
+
+def f(a: object):
+    b = a cast? A[int] | str
+    reveal_type(b)  # revealed: A[int] | str | None
+```
+
+## a data-member protocol target is checked structurally
+
+A protocol has no `__orig_class__` to probe, but basedpython reifies class attribute annotations, so
+a protocol whose members are all data members is validated structurally against those annotations —
+no `erased-cast-argument`, and the cast is checked in full.
+
+```by
+from typing import Protocol
+
+class HasA[T](Protocol):
+    a: T
+
+def f(x: object):
+    b = x cast! HasA[int]  # no erased-cast-argument: checked structurally
+    reveal_type(b)  # revealed: HasA[int]
+```
+
+These assertions run for real — `a` is invariant, so a `bool` annotation is not an `int`:
+
+```by
+from typing import Protocol
+
+class HasA[T](Protocol):
+    a: T
+
+class IntAttr:
+    a: int
+
+class BoolAttr:
+    a: bool
+
+def f(x: object) -> HasA[int] | None:
+    return x cast? HasA[int]
+
+assert f(IntAttr()) is not None
+assert f(BoolAttr()) is None  # right member, wrong annotation
+```
+
+## a method-bearing protocol target is checked structurally
+
+A method member is checked too: its parameters (contravariant) and return (covariant) are validated
+against the value method's reified annotations — no `erased-cast-argument`, the cast is checked.
+
+```by
+from typing import Protocol
+
+class HasGet[T](Protocol):
+    def get(self) -> T: ...
+
+def f(x: object):
+    b = x cast! HasGet[int]  # no erased-cast-argument: checked structurally
+    reveal_type(b)  # revealed: HasGet[int]
+```
+
+## a protocol with an unspellable member cannot be checked
+
+A member whose specialized type has no runtime spelling — a callable attribute — leaves the cast
+with no runtime residue. The transpiler degrades it to an unchecked `typing.cast`; ty warns.
+
+```by
+from typing import Protocol
+from collections.abc import Callable
+
+class HasCb[T](Protocol):
+    cb: Callable[[T], T]
+
+def f(x: object):
+    # error: [erased-cast-argument] "`HasCb[int]` cannot be checked at runtime"
+    b = x cast! HasCb[int]
+    reveal_type(b)  # revealed: HasCb[int]
+```
+
 ## not valid in `.py` files
 
-`cast?` is basedpython-only. A `.py` file using it gets a parse error from the parser.
+Both forms are basedpython-only. A `.py` file using either gets a parse error from the parser.
 
 ```py
 a = 1
-# error: [invalid-syntax] "`cast?` (checked cast) keyword is not valid in .py files"
+# error: [invalid-syntax] "`cast!` keyword is not valid in .py files"
+b = a cast! int
+```
+
+```py
+a = 1
+# error: [invalid-syntax] "`cast?` keyword is not valid in .py files"
 b = a cast? int
 ```

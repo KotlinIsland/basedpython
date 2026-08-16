@@ -73,8 +73,7 @@ fn map_call_with_two_arguments<'a>(
             },
         range_start: _,
         node_index: _,
-        is_cast: _,
-        is_checked_cast: _,
+        cast_kind: _,
         is_string_tag: _,
     } = call;
 

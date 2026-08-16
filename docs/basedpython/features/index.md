@@ -166,7 +166,7 @@ syntax inside a function body
 - [none-coalesce operator (`??`)](none-coalesce.md)
 - [postfix await (`.await`)](await-attribute.md)
 - [`cast` keyword](cast.md)
-- [checked & safe casts (`cast` / `cast?`)](checked-cast.md)
+- [checked & safe casts (`cast!` / `cast?`)](checked-cast.md)
 - [`super` keyword](super.md)
 - [tuple member access (`expr.N`)](tuple-index.md)
 - [keyword arguments in subscripts](kw-subscript.md)

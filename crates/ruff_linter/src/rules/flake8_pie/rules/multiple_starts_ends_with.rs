@@ -92,8 +92,7 @@ pub(crate) fn multiple_starts_ends_with(checker: &Checker, expr: &Expr) {
                 },
             range_start: _,
             node_index: _,
-            is_cast: _,
-            is_checked_cast: _,
+            cast_kind: _,
             is_string_tag: _,
         }) = &call
         else {
@@ -156,8 +155,7 @@ pub(crate) fn multiple_starts_ends_with(checker: &Checker, expr: &Expr) {
                             },
                         range_start: _,
                         node_index: _,
-                        is_cast: _,
-                        is_checked_cast: _,
+                        cast_kind: _,
                         is_string_tag: _,
                     }) = expr
                     else {
@@ -216,8 +214,7 @@ pub(crate) fn multiple_starts_ends_with(checker: &Checker, expr: &Expr) {
                 },
                 range_start: ruff_text_size::TextSize::default(),
                 node_index: ruff_python_ast::AtomicNodeIndex::NONE,
-                is_cast: false,
-                is_checked_cast: false,
+                cast_kind: None,
                 is_string_tag: false,
             });
             let call = node3;

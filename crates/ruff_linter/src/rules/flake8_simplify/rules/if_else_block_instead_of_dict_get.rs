@@ -212,8 +212,7 @@ pub(crate) fn if_else_block_instead_of_dict_get(checker: &Checker, stmt_if: &ast
         },
         range_start: ruff_text_size::TextSize::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
-        is_cast: false,
-        is_checked_cast: false,
+        cast_kind: None,
         is_string_tag: false,
     };
     let node4 = expected_var.clone();
@@ -325,8 +324,7 @@ pub(crate) fn if_exp_instead_of_dict_get(
         },
         range_start: ruff_text_size::TextSize::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
-        is_cast: false,
-        is_checked_cast: false,
+        cast_kind: None,
         is_string_tag: false,
     };
 

@@ -104,7 +104,6 @@ impl LoweringArgs {
     /// version.
     fn apply(&self, config: &mut Config) -> anyhow::Result<()> {
         config.soundness = parse_soundness(&self.soundness)?;
-        config.checked_cast = !self.no_checked_cast;
         config.runtime_raises_checks = self.runtime_raises_checks;
         config.unique_loop_bindings = !self.no_unique_loop_bindings;
         Ok(())

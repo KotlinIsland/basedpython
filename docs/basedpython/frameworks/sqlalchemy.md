@@ -16,7 +16,7 @@ basedpython supports sqlalchemy 2.0 declarative models. type checking is precise
 ### transpilation compatibility
 
 - `optional?.chaining` works across nullable relationships: `user?.address?.city`
-- `checked cast` and `cast?` operators work in model methods
+- the `cast!` and `cast?` operators work in model methods
 - soundness checks work correctly with sqlalchemy's descriptor machinery
 
 ### runtime queries

@@ -185,8 +185,7 @@ fn make_suggestion(open: &FileOpen<'_>, generator: Generator) -> String {
         },
         range_start: ruff_text_size::TextSize::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
-        is_cast: false,
-        is_checked_cast: false,
+        cast_kind: None,
         is_string_tag: false,
     };
     generator.expr(&call.into())

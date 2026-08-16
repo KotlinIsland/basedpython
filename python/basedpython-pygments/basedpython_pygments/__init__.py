@@ -99,9 +99,9 @@ class BasedPythonLexer(PythonLexer):
     tokens = {
         "keywords": [
             (words(RESERVED, prefix=r"\b", suffix=r"\b"), Keyword),
-            # `x cast int`, `x cast? int` — infix, so never followed by a call.
-            # `cast(...)` stays the ordinary `typing.cast`
-            (r"\bcast\?(?!\w)|\bcast\b(?!\s*\()", Keyword),
+            # `x cast int`, `x cast! int`, `x cast? int` — infix, so never
+            # followed by a call. `cast(...)` stays the ordinary `typing.cast`
+            (r"\bcast[!?](?!\w)|\bcast\b(?!\s*\()", Keyword),
             # a modifier only binds when something modifiable follows it. the
             # lookahead accepts another modifier, which is what lets a chain
             # like `frozen data class` resolve one word at a time

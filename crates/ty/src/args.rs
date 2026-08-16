@@ -208,11 +208,6 @@ pub(crate) struct LoweringArgs {
     /// `iterations`, `assignments`, `returns`, `arguments`, `parameters`
     #[arg(long, value_name = "SPEC", default_value = "default")]
     pub(crate) soundness: String,
-    /// lower `<value> cast <type>` to an unchecked `typing.cast` instead
-    /// of a runtime-checked cast that raises on a type mismatch (the
-    /// `cast?` safe form is unaffected)
-    #[arg(long)]
-    pub(crate) no_checked_cast: bool,
     /// wrap every function with a `raises` clause in a runtime guard that
     /// fails when it raises something the clause does not include
     #[arg(long)]

@@ -403,10 +403,9 @@ the escape, lifetime, and `once` **diagnostics** are always available — they a
 pure static analysis with no codegen, so they run on every check and, like any
 ty rule, can be downgraded or silenced per project or per line
 
-the `once` **runtime guard** is opt-in, mirroring `--no-checked-cast`: pass
-`--once-checks` to `by run`, `by build`, or `by transpile` to emit the
-`_OnceGuard` wrapper, or leave it off for a zero-overhead static-only build. the
-type is identical either way
+the `once` **runtime guard** is opt-in: pass `--once-checks` to `by run`,
+`by build`, or `by transpile` to emit the `_OnceGuard` wrapper, or leave it off
+for a zero-overhead static-only build. the type is identical either way
 
 ## composition
 

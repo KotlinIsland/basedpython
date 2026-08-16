@@ -8,6 +8,7 @@ use ruff_db::diagnostic::Span;
 use ruff_db::files::File;
 use ruff_db::parsed::ParsedModuleRef;
 use ruff_db::source::source_text;
+use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::helpers::{
     TypeModifier, is_dotted_name, is_untyped_declaration_marker, untyped_declaration_context,
 };
@@ -81,7 +82,7 @@ use crate::types::diagnostic::{
     NON_OVERLAPPING_TYPE_TEST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
     POSSIBLY_MISSING_SUBMODULE, REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING, TypeCheckDiagnostics,
     UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL,
-    UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_YIELD,
+    UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_CAST, UNSOUND_YIELD,
     UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, YieldKind,
     display_required_elements, hint_if_stdlib_attribute_exists_on_other_versions,
     refutable_unpacking_applies, report_attempted_protocol_instantiation,
@@ -4070,8 +4071,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 {
                     self.infer_standalone_expression_impl(value, standalone_expression, tcx)
                 } else if let ast::Expr::Call(call_expr) = value
-                    && !call_expr.is_cast
-                    && !call_expr.is_checked_cast
+                    && call_expr.cast_kind.is_none()
                 {
                     // If the RHS is not a standalone expression, this is a simple assignment
                     // (single target, no unpackings). That means it's a valid syntactic form
@@ -10481,8 +10481,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// arguments — is unverified.
     ///
     /// the wording describes what a runtime check *can* test rather than what
-    /// the transpiler emits, since ty cannot see whether checked casts are
-    /// switched off (`--no-checked-cast`, which lowers to a bare `typing.cast`)
+    /// the transpiler emits, since a provably-redundant check is elided
     fn report_erased_cast_argument(
         &mut self,
         type_arg: &ast::Expr,
@@ -10553,9 +10552,61 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
-    /// Warn when a `cast` bridges two types that can never share a value. Such a
-    /// cast is always futile: a checked `cast` raises and a safe `cast?` yields
-    /// `None`. `Any`/`Unknown` overlap everything, so those never fire.
+    /// Report a plain `cast` that is not a widening, and say whether it was one.
+    ///
+    /// The unsuffixed `cast` reinterprets a value without looking at it, so the
+    /// only casts it can make truthfully are the ones the checker already
+    /// proves: `int cast object`, or a cast to the value's own type. Casting
+    /// *down* — `object cast int` — asserts something about the value that
+    /// nothing verifies, and so must name its failure mode instead, with `cast!`
+    /// (raises) or `cast?` (yields `None`).
+    ///
+    /// A gradual `Any` / `Unknown` value is not a subtype of a concrete target,
+    /// so it is reported too: nothing at all is known about such a value, which
+    /// is exactly when the runtime check is worth having.
+    ///
+    /// The returned flag is whether the cast was unsound, not whether a
+    /// diagnostic was emitted — a suppressed report still stands in for the
+    /// non-overlapping one the caller would otherwise reach for.
+    fn report_unsound_cast(
+        &mut self,
+        cast_kind: ast::CastKind,
+        call_expression: &ast::ExprCall,
+        value_ty: Type<'db>,
+        target: Type<'db>,
+    ) -> bool {
+        if cast_kind != ast::CastKind::Static {
+            return false;
+        }
+        let env = self.program_environment();
+        let db = self.db();
+        if cast_is_redundant(db, env, value_ty, target) {
+            return false;
+        }
+        let Some(builder) = self.context.report_lint(&UNSOUND_CAST, call_expression) else {
+            return true;
+        };
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "Cast from `{}` to `{}` is not a widening",
+            value_ty.display(db, env),
+            target.display(db, env)
+        ));
+        diagnostic.info("`cast` reinterprets the value without checking it");
+        diagnostic.help("Use `cast!` to raise on a mismatch, or `cast?` to yield `None`");
+        // the synthetic callee spans the `cast` keyword itself, so the suffix
+        // goes straight after it. the edit is unsafe because it is a real change
+        // in behaviour — a value the cast was quietly lying about now raises,
+        // which is the point, but it is the author's call rather than a sweep's
+        diagnostic.set_fix(Fix::unsafe_edit(Edit::insertion(
+            ast::CastKind::Checked.suffix().to_owned(),
+            call_expression.func.range().end(),
+        )));
+        true
+    }
+
+    /// Warn when a cast bridges two types that can never share a value. Such a
+    /// cast is always futile: `cast!` raises and `cast?` yields `None`.
+    /// `Any`/`Unknown` overlap everything, so those never fire.
     fn report_non_overlapping_cast(
         &mut self,
         value_arg: &ast::Expr,
@@ -10710,30 +10761,36 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         tcx: TypeContext<'db>,
     ) -> Type<'db> {
         let env = self.program_environment();
-        // basedpython `<value> cast <type>` parses as `ExprCall { is_cast: true,
+        // basedpython's infix casts parse as `ExprCall { cast_kind: Some(..),
         // func: Name("cast"), arguments: [type, value] }`. The synthetic `cast`
-        // name is unresolved by design, so dispatch on the flag: infer the
+        // name is unresolved by design, so dispatch on the kind: infer the
         // target as a type expression and walk the value for declarations
-        if call_expression.is_cast
+        if let Some(cast_kind) = call_expression.cast_kind
             && let [type_arg, value_arg] = &*call_expression.arguments.args
         {
             let value_ty = self.infer_expression(value_arg, TypeContext::default());
             let target = self.infer_type_expression(type_arg);
-            self.report_erased_cast_argument(type_arg, value_ty, target);
-            self.report_non_overlapping_cast(value_arg, value_ty, target);
-            return target;
-        }
-
-        // basedpython `<value> cast? <type>` (checked cast) parses the same way
-        // but evaluates to `value` or `None`, so its type is `type | None`
-        if call_expression.is_checked_cast
-            && let [type_arg, value_arg] = &*call_expression.arguments.args
-        {
-            let value_ty = self.infer_expression(value_arg, TypeContext::default());
-            let target = self.infer_type_expression(type_arg);
-            self.report_erased_cast_argument(type_arg, value_ty, target);
-            self.report_non_overlapping_cast(value_arg, value_ty, target);
-            return UnionType::from_elements(self.db(), env, [target, Type::none(self.db(), env)]);
+            // only a form that verifies at runtime can drop a type-argument
+            // claim; the plain `cast` never reaches a check in the first place
+            if cast_kind.verifies_at_runtime() {
+                self.report_erased_cast_argument(type_arg, value_ty, target);
+            }
+            // an unsound plain `cast` is already the sharper report — a
+            // non-overlapping one would only repeat that the value is not the
+            // target, and the two would stack on the same expression
+            if !self.report_unsound_cast(cast_kind, call_expression, value_ty, target) {
+                self.report_non_overlapping_cast(value_arg, value_ty, target);
+            }
+            return match cast_kind {
+                // the plain `cast` and `cast!` both hand back the target: the
+                // first because the value already was one, the second because
+                // it raised if it wasn't
+                ast::CastKind::Static | ast::CastKind::Checked => target,
+                // `cast?` yields the value or `None`
+                ast::CastKind::Try => {
+                    UnionType::from_elements(self.db(), env, [target, Type::none(self.db(), env)])
+                }
+            };
         }
 
         // basedpython carries the call's expected type into the callee so a bare
@@ -11501,8 +11558,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             node_index: _,
             func,
             arguments,
-            is_cast: _,
-            is_checked_cast: _,
+            cast_kind: _,
             is_string_tag: _,
         } = call_expression;
 

@@ -45,6 +45,7 @@ KEYWORDS = [
     ("def f(var name: str): ...", "var"),
     ("a: typeof b", "typeof"),
     ("b = a cast int", "cast"),
+    ("b = a cast! int", "cast!"),
     ("b = a cast? int", "cast?"),
     ("sentinel MISSING", "sentinel"),
     ("extension list[int]:", "extension"),

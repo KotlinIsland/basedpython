@@ -367,11 +367,11 @@ def f(p: (m: literal str)) -> None:
 
 ## a modifier on a `cast` target
 
-The right operand of `cast` is the type being cast to, so it is a type expression.
+The right operand of a cast is the type being cast to, so it is a type expression.
 
 ```by
 def f(a: object) -> None:
-    b = a cast literal str
+    b = a cast! literal str
     reveal_type(b)  # revealed: LiteralString
     c = a cast? final int
     reveal_type(c)  # revealed: final int | None

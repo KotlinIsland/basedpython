@@ -44,6 +44,7 @@ types_requiring_crate_prefix = {
     "Singleton",
     "PatternArguments",
     "Variance",
+    "CastKind",
 }
 
 

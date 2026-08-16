@@ -117,8 +117,8 @@ assert Node().label?.upper() is None
 
 ## checked cast of a value pulled from `model_dump`
 
-`model_dump()` returns a loosely-typed mapping; a checked `cast` narrows a value out of it and
-verifies the claim at runtime.
+`model_dump()` returns a loosely-typed mapping; `cast!` narrows a value out of it and verifies the
+claim at runtime.
 
 ```by
 from pydantic import BaseModel
@@ -128,7 +128,7 @@ class Item(BaseModel):
     count: int
 
 i = Item(name="x", count=3)
-name = i.model_dump()["name"] cast str
+name = i.model_dump()["name"] cast! str
 reveal_type(name)  # revealed: str
 assert name == "x"
 ```

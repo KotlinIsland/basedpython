@@ -725,8 +725,7 @@ fn check_fixture_decorator(checker: &Checker, func_name: &str, decorator: &Decor
             arguments,
             range_start: _,
             node_index: _,
-            is_cast: _,
-            is_checked_cast: _,
+            cast_kind: _,
             is_string_tag: _,
         }) => {
             if checker.is_rule_enabled(Rule::PytestFixtureIncorrectParenthesesStyle) {

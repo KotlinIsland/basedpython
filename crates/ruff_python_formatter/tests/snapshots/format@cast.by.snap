@@ -6,14 +6,15 @@ input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/cast.by
 ```bython
 a = x cast int
 b = x cast? int
-c = x cast int | str
+c = x cast! int | str
 d = x cast? int | str
-e = f() cast int
+e = f() cast! int
 g = (a + b) cast? SomeClass
+j = x cast! int
 
 
 def h(v: object) -> int:
-    return v cast int
+    return v cast! int
 
 
 def i(v: object):
@@ -25,14 +26,15 @@ def i(v: object):
 ```bython
 a = x cast int
 b = x cast? int
-c = x cast int | str
+c = x cast! int | str
 d = x cast? int | str
-e = f() cast int
+e = f() cast! int
 g = (a + b) cast? SomeClass
+j = x cast! int
 
 
 def h(v: object) -> int:
-    return v cast int
+    return v cast! int
 
 
 def i(v: object):

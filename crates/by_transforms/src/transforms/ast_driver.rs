@@ -568,7 +568,7 @@ pub(crate) fn run_against_source<'a>(
     let optional_type_pass = optional_type::OptionalTypePass::new(source_ref);
     let generics_pass = generics::GenericPolyfillPass::new(source_ref, config.clone());
     let soundness_pass = soundness::SoundnessPass::new(source_ref, config);
-    let checked_cast_pass = checked_cast::CheckedCastPass::new(config.checked_cast);
+    let checked_cast_pass = checked_cast::CheckedCastPass;
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
     let if_let_pass = if_let::IfLetPass::new(source_ref, config.min_version);
     let destructure_pass = destructure::DestructurePass::new(source_ref, config.min_version);

@@ -1776,7 +1776,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 // a string tag's argument is the abutting literal, not something
                 // the reader passed by position, and a `cast` operator's are its
                 // own surface syntax
-                let details = if call.is_string_tag || call.is_cast || call.is_checked_cast {
+                let details = if call.is_string_tag || call.cast_kind.is_some() {
                     InlayHintCallArgumentDetails::default()
                 } else {
                     inlay_hint_call_argument_details(self.db, &self.model, call).unwrap_or_default()
@@ -10183,6 +10183,26 @@ Source with applied edits:
 
             a = sql\"select\"
             b = sql(\"select\")
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            call_argument_names: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// Every cast form parses as a synthetic `cast(<type>, <value>)` call, but its
+    /// operands are the operator's own surface syntax — the reader passed nothing
+    /// by position, so naming the parameters would be noise.
+    #[test]
+    fn basedpython_cast_operands_are_not_hinted() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def f(a: object, b: int):
+                x = b cast object
+                y = a cast! int
+                z = a cast? int
             ",
         );
 

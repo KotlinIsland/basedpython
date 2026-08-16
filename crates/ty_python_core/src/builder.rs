@@ -5402,13 +5402,17 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
                 self.visit_expr(value);
 
-                // basedpython `<value> cast <type>` as a bare statement narrows the
-                // value place to the target type for the rest of the scope, like an
-                // unconditional `assert isinstance(value, type)`. The synthetic
-                // `cast` callee is unresolved and never `NoReturn`, so the terminal
-                // call analysis below is skipped for it.
+                // basedpython `<value> cast <type>` / `<value> cast! <type>` as a bare
+                // statement narrows the value place to the target type for the rest of
+                // the scope, like an unconditional `assert isinstance(value, type)`.
+                // `cast?` is left out: it yields `None` rather than asserting anything.
+                // The synthetic `cast` callee is unresolved and never `NoReturn`, so the
+                // terminal call analysis below is skipped for it.
                 if let ast::Expr::Call(call) = value.as_ref()
-                    && call.is_cast
+                    && matches!(
+                        call.cast_kind,
+                        Some(ast::CastKind::Static | ast::CastKind::Checked)
+                    )
                 {
                     let predicate = self.build_predicate(value);
                     self.record_narrowing_constraint(predicate);

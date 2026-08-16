@@ -7,7 +7,7 @@ use thin_vec::ThinVec;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::{
-    self as ast, AnyStringFlags, AtomicNodeIndex, BoolOp, CallableParameterShape, CmpOp,
+    self as ast, AnyStringFlags, AtomicNodeIndex, BoolOp, CallableParameterShape, CastKind, CmpOp,
     ConversionFlag, Expr, ExprContext, FString, InterpolatedStringElement,
     InterpolatedStringElements, IpyEscapeKind, Number, Operator, OperatorPrecedence,
     ParameterBorrow, StringFlags, TString, UnaryOp,
@@ -442,28 +442,49 @@ impl<'src> Parser<'src> {
                 continue;
             }
 
-            // basedpython infix `<value> cast? <type>` — a *checked* cast. The
-            // `?` directly follows the `cast` soft keyword (no expression can
-            // start with `?`, so this never collides with `<value> cast <type>`
-            // or `<value> cast <type>?`). Lowered by `transforms::checked_cast`
-            // to `value if isinstance(value, type) else None`; its type is
-            // `type | None`.
-            if current_token == TokenKind::Cast && self.peek() == TokenKind::Question {
+            // basedpython infix casts: `<value> cast <type>` and its two
+            // runtime-verifying suffixed forms, `cast!` (raises on a mismatch)
+            // and `cast?` (yields `None`). A suffix directly follows the `cast`
+            // soft keyword, and neither `!` nor `?` can start an expression, so
+            // a suffixed form never collides with the plain `<value> cast
+            // <type>` or with `<value> cast <type>?`. All three are treated as
+            // the loosest binary-like operator: only consumed at the outermost
+            // expression level (where `left_precedence` is `None`). Lowered by
+            // `transforms::checked_cast`.
+            if current_token == TokenKind::Cast
+                && let Some(cast_kind) = match self.peek() {
+                    TokenKind::Exclamation => Some(CastKind::Checked),
+                    TokenKind::Question => Some(CastKind::Try),
+                    peeked if EXPR_SET.contains(peeked) || peeked.is_soft_keyword() => {
+                        Some(CastKind::Static)
+                    }
+                    _ => None,
+                }
+            {
                 if left_precedence > OperatorPrecedence::None {
                     break;
                 }
-                self.error_if_not_basedpython(
-                    "`cast?` (checked cast) keyword is not valid in .py files".to_string(),
-                );
+                self.error_if_not_basedpython(format!(
+                    "`{}` keyword is not valid in .py files",
+                    cast_kind.as_str()
+                ));
                 let cast_keyword_range = self.current_token_range();
                 self.bump(TokenKind::Cast);
-                // the operator is both tokens, so its span reaches the `?` —
-                // consumers that point at the keyword (semantic tokens) must
-                // cover `cast?`, not just the `cast`
-                let question_range = self.current_token_range();
-                self.bump(TokenKind::Question);
-                let operator_range =
-                    TextRange::new(cast_keyword_range.start(), question_range.end());
+                // a suffixed operator is both tokens, so its span reaches the
+                // suffix — consumers that point at the keyword (semantic
+                // tokens) must cover `cast!` / `cast?`, not just the `cast`
+                let operator_range = match cast_kind {
+                    CastKind::Static => cast_keyword_range,
+                    CastKind::Checked | CastKind::Try => {
+                        let suffix_range = self.current_token_range();
+                        self.bump(if cast_kind == CastKind::Checked {
+                            TokenKind::Exclamation
+                        } else {
+                            TokenKind::Question
+                        });
+                        TextRange::new(cast_keyword_range.start(), suffix_range.end())
+                    }
+                };
                 // the right operand is the cast's target type, so it admits the
                 // use-site type modifiers wherever the cast itself is written
                 let right = self.parse_binary_expression_or_higher(
@@ -491,58 +512,7 @@ impl<'src> Parser<'src> {
                         arguments,
                         range_start: start,
                         node_index: AtomicNodeIndex::NONE,
-                        is_cast: false,
-                        is_checked_cast: true,
-                        is_string_tag: false,
-                    }),
-                    is_parenthesized: false,
-                    parameter_borrow: ParameterBorrow::None,
-                };
-                continue;
-            }
-
-            // basedpython infix `<value> cast <type>` soft keyword.
-            // Treated as the loosest binary-like operator: only consumed at
-            // the outermost expression level (where left_precedence is None).
-            // Lowered by `transforms::cast` to `cast(<type>, <value>)`.
-            if current_token == TokenKind::Cast
-                && (EXPR_SET.contains(self.peek()) || self.peek().is_soft_keyword())
-            {
-                if left_precedence > OperatorPrecedence::None {
-                    break;
-                }
-                self.error_if_not_basedpython(
-                    "`cast` keyword is not valid in .py files".to_string(),
-                );
-                let cast_keyword_range = self.current_token_range();
-                self.bump(TokenKind::Cast);
-                let right = self.parse_binary_expression_or_higher(
-                    OperatorPrecedence::None,
-                    context.with_in_type_expression(),
-                );
-                let value_expr = left.expr;
-                let type_expr = right.expr;
-                let args_range = TextRange::new(cast_keyword_range.end(), type_expr.range().end());
-                let func = Expr::Name(ast::ExprName {
-                    range: cast_keyword_range,
-                    id: Name::new_static("cast"),
-                    ctx: ExprContext::Load,
-                    node_index: AtomicNodeIndex::NONE,
-                });
-                let arguments = ast::Arguments {
-                    range: args_range,
-                    node_index: AtomicNodeIndex::NONE,
-                    args: Box::from([type_expr, value_expr]),
-                    keywords: ThinVec::new(),
-                };
-                left = ParsedExpr {
-                    expr: Expr::Call(ast::ExprCall {
-                        func: Box::new(func),
-                        arguments,
-                        range_start: start,
-                        node_index: AtomicNodeIndex::NONE,
-                        is_cast: true,
-                        is_checked_cast: false,
+                        cast_kind: Some(cast_kind),
                         is_string_tag: false,
                     }),
                     is_parenthesized: false,
@@ -1379,8 +1349,7 @@ impl<'src> Parser<'src> {
                         arguments,
                         range_start: start,
                         node_index: AtomicNodeIndex::NONE,
-                        is_cast: false,
-                        is_checked_cast: false,
+                        cast_kind: None,
                         is_string_tag: true,
                     })
                 }
@@ -1498,8 +1467,7 @@ impl<'src> Parser<'src> {
             arguments,
             range_start: start,
             node_index: AtomicNodeIndex::NONE,
-            is_cast: false,
-            is_checked_cast: false,
+            cast_kind: None,
             is_string_tag: false,
         }
     }
