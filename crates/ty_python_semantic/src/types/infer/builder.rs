@@ -13003,7 +13003,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                 place.into()
             }
-            // Definitely bound: the debugger read a value out of the frame, so there is no
+            // definitely bound: the debugger read a value out of the frame, so there is no
             // question of the name being unbound at this point. `DefinedPlace::new` is already
             // `AlwaysDefined`
             PlaceLoadSourceKind::Observed(ty) => Place::Defined(DefinedPlace::new(ty)).into(),

@@ -2927,7 +2927,7 @@ impl<'db> Type<'db> {
     }
 
     /// Create a promotable enum literal.
-    fn enum_literal(value: EnumLiteralType<'db>) -> Self {
+    pub(crate) fn enum_literal(value: EnumLiteralType<'db>) -> Self {
         Self::LiteralValue(LiteralValueType::promotable(value))
     }
 
