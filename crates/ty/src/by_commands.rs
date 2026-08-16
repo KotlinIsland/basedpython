@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read};
@@ -444,6 +444,7 @@ pub(crate) fn cmd_build(
     }
     let file_count = handles.len();
     let roots = module_roots(&db, &root);
+    let mut packages: BTreeSet<PathBuf> = BTreeSet::new();
     if !render_check_and_transpile(
         &db,
         &handles,
@@ -451,7 +452,14 @@ pub(crate) fn cmd_build(
         CheckGate::ParseErrorsOnly,
         &rebuilder,
         |bpy, src, _line_map| {
-            let py = out.join(module_relative_path(&roots, &root, bpy));
+            let relative = module_relative_path(&roots, &root, bpy);
+            if relative.components().count() > 1
+                && let Some(package) = relative.components().next()
+            {
+                packages.insert(out.join(package));
+            }
+
+            let py = out.join(relative);
             fs::create_dir_all(py.parent().unwrap())?;
             fs::write(&py, src)?;
             eprintln!("{} -> {}", bpy.display(), py.display());
@@ -461,8 +469,40 @@ pub(crate) fn cmd_build(
         return Ok(ExitStatus::Failure);
     }
 
+    write_markers(&db, &packages)?;
+
     eprintln!("\nbuild complete ({file_count} files)");
     Ok(ExitStatus::Success)
+}
+
+/// Writes the `by.typed` marker into every package the build emitted.
+///
+/// The marker is what tells a project that installs this one that its packages
+/// are basedpython's, and it carries the one thing a `pyproject.toml` cannot tell
+/// them: which of this project's dependencies are part of its own interface.
+/// Nothing installs a `pyproject.toml`, and this rides along inside the package.
+#[allow(clippy::print_stderr)]
+fn write_markers(db: &ProjectDatabase, packages: &BTreeSet<PathBuf>) -> anyhow::Result<()> {
+    let exported = db
+        .project()
+        .settings(db)
+        .analysis()
+        .exported_dependencies
+        .clone()
+        .unwrap_or_default();
+    let marker = ty_module_resolver::Marker::render(&exported);
+
+    for package in packages {
+        let path = package.join(ty_module_resolver::BY_TYPED);
+        fs::create_dir_all(package)?;
+        fs::write(&path, &marker)?;
+    }
+
+    if !exported.is_empty() {
+        eprintln!("exporting {}", exported.join(", "));
+    }
+
+    Ok(())
 }
 
 // ── compile ─────────────────────────────────────────────────────────────────

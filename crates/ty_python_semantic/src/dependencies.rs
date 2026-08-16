@@ -11,7 +11,9 @@
 //! no restriction at all.
 
 use ruff_db::files::File;
-use ty_module_resolver::{DistributionName, Module, distribution_index};
+use ty_module_resolver::{
+    DistributionName, Module, distribution_index, export_index, requirement_index,
+};
 
 use crate::Db;
 
@@ -278,10 +280,94 @@ pub fn import_standing<'db>(
             distribution,
             declared_in: manifest.groups_declaring(distribution).collect(),
         },
+        // a dependency can hand part of what it depends on to its own users, and
+        // then importing it is what the dependency intended rather than something
+        // to report
+        None if owners
+            .iter()
+            .any(|owner| is_exported_to(db, file, &available, owner)) =>
+        {
+            ImportStanding::Available
+        }
         None => ImportStanding::Undeclared {
             distribution: first,
         },
     }
+}
+
+/// What led to `distribution` being installed, as far as a declared dependency.
+///
+/// The answer is a chain: the declared dependency that explains the install
+/// first, and whatever requires `distribution` outright last — the two being the
+/// same in the ordinary case of a direct requirement. `None` when nothing
+/// declared reaches it, which is what an environment installed by hand, or one
+/// whose `METADATA` cannot be read, looks like from here.
+///
+/// This is only for explaining a diagnostic that has already been decided on, so
+/// it is asked at the point of reporting rather than folded into
+/// [`import_standing`]: a project whose imports are all in order never pays for
+/// the requirement graph at all.
+pub fn installed_because<'db>(
+    db: &'db dyn Db,
+    file: File,
+    distribution: &DistributionName,
+) -> Option<Vec<&'db DistributionName>> {
+    let manifest = db.dependency_manifest(file)?;
+    let declared: Vec<&DistributionName> = manifest
+        .groups()
+        .iter()
+        .flat_map(|group| group.requirements.iter())
+        .collect();
+
+    requirement_index(db, db.program_file(file).resolver_environment(db)).path_from(
+        &declared,
+        distribution,
+        |_, _| true,
+    )
+}
+
+/// Whether a dependency of this project hands `distribution` out on purpose.
+///
+/// A library can say that some of what it depends on is part of its own
+/// interface: `pandas` handing out numpy arrays is not an accident of packaging,
+/// and a project that depends on `pandas` may import `numpy` without pretending
+/// it chose numpy itself. What says so is the `by.typed` the library ships, and
+/// the claim only carries as far as its own dependencies — a distribution cannot
+/// export something it does not require.
+///
+/// The permission is passed along a chain only while every link declares it:
+/// `fastapi` exporting `starlette` does not make `starlette`'s own dependencies
+/// part of `fastapi`'s interface unless `starlette` exports them too.
+fn is_exported_to(
+    db: &dyn Db,
+    file: File,
+    available: &AvailableGroups,
+    distribution: &DistributionName,
+) -> bool {
+    let Some(manifest) = available.manifest() else {
+        return false;
+    };
+
+    // the export has to come from a dependency this file may import in the first
+    // place: a test-only dependency's interface is not shipped code's to use
+    let declared: Vec<&DistributionName> = manifest
+        .groups()
+        .iter()
+        .flat_map(|group| group.requirements.iter())
+        .filter(|declared| available.allows_distribution(declared))
+        .collect();
+    if declared.is_empty() {
+        return false;
+    }
+
+    let resolver_environment = db.program_file(file).resolver_environment(db);
+    let exports = export_index(db, resolver_environment);
+
+    requirement_index(db, resolver_environment)
+        .path_from(&declared, distribution, |from, to| {
+            exports.exports(from, to)
+        })
+        .is_some()
 }
 
 /// Whether `file` is part of what the project ships.

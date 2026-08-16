@@ -74,6 +74,22 @@ impl Client {
             .unwrap();
     }
 
+    /// Asks the main loop to re-read the file system for every project.
+    ///
+    /// This is for a background task that changed something outside the editor —
+    /// installing a dependency, for one. Such a task has no session to apply the
+    /// change to itself, and the client's file watcher can't be relied on to
+    /// report where the change landed: a new virtual environment is exactly the
+    /// kind of directory editors leave unwatched.
+    pub(crate) fn rescan_projects(&self) {
+        if let Err(err) = self
+            .main_loop_sender
+            .send(Event::Action(Action::RescanProjects))
+        {
+            tracing::error!("Failed to ask for a rescan because the main loop is closed: {err}");
+        }
+    }
+
     pub(crate) fn send_request_raw(&self, session: &Session, request: SendRequest) {
         let id = session
             .request_queue()

@@ -2497,6 +2497,18 @@ declare_lint! {
     /// with no `[project]` table, an environment with no install metadata, and a
     /// module ty cannot attribute to a distribution are all cases where nothing is
     /// reported.
+    ///
+    /// A dependency can also declare that part of what it hands out is another
+    /// distribution, and then importing that one is not reported:
+    ///
+    /// ```toml
+    /// # the dependency's own pyproject.toml
+    /// [tool.basedpython.analysis]
+    /// exported-dependencies = ["numpy"]
+    /// ```
+    ///
+    /// A build writes this into the `by.typed` marker its package ships, which is
+    /// what the projects depending on it read.
     pub static UNDECLARED_DEPENDENCY = {
         summary: "detects imports of a distribution the project does not depend on",
         status: LintStatus::stable("0.0.1-alpha.39"),

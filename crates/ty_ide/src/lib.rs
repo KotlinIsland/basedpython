@@ -35,6 +35,7 @@ mod symbols;
 mod type_hierarchy;
 mod workspace_symbols;
 
+pub use add_dependency::{AddDependency, DependencyTarget};
 pub use all_symbols::{AllSymbolInfo, all_symbols};
 pub use call_hierarchy::incoming_calls::{IncomingCall, incoming_calls};
 pub use call_hierarchy::outgoing_calls::{OutgoingCall, outgoing_calls};

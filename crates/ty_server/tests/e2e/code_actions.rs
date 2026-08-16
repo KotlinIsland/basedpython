@@ -375,3 +375,42 @@ ab: "foobar"
 
     Ok(())
 }
+
+/// An import of something the project neither declares nor has installed, in a
+/// project uv manages.
+///
+/// The action for it runs a command rather than editing `pyproject.toml`, because
+/// declaring `numpy` without installing it would leave the import as unresolved as
+/// it was.
+#[test]
+fn an_unresolved_import_in_a_uv_project_is_offered_the_command_that_installs() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let foo = SystemPath::new("src/foo.py");
+    let foo_content = "import numpy\n";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .with_file(
+            SystemPath::new("src/pyproject.toml"),
+            "[project]\nname = \"mine\"\ndependencies = []\n",
+        )?
+        .with_file(SystemPath::new("src/uv.lock"), "version = 1\n")?
+        .with_file(foo, foo_content)?
+        // there is no `PATH` to find uv on in a test, so it is named outright
+        .with_env_var("UV", "/uv")
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(foo, foo_content, 1);
+
+    let diagnostics = server.document_diagnostic_request(foo, None);
+    let range = full_range(foo_content);
+    let code_action_params = code_actions_at(&server, diagnostics, foo, range);
+
+    let code_action_id = server.send_request::<CodeActionRequest>(code_action_params);
+    let code_actions = server.await_response::<CodeActionRequest>(&code_action_id);
+
+    insta::assert_json_snapshot!(code_actions);
+
+    Ok(())
+}

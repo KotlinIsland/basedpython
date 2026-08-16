@@ -68,9 +68,11 @@ impl EnvVars {
     #[attr_hidden]
     pub const TY_UV: &'static str = "TY_UV";
 
-    /// The path to the uv executable to use for workspace discovery.
+    /// The path to the uv executable.
     ///
-    /// ty uses this path when uv integration is enabled by `TY_UV`.
+    /// ty uses this path instead of looking uv up on the `PATH`, both for
+    /// workspace discovery (when that is enabled by `TY_UV`) and for the editor
+    /// action that adds a dependency by running `uv add`.
     #[attr_hidden]
     pub const UV: &'static str = "UV";
 

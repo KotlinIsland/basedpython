@@ -1556,6 +1556,62 @@ fn build_skips_hidden_directories() {
     );
 }
 
+/// what a project exports is not in its `pyproject.toml` as far as its users are
+/// concerned — nothing installs one — so the build writes it into the package
+#[test]
+fn build_writes_what_the_project_exports_into_its_marker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"my-lib\"\nversion = \"0.1.0\"\n\
+         \n[tool.basedpython.analysis]\nexported-dependencies = [\"numpy\"]\n",
+    )
+    .unwrap();
+    let package = dir.path().join("my_lib");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(
+        package.join("frames.by"),
+        "def frame() -> int:\n    return 1\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("out").join("my_lib").join("by.typed")).unwrap(),
+        "exported-dependencies = [\"numpy\"]\n"
+    );
+}
+
+/// a package the build emitted is marked as basedpython's even when the project
+/// exports nothing: the file's presence is what marks it
+#[test]
+fn build_writes_a_marker_for_a_project_that_exports_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package = dir.path().join("my_lib");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    let marker = dir.path().join("out").join("my_lib").join("by.typed");
+    assert!(marker.exists(), "expected out/my_lib/by.typed:\n{stderr}");
+    assert_eq!(fs::read_to_string(marker).unwrap(), "");
+}
+
 /// a src-layout project's `src/pkg/main.by` is the module `pkg.main`, so the
 /// emitted tree has to be rooted at `src` — mirroring the directory instead
 /// emits `out/src/pkg/main.py`, whose module is `src.pkg.main`, a name nothing

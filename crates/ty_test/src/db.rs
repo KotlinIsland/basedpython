@@ -336,6 +336,7 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
         implicit_object_repr_report_types: implicit_object_repr_report_types_default,
         dependency_groups: dependency_groups_default,
         shipped_modules: shipped_modules_default,
+        exported_dependencies: exported_dependencies_default,
     } = AnalysisSettings::default();
 
     let allowed_unresolved_imports =
@@ -423,6 +424,10 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
                     .collect::<Box<[Box<str>]>>()
             })
             .or(shipped_modules_default),
+        // nothing about checking a project reads what it exports: it is a
+        // statement to the projects that depend on it, and they read it from the
+        // `by.typed` the build wrote
+        exported_dependencies: exported_dependencies_default,
     }
 }
 

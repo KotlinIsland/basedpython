@@ -59,7 +59,7 @@ impl Settings {
         &self.overrides
     }
 
-    pub(crate) fn analysis(&self) -> &AnalysisSettings {
+    pub fn analysis(&self) -> &AnalysisSettings {
         &self.analysis
     }
 

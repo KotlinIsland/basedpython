@@ -69,7 +69,8 @@ expression: initialization_result
     "executeCommandProvider": {
       "commands": [
         "ty.printDebugInformation",
-        "ty.runManageCommand"
+        "ty.runManageCommand",
+        "ty.addDependency"
       ],
       "workDoneProgress": false
     },

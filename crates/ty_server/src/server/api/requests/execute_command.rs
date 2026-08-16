@@ -9,9 +9,10 @@ use lsp_server::ErrorCode;
 use lsp_types::ExecuteCommandRequest;
 use lsp_types::{self as types, MessageType};
 use ruff_db::Db as _;
-use ruff_db::system::SystemPathBuf;
+use ruff_db::system::{Command, SystemPathBuf};
 use std::fmt::{self, Write};
 use std::str::FromStr;
+use ty_ide::{AddDependency, DependencyTarget};
 use ty_module_resolver::ModuleResolveMode;
 use ty_project::{Db as _, ProjectDatabase};
 
@@ -49,8 +50,179 @@ impl SyncRequestHandler for ExecuteCommand {
 
                 Ok(None)
             }
+            SupportedCommand::AddDependency => {
+                let arguments: AddDependencyArguments = params
+                    .arguments
+                    .into_iter()
+                    .flatten()
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("`{}` takes one argument", params.command))
+                    .and_then(|argument| Ok(serde_json::from_value(argument)?))
+                    .with_failure_code(ErrorCode::InvalidParams)?;
+
+                add_dependency(session, client, &arguments)
+                    .with_failure_code(ErrorCode::InvalidParams)?;
+
+                Ok(None)
+            }
         }
     }
+}
+
+/// What a `ty.addDependency` is asked to add.
+///
+/// This is the wire form of [`ty_ide::AddDependency`], which the command line is
+/// then built from: the arguments arrive from the client, so the server states
+/// what it will run rather than being handed one to run.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct AddDependencyArguments {
+    /// The project to add the dependency to, which is the directory uv is run in.
+    root: String,
+    /// The distribution to add.
+    distribution: String,
+    /// The extra it is added to, if it is added to one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extra: Option<String>,
+    /// The dependency group it is added to, if it is added to one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    group: Option<String>,
+}
+
+/// The command that asks the server to add `add`, for a code action to carry.
+pub(crate) fn add_dependency_command(title: &str, add: &AddDependency) -> types::Command {
+    let arguments = serde_json::to_value(AddDependencyArguments::new(add))
+        .expect("add dependency arguments to be serializable");
+
+    types::Command {
+        title: title.to_string(),
+        command: SupportedCommand::AddDependency.identifier().to_string(),
+        arguments: Some(vec![arguments]),
+        tooltip: None,
+    }
+}
+
+impl AddDependencyArguments {
+    fn new(add: &AddDependency) -> Self {
+        let (extra, group) = match &add.target {
+            DependencyTarget::Project => (None, None),
+            DependencyTarget::Extra(extra) => (Some(extra.clone()), None),
+            DependencyTarget::Group(group) => (None, Some(group.clone())),
+        };
+
+        Self {
+            root: add.root.to_string(),
+            distribution: add.distribution.clone(),
+            extra,
+            group,
+        }
+    }
+
+    /// The dependency these name, or an error if they name none that uv could add.
+    fn to_add_dependency(&self) -> crate::Result<AddDependency> {
+        // a name is uv's to resolve, but it is also the one part of the command
+        // line that comes from the client, and an argument that could be read as
+        // a flag is not a distribution under any packaging standard
+        if self.distribution.is_empty()
+            || !self.distribution.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+            })
+        {
+            return Err(anyhow::anyhow!(
+                "`{}` is not a distribution name",
+                self.distribution
+            ));
+        }
+
+        let target = match (&self.extra, &self.group) {
+            (Some(extra), None) => DependencyTarget::Extra(extra.clone()),
+            (None, Some(group)) => DependencyTarget::Group(group.clone()),
+            (None, None) => DependencyTarget::Project,
+            (Some(_), Some(_)) => {
+                return Err(anyhow::anyhow!(
+                    "a dependency is added to an extra or to a group, not to both"
+                ));
+            }
+        };
+
+        Ok(AddDependency {
+            root: SystemPathBuf::from(self.root.clone()),
+            distribution: self.distribution.clone(),
+            target,
+        })
+    }
+}
+
+/// Declares and installs a dependency by running `uv add`, reporting through
+/// `window/logMessage`.
+///
+/// The install is the point: the action this comes from is offered on an import
+/// that doesn't resolve, and writing the requirement into `pyproject.toml` alone
+/// would leave it not resolving. Once uv is done the projects are re-read, so the
+/// diagnostic goes away without the editor having to notice the environment
+/// changed underneath it.
+fn add_dependency(
+    session: &Session,
+    client: &Client,
+    arguments: &AddDependencyArguments,
+) -> crate::Result<()> {
+    let add = arguments.to_add_dependency()?;
+
+    // the root names a project of this session's, not any directory a client
+    // cares to send: uv is being run in it
+    let is_project_root = session
+        .project_dbs()
+        .any(|db| db.project().root(db) == &*add.root);
+    if !is_project_root {
+        return Err(anyhow::anyhow!("`{}` is not a project of ty's", add.root));
+    }
+
+    let system = session.system();
+    let uv = ty_project::metadata::uv::executable(system)
+        .map_err(|error| anyhow::anyhow!("`uv add` cannot be run: {error}"))?;
+    let executor = system
+        .command_executor()
+        .ok_or_else(|| anyhow::anyhow!("this system cannot run commands"))?
+        .dyn_clone();
+
+    let mut command = Command::new(uv.into_string());
+    command.args(add.arguments()).current_dir(&add.root);
+
+    let line = format!("uv {}", add.arguments().join(" "));
+    let client = client.clone();
+
+    // adding a dependency resolves and downloads, so it is not something to hold
+    // the server still for
+    std::thread::Builder::new()
+        .name("ty:uv".to_string())
+        .spawn(move || {
+            log(&client, MessageType::Info, format!("running {line}"));
+
+            match executor.execute(command) {
+                Ok(output) => {
+                    // uv reports its progress and its failures on stderr
+                    for stream in [&output.stdout, &output.stderr] {
+                        let text = String::from_utf8_lossy(stream);
+                        if !text.trim().is_empty() {
+                            log(&client, MessageType::Info, text.trim_end().to_string());
+                        }
+                    }
+
+                    if output.status.success() {
+                        log(&client, MessageType::Info, format!("{line} succeeded"));
+                        client.rescan_projects();
+                    } else {
+                        tracing::error!("{line} failed ({})", output.status);
+                        client.show_error_message(format!("{line} failed ({})", output.status));
+                    }
+                }
+                Err(error) => {
+                    tracing::error!("{line} could not be started: {error}");
+                    client.show_error_message(format!("{line} could not be started: {error}"));
+                }
+            }
+        })?;
+
+    Ok(())
 }
 
 /// What a `ty.runManageCommand` is asked to run.
@@ -300,5 +472,64 @@ impl Write for IndentingWriter<'_> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_tripped(add: &AddDependency) -> crate::Result<AddDependency> {
+        let command = add_dependency_command("some title", add);
+        let argument = command
+            .arguments
+            .and_then(|arguments| arguments.into_iter().next())
+            .expect("the command to carry its arguments");
+
+        serde_json::from_value::<AddDependencyArguments>(argument)?.to_add_dependency()
+    }
+
+    fn added(target: DependencyTarget) -> AddDependency {
+        AddDependency {
+            root: SystemPathBuf::from("/app"),
+            distribution: "numpy".to_string(),
+            target,
+        }
+    }
+
+    #[test]
+    fn the_dependency_survives_the_round_trip_to_the_client() {
+        for target in [
+            DependencyTarget::Project,
+            DependencyTarget::Extra("cli".to_string()),
+            DependencyTarget::Group("dev".to_string()),
+        ] {
+            let add = added(target);
+            assert_eq!(round_tripped(&add).unwrap(), add);
+        }
+    }
+
+    #[test]
+    fn a_distribution_that_reads_as_a_flag_is_refused() {
+        // the name is the one part of the command line that comes from the
+        // client, and `uv add` would take this one as an option of its own
+        let add = AddDependency {
+            distribution: "--directory=/somewhere".to_string(),
+            ..added(DependencyTarget::Project)
+        };
+
+        assert!(round_tripped(&add).is_err());
+    }
+
+    #[test]
+    fn a_dependency_in_both_an_extra_and_a_group_is_refused() {
+        let arguments = AddDependencyArguments {
+            root: "/app".to_string(),
+            distribution: "numpy".to_string(),
+            extra: Some("cli".to_string()),
+            group: Some("dev".to_string()),
+        };
+
+        assert!(arguments.to_add_dependency().is_err());
     }
 }

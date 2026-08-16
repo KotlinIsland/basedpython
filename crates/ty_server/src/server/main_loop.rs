@@ -141,6 +141,14 @@ impl Server {
 
                     Action::SendRequest(request) => client.send_request_raw(&self.session, request),
 
+                    Action::RescanProjects => {
+                        api::changes::apply(
+                            &mut self.session,
+                            &client,
+                            &[ty_project::watch::ChangeEvent::Rescan],
+                        );
+                    }
+
                     Action::SuspendWorkspaceDiagnostics(suspended_request) => {
                         self.session.set_suspended_workspace_diagnostics_request(
                             *suspended_request,
@@ -213,6 +221,9 @@ pub(crate) enum Action {
     SendRequest(SendRequest),
 
     SuspendWorkspaceDiagnostics(Box<SuspendedWorkspaceDiagnosticRequest>),
+
+    /// Re-read the file system, after the server itself changed something in it.
+    RescanProjects,
 
     /// Initialize the workspace after the server received
     /// the options from the client.
