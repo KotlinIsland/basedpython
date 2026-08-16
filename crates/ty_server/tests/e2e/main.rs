@@ -32,6 +32,7 @@ mod code_actions;
 mod commands;
 mod completions;
 mod configuration;
+mod data_flow;
 mod django_templates;
 mod folding_range;
 mod hover;
