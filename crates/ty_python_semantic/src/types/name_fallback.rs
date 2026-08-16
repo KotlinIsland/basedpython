@@ -134,39 +134,6 @@ pub(crate) fn claimed_by_name_resolution(
         || matches!(name, "Character" | "Some")
 }
 
-/// [`claimed_by_name_resolution`] asked of the scopes *around* `scope` rather
-/// than `scope` itself.
-///
-/// This answers "would this name have meant something else here, had this scope
-/// not bound it", which is the question a binding cannot answer about itself.
-/// Builtins are left out for the same reason the block form leaves them out: a
-/// block's receiver outranks them, so one claims nothing here either.
-pub(crate) fn claimed_by_enclosing_name_resolution(
-    db: &dyn Db,
-    file: File,
-    scope: ScopeId<'_>,
-    name: &str,
-) -> bool {
-    let index = semantic_index(db, db.program_file(file));
-    for (ancestor_id, _) in index
-        .visible_ancestor_scopes(scope.file_scope_id(db))
-        .skip(1)
-    {
-        let ancestor_scope = ancestor_id.to_scope_id(db, db.program_file(file));
-        if place_table(db, ancestor_scope)
-            .symbol_by_name(name)
-            .is_some_and(|symbol| symbol.is_bound() || symbol.is_declared())
-        {
-            return true;
-        }
-    }
-    !module_type_implicit_global_symbol(db, db.program_file(file), name)
-        .place
-        .is_undefined()
-        || is_basedpython_implicit_typing_name(name)
-        || matches!(name, "Character" | "Some")
-}
-
 #[cfg(test)]
 mod tests {
     use ruff_db::files::system_path_to_file;

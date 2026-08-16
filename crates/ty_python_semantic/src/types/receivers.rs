@@ -36,9 +36,7 @@ use crate::Db;
 use crate::place::{ConsideredDefinitions, symbol};
 use crate::types::ProgramEnvironment;
 use crate::types::call::{Argument, CallArguments};
-use crate::types::name_fallback::{
-    claimed_by_enclosing_name_resolution, claimed_by_name_resolution,
-};
+use crate::types::name_fallback::claimed_by_name_resolution;
 use crate::types::signatures::{Parameters, Signature};
 use crate::types::{Type, UnionType};
 
@@ -265,6 +263,16 @@ pub(crate) fn implicit_receiver_name<'db>(
         return None;
     }
     let resolved = receiver_name(db, env, file, receiver, name)?;
+    // a bare `href = …` in the block was not counted above, because it writes the
+    // receiver's `href` rather than binding a name. that only holds where there
+    // is a member to write: `self` is the receiver itself and an extension member
+    // is a function rather than state, so neither is something an assignment
+    // could have meant, and the assignment is an ordinary block local after all
+    if !matches!(resolved, ImplicitReceiverName::Member(_))
+        && assigned_within_block(db, file, scope, block_scope, name)
+    {
+        return None;
+    }
     // the receiver's candidate does not fit this call — so hand the name back to
     // the levels of the tower outside the block, but only if one of them
     // actually claims it. `claimed_by_name_resolution` covers the whole visible
@@ -313,22 +321,17 @@ fn receiver_name<'db>(
     })
 }
 
-/// basedpython: the receiver member a bare assignment inside a trailing lambda
-/// block shadows.
+/// basedpython: the receiver member a declaration inside a trailing lambda block
+/// shadows.
 ///
-/// `href = "/x"` in a block binds a local, exactly as it does anywhere else —
-/// the binding is made before any type is known, so it cannot depend on what the
-/// receiver turns out to have. Once it does, that binding is the level of the
-/// tower *inside* the receiver, so every mention of the name in the block means
-/// the local — while the same name in a block that does not write it means the
-/// receiver's member. That reversal is what this reports.
-///
-/// `None` when a scope around the block already binds the name, since then the
-/// local is the ordinary capture the block is supposed to make.
+/// A bare `href = …` in a block writes the receiver's `href`, and reading `href`
+/// there means the receiver's `href`. `let href = …` takes the name for the block
+/// instead — for the whole block, including the lines above it — so it is worth
+/// saying out loud. `None` when the block has no receiver, or the receiver has no
+/// such member, which is the ordinary case of declaring a local.
 pub(crate) fn shadowed_receiver_member<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
-    file: File,
     scope: ScopeId<'db>,
     name: &str,
 ) -> Option<Type<'db>> {
@@ -337,18 +340,48 @@ pub(crate) fn shadowed_receiver_member<'db>(
     }
     let (_, callee_ty) = crate::types::trailing_lambda::enclosing_block(db, scope)?;
     let receiver = crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee_ty)?;
-    if claimed_by_enclosing_name_resolution(db, file, scope, name) {
-        return None;
-    }
     receiver
         .member(db, env, name)
         .place
         .ignore_possibly_undefined()
 }
 
+/// whether a bare assignment somewhere from the use out to the block itself gave
+/// `name` a value — the binding [`bound_within_block`] deliberately looks past,
+/// asked about on its own
+fn assigned_within_block(
+    db: &dyn Db,
+    file: File,
+    scope: ScopeId<'_>,
+    block_scope: ScopeId<'_>,
+    name: &str,
+) -> bool {
+    let index = semantic_index(db, db.program_file(file));
+    let block_scope = block_scope.file_scope_id(db);
+    for (ancestor_id, _) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
+        let ancestor_scope = ancestor_id.to_scope_id(db, db.program_file(file));
+        if place_table(db, ancestor_scope)
+            .symbol_by_name(name)
+            .is_some_and(ty_python_core::symbol::Symbol::is_bound_by_block_assignment)
+        {
+            return true;
+        }
+        if ancestor_id == block_scope {
+            break;
+        }
+    }
+    false
+}
+
 /// whether any scope from the use out to the block itself binds or declares
 /// `name` — the one level of the scope tower that sits *inside* the receiver, so
-/// the block's own `it` and anything its body assigns keep their meaning
+/// the block's own `it` and anything it declares keep their meaning
+///
+/// a bare `href = …` in the block does *not* count. it writes to the receiver's
+/// `href` when the receiver has one, and only falls back to binding a name of its
+/// own when it does not — so counting it here would let the write take the name
+/// away from the member it is supposed to be writing to. `let href = …` does
+/// count: a declaration is how the block asks for a name of its own
 fn bound_within_block(
     db: &dyn Db,
     file: File,
@@ -362,7 +395,9 @@ fn bound_within_block(
         let ancestor_scope = ancestor_id.to_scope_id(db, db.program_file(file));
         if place_table(db, ancestor_scope)
             .symbol_by_name(name)
-            .is_some_and(|symbol| symbol.is_bound() || symbol.is_declared())
+            .is_some_and(|symbol| {
+                symbol.is_bound_outside_block_assignment() || symbol.is_declared()
+            })
         {
             return true;
         }

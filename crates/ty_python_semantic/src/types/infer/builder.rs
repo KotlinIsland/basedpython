@@ -3799,8 +3799,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     infer_assigned_ty(self, TypeContext::default());
                 }
 
-                self.report_shadowed_receiver_member(name);
                 self.infer_definition(name);
+                self.validate_receiver_member_write(name, value);
             }
             ast::Expr::Starred(ast::ExprStarred {
                 value: starred_value,
@@ -4826,7 +4826,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
         let db = self.db();
         let env = self.program_environment();
-        if assignment.target.is_name_expr() {
+        if let ast::Expr::Name(target) = &*assignment.target {
+            self.report_shadowed_receiver_member(target);
             self.infer_definition(assignment);
         } else {
             // Non-name assignment targets are inferred as ordinary expressions, not definitions.
@@ -13326,18 +13327,58 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
-    /// basedpython: an assignment inside a trailing lambda block binds a local
-    /// even when the block's receiver has a member of that name, so the member
-    /// is left untouched. The binding is made before any type is known, so it
-    /// cannot be redirected here — but it can be reported.
+    /// basedpython: a bare assignment inside a trailing lambda block writes the
+    /// block receiver's member of that name, so it is checked against that
+    /// member's declared type rather than binding a name of its own.
+    ///
+    /// TODO: route this through `validate_attribute_assignment`, which is what
+    /// `self.href = …` goes through, so a write to a read-only property or through
+    /// `__setattr__` is judged the same way. That validator takes the written
+    /// `ExprAttribute` — for its diagnostic ranges, and for the object expression
+    /// it hands to `__setattr__` — and a block assignment has neither, since the
+    /// receiver is a parameter the source cannot spell. Generalizing its target to
+    /// cover both spellings is the remaining piece.
+    fn validate_receiver_member_write(&mut self, name: &ast::ExprName, value: &ast::Expr) {
+        if !self.is_basedpython_file() {
+            return;
+        }
+        let db = self.db();
+        let env = self.program_environment();
+        let Some(receivers::ImplicitReceiverName::Member(member_ty)) =
+            receivers::implicit_receiver_name(db, env, self.file(), self.scope(), &name.id, None)
+        else {
+            return;
+        };
+        let Some(value_ty) = self.try_expression_type(value) else {
+            return;
+        };
+        if value_ty.is_assignable_to(db, env, member_ty) {
+            return;
+        }
+        if let Some(builder) = self
+            .context
+            .report_lint(&crate::types::diagnostic::INVALID_ASSIGNMENT, name)
+        {
+            builder.into_diagnostic(format_args!(
+                "Object of type `{}` is not assignable to attribute `{}` of type `{}`",
+                value_ty.display(db, env),
+                name.id,
+                member_ty.display(db, env),
+            ));
+        }
+    }
+
+    /// basedpython: a declaration inside a trailing lambda block takes its name
+    /// away from the receiver's member of that name, for the whole block. A bare
+    /// assignment writes the member instead, so the two forms mean opposite
+    /// things and the one that shadows says so.
     fn report_shadowed_receiver_member(&mut self, name: &ast::ExprName) {
         if !self.is_basedpython_file() {
             return;
         }
         let db = self.db();
         let env = self.program_environment();
-        let Some(member) =
-            receivers::shadowed_receiver_member(db, env, self.file(), self.scope(), &name.id)
+        let Some(member) = receivers::shadowed_receiver_member(db, env, self.scope(), &name.id)
         else {
             return;
         };
@@ -13346,7 +13387,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .report_lint(&crate::types::diagnostic::SHADOWED_RECEIVER_MEMBER, name)
         {
             let mut diagnostic = builder.into_diagnostic(format_args!(
-                "Assigning `{}` binds a local, leaving the receiver's `{}` unchanged",
+                "Declaring `{}` shadows the receiver's `{}` for the whole block",
                 name.id, name.id
             ));
             diagnostic.info(format_args!(
@@ -13354,7 +13395,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 name.id,
                 member.display(db, env)
             ));
-            diagnostic.help(format_args!("Write `self.{}` to set the member", name.id));
+            diagnostic.help(format_args!(
+                "Rename the declaration, or drop it to write `{}` on the receiver",
+                name.id
+            ));
         }
     }
 

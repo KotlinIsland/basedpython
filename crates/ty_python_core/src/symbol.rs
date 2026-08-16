@@ -35,7 +35,7 @@ bitflags! {
     /// See the doc-comment at the top of [`super::use_def`] for explanations of what it
     /// means for a symbol to be *bound* as opposed to *declared*.
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-    struct SymbolFlags: u8 {
+    struct SymbolFlags: u16 {
         const IS_USED               = 1 << 0;
         const IS_BOUND              = 1 << 1;
         const IS_DECLARED           = 1 << 2;
@@ -51,6 +51,15 @@ bitflags! {
         /// question the resolution itself asks — whether anything *else* in the
         /// scope claims the name — without the capture claiming it first.
         const IS_BOUND_BY_CASE_NAME = 1 << 7;
+        /// basedpython: the symbol is given a value by a bare assignment inside a
+        /// [trailing lambda] block, which resolution may yet send to a member of
+        /// the block's receiver rather than to this symbol. Kept apart from
+        /// `IS_BOUND` so that [`Symbol::is_bound_outside_block_assignment`] can
+        /// answer the question the resolution asks — whether the block claims the
+        /// name for itself — without the assignment claiming it first.
+        ///
+        /// [trailing lambda]: https://basedpython.org/features/trailing-lambdas/
+        const IS_BOUND_BY_BLOCK_ASSIGNMENT = 1 << 8;
     }
 }
 
@@ -75,8 +84,11 @@ impl Symbol {
 
     /// Is the symbol given a value in its containing scope?
     pub const fn is_bound(&self) -> bool {
-        self.flags
-            .intersects(SymbolFlags::IS_BOUND.union(SymbolFlags::IS_BOUND_BY_CASE_NAME))
+        self.flags.intersects(
+            SymbolFlags::IS_BOUND
+                .union(SymbolFlags::IS_BOUND_BY_CASE_NAME)
+                .union(SymbolFlags::IS_BOUND_BY_BLOCK_ASSIGNMENT),
+        )
     }
 
     /// basedpython: is the symbol given a value by anything other than a bare
@@ -86,7 +98,33 @@ impl Symbol {
     /// subject, so the binding it would make cannot be what decides that — this
     /// is [`Self::is_bound`] with that one binding left out.
     pub const fn is_bound_outside_case_name_pattern(&self) -> bool {
-        self.flags.contains(SymbolFlags::IS_BOUND)
+        self.flags
+            .intersects(SymbolFlags::IS_BOUND.union(SymbolFlags::IS_BOUND_BY_BLOCK_ASSIGNMENT))
+    }
+
+    /// basedpython: is the symbol given a value by anything other than a bare
+    /// assignment inside a trailing lambda block?
+    ///
+    /// Such an assignment writes to the block receiver's member when the receiver
+    /// has one, so it is not the block claiming the name — this is
+    /// [`Self::is_bound`] with that one binding left out. A `let` or `var`
+    /// declaration, a parameter, a `for` target and every other binding form do
+    /// claim it, and are all still counted here.
+    pub const fn is_bound_outside_block_assignment(&self) -> bool {
+        self.flags
+            .intersects(SymbolFlags::IS_BOUND.union(SymbolFlags::IS_BOUND_BY_CASE_NAME))
+    }
+
+    /// basedpython: is the symbol given a value by a bare assignment inside a
+    /// trailing lambda block?
+    ///
+    /// Such an assignment writes the receiver's member of that name when there is
+    /// one, and binds a name of the block's own when there is not — so it claims
+    /// the name only in the second case, which is a question about the receiver's
+    /// type rather than about this scope.
+    pub const fn is_bound_by_block_assignment(&self) -> bool {
+        self.flags
+            .contains(SymbolFlags::IS_BOUND_BY_BLOCK_ASSIGNMENT)
     }
 
     /// Is the symbol declared in its containing scope?
@@ -161,6 +199,10 @@ impl Symbol {
     }
 
     /// basedpython: [`Self::mark_bound`] for a bare `case A:` capture.
+    pub(super) fn mark_bound_by_block_assignment(&mut self) {
+        self.insert_flags(SymbolFlags::IS_BOUND_BY_BLOCK_ASSIGNMENT);
+    }
+
     pub(super) fn mark_bound_by_case_name(&mut self) {
         if self.is_bound() || self.is_used() {
             self.insert_flags(SymbolFlags::IS_REASSIGNED);

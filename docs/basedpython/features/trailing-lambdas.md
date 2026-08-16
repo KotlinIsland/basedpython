@@ -204,17 +204,11 @@ with `nonlocal`. a name bound in no enclosing scope stays a plain block local,
 and an attribute or item target (`obj.x = …`) rebinds no name, so neither is
 declared
 
-a plain block local is still what you get when the block's
-[receiver](implicit-receivers.md) has a member of that name — which of the two
-an assignment binds cannot depend on a type, since the binding is made before
-any type is known. reading that name means the member and writing it does not,
-so the write is reported and asks you to spell it `self.href`:
-
-```by
-t.div:
-    href = "/x"     # warning[shadowed-receiver-member]: binds a local
-    self.href = "/x"  # sets the member
-```
+a name the block's [receiver](implicit-receivers.md) has a member for is the one
+exception: writing it sets the member, so it is an attribute write and captures
+nothing, whatever is bound outside. that is the same order reads follow — the
+receiver outranks every binding outside the block — so both sides of the `=` mean
+the same thing. `let` is how you ask for a local instead
 
 ty's flow analysis reflects the write too. a `once` block runs exactly once at
 the call site (like a `with` body), so an unconditional assignment narrows the
