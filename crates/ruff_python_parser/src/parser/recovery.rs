@@ -120,8 +120,7 @@ pub(super) fn pattern_to_expr(pattern: Pattern) -> Expr {
                         })
                         .collect(),
                 },
-                is_cast: false,
-                is_checked_cast: false,
+                cast_kind: None,
                 is_string_tag: false,
             })
         }

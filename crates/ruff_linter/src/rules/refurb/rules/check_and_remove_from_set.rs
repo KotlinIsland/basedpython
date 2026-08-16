@@ -206,8 +206,7 @@ fn make_suggestion(set: &ast::ExprName, element: &Expr, generator: Generator) ->
         },
         range_start: ruff_text_size::TextSize::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
-        is_cast: false,
-        is_checked_cast: false,
+        cast_kind: None,
         is_string_tag: false,
     };
     // And finally, turn it into a statement.

@@ -1,0 +1,9 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ call_argument_names: true, ..InlayHintSettings::none() })"
+---
+
+def f(a: object, b: int):
+    x = b cast object
+    y = a cast! int
+    z = a cast? int

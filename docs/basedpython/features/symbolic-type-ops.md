@@ -135,7 +135,7 @@ every other unprovable assignment takes:
 
 ```by
 def from_len[I: int](i: I, xs: list[int]) -> I + 1:
-    return len(xs) cast I + 1
+    return len(xs) cast! I + 1
 ```
 
 ## polyfill

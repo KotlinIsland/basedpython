@@ -42,9 +42,7 @@ impl StmtFunctionDef {
         }
         let decorator = self.decorator_list.first()?;
         Some(match &decorator.expression {
-            Expr::Call(call) if !call.is_cast && !call.is_checked_cast && !call.is_string_tag => {
-                &call.func
-            }
+            Expr::Call(call) if call.cast_kind.is_none() && !call.is_string_tag => &call.func,
             expression => expression,
         })
     }
@@ -491,6 +489,54 @@ impl Deref for InterpolatedStringLiteralElement {
 
     fn deref(&self) -> &Self::Target {
         &self.value
+    }
+}
+
+/// basedpython: which of the three infix cast operators a call carries.
+///
+/// All three parse into the same shape — an [`ExprCall`] whose `func` is a
+/// synthetic `Name("cast")` and whose `arguments` hold `[type, value]`, in
+/// `typing.cast` order — and differ only in what they do when the value turns
+/// out not to be the target
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub enum CastKind {
+    /// `<value> cast <type>` — a *static* cast, with no runtime residue. The
+    /// checker only accepts it when the value already is the target, so it can
+    /// never fail; a downcast (`object cast int`) is an error that must be
+    /// written `cast!` or `cast?` instead
+    Static,
+    /// `<value> cast! <type>` — a *checked* cast: it verifies the value at
+    /// runtime and raises a `TypeError` on a mismatch. Its type is the target
+    Checked,
+    /// `<value> cast? <type>` — a *safe* cast: it verifies the value at runtime
+    /// and yields `None` on a mismatch, so its type is `<type> | None`
+    Try,
+}
+
+impl CastKind {
+    /// the surface spelling of the operator, keyword and suffix together
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Static => "cast",
+            Self::Checked => "cast!",
+            Self::Try => "cast?",
+        }
+    }
+
+    /// the suffix that follows the `cast` keyword, empty for the static form
+    pub const fn suffix(self) -> &'static str {
+        match self {
+            Self::Static => "",
+            Self::Checked => "!",
+            Self::Try => "?",
+        }
+    }
+
+    /// whether the operator verifies the value at runtime, rather than being a
+    /// purely static reinterpretation
+    pub const fn verifies_at_runtime(self) -> bool {
+        matches!(self, Self::Checked | Self::Try)
     }
 }
 
@@ -1482,8 +1528,7 @@ impl fmt::Debug for ExprCall {
             // basedpython: the surface form a call was written in — `a cast T`,
             // `a cast? T`, a string tag — is not recoverable from `func` and
             // `arguments` alone, so the parser snapshots have to show it
-            .field("is_cast", &self.is_cast)
-            .field("is_checked_cast", &self.is_checked_cast)
+            .field("cast_kind", &self.cast_kind)
             .field("is_string_tag", &self.is_string_tag)
             .finish()
     }

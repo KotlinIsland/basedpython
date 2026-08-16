@@ -1807,8 +1807,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 arguments: _,
                 range_start: _,
                 node_index: _,
-                is_cast: _,
-                is_checked_cast: _,
+                cast_kind: _,
                 is_string_tag: _,
             }) => {
                 if let Expr::Name(ast::ExprName {
@@ -1931,12 +1930,13 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 arguments,
                 range_start: _,
                 node_index: _,
-                is_cast,
-                is_checked_cast,
+                cast_kind,
                 is_string_tag: _,
             }) => {
-                let callable = if *is_cast || *is_checked_cast {
-                    // basedpython `<value> cast[?] <type>`: the callee is a
+                let is_infix_cast = cast_kind.is_some();
+                let callable = if is_infix_cast {
+                    // basedpython `<value> cast <type>` and its `cast!` / `cast?`
+                    // forms: the callee is a
                     // synthetic `cast` name, not a real reference — visiting it
                     // would raise a false `undefined-name`. its `[type, value]`
                     // arguments are exactly a `typing.cast`'s, so route them
@@ -2009,7 +2009,6 @@ impl<'a> Visitor<'a> for Checker<'a> {
                         }
                     }
                     Some(typing::Callable::Cast) => {
-                        let is_infix_cast = *is_cast || *is_checked_cast;
                         for (i, arg) in arguments.iter_source_order().enumerate() {
                             match (i, arg) {
                                 (0, ArgOrKeyword::Arg(arg)) => {

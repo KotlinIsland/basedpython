@@ -2048,15 +2048,15 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 self.visit_expr(subscript.value.as_ref());
                 self.visit_annotated_arguments(subscript.slice.as_ref());
             }
-            // `<value> cast <type>` / `<value> cast? <type>`. The parser lowers both to a
-            // synthesized `cast(<type>, <value>)` whose `func` is an `ExprName` covering the
-            // keyword's own range, so the generic `Call` arm below would try to resolve it as a
-            // reference to `typing.cast` — which isn't in scope, leaving the keyword untokenized.
-            // Report the keyword instead. `args` is `[type, value]`, but `value` precedes the
-            // keyword in source and `add_token` requires file order, so emit value first.
+            // `<value> cast <type>` and its `cast!` / `cast?` forms. The parser lowers all
+            // three to a synthesized `cast(<type>, <value>)` whose `func` is an `ExprName`
+            // covering the keyword's own range, so the generic `Call` arm below would try to
+            // resolve it as a reference to `typing.cast` — which isn't in scope, leaving the
+            // keyword untokenized. Report the keyword instead. `args` is `[type, value]`, but
+            // `value` precedes the keyword in source and `add_token` requires file order, so
+            // emit value first.
             ast::Expr::Call(call)
-                if (call.is_cast || call.is_checked_cast)
-                    && matches!(&*call.arguments.args, [_, _]) =>
+                if call.cast_kind.is_some() && matches!(&*call.arguments.args, [_, _]) =>
             {
                 let [type_expr, value_expr] = &*call.arguments.args else {
                     unreachable!("guarded by the `matches!` above")
@@ -7095,8 +7095,8 @@ class C(B):
     /// `func` is an `ExprName` sitting on the keyword's own range. It must be reported as a
     /// keyword, not resolved as if it were a reference to `typing.cast`.
     ///
-    /// `cast?` is two tokens, and the `?` need not be adjacent — the keyword span has to reach
-    /// it either way, or the `?` goes unhighlighted.
+    /// `cast!` and `cast?` are two tokens each, and the suffix need not be adjacent — the keyword
+    /// span has to reach it either way, or the suffix goes unhighlighted.
     #[test]
     fn infix_cast_keyword() {
         let test = SemanticTokenTest::new_by(
@@ -7104,6 +7104,8 @@ class C(B):
 a = 1 cast int
 b = 1 cast? int
 c = 1 cast ? int
+d = 1 cast! int
+e = 1 cast ! int
 "#,
         );
 
@@ -7121,10 +7123,18 @@ c = 1 cast ? int
         "1" @ 36..37: Number
         "cast ?" @ 38..44: Keyword
         "int" @ 45..48: Class
+        "d" @ 49..50: Variable [definition]
+        "1" @ 53..54: Number
+        "cast!" @ 55..60: Keyword
+        "int" @ 61..64: Class
+        "e" @ 65..66: Variable [definition]
+        "1" @ 69..70: Number
+        "cast !" @ 71..77: Keyword
+        "int" @ 78..81: Class
         "#);
     }
 
-    /// A real `typing.cast(...)` call is *not* the keyword form (`is_cast` is false) and must keep
+    /// A real `typing.cast(...)` call is *not* the keyword form (it has no `cast_kind`) and must keep
     /// resolving as a function reference.
     #[test]
     fn cast_call_is_not_the_keyword() {

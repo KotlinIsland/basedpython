@@ -342,9 +342,9 @@ impl<'a> Visitor<'a> for ValueUseFinder<'a> {
                 self.check_parametric_tests(compare);
                 walk_expr(self, expr);
             }
-            // `value cast T` / `value cast? T` parse as a call whose first
-            // argument is the target type — a type position
-            Expr::Call(call) if call.is_cast || call.is_checked_cast => {
+            // every `cast` form parses as a call whose first argument is the
+            // target type — a type position
+            Expr::Call(call) if call.cast_kind.is_some() => {
                 if let [type_arg, value_arg] = &*call.arguments.args {
                     self.check_parametric_cast(type_arg, value_arg);
                     self.visit_expr(value_arg);

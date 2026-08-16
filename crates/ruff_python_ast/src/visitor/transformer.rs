@@ -560,8 +560,7 @@ pub fn walk_expr<V: Transformer + ?Sized>(visitor: &V, expr: &mut Expr) {
             arguments,
             range_start: _,
             node_index: _,
-            is_cast: _,
-            is_checked_cast: _,
+            cast_kind: _,
             is_string_tag: _,
         }) => {
             visitor.visit_expr(func);

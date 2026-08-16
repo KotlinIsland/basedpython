@@ -1239,6 +1239,19 @@ mod python_parse_errors {
     }
 
     #[test]
+    fn bang_cast_in_py_errors() {
+        let errs = parse_errors_in_py("b = a cast! int\n");
+        assert!(
+            !errs.is_empty(),
+            "expected parse error for `cast!` in .py file"
+        );
+        assert!(
+            errs.iter().any(|e| e.contains("cast!")),
+            "expected error mentioning `cast!`, got: {errs:?}"
+        );
+    }
+
+    #[test]
     fn plain_cast_still_valid_in_py_after_checked() {
         // `cast` (the identifier / regular call) must not be mistaken for `cast?`
         let errs = parse_errors_in_py("cast = 5\nb = cast(int, a)\n");

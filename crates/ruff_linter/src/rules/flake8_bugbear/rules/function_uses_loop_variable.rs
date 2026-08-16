@@ -208,8 +208,7 @@ impl<'a> Visitor<'a> for SuspiciousVariablesVisitor<'a> {
                 arguments,
                 range_start: _,
                 node_index: _,
-                is_cast: _,
-                is_checked_cast: _,
+                cast_kind: _,
                 is_string_tag: _,
             }) => {
                 // Mark immediately-invoked lambdas as safe — the closure

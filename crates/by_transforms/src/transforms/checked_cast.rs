@@ -1,20 +1,23 @@
-//! Lowering for the `cast` and `cast?` infix operators.
+//! Lowering for the `cast`, `cast!` and `cast?` infix operators.
 //!
-//! Both parse as an `ExprCall` whose `func` is a synthetic `Name("cast")` and
-//! whose `arguments` are `[type, value]`; a flag distinguishes them:
+//! All three parse as an `ExprCall` whose `func` is a synthetic `Name("cast")`
+//! and whose `arguments` are `[type, value]`; the [`CastKind`] distinguishes
+//! them:
 //!
-//! - **`is_cast`** — `<value> cast <type>`, the *checked* cast. By default
-//!   (`Config::checked_cast`) it verifies the value at runtime and raises a
-//!   `TypeError` on a mismatch, so `"1" cast int` errors. Its type is `type`.
-//!   When checked casts are disabled it degrades to the unchecked
-//!   `typing.cast(type, value)`.
-//! - **`is_checked_cast`** — `<value> cast? <type>`, the *safe* cast. Always
-//!   available: it yields the value when `isinstance(value, type)` holds and
-//!   `None` otherwise, so its type is `type | None`.
+//! - **[`CastKind::Static`]** — `<value> cast <type>`, a purely static
+//!   reinterpretation with no runtime residue, lowered to `typing.cast(type,
+//!   value)`. ty only accepts it when the value already is the target, so
+//!   there is nothing left to verify.
+//! - **[`CastKind::Checked`]** — `<value> cast! <type>`. Verifies the value at
+//!   runtime and raises a `TypeError` on a mismatch, so `"1" cast! int` errors.
+//!   Its type is `type`.
+//! - **[`CastKind::Try`]** — `<value> cast? <type>`, the *safe* cast: it yields
+//!   the value when the check holds and `None` otherwise, so its type is
+//!   `type | None`.
 //!
-//! Each is rewritten to a helper call (or plain `cast` when unchecked). The
-//! value is a [`Fragment::Src`] passthrough, so lowerings inside it still
-//! compose and it is evaluated exactly once.
+//! Each is rewritten to a helper call (or plain `cast` when there is nothing to
+//! check). The value is a [`Fragment::Src`] passthrough, so lowerings inside it
+//! still compose and it is evaluated exactly once.
 //!
 //! How a *checked* form validates is decided by the **same engine that decides
 //! `x is T`** — [`build_predicate`], via [`TypeInfo::parametric_cast_plan`]. The
@@ -25,7 +28,7 @@
 //!   while an `is`-rhs is a value expression, so ty infers it differently;
 //! - [`ProbeStrictness::Lenient`], because a cast is an assertion: arguments the
 //!   runtime cannot see are not held against the value, keeping
-//!   `[1, 2] cast list[int]` legal. An `is`-test is strict — a `True` narrows,
+//!   `[1, 2] cast! list[int]` legal. An `is`-test is strict — a `True` narrows,
 //!   so it must be earned.
 //!
 //! Everything else follows from the shared plan: a reified type parameter
@@ -45,7 +48,7 @@
 use std::collections::BTreeSet;
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, Stmt};
+use ruff_python_ast::{CastKind, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
@@ -58,7 +61,7 @@ use crate::type_info::{CastCheck, SoundnessCheck, TypeInfo};
 /// is evaluated exactly once and the predicate can reference it
 const CAST_VALUE_PARAM: &str = "_by_cast_value";
 
-// `<value> cast <type>` with checks on: verify at runtime, raise on mismatch.
+// `<value> cast! <type>`: verify at runtime, raise on mismatch.
 const CHECKED_CAST_HELPER: &str = "\
 def _checked_cast(_v, _t):
     if not isinstance(_v, _t):
@@ -91,7 +94,7 @@ def _try_cast_pred(_v, _pred):
     return _v if _pred(_v) else None
 ";
 
-/// the runtime helper a `cast` / `cast?` occurrence lowers to
+/// the runtime helper a cast occurrence lowers to
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Helper {
     /// `_checked_cast(value, target)` — shallow `isinstance`, raises on mismatch
@@ -108,7 +111,7 @@ enum Helper {
 
 impl Helper {
     /// whether this helper yields `None` on mismatch (the `cast?` family) rather
-    /// than raising (the `cast` family)
+    /// than raising (the `cast!` family)
     fn is_yielding(self) -> bool {
         matches!(self, Self::Try | Self::TryPredicate)
     }
@@ -144,16 +147,8 @@ impl Helper {
     }
 }
 
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "independent yes/no facts about one pass — the form it lowers to, \
-              and which runtime helpers its predicates reached for"
-)]
 struct CastLower<'a> {
     types: &'a dyn TypeInfo,
-    /// `true` when the checked (`cast`) form does its runtime check; `false`
-    /// degrades `cast` to unchecked `typing.cast`
-    checked: bool,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     used: BTreeSet<Helper>,
     needs_parametric: bool,
@@ -162,10 +157,9 @@ struct CastLower<'a> {
 }
 
 impl<'a> CastLower<'a> {
-    fn new(types: &'a dyn TypeInfo, checked: bool) -> Self {
+    fn new(types: &'a dyn TypeInfo) -> Self {
         Self {
             types,
-            checked,
             edits: Vec::new(),
             used: BTreeSet::new(),
             needs_parametric: false,
@@ -261,24 +255,23 @@ impl<'ast> Visitor<'ast> for CastLower<'_> {
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
         if let Expr::Call(call) = expr
-            && (call.is_cast || call.is_checked_cast)
+            && let Some(cast_kind) = call.cast_kind
             && let [type_arg, value_arg] = &*call.arguments.args
         {
             // a statically-proven upcast needs no runtime check — the probe
             // would always pass, and for a subscripted protocol or builtin
             // target it cannot even run — so it degrades to a plain
-            // `typing.cast`, exactly as a disabled checked cast does. a
+            // `typing.cast`, exactly as the static `cast` does. a
             // method-bearing protocol target has no faithful runtime check at
             // all, so it degrades the same way rather than emit an `isinstance`
             // against the protocol (a runtime error)
             let redundant = self.types.cast_is_redundant(value_arg, type_arg)
                 || self.types.cast_target_is_unverifiable(type_arg);
-            let helper = if call.is_checked_cast && !redundant {
-                Helper::Try
-            } else if self.checked && !redundant {
-                Helper::Checked
-            } else {
-                Helper::TypingCast
+            let helper = match cast_kind {
+                _ if redundant => Helper::TypingCast,
+                CastKind::Static => Helper::TypingCast,
+                CastKind::Checked => Helper::Checked,
+                CastKind::Try => Helper::Try,
             };
             self.emit(expr.range(), type_arg, value_arg, helper);
         }
@@ -286,19 +279,11 @@ impl<'ast> Visitor<'ast> for CastLower<'_> {
     }
 }
 
-pub(crate) struct CheckedCastPass {
-    checked: bool,
-}
-
-impl CheckedCastPass {
-    pub(crate) fn new(checked: bool) -> Self {
-        Self { checked }
-    }
-}
+pub(crate) struct CheckedCastPass;
 
 impl TypeAwarePass for CheckedCastPass {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = CastLower::new(types, self.checked);
+        let mut inner = CastLower::new(types);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
@@ -329,21 +314,13 @@ mod tests {
     use crate::{Config, transpile};
     use ruff_python_ast::PythonVersion;
 
-    /// default config — checked casts on
     fn check(input: &str) -> String {
         transpile(input, &Config::test_default()).unwrap()
     }
 
-    fn unchecked_config() -> Config {
-        Config {
-            checked_cast: false,
-            ..Config::test_default()
-        }
-    }
-
     #[test]
-    fn cast_is_checked_by_default() {
-        let out = check("def f(a: object):\n    b = a cast int\n");
+    fn bang_cast_is_checked() {
+        let out = check("def f(a: object):\n    b = a cast! int\n");
         assert!(out.contains("b = _checked_cast(a, int)"), "got:\n{out}");
         assert!(
             out.contains("raise TypeError"),
@@ -351,14 +328,12 @@ mod tests {
         );
     }
 
+    /// the plain `cast` is a static reinterpretation — ty only accepts it where
+    /// the value already is the target, so it has no runtime residue at all
     #[test]
-    fn cast_disabled_is_typing_cast() {
-        let out = transpile(
-            "def f(a: object):\n    b = a cast int\n",
-            &unchecked_config(),
-        )
-        .unwrap();
-        assert!(out.contains("b = cast(int, a)"), "got:\n{out}");
+    fn static_cast_is_typing_cast() {
+        let out = check("def f(a: int):\n    b = a cast object\n");
+        assert!(out.contains("b = cast(object, a)"), "got:\n{out}");
         assert!(
             out.contains("from typing import cast"),
             "import injected:\n{out}"
@@ -367,18 +342,15 @@ mod tests {
     }
 
     #[test]
-    fn try_cast_returns_none_and_is_ungated() {
-        // `cast?` is always the safe form, independent of the checked-cast config
-        for config in [Config::test_default(), unchecked_config()] {
-            let out = transpile("def f(a: object):\n    b = a cast? int\n", &config).unwrap();
-            assert!(out.contains("b = _try_cast(a, int)"), "got:\n{out}");
-            assert!(out.contains("def _try_cast"), "got:\n{out}");
-        }
+    fn try_cast_returns_none() {
+        let out = check("def f(a: object):\n    b = a cast? int\n");
+        assert!(out.contains("b = _try_cast(a, int)"), "got:\n{out}");
+        assert!(out.contains("def _try_cast"), "got:\n{out}");
     }
 
     #[test]
     fn checked_cast_to_union() {
-        let out = check("def f(a: object):\n    b = a cast int | str\n");
+        let out = check("def f(a: object):\n    b = a cast! int | str\n");
         assert!(
             out.contains("b = _checked_cast(a, (int, str))"),
             "got:\n{out}"
@@ -397,7 +369,7 @@ mod tests {
     #[test]
     fn literal_target_checks_membership() {
         let out = check(
-            "from typing import Literal\n\ndef f(a: object):\n    b = a cast Literal[\"x\", \"y\"]\n",
+            "from typing import Literal\n\ndef f(a: object):\n    b = a cast! Literal[\"x\", \"y\"]\n",
         );
         assert!(
             out.contains(
@@ -449,7 +421,7 @@ mod tests {
     #[test]
     fn user_generic_target_checks_arguments() {
         let out = check(
-            "class A[T]:\n    t: T\n    def __init__(self, t: T): ...\n\ndef f(x: object):\n    b = x cast A[int]\n",
+            "class A[T]:\n    t: T\n    def __init__(self, t: T): ...\n\ndef f(x: object):\n    b = x cast! A[int]\n",
         );
         assert!(
             out.contains("b = _checked_cast_pred(x, lambda _by_cast_value: _parametric_is_lenient(_by_cast_value, A[int], (0,)))"),
@@ -477,7 +449,7 @@ mod tests {
     #[test]
     fn user_generic_target_carries_variance() {
         let out = check(
-            "class A[out T]:\n    t: T\n    def __init__(self, t: T): ...\n\ndef f(x: object):\n    b = x cast A[int]\n",
+            "class A[out T]:\n    t: T\n    def __init__(self, t: T): ...\n\ndef f(x: object):\n    b = x cast! A[int]\n",
         );
         assert!(
             out.contains("b = _checked_cast_pred(x, lambda _by_cast_value: _parametric_is_lenient(_by_cast_value, A[int], (1,)))"),
@@ -485,15 +457,13 @@ mod tests {
         );
     }
 
-    /// an unchecked cast never reaches a runtime probe, so a user generic
+    /// the static `cast` never reaches a runtime probe, so a user generic
     /// target stays a plain `typing.cast`
     #[test]
-    fn user_generic_unchecked_is_typing_cast() {
-        let out = transpile(
-            "class A[T]:\n    t: T\n    def __init__(self, t: T): ...\n\ndef f(x: object):\n    b = x cast A[int]\n",
-            &unchecked_config(),
-        )
-        .unwrap();
+    fn user_generic_static_cast_is_typing_cast() {
+        let out = check(
+            "class A[T]:\n    t: T\n    def __init__(self, t: T): ...\n\ndef f(x: A[int]):\n    b = x cast A[int]\n",
+        );
         assert!(out.contains("b = cast(A[int], x)"), "got:\n{out}");
         assert!(!out.contains("_parametric_is"), "got:\n{out}");
     }
@@ -504,7 +474,7 @@ mod tests {
         // subscripted target must never reach `isinstance`. the probe unwraps it
         // to the origin itself, and checks the arguments only when the value
         // records them
-        let out = check("def f(a: object):\n    b = a cast list[object]\n");
+        let out = check("def f(a: object):\n    b = a cast! list[object]\n");
         assert!(
             out.contains("b = _checked_cast_pred(a, lambda _by_cast_value: _parametric_is_lenient(_by_cast_value, list[object], (0,)))"),
             "got:\n{out}"
@@ -524,25 +494,21 @@ mod tests {
     }
 
     #[test]
-    fn unchecked_keeps_written_type() {
+    fn static_cast_keeps_written_type() {
         // `typing.cast` never reaches `isinstance`, so the exact type is kept
-        let out = transpile(
-            "def f(a: object):\n    b = a cast list[object]\n",
-            &unchecked_config(),
-        )
-        .unwrap();
+        let out = check("def f(a: list[object]):\n    b = a cast list[object]\n");
         assert!(out.contains("b = cast(list[object], a)"), "got:\n{out}");
     }
 
     #[test]
     fn value_evaluated_once() {
-        let out = check("def f():\n    b = g() cast int\n");
+        let out = check("def f():\n    b = g() cast! int\n");
         assert_eq!(out.matches("g()").count(), 1, "single evaluation:\n{out}");
     }
 
     #[test]
     fn both_forms_in_one_file() {
-        let out = check("def f(a: object, b: object):\n    x = a cast int\n    y = b cast? str\n");
+        let out = check("def f(a: object, b: object):\n    x = a cast! int\n    y = b cast? str\n");
         assert!(out.contains("x = _checked_cast(a, int)"), "got:\n{out}");
         assert!(out.contains("y = _try_cast(b, str)"), "got:\n{out}");
     }
@@ -550,7 +516,7 @@ mod tests {
     #[test]
     fn collection_literal_value_composes() {
         // a bare collection-literal value passes through the wrap intact
-        let out = check("x = [1] cast list[object]\n");
+        let out = check("x = [1] cast! list[object]\n");
         assert!(out.contains("_checked_cast_pred([1], "), "got:\n{out}");
         assert_eq!(
             out.matches('(').count(),
@@ -565,7 +531,7 @@ mod tests {
     /// and (for a subscripted protocol) would be a runtime error
     #[test]
     fn redundant_upcast_is_typing_cast() {
-        let out = check("class B[T](list[T]): ...\n\ndef f():\n    b = B[int]() cast list[int]\n");
+        let out = check("class B[T](list[T]): ...\n\ndef f():\n    b = B[int]() cast! list[int]\n");
         assert!(out.contains("b = cast(list[int], B[int]())"), "got:\n{out}");
         assert!(!out.contains("_checked_cast"), "no runtime probe:\n{out}");
     }
@@ -584,7 +550,7 @@ mod tests {
     #[test]
     fn redundant_upcast_to_protocol_is_typing_cast() {
         let out = check(
-            "from collections.abc import Sequence\n\nclass A[T](Sequence[T]):\n    def __getitem__(self, i): ...  # type: ignore\n    def __len__(self): ...\n\ndef f():\n    a = A[int]() cast Sequence[object]\n",
+            "from collections.abc import Sequence\n\nclass A[T](Sequence[T]):\n    def __getitem__(self, i): ...  # type: ignore\n    def __len__(self): ...\n\ndef f():\n    a = A[int]() cast! Sequence[object]\n",
         );
         assert!(
             out.contains("a = cast(Sequence[object], A[int]())"),
@@ -600,7 +566,7 @@ mod tests {
     #[test]
     fn non_redundant_cast_keeps_probe() {
         // (the probe is lenient: an unreified value passes the argument check)
-        let out = check("def f(a: object):\n    b = a cast list[int]\n");
+        let out = check("def f(a: object):\n    b = a cast! list[int]\n");
         assert!(
             out.contains("b = _checked_cast_pred(a, lambda _by_cast_value: _parametric_is_lenient(_by_cast_value, list[int], (0,)))"),
             "got:\n{out}"
@@ -612,7 +578,7 @@ mod tests {
     #[test]
     fn data_member_protocol_cast_checks_structurally() {
         let out = check(
-            "from typing import Protocol\n\nclass A[T](Protocol):\n    a: T\n\ndef f(x: object):\n    b = x cast A[int]\n",
+            "from typing import Protocol\n\nclass A[T](Protocol):\n    a: T\n\ndef f(x: object):\n    b = x cast! A[int]\n",
         );
         assert!(
             out.contains("b = _checked_cast_pred(x, lambda _by_cast_value: _by_protocol_is(_by_cast_value, [(\"attr\", \"a\", int, 0)]))"),
@@ -640,7 +606,7 @@ mod tests {
     #[test]
     fn method_protocol_cast_checks_structurally() {
         let out = check(
-            "from typing import Protocol\n\nclass M[T](Protocol):\n    def get(self) -> T: ...\n\ndef f(x: object):\n    b = x cast M[int]\n",
+            "from typing import Protocol\n\nclass M[T](Protocol):\n    def get(self) -> T: ...\n\ndef f(x: object):\n    b = x cast! M[int]\n",
         );
         assert!(
             out.contains("b = _checked_cast_pred(x, lambda _by_cast_value: _by_protocol_is(_by_cast_value, [(\"method\", \"get\", [], (int, 1))]))"),
@@ -655,7 +621,7 @@ mod tests {
     #[test]
     fn unspellable_protocol_cast_degrades_to_typing_cast() {
         let out = check(
-            "from typing import Protocol\nfrom collections.abc import Callable\n\nclass M[T](Protocol):\n    cb: Callable[[T], T]\n\ndef f(x: object):\n    b = x cast M[int]\n",
+            "from typing import Protocol\nfrom collections.abc import Callable\n\nclass M[T](Protocol):\n    cb: Callable[[T], T]\n\ndef f(x: object):\n    b = x cast! M[int]\n",
         );
         assert!(out.contains("b = cast(M[int], x)"), "got:\n{out}");
         assert!(
@@ -674,15 +640,13 @@ mod tests {
         assert!(!out.contains("_try_cast"), "no probe:\n{out}");
     }
 
-    /// an unchecked config keeps a data-member protocol cast as a plain
-    /// `typing.cast` — no structural probe is emitted
+    /// a static `cast` to a data-member protocol emits no structural probe —
+    /// the value already conforms, so there is nothing to test
     #[test]
-    fn data_member_protocol_unchecked_is_typing_cast() {
-        let out = transpile(
-            "from typing import Protocol\n\nclass A[T](Protocol):\n    a: T\n\ndef f(x: object):\n    b = x cast A[int]\n",
-            &unchecked_config(),
-        )
-        .unwrap();
+    fn data_member_protocol_static_cast_is_typing_cast() {
+        let out = check(
+            "from typing import Protocol\n\nclass A[T](Protocol):\n    a: T\n\ndef f(x: A[int]):\n    b = x cast A[int]\n",
+        );
         assert!(out.contains("b = cast(A[int], x)"), "got:\n{out}");
         assert!(!out.contains("_by_protocol_is"), "got:\n{out}");
     }
@@ -715,7 +679,7 @@ mod tests {
     #[test]
     fn union_mixes_probe_and_isinstance_per_arm() {
         let out = check(
-            "class A[T]:\n    t: T\n    def __init__(self, t: T): ...\n\ndef f(a: object):\n    b = a cast A[int] | str\n",
+            "class A[T]:\n    t: T\n    def __init__(self, t: T): ...\n\ndef f(a: object):\n    b = a cast! A[int] | str\n",
         );
         assert!(
             out.contains(

@@ -1,5 +1,5 @@
 //! Runtime divergence test for parametric protocol checks — both `is`-tests
-//! (`value is A[int]`) and checked casts (`value cast A[int]`, `value cast?
+//! (`value is A[int]`) and checked casts (`value cast! A[int]`, `value cast?
 //! A[int]`).
 //!
 //! The unit tests verify the *lowered text* and the mdtest checker verifies the
@@ -113,11 +113,11 @@ assert (C() is not HasA[bool]) is False, "is not negates a match"
 
 # a checked `cast` to a data-member protocol validates the same structural
 # claim: it returns the value on a match and raises on a mismatch
-assert (C() cast HasA[bool]) is not None, "checked cast to a matching protocol returns the value"
+assert (C() cast! HasA[bool]) is not None, "checked cast to a matching protocol returns the value"
 
 _raised = False
 try:
-    D() cast HasA[str]
+    D() cast! HasA[str]
 except TypeError:
     _raised = True
 assert _raised, "checked cast to a non-matching protocol raises"
@@ -233,7 +233,7 @@ assert (FeedBoolAnn() is Feed2[bool]) is True, "bool accepts bool"
 assert (FeedBoolAnn() is Feed2[True]) is True, "bool accepts Literal[True]"
 
 # a checked cast to a method protocol validates the same claim
-assert (GetBool() cast Get[int]) is not None, "method-protocol cast returns the value on a match"
+assert (GetBool() cast! Get[int]) is not None, "method-protocol cast returns the value on a match"
 assert (GetBool() cast? Get[str]) is None, "method-protocol safe cast yields None on a mismatch"
 
 # a union cast is the disjunction of its arms, each checked by its own kind —
@@ -246,7 +246,7 @@ assert (1 cast? Get[int] | str) is None, "neither arm matches"
 # the cast probe is *lenient*: a value recording no reification has no arguments
 # to check, so the base class test is the whole guarantee. this keeps a plain
 # list castable while still rejecting one whose recorded arguments contradict
-assert ([1, 2] cast list[int]) is not None, "an unreified list still casts"
+assert ([1, 2] cast! list[int]) is not None, "an unreified list still casts"
 
 class IntList(list[int]): ...
 class StrList(list[str]): ...

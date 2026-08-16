@@ -249,8 +249,7 @@ fn generate_with_statement(
     let context_call = ast::ExprCall {
         node_index: AtomicNodeIndex::NONE,
         range_start: ruff_text_size::TextSize::default(),
-        is_cast: false,
-        is_checked_cast: false,
+        cast_kind: None,
         is_string_tag: false,
         func: legacy_call.func.clone(),
         arguments: ast::Arguments {
@@ -274,8 +273,7 @@ fn generate_with_statement(
     let func_call = ast::ExprCall {
         node_index: AtomicNodeIndex::NONE,
         range_start: ruff_text_size::TextSize::default(),
-        is_cast: false,
-        is_checked_cast: false,
+        cast_kind: None,
         is_string_tag: false,
         func: Box::new(func.clone()),
         arguments: ast::Arguments {

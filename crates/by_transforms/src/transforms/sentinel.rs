@@ -81,8 +81,7 @@ impl Transformer for Sentinel {
                     })]),
                     keywords: thin_vec::ThinVec::new(),
                 },
-                is_cast: false,
-                is_checked_cast: false,
+                cast_kind: None,
                 is_string_tag: false,
             });
             *stmt = Stmt::Assign(StmtAssign {

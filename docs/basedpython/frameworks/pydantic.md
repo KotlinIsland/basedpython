@@ -17,7 +17,7 @@ basedpython has full support for pydantic v2 models. type checking is precise, a
 ### transpilation compatibility
 
 - `optional?.chaining` works correctly on optional fields
-- `checked cast` and `cast?` operators work inside model methods
+- the `cast!` and `cast?` operators work inside model methods
 - reified generics: `Model[int](...)` constructor calls work natively
 - mutable default re-evaluation is handled correctly
 

@@ -489,17 +489,13 @@ fields = [
   { name = "range_start", type = "ruff_text_size::TextSize", skip_visit = true },
   { name = "func", type = "Expr" },
   { name = "arguments", type = "Arguments" },
-  { name = "is_cast", type = "bool", doc = """basedpython: when true, this call represents a `<value> cast <type>`
-expression. The `func` is a synthetic `Name(\"cast\")`, and `arguments` holds
-`[type, value]` in `typing.cast` order. The parentheses are not present in the
-source — surface form is `<value> cast <type>`. Lowered to `cast(<type>, <value>)`
-with an injected `from typing import cast`""" },
-  { name = "is_checked_cast", type = "bool", doc = """basedpython: when true, this call is a `<value> cast? <type>` checked
-cast. Like `is_cast`, `func` is a synthetic `Name(\"cast\")` and `arguments`
-holds `[type, value]`, but the surface form is `<value> cast? <type>` and it
-carries runtime semantics: it evaluates to `value` when `isinstance(value, type)`
-holds and `None` otherwise, so its inferred type is `type | None`. Lowered to
-`(value if isinstance(value, type) else None)`""" },
+  { name = "cast_kind", type = "CastKind?", skip_visit = true, doc = """basedpython: `Some` when this call is one of the infix cast operators
+rather than an ordinary call. The `func` is then a synthetic `Name(\"cast\")`
+spanning the operator, and `arguments` holds `[type, value]` in `typing.cast`
+order; the parentheses are not present in the source, whose surface form is
+`<value> cast <type>`, `<value> cast! <type>` or `<value> cast? <type>`. Which
+one it is — and so whether the cast is purely static, raises on a mismatch, or
+yields `None` — is the [`crate::CastKind`]""" },
   { name = "is_string_tag", type = "bool", doc = """basedpython: when true, this call is a custom string tag `tag"..."`.
 The `func` is the tag identifier and `arguments` holds exactly the template
 literal, whose opening quote directly abuts the tag name — no parentheses or

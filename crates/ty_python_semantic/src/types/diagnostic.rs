@@ -169,6 +169,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&NARROWING_GUARD_AS_VALUE);
     registry.register_lint(&ESCAPING_LOOP_VARIABLE);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
+    registry.register_lint(&UNSOUND_CAST);
     registry.register_lint(&NON_OVERLAPPING_CAST);
     registry.register_lint(&NON_OVERLAPPING_TYPE_TEST);
     registry.register_lint(&OPTIONAL_OBJECT_CONVERSION);
@@ -1799,23 +1800,23 @@ declare_lint! {
     /// from collections.abc import Callable
     ///
     /// def f(x: object):
-    ///     a = x cast list[int]   # warning: only `list` is checked
-    ///     b = x cast list        # ok — no argument claimed
+    ///     a = x cast! list[int]   # warning: only `list` is checked
+    ///     b = x cast! list        # ok — no argument claimed
     ///
     /// class A[T]:
     ///     init(self, t: T)
     ///
     /// def g(x: object):
-    ///     a = x cast A[int]      # ok — checked in full via `__orig_class__`
+    ///     a = x cast! A[int]      # ok — checked in full via `__orig_class__`
     ///
     /// def r[T](data: list[T]):
-    ///     a = data cast list[int]  # ok — the reified `T` cell decides it
+    ///     a = data cast! list[int]  # ok — the reified `T` cell decides it
     ///
     /// class HasCb[T](Protocol):
     ///     cb: Callable[[T], T]
     ///
     /// def h(x: object):
-    ///     a = x cast HasCb[int]  # warning: a callable member has no runtime check
+    ///     a = x cast! HasCb[int]  # warning: a callable member has no runtime check
     /// ```
     pub(crate) static ERASED_CAST_ARGUMENT = {
         summary: "detects casts whose type arguments cannot be checked at runtime",
@@ -1826,19 +1827,54 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
+    /// Checks for a plain `cast` that is not a widening — one whose value is not
+    /// already known to be the target type.
+    ///
+    /// ## Why is this bad?
+    /// `cast` reinterprets a value without looking at it, so it is only ever
+    /// truthful when the checker can already prove the value is the target.
+    /// Casting *down* — `object` to `int` — makes a claim about the value that
+    /// nothing verifies, and the program carries on with a type it may not have.
+    ///
+    /// The two suffixed forms make the claim honest by saying what happens when
+    /// it turns out to be false: `cast!` raises a `TypeError`, and `cast?`
+    /// yields `None`, so its type is `<target> | None`.
+    ///
+    /// A gradual `Any` or `Unknown` value is not "already the target" either —
+    /// nothing is known about it, which is exactly when a check is worth having.
+    ///
+    /// ## Examples
+    /// ```by
+    /// def f(a: object, b: int, c: Any):
+    ///     b cast object    # ok — `int` is already an `object`
+    ///     a cast int       # error: `object` is not already an `int`
+    ///     c cast int       # error: nothing is known about an `Any`
+    ///
+    ///     a cast! int      # raises unless `a` really is an `int`
+    ///     a cast? int      # `int | None`
+    /// ```
+    pub(crate) static UNSOUND_CAST = {
+        summary: "detects a plain `cast` that is not a widening",
+        status: LintStatus::stable("0.0.71"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
     /// Checks for a `cast` whose value type is disjoint from the target type,
     /// so no value could ever belong to both.
     ///
     /// ## Why is this bad?
-    /// A cast between non-overlapping types can never succeed: a checked `cast`
-    /// always raises at runtime, and a safe `cast?` always yields `None`. The
-    /// cast is almost certainly a mistake.
+    /// A cast between non-overlapping types can never succeed: `cast!` always
+    /// raises at runtime, and `cast?` always yields `None`. The cast is almost
+    /// certainly a mistake.
     ///
     /// ## Examples
     /// ```by
     /// def f(a: object):
-    ///     a cast int       # ok — `object` overlaps `int`
-    ///     "" cast int      # warning: `str` and `int` are disjoint
+    ///     a cast! int      # ok — `object` overlaps `int`
+    ///     "" cast! int     # warning: `str` and `int` are disjoint
     /// ```
     pub(crate) static NON_OVERLAPPING_CAST = {
         summary: "detects casts between non-overlapping types",

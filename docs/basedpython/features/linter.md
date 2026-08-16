@@ -28,7 +28,7 @@ spelling of something basedpython has syntax for:
 | `BY101` | `redundant-none-coalesce`  | a `??` whose fallback cannot change the result                             |
 
 every one of them is fixable. `BY020`'s fix is the only one that is always
-unsafe — basedpython's `cast` is [checked](checked-cast.md) where `typing.cast`
+unsafe — the `cast!` it writes is [checked](checked-cast.md) where `typing.cast`
 is a no-op, so the rewrite adds a way for the program to fail.
 
 they also compose with the upstream rules that produce their input. `SIM108`

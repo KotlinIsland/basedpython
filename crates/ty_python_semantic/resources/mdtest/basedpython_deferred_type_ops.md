@@ -392,7 +392,7 @@ unprovable assignment uses.
 
 ```by
 def from_len[I: int](i: I, xs: list[int]) -> I + 1:
-    return len(xs) cast I + 1
+    return len(xs) cast! I + 1
 ```
 
 ## an operation nested past the limit stands for its reduced form

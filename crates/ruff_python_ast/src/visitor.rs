@@ -573,8 +573,7 @@ pub fn walk_expr<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, expr: &'a Expr) {
             arguments,
             range_start: _,
             node_index: _,
-            is_cast: _,
-            is_checked_cast: _,
+            cast_kind: _,
             is_string_tag: _,
         }) => {
             visitor.visit_expr(func);

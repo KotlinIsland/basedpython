@@ -23,18 +23,20 @@ use crate::{AlwaysFixableViolation, Applicability, Edit, Fix};
 ///
 /// Use instead:
 /// ```by
-/// n = value cast int
+/// n = value cast! int
 /// ```
 ///
 /// ## Fix safety
 /// This rule's fix is always marked as unsafe, because the two do not do the
-/// same thing at runtime. `typing.cast` returns its argument untouched;
-/// basedpython's `cast` is [checked](https://docs.basedpython.org/features/checked-cast)
-/// by default and raises on a value that is not of the named type. That is the
-/// stronger guarantee, but it is a new way for the program to fail — code that
-/// relied on the cast being a lie will now raise. `cast?` is the variant that
-/// yields `None` instead, and `--no-checked-cast` degrades `cast` to the
-/// unchecked form.
+/// same thing at runtime. `typing.cast` returns its argument untouched, while
+/// `cast!` is [checked](https://docs.basedpython.org/features/checked-cast) and
+/// raises on a value that is not of the named type. That is the stronger
+/// guarantee, but it is a new way for the program to fail — code that relied on
+/// the cast being a lie will now raise. `cast?` is the variant that yields
+/// `None` instead.
+///
+/// The fix writes `cast!` rather than the plain `cast` because a `typing.cast`
+/// is nearly always a downcast, which the unsuffixed keyword rejects.
 ///
 /// The fix does not remove the now-unused `from typing import cast`; `F401`
 /// reports it.
@@ -48,11 +50,11 @@ pub(crate) struct ManualCastCall;
 impl AlwaysFixableViolation for ManualCastCall {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "`cast` call can be written as the `cast` keyword".to_string()
+        "`cast` call can be written as the `cast!` keyword".to_string()
     }
 
     fn fix_title(&self) -> String {
-        "Replace with `cast`".to_string()
+        "Replace with `cast!`".to_string()
     }
 }
 
@@ -63,7 +65,7 @@ pub(crate) fn manual_cast_call(checker: &Checker, call: &ast::ExprCall) {
     }
     // the keyword parses to a call of its own, so it would otherwise report the
     // rewrite it just made
-    if call.is_cast || call.is_checked_cast {
+    if call.cast_kind.is_some() {
         return;
     }
     if !checker.semantic().match_typing_expr(&call.func, "cast") {
@@ -78,7 +80,7 @@ pub(crate) fn manual_cast_call(checker: &Checker, call: &ast::ExprCall) {
 
     // the keyword's operands sit at the same precedence as a comparison's
     let replacement = format!(
-        "{} cast {}",
+        "{} cast! {}",
         comparison_operand_source(checker, value),
         comparison_operand_source(checker, class),
     );

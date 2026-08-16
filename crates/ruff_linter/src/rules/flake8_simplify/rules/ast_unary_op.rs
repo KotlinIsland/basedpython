@@ -299,8 +299,7 @@ pub(crate) fn double_negation(checker: &Checker, expr: &Expr, op: UnaryOp, opera
             },
             range_start: ruff_text_size::TextSize::default(),
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
-            is_cast: false,
-            is_checked_cast: false,
+            cast_kind: None,
             is_string_tag: false,
         };
         diagnostic.set_fix(Fix::safe_edit(Edit::range_replacement(

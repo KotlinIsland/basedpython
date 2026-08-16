@@ -364,8 +364,7 @@ fn affix_matches_slice_bound(data: &RemoveAffixData, semantic: &SemanticModel) -
             ast::Expr::Call(ast::ExprCall {
                 range_start: _,
                 node_index: _,
-                is_cast: _,
-                is_checked_cast: _,
+                cast_kind: _,
                 is_string_tag: _,
                 func,
                 arguments,
@@ -416,8 +415,7 @@ fn affix_matches_slice_bound(data: &RemoveAffixData, semantic: &SemanticModel) -
             |ast::ExprCall {
                  range_start: _,
                  node_index: _,
-                 is_cast: _,
-                 is_checked_cast: _,
+                 cast_kind: _,
                  is_string_tag: _,
                  func,
                  arguments,

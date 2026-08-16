@@ -46,11 +46,6 @@ pub struct Config {
     /// saw. a clause with no faithful runtime test — `raises ...`, or a set with
     /// no runtime spelling such as a negation — is never guarded
     pub runtime_raises_checks: bool,
-    /// when true (the default), the `<value> cast? <type>` checked-cast
-    /// operator is lowered to a runtime `isinstance` test that yields the
-    /// value or `None`. when false, using `cast?` is a transpile error — the
-    /// feature is simply unavailable
-    pub checked_cast: bool,
     /// when true (the default), a closure created inside a loop captures the
     /// loop's bindings *by value*, so each iteration's closure sees that
     /// iteration's element instead of every closure sharing the one cell
@@ -153,7 +148,6 @@ impl Default for Config {
             prune_unused_imports_after_reverse: true,
             soundness: SoundnessPositions::defaults(),
             runtime_raises_checks: false,
-            checked_cast: true,
             unique_loop_bindings: true,
         }
     }

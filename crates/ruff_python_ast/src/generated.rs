@@ -10439,19 +10439,14 @@ pub struct ExprCall {
     pub range_start: ruff_text_size::TextSize,
     pub func: Box<Expr>,
     pub arguments: crate::Arguments,
-    /// basedpython: when true, this call represents a `<value> cast <type>`
-    /// expression. The `func` is a synthetic `Name("cast")`, and `arguments` holds
-    /// `[type, value]` in `typing.cast` order. The parentheses are not present in the
-    /// source — surface form is `<value> cast <type>`. Lowered to `cast(<type>, <value>)`
-    /// with an injected `from typing import cast`
-    pub is_cast: bool,
-    /// basedpython: when true, this call is a `<value> cast? <type>` checked
-    /// cast. Like `is_cast`, `func` is a synthetic `Name("cast")` and `arguments`
-    /// holds `[type, value]`, but the surface form is `<value> cast? <type>` and it
-    /// carries runtime semantics: it evaluates to `value` when `isinstance(value, type)`
-    /// holds and `None` otherwise, so its inferred type is `type | None`. Lowered to
-    /// `(value if isinstance(value, type) else None)`
-    pub is_checked_cast: bool,
+    /// basedpython: `Some` when this call is one of the infix cast operators
+    /// rather than an ordinary call. The `func` is then a synthetic `Name("cast")`
+    /// spanning the operator, and `arguments` holds `[type, value]` in `typing.cast`
+    /// order; the parentheses are not present in the source, whose surface form is
+    /// `<value> cast <type>`, `<value> cast! <type>` or `<value> cast? <type>`. Which
+    /// one it is — and so whether the cast is purely static, raises on a mismatch, or
+    /// yields `None` — is the [`crate::CastKind`]
+    pub cast_kind: Option<crate::CastKind>,
     /// basedpython: when true, this call is a custom string tag `tag"..."`.
     /// The `func` is the tag identifier and `arguments` holds exactly the template
     /// literal, whose opening quote directly abuts the tag name — no parentheses or
@@ -11721,8 +11716,7 @@ impl ExprCall {
             range_start: _,
             func,
             arguments,
-            is_cast: _,
-            is_checked_cast: _,
+            cast_kind: _,
             is_string_tag: _,
             node_index: _,
         } = self;
