@@ -393,8 +393,8 @@ pub(crate) fn body_parameter_constraints<'db>(
 
     // a name bound more than once cannot stand for one value: which of them a later use is
     // about is not a question this can answer
-    let single_bindings = index
-        .place_table(body_scope.file_scope_id(db))
+    let place_table = index.place_table(body_scope.file_scope_id(db));
+    let single_bindings: FxHashSet<Name> = place_table
         .symbols()
         .filter(|symbol| symbol.is_bound() && !symbol.is_reassigned())
         .map(|symbol| symbol.name().clone())
@@ -431,13 +431,26 @@ pub(crate) fn body_parameter_constraints<'db>(
     entries.extend(asserted_parameter_types(db, env, index, body_scope, node));
 
     // a parameter a nested scope captured keeps nothing: that body is checked against this
-    // bound, and this walk never saw what it does with the name
-    if !collector.captured.is_empty() {
-        entries.retain(|(parameter, _)| {
-            parameter_definition_name(db, *parameter)
-                .is_none_or(|name| !collector.captured.contains(&name))
-        });
-    }
+    // bound, and this walk never saw what it does with the name.
+    //
+    // a parameter its own body rebinds keeps nothing either, for the same reason a rebound
+    // local does. after
+    //
+    //     while tb.tb_next:
+    //         tb = tb.tb_next
+    //
+    // the name stands for whatever the rebinding produced, not for what the caller passed, so
+    // the uses below it are no requirement on the argument — and bounding the argument by them
+    // anyway makes the body fail against its own bound, because the rebinding lands on the
+    // member type the bound itself invented
+    entries.retain(|(parameter, _)| {
+        parameter_definition_name(db, *parameter).is_none_or(|name| {
+            !collector.captured.contains(&name)
+                && place_table
+                    .symbol_id(name.as_str())
+                    .is_some_and(|symbol| !place_table.symbol(symbol).is_reassigned())
+        })
+    });
 
     entries.sort_by_key(|(parameter, _)| *parameter);
 

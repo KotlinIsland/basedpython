@@ -174,6 +174,19 @@ that a member's value was given to is read the same way: a name bound more than 
 for one value, and a use under a narrowing is about something narrower than the value it was bound
 to
 
+a parameter its own body rebinds keeps nothing at all, for the same reason. the reads above the
+rebinding are not enough on their own: walking a linked structure asks only that the argument have
+the member it walks along, so the rebinding lands on that member — whose value nothing described —
+and the walk's next step would fail against the signature the function itself produced
+
+```python
+def deepest(tb):
+    if tb.tb_next:
+        tb = tb.tb_next
+    return tb.tb_frame
+# def deepest(tb)
+```
+
 ### an `assert` at the top of the body
 
 an `assert` there holds for every call that returns normally, so it is the author saying what they

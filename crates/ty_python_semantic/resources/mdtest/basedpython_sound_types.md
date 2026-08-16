@@ -567,6 +567,50 @@ def f(x):
 f("anything")  # ok
 ```
 
+### a parameter its own body rebinds says nothing
+
+a name bound more than once cannot stand for one value, which is already why a reassigned local
+contributes nothing. a parameter is no different once its own body rebinds it: below the rebinding
+the name is whatever the rebinding produced, so what is done with it there requires nothing of what
+the caller passed
+
+keeping the requirements collected *above* the rebinding would not do either. walking a traceback
+requires only that the argument have a `tb_next`, so the rebinding lands on that member's type —
+which is `object`, because nothing said what it holds — and the read below it then fails against the
+bound the function itself produced
+
+```py
+def deepest(tb):
+    if tb.tb_next:
+        tb = tb.tb_next
+    return tb.tb_frame
+
+deepest("anything")  # ok
+```
+
+the same holds when the member is a method, which is the shape most of these take
+
+```py
+def rebound(x):
+    x.foo()
+    x = x.foo()
+    x.foo()
+
+rebound("anything")  # ok
+```
+
+the rebinding does not have to be reachable, or to come from the parameter, for the name to stop
+standing for one value
+
+```py
+def maybe(x, flag):
+    x.foo()
+    if flag:
+        x = 1
+
+maybe("anything", True)  # ok
+```
+
 ### a recursive call does not constrain
 
 ```py
