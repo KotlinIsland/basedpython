@@ -28,6 +28,7 @@ pub struct Settings {
     pub(super) terminal: TerminalSettings,
     pub(super) src: SrcSettings,
     pub(super) analysis: AnalysisSettings,
+    pub(super) editor: EditorSettings,
 
     /// Settings for configuration overrides that apply to specific file patterns.
     ///
@@ -60,6 +61,47 @@ impl Settings {
 
     pub(crate) fn analysis(&self) -> &AnalysisSettings {
         &self.analysis
+    }
+
+    pub fn editor(&self) -> &EditorSettings {
+        &self.editor
+    }
+}
+
+/// The resolved `[tool.ty.editor]` options.
+#[derive(Debug, Default, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub struct EditorSettings {
+    /// The modules a name is a common alias of, paired with the alias and sorted by it.
+    ///
+    /// These are only the aliases the project configured. The ones the editor knows on its own
+    /// live with the feature that offers them, in `ty_ide`.
+    common_aliases: Box<[(Box<str>, Box<str>)]>,
+}
+
+impl EditorSettings {
+    pub(super) fn new<'a>(common_aliases: impl Iterator<Item = (&'a str, &'a str)>) -> Self {
+        let mut common_aliases: Box<[(Box<str>, Box<str>)]> = common_aliases
+            .map(|(alias, module)| (Box::from(alias), Box::from(module)))
+            .collect();
+        // `common_alias` looks these up by binary search
+        common_aliases.sort_by(|(left, _), (right, _)| left.cmp(right));
+        Self { common_aliases }
+    }
+
+    /// The module the project configured `alias` to name, if it configured one.
+    pub fn common_alias(&self, alias: &str) -> Option<&str> {
+        self.common_aliases
+            .binary_search_by(|(configured, _)| (**configured).cmp(alias))
+            .ok()
+            .and_then(|found| self.common_aliases.get(found))
+            .map(|(_, module)| &**module)
+    }
+
+    /// Every alias the project configured, paired with the module it names, in alias order.
+    pub fn common_aliases(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+        self.common_aliases
+            .iter()
+            .map(|(alias, module)| (&**alias, &**module))
     }
 }
 

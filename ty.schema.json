@@ -13,6 +13,17 @@
         }
       ]
     },
+    "editor": {
+      "description": "Configures the parts of the editor experience that type checking does not decide.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/EditorOptions"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "environment": {
       "description": "Configures the type checking environment.",
       "anyOf": [
@@ -231,6 +242,29 @@
       "items": {
         "$ref": "#/definitions/string"
       }
+    },
+    "CommonAliases": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "EditorOptions": {
+      "type": "object",
+      "properties": {
+        "common-aliases": {
+          "description": "The modules a name is a common alias of, keyed by the alias.\n\nA file that writes `np.` before importing anything almost always means numpy, because `np`\nis what numpy is conventionally imported as. The editor completes such a name as the module\nit names, and accepting one of those completions writes the `import numpy as np` that makes\nthe name real.\n\nThis adds aliases of your own to the ones ty already knows; an entry whose alias ty knows\nreplaces it. An alias for a module the project does not have is never offered, so an entry\nfor a module nobody installed costs nothing.\n\nDefaults to `{}`, which leaves ty's own aliases as they are.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CommonAliases"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "EnvironmentOptions": {
       "type": "object",

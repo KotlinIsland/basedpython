@@ -82,6 +82,42 @@ a type position offers the words basedpython spells types with — `literal`,
 keywords, which never read there. a [type parameter](generics.md) offers its
 modifiers before the name: `in`, `out`, `in out`, `overlapping`, `reified`
 
+### common aliases
+
+a name that is conventionally an alias of a module completes as that module,
+in a file that has not imported it yet. `np.` offers what numpy has, and
+accepting one of those completions writes the import that binds the name:
+
+```py
+import numpy as np
+
+np.arange
+```
+
+the alias itself completes the same way — typing `n` offers `np`, and taking it
+writes `import numpy as np`
+
+only a module the project actually has is offered, and only where the name is
+free: a file that binds `np` to something of its own means that, and gets
+nothing from numpy
+
+the aliases are the ones the python ecosystem already writes — `np`, `pd`,
+`plt`, `dt`, and the rest. a project spells aliases of its own in its
+configuration, keyed by the alias:
+
+```toml
+[tool.ty.editor.common-aliases]
+npt = "numpy.typing"
+```
+
+an alias configured under a name ty already knows replaces it
+
+a name left unimported reports as unresolved, and the quick fix on that
+diagnostic writes the same import
+
+these are auto-imports, so turning off `ty.completions.autoImport` turns them
+off too
+
 ### enum members and extensions
 
 a bare [enum member](enums.md) is offered where the expected type admits one —

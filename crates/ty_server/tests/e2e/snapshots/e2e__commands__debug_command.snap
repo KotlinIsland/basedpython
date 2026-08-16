@@ -234,6 +234,9 @@ Settings: Settings {
             "builtins.classmethod",
         ],
     },
+    editor: EditorSettings {
+        common_aliases: [],
+    },
     overrides: [],
 }
 

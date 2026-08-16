@@ -786,6 +786,40 @@ mod tests {
         "#);
     }
 
+    /// `dt` is a common alias of `datetime`, so an unresolved one offers the import that binds it.
+    #[test]
+    fn unresolved_common_alias() {
+        let test = CodeActionTest::with_source(
+            r#"
+            <START>dt<END>.timedelta(days=1)
+        "#,
+        );
+
+        assert_snapshot!(test.code_actions(&UNRESOLVED_REFERENCE), @"
+        info[code-action]: import datetime as dt
+         --> main.py:2:1
+          |
+        2 | dt.timedelta(days=1)
+          | ^^
+        help: This is a preferred code action
+          |
+        1 + import datetime as dt
+        2 |
+          |
+
+        info[code-action]: Ignore 'unresolved-reference' for this line
+         --> main.py:2:1
+          |
+        2 | dt.timedelta(days=1)
+          | ^^
+          |
+        1 |
+          - dt.timedelta(days=1)
+        2 + dt.timedelta(days=1)  # ty: ignore[unresolved-reference]
+          |
+        ");
+    }
+
     #[test]
     fn unresolved_deprecated_warnings_imported() {
         let test = CodeActionTest::with_source(

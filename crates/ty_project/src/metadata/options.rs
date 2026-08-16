@@ -3,7 +3,7 @@ use crate::glob::{ExcludeFilter, IncludeExcludeFilter, IncludeFilter, PortableGl
 use crate::metadata::python_version::SupportedPythonVersion;
 use crate::metadata::settings::{OverrideSettings, SrcSettings};
 
-use super::settings::{Override, Settings, TerminalSettings};
+use super::settings::{EditorSettings, Override, Settings, TerminalSettings};
 use crate::metadata::value::{RelativeGlobPattern, RelativePathBuf};
 use anyhow::Context;
 use ordermap::OrderMap;
@@ -23,6 +23,7 @@ use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display};
 use std::hash::BuildHasherDefault;
 use std::ops::Deref;
@@ -104,6 +105,11 @@ pub struct Options {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[option_group]
     pub run: Option<RunOptions>,
+
+    /// Configures the parts of the editor experience that type checking does not decide.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option_group]
+    pub editor: Option<EditorOptions>,
 
     /// Override configurations for specific file patterns.
     ///
@@ -493,11 +499,20 @@ impl Options {
             });
         let overrides = strategy.fallback(overrides, |_| Vec::new())?;
 
+        let editor = EditorSettings::new(
+            self.editor
+                .as_ref()
+                .and_then(|editor| editor.common_aliases.as_ref())
+                .into_iter()
+                .flat_map(CommonAliases::iter),
+        );
+
         let settings = Settings {
             rules: Arc::new(rules),
             terminal,
             src,
             analysis,
+            editor,
             overrides,
         };
 
@@ -1487,6 +1502,81 @@ pub struct RunOptions {
         "#
     )]
     pub main: Option<RangedValue<String>>,
+}
+
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Eq,
+    PartialEq,
+    Combine,
+    Serialize,
+    Deserialize,
+    OptionsMetadata,
+    get_size2::GetSize,
+)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct EditorOptions {
+    /// The modules a name is a common alias of, keyed by the alias.
+    ///
+    /// A file that writes `np.` before importing anything almost always means numpy, because `np`
+    /// is what numpy is conventionally imported as. The editor completes such a name as the module
+    /// it names, and accepting one of those completions writes the `import numpy as np` that makes
+    /// the name real.
+    ///
+    /// This adds aliases of your own to the ones ty already knows; an entry whose alias ty knows
+    /// replaces it. An alias for a module the project does not have is never offered, so an entry
+    /// for a module nobody installed costs nothing.
+    ///
+    /// Defaults to `{}`, which leaves ty's own aliases as they are.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"{}"#,
+        value_type = "dict[str, str]",
+        example = r#"
+            [tool.ty.editor.common-aliases]
+            npt = "numpy.typing"
+        "#
+    )]
+    pub common_aliases: Option<CommonAliases>,
+}
+
+/// The modules that names are common aliases of, keyed by the alias.
+///
+/// A `BTreeMap` rather than a hash map because the order these are offered in should not depend on
+/// a hash seed.
+#[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, get_size2::GetSize)]
+#[serde(transparent)]
+pub struct CommonAliases {
+    inner: BTreeMap<String, String>,
+}
+
+impl CommonAliases {
+    /// The configured aliases, each paired with the module it names.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+        self.inner
+            .iter()
+            .map(|(alias, module)| (alias.as_str(), module.as_str()))
+    }
+}
+
+impl Combine for CommonAliases {
+    fn combine_with(&mut self, mut other: Self) {
+        // `self` takes precedence over `other`, and `extend` overwrites what it lands on, so the
+        // lower-precedence map is the one that gets extended
+        std::mem::swap(&mut self.inner, &mut other.inner);
+        self.inner.extend(other.inner);
+    }
+}
+
+impl FromIterator<(String, String)> for CommonAliases {
+    fn from_iter<T: IntoIterator<Item = (String, String)>>(iter: T) -> Self {
+        Self {
+            inner: iter.into_iter().collect(),
+        }
+    }
 }
 
 #[derive(
@@ -2679,6 +2769,19 @@ mod schema {
             object.insert("additionalProperties".to_string(), level_schema.into());
 
             schema
+        }
+    }
+
+    impl schemars::JsonSchema for super::CommonAliases {
+        fn schema_name() -> std::borrow::Cow<'static, str> {
+            std::borrow::Cow::Borrowed("CommonAliases")
+        }
+
+        fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+            schemars::json_schema!({
+                "type": "object",
+                "additionalProperties": { "type": "string" },
+            })
         }
     }
 }
