@@ -1,12 +1,12 @@
-//! `by/dataFlowAt` — what a stopped program's own state says about the code below it.
+//! `by/dataFlowAt` — what a stopped program's own state says about the code below it
 //!
-//! A custom request rather than an `executeCommand`: this is a question with a typed answer, and
-//! `executeCommand` is for things that have an effect. It is also not an `inlayHint` variant,
+//! a custom request rather than an `executeCommand`: this is a question with a typed answer, and
+//! `executeCommand` is for things that have an effect. it is also not an `inlayHint` variant,
 //! because an inlay hint request carries a range and nothing else — there is nowhere in it to put
-//! what a debugger saw, and the answer depends entirely on that.
+//! what a debugger saw, and the answer depends entirely on that
 //!
-//! The client is the one holding a debug session, so it is the client that sends the observations.
-//! The server never learns what a debugger is: it is handed facts and reads source under them.
+//! the client is the one holding a debug session, so it is the client that sends the observations.
+//! the server never learns what a debugger is: it is handed facts and reads source under them
 
 use std::borrow::Cow;
 
@@ -23,67 +23,82 @@ use crate::server::api::traits::{
 use crate::session::DocumentSnapshot;
 use crate::session::client::Client;
 
-/// The request a client sends while its debuggee is stopped.
+/// the request a client sends while its debuggee is stopped
 pub(crate) enum DataFlowRequest {}
 
 impl Request for DataFlowRequest {
     type Params = DataFlowParams;
     type Result = Option<Vec<DataFlowFinding>>;
-    // Not a method LSP defines, so it goes across as a custom one. The `by/` prefix is what keeps
+    // not a method LSP defines, so it goes across as a custom one. the `by/` prefix is what keeps
     // it from ever colliding with something the protocol grows later
     const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("by/dataFlowAt");
     const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
 }
 
-/// What the client knows: where the program is, and what it was holding there.
+/// what the client knows: where the program is, and what it was holding there
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DataFlowParams {
-    /// The file the program is stopped in.
+    /// the file the program is stopped in
     pub(crate) text_document: TextDocumentIdentifier,
 
-    /// The one-based line it is stopped on.
+    /// the one-based line it is stopped on
     pub(crate) line: u32,
 
-    /// What the debugger observed, one entry per name.
+    /// what the debugger observed, one entry per name
     ///
-    /// Only observations the client is willing to stand behind belong here. A debugger that
+    /// only observations the client is willing to stand behind belong here. a debugger that
     /// reports how long a reading stays true — as `bpd` does — is the thing that decides which
-    /// ones those are; the server takes what it is given.
+    /// ones those are; the server takes what it is given
     pub(crate) observations: Vec<WireObservation>,
 }
 
-/// One observation, in the shape a client sends it.
+/// one observation, in the shape a client sends it
 ///
-/// Deliberately its own type rather than `serde` on [`Observed`]: this is a wire format that a
+/// deliberately its own type rather than `serde` on [`Observed`]: this is a wire format that a
 /// plugin written in another language has to produce, and it should be able to change on its own
-/// schedule without an internal enum's representation deciding it.
+/// schedule without an internal enum's representation deciding it
+///
+/// no `deny_unknown_fields` here, and it is not an oversight: serde does not support that together
+/// with `flatten`, because the flattened variant's own keys are exactly the unknown fields it would
+/// then reject. asking for both makes every observation fail to parse
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct WireObservation {
-    /// The name, or a dotted path such as `self.limit`.
+    /// the name, or a dotted path such as `self.limit`
     pub(crate) name: String,
 
-    /// What was seen. Exactly one of these is set; anything else is refused.
+    /// what was seen. exactly one of these is set; anything else is refused
     #[serde(flatten)]
     pub(crate) observed: WireObserved,
 }
 
-/// What was read off the value.
+/// what was read off the value
+// the shared `Is` prefix is the wire contract: `rename_all` derives the `observed` tag from the
+// variant name, so `isInt` is spelled here and nowhere else. renaming the variants to satisfy the
+// lint would mean pinning each tag with its own `serde(rename)`, which is the same names written
+// twice and one more place they can drift apart
+#[expect(clippy::enum_variant_names)]
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
-#[serde(tag = "observed", rename_all = "camelCase")]
+#[serde(tag = "observed", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum WireObserved {
-    /// The value is `None`.
+    /// the value is `None`
     IsNone,
-    /// The value is exactly this `bool`.
+    /// the value is exactly this `bool`
     IsBool { value: bool },
-    /// The value is exactly this integer, in decimal.
+    /// the value is exactly this integer, in decimal
     IsInt { text: String },
-    /// The value is exactly this string.
+    /// the value is exactly this string
     IsStr { text: String },
-    /// `type(value)` is exactly this class.
+    /// the value is exactly these bytes
+    ///
+    /// an array of numbers rather than a base64 string, because json has no byte string and every
+    /// encoding of one is a decoder this has to get right. serde refuses a number outside a byte
+    /// on its own, so a malformed reading is rejected at the edge instead of somewhere inside
+    IsBytes { bytes: Vec<u8> },
+    /// `type(value)` is exactly this class
     IsExactly { module: String, qualname: String },
-    /// The value is this member of this enum.
+    /// the value is this member of this enum
     IsEnumMember {
         module: String,
         qualname: String,
@@ -98,6 +113,7 @@ impl WireObservation {
             WireObserved::IsBool { value } => Observed::IsBool(value),
             WireObserved::IsInt { text } => Observed::IsInt(text),
             WireObserved::IsStr { text } => Observed::IsStr(text),
+            WireObserved::IsBytes { bytes } => Observed::IsBytes(bytes.into_boxed_slice()),
             WireObserved::IsExactly { module, qualname } => {
                 Observed::IsExactly(ClassName { module, qualname })
             }
@@ -117,18 +133,18 @@ impl WireObservation {
     }
 }
 
-/// One thing the state settles, positioned for the editor.
+/// one thing the state settles, positioned for the editor
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DataFlowFinding {
-    /// Where in the document.
+    /// where in the document
     pub(crate) range: lsp_types::Range,
-    /// What kind of finding: `condition` or `unreachable`.
+    /// what kind of finding: `condition` or `unreachable`
     pub(crate) kind: String,
-    /// Which way a condition goes. Absent for an unreachable range.
+    /// which way a condition goes. absent for an unreachable range
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) taken: Option<bool>,
-    /// What to draw beside the source.
+    /// what to draw beside the source
     pub(crate) label: String,
 }
 
@@ -159,7 +175,7 @@ impl BackgroundDocumentRequestHandler for DataFlowRequestHandler {
             return Ok(None);
         };
         let document = snapshot.uri();
-        // A one-based line of zero is not a line. Answering nothing is right: there is no
+        // a one-based line of zero is not a line. answering nothing is right: there is no
         // statement above the first one for a program to be stopped after
         let Some(line) = OneIndexed::new(params.line as usize) else {
             return Ok(None);
@@ -173,9 +189,9 @@ impl BackgroundDocumentRequestHandler for DataFlowRequestHandler {
 
         let findings = data_flow_at(db, db.program_file(file), line, observations)
             .into_iter()
-            // Two ways a finding is dropped rather than reported, and both are the same
+            // two ways a finding is dropped rather than reported, and both are the same
             // judgement: a position that is not certainly in the document the client asked
-            // about is worse than no position. The reply may have raced an edit, and a
+            // about is worse than no position. the reply may have raced an edit, and a
             // notebook maps ranges per cell — so the location is required to name the very
             // document the request did
             .filter_map(|finding| {
@@ -207,3 +223,62 @@ impl BackgroundDocumentRequestHandler for DataFlowRequestHandler {
 }
 
 impl RetriableRequestHandler for DataFlowRequestHandler {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// the params exactly as a client sends them
+    ///
+    /// this is the whole contract with a plugin written in another language, and nothing else in
+    /// the crate exercises it — the handler is reached through a `Request` the tests construct
+    /// from typed values, which is precisely the path that cannot notice a serde attribute that
+    /// makes the typed value unreachable from json
+    fn params(observation: &str) -> Result<DataFlowParams, serde_json::Error> {
+        serde_json::from_str(&format!(
+            r#"{{"textDocument":{{"uri":"file:///a.py"}},"line":3,"observations":[{observation}]}}"#
+        ))
+    }
+
+    #[test]
+    fn every_observation_a_client_can_send_parses() {
+        for observation in [
+            r#"{"name":"value","observed":"isNone"}"#,
+            r#"{"name":"flag","observed":"isBool","value":true}"#,
+            r#"{"name":"limit","observed":"isInt","text":"5"}"#,
+            r#"{"name":"label","observed":"isStr","text":"hi"}"#,
+            r#"{"name":"raw","observed":"isBytes","bytes":[104,105]}"#,
+            r#"{"name":"self.thing","observed":"isExactly","module":"main","qualname":"Runner"}"#,
+            r#"{"name":"c","observed":"isEnumMember","module":"main","qualname":"Color","member":"RED"}"#,
+        ] {
+            assert!(
+                params(observation).is_ok(),
+                "a client sending {observation} would have got an error back: {:?}",
+                params(observation).unwrap_err().to_string()
+            );
+        }
+    }
+
+    #[test]
+    fn an_observation_of_a_kind_the_server_does_not_know_is_refused() {
+        // the wire format is closed for the same reason `Observed` is: an unrecognised reading
+        // swept into a catch-all would be a reading nothing understands, treated as one that is
+        assert!(params(r#"{"name":"x","observed":"isImaginary","value":1}"#).is_err());
+    }
+
+    #[test]
+    fn a_bytes_observation_survives_the_crossing_to_an_observed() {
+        let parsed = params(r#"{"name":"raw","observed":"isBytes","bytes":[104,105]}"#)
+            .expect("the wire form is one of the seven above");
+        let observation = parsed
+            .observations
+            .into_iter()
+            .next()
+            .expect("one observation was sent")
+            .into_observation();
+        assert_eq!(
+            observation.observed,
+            Observed::IsBytes(Box::from(&b"hi"[..]))
+        );
+    }
+}
