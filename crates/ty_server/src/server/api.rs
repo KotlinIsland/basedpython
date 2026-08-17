@@ -94,6 +94,9 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::TranspileRequestHandler::METHOD => background_document_request_task::<
             requests::TranspileRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        requests::ExplainTranspilationHandler::METHOD => background_document_request_task::<
+            requests::ExplainTranspilationHandler,
+        >(req, BackgroundSchedule::Worker),
         requests::SemanticTokensRequestHandler::METHOD => background_document_request_task::<
             requests::SemanticTokensRequestHandler,
         >(req, BackgroundSchedule::Worker),
