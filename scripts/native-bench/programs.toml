@@ -1,0 +1,150 @@
+# the benchmark corpus, and the ledger of what the native backend refuses
+#
+# `group` is the axis a benchmark exists to measure. `measures` is the one-line
+# reason it is in the set — if two entries would have the same one, one of them
+# should go.
+#
+# `declines` is how many functions `by compile` currently leaves to their
+# interpreted definitions. it is checked exactly: a benchmark whose count moved
+# in either direction fails the run rather than quietly reporting a number about
+# interpreted code. improve the compiler and this file changes in the same
+# commit, which makes it a readable history of what the backend learned to take.
+#
+# `mypyc = false` means mypyc genuinely cannot build the program — the harness
+# reports a *failed* mypyc build loudly, so this is for the cases that are not
+# failures, and nothing may be listed here without the log to justify it.
+
+[programs.mandel]
+group = "float"
+measures = "scalar float arithmetic with a call in the inner loop"
+declines = 0
+
+[programs.mandel_inline]
+group = "float"
+measures = "the same work with the loop spelled out — the pair isolates call cost"
+declines = 0
+
+[programs.loops]
+group = "int"
+measures = "tagged-integer arithmetic with no container, no call and no float"
+declines = 0
+
+[programs.bigint]
+group = "int"
+measures = "integer arithmetic that leaves the machine word"
+declines = 0
+
+[programs.calls]
+group = "dispatch"
+measures = "a plain function call with a one-add body"
+declines = 0
+
+[programs.methods]
+group = "dispatch"
+measures = "a method call on a long-lived object"
+declines = 0
+
+[programs.recurse]
+group = "dispatch"
+measures = "calls that nest rather than repeat"
+declines = 0
+
+[programs.inherit]
+group = "dispatch"
+measures = "an override reached through a base-typed local"
+declines = 0
+
+[programs.alloc]
+group = "memory"
+measures = "an object built and dropped every iteration"
+declines = 0
+
+[programs.fields]
+group = "memory"
+measures = "attribute reads and writes on one long-lived object"
+declines = 0
+
+[programs.objects]
+group = "memory"
+measures = "allocation, fields and methods together, as object code looks"
+declines = 0
+
+[programs.dot]
+group = "list"
+measures = "indexed reads over two lists that never escape"
+declines = 0
+
+[programs.prefix]
+group = "list"
+measures = "appends into a list the function owns, iterated with `for`"
+declines = 0
+
+[programs.sieve]
+group = "list"
+measures = "indexed writes into a `bool` buffer from a nested loop"
+declines = 0
+
+[programs.tuples]
+group = "tuple"
+measures = "tuples packed, unpacked and indexed, and a two-value return"
+declines = 0
+
+[programs.sets]
+group = "set"
+measures = "a set built once and tested for membership many times"
+declines = 0
+
+[programs.dictget]
+group = "dict"
+measures = "dict lookup and in-place update, keys handed in already built"
+declines = 0
+
+[programs.dicthist]
+group = "dict"
+measures = "the histogram shape: membership test then read-modify-write"
+declines = 0
+
+[programs.words]
+group = "str"
+measures = "string concatenation in a loop"
+declines = 0
+
+[programs.chars]
+group = "str"
+measures = "an indexed scan over text, a character at a time"
+declines = 0
+
+[programs.strops]
+group = "str"
+measures = "the `str` methods real code calls: split, join, startswith, upper"
+declines = 0
+
+[programs.keybuild]
+group = "str"
+measures = "a builtin through the module namespace, a call, and a concatenation"
+declines = 0
+
+[programs.generic]
+group = "boxing"
+measures = "a list handed to a function with a type parameter"
+declines = 0
+
+[programs.generic_mono]
+group = "boxing"
+measures = "the same call monomorphised — the pair isolates what boxing costs"
+declines = 0
+
+[programs.excs]
+group = "control"
+measures = "a raise that is caught, and a `try` that never fires"
+declines = 0
+
+[programs.gen]
+group = "frames"
+measures = "a generator consumed by a `for` loop"
+declines = 0
+
+[programs.coro]
+group = "frames"
+measures = "awaits that complete immediately, driven without an event loop"
+declines = 0

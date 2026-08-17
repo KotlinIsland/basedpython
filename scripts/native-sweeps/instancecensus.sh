@@ -25,8 +25,19 @@ trap 'rm -rf "$root"' EXIT
 : > "$OUT"
 
 cat > "$root/probe.py" <<'PYEOF'
+import importlib
+import os
 import signal
 import sys
+
+# the staging says what to import: `m` for a top-level module, `pkg.m` for a package
+# member, which is the only name its relative imports resolve against
+MOD = os.environ['SWEEP_MOD']
+# `by compile` names a module after its file, and an emitted class takes its
+# `__module__` from the last component of that name — so it answers `m` where an
+# interpreted one answers `pkg.m`. this census reads a compiled leg only, and both
+# spellings mean "defined by the module under test"
+SELF = (MOD, MOD.rpartition('.')[2])
 
 
 def _ring(signum, frame):
@@ -35,9 +46,9 @@ def _ring(signum, frame):
 
 signal.signal(signal.SIGALRM, _ring)
 try:
-    signal.alarm(30)
+    signal.alarm(int(os.environ['SWEEP_IMPORT_BOUND']))
     try:
-        import m
+        m = importlib.import_module(MOD)
     finally:
         signal.alarm(0)
 except BaseException as error:
@@ -51,7 +62,7 @@ counts = [0, 0]
 
 def note(value, bucket, slot):
     kind = type(value)
-    if getattr(kind, '__module__', None) != 'm':
+    if getattr(kind, '__module__', None) not in SELF:
         return
     claimed = getattr(m, kind.__name__, None)
     if not isinstance(claimed, type):
@@ -99,19 +110,24 @@ PYEOF
 for b in $(sweep_modules "$LIB" "$@"); do
   f="$LIB/$b"
   [ -f "$f" ] || continue
-  d="$root/w"; sweep_stage "$d" "$f"
-  sweep_compile "$d" "$PY" "$BY"
+  d="$root/w"; sweep_stage "$d" "$LIB" "$b"
+  sweep_compile "$b" "$d" "$PY" "$BY"
   if ! sweep_built "$d"; then printf '%s\tno-artifact\n' "$b" >> "$OUT"; continue; fi
   # the swap this defect is about, read off the emitted C: every class whose name the
   # module init rebinds to a compiled type
-  emitted=$(grep -oE 'PyDict_SetItemString\(dict, "[^"]+", By_[A-Za-z0-9_]+_OBJ\)' "$d/o/m.c" \
+  #
+  # read *before* `sweep_place`: a package member's C sits inside the package's place in
+  # the output tree, and `sweep_place` lays the twin's copy of the package over the top
+  emitted=$(grep -oE 'PyDict_SetItemString\(dict, "[^"]+", By_[A-Za-z0-9_]+_OBJ\)' \
+    "$(sweep_out_dir "$d")/m.c" \
     | sed -E 's/.*dict, "([^"]+)".*/\1/' | LC_ALL=C sort -u | paste -sd, -)
-  cp "$root/probe.py" "$d/o/probe.py"
+  sweep_place "$d"
+  cp "$root/probe.py" "$SWEEP_RUN_C/probe.py"
   # the comma list becomes one argument per class; an array says that, where a bare
   # command substitution only word-splits by accident
   names=()
   [ -n "$emitted" ] && IFS=',' read -r -a names <<< "$emitted"
-  out=$(cd "$d/o" && "$PY" probe.py "${names[@]}" 2>&1)
+  out=$(cd "$SWEEP_RUN_C" && "$PY" probe.py "${names[@]}" 2>&1)
   case "$out" in
     IMPORT-FAILED*) printf '%s\timport-failed\temitted=%s\n' "$b" "$emitted" >> "$OUT"; continue ;;
   esac

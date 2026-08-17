@@ -23,6 +23,11 @@
 #   - every module-level value whose type this module owns is asked whether it is still
 #     an instance of the class now under that name
 #
+# one cause currently dominates `differing`: an emitted class in a package reports its
+# `__module__` without the package, so 215 of the 246 differ on nothing else. that is one
+# defect, not 215 — `grep '| > .* named ' | grep -v \\.` separates them, and the rest is
+# the number to watch
+#
 # usage: isosurface.sh SP BY PY OUT [MODULE...]
 SP="$1"; BY="$2"; PY="$3"; OUT="$4"; shift 4
 # shellcheck source=scripts/native-sweeps/sweeplib.sh
@@ -33,7 +38,21 @@ trap 'rm -rf "$root"' EXIT
 : > "$OUT"
 
 cat > "$root/drive.py" <<'PYEOF'
+import importlib
+import os
 import signal
+
+# the staging says what to import: `m` for a top-level module, `pkg.m` for a package
+# member, which is the only name its relative imports resolve against. both legs are
+# handed the same one
+MOD = os.environ['SWEEP_MOD']
+# `by compile` names a module after its file, and an emitted class takes its
+# `__module__` from the last component of that name — so it answers `m` where its
+# interpreted twin answers `pkg.m`. both spellings have to select the *same classes*, or
+# the compiled leg would appear to define none of them. what a class says its module is
+# stays compared outright, because that answer is wrong rather than merely differently
+# spelled
+SELF = (MOD, MOD.rpartition('.')[2])
 
 
 class _Slow(Exception):
@@ -46,16 +65,15 @@ def _ring(signum, frame):
 
 signal.signal(signal.SIGALRM, _ring)
 
-# a subpackage module is far likelier than a top-level one to fail this import: a
-# `from . import x` has no parent package to resolve against once the file has been
-# copied out on its own. both legs fail it alike, but an uncaught traceback would not
-# read alike — the interpreted frame names `m.py` where the compiled one, running its
-# fallback source through `PyRun_String`, names `<string>`. so the failure is caught
-# and reported as one line that carries no path at all
+# a module can still fail this import — a compiled extension that did not load, a C
+# accelerator this build has no source for. both legs fail it alike, but an uncaught
+# traceback would not read alike: the interpreted frame names `m.py` where the compiled
+# one, running its fallback source through `PyRun_String`, names `<string>`. so the
+# failure is caught and reported as one line that carries no path at all
 try:
-    signal.alarm(30)
+    signal.alarm(int(os.environ['SWEEP_IMPORT_BOUND']))
     try:
-        import m
+        m = importlib.import_module(MOD)
     finally:
         signal.alarm(0)
 except BaseException as error:
@@ -82,7 +100,7 @@ def value_of(target, key):
 
 
 def owned(value):
-    return isinstance(value, type) and getattr(value, '__module__', None) == 'm'
+    return isinstance(value, type) and getattr(value, '__module__', None) in SELF
 
 
 # what a compiled type does not carry, by construction rather than by defect: a spec
@@ -101,6 +119,10 @@ for name, cls in classes:
     try:
         show('%s mro %s' % (name, [base.__name__ for base in cls.__mro__]))
         show('%s meta %s' % (name, type(cls).__name__))
+        # `__module__` is compared outright, and the two spellings above are *not*
+        # collapsed here. a compiled class in a package answers `m` where its twin
+        # answers `pkg.m`, and that is a wrong answer rather than a house style:
+        # `dataclasses` does `sys.modules[cls.__module__].__dict__` and gets `None`
         show('%s named %s %s' % (name, cls.__module__, cls.__qualname__))
         # one way: a name the interpreted class has and the compiled one does not.
         # `MISSING` is printed by the compiled leg only, so an identical pair of legs
@@ -127,7 +149,7 @@ for name in sorted(vars(m)):
     if isinstance(value, type):
         continue
     kind = type(value)
-    if getattr(kind, '__module__', None) != 'm':
+    if getattr(kind, '__module__', None) not in SELF:
         continue
     claimed = getattr(m, kind.__name__, None)
     if not isinstance(claimed, type):
@@ -142,29 +164,35 @@ PYEOF
 for b in $(sweep_modules "$LIB" "$@"); do
   f="$LIB/$b"
   [ -f "$f" ] || continue
-  d="$root/w"; sweep_stage "$d" "$f"
-  sweep_compile "$d" "$PY" "$BY"
+  d="$root/w"; sweep_stage "$d" "$LIB" "$b"
+  sweep_compile "$b" "$d" "$PY" "$BY"
   if ! sweep_built "$d"; then printf '%s\tno-artifact\n' "$b" >> "$OUT"; continue; fi
-  cp "$root/drive.py" "$d/drive.py"; cp "$root/drive.py" "$d/o/drive.py"
+  sweep_place "$d"
+  cp "$root/drive.py" "$SWEEP_RUN_I/drive.py"; cp "$root/drive.py" "$SWEEP_RUN_C/drive.py"
   # a traceback names the file it came from, and the two legs run from different
   # directories — so the *path* would read as a difference the module never had
-  i=$(cd "$d" && "$PY" drive.py 2>&1 | sed "s|$d/||g")
-  c=$(cd "$d/o" && "$PY" drive.py 2>&1 | sed "s|$d/o/||g")
+  i=$(cd "$SWEEP_RUN_I" && "$PY" drive.py 2>&1 | sed "s|$SWEEP_RUN_I/||g")
+  c=$(cd "$SWEEP_RUN_C" && "$PY" drive.py 2>&1 | sed "s|$SWEEP_RUN_C/||g")
   # a `has` line is one-directional: only its loss counts, so the compiled leg's extra
   # names are dropped before the comparison and the interpreted leg's are kept
   ionly=$(echo "$i" | grep -v ' has ')
   only=$(echo "$c" | grep -v ' has ')
   lost=$(comm -23 <(echo "$i" | grep ' has ' | sort) <(echo "$c" | grep ' has ' | sort))
   if [ "$ionly" = "$only" ] && [ -z "$lost" ]; then
-    # a module that cannot be imported standalone agrees on both legs and exercises
-    # nothing — kept apart from `same` so the denominator stays honest
+    # a module that cannot be imported here agrees on both legs and exercises nothing —
+    # kept apart from `same` so the denominator stays honest
     case "$i" in IMPORT-FAILED*) printf '%s\timport-failed\t%s\n' "$b" "$i" ;;
       *) printf '%s\tsame\t%s\n' "$b" "$(echo "$i" | wc -l | tr -d ' ')" ;;
     esac >> "$OUT"
+  elif printf '%s%s' "$i" "$c" | grep -q '_Slow timed out'; then
+    # the import bound is 30 seconds and a loaded machine loses it on one leg and not
+    # the other. that says nothing about the compiler, so it is kept out of `differing`
+    # — and out of `same`, because a leg that was killed answered nothing
+    printf '%s\ttimed-out\n' "$b" >> "$OUT"
   else
     printf '%s\tDIFFERS\n' "$b"
     diff <(echo "$ionly") <(echo "$only") | awk -v b="$b" '{print b "\t| " $0}'
     echo "$lost" | awk -v b="$b" 'NF {print b "\t| lost " $0}'
   fi >> "$OUT"
 done
-echo "walked: $(grep -cE $'\t(same|DIFFERS|import-failed|no-artifact)' "$OUT")   exercised: $(grep -cE $'\t(same|DIFFERS)' "$OUT")   differing: $(grep -c $'\tDIFFERS' "$OUT")   lost: $(grep -c $'\t| lost ' "$OUT")   import-failed: $(grep -c $'\timport-failed' "$OUT")   no-artifact: $(grep -c $'\tno-artifact' "$OUT")"
+echo "walked: $(grep -cE $'\t(same|DIFFERS|timed-out|import-failed|no-artifact)' "$OUT")   exercised: $(grep -cE $'\t(same|DIFFERS)' "$OUT")   differing: $(grep -c $'\tDIFFERS' "$OUT")   lost: $(grep -c $'\t| lost ' "$OUT")   timed-out: $(grep -c $'\ttimed-out' "$OUT")   import-failed: $(grep -c $'\timport-failed' "$OUT")   no-artifact: $(grep -c $'\tno-artifact' "$OUT")"

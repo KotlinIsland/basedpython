@@ -23,53 +23,77 @@ trap 'rm -rf "$root"' EXIT
 cat > "$root/drive.py" <<'PYEOF'
 # every class the module itself defines, called with no arguments. `signal.alarm`
 # bounds a constructor that blocks, so one module cannot stall the sweep
+import importlib
+import os
 import signal
 import sys
+
+# the staging says what to import: `m` for a top-level module, `pkg.m` for a package
+# member, which is the only name its relative imports resolve against. both legs are
+# handed the same one
+MOD = os.environ['SWEEP_MOD']
+# `by compile` names a module after its file, and an emitted class takes its
+# `__module__` from the last component of that name — so it answers `m` where its
+# interpreted twin answers `pkg.m`. both spellings mean "defined by the module under
+# test", and nothing else in the staged tree answers to either
+SELF = (MOD, MOD.rpartition('.')[2])
+
 
 class _Slow(Exception):
     pass
 
+
 def _ring(signum, frame):
     raise _Slow('timed out')
 
-signal.signal(signal.SIGALRM, _ring)
 
-# a subpackage module is far likelier than a top-level one to fail this import: a
-# `from . import x` has no parent package to resolve against once the file has been
-# copied out on its own. both legs fail it alike, but an uncaught traceback would not
-# read alike — the interpreted frame names `m.py` where the compiled one, running its
-# fallback source through `PyRun_String`, names `<string>`. so the failure is caught
-# and reported as one line that carries no path at all
-try:
-    signal.alarm(30)
+def main():
+    signal.signal(signal.SIGALRM, _ring)
+
+    # a module can still fail this import — a compiled extension that did not load, a
+    # C accelerator this build has no source for. both legs fail it alike, but an
+    # uncaught traceback would not read alike: the interpreted frame names `m.py` where
+    # the compiled one, running its fallback source through `PyRun_String`, names
+    # `<string>`. so the failure is caught and reported as one line carrying no path
     try:
-        import m
-    finally:
-        signal.alarm(0)
-except BaseException as error:
-    print('IMPORT-FAILED', type(error).__name__, str(error), flush=True)
-    raise SystemExit(0)
-
-names = [
-    name
-    for name in sorted(vars(m))
-    if isinstance(vars(m)[name], type) and getattr(vars(m)[name], '__module__', None) == 'm'
-]
-
-start = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-
-for name in names[start:]:
-    value = vars(m)[name]
-    try:
-        signal.alarm(2)
+        signal.alarm(int(os.environ['SWEEP_IMPORT_BOUND']))
         try:
-            made = value()
+            m = importlib.import_module(MOD)
         finally:
             signal.alarm(0)
     except BaseException as error:
-        print(name, type(error).__name__, str(error), flush=True)
-    else:
-        print(name, 'built', type(made).__name__, flush=True)
+        print('IMPORT-FAILED', type(error).__name__, str(error), flush=True)
+        raise SystemExit(0)
+
+    names = [
+        name
+        for name in sorted(vars(m))
+        if isinstance(vars(m)[name], type)
+        and getattr(vars(m)[name], '__module__', None) in SELF
+    ]
+
+    start = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+
+    for name in names[start:]:
+        value = vars(m)[name]
+        try:
+            signal.alarm(2)
+            try:
+                made = value()
+            finally:
+                signal.alarm(0)
+        except BaseException as error:
+            print(name, type(error).__name__, str(error), flush=True)
+        else:
+            print(name, 'built', type(made).__name__, flush=True)
+
+
+# `multiprocessing` starts a worker by re-running this interpreter and importing this
+# file, as `__mp_main__`. a constructor that makes a pool is reached now that the
+# package modules import, and without the guard every worker would import the module
+# and construct every class in it again — pool included
+if __name__ == '__main__':
+    main()
 PYEOF
 
 # run one leg to completion, restarting past whatever killed it. a constructor that
@@ -94,23 +118,31 @@ leg() {
 for b in $(sweep_modules "$LIB" "$@"); do
   f="$LIB/$b"
   [ -f "$f" ] || continue
-  d="$root/w"; sweep_stage "$d" "$f"
-  sweep_compile "$d" "$PY" "$BY"
+  d="$root/w"; sweep_stage "$d" "$LIB" "$b"
+  sweep_compile "$b" "$d" "$PY" "$BY"
   if ! sweep_built "$d"; then printf '%s\tno-artifact\n' "$b" >> "$OUT"; continue; fi
-  cp "$root/drive.py" "$d/drive.py"; cp "$root/drive.py" "$d/o/drive.py"
+  sweep_place "$d"
+  cp "$root/drive.py" "$SWEEP_RUN_I/drive.py"; cp "$root/drive.py" "$SWEEP_RUN_C/drive.py"
   # a traceback names the file it came from, and the two legs run from different
   # directories — so the *path* would read as a difference the module never had
-  i=$(leg "$d")
-  c=$(leg "$d/o")
+  i=$(leg "$SWEEP_RUN_I")
+  c=$(leg "$SWEEP_RUN_C")
   if [ "$i" = "$c" ]; then
-    # a module that cannot be imported standalone agrees on both legs and exercises
-    # nothing — kept apart from `same` so the denominator stays honest
+    # a module that cannot be imported here agrees on both legs and exercises nothing —
+    # kept apart from `same` so the denominator stays honest
     case "$i" in IMPORT-FAILED*) printf '%s\timport-failed\t%s\n' "$b" "$i" ;;
       *) printf '%s\tsame\t%s\n' "$b" "$(printf '%s' "$i" | grep -c '')" ;;
     esac >> "$OUT"
+  elif printf '%s%s' "$i" "$c" | grep -q '_Slow timed out'; then
+    # a constructor that outran its two seconds on one leg and not the other, or an
+    # import that outran its thirty, says nothing about the compiler — a loaded machine
+    # loses either bound. kept out of `differing` so the headline number is the same on
+    # a busy machine as an idle one; it was not, and two agents reading the same tree
+    # got different counts
+    printf '%s\ttimed-out\n' "$b" >> "$OUT"
   else
     printf '%s\tDIFFERS\n' "$b"
     diff <(printf '%s' "$i") <(printf '%s' "$c") | awk -v b="$b" '{print b "\t| " $0}'
   fi >> "$OUT"
 done
-echo "walked: $(grep -cE $'\t(same|DIFFERS|import-failed|no-artifact)' "$OUT")   exercised: $(grep -cE $'\t(same|DIFFERS)' "$OUT")   differing: $(grep -c $'\tDIFFERS' "$OUT")   crashed: $(grep -c 'DIED signal' "$OUT")   import-failed: $(grep -c $'\timport-failed' "$OUT")   no-artifact: $(grep -c $'\tno-artifact' "$OUT")"
+echo "walked: $(grep -cE $'\t(same|DIFFERS|timed-out|import-failed|no-artifact)' "$OUT")   exercised: $(grep -cE $'\t(same|DIFFERS)' "$OUT")   differing: $(grep -c $'\tDIFFERS' "$OUT")   crashed: $(grep -c 'DIED signal' "$OUT")   timed-out: $(grep -c $'\ttimed-out' "$OUT")   import-failed: $(grep -c $'\timport-failed' "$OUT")   no-artifact: $(grep -c $'\tno-artifact' "$OUT")"
