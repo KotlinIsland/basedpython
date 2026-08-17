@@ -228,3 +228,51 @@ between:
     one frame's `limit` is not another's, and a name that scope does not itself
     bind — a global it only reads, an attribute it never assigns — is a value
     nothing in that scope can vouch for
+
+## renaming a module
+
+renaming `util.by` to `helpers.by` renames the module `alpha.util`, and every
+`from alpha.util import thing` in the project now names a module that is not
+there. an editor cannot find those on its own — it would have to resolve every
+import against the same search paths the checker uses — so it asks first
+
+the request is the protocol's own `workspace/willRenameFiles`, sent *before* the
+file moves, and the answer is the edits that keep the project working. the
+ordering is what makes the answer computable: the old path still holds the file,
+so the module it is today can be resolved, and the new path is a path to read a
+name out of
+
+both a file and a *directory* are asked about, because renaming a directory
+renames every module under it — the client sends only the directory, never its
+contents
+
+what gets rewritten:
+
+```by
+import alpha.util              # the dotted name
+import alpha.util as util      # ... with an alias, which is left alone
+from alpha.util import thing   # the module a symbol comes from
+from alpha import util         # the module imported as a name
+from .util import thing        # a relative import, after the dots
+```
+
+and the *uses* of a name an import binds, when that name changes.
+`import alpha.util` binds `alpha`, so `alpha.util.thing()` in the body is part of
+the rename too. those are found by asking what each expression is rather than by
+matching text — a local called `util` in a file that also imports a module of
+that name is not a reference to the module, and is not touched
+
+a relative import inside a package that is being renamed as a whole comes out
+unchanged, which is the truth: nothing about `from .util import thing` stops
+working because its package was renamed around it
+
+two things are deliberately not rewritten:
+
+- **a module named as a string** — `importlib.import_module("alpha.util")`, an
+    `INSTALLED_APPS` entry, an entry point in `pyproject.toml`. django's own
+    module strings are handled by the django rename, and the rest are not
+    distinguishable from any other string
+- **an import that would have to change shape** — moving `alpha.util` to
+    `beta.util` leaves `from alpha import util` needing a different statement,
+    not a different word. those are reported in the server log rather than
+    rewritten into something that does not mean the same thing

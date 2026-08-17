@@ -1,0 +1,23 @@
+---
+source: crates/ty_server/tests/e2e/will_rename_files.rs
+expression: edits
+---
+{
+  "changes": {
+    "file://<temp_dir>/main.py": [
+      {
+        "range": {
+          "start": {
+            "line": 0,
+            "character": 5
+          },
+          "end": {
+            "line": 0,
+            "character": 15
+          }
+        },
+        "newText": "alpha.helpers"
+      }
+    ]
+  }
+}

@@ -572,11 +572,53 @@ pub(crate) fn server_capabilities(
                 supported: Some(true),
                 change_notifications: Some(true.into()),
             }),
+            file_operations: Some(lsp_types::FileOperationOptions {
+                will_rename: Some(will_rename_registration()),
+                ..Default::default()
+            }),
             ..Default::default()
         }),
         type_hierarchy_provider: Some(true.into()),
         call_hierarchy_provider: Some(true.into()),
         ..Default::default()
+    }
+}
+
+/// Which renames the client should ask about before it carries them out.
+///
+/// Two filters, and both are needed for the same feature. A **file** rename is a module renamed —
+/// every module lives in one file, and the extensions listed are the ones the module resolver
+/// accepts. A **folder** rename is a *package* renamed, which renames every module inside it, and
+/// the client sends only the folder (never its contents), so a server that asked for files alone
+/// would be told nothing at all about the rename that changes the most names.
+///
+/// The folder pattern cannot be narrowed the way the file one is: a directory has no extension to
+/// match on, and whether it is a package is a question about the search paths rather than about its
+/// name. So every folder rename is asked about, and the ones that turn out not to be packages cost
+/// one request that answers with no edits.
+fn will_rename_registration() -> lsp_types::FileOperationRegistrationOptions {
+    fn filter(
+        glob: &str,
+        kind: lsp_types::FileOperationPatternKind,
+    ) -> lsp_types::FileOperationFilter {
+        lsp_types::FileOperationFilter {
+            scheme: Some("file".to_string()),
+            pattern: lsp_types::FileOperationPattern {
+                glob: glob.to_string(),
+                matches: Some(kind),
+                options: None,
+            },
+        }
+    }
+
+    lsp_types::FileOperationRegistrationOptions {
+        filters: vec![
+            filter(
+                "**/*.{py,pyi,by,byi}",
+                lsp_types::FileOperationPatternKind::File,
+            ),
+            filter("**", lsp_types::FileOperationPatternKind::Folder),
+        ],
     }
 }
 
