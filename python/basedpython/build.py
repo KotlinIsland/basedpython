@@ -184,16 +184,22 @@ def _staged() -> Iterator[Path]:
 
 
 class Staged:
-    """What a build read, and what it produced."""
+    """What a build read, what it produced, and what the result needs to run."""
 
-    __slots__ = ("packages", "sources")
+    __slots__ = ("packages", "requires", "sources")
 
-    def __init__(self, sources: list[str], packages: list[str]) -> None:
+    def __init__(
+        self,
+        sources: list[str],
+        packages: list[str],
+        requires: list[str] | None = None,
+    ) -> None:
         self.sources = sources
         self.packages = packages
+        self.requires = requires or []
 
 
-def _stage(staging: Path) -> Staged:
+def _stage(staging: Path, python_version: str | None = None) -> Staged:
     """Build the project into `staging`, and report what came of it.
 
     Which files the project is made of, and which packages it builds into, are
@@ -202,17 +208,22 @@ def _stage(staging: Path) -> Staged:
     guess wrong, since a directory in the output is not necessarily something the
     project ships.
     """
+    arguments = ["build", "--out", str(staging), "--print-manifest"]
+    if python_version:
+        arguments += ["--min-version", python_version]
+
     sources: list[str] = []
     packages: list[str] = []
-    for line in _run_by(
-        "build", "--out", str(staging), "--print-manifest"
-    ).splitlines():
+    requires: list[str] = []
+    for line in _run_by(*arguments).splitlines():
         kind, _, value = line.strip().partition(" ")
         if kind == "input":
             sources.append(value)
         elif kind == "package":
             packages.append(value)
-    return Staged(sorted(set(sources)), sorted(set(packages)))
+        elif kind == "requires":
+            requires.append(value)
+    return Staged(sorted(set(sources)), sorted(set(packages)), sorted(set(requires)))
 
 
 def _write_staged_pyproject(staging: Path, built: Staged) -> None:
@@ -232,6 +243,8 @@ def _write_staged_pyproject(staging: Path, built: Staged) -> None:
             "least one importable package, so a top-level module like `app.by` has "
             "to become `app/__init__.by`"
         )
+
+    metadata["dependencies"] = _merged_dependencies(metadata, built.requires)
 
     document = {
         "build-system": {
@@ -308,6 +321,34 @@ def _requirements() -> list[str]:
 
 
 # ── the project's own metadata ───────────────────────────────────────────────
+
+
+def _merged_dependencies(
+    metadata: Mapping[str, Any], introduced: Sequence[str]
+) -> list[str]:
+    """The project's dependencies, plus what lowering needs at run time.
+
+    Building for an older python can put a name in the output that only
+    `typing_extensions` has there, and the project never asked for it, so it
+    cannot have declared it. A wheel that shipped without it would install
+    cleanly and fail on the first import of the module that needs it.
+
+    A project that already names the distribution keeps its own constraint: it
+    knows something about the version it wants that this does not.
+    """
+    declared = list(metadata.get("dependencies", []))
+    already = {_requirement_name(requirement) for requirement in declared}
+    return declared + [
+        requirement
+        for requirement in introduced
+        if _requirement_name(requirement) not in already
+    ]
+
+
+def _requirement_name(requirement: str) -> str:
+    """The distribution a requirement names, normalized."""
+    name = re.split(r"[\s<>=!~;\[(]", requirement.strip(), maxsplit=1)[0]
+    return _normalized_name(name)
 
 
 def _read_project_metadata(project_root: Path) -> dict[str, Any]:
