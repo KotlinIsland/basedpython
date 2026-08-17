@@ -44,6 +44,7 @@ mod signature_help;
 mod transpile;
 mod type_hierarchy_subtypes;
 mod type_hierarchy_supertypes;
+mod will_rename_files;
 mod workspace_diagnostic;
 mod workspace_symbols;
 
@@ -79,5 +80,6 @@ pub(super) use signature_help::SignatureHelpRequestHandler;
 pub(super) use transpile::TranspileRequestHandler;
 pub(super) use type_hierarchy_subtypes::TypeHierarchySubtypesRequestHandler;
 pub(super) use type_hierarchy_supertypes::TypeHierarchySupertypesRequestHandler;
+pub(super) use will_rename_files::WillRenameFilesRequestHandler;
 pub(super) use workspace_diagnostic::WorkspaceDiagnosticRequestHandler;
 pub(super) use workspace_symbols::WorkspaceSymbolRequestHandler;

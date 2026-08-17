@@ -46,6 +46,7 @@ mod rename;
 mod semantic_tokens;
 mod signature_help;
 mod type_hierarchy;
+mod will_rename_files;
 mod workspace_folders;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};

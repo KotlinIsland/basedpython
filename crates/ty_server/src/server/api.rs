@@ -136,6 +136,14 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::Worker
         ),
+        // The client is holding a file move open waiting for this, so it is scheduled like the
+        // other things a person is watching for rather than as background work.
+        requests::WillRenameFilesRequestHandler::METHOD => {
+            background_request_task::<requests::WillRenameFilesRequestHandler>(
+                req,
+                BackgroundSchedule::LatencySensitive,
+            )
+        }
         requests::PrepareTypeHierarchyRequestHandler::METHOD => background_document_request_task::<
             requests::PrepareTypeHierarchyRequestHandler,
         >(

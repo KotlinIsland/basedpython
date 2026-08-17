@@ -25,6 +25,7 @@ mod hover;
 mod importer;
 mod inlay_hints;
 mod markup;
+mod module_rename;
 mod references;
 mod rename;
 mod selection_range;
@@ -69,6 +70,9 @@ pub use inlay_hints::{
     InlayHintKind, InlayHintLabel, InlayHintSettings, InlayHintTextEdit, inlay_hints,
 };
 pub use markup::MarkupKind;
+pub use module_rename::{
+    FileMove, ModuleRenameEdits, SkipReason, SkippedImport, module_rename_edits,
+};
 pub use references::ReferencesMode;
 pub use rename::{can_rename, rename};
 pub use selection_range::selection_range;
