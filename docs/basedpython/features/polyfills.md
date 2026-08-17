@@ -17,7 +17,17 @@ _V = TypeVar("_V")
 class Map(Generic[_K, _V]): ...
 ```
 
-basedpython backfills modern python syntax and stdlib features to older supported versions this way, at transpile time. minimum supported runtime is **python 3.10**
+basedpython backfills modern python syntax and stdlib features to older supported versions this way, at transpile time. **python 3.10** is the version the toolchain is built around, and the one everything below is written against; the 3.10 section covers the constructs that are lowered for a target older still
+
+whatever is left — syntax no polyfill covers, aimed at a version that cannot parse it — is a transpile error rather than a file that fails at import. the output is parsed a second time as the target version, and the first construct that version does not have is reported against the `.by` line that produced it:
+
+```text
+error[invalid-syntax]: Cannot use `except*` on Python 3.9 (syntax was added in Python 3.11)
+ --> probe.by:4:1
+  |
+4 |     except* ValueError:
+  | ^^^^^^^^^^^^^^^^^^^^^^^
+```
 
 scope of this page: rewrites that apply to **plain python source** (forms a user could type into a `.py` file). basedpython-specific surface syntax has its own feature page
 
@@ -308,6 +318,62 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 ```
+
+______________________________________________________________________
+
+## Python 3.10
+
+### the `match` statement (PEP 634)
+
+`match` is grammar, so a target below 3.10 cannot even parse a file containing one. every `match` in the output — the ones you wrote, and the ones other lowerings produce for [`let` destructuring](destructuring.md), [`if let`](if-let.md), [statement expressions](statement-expressions.md) and [enum](enums.md) exhaustiveness — becomes an `if`/`elif` chain whose conditions do the matching:
+
+```python
+# python source
+match point:
+    case Point(0, y) if y > 0:
+        north(y)
+    case _:
+        elsewhere()
+```
+
+```python
+# generated Python
+if [__by_match_0__ := (point)]:
+    if isinstance(__by_match_0__, (__by_match_1__ := (Point))) and ...:
+        north(y)
+    else:
+        elsewhere()
+```
+
+captures are bound by assignment expressions along the way, and the structure python cannot ask for in an expression — whether a value counts as a sequence or a mapping, what a class's `__match_args__` names — is asked of small helper functions the output carries. the subject is evaluated once, the cases are tried in order, and a sub-pattern that fails falls through to the next case exactly as it would have
+
+only the `match` and `case` headers are replaced, so every case body keeps its source bytes at its own indentation and the statement occupies the same lines it did before
+
+two things are not reproduced: a comment written *inside* a multi-line pattern is dropped, and a temporary is left bound after the statement (python has no expression that unbinds a name). the temporaries are dunder-named, so a `match` in a class body leaves nothing `enum` or `dataclass` reads as a member
+
+the lowering binds with assignment expressions, so it needs python 3.8. below that a `match` is reported rather than lowered
+
+### `X | Y` at runtime (PEP 604)
+
+`int | str` calls `type.__or__`, which arrived in 3.10. in an *annotation* that costs nothing — a target this old always gets `from __future__ import annotations`, so no annotation is ever evaluated — but where the value is really produced it is a `TypeError` at import time. those are spelled the way the target can:
+
+```python
+# python source
+Alias = int | str
+isinstance(x, int | None)
+cast(int | str, value)
+```
+
+```python
+# generated Python
+Alias = Union[int, str]
+isinstance(x, (int, type(None),))
+cast(Union[int, str], value)
+```
+
+the two spellings are not interchangeable — `isinstance` takes a tuple of classes and rejects a `typing.Union` — so the classinfo argument of `isinstance` and `issubclass` becomes a tuple and everything else a `Union`. whether a `|` is a union at all is asked of the checker rather than guessed from the shape, so an ordinary bitwise or is left alone
+
+[`T?`](wrapped-results.md) is spelled `Union[T, None]` on these targets for the same reason
 
 ______________________________________________________________________
 

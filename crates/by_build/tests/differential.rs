@@ -540,11 +540,18 @@ fn agree_in(
     let module = format!("by_diff_{tag}");
 
     // the interpreted leg: for basedpython, the transpiler's own output run by
-    // cpython, under the same config `by_build` uses, so the two legs are the same
-    // program. for python there is nothing to transpile — it already is one
+    // cpython, under the same config `by_build` uses — including the *target
+    // version*, which has to be this interpreter's or the two legs are not the
+    // same program. for python there is nothing to transpile — it already is one
     let interpreted_source = match language {
         by_irbuild::Language::BasedPython => {
-            by_transforms::transpile(source, &Config::default()).expect("the source transpiles")
+            let mut config = Config::default();
+            if let Some((major, minor)) = toolchain.version
+                && let Ok(parsed) = format!("{major}.{minor}").parse()
+            {
+                config.min_version = parsed;
+            }
+            by_transforms::transpile(source, &config).expect("the source transpiles")
         }
         by_irbuild::Language::Python => source.to_string(),
     };

@@ -76,8 +76,9 @@ pub fn emit_lowered(
     source: &str,
     out_dir: &Path,
     options: &Options,
+    version: Option<(u8, u8)>,
 ) -> Result<Built> {
-    let module = finish(module, source, options, None)?;
+    let module = finish(module, source, options, version)?;
     emit_verified(&module, out_dir, options)
 }
 
@@ -90,8 +91,9 @@ pub fn emit_source(
     module_name: impl Into<by_ir::ModuleName>,
     out_dir: &Path,
     options: &Options,
+    version: Option<(u8, u8)>,
 ) -> Result<Built> {
-    let module = lower(source, module_name, options, None)?;
+    let module = lower(source, module_name, options, version)?;
     emit_verified(&module, out_dir, options)
 }
 

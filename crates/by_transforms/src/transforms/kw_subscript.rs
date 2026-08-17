@@ -8,7 +8,7 @@
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, Stmt};
+use ruff_python_ast::{Expr, PythonVersion, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
@@ -17,14 +17,20 @@ use crate::type_info::TypeInfo;
 pub(crate) struct KwSubscript<'src, T: TypeInfo + ?Sized> {
     source: &'src str,
     types: Option<&'src T>,
+    min_version: PythonVersion,
     pub(crate) edits: Vec<Fix>,
 }
 
 impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
-    pub(crate) fn new(source: &'src str, types: Option<&'src T>) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        types: Option<&'src T>,
+        min_version: PythonVersion,
+    ) -> Self {
         Self {
             source,
             types,
+            min_version,
             edits: Vec::new(),
         }
     }
@@ -39,7 +45,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
     /// import for nested `??` is still raised by `OptionalTypePass`, which walks
     /// every expression independently
     fn value_src(&self, expr: &Expr) -> String {
-        crate::transforms::optional_type::rewrite_type_expr(self.source, expr)
+        crate::transforms::optional_type::rewrite_type_expr(self.source, expr, self.min_version)
             .unwrap_or_else(|| self.src(expr.range()).to_owned())
     }
 
@@ -307,17 +313,22 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
 
 pub(crate) struct KwSubscriptPass<'src> {
     source: &'src str,
+    min_version: PythonVersion,
 }
 
 impl<'src> KwSubscriptPass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
+        Self {
+            source,
+            min_version,
+        }
     }
 }
 
 impl TypeAwarePass for KwSubscriptPass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner: KwSubscript<'_, dyn TypeInfo> = KwSubscript::new(self.source, Some(types));
+        let mut inner: KwSubscript<'_, dyn TypeInfo> =
+            KwSubscript::new(self.source, Some(types), self.min_version);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }

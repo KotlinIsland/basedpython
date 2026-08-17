@@ -138,8 +138,16 @@ mod tests {
     use indoc::indoc;
 
     fn check(input: &str, expected: &str) {
+        check_at(Config::test_default().min_version, input, expected);
+    }
+
+    fn check_at(min_version: crate::PythonVersion, input: &str, expected: &str) {
+        let config = Config {
+            min_version,
+            ..Config::test_default()
+        };
         assert_eq!(
-            transpile(input, &Config::test_default()).unwrap(),
+            transpile(input, &config).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
         );
     }
@@ -182,9 +190,11 @@ mod tests {
         );
     }
 
+    /// t-strings are 3.14 syntax, so the target has to be one that can run them
     #[test]
     fn tstring_dedent() {
-        check(
+        check_at(
+            crate::PythonVersion::PY314,
             indoc! {r#"
                 a = "asdf"
                 text = t"""

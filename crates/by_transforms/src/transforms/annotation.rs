@@ -1,11 +1,22 @@
 use ruff_diagnostics::{Edit, Fix};
-use ruff_python_ast::{Expr, Stmt};
+use ruff_python_ast::{Expr, PythonVersion, Stmt};
 use ruff_text_size::Ranged;
 
+use crate::Config;
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::transforms::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
 use crate::transforms::{literal_types, optional_type};
 use crate::type_info::TypeInfo;
+
+/// The element type an unpacked tuple element wraps, whichever way the target
+/// spells the unpack.
+fn strip_unpack(element: &str) -> Option<&str> {
+    element.strip_prefix('*').or_else(|| {
+        element
+            .strip_prefix("Unpack[")
+            .and_then(|rest| rest.strip_suffix(']'))
+    })
+}
 
 /// Rewrites tuple literal types in type positions.
 ///
@@ -18,15 +29,37 @@ use crate::type_info::TypeInfo;
 pub(crate) struct TupleLiteralType<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
+    min_version: PythonVersion,
+    /// set when a lowering spelled an `Unpack`, so the pass can ask for the import
+    pub(crate) needs_unpack_import: std::cell::Cell<bool>,
     pub(crate) edits: Vec<Fix>,
 }
 
 impl<'src> TupleLiteralType<'src> {
-    pub(crate) fn new(source: &'src str, types: &'src dyn TypeInfo) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        types: &'src dyn TypeInfo,
+        min_version: PythonVersion,
+    ) -> Self {
         Self {
             source,
             types,
+            min_version,
+            needs_unpack_import: std::cell::Cell::new(false),
             edits: Vec::new(),
+        }
+    }
+
+    /// How an unpacked element of a tuple type is spelled for the target. The
+    /// star form is PEP 646, python 3.11; below that it is a *syntax* error
+    /// rather than something the `__future__` import could defer, so a tuple
+    /// type has to say `Unpack[...]` instead.
+    fn unpack(&self, inner: &str) -> String {
+        if self.min_version >= PythonVersion::PY311 {
+            format!("*{inner}")
+        } else {
+            self.needs_unpack_import.set(true);
+            format!("Unpack[{inner}]")
         }
     }
 
@@ -75,7 +108,7 @@ impl<'src> TupleLiteralType<'src> {
                 // rather than the wrapped `tuple[*tuple[T, ...]]` form
                 if parameter_shape
                     && lowered.len() == 1
-                    && let Some(rest) = lowered[0].strip_prefix("*")
+                    && let Some(rest) = strip_unpack(&lowered[0])
                 {
                     return Some(rest.to_owned());
                 }
@@ -218,7 +251,7 @@ impl<'src> TupleLiteralType<'src> {
                     let value_src = self
                         .transform_annotation(&named.value)
                         .unwrap_or_else(|| self.src(named.value.range()).to_owned());
-                    return format!("*tuple[{value_src}, ...]");
+                    return self.unpack(&format!("tuple[{value_src}, ...]"));
                 }
                 self.transform_annotation(&named.value)
                     .unwrap_or_else(|| self.src(named.value.range()).to_owned())
@@ -233,9 +266,9 @@ impl<'src> TupleLiteralType<'src> {
                     .transform_annotation(&s.value)
                     .unwrap_or_else(|| self.src(s.value.range()).to_owned());
                 if parameter_shape {
-                    format!("*tuple[{value_src}, ...]")
+                    self.unpack(&format!("tuple[{value_src}, ...]"))
                 } else {
-                    format!("*{value_src}")
+                    self.unpack(&value_src)
                 }
             }
             // a plain element type — also lower a nested `?` (`(int, str?)`),
@@ -243,7 +276,7 @@ impl<'src> TupleLiteralType<'src> {
             // tuple's whole-expression edit subsumes the optional pass's edit
             _ => self
                 .transform_annotation(elt)
-                .or_else(|| optional_type::rewrite_type_expr(self.source, elt))
+                .or_else(|| optional_type::rewrite_type_expr(self.source, elt, self.min_version))
                 .unwrap_or_else(|| self.src(elt.range()).to_owned()),
         }
     }
@@ -275,17 +308,18 @@ impl TypeExprVisitor for TupleLiteralType<'_> {
 
 pub(crate) struct TupleLiteralTypePass<'src> {
     source: &'src str,
+    config: Config,
 }
 
 impl<'src> TupleLiteralTypePass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, config: Config) -> Self {
+        Self { source, config }
     }
 }
 
 impl TypeAwarePass for TupleLiteralTypePass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = TupleLiteralType::new(self.source, types);
+        let mut inner = TupleLiteralType::new(self.source, types, self.config.min_version);
         walk_type_positions(stmts, Some(types), &mut inner);
         let mut wraps_literal = false;
         for fix in inner.edits {
@@ -297,6 +331,10 @@ impl TypeAwarePass for TupleLiteralTypePass<'_> {
                 }
                 ctx.text_edits.push((range, repl));
             }
+        }
+        if inner.needs_unpack_import.get() {
+            ctx.required_imports
+                .push("from typing import Unpack".to_owned());
         }
         // when our embedded literal-type lowering produced `Literal[...]` text,
         // request the import. the standalone literal_types pass doesn't see
@@ -311,12 +349,24 @@ impl TypeAwarePass for TupleLiteralTypePass<'_> {
 #[cfg(test)]
 mod tests {
     use crate::python_passthrough::unchanged;
-    use crate::{Config, transpile};
+    use crate::{Config, PythonVersion, transpile};
     use indoc::indoc;
 
     fn check(input: &str, expected: &str) {
         assert_eq!(
             transpile(input, &Config::test_default()).unwrap(),
+            crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    /// the same, against a target that has PEP 646
+    fn check_at(min_version: PythonVersion, input: &str, expected: &str) {
+        let config = Config {
+            min_version,
+            ..Config::test_default()
+        };
+        assert_eq!(
+            transpile(input, &config).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
         );
     }
@@ -331,21 +381,39 @@ mod tests {
         check("a: (int,)\n", "a: tuple[int]\n");
     }
 
-    /// a bare `*A` splices `A` in — python spells that the same way, unlike the
-    /// `*: T` variadic it shares an AST shape with
+    /// a bare `*A` splices `A` in — python spells that the same way from 3.11,
+    /// unlike the `*: T` variadic it shares an AST shape with
     #[test]
     fn unpacked_element() {
-        check("a: (int, *A)\n", "a: tuple[int, *A]\n");
+        check_at(
+            PythonVersion::PY311,
+            "a: (int, *A)\n",
+            "a: tuple[int, *A]\n",
+        );
+    }
+
+    /// a star in a subscript is 3.11 grammar, so a `__future__` import cannot
+    /// defer it the way it defers an annotation's *evaluation* — below 3.11 the
+    /// unpack has to be spelled out
+    #[test]
+    fn unpacked_element_before_pep_646() {
+        check(
+            "a: (int, *A)\n",
+            indoc! {"
+                from typing_extensions import Unpack
+                a: tuple[int, Unpack[A]]
+            "},
+        );
     }
 
     #[test]
     fn lone_unpacked_element_without_a_comma() {
-        check("a: (*A)\n", "a: tuple[*A]\n");
+        check_at(PythonVersion::PY311, "a: (*A)\n", "a: tuple[*A]\n");
     }
 
     #[test]
     fn lone_unpacked_element_with_a_comma() {
-        check("a: (*A,)\n", "a: tuple[*A]\n");
+        check_at(PythonVersion::PY311, "a: (*A,)\n", "a: tuple[*A]\n");
     }
 
     #[test]
@@ -458,7 +526,18 @@ mod tests {
     fn variadic_tuple_annotation() {
         // `*: T` in a tuple type expands to `*tuple[T, ...]` so the tuple
         // can hold zero+ values of T after the leading positional fields
-        check("b: (int, *: str)\n", "b: tuple[int, *tuple[str, ...]]\n");
+        check_at(
+            PythonVersion::PY311,
+            "b: (int, *: str)\n",
+            "b: tuple[int, *tuple[str, ...]]\n",
+        );
+        check(
+            "b: (int, *: str)\n",
+            indoc! {"
+                from typing_extensions import Unpack
+                b: tuple[int, Unpack[tuple[str, ...]]]
+            "},
+        );
     }
 
     #[test]
@@ -466,7 +545,8 @@ mod tests {
         // `*name: T` in a tuple type behaves the same as `*: T` — the name
         // is metadata for callable-parameter use and has no effect on tuple
         // type semantics
-        check(
+        check_at(
+            PythonVersion::PY311,
             "b: (int, *args: str)\n",
             "b: tuple[int, *tuple[str, ...]]\n",
         );

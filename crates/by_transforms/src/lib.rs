@@ -201,9 +201,11 @@ pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
     let final_output = run_anon_named_tuple_cleanup(final_output, config)?;
     let final_output =
         run_lazy_import_phase(final_output, config, &model.eagerly_imported_modules());
+    let final_output = run_version_polyfill_phase(final_output, config);
 
     // --- Phase 3: syntax verification ---
     verify_syntax(&final_output).map_err(|e| e.message)?;
+    verify_target_syntax(&final_output, config).map_err(|e| e.message)?;
 
     Ok(final_output)
 }
@@ -365,6 +367,7 @@ pub fn transpile_typed_with_map(
     let final_output = run_import_redirect_phase(output, config);
     let final_output = run_anon_named_tuple_cleanup(final_output, config)?;
     let final_output = run_lazy_import_phase(final_output, config, &eager_imports);
+    let final_output = run_version_polyfill_phase(final_output, config);
 
     // phases 1-2c only prepend preambles at the top and edit within lines, so
     // the spliced body keeps its line correspondence: prepend one `None` per
@@ -398,7 +401,9 @@ pub fn transpile_typed_with_map(
     line_map.extend(composed[kept..].iter().copied());
 
     // verify last: on failure, map the generated span back to a `.by` range
-    if let Err(mut err) = verify_syntax(&final_output) {
+    let verified =
+        verify_syntax(&final_output).and_then(|()| verify_target_syntax(&final_output, config));
+    if let Err(mut err) = verified {
         err.by_range = err.output_range.and_then(|r| {
             output_offset_to_by_range(&line_map, &final_output, original_source, r.start())
         });
@@ -569,6 +574,43 @@ fn run_lazy_import_phase(source: String, config: &Config, eager: &[String]) -> S
     } else {
         splice_preamble(&body, &preamble)
     }
+}
+
+/// Version polyfill phase: rewrite syntax the target python cannot parse into
+/// syntax it can. Runs over the finished python rather than over `.by`, so a
+/// `match` an earlier lowering *generated* — for a `let` destructuring, an
+/// `if let`, a statement expression — is lowered by the same code as one the
+/// author wrote.
+///
+/// Nothing here changes how many lines the file has: the polyfill rewrites
+/// headers in place and pads them back to their original height, so the only
+/// lines it adds are the runtime preamble's, at the top, where the line map
+/// already accounts for generated leading lines.
+fn run_version_polyfill_phase(source: String, config: &Config) -> String {
+    transforms::match_polyfill::lower(source, config.min_version)
+}
+
+/// Re-parse the transpiled output *as the target python version* and report any
+/// construct that version cannot parse.
+///
+/// [`verify_syntax`] asks whether the output is python at all; this asks whether
+/// it is python the file's declared floor can run. Without it, syntax no
+/// polyfill covers — `except*`, t-strings, a PEP 701 f-string — is emitted
+/// verbatim and fails at import time in generated code the author never wrote.
+fn verify_target_syntax(source: &str, config: &Config) -> Result<(), TranspileError> {
+    let options = ruff_python_parser::ParseOptions::from(ruff_python_ast::PySourceType::Python)
+        .with_target_version(config.min_version);
+    let parsed = ruff_python_parser::parse_unchecked(source, options);
+    let Some(first) = parsed.unsupported_syntax_errors().first() else {
+        return Ok(());
+    };
+    // the parser's own wording already names both versions: "Cannot use
+    // `except*` on Python 3.9 (syntax was added in Python 3.11)"
+    Err(TranspileError {
+        message: first.to_string(),
+        output_range: Some(first.range),
+        by_range: None,
+    })
 }
 
 /// Splice `preamble` into `body` where generated lines belong: after the module

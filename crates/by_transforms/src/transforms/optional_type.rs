@@ -4,6 +4,11 @@
 //! This pass rewrites it to the runtime-compatible union `T | None`
 //! (`Optional.Some(x)` is `x`, `Optional.None_` is `None`).
 //!
+//! A target older than 3.10 has no `type.__or__`, and an optional is written in
+//! plenty of places the runtime evaluates — a `cast` target, an alias — so for
+//! those the union is spelled `Union[T, None]` instead. Which spelling is used
+//! never changes what the type means.
+//!
 //! It emits narrow text edits rather than mutating the AST so it composes with
 //! the value-position operator lowerings that share a statement — e.g. a
 //! function whose signature has `int?` and whose body uses `??` or `?.`. A
@@ -20,7 +25,7 @@
 //! runtime representation is still being settled.
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, Stmt, UnaryOp};
+use ruff_python_ast::{Expr, PythonVersion, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{PassContext, TypeAwarePass};
@@ -35,6 +40,10 @@ struct OptionalLower<'src> {
     edits: Vec<(TextRange, String)>,
     /// set when any lowered optional produced a runtime `Optional[...]` wrapper
     needs_runtime: bool,
+    /// set when any lowered optional was spelled `Union[...]`, which needs the import
+    needs_union: bool,
+    /// whether the target can spell a union with `|` (python 3.10)
+    native_union: bool,
     source: &'src str,
     /// stack of in-scope PEP 695 type-parameter names. `?` over a bare type
     /// variable lowers to the *wrapped* form (`Optional[T | None]`) — a plain
@@ -44,10 +53,12 @@ struct OptionalLower<'src> {
 }
 
 impl<'src> OptionalLower<'src> {
-    fn new(source: &'src str) -> Self {
+    fn new(source: &'src str, min_version: PythonVersion) -> Self {
         Self {
             edits: Vec::new(),
             needs_runtime: false,
+            needs_union: false,
+            native_union: min_version >= PythonVersion::PY310,
             source,
             typevar_scopes: Vec::new(),
         }
@@ -120,13 +131,21 @@ impl<'ast> Visitor<'ast> for OptionalLower<'_> {
         let wrap_layers = (depth - 1) as usize + usize::from(generic_operand);
         if wrap_layers >= 1 {
             self.needs_runtime = true;
-            self.edits.push((
-                TextRange::empty(node.start()),
-                "Optional[".repeat(wrap_layers),
-            ));
+        }
+        let mut prefix = "Optional[".repeat(wrap_layers);
+        if !self.native_union {
+            self.needs_union = true;
+            prefix.push_str("Union[");
+        }
+        if !prefix.is_empty() {
+            self.edits.push((TextRange::empty(node.start()), prefix));
         }
         let mut replacement = close_parens;
-        replacement.push_str(" | None");
+        if self.native_union {
+            replacement.push_str(" | None");
+        } else {
+            replacement.push_str(", None]");
+        }
         for _ in 0..wrap_layers {
             replacement.push(']');
         }
@@ -141,11 +160,15 @@ impl<'ast> Visitor<'ast> for OptionalLower<'_> {
 
 pub(crate) struct OptionalTypePass<'src> {
     source: &'src str,
+    min_version: PythonVersion,
 }
 
 impl<'src> OptionalTypePass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
+        Self {
+            source,
+            min_version,
+        }
     }
 }
 
@@ -156,8 +179,12 @@ impl<'src> OptionalTypePass<'src> {
 /// lowered when that constructor renders its nested types. The runtime
 /// `Optional[...]` import for nested `T??` is handled by [`OptionalTypePass`],
 /// which independently walks every type position.
-pub(crate) fn collect_edits(source: &str, expr: &Expr) -> Vec<(TextRange, String)> {
-    let mut lower = OptionalLower::new(source);
+pub(crate) fn collect_edits(
+    source: &str,
+    expr: &Expr,
+    min_version: PythonVersion,
+) -> Vec<(TextRange, String)> {
+    let mut lower = OptionalLower::new(source, min_version);
     lower.visit_expr(expr);
     lower.edits
 }
@@ -165,8 +192,12 @@ pub(crate) fn collect_edits(source: &str, expr: &Expr) -> Vec<(TextRange, String
 /// Lower the optionals in a single type-expression subtree to a string, or
 /// `None` if it contains no optional. Used by type constructors (tuple type,
 /// kw-subscript) to lower a nested `T?` when they splice their element types.
-pub(crate) fn rewrite_type_expr(source: &str, expr: &Expr) -> Option<String> {
-    let mut edits = collect_edits(source, expr);
+pub(crate) fn rewrite_type_expr(
+    source: &str,
+    expr: &Expr,
+    min_version: PythonVersion,
+) -> Option<String> {
+    let mut edits = collect_edits(source, expr, min_version);
     if edits.is_empty() {
         return None;
     }
@@ -188,12 +219,16 @@ pub(crate) fn rewrite_type_expr(source: &str, expr: &Expr) -> Option<String> {
 
 impl TypeAwarePass for OptionalTypePass<'_> {
     fn run(&self, stmts: &[Stmt], _types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut lower = OptionalLower::new(self.source);
+        let mut lower = OptionalLower::new(self.source, self.min_version);
         for stmt in stmts {
             lower.visit_stmt(stmt);
         }
         if lower.needs_runtime {
             ctx.required_imports.push(OPTIONAL_RUNTIME.to_owned());
+        }
+        if lower.needs_union {
+            ctx.required_imports
+                .push("from typing import Union".to_owned());
         }
         ctx.text_edits.extend(lower.edits);
     }
@@ -267,18 +302,38 @@ class Optional:
         );
     }
 
+    /// below 3.10 there is no `type.__or__`, so the optional is spelled as the
+    /// `Union` that works on every version — and the annotation is deferred too,
+    /// which is what the future import is for
     #[test]
-    fn py39_target_defers_annotation_evaluation() {
-        // below 3.10 the runtime cannot evaluate the pep 604 union this very
-        // lowering produces, so the future import is mandatory
+    fn py39_target_spells_the_union_out() {
         let config = crate::Config {
             min_version: crate::PythonVersion::PY39,
             ..crate::Config::test_default()
         };
         assert_eq!(
             crate::transpile("x: int? = None\n", &config).unwrap(),
-            "from __future__ import annotations\nx: int | None = None\n"
+            indoc! {"
+                from __future__ import annotations
+                from typing import Union
+                x: Union[int, None] = None
+            "}
         );
+    }
+
+    /// the spelling reaches a position the runtime really does evaluate
+    #[test]
+    fn py39_target_spells_a_cast_target_out() {
+        let config = crate::Config {
+            min_version: crate::PythonVersion::PY39,
+            ..crate::Config::test_default()
+        };
+        let out = crate::transpile(
+            "from typing import cast\ndef f(v: object):\n    return cast(int?, v)\n",
+            &config,
+        )
+        .unwrap();
+        assert!(out.contains("cast(Union[int, None], v)"), "got:\n{out}");
     }
 
     #[test]

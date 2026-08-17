@@ -570,6 +570,7 @@ def kept(a: str, b: str) -> object:
         "by_e2e_append",
         &dir,
         &Options::default(),
+        None,
     )
     .expect("the module emits");
     let emitted = std::fs::read_to_string(&built.artifact.source).expect("the C is readable");
@@ -1097,8 +1098,14 @@ fn the_emitted_c_names_no_pointer_type_it_does_not_mean() {
     }
     let dir = std::env::temp_dir().join("by_e2e_pointers");
     let _ = std::fs::remove_dir_all(&dir);
-    let built = by_build::emit_source(POINTER_SOURCE, "by_e2e_pointers", &dir, &Options::default())
-        .expect("the module emits");
+    let built = by_build::emit_source(
+        POINTER_SOURCE,
+        "by_e2e_pointers",
+        &dir,
+        &Options::default(),
+        None,
+    )
+    .expect("the module emits");
 
     let object = dir.join("by_e2e_pointers.o");
     let mut args = by_build::compile_command(&toolchain, &built.artifact.source, &object, &dir);

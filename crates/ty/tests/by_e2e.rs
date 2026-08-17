@@ -228,13 +228,10 @@ fn compile_transpiles_the_fallback_with_the_lowering_options_it_was_given() {
     // has always taken them; until this reached the cli there was no way to say so,
     // and every compile silently used the defaults
     //
-    // `except*` has no lowering, so this declines and the fallback is what runs
+    // an `async def` has no native lowering, so this declines and the fallback
+    // is what runs
     let source = "\
-def total(s: str, n: int) -> int:
-    try:
-        pass
-    except* ValueError:
-        pass
+async def total(s: str, n: int) -> int:
     return len(s) + n
 ";
     let dir = std::env::temp_dir().join("by_cli_soundness");

@@ -685,7 +685,7 @@ pub(crate) fn cmd_compile(
         ));
 
         let built = if emit_c_only {
-            by_build::emit_lowered(lowered, &source, &out_dir, &options)
+            by_build::emit_lowered(lowered, &source, &out_dir, &options, toolchain.version)
         } else {
             by_build::build_lowered(lowered, &source, &toolchain, &out_dir, &options).inspect(
                 |built| {

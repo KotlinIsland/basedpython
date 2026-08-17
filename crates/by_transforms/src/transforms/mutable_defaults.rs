@@ -264,8 +264,16 @@ mod tests {
     use indoc::indoc;
 
     fn check(input: &str, expected: &str) {
+        check_at(crate::Config::test_default().min_version, input, expected);
+    }
+
+    fn check_at(min_version: crate::PythonVersion, input: &str, expected: &str) {
+        let config = crate::Config {
+            min_version,
+            ..crate::Config::test_default()
+        };
         assert_eq!(
-            transpile(input, &crate::Config::test_default()).unwrap(),
+            transpile(input, &config).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
         );
     }
@@ -616,9 +624,11 @@ mod tests {
         );
     }
 
+    /// t-strings are 3.14 syntax, so the target has to be one that can run them
     #[test]
     fn tstring_default() {
-        check(
+        check_at(
+            crate::PythonVersion::PY314,
             indoc! {r#"
                 data = "fdsa"
                 def f(a=t"asdf{data}"):
