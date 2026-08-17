@@ -58,6 +58,9 @@ pub(super) fn request(req: server::Request) -> Task {
             background_request_task::<request::DocumentDiagnostic>(req, BackgroundSchedule::Worker)
         }
         request::ExecuteCommand::METHOD => sync_request_task::<request::ExecuteCommand>(req),
+        request::ExplainRule::METHOD => {
+            background_request_task::<request::ExplainRule>(req, BackgroundSchedule::Worker)
+        }
         request::Format::METHOD => {
             background_request_task::<request::Format>(req, BackgroundSchedule::Fmt)
         }

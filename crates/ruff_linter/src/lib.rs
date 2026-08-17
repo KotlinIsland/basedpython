@@ -11,6 +11,7 @@ pub use noqa::{SuppressionKind, generate_suppression_edits};
 pub use registry::clap_completion::RuleParser;
 #[cfg(feature = "clap")]
 pub use rule_selector::clap_completion::UnresolvedRuleSelectorParser;
+pub use rule_documentation::rule_documentation;
 pub use rule_selector::{RuleSelector, UnresolvedRuleSelector};
 pub use rules::pycodestyle::rules::IOError;
 
@@ -41,6 +42,7 @@ pub mod preview;
 pub mod registry;
 mod renamer;
 mod rule_redirects;
+pub mod rule_documentation;
 pub mod rule_selector;
 pub mod rules;
 pub mod settings;

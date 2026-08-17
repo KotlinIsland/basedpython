@@ -4996,6 +4996,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bitflags 2.13.1",
+ "by_transforms",
  "crossbeam",
  "dunce",
  "gen-lsp-types",

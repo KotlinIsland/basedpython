@@ -86,6 +86,14 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::LatencySensitive
         ),
+        // A table lookup with no document behind it: a reader can ask about a code they typed
+        // into a prompt, with no file open at all.
+        requests::ExplainRuleHandler::METHOD => {
+            background_request_task::<requests::ExplainRuleHandler>(req, BackgroundSchedule::Worker)
+        }
+        requests::TranspileRequestHandler::METHOD => background_document_request_task::<
+            requests::TranspileRequestHandler,
+        >(req, BackgroundSchedule::Worker),
         requests::SemanticTokensRequestHandler::METHOD => background_document_request_task::<
             requests::SemanticTokensRequestHandler,
         >(req, BackgroundSchedule::Worker),
