@@ -306,6 +306,17 @@
               "type": "null"
             }
           ]
+        },
+        "wheel-versions": {
+          "description": "The python versions to build a wheel for, one wheel each.\n\n`by build --wheels` builds one wheel per version listed and tags each for\nthe python it was lowered to, so an installer hands every interpreter the\nbest wheel it can use. A python with no wheel of its own takes the newest\none below it.\n\nDefaults to every version from the one the project targets up to the\nnewest this release knows about — which is what `requires-python` already\nsays the project supports, so most projects need not set this. List them\nexplicitly to ship fewer.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Array_of_string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false

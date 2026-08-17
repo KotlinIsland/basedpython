@@ -3454,6 +3454,63 @@ fn build_reports_what_lowering_needs_at_run_time() {
     );
 }
 
+/// the packaging is `uv`'s, so without it there is nothing to drive — and the
+/// command has to say that rather than fail somewhere further in
+#[test]
+fn building_wheels_without_a_frontend_says_what_is_missing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nrequires-python = \">=3.12\"\n",
+    )
+    .unwrap();
+    let package = dir.path().join("src").join("demo");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["build", "--wheels"])
+        .current_dir(dir.path())
+        // an empty `PATH` is the only way to be sure this machine's `uv` is not
+        // found, whatever the developer happens to have installed
+        .env("PATH", "")
+        .env_remove("VIRTUAL_ENV")
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "expected a failure:\n{stderr}");
+    assert!(
+        stderr.contains("could not find `uv`"),
+        "the message has to name what is missing:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("uv build"),
+        "and what to do without it:\n{stderr}"
+    );
+}
+
+/// `--wheels` produces a release, `--min-version` produces one tree lowered to
+/// one python. asking for both is asking for two different things at once
+#[test]
+fn building_wheels_refuses_a_single_target_version() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["build", "--wheels", "--min-version", "3.12"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot be used with"),
+        "clap has to reject the combination:\n{stderr}"
+    );
+}
+
 // ── running a project, not just its `.by` files ──────────────────────────────
 
 /// the same hole at run time, where it is fatal rather than untidy: `by run`

@@ -3,6 +3,7 @@ mod by_commands;
 mod by_init;
 mod by_source_encoding;
 mod by_staging;
+mod by_wheels;
 mod logging;
 mod printer;
 mod python_version;
@@ -10,6 +11,7 @@ mod rule;
 mod version;
 
 use std::io::{BufWriter, Write};
+use std::path::Path;
 use std::process::{ExitCode, Termination};
 use std::sync::{Arc, Mutex};
 
@@ -138,10 +140,22 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
         }
         Command::Build {
             min_version,
+            wheels,
             out,
             print_manifest,
             lowering,
-        } => by_commands::cmd_build(min_version.as_deref(), &lowering, &out, print_manifest),
+        } => {
+            if wheels {
+                by_wheels::cmd_build_wheels(out.as_deref())
+            } else {
+                by_commands::cmd_build(
+                    min_version.as_deref(),
+                    &lowering,
+                    out.as_deref().unwrap_or(Path::new("out")),
+                    print_manifest,
+                )
+            }
+        }
         Command::Compile {
             files,
             output,

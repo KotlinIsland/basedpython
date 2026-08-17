@@ -24,6 +24,8 @@ file is a source file.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import os
 import re
@@ -33,6 +35,7 @@ import sys
 import sysconfig
 import tarfile
 import tempfile
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -45,6 +48,10 @@ if TYPE_CHECKING:
 # overwhelming majority of what this distribution is used for, and neither of
 # them packages anything
 UV_BUILD_REQUIREMENT = "uv_build>=0.9,<10"
+
+# the config setting that asks for a wheel lowered to one python rather than to
+# the floor of what the project supports
+TARGET_VERSION_SETTING = "python-version"
 
 # where `build_editable` stages the project. it is `by build`'s own default
 # output directory on purpose: an editable install points python at this tree, so
@@ -108,8 +115,14 @@ def build_wheel(
     config_settings: Mapping[str, Any] | None = None,
     metadata_directory: str | None = None,
 ) -> str:
-    with _staged() as staging:
-        return _delegate("build_wheel", staging, wheel_directory, config_settings)
+    target = _target_version(config_settings)
+    with _staged(target) as staging:
+        built = _delegate("build_wheel", staging, wheel_directory, config_settings)
+    if target is None:
+        return built
+    # a wheel lowered for one python says so, so that a newer interpreter can be
+    # given a better one. see `_retag`
+    return _retag(Path(wheel_directory) / built, target)
 
 
 def build_editable(
@@ -122,9 +135,15 @@ def build_editable(
     # makes the install editable at all: transpiled python is what gets imported,
     # and re-running the build is what updates it
     staging = Path.cwd() / EDITABLE_STAGING_DIRECTORY
-    built = _stage(staging)
+    target = _target_version(config_settings)
+    built = _stage(staging, target)
     _write_staged_pyproject(staging, built)
-    return _delegate("build_editable", staging, wheel_directory, config_settings)
+    editable = _delegate("build_editable", staging, wheel_directory, config_settings)
+    if target is None:
+        return editable
+    # an editable wheel is a pointer, but it is still selected on its tag, so it
+    # is tagged for the python it was lowered for like any other
+    return _retag(Path(wheel_directory) / editable, target)
 
 
 def build_sdist(
@@ -174,13 +193,34 @@ def build_sdist(
 
 
 @contextmanager
-def _staged() -> Iterator[Path]:
+def _staged(python_version: str | None = None) -> Iterator[Path]:
     """The project, built as python, in a directory that lasts for one hook."""
     with tempfile.TemporaryDirectory() as directory:
         staging = Path(directory) / "build"
-        built = _stage(staging)
+        built = _stage(staging, python_version)
         _write_staged_pyproject(staging, built)
         yield staging
+
+
+def _target_version(config_settings: Mapping[str, Any] | None) -> str | None:
+    """The python this wheel is being lowered for, if one was asked for.
+
+    Without it the build targets what the project declares it supports, which is
+    the wheel that runs everywhere. With it, the wheel is for one python and is
+    tagged so that only that python — or the next one up with no wheel of its own
+    — will choose it.
+    """
+    if not config_settings:
+        return None
+    target = config_settings.get(TARGET_VERSION_SETTING)
+    if target is None:
+        return None
+    target = str(target).strip()
+    if not re.fullmatch(r"3\.\d+", target):
+        raise BuildError(
+            f"`{TARGET_VERSION_SETTING}` has to be a python version like `3.12`, not `{target}`"
+        )
+    return target
 
 
 class Staged:
@@ -266,6 +306,142 @@ def _write_staged_pyproject(staging: Path, built: Staged) -> None:
     (staging / "pyproject.toml").write_text(_toml(document), encoding="utf-8")
 
 
+# ── tagging a wheel for the python it was lowered for ────────────────────────
+
+
+def _retag(wheel: Path, python_version: str) -> str:
+    """Re-tag `wheel` for one python, and return its new name.
+
+    A wheel's tag is what an installer selects on. Left as `py3-none-any`, every
+    wheel of a release looks equally good and the first one found wins — so a
+    3.13 user could be handed code lowered for 3.9, with a `typing_extensions`
+    dependency they have no use for. Tagged `py313-none-any`, that same user gets
+    the wheel built for them, and a python with no wheel of its own falls back to
+    the newest one below it.
+
+    The backend that built it has no option for this, so the tag is rewritten
+    here: in the archive's `WHEEL`, in the `RECORD` line that carries that file's
+    hash, and in the file name itself.
+    """
+    tag = _python_tag(python_version)
+    entries = _read_wheel(wheel)
+
+    wheel_metadata = _dist_info_entry(entries, "WHEEL")
+    metadata_info, metadata = entries[wheel_metadata]
+    entries[wheel_metadata] = (metadata_info, _replace_tag(metadata, tag))
+
+    record = _dist_info_entry(entries, "RECORD")
+    record_info, recorded = entries[record]
+    entries[record] = (
+        record_info,
+        _rerecord(recorded, wheel_metadata, entries[wheel_metadata][1]),
+    )
+
+    renamed = wheel.with_name(_retagged_name(wheel.name, tag))
+    _write_wheel(renamed, entries)
+    if renamed != wheel:
+        wheel.unlink()
+    return renamed.name
+
+
+def _python_tag(python_version: str) -> str:
+    return "py" + python_version.replace(".", "")
+
+
+def _retagged_name(name: str, tag: str) -> str:
+    """`thing-1.0-py3-none-any.whl` under a new python tag.
+
+    The three tag fields are the last three before the extension, whatever the
+    name and version in front of them contain.
+    """
+    stem, _, extension = name.rpartition(".")
+    parts = stem.split("-")
+    if len(parts) < 4:
+        raise BuildError(f"`{name}` is not a wheel name this can re-tag")
+    parts[-3] = tag
+    return "-".join(parts) + "." + extension
+
+
+def _read_wheel(wheel: Path) -> dict[str, tuple[zipfile.ZipInfo, bytes]]:
+    with zipfile.ZipFile(wheel) as archive:
+        return {
+            info.filename: (info, archive.read(info)) for info in archive.infolist()
+        }
+
+
+def _write_wheel(
+    wheel: Path, entries: Mapping[str, tuple[zipfile.ZipInfo, bytes]]
+) -> None:
+    """Write the entries back, each as it arrived but for what changed.
+
+    The original `ZipInfo` is reused rather than rebuilt, because it carries what
+    a wheel means by it: the mode, and so whether a file in `.data/scripts/` is
+    still executable once installed. Building a fresh one silently made every
+    entry `0o644`.
+    """
+    with zipfile.ZipFile(wheel, "w", zipfile.ZIP_DEFLATED) as archive:
+        for info, payload in entries.values():
+            archive.writestr(info, payload)
+
+
+def _dist_info_entry(
+    entries: Mapping[str, tuple[zipfile.ZipInfo, bytes]], name: str
+) -> str:
+    matches = [
+        entry
+        for entry in entries
+        if entry.endswith(f".dist-info/{name}") and entry.count("/") == 1
+    ]
+    if len(matches) != 1:
+        raise BuildError(f"the wheel does not hold exactly one `{name}` to rewrite")
+    return matches[0]
+
+
+def _replace_tag(wheel_metadata: bytes, tag: str) -> bytes:
+    """Rewrite every `Tag:` line to name `tag`.
+
+    A pure-python wheel carries one; rewriting all of them means a wheel that
+    somehow carried several is either re-tagged wholly or not at all.
+    """
+    lines = wheel_metadata.decode("utf-8").splitlines(keepends=True)
+    rewritten = []
+    seen = False
+    for line in lines:
+        if line.startswith("Tag:"):
+            seen = True
+            _, _, rest = line.partition(":")
+            fields = rest.strip().split("-")
+            fields[0] = tag
+            rewritten.append("Tag: " + "-".join(fields) + "\n")
+        else:
+            rewritten.append(line)
+    if not seen:
+        raise BuildError("the wheel's `WHEEL` has no `Tag:` to rewrite")
+    return "".join(rewritten).encode("utf-8")
+
+
+def _rerecord(record: bytes, path: str, payload: bytes) -> bytes:
+    """Restate `path`'s hash and size in `RECORD`.
+
+    `RECORD` is what an installer verifies the archive against, so a file
+    rewritten without it is a wheel that reports itself as corrupt.
+    """
+    digest = base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b"=")
+    line = f"{path},sha256={digest.decode('ascii')},{len(payload)}\n"
+
+    rewritten = []
+    seen = False
+    for existing in record.decode("utf-8").splitlines(keepends=True):
+        if existing.split(",")[0] == path:
+            seen = True
+            rewritten.append(line)
+        else:
+            rewritten.append(existing)
+    if not seen:
+        raise BuildError(f"`RECORD` does not mention `{path}`")
+    return "".join(rewritten).encode("utf-8")
+
+
 # ── delegation ───────────────────────────────────────────────────────────────
 
 
@@ -285,6 +461,9 @@ def _delegate(
         ) from error
 
     hook = getattr(uv_build, hook_name)
+    # the settings are this backend's, not the one it delegates to: `uv_build`
+    # supports none of its own and warns about every one it is handed
+    config_settings = None
     out = os.path.abspath(out_directory)
     Path(out).mkdir(parents=True, exist_ok=True)
     previous = Path.cwd()
