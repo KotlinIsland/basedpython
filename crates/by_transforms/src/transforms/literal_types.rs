@@ -17,7 +17,7 @@ use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::transforms::type_expr_walker::{
     Recurse, TypeExprVisitor, TypePos, walk_type_positions_skipping,
 };
-use crate::type_info::TypeInfo;
+use crate::type_info::{TypeInfo, trailing_name};
 
 pub(crate) struct LiteralType<'src> {
     source: &'src str,
@@ -43,26 +43,12 @@ impl<'src> LiteralType<'src> {
     /// Whether a `Subscript.value` resolves to something whose subscript slice
     /// is a type-argument position.
     fn is_type_subscript(&self, value: &Expr) -> bool {
-        match value {
-            Expr::Name(n) => self.types.subscript_is_type_context(n),
-            Expr::Attribute(a) => match a.value.as_ref() {
-                Expr::Name(base) => self.types.attr_base_is_type_context(base),
-                _ => false,
-            },
-            _ => false,
-        }
+        trailing_name(value).is_some() && self.types.subscript_is_type_context(value)
     }
 
     /// Is `value` a reference to the named typing special form?
     fn is_typing_name(&self, value: &Expr, name: &str) -> bool {
-        match value {
-            Expr::Name(n) => n.id.as_str() == name && self.types.subscript_is_type_context(n),
-            Expr::Attribute(a) => {
-                a.attr.id.as_str() == name
-                    && matches!(a.value.as_ref(), Expr::Name(base) if self.types.attr_base_is_type_context(base))
-            }
-            _ => false,
-        }
+        trailing_name(value) == Some(name) && self.types.subscript_is_type_context(value)
     }
 
     fn is_annotated_name(&self, value: &Expr) -> bool {

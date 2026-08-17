@@ -71,19 +71,23 @@ pub(crate) enum CaptureKind {
 }
 
 pub(crate) trait TypeInfo {
-    /// whether `X[…]` where `X` is `name` treats the slice as type arguments.
-    /// returns `true` for unresolved / unknown names (covers builtins like
-    /// `list`, unimported sugar like `Union`)
-    fn subscript_is_type_context(&self, name: &ExprName) -> bool;
+    /// whether `X[…]` treats the slice as type arguments, where `X` is whatever
+    /// is being subscripted — a bare name (`list[int]`) or a dotted one
+    /// (`typing.List[int]`). returns `true` for unresolved / unknown values
+    /// (covers builtins like `list`, unimported sugar like `Union`)
+    ///
+    /// the question is asked of `X` itself rather than of its base. asking the
+    /// base "is this a module?" answers a different and much weaker question:
+    /// `typing.List` and `sys.modules` are both attributes of a module, but only
+    /// the first is a type — and reading `sys.modules[key]` as a type
+    /// application rewrote the key to the type it inferred for it
+    fn subscript_is_type_context(&self, value: &Expr) -> bool;
 
-    /// stricter variant: only `true` when ty *resolved* `name` to a class /
-    /// generic / special form. unresolved names return `false`. used by
+    /// stricter variant: only `true` when ty *resolved* the value to a class /
+    /// generic / special form. unresolved values return `false`. used by
     /// transforms that may fire on value-position subscripts (where an
     /// unresolved name should be treated as a runtime subscript, not a type)
-    fn subscript_is_known_type_context(&self, name: &ExprName) -> bool;
-
-    /// whether `base.attr[…]` (base = a module or class) treats slice as type args
-    fn attr_base_is_type_context(&self, base: &ExprName) -> bool;
+    fn subscript_is_known_type_context(&self, value: &Expr) -> bool;
 
     fn is_function(&self, name: &ExprName) -> bool;
 
@@ -543,8 +547,8 @@ impl TypeInfo for SemanticModel<'_> {
             .is_some_and(|ty| ty.is_attribute_type(self.db()))
     }
 
-    fn subscript_is_type_context(&self, name: &ExprName) -> bool {
-        match name.inferred_type(self) {
+    fn subscript_is_type_context(&self, value: &Expr) -> bool {
+        match value.inferred_type(self) {
             Some(ty) => ty.is_subscript_type_context(),
             // unresolved → assume type context (covers builtins like `list`,
             // unknown imports, basedpython sugar contexts)
@@ -552,17 +556,10 @@ impl TypeInfo for SemanticModel<'_> {
         }
     }
 
-    fn subscript_is_known_type_context(&self, name: &ExprName) -> bool {
-        match name.inferred_type(self) {
+    fn subscript_is_known_type_context(&self, value: &Expr) -> bool {
+        match value.inferred_type(self) {
             Some(ty) => ty.is_subscript_type_context() && !ty.is_dynamic(),
             None => false,
-        }
-    }
-
-    fn attr_base_is_type_context(&self, base: &ExprName) -> bool {
-        match base.inferred_type(self) {
-            Some(ty) => ty.is_module_or_type(),
-            None => true,
         }
     }
 
@@ -1178,6 +1175,23 @@ impl TypeInfo for SemanticModel<'_> {
 /// diagnostic, where a symbolic arithmetic operation is shown as the expression it stands
 /// for (`I + 1`); emitting that would evaluate `_I + 1` on a `TypeVar` object at import, so
 /// the transpiler asks for the type it reduces to instead
+/// the last component of a name or a dotted name — `List` for both `List` and
+/// `typing.List`
+///
+/// every spelling that takes type arguments is written one of those two ways, so
+/// a transform looking for one asks for the trailing name and then asks
+/// [`TypeInfo::subscript_is_type_context`] whether the whole thing is a type. the
+/// two questions are separate on purpose: the name alone cannot tell
+/// `typing.List` from an unrelated `mine.List`, and the type alone cannot tell
+/// `Callable` from any other generic
+pub(crate) fn trailing_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Name(name) => Some(name.id.as_str()),
+        Expr::Attribute(attribute) => Some(attribute.attr.id.as_str()),
+        _ => None,
+    }
+}
+
 fn display_for_python<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,

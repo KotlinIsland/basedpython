@@ -567,6 +567,57 @@ mod tests {
     }
 
     #[test]
+    fn a_module_attribute_that_is_not_a_type_keeps_its_subscript_key() {
+        // `sys.modules` is a dict, so `sys.modules[k]` is a runtime lookup and
+        // `k` is a value. asking only whether the *base* (`sys`) is a module
+        // said yes here as readily as it does for `typing.List`, and the key
+        // was then folded to the type inferred for it — `sys.modules[str]`,
+        // which raises at runtime
+        check(
+            indoc! {"
+                import sys
+
+
+                class Point:
+                    x: int
+
+
+                def main():
+                    point = Point()
+                    print(sys.modules[type(point).__module__].__name__)
+            "},
+            indoc! {"
+                import sys
+
+
+                class Point:
+                    x: int
+
+
+                def main():
+                    point = Point()
+                    print(sys.modules[type(point).__module__].__name__)
+                if __name__ == \"__main__\":
+                    main()
+            "},
+        );
+    }
+
+    #[test]
+    fn a_module_attribute_that_is_a_type_still_takes_type_arguments() {
+        // the other side of the same question: `typing.List` *is* a type, so its
+        // slice stays a type position and the fold still happens there
+        check(
+            "import typing\nc: typing.List[1 + 1]\n",
+            indoc! {"
+                from typing import Literal
+                import typing
+                c: typing.List[Literal[2]]
+            "},
+        );
+    }
+
+    #[test]
     fn attribute_type_folds_to_the_bound_member() {
         check_py312(
             indoc! {"

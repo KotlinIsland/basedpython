@@ -15,7 +15,7 @@ use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::{Ranged, TextSize};
 
-use crate::type_info::TypeInfo;
+use crate::type_info::{TypeInfo, trailing_name};
 
 pub(crate) struct SubscriptReverse<'src> {
     source: &'src str,
@@ -33,14 +33,7 @@ impl<'src> SubscriptReverse<'src> {
     }
 
     fn is_type_subscript(&self, value: &Expr) -> bool {
-        match value {
-            Expr::Name(n) => self.types.subscript_is_type_context(n),
-            Expr::Attribute(a) => match a.value.as_ref() {
-                Expr::Name(base) => self.types.attr_base_is_type_context(base),
-                _ => false,
-            },
-            _ => false,
-        }
+        trailing_name(value).is_some() && self.types.subscript_is_type_context(value)
     }
 }
 

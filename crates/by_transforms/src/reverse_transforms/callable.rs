@@ -17,7 +17,7 @@ use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-use crate::type_info::TypeInfo;
+use crate::type_info::{TypeInfo, trailing_name};
 
 pub(crate) struct CallableReverse<'src> {
     types: &'src dyn TypeInfo,
@@ -55,24 +55,11 @@ impl<'src> CallableReverse<'src> {
     }
 
     fn is_callable_name(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Name(n) => n.id.as_str() == "Callable" && self.types.subscript_is_type_context(n),
-            Expr::Attribute(a) => {
-                a.attr.id.as_str() == "Callable"
-                    && matches!(a.value.as_ref(), Expr::Name(n) if self.types.attr_base_is_type_context(n))
-            }
-            _ => false,
-        }
+        trailing_name(expr) == Some("Callable") && self.types.subscript_is_type_context(expr)
     }
 
     fn is_type_context_subscript(&self, value: &Expr) -> bool {
-        match value {
-            Expr::Name(n) => self.types.subscript_is_type_context(n),
-            Expr::Attribute(a) => {
-                matches!(a.value.as_ref(), Expr::Name(n) if self.types.attr_base_is_type_context(n))
-            }
-            _ => false,
-        }
+        trailing_name(value).is_some() && self.types.subscript_is_type_context(value)
     }
 
     /// rewrite the punctuation of `Callable[<params>, <ret>]` into the arrow
