@@ -15,8 +15,8 @@ trap 'rm -rf "$root"' EXIT
 for b in $(sweep_modules "$LIB" "$@"); do
   f="$LIB/$b"
   [ -f "$f" ] || continue
-  d="$root/w"; sweep_stage "$d" "$f"
-  err=$(cd "$d" && PYTHON="$PY" "$BY" compile m.py -o o 2>&1 >/dev/null)
+  d="$root/w"; sweep_stage "$d" "$LIB" "$b"
+  err=$(cd "$d" && PYTHON="$PY" "$BY" compile "$SWEEP_SRC" -o o 2>&1 >/dev/null)
   if echo "$err" | grep -qiE 'panicked|internal error|stack overflow'; then
     printf '%s\tPANIC\t%s\n' "$b" "$(echo "$err" | head -1)" >> "$OUT"
   elif sweep_built "$d"; then
