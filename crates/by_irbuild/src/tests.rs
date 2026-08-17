@@ -22,6 +22,15 @@ fn has_op(function: &by_ir::function::Function, predicate: impl Fn(&Op) -> bool)
         .any(predicate)
 }
 
+/// each decorator as it was written, which is what a test about *which* decorators
+/// travel with a definition wants to read
+fn dotted(decorators: &[by_ir::function::Decorator]) -> Vec<String> {
+    decorators
+        .iter()
+        .map(by_ir::function::Decorator::dotted)
+        .collect()
+}
+
 /// lower `source` and render the module's IR, failing if it does not verify
 fn ir(source: &str) -> String {
     with_source(source, |db, env, model, suite| {
@@ -1039,6 +1048,34 @@ class Tagged:
 }
 
 #[test]
+fn a_decorated_class_with_a_class_level_constant_is_lowered() {
+    // the constant is copied off the body the interpreted `class` statement wrote, which
+    // is captured while that statement runs and so predates every decorator. it used to
+    // be read back off the finished definition, and a decorator that makes something of
+    // what the body wrote leaves that definition saying something else — `@dataclass`
+    // deletes the `field(init=False)` a body wrote. so this whole shape declined, which
+    // over the corpus was almost every decorated class there was
+    let reasons = declines(
+        "\
+def tagger(cls):
+    return cls
+
+
+@tagger
+class Tagged:
+    KIND: str = \"class-level\"
+
+    def read(self) -> str:
+        return \"read\"
+",
+    );
+    assert!(
+        !reasons.iter().any(|(name, _)| name == "Tagged"),
+        "{reasons:?}"
+    );
+}
+
+#[test]
 fn a_private_class_constant_takes_its_mangled_name() {
     // python binds `__params` written in `class Function` as `_Function__params`, so
     // copying it from the twin under the written name found nothing at all and the
@@ -1256,17 +1293,17 @@ class Held:
 }
 
 #[test]
-fn a_class_level_constant_under_a_class_keyword_declines() {
-    // a constant keeps its class off the metaclass construction, because it is settled
-    // after the metaclass has already decided what the class defines. a class keyword
-    // leaves nowhere else to go — a type spec has nowhere to put the keyword — so what
-    // would answer is the interpreted definition, and that is only there while the
-    // module still holds the name. `ast` pops `Num` straight out of its own globals, so
-    // leaving this to the runtime turns the import into a `NameError`.
+fn a_class_level_constant_under_a_class_keyword_is_carried_not_declined() {
+    // a constant used to keep its class off the metaclass construction, on the reasoning
+    // that it is settled after the metaclass has decided what the class defines. it is
+    // not: it goes into the namespace with the methods, and the class is asked afterwards
+    // whether it kept the value. so the class lowers, carrying the constant.
     //
-    // `Plain` is the boundary: the same keyword with no constant still lowers
-    let reasons = declines(
-        "\
+    // a decorated method is the boundary, and the one thing this gate still turns down —
+    // what a decorator produces is only knowable by running it on a finished class
+    assert_eq!(
+        class_constants(
+            "\
 from abc import ABCMeta
 
 
@@ -1275,21 +1312,59 @@ class Tagged(metaclass=ABCMeta):
 
     def label(self) -> str:
         return \"tagged\"
-
-
-class Plain(metaclass=ABCMeta):
-    def label(self) -> str:
-        return \"plain\"
 ",
+            "Tagged"
+        ),
+        vec!["TAG".to_string()]
     );
     assert_eq!(
-        reasons,
+        declines(
+            "\
+from abc import ABCMeta
+
+
+class Decorated(metaclass=ABCMeta):
+    @staticmethod
+    def label() -> str:
+        return \"decorated\"
+"
+        ),
         vec![(
-            "Tagged".to_string(),
-            "a class-level constant on a class built through its metaclass is not lowered yet"
+            "Decorated".to_string(),
+            "a decorated method on a class built through its metaclass is not lowered yet"
                 .to_string()
         )]
     );
+}
+
+#[test]
+fn a_class_level_constant_beside_a_base_of_ours_keeps_that_base_emitted() {
+    // the shape the stdlib is made of: no keyword at all, a base this module emits
+    // standing beside one from outside, and a constant. a spec cannot work that base list
+    // out, so the metaclass is what builds it — and the constant rides into the namespace
+    // it is handed rather than closing it.
+    //
+    // the base staying emitted is the point, and it is what the decline used to cost:
+    // `Reader` declining took `Codec` with it, because the interpreted `Reader` extends
+    // the *twin's* `Codec` and `issubclass(m.Reader, m.Codec)` would answer False against
+    // a twin that says True. neither declines now
+    const SOURCE: &str = "\
+import codecs
+
+
+class Codec(codecs.Codec):
+    def label(self) -> str:
+        return \"codec\"
+
+
+class Reader(Codec, codecs.StreamReader):
+    tag = 1
+
+    def kind(self) -> str:
+        return \"reader\"
+";
+    assert_eq!(declines(SOURCE), vec![]);
+    assert_eq!(class_constants(SOURCE, "Reader"), vec!["tag".to_string()]);
 }
 
 #[test]
@@ -1336,6 +1411,187 @@ class OnFieldless(Fieldless, codecs.Codec):
                     .to_string()
             )
         ]
+    );
+}
+
+#[test]
+fn a_base_written_as_an_alias_is_the_class_it_was_bound_to() {
+    // the alias is not a base out of this module: it stands for a class this module
+    // writes, and the emitted type is what the name will hold. taking it as external
+    // built the class on the interpreted definition instead — the alias is carried over
+    // to the emitted type only once every class has been built — so `isinstance` said
+    // `False` where the interpreter says `True`
+    const SOURCE: &str = "\
+class Root:
+    def root(self) -> str:
+        return \"root\"
+
+
+Alias = Root
+
+
+class Over(Alias):
+    def side(self) -> str:
+        return \"over\"
+";
+    assert_eq!(declines(SOURCE), Vec::new());
+    let bases = with_source(SOURCE, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        module
+            .classes
+            .iter()
+            .map(|class| (class.name.clone(), class.base.clone()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        bases,
+        vec![
+            ("Root".to_string(), None),
+            (
+                "Over".to_string(),
+                Some(ClassBase::InModule("Root".to_string()))
+            )
+        ]
+    );
+}
+
+#[test]
+fn an_alias_does_not_hide_a_base_this_module_lays_out() {
+    // the same refusal as the direct spelling, which is the point: every question the
+    // base list is asked is asked of the *name*, so an alias that stood for itself
+    // walked straight past this gate and compiled the one shape it exists to refuse
+    let reasons = declines(
+        "\
+import codecs
+
+
+class Laid:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+
+Alias = Laid
+
+
+class OnLaid(Alias, codecs.Codec):
+    pass
+",
+    );
+    assert_eq!(
+        reasons,
+        vec![
+            (
+                "OnLaid".to_string(),
+                "a base this module lays out cannot stand beside one it does not".to_string()
+            ),
+            (
+                "Laid".to_string(),
+                "`OnLaid` declined, so it extends the interpreted definition rather than this type"
+                    .to_string()
+            )
+        ]
+    );
+}
+
+#[test]
+fn a_name_the_module_binds_twice_declines_rather_than_pick_a_class() {
+    // `Over` was built on `Root` and the name holds `Other` by the time the module body
+    // ends, so neither class is the answer: the one the class statement saw is gone, and
+    // the one the emitted module would look up is not what it extends
+    let reasons = declines(
+        "\
+class Root:
+    def root(self) -> str:
+        return \"root\"
+
+
+class Other:
+    def other(self) -> str:
+        return \"other\"
+
+
+Alias = Root
+Alias = Other
+
+
+class Over(Alias):
+    def side(self) -> str:
+        return \"over\"
+",
+    );
+    assert_eq!(
+        reasons,
+        vec![(
+            "Over".to_string(),
+            "a base the module binds more than once stands for the class bound last, not the one it was built on"
+                .to_string()
+        )]
+    );
+}
+
+#[test]
+fn an_alias_chain_that_leaves_the_module_is_left_where_it_was_written() {
+    // the emitted module looks the base up by name, and both names hold the same object
+    // at import — so following one is no gain, and it would trade a name this body binds
+    // once for one it may bind again. only a chain that ends at a class of *ours* moves
+    const SOURCE: &str = "\
+from codecs import Codec
+
+Alias = Codec
+
+
+class Over(Alias):
+    def side(self) -> str:
+        return \"over\"
+";
+    assert_eq!(declines(SOURCE), Vec::new());
+    let bases = with_source(SOURCE, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        module
+            .classes
+            .iter()
+            .map(|class| (class.name.clone(), class.base.clone()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        bases,
+        vec![(
+            "Over".to_string(),
+            Some(ClassBase::External(vec!["Alias".to_string()]))
+        )]
+    );
+}
+
+#[test]
+fn a_name_bound_twice_to_nothing_of_ours_still_stands_for_itself() {
+    // the boundary: a name the module rebinds is a hazard only where a class of this
+    // module's is behind it. two imported names leave the base exactly what it was
+    const SOURCE: &str = "\
+import codecs
+
+Alias = codecs.Codec
+Alias = codecs.StreamWriter
+
+
+class Over(Alias):
+    def side(self) -> str:
+        return \"over\"
+";
+    assert_eq!(declines(SOURCE), Vec::new());
+    let bases = with_source(SOURCE, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        module
+            .classes
+            .iter()
+            .map(|class| (class.name.clone(), class.base.clone()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        bases,
+        vec![(
+            "Over".to_string(),
+            Some(ClassBase::External(vec!["Alias".to_string()]))
+        )]
     );
 }
 
@@ -1639,14 +1895,205 @@ class Beside(Rooted):
 }
 
 #[test]
-fn an_annotated_class_attribute_under_a_class_keyword_declines_with_the_rest() {
-    // an annotated assignment is a class-level constant, so it reaches the same gate a
-    // plain one does. this is what making the annotation a binding costs: a class the
-    // compiler used to build silently without the attribute now refuses to build at all.
-    // over the stdlib that cost was nothing — every class this reason reaches was
-    // already declining for another
-    let reasons = declines(
+fn a_subclass_that_appends_nothing_past_a_base_declares_nothing() {
+    // the fields are what makes the difference: `Held` above appends storage past a
+    // `Wrapper` instance and has no construction, while a class that adds *no* field of
+    // its own appends nothing at all. what such a class keeps is what `Wrapper` already
+    // keeps, at the offsets `Wrapper` laid them out and through the descriptors `Wrapper`
+    // published — so it is built the way any other class with no storage of its own is
+    //
+    // `Restating` is the same class written the other way round: assigning an attribute
+    // the base already stores adds nothing either, and the write lands on the base's
+    // field through the base's own setter
+    let (declined, layouts) = with_source(
         "\
+class Wrapper(OSError):
+    def __init__(self, code: int) -> None:
+        self.code = code
+
+
+class Plain(Wrapper):
+    pass
+
+
+class Tagged(Wrapper):
+    TAG = 1
+
+
+class Restating(Wrapper):
+    def __init__(self, code: int) -> None:
+        self.code = code + 1
+",
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
+            let declined: Vec<(String, String)> = module
+                .declined
+                .iter()
+                .map(|declined| (declined.name.clone(), declined.reason.clone()))
+                .collect();
+            let layouts: Vec<(String, Vec<String>)> = module
+                .classes
+                .iter()
+                .map(|class| {
+                    (
+                        class.name.clone(),
+                        class
+                            .fields
+                            .iter()
+                            .map(|field| field.name.clone())
+                            .collect(),
+                    )
+                })
+                .collect();
+            (declined, layouts)
+        },
+    );
+    assert_eq!(declined, Vec::new());
+    assert_eq!(
+        layouts,
+        vec![
+            ("Wrapper".to_string(), vec!["code".to_string()]),
+            ("Plain".to_string(), Vec::new()),
+            ("Tagged".to_string(), Vec::new()),
+            ("Restating".to_string(), Vec::new()),
+        ]
+    );
+}
+
+#[test]
+fn a_subclass_with_no_storage_is_rebuilt_on_a_base_that_declines_later() {
+    // a base is settled as one of ours while the layouts settle, and only the body being
+    // lowered can turn it down after that. a class with no storage of its own does not
+    // need it to have stayed one: what stands under the name at import is a class either
+    // way, and building on the *name* is what every class over a base out of this module
+    // already does — so it takes that construction rather than cascading behind the base.
+    //
+    // `Storing` is the boundary: a class with a field declares a size of its own, and a
+    // class over a base out of this module declares none — the base allocates. so the
+    // storage would have nowhere to go, and it cascades behind the base instead
+    const SOURCE: &str = "\
+class Base:
+    def __new__(cls) -> \"Base\":
+        return object.__new__(cls)
+
+    def label(self) -> str:
+        return \"base\"
+
+
+class Below(Base):
+    def side(self) -> str:
+        return \"below\"
+
+
+class Storing(Base):
+    def __init__(self, extra: int) -> None:
+        self.extra = extra
+";
+    assert_eq!(
+        declines(SOURCE),
+        vec![
+            (
+                "Base".to_string(),
+                "`__new__` fills a type slot with no adapter yet".to_string()
+            ),
+            (
+                "Storing".to_string(),
+                "`Base` declined, so it is not a base to build on".to_string()
+            )
+        ]
+    );
+    let bases = with_source(SOURCE, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        module
+            .classes
+            .iter()
+            .map(|class| (class.name.clone(), class.base.clone()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        bases,
+        vec![(
+            "Below".to_string(),
+            Some(ClassBase::External(vec!["Base".to_string()]))
+        )]
+    );
+}
+
+#[test]
+fn a_class_a_subclass_stores_inside_is_not_rebuilt_on_its_declining_base() {
+    // rebuilding `Middle` on a name would move the layout of everything under it outside
+    // the module, and `Storing`'s field would go from sitting inside a `Middle` instance
+    // to sitting past one — a construction that has no answer, and one that refuses the
+    // *whole module* at import rather than the class. `urllib.request` lost all nineteen
+    // of its compiled functions that way.
+    //
+    // `Aside` is the boundary: nothing stores anything under it, so it is rebuilt
+    const SOURCE: &str = "\
+class Base:
+    def __new__(cls) -> \"Base\":
+        return object.__new__(cls)
+
+    def label(self) -> str:
+        return \"base\"
+
+
+class Middle(Base):
+    def side(self) -> str:
+        return \"middle\"
+
+
+class Storing(Middle):
+    def __init__(self) -> None:
+        self.extra = 1
+
+
+class Aside(Base):
+    def side(self) -> str:
+        return \"aside\"
+";
+    assert_eq!(
+        declines(SOURCE),
+        vec![
+            (
+                "Base".to_string(),
+                "`__new__` fills a type slot with no adapter yet".to_string()
+            ),
+            (
+                "Middle".to_string(),
+                "`Base` declined, so it is not a base to build on".to_string()
+            ),
+            (
+                "Storing".to_string(),
+                "`Middle` declined, so it is not a base to build on".to_string()
+            )
+        ]
+    );
+    let bases = with_source(SOURCE, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        module
+            .classes
+            .iter()
+            .map(|class| (class.name.clone(), class.base.clone()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        bases,
+        vec![(
+            "Aside".to_string(),
+            Some(ClassBase::External(vec!["Base".to_string()]))
+        )]
+    );
+}
+
+#[test]
+fn an_annotated_class_attribute_under_a_class_keyword_is_carried_with_the_rest() {
+    // an annotated assignment is a class-level constant, so it takes the same route a
+    // plain one does — into the namespace the metaclass is handed. it used to reach the
+    // same gate instead, and a class the compiler had been building silently without the
+    // attribute went from missing the attribute to refusing to build at all
+    assert_eq!(
+        class_constants(
+            "\
 from abc import ABCMeta
 
 
@@ -1656,24 +2103,23 @@ class Tagged(metaclass=ABCMeta):
     def label(self) -> str:
         return \"tagged\"
 ",
-    );
-    assert_eq!(
-        reasons,
-        vec![(
-            "Tagged".to_string(),
-            "a class-level constant on a class built through its metaclass is not lowered yet"
-                .to_string()
-        )]
+            "Tagged"
+        ),
+        vec!["TAG".to_string()]
     );
 }
 
 #[test]
-fn a_subclass_of_a_class_the_metaclass_gates_turn_down_builds_on_the_interpreted_base() {
-    // both gates are asked while the layouts settle, so a class either of them turns
-    // down leaves the layout set — and its subclass then takes the external base every
-    // other declining class's subclass takes rather than being laid out on a base
-    // nothing emits. asked while the *body* was lowered instead, the base stayed in the
-    // set and both subclasses cascaded behind it
+fn a_subclass_of_a_class_the_metaclass_gate_turns_down_builds_on_the_interpreted_base() {
+    // the gate is asked while the layouts settle, so a class it turns down leaves the
+    // layout set — and its subclass then takes the external base every other declining
+    // class's subclass takes rather than being laid out on a base nothing emits. asked
+    // while the *body* was lowered instead, the base stayed in the set and the subclass
+    // cascaded behind it.
+    //
+    // `Constant` is the boundary in the other direction: a class-level constant no longer
+    // turns a class down, so that half stays in the layout set and its subclass is laid
+    // out on it — an `InModule` base against an `External` one
     const SOURCE: &str = "\
 from abc import ABCMeta
 
@@ -1702,21 +2148,15 @@ class BelowConstant(Constant):
 ";
     assert_eq!(
         declines(SOURCE),
-        vec![
-            (
-                "Decorated".to_string(),
-                "a decorated method on a class built through its metaclass is not lowered yet"
-                    .to_string()
-            ),
-            (
-                "Constant".to_string(),
-                "a class-level constant on a class built through its metaclass is not lowered yet"
-                    .to_string()
-            )
-        ]
+        vec![(
+            "Decorated".to_string(),
+            "a decorated method on a class built through its metaclass is not lowered yet"
+                .to_string()
+        )]
     );
-    // the base each subclass gets is the point: an `InModule` one would name a type
-    // this module never emits
+    // the base each subclass gets is the point: an `InModule` one below `Decorated` would
+    // name a type this module never emits, and an `External` one below `Constant` would
+    // give up a layout the module does have
     let bases = with_source(SOURCE, |db, env, model, suite| {
         let module = crate::build_module(db, env, model, suite, "app", true);
         module
@@ -1732,9 +2172,14 @@ class BelowConstant(Constant):
                 "BelowDecorated".to_string(),
                 Some(ClassBase::External(vec!["Decorated".to_string()]))
             ),
+            // a keyword-only class header has no bases at all
+            (
+                "Constant".to_string(),
+                Some(ClassBase::External(Vec::new()))
+            ),
             (
                 "BelowConstant".to_string(),
-                Some(ClassBase::External(vec!["Constant".to_string()]))
+                Some(ClassBase::InModule("Constant".to_string()))
             )
         ]
     );
@@ -2060,13 +2505,11 @@ def plain(p: Plain) -> int:
 
 #[test]
 fn a_final_receiver_keeps_its_direct_call() {
-    // AB3 and AB4 traded the direct call away for any class that is decorated or in
-    // an inheritance chain. `@final` is about the *place*: nothing can subclass it,
-    // so there is no override for the protocol to find
+    // AB3 and AB4 traded the direct call away for any class in an inheritance chain.
+    // `final` is about the *place*: nothing can subclass it, so there is no override
+    // for the protocol to find
     with_source(
         "\
-from typing import final
-
 data class Open:
     n: int
 
@@ -2076,8 +2519,7 @@ data class Open:
 data class Derived(Open):
     extra: int
 
-@final
-data class Fixed(Open):
+final data class Fixed(Open):
     label: str
 
     def tripled(self) -> int:
@@ -2162,23 +2604,31 @@ def through(s: Shape) -> str:
 }
 
 #[test]
-fn a_decorated_class_gives_up_its_direct_call() {
+fn a_decorated_class_gives_up_its_direct_call_and_its_direct_construction() {
     // a decorated class is a mutable heap type, and python can rebind a method on
-    // one — a direct call would not see the rebinding
+    // one — a direct call would not see the rebinding.
+    //
+    // the *construction* goes the same way, and for a sharper reason: the decorator
+    // replaces what the module namespace binds, so `Loud(...)` names whatever it
+    // returned. allocating the emitted layout instead skipped the decorator outright,
+    // and a decorator returning another class had every construction in the module
+    // building the wrong object with no diagnostic at all
     with_source(
         "\
 def tagged(cls: type) -> type:
     return cls
 
 @tagged
-data class Loud:
-    n: int
+class Loud:
+    def __init__(self, n: int) -> None:
+        self.n = n
 
     def doubled(self) -> int:
         return self.n * 2
 
-data class Quiet:
-    n: int
+class Quiet:
+    def __init__(self, n: int) -> None:
+        self.n = n
 
     def doubled(self) -> int:
         return self.n * 2
@@ -2188,6 +2638,12 @@ def loud(x: Loud) -> int:
 
 def quiet(x: Quiet) -> int:
     return x.doubled()
+
+def build_loud(n: int) -> int:
+    return Loud(n).doubled()
+
+def build_quiet(n: int) -> int:
+    return Quiet(n).doubled()
 ",
         |db, env, model, suite| {
             let module = crate::build_module(db, env, model, suite, "app", true);
@@ -2211,15 +2667,63 @@ def quiet(x: Quiet) -> int:
                 "{}",
                 ops("loud")
             );
+            // and the undecorated one is allocated where it stands, while the
+            // decorated one is resolved through the namespace the decorator wrote to
+            assert!(
+                ops("build_quiet").contains("new Quiet"),
+                "{}",
+                ops("build_quiet")
+            );
+            assert!(
+                !ops("build_loud").contains("new Loud"),
+                "{}",
+                ops("build_loud")
+            );
+            assert!(
+                ops("build_loud").contains("pycall Loud"),
+                "{}",
+                ops("build_loud")
+            );
             // and its decorators travel with the class
             let loud = module
                 .classes
                 .iter()
                 .find(|class| class.name == "Loud")
                 .expect("Loud is emitted");
-            assert_eq!(loud.decorators, ["tagged"]);
+            assert_eq!(dotted(&loud.decorators), ["tagged"]);
         },
     );
+}
+
+#[test]
+fn a_class_modifier_is_not_a_decorator() {
+    // `sealed`, `abstract`, `open` and `export` reach the ast as decorators with no
+    // `@`, and the transpiler erases them — so the interpreted twin has no such name
+    // and looking one up at module init raised `NameError` and took the whole
+    // extension down with it
+    for modifier in ["sealed", "abstract", "open", "export"] {
+        let source = format!(
+            "\
+{modifier} data class Shape:
+    n: int
+"
+        );
+        let decorators = with_source(&source, |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
+            assert!(
+                module.declined.is_empty(),
+                "{modifier}: {:?}",
+                module.declined
+            );
+            module
+                .classes
+                .iter()
+                .find(|class| class.name == "Shape")
+                .map(|class| dotted(&class.decorators))
+                .unwrap_or_else(|| panic!("{modifier}: Shape is emitted"))
+        });
+        assert!(decorators.is_empty(), "{modifier}: {decorators:?}");
+    }
 }
 
 #[test]
@@ -2297,13 +2801,16 @@ def f() -> None:
             .iter()
             .find(|function| function.name == "f")
             .expect("f is compiled");
-        assert_eq!(decorated.decorators, vec!["deco".to_string()]);
+        assert_eq!(dotted(&decorated.decorators), ["deco"]);
     });
 }
 
 #[test]
-fn a_computed_decorator_is_declined() {
-    // a call or an attribute would need its arguments evaluated at module init
+fn a_decorator_that_is_a_call_is_declined() {
+    // python calls `make(1)` where the `def` stands. module-level code is not compiled,
+    // so the only moment init has is the end of the module — by which time the
+    // interpreted twin has already made that call, and making it again would be a
+    // second one, in the wrong place
     let source = "\
 def make(n: int) -> object:
     return n
@@ -2321,7 +2828,440 @@ def f() -> None:
             .map(|declined| declined.reason.clone())
             .unwrap_or_default()
     });
-    assert!(reason.contains("plain-name decorator"), "{reason}");
+    assert!(reason.contains("run it a second time"), "{reason}");
+}
+
+#[test]
+fn a_decorator_written_as_a_path_keeps_its_segments() {
+    // every step of `functools.cache` is a read, so evaluating it at init means what it
+    // meant where the `def` stood — and the ir carries the chain rather than one name
+    let source = "\
+import functools
+
+@functools.cache
+def f(n: int) -> int:
+    return n
+";
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let decorated = module
+            .functions
+            .iter()
+            .find(|function| function.name == "f")
+            .expect("f is compiled");
+        assert_eq!(
+            decorated.decorators,
+            [by_ir::function::Decorator::Path {
+                root: "functools".to_string(),
+                attributes: vec!["cache".to_string()],
+            }]
+        );
+    });
+}
+
+#[test]
+fn a_decorator_rooted_in_the_class_body_is_declined() {
+    // a decorator is resolved out of the *module* namespace at init, and a class body is
+    // not that namespace. `@x.setter` is the shape this exists for, but that one also
+    // writes two `def`s of one name — so the names here are distinct, or the duplicate
+    // would answer first and this guard would never be reached
+    let source = "\
+class Box:
+    def wrap(fn: object) -> object:
+        return fn
+
+    @wrap
+    def value(self) -> int:
+        return 1
+";
+    let reasons = with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(
+            module.classes.iter().all(|class| class.name != "Box"),
+            "Box must not be emitted"
+        );
+        module
+            .declined
+            .iter()
+            .map(|declined| declined.reason.clone())
+            .collect::<Vec<_>>()
+    });
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("`wrap` is bound by the class body")),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_decorated_function_is_not_called_at_its_native_entry() {
+    // the module namespace holds what the decorator returned, and the native entry is
+    // what it was handed — so reaching the entry directly runs the *undecorated*
+    // function. `caller` answered 2 where the interpreted module answered 4
+    let ir = ir("\
+def double(fn: object) -> object:
+    def inner(x: int) -> int:
+        return fn(x) * 2
+    return inner
+
+@double
+def f(x: int) -> int:
+    return x + 1
+
+def caller(x: int) -> int:
+    return f(x)
+
+def plain(x: int) -> int:
+    return x + 1
+
+def other(x: int) -> int:
+    return plain(x)
+");
+    assert!(ir.contains("pycall f("), "{ir}");
+    assert!(!ir.contains("= call f("), "{ir}");
+    // an undecorated sibling still reaches its native entry
+    assert!(ir.contains("= call plain("), "{ir}");
+}
+
+#[test]
+fn a_modifier_is_translated_rather_than_looked_up() {
+    // a modifier reaches the ast as a decorator with no `@`, and there is no such name
+    // in the module namespace to look up: `static` compiled to
+    // `By_ApplyDecorator(dict, "make", "static")` and the extension then failed to
+    // import with `NameError: name 'static' is not defined`.
+    //
+    // the transpiler rewrites each of these to a python decorator, and this is the
+    // same mapping — so the compiled definition ends up wearing what the interpreted
+    // twin wears
+    for (modifier, expected) in [
+        ("abstract", vec!["abstractmethod".to_string()]),
+        ("override", vec!["override".to_string()]),
+        ("export", Vec::new()),
+    ] {
+        let source = format!(
+            "\
+class Box:
+    {modifier} def make(self) -> int:
+        return 7
+"
+        );
+        let decorators = with_source(&source, |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
+            assert!(
+                module.declined.is_empty(),
+                "{modifier}: {:?}",
+                module.declined
+            );
+            module
+                .all_functions()
+                .find(|function| function.name.ends_with("make"))
+                .map(|function| dotted(&function.decorators))
+                .unwrap_or_else(|| panic!("{modifier}: make is compiled"))
+        });
+        assert_eq!(decorators, expected, "{modifier}");
+    }
+}
+
+#[test]
+fn a_method_that_is_not_bound_to_its_receiver_carries_its_convention() {
+    // a method's first parameter used to be forced to the receiver whatever the
+    // decorators said, and these two say slot zero holds something else — so
+    // `Box.make(3)` compiled with `3` bound to a `Box` and raised at its first call.
+    //
+    // the convention rides on the method table entry now, so slot zero holds what
+    // python puts there: nothing at all for a static method, whose first written
+    // parameter keeps its own representation, and the *class* for a class method — an
+    // ordinary object, pointedly not an instance of the layout, so nothing derives a
+    // field read from it.
+    //
+    // and the decorator comes off the list: it is honoured by the emitted type rather
+    // than applied to it, and applying it as well would wrap the descriptor twice
+    for (source, binding, params) in [
+        (
+            "class Box:\n    static def make(x: int) -> int:\n        return x\n",
+            by_ir::function::Binding::Static,
+            vec![("x", RType::INT)],
+        ),
+        (
+            "class Box:\n    @staticmethod\n    def make(x: int) -> int:\n        return x\n",
+            by_ir::function::Binding::Static,
+            vec![("x", RType::INT)],
+        ),
+        (
+            "class Box:\n    @classmethod\n    def make(cls, x: int) -> int:\n        return x\n",
+            by_ir::function::Binding::Class,
+            vec![("cls", RType::OBJECT), ("x", RType::INT)],
+        ),
+        (
+            "class Box:\n    def make(self, x: int) -> int:\n        return x\n",
+            by_ir::function::Binding::Instance,
+            vec![
+                (
+                    "self",
+                    RType::Instance {
+                        class: "Box".to_string(),
+                        exact: false,
+                    },
+                ),
+                ("x", RType::INT),
+            ],
+        ),
+    ] {
+        with_source(source, |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
+            assert!(
+                module.declined.is_empty(),
+                "{source}: {:?}",
+                module.declined
+            );
+            let method = module
+                .all_functions()
+                .find(|function| function.name.ends_with("make"))
+                .unwrap_or_else(|| panic!("{source}: make is compiled"));
+            assert_eq!(method.binding, binding, "{source}");
+            assert!(method.decorators.is_empty(), "{source}");
+            let lowered: Vec<(&str, RType)> = method
+                .params()
+                .iter()
+                .map(|param| (param.name.as_deref().unwrap_or(""), param.ty.clone()))
+                .collect();
+            let expected: Vec<(&str, RType)> = params
+                .iter()
+                .map(|(name, ty)| (*name, ty.clone()))
+                .collect();
+            assert_eq!(lowered, expected, "{source}");
+        });
+    }
+}
+
+#[test]
+fn a_second_decorator_over_a_static_method_keeps_the_decline() {
+    // the runtime folds the remaining decorators onto the attribute it reads back off
+    // the finished type — and reading a static method back hands over the plain
+    // function it wraps, which would then be written back as an ordinary method. so
+    // the convention is only honoured natively where nothing else has to be applied
+    for source in [
+        "class Box:\n    @final\n    @staticmethod\n    def make() -> int:\n        return 7\n",
+        "class Box:\n    @staticmethod\n    @final\n    def make() -> int:\n        return 7\n",
+        "class Box:\n    @final\n    @classmethod\n    def make(cls) -> int:\n        return 7\n",
+    ] {
+        let reasons = declines(source);
+        assert!(
+            reasons
+                .iter()
+                .any(|(_, reason)| reason.contains("a second decorator over")),
+            "{source}: {reasons:?}"
+        );
+    }
+}
+
+#[test]
+fn a_convention_python_gives_a_method_itself_is_not_carried_twice() {
+    // python already makes each of these implicitly static or class, and an emitted
+    // generic class publishes a `__class_getitem__` of its own — so a table entry here
+    // would either duplicate the convention or collide with that entry
+    for source in [
+        "class Box:\n    @staticmethod\n    def __new__(cls) -> object:\n        return 7\n",
+        "class Box:\n    @classmethod\n    def __init_subclass__(cls) -> None:\n        return None\n",
+        "class Box:\n    @classmethod\n    def __class_getitem__(cls, item: object) -> object:\n        return item\n",
+    ] {
+        let reasons = declines(source);
+        assert!(
+            reasons
+                .iter()
+                .any(|(_, reason)| reason.contains("a convention of its own")
+                    || reason.contains("fills a type slot")),
+            "{source}: {reasons:?}"
+        );
+    }
+}
+
+#[test]
+fn a_global_a_frame_assigns_is_written_to_the_namespace_and_read_back_from_it() {
+    // a `global` declaration says where a name lives, and both halves of it have to
+    // agree: the write goes to the module namespace, and every read in the same frame
+    // comes back out of it. binding a register for either half is what made
+    // `mimetypes.init` set `inited` where nothing else could see it
+    for (source, function, writes, reads) in [
+        (
+            "seen = 0\n\ndef bump(n: int) -> int:\n    global seen\n    seen = n\n    return seen\n",
+            "bump",
+            1,
+            1,
+        ),
+        // augmented assignment is a read and a write of the one place, so it is both
+        (
+            "seen = 0\n\ndef bump(n: int) -> int:\n    global seen\n    seen += n\n    return seen\n",
+            "bump",
+            1,
+            2,
+        ),
+        // a loop target is a binding like any other
+        (
+            "seen = 0\n\ndef bump(ns: list[int]) -> int:\n    global seen\n    for seen in ns:\n        pass\n    return seen\n",
+            "bump",
+            1,
+            1,
+        ),
+        // a declaration with no assignment under it is redundant, and the name resolves
+        // where it already resolved
+        (
+            "seen = 0\n\ndef read(n: int) -> int:\n    global seen\n    return seen + n\n",
+            "read",
+            0,
+            1,
+        ),
+        // the same name written by a frame that did *not* declare it is an ordinary
+        // local, and shadowing the global is what python does with it too
+        (
+            "seen = 0\n\ndef shadow(n: int) -> int:\n    seen = n\n    return seen\n",
+            "shadow",
+            0,
+            0,
+        ),
+    ] {
+        let (stores, loads) = with_source(source, |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
+            assert!(
+                module.declined.is_empty(),
+                "{source}: {:?}",
+                module.declined
+            );
+            let lowered = module
+                .functions
+                .iter()
+                .find(|candidate| candidate.name == function)
+                .unwrap_or_else(|| panic!("{function} was not emitted"));
+            let count = |wanted: fn(&Op) -> bool| {
+                lowered
+                    .blocks
+                    .iter()
+                    .flat_map(|block| block.ops.iter())
+                    .filter(|op| wanted(op))
+                    .count()
+            };
+            (
+                count(|op| matches!(op, Op::StoreGlobal { name, .. } if name == "seen")),
+                count(|op| matches!(op, Op::LoadGlobal { name, .. } if name == "seen")),
+            )
+        });
+        assert_eq!((stores, loads), (writes, reads), "{source}");
+    }
+}
+
+#[test]
+fn a_global_a_nested_frame_declares_is_never_captured_from_the_frame_around_it() {
+    // the enclosing frame binds a local `seen` and the nested one declares `seen`
+    // global, so the two names are different places. the nested body only *reads* it,
+    // which is the case nothing else rules out: a body that wrote it would look like
+    // it owned the name anyway, so only the declaration says the enclosing local is
+    // the wrong place to capture
+    let source = "\
+seen = 0
+tally = 0
+
+
+def outer(n: int) -> int:
+    seen = n
+
+    def peek() -> int:
+        global seen
+        return seen
+
+    return peek() + seen
+
+
+def declared_out_here(n: int) -> int:
+    global tally
+    tally = n
+
+    def look() -> int:
+        return tally
+
+    return look() + tally
+";
+    let (fields, loads) = with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let nested: Vec<&by_ir::function::Function> = module
+            .classes
+            .iter()
+            .flat_map(|class| class.methods.iter())
+            .filter(|candidate| candidate.name == "peek" || candidate.name == "look")
+            .collect();
+        assert_eq!(nested.len(), 2, "both nested functions are emitted");
+        (
+            // neither name may become an environment field: there is nothing in the
+            // frame around either nested function for it to hold
+            module
+                .classes
+                .iter()
+                .flat_map(|class| class.fields.iter())
+                .filter(|field| field.name == "seen" || field.name == "tally")
+                .count(),
+            nested
+                .iter()
+                .flat_map(|function| function.blocks.iter())
+                .flat_map(|block| block.ops.iter())
+                .filter(|op| {
+                    matches!(op, Op::LoadGlobal { name, .. } if name == "seen" || name == "tally")
+                })
+                .count(),
+        )
+    });
+    assert_eq!((fields, loads), (0, 2));
+}
+
+#[test]
+fn a_static_method_that_suspends_declines() {
+    // a generator's state class is namespaced by the receiver's class, and neither of
+    // these has one — so two classes each with a static `values` would want a single
+    // state class between them
+    let reasons =
+        declines("class Box:\n    @staticmethod\n    def values() -> object:\n        yield 1\n");
+    assert!(
+        reasons
+            .iter()
+            .any(|(_, reason)| reason.contains("that suspends is not lowered yet")),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_static_method_and_a_function_of_one_name_get_environments_of_their_own() {
+    // a nested function lives on a generated environment class named after the frame
+    // that makes it, and a method's frame is namespaced by its class. a static method
+    // has no receiver to take that name from, so the name comes from the class the
+    // `def` was *written* in — otherwise these two ask for one class between them
+    with_source(
+        "\
+class Box:
+    @staticmethod
+    def add(n: int) -> int:
+        def inner(k: int) -> int:
+            return k + n
+        return inner(1)
+
+
+def add(n: int) -> int:
+    def inner(k: int) -> int:
+        return k + n + 100
+    return inner(1)
+",
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
+            assert!(module.declined.is_empty(), "{:?}", module.declined);
+            let environments: Vec<&str> = module
+                .classes
+                .iter()
+                .map(|class| class.name.as_str())
+                .filter(|name| name.ends_with("$env"))
+                .collect();
+            assert_eq!(environments, vec!["Box$add$env", "add$env"]);
+        },
+    );
 }
 
 #[test]
@@ -3063,7 +4003,7 @@ data class Point:
                     .methods
                     .iter()
                     .find(|method| method.name == name)
-                    .map(|method| method.decorators.clone())
+                    .map(|method| dotted(&method.decorators))
             };
             assert_eq!(decorators("total"), Some(vec!["property".to_string()]));
             assert_eq!(decorators("raw"), Some(vec!["doubling".to_string()]));
@@ -4812,4 +5752,180 @@ class Held:
 ",
     );
     assert_eq!(reasons, Vec::new());
+}
+
+#[test]
+fn a_method_defined_twice_in_a_class_body_is_declined() {
+    // two `def`s of one name bind whichever one ran, and they mangle to one C symbol —
+    // so a class with both emitted two `Box.value` entries and the module then failed to
+    // compile outright, which is worse than any wrong answer
+    let source = "\
+class Box:
+    def value(self) -> int:
+        return 1
+
+    def value(self) -> int:
+        return 2
+";
+    let reasons = with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(
+            module.classes.iter().all(|class| class.name != "Box"),
+            "Box must not be emitted"
+        );
+        module
+            .declined
+            .iter()
+            .map(|declined| declined.reason.clone())
+            .collect::<Vec<_>>()
+    });
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("`value` is defined more than once")),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_module_level_function_defined_twice_is_declined() {
+    // the same in the module scope, which had nobody asking: three module-level `def _`s
+    // in `importlib/resources/_common.py` emitted one `by_m__` twice and the extension
+    // failed to build at all
+    let source = "\
+import functools
+
+@functools.cache
+def _(n: int) -> int:
+    return n
+
+@functools.cache
+def _(n: int) -> int:
+    return n + 1
+";
+    let reasons = with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(module.functions.is_empty(), "nothing may compile");
+        module
+            .declined
+            .iter()
+            .map(|declined| declined.reason.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(reasons.len(), 2, "{reasons:?}");
+    assert!(
+        reasons
+            .iter()
+            .all(|reason| reason.contains("`_` is defined more than once")),
+        "{reasons:?}"
+    );
+}
+
+/// the twin's source keeps only the decorators module init will not re-apply
+///
+/// a decorator init applies is evaluated there, over the compiled definition — so
+/// leaving it on the twin's `def` evaluates it a second time and doubles whatever it did
+/// on the way. a class's comes out for the same reason, because init applies that one to
+/// the namespace entry. a *method's* stays: the class construction reads what it wrote —
+/// `ABCMeta` computes `__abstractmethods__` from the namespace the body left — so taking
+/// it out changes the class the twin builds rather than only when the decorator ran
+#[test]
+fn only_the_decorators_init_applies_come_out_of_the_twin() {
+    let source = "\
+def mark(f: object) -> object:
+    return f
+
+
+@mark
+def counted() -> int:
+    return 1
+
+
+@mark
+class Held:
+    @mark
+    def value(self) -> int:
+        return 2
+";
+    let twin = with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        crate::without_init_decorators(source, &module).expect("the twin parses")
+    });
+    assert_eq!(twin.matches("@mark").count(), 1, "{twin}");
+    assert!(twin.contains("    @mark\n    def value"), "{twin}");
+    // the blanking keeps every line where it was, so a traceback through the twin still
+    // quotes the right one
+    assert_eq!(twin.lines().count(), source.lines().count(), "{twin}");
+}
+
+/// a decorator init does not re-apply stays on the twin's definition
+///
+/// `staticmethod` is the shape: the method table honours the binding itself, so init has
+/// nothing to apply and the twin's own `def` is the only thing that can
+#[test]
+fn a_decorator_init_does_not_re_apply_stays_on_the_twin() {
+    let source = "\
+class Held:
+    @staticmethod
+    def value() -> int:
+        return 2
+";
+    let twin = with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        crate::without_init_decorators(source, &module).expect("the twin parses")
+    });
+    assert!(twin.contains("@staticmethod"), "{twin}");
+}
+
+/// a decorated definition the module reads cannot have its decorator moved to init
+#[test]
+fn a_decorated_definition_the_module_reads_declines() {
+    let reasons = declines(
+        "\
+def mark(f: object) -> object:
+    return f
+
+
+@mark
+def counted() -> int:
+    return 1
+
+
+at_import = counted()
+",
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|(name, reason)| name == "counted" && reason.contains("this module reads")),
+        "{reasons:?}"
+    );
+}
+
+/// and neither can a decorated class the module reads
+#[test]
+fn a_decorated_class_the_module_reads_declines() {
+    let reasons = declines(
+        "\
+def mark(c: object) -> object:
+    return c
+
+
+@mark
+class Held:
+    def value(self) -> int:
+        return 1
+
+
+table = [Held]
+",
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|(name, reason)| name == "Held" && reason.contains("this module reads")),
+        "{reasons:?}"
+    );
 }

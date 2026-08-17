@@ -5,7 +5,7 @@
 //! and refuses to finish a block twice, which removes the two mistakes that would
 //! otherwise account for most verifier failures.
 
-use crate::function::{BasicBlock, CallConvention, Function, RegisterDecl};
+use crate::function::{BasicBlock, CallConvention, Decorator, Function, RegisterDecl};
 use crate::ops::{BlockId, Op, RegisterId, Terminator, Value};
 use crate::rtype::RType;
 
@@ -17,7 +17,7 @@ pub struct FunctionBuilder {
     convention: CallConvention,
     exported: bool,
     owner: Option<String>,
-    decorators: Vec<String>,
+    decorators: Vec<Decorator>,
     registers: Vec<RegisterDecl>,
     /// `None` until the block is sealed with a terminator
     blocks: Vec<Option<BasicBlock>>,
@@ -78,7 +78,7 @@ impl FunctionBuilder {
     }
 
     /// decorators to apply at module init, outermost first
-    pub fn decorators(&mut self, decorators: Vec<String>) -> &mut Self {
+    pub fn decorators(&mut self, decorators: Vec<Decorator>) -> &mut Self {
         self.decorators = decorators;
         self
     }
@@ -276,6 +276,7 @@ impl FunctionBuilder {
             range: self.range,
             deferring: self.deferring,
             computed_defaults: self.computed_defaults,
+            binding: crate::function::Binding::Instance,
         }
     }
 }

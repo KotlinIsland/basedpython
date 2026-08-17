@@ -18,7 +18,7 @@ use std::process::Command;
 
 use by_build::{Options, Toolchain, build_module, build_source};
 use by_ir::builder::FunctionBuilder;
-use by_ir::function::{CallConvention, ModuleIr};
+use by_ir::function::{CallConvention, ModuleIr, ModuleName};
 use by_ir::ops::{BinOp, CmpOp, Op, Terminator, Value};
 use by_ir::rtype::RType;
 
@@ -114,7 +114,7 @@ fn arith_module() -> ModuleIr {
     builder.terminate(Terminator::Return(Value::Register(result)));
 
     ModuleIr {
-        name: "by_e2e_arith".to_string(),
+        name: by_ir::ModuleName::new("by_e2e_arith"),
         functions: vec![builder.finish()],
         declined: Vec::new(),
         classes: Vec::new(),
@@ -178,7 +178,7 @@ fn fib_module() -> ModuleIr {
     builder.terminate(Terminator::Return(Value::Register(a)));
 
     ModuleIr {
-        name: "by_e2e_fib".to_string(),
+        name: by_ir::ModuleName::new("by_e2e_fib"),
         functions: vec![builder.finish()],
         declined: Vec::new(),
         classes: Vec::new(),
@@ -314,7 +314,7 @@ fn division_floors_like_python_and_raises_on_zero() {
     });
     builder.terminate(Terminator::Return(Value::Register(out)));
     let module = ModuleIr {
-        name: "by_e2e_div".to_string(),
+        name: by_ir::ModuleName::new("by_e2e_div"),
         functions: vec![builder.finish()],
         declined: Vec::new(),
         classes: Vec::new(),
@@ -370,7 +370,7 @@ fn floats_are_unboxed_and_exclude_int() {
     });
     builder.terminate(Terminator::Return(Value::Register(out)));
     let module = ModuleIr {
-        name: "by_e2e_float".to_string(),
+        name: by_ir::ModuleName::new("by_e2e_float"),
         functions: vec![builder.finish()],
         declined: Vec::new(),
         classes: Vec::new(),
@@ -441,7 +441,7 @@ fn calls_between_compiled_functions_stay_native() {
     quad.terminate(Terminator::Return(Value::Register(twice)));
 
     let module = ModuleIr {
-        name: "by_e2e_call".to_string(),
+        name: by_ir::ModuleName::new("by_e2e_call"),
         functions: vec![double.finish(), quad.finish()],
         declined: Vec::new(),
         classes: Vec::new(),
@@ -701,7 +701,7 @@ fn a_stdlib_module_compiles_without_a_hard_failure(name: &str) {
     };
     match build_source(
         &source,
-        &module,
+        module.as_str(),
         &toolchain,
         &dir.join(&module),
         &Options::default(),
@@ -1121,4 +1121,98 @@ fn the_emitted_c_names_no_pointer_type_it_does_not_mean() {
         result.status.success(),
         "the C compiler rejected the generated code:\n{stderr}"
     );
+}
+
+/// the source of a package member, whose answers say which member is speaking
+///
+/// `tag` is the same name in both `dup` modules, which is the whole point: a flat
+/// output directory called both files `dup`, so the second silently replaced the
+/// first and neither was importable under the name it was compiled as
+fn member_source(tag: i32) -> String {
+    format!(
+        "class Member:\n    def __init__(self) -> None:\n        self.tag: int = {tag}\n\n\ndef tag() -> int:\n    return {tag}\n"
+    )
+}
+
+/// the artefacts of a package build have to be laid out as the package, because
+/// that is the only shape cpython's finder will import them back under: it looks
+/// for `pkg/sub/dup<suffix>` for a member and `pkg/sub/__init__<suffix>` for the
+/// package itself, and never for a flat file named after the last component
+#[test]
+fn a_package_is_built_as_a_tree_and_imports_under_its_dotted_names() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    if !supports(&toolchain, (3, 12)) {
+        return;
+    }
+    let dir = std::env::temp_dir().join("by_e2e_package_tree");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    // both packages and both members go into one output directory, the way
+    // `by compile -o` builds a whole project
+    let members = [
+        (ModuleName::package("by_e2e_pkg"), 1),
+        (ModuleName::package("by_e2e_pkg.sub"), 2),
+        (ModuleName::new("by_e2e_pkg.dup"), 3),
+        (ModuleName::new("by_e2e_pkg.sub.dup"), 4),
+    ];
+    for (name, tag) in &members {
+        let Ok(built) = build_source(
+            &member_source(*tag),
+            name.clone(),
+            &toolchain,
+            &dir,
+            &options,
+        ) else {
+            eprintln!("skipping: no working C toolchain");
+            return;
+        };
+        assert!(
+            built.artifact.extension.exists(),
+            "{} was written to {}",
+            name.dotted(),
+            built.artifact.extension.display()
+        );
+    }
+
+    // four distinct artefacts: the two `dup` members used to be one file
+    assert_eq!(
+        members
+            .iter()
+            .map(|(name, _)| toolchain.extension_path(name))
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        4
+    );
+
+    let printed = script(
+        &python,
+        &dir,
+        "import sys\n\
+         import by_e2e_pkg.sub.dup\n\
+         import by_e2e_pkg.dup\n\
+         for name in ('by_e2e_pkg', 'by_e2e_pkg.sub', 'by_e2e_pkg.dup', 'by_e2e_pkg.sub.dup'):\n\
+         \x20   m = sys.modules[name]\n\
+         \x20   print(name, m.__name__, m.tag(), m.Member.__module__, m.__file__)\n",
+    );
+    let lines: Vec<&str> = printed.lines().collect();
+    assert_eq!(lines.len(), 4, "{printed}");
+    for (line, (name, tag)) in lines.iter().zip(&members) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        // the key it answered to in `sys.modules`, the name the module reports,
+        // and the module a class written in it belongs to all have to be the one
+        // it was compiled as
+        assert_eq!(fields[0], name.dotted(), "{printed}");
+        assert_eq!(fields[1], name.dotted(), "{printed}");
+        assert_eq!(fields[2], tag.to_string(), "{printed}");
+        assert_eq!(fields[3], name.dotted(), "{printed}");
+        // and it answered from the extension, not from some interpreted source
+        // that happened to be lying beside it
+        assert!(fields[4].ends_with(&toolchain.ext_suffix), "{printed}");
+    }
 }

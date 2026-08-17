@@ -150,7 +150,7 @@ mod tests {
         builder.terminate(Terminator::Return(Value::Register(index)));
 
         let mut module = ModuleIr {
-            name: "app".to_string(),
+            name: by_ir::ModuleName::new("app"),
             functions: vec![builder.finish()],
             declined: Vec::new(),
             classes: Vec::new(),
@@ -185,7 +185,7 @@ mod tests {
         builder.terminate(Terminator::Return(Value::Register(out)));
 
         let mut module = ModuleIr {
-            name: "app".to_string(),
+            name: by_ir::ModuleName::new("app"),
             functions: vec![builder.finish()],
             declined: Vec::new(),
             classes: Vec::new(),

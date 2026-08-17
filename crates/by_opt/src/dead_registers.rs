@@ -168,6 +168,13 @@ fn rewrite_op(
         | Op::ImportModule { dest, .. } => {
             rewrite_dest(dest);
         }
+        Op::StoreGlobal { dest, value, .. } => {
+            rewrite_dest(dest);
+            rewrite_value(value, remap);
+        }
+        Op::DeleteGlobal { dest, .. } => {
+            rewrite_dest(dest);
+        }
         Op::ImportFrom { dest, module, .. } => {
             rewrite_dest(dest);
             rewrite_value(module, remap);
@@ -447,7 +454,7 @@ mod tests {
 
     fn module(function: Function) -> ModuleIr {
         ModuleIr {
-            name: "app".to_string(),
+            name: by_ir::ModuleName::new("app"),
             functions: vec![function],
             declined: Vec::new(),
             classes: Vec::new(),

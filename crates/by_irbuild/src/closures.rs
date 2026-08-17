@@ -107,18 +107,6 @@ pub(crate) fn nested_functions(
 
     for (def, lambda) in definitions {
         let def = &def;
-        // a decorator on a nested function wraps the closure where the `def`
-        // stands, so it is resolved the way the module-level ones are: a plain
-        // name, looked up as `LOAD_GLOBAL` would
-        if def
-            .decorator_list
-            .iter()
-            .any(|decorator| !matches!(&decorator.expression, ast::Expr::Name(_)))
-        {
-            return Err(Decline::new(
-                "only a plain-name decorator on a nested function is lowered yet",
-            ));
-        }
         let own = own_names(def);
         let mut captures: Vec<String> = Vec::new();
         let mut seen: HashSet<&str> = HashSet::new();
@@ -201,6 +189,10 @@ fn own_names(def: &ast::StmtFunctionDef) -> HashSet<&str> {
         out.insert(kwarg.name.as_str());
     }
     out.extend(written_names(&def.body));
+    // a name declared `global` here resolves in the module namespace whether this body
+    // writes it or only reads it, so an enclosing local of the same name must never be
+    // captured for it. counting it as this function's own is what says so
+    out.extend(global_names(def));
     // a `nonlocal` name is explicitly *not* the nested function's own
     for name in nonlocal_names(def) {
         out.remove(name);
@@ -216,6 +208,18 @@ fn nonlocal_names(def: &ast::StmtFunctionDef) -> Vec<&str> {
             Stmt::Nonlocal(node) => {
                 Some(node.names.iter().map(ruff_python_ast::Identifier::as_str))
             }
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// the names a function declares `global`
+fn global_names(def: &ast::StmtFunctionDef) -> Vec<&str> {
+    crate::walk(&def.body)
+        .into_iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::Global(node) => Some(node.names.iter().map(ruff_python_ast::Identifier::as_str)),
             _ => None,
         })
         .flatten()
@@ -270,6 +274,12 @@ fn read_names(body: &[Stmt]) -> Vec<&str> {
         // and a lambda's body, which is an expression the walk above does reach — but a
         // nested `def`'s body is a statement list the walk deliberately stops at
         if let Stmt::FunctionDef(nested) = stmt {
+            // a decorator belongs to the frame the `def` stands in, not to the function
+            // it decorates: it is evaluated there, so the names in it are read here and
+            // filtered by nothing the nested function binds
+            for decorator in &nested.decorator_list {
+                collect_reads(&decorator.expression, &mut out);
+            }
             let own = own_names(nested);
             out.extend(
                 read_names(&nested.body)

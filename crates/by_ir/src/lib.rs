@@ -17,8 +17,8 @@ pub mod verify;
 
 pub use builder::FunctionBuilder;
 pub use function::{
-    BasicBlock, CallConvention, ClassIr, Declined, FieldDecl, Function, GradualUse, ModuleIr,
-    RegisterDecl,
+    BasicBlock, CallConvention, ClassIr, Declined, Decorator, FieldDecl, Function, GradualUse,
+    ModuleIr, ModuleName, RegisterDecl,
 };
 pub use ops::{BinOp, BlockId, CmpOp, Op, RegisterId, StandardError, Terminator, UnaryOp, Value};
 pub use print::{print_function, print_module};

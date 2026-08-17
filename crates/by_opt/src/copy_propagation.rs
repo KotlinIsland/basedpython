@@ -272,6 +272,8 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::CallPython { dest, .. }
         | Op::CallValue { dest, .. }
         | Op::LoadGlobal { dest, .. }
+        | Op::StoreGlobal { dest, .. }
+        | Op::DeleteGlobal { dest, .. }
         | Op::LoadClass { dest, .. }
         | Op::ImportModule { dest, .. }
         | Op::ImportFrom { dest, .. }
@@ -341,7 +343,7 @@ mod tests {
 
     fn module(function: Function) -> ModuleIr {
         ModuleIr {
-            name: "app".to_string(),
+            name: by_ir::ModuleName::new("app"),
             functions: vec![function],
             declined: Vec::new(),
             classes: Vec::new(),

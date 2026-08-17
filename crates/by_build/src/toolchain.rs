@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use by_ir::ModuleName;
 use serde::Deserialize;
 
 /// everything needed to compile and link an extension for one interpreter
@@ -175,10 +176,10 @@ impl Toolchain {
         })
     }
 
-    /// the file name an extension for `module` must have to be importable
-    pub fn extension_file_name(&self, module: &str) -> String {
-        let last = module.rsplit('.').next().unwrap_or(module);
-        format!("{last}{}", self.ext_suffix)
+    /// where an extension for `module` must sit, relative to the root of an output
+    /// tree, to be importable under that name
+    pub fn extension_path(&self, module: &ModuleName) -> PathBuf {
+        module.relative_path(&self.ext_suffix)
     }
 }
 
@@ -234,11 +235,15 @@ mod tests {
     }
 
     #[test]
-    fn the_extension_name_uses_only_the_last_module_component() {
+    fn the_extension_path_mirrors_the_module_tree() {
         let toolchain = Toolchain::from_probe("python3", SAMPLE).unwrap();
         assert_eq!(
-            toolchain.extension_file_name("pkg.app"),
-            "app.cpython-313-darwin.so"
+            toolchain.extension_path(&ModuleName::new("pkg.app")),
+            PathBuf::from("pkg/app.cpython-313-darwin.so")
+        );
+        assert_eq!(
+            toolchain.extension_path(&ModuleName::package("pkg")),
+            PathBuf::from("pkg/__init__.cpython-313-darwin.so")
         );
     }
 

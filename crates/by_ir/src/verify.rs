@@ -933,6 +933,14 @@ impl Verifier<'_> {
             Op::LoadGlobal { dest, .. } => {
                 self.expect_dest(block, *dest, &RType::OBJECT, "a global read");
             }
+            Op::StoreGlobal { dest, value, .. } => {
+                // the namespace holds objects, so a write to one has to arrive boxed
+                self.expect(block, value, &RType::OBJECT, "a global write");
+                self.expect_dest(block, *dest, &RType::BIT, "a global write");
+            }
+            Op::DeleteGlobal { dest, .. } => {
+                self.expect_dest(block, *dest, &RType::BIT, "a global delete");
+            }
             Op::LoadClass { dest, .. } => {
                 self.expect_dest(block, *dest, &RType::OBJECT, "a class read");
             }
@@ -1453,6 +1461,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            binding: crate::function::Binding::Instance,
         }
     }
 
@@ -1638,6 +1647,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            binding: crate::function::Binding::Instance,
         };
         let errors = verify(&f).unwrap_err();
         assert!(
@@ -1684,6 +1694,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            binding: crate::function::Binding::Instance,
         };
         assert_eq!(verify(&f), Ok(()));
     }
@@ -1731,6 +1742,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            binding: crate::function::Binding::Instance,
         };
         let errors = verify(&f).unwrap_err();
         assert!(
@@ -1829,6 +1841,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            binding: crate::function::Binding::Instance,
         };
         let errors = verify(&f).unwrap_err();
         assert!(errors.iter().any(|e| e.message.contains("past the end")));
@@ -1840,7 +1853,7 @@ mod tests {
         broken.name = "broken".to_string();
         broken.ret = RType::FLOAT;
         let module = ModuleIr {
-            name: "m".to_string(),
+            name: crate::ModuleName::new("m"),
             functions: vec![add(), broken],
             declined: Vec::new(),
             classes: Vec::new(),
@@ -1875,7 +1888,7 @@ mod tests {
             },
         );
         let module = ModuleIr {
-            name: "m".to_string(),
+            name: crate::ModuleName::new("m"),
             functions: vec![add(), caller],
             declined: Vec::new(),
             classes: Vec::new(),

@@ -112,7 +112,7 @@ mod tests {
 
     fn module(function: by_ir::function::Function) -> ModuleIr {
         ModuleIr {
-            name: "app".to_string(),
+            name: by_ir::ModuleName::new("app"),
             functions: vec![function],
             classes: Vec::new(),
             declined: Vec::new(),

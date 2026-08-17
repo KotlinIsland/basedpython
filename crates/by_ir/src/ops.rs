@@ -650,6 +650,23 @@ pub enum Op {
     /// resolved on every read for the same reason a call is — a module global may
     /// be rebound, and python would see it
     LoadGlobal { dest: RegisterId, name: String },
+    /// bind a name in the module namespace: what an assignment under a `global`
+    /// declaration does
+    ///
+    /// the other half of [`Self::LoadGlobal`], and it has to reach the same place. a
+    /// register write is private to the frame, where python's binding is the module's
+    /// — visible at once to every other reader, the interpreted twin included
+    StoreGlobal {
+        /// the status of the store, zero on success
+        dest: RegisterId,
+        name: String,
+        value: Value,
+    },
+    /// unbind a name in the module namespace: `del x` under a `global x`
+    ///
+    /// a name that is not bound is a `NameError`, which is not what deleting from a
+    /// dict raises — see `By_DeleteGlobal`
+    DeleteGlobal { dest: RegisterId, name: String },
     /// the type object of a class this module emits, by identity rather than by name
     ///
     /// a class decorator replaces the *namespace* entry, and a module may rebind the
@@ -864,6 +881,8 @@ impl Op {
             | Self::ImportFrom { dest, .. }
             | Self::CallValue { dest, .. }
             | Self::LoadGlobal { dest, .. }
+            | Self::StoreGlobal { dest, .. }
+            | Self::DeleteGlobal { dest, .. }
             | Self::LoadClass { dest, .. }
             | Self::NewInstance { dest, .. }
             | Self::GetCell { dest, .. }
@@ -956,6 +975,8 @@ impl Op {
             | Self::ImportFrom { dest, .. }
             | Self::CallValue { dest, .. }
             | Self::LoadGlobal { dest, .. }
+            | Self::StoreGlobal { dest, .. }
+            | Self::DeleteGlobal { dest, .. }
             | Self::LoadClass { dest, .. }
             | Self::NewInstance { dest, .. }
             | Self::GetCell { dest, .. }
@@ -1099,6 +1120,7 @@ impl Op {
             Self::SetAttr {
                 receiver, value, ..
             } => vec![receiver, value],
+            Self::StoreGlobal { value, .. } => vec![value],
             Self::TupleBuild { items, .. }
             | Self::BuildList { items, .. }
             | Self::BuildSet { items, .. }
@@ -1126,6 +1148,7 @@ impl Op {
             Self::RaiseStandard { .. }
             | Self::FetchException { .. }
             | Self::LoadGlobal { .. }
+            | Self::DeleteGlobal { .. }
             | Self::LoadClass { .. }
             | Self::ImportModule { .. } => Vec::new(),
             Self::Enter { manager, .. } => vec![manager],
@@ -1266,6 +1289,7 @@ impl Op {
             Self::SetAttr {
                 receiver, value, ..
             } => vec![receiver, value],
+            Self::StoreGlobal { value, .. } => vec![value],
             Self::TupleBuild { items, .. }
             | Self::BuildList { items, .. }
             | Self::BuildSet { items, .. }
@@ -1293,6 +1317,7 @@ impl Op {
             Self::RaiseStandard { .. }
             | Self::FetchException { .. }
             | Self::LoadGlobal { .. }
+            | Self::DeleteGlobal { .. }
             | Self::LoadClass { .. }
             | Self::ImportModule { .. } => Vec::new(),
             Self::Enter { manager, .. } => vec![manager],
