@@ -1,5 +1,9 @@
 use crate::Db;
-use crate::glob::{ExcludeFilter, IncludeExcludeFilter, IncludeFilter, PortableGlobKind};
+use crate::GlobFilterCheckMode;
+use crate::glob::{
+    AbsolutePortableGlobPattern, ExcludeFilter, IncludeExcludeFilter, IncludeFilter,
+    PortableGlobKind,
+};
 use crate::metadata::python_version::SupportedPythonVersion;
 use crate::metadata::settings::{OverrideSettings, SrcSettings};
 
@@ -1015,7 +1019,13 @@ pub struct SrcOptions {
     /// - `**/venv/`
     ///
     /// You can override any default exclude by using a negated pattern. For example,
-    /// to re-include `dist` use `exclude = ["!dist"]`
+    /// to re-include `dist` use `exclude = ["!dist"]`, or `exclude = ["!**/dist/"]` to
+    /// re-include every `dist` directory rather than only the one at the project root.
+    ///
+    /// A negated pattern can only re-include something that is still walked, so it cannot
+    /// reach into a directory that is itself excluded. `exclude = ["!dist/generated.py"]`
+    /// re-includes nothing, because the walk stops at `dist`. Re-include the directory
+    /// first: `exclude = ["!**/dist/", "**/dist/**", "!**/dist/generated.py"]`
     #[option(
         default = r#"null"#,
         value_type = r#"list[str]"#,
@@ -1052,6 +1062,7 @@ impl SrcOptions {
             self.exclude.as_ref(),
             DEFAULT_SRC_EXCLUDES,
             GlobFilterContext::SrcRoot,
+            diagnostics,
         )?;
         let files = IncludeExcludeFilter::new(include, exclude);
 
@@ -1276,6 +1287,7 @@ fn build_exclude_filter(
     exclude_patterns: Option<&RangedValue<Vec<RelativeGlobPattern>>>,
     default_patterns: &[&str],
     context: GlobFilterContext,
+    diagnostics: &mut Vec<OptionDiagnostic>,
 ) -> Result<ExcludeFilter, Box<OptionDiagnostic>> {
     use crate::glob::{ExcludeFilterBuilder, PortableGlobPattern};
 
@@ -1290,12 +1302,19 @@ fn build_exclude_filter(
             });
     }
 
+    // Held on to so that, once the filter is built, every negation can be checked against the
+    // whole pattern set — including the negations that come after it.
+    let mut negations = Vec::new();
+
     // Add user-specified excludes
     if let Some(exclude_patterns) = exclude_patterns {
         for exclude in exclude_patterns {
-            exclude
+            let pattern = exclude
                 .absolute(project_root, system, PortableGlobKind::Exclude)
-                .and_then(|pattern| Ok(excludes.add(&pattern)?))
+                .and_then(|pattern| {
+                    excludes.add(&pattern)?;
+                    Ok(pattern)
+                })
                 .map_err(|err| {
                     let diagnostic = OptionDiagnostic::new(
                         DiagnosticId::InvalidGlob,
@@ -1311,10 +1330,14 @@ fn build_exclude_filter(
                         err,
                     )
                 })?;
+
+            if pattern.is_negated() {
+                negations.push((exclude, pattern));
+            }
         }
     }
 
-    excludes.build().map_err(|_| {
+    let filter = excludes.build().map_err(|_| {
         let diagnostic = OptionDiagnostic::new(
             DiagnosticId::InvalidGlob,
             format!(
@@ -1328,7 +1351,63 @@ fn build_exclude_filter(
             "Please open an issue on the ty repository \
             and share the patterns that caused the error.",
         )))
-    })
+    })?;
+
+    for (exclude, pattern) in negations {
+        let Some(blocked_by) = unreachable_negation_cause(&filter, &pattern) else {
+            continue;
+        };
+
+        // Paths in a configuration file read better relative to the project they configure.
+        let blocked_by_display = blocked_by.strip_prefix(project_root).unwrap_or(blocked_by);
+
+        let mut diagnostic = OptionDiagnostic::new(
+            DiagnosticId::UnreachableExcludeNegation,
+            format!("Negated pattern `{exclude}` has no effect"),
+            Severity::Warning,
+        )
+        .sub(SubDiagnostic::new(
+            SubDiagnosticSeverity::Info,
+            format!("`{blocked_by_display}` is excluded, so nothing inside it is ever reached"),
+        ));
+
+        if let Some(name) = blocked_by.file_name() {
+            diagnostic = diagnostic.sub(SubDiagnostic::new(
+                SubDiagnosticSeverity::Info,
+                format!("Re-include the directory first by adding `!**/{name}/`"),
+            ));
+        }
+
+        if let Some(source_file) = exclude.value().source().file()
+            && let Ok(file) = system_path_to_file(db, source_file)
+        {
+            diagnostic = diagnostic.with_annotation(Some(
+                Annotation::primary(Span::from(file).with_optional_range(exclude.value().range()))
+                    .message("This pattern can never match"),
+            ));
+        }
+
+        diagnostics.push(diagnostic);
+    }
+
+    Ok(filter)
+}
+
+/// Returns the excluded directory that stops `negation` from ever re-including anything.
+///
+/// A negation only takes effect if the walk actually reaches the paths it matches, and the walk
+/// stops at the first excluded directory. So the pattern is dead if any directory it has to be
+/// reached through is excluded — the shallowest such directory is the one reported, because that
+/// is where the walk really stops.
+fn unreachable_negation_cause<'a>(
+    filter: &ExcludeFilter,
+    negation: &'a AbsolutePortableGlobPattern,
+) -> Option<&'a SystemPath> {
+    negation
+        .required_directory()?
+        .ancestors()
+        .filter(|directory| filter.match_directory(directory, GlobFilterCheckMode::TopDown))
+        .last()
 }
 
 /// Context for filter operations, used in error messages
@@ -2600,6 +2679,7 @@ impl ToOverride for RangedValue<OverrideOptions> {
             self.exclude.as_ref(),
             &[],
             GlobFilterContext::Overrides,
+            diagnostics,
         )?;
 
         let files = IncludeExcludeFilter::new(include, exclude);

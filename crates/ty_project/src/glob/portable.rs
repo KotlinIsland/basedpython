@@ -147,8 +147,15 @@ impl<'a> PortableGlobPattern<'a> {
         }
 
         if pattern.starts_with('/') {
+            // An already-rooted pattern needs no anchoring, but it does need its `!` back:
+            // without it `!/root/src` reads as an exclude of `/root/src`, the opposite of
+            // what was written.
             return AbsolutePortableGlobPattern {
-                absolute: pattern.to_string(),
+                absolute: if negated {
+                    format!("!{pattern}")
+                } else {
+                    pattern.to_string()
+                },
                 relative: self.pattern.to_string(),
             };
         }
@@ -231,6 +238,64 @@ impl AbsolutePortableGlobPattern {
     pub(crate) fn relative(&self) -> &str {
         &self.relative
     }
+
+    /// Returns `true` if this is a negated (`!`-prefixed) exclude pattern.
+    pub(crate) fn is_negated(&self) -> bool {
+        self.absolute.starts_with('!')
+    }
+
+    /// The deepest directory that has to be walked for this pattern to match anything.
+    ///
+    /// A glob can only match paths that start with the components before its first wildcard,
+    /// so those components bound how deep the pattern can reach. `/root/dist/**` can only ever
+    /// match something inside `/root/dist`, and `/root/dist/generated.py` can only match a file
+    /// in that same directory, so both need `/root/dist` to be walked. A pattern that names a
+    /// path outright needs only that path's parent, which is why `/root/dist` itself returns
+    /// `/root`: re-including `dist` doesn't require walking into it.
+    ///
+    /// Returns `None` for a pattern that isn't anchored to any directory at all, such as
+    /// `**/dist/` before it's made absolute.
+    pub(crate) fn required_directory(&self) -> Option<&SystemPath> {
+        let pattern = self.absolute.strip_prefix('!').unwrap_or(&self.absolute);
+
+        let wildcard_start = pattern
+            .split('/')
+            .scan(0usize, |offset, component| {
+                let start = *offset;
+                *offset += component.len() + 1;
+                Some((start, component))
+            })
+            .find(|(_, component)| is_wildcard_component(component))
+            .map(|(start, _)| start);
+
+        match wildcard_start {
+            // Everything before the first wildcard is literal, so that prefix is the deepest
+            // directory the pattern can be anchored to. The trailing `/` is dropped with it.
+            Some(start) => {
+                let prefix = &pattern[..start.saturating_sub(1)];
+                (!prefix.is_empty()).then(|| SystemPath::new(prefix))
+            }
+            // No wildcard at all: the pattern names one path, so only its parent is walked.
+            None => SystemPath::new(pattern).parent(),
+        }
+    }
+}
+
+/// Returns `true` if `component` contains an unescaped glob metacharacter.
+fn is_wildcard_component(component: &str) -> bool {
+    let mut chars = component.chars();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '*' | '?' | '[' => return true,
+            _ => {}
+        }
+    }
+
+    false
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -391,6 +456,45 @@ mod tests {
     fn absolute_pattern() {
         assert_absolute_path("/src", "/root", "/src");
         assert_absolute_path("./src", "/root", "/root/src");
+    }
+
+    /// A pattern that's already rooted skips anchoring, but it still has to keep its `!`:
+    /// dropping it turns a re-include into an exclude of the same path.
+    #[test]
+    fn negated_absolute_pattern_keeps_its_negation() {
+        assert_absolute_path("!/src", "/root", "!/src");
+        assert_absolute_path("!./src", "/root", "!/root/src");
+    }
+
+    #[track_caller]
+    fn assert_required_directory(
+        pattern: &str,
+        relative_to: impl AsRef<SystemPath>,
+        expected: &str,
+    ) {
+        let pattern = PortableGlobPattern::parse(pattern, PortableGlobKind::Exclude)
+            .unwrap()
+            .into_absolute(relative_to);
+        assert_eq!(
+            pattern.required_directory().map(SystemPath::as_str),
+            (!expected.is_empty()).then_some(expected)
+        );
+    }
+
+    #[test]
+    fn required_directory() {
+        // A pattern that names one path only needs that path's parent walked.
+        assert_required_directory("!dist", "/root", "/root");
+        assert_required_directory("!dist/", "/root", "/root");
+        assert_required_directory("!dist/generated.py", "/root", "/root/dist");
+        // Everything before the first wildcard bounds how deep the pattern can reach.
+        assert_required_directory("!dist/**", "/root", "/root/dist");
+        assert_required_directory("!dist/*.py", "/root", "/root/dist");
+        assert_required_directory("!**/dist/", "/root", "/root");
+        // An escaped `*` is a literal, not a wildcard.
+        assert_required_directory(r"!dist/\*/x.py", "/root", r"/root/dist/\*");
+        // Nothing to anchor to.
+        assert_required_directory("**/dist/", "", "");
     }
 
     #[test]

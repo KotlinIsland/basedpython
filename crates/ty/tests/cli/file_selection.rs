@@ -544,6 +544,105 @@ fn remove_default_exclude() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A negation that names the directory re-includes it without needing the `**/` the default
+/// exclude is written with, which is the spelling the `exclude` documentation gives.
+#[test]
+fn remove_default_exclude_unqualified() -> anyhow::Result<()> {
+    let case = CliTest::with_files([(
+        "dist/generated.py",
+        r#"
+        print(another_undefined_var)  # error: unresolved-reference
+        "#,
+    )])?;
+
+    for pattern in ["!dist", "!dist/", "!./dist"] {
+        case.write_file("ty.toml", &format!("[src]\nexclude = [\"{pattern}\"]\n"))?;
+
+        insta::allow_duplicates! {
+            assert_cmd_snapshot!(case.command(), @"
+            success: false
+            exit_code: 1
+            ----- stdout -----
+            error[unresolved-reference]: Name `another_undefined_var` used when not defined
+             --> dist/generated.py:2:7
+              |
+            2 | print(another_undefined_var)  # error: unresolved-reference
+              |       ^^^^^^^^^^^^^^^^^^^^^
+
+            Found 1 diagnostic
+
+            ----- stderr -----
+            ");
+        }
+    }
+
+    Ok(())
+}
+
+/// A negation can only re-include something the walk still reaches. Pointing one into a
+/// directory that is itself excluded matches nothing at all, so it's reported rather than
+/// silently doing nothing.
+#[test]
+fn negation_into_an_excluded_directory_warns() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        ("src/main.py", "print('ok')"),
+        ("dist/generated.py", "print(dist_var)"),
+        ("dist/keep.py", "print(keep_var)"),
+    ])?;
+
+    case.write_file(
+        "ty.toml",
+        r#"
+        [src]
+        exclude = ["!dist/keep.py"]
+        "#,
+    )?;
+
+    assert_cmd_snapshot!(case.command(), @r#"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[unreachable-exclude-negation]: Negated pattern `!dist/keep.py` has no effect
+     --> ty.toml:3:12
+      |
+    3 | exclude = ["!dist/keep.py"]
+      |            ^^^^^^^^^^^^^^^ This pattern can never match
+    info: `dist` is excluded, so nothing inside it is ever reached
+    info: Re-include the directory first by adding `!**/dist/`
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    "#);
+
+    // Re-including the directory first makes the same negation reachable, so the warning goes
+    // away and only `keep.py` comes back.
+    case.write_file(
+        "ty.toml",
+        r#"
+        [src]
+        exclude = ["!**/dist/", "**/dist/**", "!dist/keep.py"]
+        "#,
+    )?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    error[unresolved-reference]: Name `keep_var` used when not defined
+     --> dist/keep.py:1:7
+      |
+    1 | print(keep_var)
+      |       ^^^^^^^^
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
 /// Test that configuration excludes can be removed via CLI negation
 #[test]
 fn cli_removes_config_exclude() -> anyhow::Result<()> {

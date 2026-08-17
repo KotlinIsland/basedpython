@@ -49,6 +49,179 @@ fn run_transpile(source: &str, extra_args: &[&str]) -> String {
 }
 
 #[test]
+fn compile_emits_only_the_files_it_was_given_and_still_resolves_the_others() {
+    // `by compile a.py` used to compile every source in the project and ignore the
+    // argument entirely. that is not a harmless superset: it costs every other
+    // module's build time, it fails the command for a diagnostic in a file nobody
+    // named, and it silently compiles a file sitting beside the one under test —
+    // which invalidated a delta-debugging run whose original was in the same
+    // directory as each candidate
+    //
+    // the database still holds the whole project, because a type imported from a
+    // sibling has to resolve. that is what `lib.py` is here to prove: it is never
+    // compiled, and `wanted.py` still lowers `Point` rather than declining
+    let dir = std::env::temp_dir().join("by_cli_only_named");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("lib.py"),
+        "class Point:\n    def __init__(self) -> None:\n        self.x: int = 7\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("wanted.py"),
+        "from lib import Point\n\n\ndef go() -> int:\n    p = Point()\n    return p.x\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("other.py"),
+        "def unrelated() -> int:\n    return 2\n",
+    )
+    .unwrap();
+
+    let out = dir.join("out");
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["compile", "wanted.py", "-o"])
+        .arg(&out)
+        .arg("--emit-c-only")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        result.status.success(),
+        "by exited with error:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    assert!(out.join("wanted.c").exists(), "the named file is compiled");
+    assert!(
+        !out.join("lib.c").exists() && !out.join("other.c").exists(),
+        "a file that was not named is not compiled"
+    );
+
+    // the cross-module type resolved: a declined body would not carry the
+    // attribute read at all
+    let emitted = std::fs::read_to_string(out.join("wanted.c")).expect("the C is readable");
+    assert!(
+        emitted.contains("by_wanted_go"),
+        "`go` lowered natively, so `Point` resolved out of the uncompiled sibling"
+    );
+}
+
+/// write a project of package members under `dir`, each answering with its own
+/// dotted name
+fn write_package_project(dir: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir.join("pkg/sub")).unwrap();
+    std::fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n",
+    )
+    .unwrap();
+    for (path, tag) in [
+        ("pkg/__init__.py", 1),
+        ("pkg/sub/__init__.py", 2),
+        ("pkg/dup.py", 3),
+        ("pkg/sub/dup.py", 4),
+    ] {
+        std::fs::write(
+            dir.join(path),
+            format!("def tag() -> int:\n    return {tag}\n"),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn compile_writes_each_package_member_at_its_own_place_in_the_output_tree() {
+    // `by compile -o out` used to write every artefact flat, named after the
+    // module's last component. two members of a package sharing a last component
+    // then wrote the same file and the second silently won — and *no* package
+    // member's artefact was importable under the name it had been compiled as,
+    // because a flat `dup.so` can only ever be imported as `dup`
+    let dir = std::env::temp_dir().join("by_cli_package_tree");
+    write_package_project(&dir);
+
+    let out = dir.join("o");
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["compile", "-o"])
+        .arg(&out)
+        .arg("--emit-c-only")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        result.status.success(),
+        "by exited with error:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    // four sources, four artefacts — a package's own file is the `__init__` inside
+    // its directory, which is the only name cpython's finder looks for
+    for relative in [
+        "pkg/__init__.c",
+        "pkg/sub/__init__.c",
+        "pkg/dup.c",
+        "pkg/sub/dup.c",
+    ] {
+        assert!(out.join(relative).exists(), "{relative} was written");
+    }
+    // and nothing named after a last component alone
+    assert!(
+        !out.join("dup.c").exists() && !out.join("sub.c").exists() && !out.join("pkg.c").exists()
+    );
+
+    // the two `dup` members are distinct modules, not one file written twice
+    let first = fs::read_to_string(out.join("pkg/dup.c")).unwrap();
+    let second = fs::read_to_string(out.join("pkg/sub/dup.c")).unwrap();
+    assert!(first.contains("by_pkg_dup_tag"), "{first}");
+    assert!(second.contains("by_pkg_sub_dup_tag"), "{second}");
+}
+
+#[test]
+fn compile_refuses_two_sources_that_would_write_the_same_artifact() {
+    // laying the output out as the module tree settles the collision between two
+    // package members, but not this one: neither directory here has a name python
+    // could import, so neither file has a dotted name and both fall back to their
+    // stem. one artefact would be written twice and only the second kept, which is
+    // the silent loss the tree was meant to end — so it is refused before anything
+    // is written rather than half-performed
+    let dir = std::env::temp_dir().join("by_cli_artifact_clash");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("a-one")).unwrap();
+    std::fs::create_dir_all(dir.join("b-two")).unwrap();
+    std::fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("a-one/m.py"), "def tag() -> int:\n    return 1\n").unwrap();
+    std::fs::write(dir.join("b-two/m.py"), "def tag() -> int:\n    return 2\n").unwrap();
+
+    let out = dir.join("o");
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["compile", "-o"])
+        .arg(&out)
+        .arg("--emit-c-only")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    assert!(!result.status.success(), "the clash is refused");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("would both be compiled as the module `m`"),
+        "{stderr}"
+    );
+    // and it said so before writing either one
+    assert!(!out.join("m.c").exists(), "{stderr}");
+}
+
+#[test]
 fn compile_transpiles_the_fallback_with_the_lowering_options_it_was_given() {
     // a declined function *runs* from the embedded source, so `by compile` has to
     // transpile it with the same options a `by transpile` would use. the library
