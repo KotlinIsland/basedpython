@@ -1533,14 +1533,10 @@ impl TestContext {
         let mut settings = insta::Settings::clone_current();
         let project_dir_uri = Uri::from_file_path(project_dir.as_std_path())
             .map_err(|()| anyhow!("Failed to convert root directory to uri"))?;
-        settings.add_filter(&tempdir_filter(project_dir.as_str()), "<temp_dir>/");
-        settings.add_filter(&tempdir_filter(project_dir_uri.path()), "<temp_dir>/");
-        settings.add_filter(r#"\\\\"#, "/");
-        settings.add_filter(
-            r#"The system cannot find the file specified."#,
-            "No such file or directory",
-        );
-        settings.add_filter(r"file://.*/stdlib/", "file://<typeshed>/stdlib/");
+        for (pattern, replacement) in snapshot_filters(project_dir.as_str(), project_dir_uri.path())
+        {
+            settings.add_filter(&pattern, replacement);
+        }
 
         let settings_scope = settings.bind_to_scope();
 
@@ -1558,4 +1554,75 @@ impl TestContext {
 
 fn tempdir_filter(path: impl AsRef<str>) -> String {
     format!(r"{}\\?/?", regex::escape(path.as_ref()))
+}
+
+/// What a snapshot has to have taken out of it to be the same everywhere, in the
+/// order it is taken out.
+///
+/// The order carries meaning: a path inside a JSON snapshot has its separators
+/// escaped, so on Windows nothing that matches `\` matches the `\\` the snapshot
+/// holds. The escaping is undone part way through, and what the directory looks
+/// like on either side of that is matched separately.
+fn snapshot_filters(project_dir: &str, uri_path: &str) -> Vec<(String, &'static str)> {
+    vec![
+        // the directory as the system spells it, which on Windows is with `\`
+        (tempdir_filter(project_dir), "<temp_dir>/"),
+        // and as a `file:` URI spells it, which is with `/` and a leading one
+        (tempdir_filter(uri_path), "<temp_dir>/"),
+        // an escaped separator, which is what a JSON snapshot holds
+        (r#"\\\\"#.to_string(), "/"),
+        // the directory again, now that the line above has left it spelled with
+        // `/`. On a system that spells it that way already this is the first
+        // filter over again, which matches nothing new
+        (
+            tempdir_filter(project_dir.replace('\\', "/")),
+            "<temp_dir>/",
+        ),
+        (
+            r#"The system cannot find the file specified."#.to_string(),
+            "No such file or directory",
+        ),
+        (
+            r"file://.*/stdlib/".to_string(),
+            "file://<typeshed>/stdlib/",
+        ),
+    ]
+}
+
+/// A path a JSON snapshot holds is filtered whichever way the system spells it.
+///
+/// Windows spells it with `\`, which a JSON snapshot escapes, and a filter
+/// written for the unescaped spelling silently misses — leaving a real path in
+/// the snapshot, and a test that only fails there.
+#[test]
+fn a_path_in_a_json_snapshot_is_the_temp_directory_on_either_system() {
+    let filtered = |directory: &str, uri_path: &str, snapshot: &str| {
+        snapshot_filters(directory, uri_path).into_iter().fold(
+            snapshot.to_string(),
+            |snapshot, (pattern, replacement)| {
+                regex::Regex::new(&pattern)
+                    .expect("a filter to be a valid pattern")
+                    .replace_all(&snapshot, replacement)
+                    .into_owned()
+            },
+        )
+    };
+
+    assert_eq!(
+        filtered(
+            r"C:\Users\runner\AppData\Local\Temp\.tmp42",
+            "/C:/Users/runner/AppData/Local/Temp/.tmp42",
+            r#"{"root": "C:\\Users\\runner\\AppData\\Local\\Temp\\.tmp42\\src"}"#,
+        ),
+        r#"{"root": "<temp_dir>/src"}"#
+    );
+
+    assert_eq!(
+        filtered(
+            "/tmp/.tmp42",
+            "/tmp/.tmp42",
+            r#"{"root": "/tmp/.tmp42/src"}"#,
+        ),
+        r#"{"root": "<temp_dir>/src"}"#
+    );
 }
