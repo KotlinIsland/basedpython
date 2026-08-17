@@ -294,6 +294,30 @@ fn run_executes_module() {
     );
 }
 
+/// inference recurses with the shape of the expression it is checking, and `run`
+/// checks on the thread it was dispatched to rather than through the rayon pool.
+/// on the stack a process starts with — 1 MiB on windows — a file like this one
+/// overflowed before that thread was sized for the work
+#[test]
+fn run_checks_a_deeply_nested_expression() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let terms = vec!["1"; 2000].join(" + ");
+    fs::write(dir.path().join("main.by"), format!("print({terms})\n")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2000");
+}
+
 #[test]
 fn run_force_unwrap_yields_inner_value() {
     // `Some(x)` lowers to the `Optional(x)` wrapper; force-unwrapping it must
@@ -1780,17 +1804,36 @@ fn build_writes_a_sourcemap_beside_the_generated_python() {
     let out = dir.path().join("out");
     let map = fs::read_to_string(out.join("_by_sourcemap.py")).expect("sourcemap module");
 
-    // the paths in the map are the ones the build ran against, so a symlinked
-    // temp dir (`/tmp` on macOS) is spelled resolved there and has to be here
-    let resolved = fs::canonicalize(&out).expect("out directory");
-    let py_key = format!("{:?}", resolved.join("main.py").to_string_lossy());
+    // read the keys out of the file rather than rebuilding them: the build
+    // spells a path the way the system handed it over, which is neither the
+    // test's `dir.path()` (a symlink under `/tmp` on macOS) nor its canonical
+    // form (a `\\?\` path with the long directory name on windows)
+    let first_key_of = |table: &str| {
+        let (_, body) = map
+            .split_once(&format!("{table} = {{\n"))
+            .unwrap_or_else(|| panic!("no {table} table:\n{map}"));
+        let entry = body.lines().next().expect("an entry");
+        entry
+            .trim()
+            .split_once(": ")
+            .unwrap_or_else(|| panic!("no key in {table}:\n{map}"))
+            .0
+            .to_owned()
+    };
+
+    let mapped = first_key_of("SOURCEMAP");
     assert!(
-        map.contains(&format!("SOURCEMAP = {{\n    {py_key}: (")),
+        mapped.ends_with("main.py\""),
         "the generated module should be mapped by its own path:\n{map}"
     );
+    assert_eq!(
+        mapped,
+        first_key_of("DIGESTS"),
+        "both tables key the same generated file:\n{map}"
+    );
     assert!(
-        map.contains(&format!("    {py_key}: {{\"by\": \"sha256:")),
-        "and digested under the same key:\n{map}"
+        map.contains(&format!("{mapped}: {{\"by\": \"sha256:")),
+        "the entry should carry a digest of each side:\n{map}"
     );
     // the runner shim belongs to `by run`; a build output is not an entry point
     assert!(

@@ -57,7 +57,30 @@ where
         .context("Failed to read CLI arguments from file")?;
     let args = Cli::parse_from(args);
 
-    match args.command {
+    // type inference recurses with the shape of the program it is checking, so
+    // how deep a file it can survive is decided by the stack it runs on. the
+    // rayon pool asks for `STACK_SIZE`, but the thread a process starts on gets a
+    // platform default — 1 MiB on windows — and the commands that check on the
+    // calling thread rather than through the pool (`run`, `build`, `transpile`,
+    // `compile`) were overflowing it there. so the whole command runs on a thread
+    // this codebase has sized for the job, wherever it is dispatched to
+    std::thread::scope(|scope| {
+        let command = std::thread::Builder::new()
+            .stack_size(STACK_SIZE)
+            .spawn_scoped(scope, || run_command(args.command))
+            .context("failed to start the worker thread")?;
+        match command.join() {
+            Ok(status) => status,
+            // the panic has already been reported by the default hook; carrying
+            // it across the join keeps the process behaving as if it never moved
+            // off the starting thread
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    })
+}
+
+fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
+    match command {
         Command::Server => run_server().map(|()| ExitStatus::Success),
         Command::Check(check_args) => run_check(check_args),
         Command::Version { output_format } => Ok(by_commands::cmd_version_by(output_format)),
