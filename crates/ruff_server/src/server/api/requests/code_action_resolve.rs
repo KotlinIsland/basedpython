@@ -111,6 +111,10 @@ impl super::BackgroundRequestHandler for CodeActionResolve {
                 )
                 .with_failure_code(ErrorCode::InternalError)?,
             ),
+            SupportedCodeAction::SourceFormatAndOrganizeImports => Some(
+                resolve_edit_for_format_and_organize_imports(&snapshot)
+                    .with_failure_code(ErrorCode::InternalError)?,
+            ),
             SupportedCodeAction::SourceFormatAndOptimizeImports => Some(
                 resolve_edit_for_format_and_optimize_imports(&snapshot)
                     .with_failure_code(ErrorCode::InternalError)?,
@@ -223,6 +227,15 @@ pub(super) fn resolve_edit_for_format_and_optimize_imports(
     Ok(tracker.into_workspace_edit())
 }
 
+pub(super) fn resolve_edit_for_format_and_organize_imports(
+    snapshot: &DocumentSnapshot,
+) -> crate::Result<types::WorkspaceEdit> {
+    let query = snapshot.query();
+    let mut tracker = WorkspaceEditTracker::new(snapshot.resolved_client_capabilities());
+    tracker.set_fixes_for_document(format_and_organize_imports_edit(snapshot)?, query.version())?;
+    Ok(tracker.into_workspace_edit())
+}
+
 fn optimize_imports_settings(query: &DocumentQuery) -> ruff_linter::settings::LinterSettings {
     settings_for_rules(
         query,
@@ -231,6 +244,29 @@ fn optimize_imports_settings(query: &DocumentQuery) -> ruff_linter::settings::Li
 }
 
 /// Optimizes a module's imports and formats it, as a single edit.
+///
+/// See [`format_and_imports_edit`] for why the two are composed here rather than asked for
+/// separately.
+pub(super) fn format_and_optimize_imports_edit(
+    snapshot: &DocumentSnapshot,
+) -> crate::Result<Fixes> {
+    let settings = optimize_imports_settings(snapshot.query());
+    format_and_imports_edit(snapshot, &settings)
+}
+
+/// Sorts a module's imports and formats it, as a single edit.
+///
+/// The same as [`format_and_optimize_imports_edit`] but for F401: laying a file out is not licence
+/// to delete anything from it, so *Reformat Code* sorts imports without pruning them. Dropping the
+/// unused ones is what *Optimize Imports* is for, and the user asks for that separately.
+pub(super) fn format_and_organize_imports_edit(
+    snapshot: &DocumentSnapshot,
+) -> crate::Result<Fixes> {
+    let settings = settings_for_rules(snapshot.query(), import_sorting_rules());
+    format_and_imports_edit(snapshot, &settings)
+}
+
+/// Runs an import pass and the formatter against one buffer, as a single edit.
 ///
 /// Asking a client to run the two separately cannot be made correct: the second request is answered
 /// against whatever text the server last saw, so the client has to wait for the first edit to be
@@ -243,8 +279,9 @@ fn optimize_imports_settings(query: &DocumentQuery) -> ruff_linter::settings::Li
 ///
 /// Notebooks are not handled — their cells are fixed as a group and formatted one at a time, which
 /// a single whole-document diff cannot express. They keep the separate `notebook.source.*` actions.
-pub(super) fn format_and_optimize_imports_edit(
+fn format_and_imports_edit(
     snapshot: &DocumentSnapshot,
+    import_settings: &ruff_linter::settings::LinterSettings,
 ) -> crate::Result<Fixes> {
     let query = snapshot.query();
     let Ok(document) = query.as_single_document() else {
@@ -256,8 +293,8 @@ pub(super) fn format_and_optimize_imports_edit(
 
     let source = document.contents();
 
-    let optimized = crate::fix::fix_all_text(query, &optimize_imports_settings(query))?;
-    let optimized = optimized.as_deref().unwrap_or(source);
+    let sorted = crate::fix::fix_all_text(query, import_settings)?;
+    let sorted = sorted.as_deref().unwrap_or(source);
 
     let settings = query.settings();
     let file_path = query.virtual_file_path();
@@ -272,7 +309,7 @@ pub(super) fn format_and_optimize_imports_edit(
         // The formatter reads a whole document, so the fixed source is handed to it as one. The
         // version is irrelevant here: this document never leaves this function, and the edit is
         // stamped with the real document's version by the caller.
-        let intermediate = TextDocument::new(optimized.to_string(), document.version());
+        let intermediate = TextDocument::new(sorted.to_string(), document.version());
         crate::format::format(
             &intermediate,
             query.source_type_for_format(),
@@ -286,7 +323,7 @@ pub(super) fn format_and_optimize_imports_edit(
         .into_formatted()
     };
 
-    let modified = formatted.as_deref().unwrap_or(optimized);
+    let modified = formatted.as_deref().unwrap_or(sorted);
     if modified == source {
         return Ok(Fixes::default());
     }

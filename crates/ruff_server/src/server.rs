@@ -280,6 +280,13 @@ pub(crate) enum SupportedCodeAction {
     /// Maps to the `source.optimizeImports.ruff` code action kind. Sorts imports *and* removes the
     /// ones nothing uses, which is what an editor's *Optimize Imports* means.
     SourceOptimizeImports,
+    /// Maps to the `source.formatAndOrganizeImports.ruff` code action kind. Runs
+    /// [`Self::SourceOrganizeImports`] and the formatter against one buffer, as a single edit.
+    ///
+    /// This is what an editor's *Reformat Code* means for a module whose imports it also keeps in
+    /// order: laying the file out is not licence to delete anything, so unlike
+    /// [`Self::SourceFormatAndOptimizeImports`] it sorts without pruning.
+    SourceFormatAndOrganizeImports,
     /// Maps to the `source.formatAndOptimizeImports.ruff` code action kind. Runs
     /// [`Self::SourceOptimizeImports`] and the formatter against one buffer, as a single edit.
     SourceFormatAndOptimizeImports,
@@ -301,6 +308,7 @@ impl SupportedCodeAction {
             Self::SourceFixAll => crate::SOURCE_FIX_ALL_RUFF,
             Self::SourceOrganizeImports => crate::SOURCE_ORGANIZE_IMPORTS_RUFF,
             Self::SourceOptimizeImports => crate::SOURCE_OPTIMIZE_IMPORTS_RUFF,
+            Self::SourceFormatAndOrganizeImports => crate::SOURCE_FORMAT_AND_ORGANIZE_IMPORTS_RUFF,
             Self::SourceFormatAndOptimizeImports => crate::SOURCE_FORMAT_AND_OPTIMIZE_IMPORTS_RUFF,
             Self::NotebookSourceFixAll => crate::NOTEBOOK_SOURCE_FIX_ALL_RUFF,
             Self::NotebookSourceOrganizeImports => crate::NOTEBOOK_SOURCE_ORGANIZE_IMPORTS_RUFF,
@@ -320,6 +328,7 @@ impl SupportedCodeAction {
             Self::SourceFixAll,
             Self::SourceOrganizeImports,
             Self::SourceOptimizeImports,
+            Self::SourceFormatAndOrganizeImports,
             Self::SourceFormatAndOptimizeImports,
             Self::NotebookSourceFixAll,
             Self::NotebookSourceOrganizeImports,
