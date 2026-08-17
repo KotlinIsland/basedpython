@@ -238,9 +238,20 @@ it to `app/__init__.by` and it builds
 
 ## running on the right python
 
-`by run` uses the project environment: the same interpreter `by check` resolves
-imports against, which for a uv project is `.venv`. `$PYTHON` overrides it, and
-`by run --python` overrides that
+`by run` uses the project environment — the same one `by check` resolves imports
+against, resolved the same way:
+
+1. `by run --python`, for one run
+1. the `environment.python` the project configures — and if that names something
+    that is not an environment, `by run` refuses it, the way `by check` does
+1. an activated virtual environment, a conda environment, or a `.venv` beside the
+    project's `pyproject.toml`
+1. `$PYTHON`
+1. `python3` on `PATH`
+
+all of it relative to the project, not to where the command was run: `by run` in a
+subdirectory is still this project, uses the project's `.venv`, and builds the
+project's modules
 
 a project that targets a newer python than the interpreter can run is reported
 before anything executes:

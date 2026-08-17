@@ -421,7 +421,12 @@ impl ProjectMetadata {
         Ok(metadata)
     }
 
-    pub(crate) fn root(&self) -> &SystemPath {
+    /// The directory the project's configuration was found in.
+    ///
+    /// Everything the project declares is relative to this — a configured
+    /// environment, a source root — so a command run from a subdirectory resolves
+    /// them against the project rather than against where it happened to be run.
+    pub fn root(&self) -> &SystemPath {
         &self.root
     }
 

@@ -3630,6 +3630,7 @@ fn run_refuses_an_interpreter_older_than_the_project_targets() {
 /// targets. Probing whatever `python3` resolves to says nothing about the
 /// interpreter `by run` would pick, which is the whole question here.
 struct Environment {
+    root: PathBuf,
     version: (u8, u8),
 }
 
@@ -3645,9 +3646,46 @@ fn python_environment(root: &Path) -> Environment {
         root.display()
     );
     Environment {
+        root: root.to_path_buf(),
         version: interpreter_version(&interpreter_in(root)),
     }
 }
+
+impl Environment {
+    /// what a project must say it targets to run on this
+    fn requires_python(&self) -> String {
+        let (major, minor) = self.version;
+        format!("requires-python = \">={major}.{minor}\"\n")
+    }
+
+    fn interpreter(&self) -> PathBuf {
+        interpreter_in(&self.root)
+    }
+
+    /// Whether the program ran on this environment's interpreter.
+    ///
+    /// Compared as canonical *directories*: windows hands a process the short
+    /// (`RUNNER~1`) form of a path it was given the long form of, so two
+    /// spellings of one directory do not compare equal as text. It is the
+    /// directory that is canonicalized rather than the interpreter itself,
+    /// because a virtual environment's `python3` is a symlink to the interpreter
+    /// it was made from — resolving *that* leads out of the environment, which is
+    /// the one place this must not look.
+    fn ran_it(&self, stdout: &str) -> bool {
+        let reported = PathBuf::from(stdout.trim());
+        let Some(Ok(directory)) = reported.parent().map(fs::canonicalize) else {
+            return false;
+        };
+        let Ok(root) = fs::canonicalize(&self.root) else {
+            return false;
+        };
+        directory.starts_with(root)
+    }
+}
+
+/// the program these tests run: it reports the interpreter that ran it, which is
+/// the whole question
+const REPORTS_ITS_INTERPRETER: &str = "import sys\n\nprint(sys.executable)\n";
 
 fn interpreter_in(root: &Path) -> PathBuf {
     if cfg!(windows) {
@@ -3687,6 +3725,214 @@ fn running_python_version() -> (u8, u8) {
     let major = parts.next().unwrap().parse().unwrap();
     let minor = parts.next().unwrap().parse().unwrap();
     (major, minor)
+}
+
+/// the project environment is the environment the project *is* — `by check`
+/// resolved this project's imports against it, so running against a different
+/// python answers a question nobody asked
+#[test]
+fn run_uses_the_environment_the_project_configures() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let environment = python_environment(&dir.path().join("environments").join("current"));
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        format!(
+            "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n{}\
+             \n[tool.basedpython.environment]\npython = \"environments/current\"\n",
+            environment.requires_python()
+        ),
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.by"), REPORTS_ITS_INTERPRETER).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .env_remove("PYTHON")
+        .env_remove("VIRTUAL_ENV")
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        environment.ran_it(&stdout),
+        "expected the configured environment's interpreter ({}):\n{stdout}\n{}",
+        environment.interpreter().display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// a `.venv` belongs to the project, not to whichever directory the command was
+/// run from — and neither do the sources
+#[test]
+fn run_from_a_subdirectory_is_still_the_project() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let environment = python_environment(&dir.path().join(".venv"));
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        format!(
+            "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n{}\
+             \n[tool.basedpython.run]\nmain = \"app.main\"\n",
+            environment.requires_python()
+        ),
+    )
+    .unwrap();
+    let package = dir.path().join("src").join("app");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(package.join("main.by"), REPORTS_ITS_INTERPRETER).unwrap();
+    let elsewhere = dir.path().join("tools");
+    fs::create_dir_all(&elsewhere).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("run")
+        .current_dir(&elsewhere)
+        .env_remove("PYTHON")
+        .env_remove("VIRTUAL_ENV")
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        environment.ran_it(&stdout),
+        "the project's `.venv` is the project's wherever this was run:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn build_from_a_subdirectory_builds_the_project() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let package = dir.path().join("src").join("app");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    let elsewhere = dir.path().join("tools");
+    fs::create_dir_all(&elsewhere).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(&elsewhere)
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert!(
+        elsewhere
+            .join("out")
+            .join("app")
+            .join("__init__.py")
+            .exists(),
+        "the module tree is the project's, not the caller's:\n{stderr}"
+    );
+}
+
+/// `$PYTHON` names an interpreter, not an environment, so it stands in only where
+/// there is no project environment to prefer. this is a change in what the
+/// variable does: it used to be the only mechanism, and so beat everything
+#[test]
+fn run_prefers_the_project_environment_to_the_python_variable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = python_environment(&dir.path().join(".venv"));
+    // a second environment, so that what `$PYTHON` names is never what the
+    // project would have chosen anyway — otherwise the two answers are the same
+    // and the test asserts nothing
+    let named = python_environment(&dir.path().join("named"));
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        format!(
+            "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n{}",
+            project.requires_python()
+        ),
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.by"), REPORTS_ITS_INTERPRETER).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .env("PYTHON", named.interpreter())
+        .env_remove("VIRTUAL_ENV")
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        project.ran_it(&stdout),
+        "the project's environment outranks `$PYTHON`:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// and where there is no project environment, `$PYTHON` is still what stands in —
+/// demoting it below discovery entirely would have made it dead, since discovery
+/// always ends at *some* interpreter on `PATH`
+#[test]
+fn run_falls_back_to_the_python_variable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // outside the project, so that discovery does not find it and the only way
+    // to reach it is the variable
+    let elsewhere = python_environment(&dir.path().join("chosen"));
+    let project = dir.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join("pyproject.toml"),
+        format!(
+            "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n{}",
+            elsewhere.requires_python()
+        ),
+    )
+    .unwrap();
+    fs::write(project.join("main.by"), REPORTS_ITS_INTERPRETER).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(&project)
+        .env("PYTHON", elsewhere.interpreter())
+        .env_remove("VIRTUAL_ENV")
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        elsewhere.ran_it(&stdout),
+        "with no project environment, `$PYTHON` is the answer:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// a configured environment that cannot be resolved is what `by check` refuses
+/// outright. falling past it ran the program on a different python than the one
+/// it had just been checked against, and reported that as a version mismatch —
+/// naming the wrong cause entirely
+#[test]
+fn run_refuses_a_configured_environment_that_is_not_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n\
+         \n[tool.basedpython.environment]\npython = \"absent\"\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.by"), "print(1)\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "expected a refusal:\n{stderr}");
+    assert!(
+        stderr.contains("`environment.python`"),
+        "the message has to name the setting that is wrong:\n{stderr}"
+    );
 }
 
 /// the shim `by run` puts in the tree it executes is written through the same
