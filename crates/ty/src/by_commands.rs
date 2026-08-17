@@ -228,6 +228,7 @@ pub(crate) fn cmd_run(
         &config,
         CheckGate::AllErrors,
         &rebuilder,
+        &mut by_transforms::RuntimeRequirements::default(),
         |emitted| {
             let relative = transpiled_destination(&roots, &root, emitted.by_path);
             traceback_entries.push(stage_module(&mut staging, &relative, emitted)?);
@@ -748,12 +749,14 @@ pub(crate) fn cmd_build(
     // the directory where a `.by` really can be saved after the transpile, which
     // is what the digests beside the map are for
     let mut entries: Vec<TracebackEntry> = Vec::new();
+    let mut requirements = by_transforms::RuntimeRequirements::default();
     if !render_check_and_transpile(
         &db,
         &handles,
         &config,
         CheckGate::ParseErrorsOnly,
         &rebuilder,
+        &mut requirements,
         |emitted| {
             let relative = transpiled_destination(&roots, &root, emitted.by_path);
             let entry = stage_module(&mut staging, &relative, emitted)?;
@@ -773,7 +776,7 @@ pub(crate) fn cmd_build(
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
     write_sourcemap_module(&mut staging, &entries)?;
     if print_manifest {
-        print_build_manifest(&staging, &roots, &root)?;
+        print_build_manifest(&staging, &roots, &root, requirements)?;
     }
     staging.finish()?;
 
@@ -789,7 +792,12 @@ pub(crate) fn cmd_build(
 /// out. Answering them here rather than in the packaging layer keeps one answer
 /// to "what is this project", instead of a second one that has to be kept in step.
 #[allow(clippy::print_stdout)]
-fn print_build_manifest(staging: &Staging, roots: &[PathBuf], root: &Path) -> anyhow::Result<()> {
+fn print_build_manifest(
+    staging: &Staging,
+    roots: &[PathBuf],
+    root: &Path,
+    requirements: by_transforms::RuntimeRequirements,
+) -> anyhow::Result<()> {
     use std::io::Write as _;
 
     let mut stdout = io::stdout().lock();
@@ -799,6 +807,12 @@ fn print_build_manifest(staging: &Staging, roots: &[PathBuf], root: &Path) -> an
     }
     for package in staged_packages(staging, roots, root) {
         writeln!(stdout, "package {package}")?;
+    }
+    // lowering for an older python can put a name in the output that only
+    // `typing_extensions` has there. nothing in the source says so, so nothing
+    // but the build can
+    for specifier in requirements.specifiers() {
+        writeln!(stdout, "requires {specifier}")?;
     }
     Ok(())
 }
@@ -1301,6 +1315,7 @@ fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
         config,
         CheckGate::ParseErrorsOnly,
         &rebuilder,
+        &mut by_transforms::RuntimeRequirements::default(),
         |emitted| {
             let py = emitted.by_path.with_extension("py");
             fs::write(&py, emitted.python).with_context(|| format!("{}", py.display()))?;
@@ -1830,6 +1845,7 @@ fn render_check_and_transpile(
     config: &Config,
     gate: CheckGate,
     rebuilder: &Rebuilder,
+    requirements: &mut by_transforms::RuntimeRequirements,
     mut consume: impl FnMut(&Transpiled<'_>) -> anyhow::Result<()>,
 ) -> anyhow::Result<bool> {
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
@@ -1867,8 +1883,9 @@ fn render_check_and_transpile(
         if unusable.contains(file) {
             continue;
         }
-        match by_transforms::transpile_typed_with_map(db, *file, config, Some(&rebuild)) {
-            Ok((out, line_map)) => {
+        match by_transforms::transpile_typed_with_report(db, *file, config, Some(&rebuild)) {
+            Ok((out, line_map, needed)) => {
+                requirements.merge(needed);
                 let by_source = source_text(db, *file);
                 consume(&Transpiled {
                     by_path: bpy,

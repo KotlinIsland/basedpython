@@ -3402,6 +3402,58 @@ fn build_ships_a_source_directory_that_is_itself_a_package() {
     assert!(dir.path().join("out/src/mymod/__init__.py").exists());
 }
 
+/// lowering for an older python can put a name in the output that only
+/// `typing_extensions` has there. nothing in the source says so — the project
+/// never asked for it — so nothing but the build can, and a wheel that shipped
+/// without it would install cleanly and fail on the first import
+#[test]
+fn build_reports_what_lowering_needs_at_run_time() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package = dir.path().join("src").join("app");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"app\"\nversion = \"0.1.0\"\nrequires-python = \">=3.9\"\n",
+    )
+    .unwrap();
+    // `Self` reached `typing` in 3.11, so a 3.9 target has to borrow it
+    fs::write(
+        package.join("__init__.by"),
+        "from typing import Self\n\nclass N:\n    def me(self) -> Self:\n        return self\n",
+    )
+    .unwrap();
+
+    let manifest = |extra: &[&str]| -> String {
+        let output = Command::new(env!("CARGO_BIN_EXE_by"))
+            .args(["build", "--print-manifest"])
+            .args(extra)
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to spawn by");
+        assert!(
+            output.status.success(),
+            "by build failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    let lowered = manifest(&[]);
+    assert!(
+        lowered
+            .lines()
+            .any(|line| line.starts_with("requires typing_extensions")),
+        "a 3.9 target borrows the name, so the wheel depends on it:\n{lowered}"
+    );
+
+    // and on a python that has it, the dependency would be dead weight
+    let native = manifest(&["--min-version", "3.13"]);
+    assert!(
+        !native.contains("requires "),
+        "a 3.13 target needs no backport:\n{native}"
+    );
+}
+
 // ── running a project, not just its `.by` files ──────────────────────────────
 
 /// the same hole at run time, where it is fatal rather than untidy: `by run`

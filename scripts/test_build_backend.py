@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 from basedpython.build import (
     BuildError,
     Staged,
+    _merged_dependencies,
     _read_project_metadata,
     _toml,
     _write_staged_pyproject,
@@ -292,3 +293,51 @@ def test_the_staged_tree_is_its_own_module_root(tmp_path: Path):
 def test_a_project_with_no_package_to_ship_is_reported(tmp_path: Path):
     with reports("no package to build a wheel from"):
         staged_pyproject(tmp_path, PROJECT, Staged(sources=[], packages=[]))
+
+
+# ── what lowering needs at run time ──────────────────────────────────────────
+
+
+def test_a_dependency_lowering_introduced_is_declared():
+    """Building for an older python can put a name in the output that only
+    `typing_extensions` has there. The project never asked for it, so it cannot
+    have declared it — and a wheel without it fails on the first import."""
+    merged = _merged_dependencies(
+        {"dependencies": ["packaging>=24"]}, ["typing_extensions>=4.12"]
+    )
+    assert merged == ["packaging>=24", "typing_extensions>=4.12"]
+
+
+def test_a_project_with_no_dependencies_still_gets_what_it_needs():
+    assert _merged_dependencies({}, ["typing_extensions>=4.12"]) == [
+        "typing_extensions>=4.12"
+    ]
+
+
+def test_nothing_is_added_when_lowering_needed_nothing():
+    assert _merged_dependencies({"dependencies": ["packaging>=24"]}, []) == [
+        "packaging>=24"
+    ]
+
+
+def test_a_constraint_the_project_already_declared_is_left_alone():
+    """It knows something about the version it wants that this does not."""
+    merged = _merged_dependencies(
+        {"dependencies": ["typing_extensions==4.13.2"]}, ["typing_extensions>=4.12"]
+    )
+    assert merged == ["typing_extensions==4.13.2"]
+
+
+def test_a_declaration_is_matched_however_it_is_spelled():
+    """`typing-extensions` and `typing_extensions` are one distribution, and a
+    requirement can carry an extra, a marker or a comparator after the name."""
+    for spelling in (
+        "typing-extensions",
+        "Typing_Extensions >= 4.0",
+        "typing-extensions[all]>=4",
+        'typing_extensions>=4; python_version < "3.11"',
+    ):
+        merged = _merged_dependencies(
+            {"dependencies": [spelling]}, ["typing_extensions>=4.12"]
+        )
+        assert merged == [spelling], spelling

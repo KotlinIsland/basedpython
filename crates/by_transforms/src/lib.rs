@@ -123,8 +123,17 @@ fn run_erased_union_phase<'a>(
 /// type-aware passes see only this file). Used for stdin input and tests; the
 /// file-backed [`transpile_typed`] resolves cross-module types.
 pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
+    transpile_with_report(source, config).map(|(output, _)| output)
+}
+
+/// Like [`transpile`], and also reports what the emitted python needs installed
+/// to run.
+pub fn transpile_with_report(
+    source: &str,
+    config: &Config,
+) -> Result<(String, RuntimeRequirements), String> {
     if config.is_python {
-        return Ok(source.to_owned());
+        return Ok((source.to_owned(), RuntimeRequirements::default()));
     }
 
     // one db over the original source, shared by the qualification phase below
@@ -197,7 +206,7 @@ pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
     }
 
     // --- Phase 2: import-redirect, surface-syntax cleanup, lazy-import marking ---
-    let final_output = run_import_redirect_phase(output, config);
+    let (final_output, requirements) = run_import_redirect_phase(output, config);
     let final_output = run_anon_named_tuple_cleanup(final_output, config)?;
     let final_output =
         run_lazy_import_phase(final_output, config, &model.eagerly_imported_modules());
@@ -207,7 +216,7 @@ pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
     verify_syntax(&final_output).map_err(|e| e.message)?;
     verify_target_syntax(&final_output, config).map_err(|e| e.message)?;
 
-    Ok(final_output)
+    Ok((final_output, requirements))
 }
 
 /// Transpile using ty's full type inference. `db` and `file` must already
@@ -243,12 +252,71 @@ pub fn transpile_typed_with_map(
     config: &Config,
     rebuild: Option<RebuildProject<'_>>,
 ) -> Result<(String, Vec<Option<u32>>), TranspileError> {
+    transpile_typed_with_report(db, file, config, rebuild)
+        .map(|(output, line_map, _)| (output, line_map))
+}
+
+/// What the emitted python needs at run time that the standard library does not
+/// provide.
+///
+/// Lowering for an older python can put a name in the output that only
+/// `typing_extensions` has there — `Self` on 3.9, say. That is a real dependency
+/// of the built artifact, and nothing in the source says so, which is why the
+/// transpile is what reports it: a wheel that shipped without it would install
+/// cleanly and fail on the first import.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeRequirements {
+    typing_extensions: bool,
+}
+
+/// What the emitted python needs when lowering reached for `typing_extensions`.
+///
+/// One floor for every name rather than one per name: which release of
+/// `typing_extensions` first carried each backport is not something the emitted
+/// code records, and a floor too low is a wheel that installs and then fails on
+/// an import. It has to cover every name
+/// [`ty_python_semantic::basedpython_typing_added_in`] can redirect, which is why
+/// it lives beside the pass that does the redirecting rather than beside the
+/// command that reports it.
+const TYPING_EXTENSIONS_REQUIREMENT: &str = "typing_extensions>=4.12";
+
+impl RuntimeRequirements {
+    /// Fold in what another module needed.
+    pub fn merge(&mut self, other: Self) {
+        self.typing_extensions |= other.typing_extensions;
+    }
+
+    /// The requirements, spelled the way a `[project] dependencies` entry is.
+    ///
+    /// A list rather than a set of flags, so that a second requirement is a line
+    /// here instead of an edit at every place a caller asks what is needed.
+    pub fn specifiers(self) -> Vec<&'static str> {
+        let mut specifiers = Vec::new();
+        if self.typing_extensions {
+            specifiers.push(TYPING_EXTENSIONS_REQUIREMENT);
+        }
+        specifiers
+    }
+}
+
+/// Like [`transpile_typed_with_map`], and also reports what the emitted python
+/// needs installed to run.
+pub fn transpile_typed_with_report(
+    db: &dyn ty_python_semantic::Db,
+    file: File,
+    config: &Config,
+    rebuild: Option<RebuildProject<'_>>,
+) -> Result<(String, Vec<Option<u32>>, RuntimeRequirements), TranspileError> {
     let source_ref = ruff_db::source::source_text(db, file);
     let original_source = source_ref.as_str();
 
     if config.is_python {
         let out = original_source.to_owned();
-        return Ok((out, source_map::line_table(original_source, &[])));
+        return Ok((
+            out,
+            source_map::line_table(original_source, &[]),
+            RuntimeRequirements::default(),
+        ));
     }
 
     // erased-union reification: give a `list[int] | list[str]` parameter a
@@ -364,7 +432,7 @@ pub fn transpile_typed_with_map(
         return Err(first.clone().into());
     }
 
-    let final_output = run_import_redirect_phase(output, config);
+    let (final_output, requirements) = run_import_redirect_phase(output, config);
     let final_output = run_anon_named_tuple_cleanup(final_output, config)?;
     let final_output = run_lazy_import_phase(final_output, config, &eager_imports);
     let final_output = run_version_polyfill_phase(final_output, config);
@@ -410,7 +478,7 @@ pub fn transpile_typed_with_map(
         return Err(err);
     }
 
-    Ok((final_output, line_map))
+    Ok((final_output, line_map, requirements))
 }
 
 fn newline_count(s: &str) -> usize {
@@ -499,7 +567,7 @@ fn run_anon_named_tuple_cleanup(mut source: String, config: &Config) -> Result<S
 
 /// Rewrite stdlib imports to `typing_extensions` where the imported name is
 /// not yet available at the configured min version
-fn run_import_redirect_phase(source: String, config: &Config) -> String {
+fn run_import_redirect_phase(source: String, config: &Config) -> (String, RuntimeRequirements) {
     let (db, file) = make_in_memory_db(&source);
     let source_ref = ruff_db::source::source_text(&db, file);
     let src = source_ref.as_str();
@@ -515,11 +583,16 @@ fn run_import_redirect_phase(source: String, config: &Config) -> String {
     }
 
     if typing_redirect.edits.is_empty() {
-        return source;
+        return (source, RuntimeRequirements::default());
     }
 
     let (output, _) = apply_transforms_once(src, typing_redirect.edits);
-    output
+    (
+        output,
+        RuntimeRequirements {
+            typing_extensions: true,
+        },
+    )
 }
 
 /// Lazy-import marking phase: walks the post-typing-redirect output and

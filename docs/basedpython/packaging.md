@@ -118,6 +118,22 @@ there takes them back for the build too:
 exclude = ["!dist"]
 ```
 
+## dependencies lowering adds
+
+Building for an older python can put a name in the output that only
+`typing_extensions` has there — `Self` on 3.9, say. The project never asked for
+it, so it cannot have declared it, and a wheel that shipped without it would
+install cleanly and fail on the first import. The build reports what it reached
+for and the wheel declares it:
+
+```text
+Requires-Dist: typing-extensions>=4.12
+```
+
+Only when lowering actually needed it. The same project built for a python that
+has the name in its own `typing` gets no such dependency. A project that already
+names the distribution keeps its own constraint
+
 ## a version that lives in the source
 
 declare it dynamic and say where to read it from:
