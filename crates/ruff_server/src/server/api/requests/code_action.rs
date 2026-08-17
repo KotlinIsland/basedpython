@@ -15,7 +15,8 @@ use crate::session::{Client, DocumentSnapshot};
 
 use super::code_action_resolve::{
     resolve_edit_for_fix_all, resolve_edit_for_format_and_optimize_imports,
-    resolve_edit_for_optimize_imports, resolve_edit_for_organize_imports,
+    resolve_edit_for_format_and_organize_imports, resolve_edit_for_optimize_imports,
+    resolve_edit_for_organize_imports,
 };
 
 pub(crate) struct CodeActions;
@@ -128,6 +129,12 @@ impl super::BackgroundDocumentRequestHandler for CodeActions {
             if named_in(asked_for, &crate::SOURCE_OPTIMIZE_IMPORTS_RUFF) {
                 response
                     .push(optimize_imports(&snapshot).with_failure_code(ErrorCode::InternalError)?);
+            }
+            if named_in(asked_for, &crate::SOURCE_FORMAT_AND_ORGANIZE_IMPORTS_RUFF) {
+                response.push(
+                    format_and_organize_imports(&snapshot)
+                        .with_failure_code(ErrorCode::InternalError)?,
+                );
             }
             if named_in(asked_for, &crate::SOURCE_FORMAT_AND_OPTIMIZE_IMPORTS_RUFF) {
                 response.push(
@@ -373,6 +380,20 @@ fn optimize_imports(snapshot: &DocumentSnapshot) -> crate::Result<CodeActionResp
     Ok(CodeActionResponse::CodeAction(types::CodeAction {
         title: format!("{DIAGNOSTIC_NAME}: Optimize imports"),
         kind: Some(crate::SOURCE_OPTIMIZE_IMPORTS_RUFF),
+        edit,
+        data,
+        ..Default::default()
+    }))
+}
+
+fn format_and_organize_imports(snapshot: &DocumentSnapshot) -> crate::Result<CodeActionResponse> {
+    let (edit, data) = deferred_or_resolved(snapshot, |snapshot| {
+        resolve_edit_for_format_and_organize_imports(snapshot)
+    })?;
+
+    Ok(CodeActionResponse::CodeAction(types::CodeAction {
+        title: format!("{DIAGNOSTIC_NAME}: Format document and organize imports"),
+        kind: Some(crate::SOURCE_FORMAT_AND_ORGANIZE_IMPORTS_RUFF),
         edit,
         data,
         ..Default::default()

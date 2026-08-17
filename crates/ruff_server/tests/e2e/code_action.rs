@@ -291,6 +291,7 @@ fn save_time_actions_are_not_offered_unasked() -> Result<()> {
 
     assert!(
         !kinds.contains(&"source.optimizeImports.ruff")
+            && !kinds.contains(&"source.formatAndOrganizeImports.ruff")
             && !kinds.contains(&"source.formatAndOptimizeImports.ruff"),
         "Unasked-for source actions leaked into the menu: {kinds:?}"
     );
@@ -314,6 +315,61 @@ fn optimize_imports_is_answered_when_named() -> Result<()> {
         .expect("Expected Some response");
 
     assert_json_snapshot!(actions);
+
+    Ok(())
+}
+
+/// The *Reformat Code* composite: sorts and formats, and leaves the unused `import os` alone.
+///
+/// This is the whole difference from `formatAndOptimizeImports`, and it is the point of having
+/// both — laying a file out is not licence to delete anything from it.
+#[test]
+fn format_and_organize_imports_is_answered_when_named() -> Result<()> {
+    let mut server = TestServerBuilder::new()?.with_workspace(".")?.build();
+
+    server.open_text_document("test.py", NEEDS_EVERYTHING, 1);
+
+    let actions = server
+        .code_action_request_only(
+            "test.py",
+            vec![CodeActionKind::new("source.formatAndOrganizeImports.ruff")],
+        )
+        .expect("Expected Some response");
+
+    assert_json_snapshot!(actions);
+
+    Ok(())
+}
+
+/// The deferred round trip for the *Reformat Code* composite, which is the path the plugin takes.
+#[test]
+fn format_and_organize_imports_resolves_deferred() -> Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(".")?
+        .enable_code_action_edit_resolution(true)
+        .build();
+
+    server.open_text_document("test.py", NEEDS_EVERYTHING, 1);
+
+    let actions = server
+        .code_action_request_only(
+            "test.py",
+            vec![CodeActionKind::new("source.formatAndOrganizeImports.ruff")],
+        )
+        .expect("Expected Some response");
+
+    let [CodeActionResponse::CodeAction(action)] = actions.as_slice() else {
+        panic!("Expected exactly one code action, got {actions:?}");
+    };
+    assert!(
+        action.edit.is_none(),
+        "A deferred action should carry no edit until it is resolved"
+    );
+
+    let request_id = server.send_request::<CodeActionResolveRequest>(action.clone());
+    let resolved = server.await_response::<CodeActionResolveRequest>(&request_id);
+
+    assert_json_snapshot!(resolved.edit);
 
     Ok(())
 }

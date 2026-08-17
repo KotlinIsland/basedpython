@@ -29,6 +29,8 @@ const SOURCE_ORGANIZE_IMPORTS_RUFF: CodeActionKind =
     CodeActionKind::new("source.organizeImports.ruff");
 const SOURCE_OPTIMIZE_IMPORTS_RUFF: CodeActionKind =
     CodeActionKind::new("source.optimizeImports.ruff");
+const SOURCE_FORMAT_AND_ORGANIZE_IMPORTS_RUFF: CodeActionKind =
+    CodeActionKind::new("source.formatAndOrganizeImports.ruff");
 const SOURCE_FORMAT_AND_OPTIMIZE_IMPORTS_RUFF: CodeActionKind =
     CodeActionKind::new("source.formatAndOptimizeImports.ruff");
 const NOTEBOOK_SOURCE_FIX_ALL_RUFF: CodeActionKind =
