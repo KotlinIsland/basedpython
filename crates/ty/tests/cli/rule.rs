@@ -54,7 +54,8 @@ fn rule_json_output() {
       "status": {
         "type": "stable",
         "since": "0.0.1-alpha.1"
-      }
+      },
+      "markdown": "# invalid-return-type\n\nDefault level: error | Stable (since 0.0.1-alpha.1)\n\n## What it does\n\nDetects returned values that can't be assigned to the function's annotated return type.\n\nNote that the special case of a function with a non-`None` return type and an empty body\nis handled by the separate `empty-body` error code.\n\n## Why is this bad?\n\nReturning an object of a type incompatible with the annotated return type\nis unsound, and will lead to ty inferring incorrect types elsewhere.\n\n## Examples\n\n```python\ndef func() -> int:\n    return \"a\"  # error: [invalid-return-type]\n```"
     }
     ----- stderr -----
     "###);

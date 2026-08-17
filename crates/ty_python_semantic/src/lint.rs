@@ -135,6 +135,28 @@ impl LintMetadata {
         &self.status
     }
 
+    /// The markdown explaining this lint: what it is called, how it is reported, and its prose.
+    ///
+    /// Lives here rather than in whichever tool wants to show it. `by explain rule` and the
+    /// editor's *Explain Rule* are the same question, so they render the same answer — one
+    /// implementation, in the crate that owns the lints.
+    pub fn documentation_markdown(&self) -> String {
+        let status = match self.status() {
+            LintStatus::Stable { since } => format!("Stable (since {since})"),
+            LintStatus::Deprecated { since, reason } => {
+                format!("Deprecated (since {since}): {reason}")
+            }
+            LintStatus::Removed { since, reason } => format!("Removed (since {since}): {reason}"),
+        };
+
+        format!(
+            "# {name}\n\nDefault level: {level} | {status}\n\n{documentation}",
+            name = self.name(),
+            level = self.default_level(),
+            documentation = self.documentation().trim(),
+        )
+    }
+
     pub fn file(&self) -> &str {
         self.file
     }

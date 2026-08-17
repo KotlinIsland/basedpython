@@ -15,6 +15,8 @@ struct Explanation<'a> {
     documentation: String,
     default_level: Level,
     status: LintStatus,
+    /// The rendered form, so a client reading the json gets the same prose the terminal shows.
+    markdown: String,
 }
 
 impl<'a> Explanation<'a> {
@@ -25,25 +27,16 @@ impl<'a> Explanation<'a> {
             documentation: lint.documentation(),
             default_level: lint.default_level(),
             status: *lint.status(),
+            markdown: lint.documentation_markdown(),
         }
     }
 }
 
 impl std::fmt::Display for Explanation<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "# {}\n", self.name)?;
-
-        let status = match self.status {
-            LintStatus::Stable { since } => format!("Stable (since {since})"),
-            LintStatus::Deprecated { since, reason } => {
-                format!("Deprecated (since {since}): {reason}")
-            }
-            LintStatus::Removed { since, reason } => format!("Removed (since {since}): {reason}"),
-        };
-
-        writeln!(f, "Default level: {} | {status}\n", self.default_level)?;
-
-        f.write_str(self.documentation.trim())
+        // The lint renders its own documentation, so this and the editor's *Explain Rule* show the
+        // same text rather than two renderings that drift.
+        f.write_str(&self.markdown)
     }
 }
 
