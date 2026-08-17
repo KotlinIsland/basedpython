@@ -30,7 +30,13 @@ from basedpython.build import (
     BuildError,
     Staged,
     _merged_dependencies,
+    _python_tag,
     _read_project_metadata,
+    _replace_tag,
+    _rerecord,
+    _retag,
+    _retagged_name,
+    _target_version,
     _toml,
     _write_staged_pyproject,
 )
@@ -341,3 +347,148 @@ def test_a_declaration_is_matched_however_it_is_spelled():
             {"dependencies": [spelling]}, ["typing_extensions>=4.12"]
         )
         assert merged == [spelling], spelling
+
+
+# ── tagging a wheel for the python it was lowered for ────────────────────────
+
+
+def test_the_target_version_comes_from_the_config_setting():
+    assert _target_version({"python-version": "3.12"}) == "3.12"
+    assert _target_version(None) is None
+    assert _target_version({}) is None
+    assert _target_version({"other": "x"}) is None
+
+
+def test_a_target_that_is_not_a_python_version_is_reported():
+    for bad in ("3", "py312", "3.12.1", "latest", ""):
+        with reports("python version"):
+            _target_version({"python-version": bad})
+
+
+def test_a_version_becomes_the_tag_an_installer_selects_on():
+    assert _python_tag("3.9") == "py39"
+    assert _python_tag("3.13") == "py313"
+
+
+def test_only_the_python_field_of_the_name_changes():
+    assert (
+        _retagged_name("thing-1.0-py3-none-any.whl", "py313")
+        == "thing-1.0-py313-none-any.whl"
+    )
+    # a version with its own hyphens leaves the three tag fields where they are
+    assert (
+        _retagged_name("thing-1.0-rc1-py3-none-any.whl", "py39")
+        == "thing-1.0-rc1-py39-none-any.whl"
+    )
+
+
+def test_a_name_that_is_not_a_wheel_is_reported():
+    with reports("re-tag"):
+        _retagged_name("nonsense.whl", "py39")
+
+
+def test_the_tag_line_is_rewritten_and_the_rest_is_left_alone():
+    original = b"Wheel-Version: 1.0\nGenerator: uv 0.12.5\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+    rewritten = _replace_tag(original, "py311")
+    assert b"Tag: py311-none-any\n" in rewritten
+    assert b"Generator: uv 0.12.5\n" in rewritten
+    assert b"Root-Is-Purelib: true\n" in rewritten
+
+
+def test_a_wheel_with_no_tag_to_rewrite_is_reported():
+    with reports("`Tag:`"):
+        _replace_tag(b"Wheel-Version: 1.0\n", "py39")
+
+
+def test_the_record_restates_the_file_that_changed():
+    """`RECORD` is what an installer verifies against, so a file rewritten
+    without it is a wheel that reports itself as corrupt."""
+    record = (
+        b"thing/__init__.py,sha256=AAA,0\n"
+        b"thing-1.0.dist-info/WHEEL,sha256=STALE,10\n"
+        b"thing-1.0.dist-info/RECORD,,\n"
+    )
+    rewritten = _rerecord(record, "thing-1.0.dist-info/WHEEL", b"Tag: py39-none-any\n")
+    lines = rewritten.decode().splitlines()
+    assert lines[0] == "thing/__init__.py,sha256=AAA,0"
+    assert lines[1].startswith("thing-1.0.dist-info/WHEEL,sha256=")
+    assert not lines[1].endswith("STALE,10")
+    assert lines[1].endswith(",19")
+    assert lines[2] == "thing-1.0.dist-info/RECORD,,"
+
+
+def test_a_record_that_does_not_mention_the_file_is_reported():
+    with reports("RECORD"):
+        _rerecord(b"thing/__init__.py,sha256=AAA,0\n", "missing/WHEEL", b"")
+
+
+def build_wheel_fixture(directory: Path) -> Path:
+    """A minimal but valid wheel, tagged generically."""
+    import zipfile
+
+    wheel = directory / "thing-1.0-py3-none-any.whl"
+    metadata = b"Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("thing/__init__.py", "x = 1\n")
+        archive.writestr("thing-1.0.dist-info/WHEEL", metadata)
+        archive.writestr("thing-1.0.dist-info/METADATA", "Name: thing\n")
+        archive.writestr(
+            "thing-1.0.dist-info/RECORD",
+            "thing/__init__.py,sha256=AAA,6\n"
+            f"thing-1.0.dist-info/WHEEL,sha256=STALE,{len(metadata)}\n"
+            "thing-1.0.dist-info/RECORD,,\n",
+        )
+    return wheel
+
+
+def test_a_retagged_wheel_keeps_everything_but_its_tag(tmp_path: Path):
+    import base64
+    import hashlib
+    import zipfile
+
+    wheel = build_wheel_fixture(tmp_path)
+    name = _retag(wheel, "3.13")
+
+    assert name == "thing-1.0-py313-none-any.whl"
+    assert not wheel.exists(), "the wheel under the old name is gone"
+
+    with zipfile.ZipFile(tmp_path / name) as archive:
+        assert archive.read("thing/__init__.py") == b"x = 1\n"
+        assert b"Tag: py313-none-any" in archive.read("thing-1.0.dist-info/WHEEL")
+
+        # and the record agrees with what is actually in the archive, or an
+        # installer reports the wheel as corrupt
+        payload = archive.read("thing-1.0.dist-info/WHEEL")
+        digest = base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b"=")
+        recorded = archive.read("thing-1.0.dist-info/RECORD").decode()
+        assert f"sha256={digest.decode()},{len(payload)}" in recorded
+
+
+def test_a_retagged_wheel_keeps_the_modes_it_arrived_with(tmp_path: Path):
+    """A wheel's entries carry their mode, and an installer honours it — so a
+    script in `.data/scripts/` that arrives executable has to leave executable.
+    Rebuilding each entry's metadata instead of reusing it made every one
+    `0o644`."""
+    import zipfile
+
+    wheel = tmp_path / "thing-1.0-py3-none-any.whl"
+    metadata = b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+    script = b"#!/bin/sh\necho hi\n"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        executable = zipfile.ZipInfo("thing-1.0.data/scripts/tool")
+        executable.external_attr = (0o755 << 16) | 0o100000
+        archive.writestr(executable, script)
+        archive.writestr("thing-1.0.dist-info/WHEEL", metadata)
+        archive.writestr(
+            "thing-1.0.dist-info/RECORD",
+            f"thing-1.0.data/scripts/tool,sha256=x,{len(script)}\n"
+            f"thing-1.0.dist-info/WHEEL,sha256=y,{len(metadata)}\n"
+            "thing-1.0.dist-info/RECORD,,\n",
+        )
+
+    name = _retag(wheel, "3.13")
+
+    with zipfile.ZipFile(tmp_path / name) as archive:
+        mode = archive.getinfo("thing-1.0.data/scripts/tool").external_attr >> 16
+        assert mode == 0o755, f"expected 0o755, got {mode:o}"
+        assert archive.read("thing-1.0.data/scripts/tool") == script

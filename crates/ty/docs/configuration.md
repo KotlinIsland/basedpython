@@ -994,6 +994,42 @@ The value is a path relative to the project root.
 
 ---
 
+### `wheel-versions`
+
+The python versions to build a wheel for, one wheel each.
+
+`by build --wheels` builds one wheel per version listed and tags each for
+the python it was lowered to, so an installer hands every interpreter the
+best wheel it can use. A python with no wheel of its own takes the newest
+one below it.
+
+Defaults to every version from the one the project targets up to the
+newest this release knows about — which is what `requires-python` already
+says the project supports, so most projects need not set this. List them
+explicitly to ship fewer.
+
+**Default value**: `null`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.build]
+    wheel-versions = ["3.9", "3.13"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [build]
+    wheel-versions = ["3.9", "3.13"]
+    ```
+
+---
+
 ## `editor`
 
 ### `common-aliases`

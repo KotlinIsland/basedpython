@@ -137,9 +137,18 @@ pub(crate) enum Command {
         /// [default: the project's configured python version]
         #[arg(long, value_name = "VERSION")]
         min_version: Option<String>,
-        /// Where to write the built project.
-        #[arg(short = 'o', long, value_name = "DIR", default_value = "out")]
-        out: PathBuf,
+        /// Build one publishable wheel per python version, and a source
+        /// distribution, into `dist/`.
+        ///
+        /// Each wheel is lowered to the version it is tagged for, so an
+        /// installer hands every interpreter the best wheel it can use rather
+        /// than one lowered to the oldest python the project supports. Needs
+        /// `uv`, which does the packaging.
+        #[arg(long, conflicts_with_all = ["min_version", "print_manifest"])]
+        wheels: bool,
+        /// Where to write the output [default: `out`, or `dist` with `--wheels`]
+        #[arg(short = 'o', long, value_name = "DIR")]
+        out: Option<PathBuf>,
         /// Report what the build read and produced, as `<kind> <value>` lines.
         ///
         /// `input <path>` for every file the project is made of — what a source

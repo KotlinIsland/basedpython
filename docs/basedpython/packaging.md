@@ -118,6 +118,51 @@ there takes them back for the build too:
 exclude = ["!dist"]
 ```
 
+## a wheel for each python
+
+one wheel, lowered to the oldest python the project supports, runs everywhere —
+and that is what `uv build` produces. it also means a reader on 3.13 gets code
+written around 3.9's limits, and a `typing_extensions` dependency they have no
+use for
+
+`by build --wheels` builds one wheel per version instead, each lowered to the
+python it is tagged for:
+
+```sh
+by build --wheels
+```
+
+```text
+building for 3.12, 3.13, 3.14
+
+dist/lib9-0.3.0.tar.gz
+dist/lib9-0.3.0-py312-none-any.whl
+dist/lib9-0.3.0-py313-none-any.whl
+dist/lib9-0.3.0-py314-none-any.whl
+```
+
+an installer picks the best wheel each interpreter can use, and a python with no
+wheel of its own takes the newest one below it — so 3.15 takes the 3.14 wheel,
+and nothing is left uncovered
+
+the versions come from `requires-python`, up to the newest this release can emit
+for. to ship fewer:
+
+```toml
+[tool.basedpython.build]
+wheel-versions = ["3.12", "3.14"]
+```
+
+`uv` does the packaging, called once per version; `by` runs the loop and checks
+the result. nothing reaches `dist/` unless the whole set built, because a release
+missing one of its wheels hands that interpreter an older one without saying so
+
+`dist/` itself is checked too, since that is where a release is published *from*.
+an artifact of this release that this build did not produce — an untagged wheel
+from an earlier `uv build`, or a version no longer built — is refused, because
+`uv publish` takes the directory as it finds it and an untagged wheel outranks
+every wheel that is tagged. remove them and build again
+
 ## dependencies lowering adds
 
 Building for an older python can put a name in the output that only
