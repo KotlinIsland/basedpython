@@ -2073,7 +2073,13 @@ By default, ty excludes commonly ignored directories:
 - `**/venv/`
 
 You can override any default exclude by using a negated pattern. For example,
-to re-include `dist` use `exclude = ["!dist"]`
+to re-include `dist` use `exclude = ["!dist"]`, or `exclude = ["!**/dist/"]` to
+re-include every `dist` directory rather than only the one at the project root.
+
+A negated pattern can only re-include something that is still walked, so it cannot
+reach into a directory that is itself excluded. `exclude = ["!dist/generated.py"]`
+re-includes nothing, because the walk stops at `dist`. Re-include the directory
+first: `exclude = ["!**/dist/", "**/dist/**", "!**/dist/generated.py"]`
 
 **Default value**: `null`
 

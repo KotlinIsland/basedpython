@@ -291,3 +291,88 @@ impl GitignoreBuilder {
         Ok(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use ruff_db::system::SystemPath;
+
+    use crate::GlobFilterCheckMode;
+    use crate::glob::exclude::{ExcludeFilter, ExcludeFilterBuilder};
+    use crate::glob::{PortableGlobKind, PortableGlobPattern};
+    use crate::metadata::options::DEFAULT_SRC_EXCLUDES;
+
+    /// Builds an exclude filter the same way `build_exclude_filter` does: the defaults first,
+    /// anchored at the file system root, then the user's patterns anchored at the project root.
+    fn filter_with_defaults(
+        user_patterns: impl IntoIterator<Item = &'static str>,
+    ) -> ExcludeFilter {
+        let mut builder = ExcludeFilterBuilder::new();
+
+        for pattern in DEFAULT_SRC_EXCLUDES {
+            builder
+                .add(
+                    &PortableGlobPattern::parse(pattern, PortableGlobKind::Exclude)
+                        .unwrap()
+                        .into_absolute(""),
+                )
+                .unwrap();
+        }
+
+        for pattern in user_patterns {
+            builder
+                .add(
+                    &PortableGlobPattern::parse(pattern, PortableGlobKind::Exclude)
+                        .unwrap()
+                        .into_absolute("/project"),
+                )
+                .unwrap();
+        }
+
+        builder.build().unwrap()
+    }
+
+    #[track_caller]
+    fn assert_excluded(patterns: impl IntoIterator<Item = &'static str>, path: &str) {
+        let filter = filter_with_defaults(patterns);
+        assert!(
+            filter.match_directory(SystemPath::new(path), GlobFilterCheckMode::TopDown),
+            "`{path}` should be excluded"
+        );
+    }
+
+    #[track_caller]
+    fn assert_not_excluded(patterns: impl IntoIterator<Item = &'static str>, path: &str) {
+        let filter = filter_with_defaults(patterns);
+        assert!(
+            !filter.match_directory(SystemPath::new(path), GlobFilterCheckMode::TopDown),
+            "`{path}` should not be excluded"
+        );
+    }
+
+    /// A negation that names the directory itself re-includes it, whichever way it's spelled.
+    #[test]
+    fn negation_re_includes_a_default_excluded_directory() {
+        assert_excluded([], "/project/dist");
+
+        assert_not_excluded(["!dist"], "/project/dist");
+        assert_not_excluded(["!dist/"], "/project/dist");
+        assert_not_excluded(["!**/dist/"], "/project/dist");
+        assert_not_excluded(["!./dist"], "/project/dist");
+        assert_not_excluded(["!/project/dist"], "/project/dist");
+    }
+
+    /// Patterns are anchored at the project root, so an unqualified negation doesn't reach a
+    /// nested directory of the same name. `**/` does.
+    #[test]
+    fn negation_of_a_nested_directory_needs_a_wildcard() {
+        assert_excluded(["!dist"], "/project/pkg/dist");
+        assert_not_excluded(["!**/dist/"], "/project/pkg/dist");
+    }
+
+    /// `dist/**` names the contents of `dist`, not `dist` itself, so negating it leaves the
+    /// directory excluded and the contents out of reach.
+    #[test]
+    fn negating_the_contents_leaves_the_directory_excluded() {
+        assert_excluded(["!dist/**"], "/project/dist");
+    }
+}

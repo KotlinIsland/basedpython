@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read};
@@ -222,21 +223,30 @@ pub(crate) fn cmd_run(
         for entry in &traceback_entries {
             let source = fs::read_to_string(&entry.by_path)
                 .with_context(|| format!("could not read {}", entry.by_path.display()))?;
-            let name = entry
+            // the generated tree *is* the module tree, so the dotted name is the
+            // path within it — and it has to be dotted, because a class's
+            // `__module__` is read off the front of its type's `tp_name`. a file
+            // the tree gives no name to is left interpreted rather than compiled
+            // under a guessed one
+            let relative = entry
                 .py_path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .context("a source file has no usable module name")?;
-            if name == module {
+                .strip_prefix(tmp.path())
+                .unwrap_or(&entry.py_path);
+            let Some(name) = dotted_module_name(relative) else {
+                continue;
+            };
+            if name.dotted() == module {
                 continue;
             }
-            let dir = entry.py_path.parent().unwrap_or(tmp.path());
             let mut lowered = by_irbuild::module_from_source(&source, name, options.language);
             lowered.lines = Some(by_ir::function::LineTable::new(
                 entry.by_path.display().to_string(),
                 &source,
             ));
-            by_build::build_lowered(lowered, &source, &toolchain, dir, &options)
+            // the root of the generated tree, not the directory the `.py` landed
+            // in: the build lays the extension out at its module's own place, and
+            // handing it the leaf directory would nest the tree inside itself
+            by_build::build_lowered(lowered, &source, &toolchain, tmp.path(), &options)
                 .with_context(|| format!("could not compile {}", entry.by_path.display()))?;
             built += 1;
         }
@@ -308,6 +318,89 @@ fn module_relative_path(roots: &[PathBuf], root: &Path, bpy: &Path) -> PathBuf {
         })
         .collect::<PathBuf>()
         .with_extension("py")
+}
+
+/// The dotted module name a file laid out at `relative` will be imported under.
+///
+/// The tree the generated python is written into *is* the module tree — every
+/// file lands at [`module_relative_path`] — so the name is that path with its
+/// separators turned into dots. `pkg/__init__.py` is the package `pkg` itself,
+/// which is the name a class defined in it reports as its `__module__`.
+///
+/// `None` when the path names no module: nothing but `__init__.py` at the root,
+/// or a component that is not plain text. A caller with no name has nothing to
+/// compile, and guessing one would be worse than saying so.
+fn dotted_module_name(relative: &Path) -> Option<by_ir::ModuleName> {
+    let mut components: Vec<&str> = Vec::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return None;
+        };
+        components.push(name.to_str()?);
+    }
+    let last = components.pop()?;
+    let stem = last.strip_suffix(".py").unwrap_or(last);
+    // a package's `__init__` is not a module beside the package, it *is* the
+    // package — so a class written in it belongs to the package's own name
+    let is_package = stem == "__init__";
+    if !is_package {
+        components.push(stem);
+    }
+    if components.is_empty() {
+        return None;
+    }
+    let dotted = components.join(".");
+    Some(if is_package {
+        by_ir::ModuleName::package(dotted)
+    } else {
+        by_ir::ModuleName::new(dotted)
+    })
+}
+
+/// The dotted module name `file` is imported under, as the project resolves it.
+///
+/// The resolver is what knows this, and nothing simpler will do: it accounts for
+/// the search paths (`src/pkg/m.py` in a src-layout project is `pkg.m`, not
+/// `src.pkg.m`), for a `pkg/__init__.py` whose module is `pkg`, and for a
+/// namespace package, which a walk looking for `__init__.py` would stop short of.
+/// It also refuses a directory that merely holds `.py` files — cpython's own
+/// `config-3.13-darwin` is not a package, and its name is not even an identifier.
+///
+/// `None` when no search path reaches the file. Such a file has no dotted name to
+/// be had: the only way to import it is from its own directory, under its stem.
+fn resolved_module_name(db: &ProjectDatabase, file: ruff_db::files::File) -> Option<String> {
+    let program_file = ty_python_semantic::Db::program_file(db, file);
+    let module = ty_module_resolver::file_to_module(db, program_file.resolver_file(db))?;
+    Some(module.name(db).to_string())
+}
+
+/// The name `path` is compiled under — dotted, and knowing whether it is a
+/// package's.
+///
+/// The *dotted* name because it is what the emitted types carry: cpython reads a
+/// class's `__module__` off the front of its `tp_name`, so a class in
+/// `tkinter/m.py` compiled as plain `m` reports a module nothing can look up —
+/// and `dataclasses` does exactly that lookup.
+///
+/// Package or not because the two are written to different files. The resolver
+/// names a package after its directory, so an `__init__.py` it resolved is that
+/// package, and its artefact is the `__init__` inside the directory. A file the
+/// resolver could not reach has no dotted name at all: it falls back to its stem,
+/// which is the only name it could be imported under, from its own directory.
+fn compiled_module_name(
+    db: &ProjectDatabase,
+    path: &Path,
+    file: ruff_db::files::File,
+) -> anyhow::Result<by_ir::ModuleName> {
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .context("a source file has no usable module name")?;
+    Ok(match resolved_module_name(db, file) {
+        Some(resolved) if stem == "__init__" => by_ir::ModuleName::package(resolved),
+        Some(resolved) => by_ir::ModuleName::new(resolved),
+        None => by_ir::ModuleName::new(stem),
+    })
 }
 
 /// The project's `run.main` entry point, if one is configured.
@@ -435,7 +528,40 @@ pub(crate) fn cmd_compile(
     // gradual, and `--no-any` would then fail on noise
     // `compile` embeds fallback source produced by the untyped transpile, which
     // takes no db, so the rebuilder the other commands thread through is unused here
-    let (db, handles, _rebuilder, _root) = build_project_db(&cwd, COMPILABLE_SOURCES)?;
+    let (db, project, _rebuilder, _root) = build_project_db(&cwd, COMPILABLE_SOURCES)?;
+
+    // the database holds the whole project so a type imported from a sibling
+    // resolves, but only the files that were *asked for* are checked and emitted.
+    // compiling the project regardless of the arguments is not a harmless
+    // superset: it costs every other module's build time, it fails the command
+    // for a diagnostic in a file nobody named, and — because the argument is
+    // ignored rather than rejected — it silently compiles a file beside the one
+    // under test, which has already invalidated one delta-debugging run here
+    let requested: Vec<PathBuf> = sources
+        .iter()
+        .map(|source| {
+            if source.is_absolute() {
+                source.clone()
+            } else {
+                cwd.join(source)
+            }
+        })
+        .map(|source| source.canonicalize().unwrap_or(source))
+        .collect();
+    let handles: Vec<_> = project
+        .iter()
+        .filter(|(path, _)| {
+            files.is_empty()
+                || requested.iter().any(|wanted| {
+                    *wanted == **path || path.canonicalize().is_ok_and(|p| p == *wanted)
+                })
+        })
+        .cloned()
+        .collect();
+    if handles.is_empty() {
+        eprintln!("no .by or .py files found");
+        return Ok(ExitStatus::Success);
+    }
 
     // a source with nothing to lower blocks, the way it does for `build` and
     // `transpile` — it could not be parsed, or could not be read at all. a *type*
@@ -459,13 +585,32 @@ pub(crate) fn cmd_compile(
         render_diagnostics(&db, &diagnostics)?;
     }
 
+    // what each source will be compiled as, worked out before anything is written:
+    // two sources that land on the same artefact used to leave only the second, and
+    // nothing said so
+    let mut names: Vec<by_ir::ModuleName> = Vec::with_capacity(handles.len());
+    let mut claimed: HashMap<PathBuf, &Path> = HashMap::new();
     for (path, file) in &handles {
+        let name = compiled_module_name(&db, path, *file)?;
+        // keyed on the artefact rather than on the name, because the artefact is
+        // what would be overwritten — and a file the resolver cannot name falls
+        // back to its stem, which two directories can share
+        let artifact = name.relative_path("");
+        if let Some(first) = claimed.insert(artifact, path.as_path()) {
+            anyhow::bail!(
+                "`{}` and `{}` would both be compiled as the module `{}`, \
+                 and the second would replace the first's artifact",
+                first.display(),
+                path.display(),
+                name.dotted()
+            );
+        }
+        names.push(name);
+    }
+
+    for ((path, file), name) in handles.iter().zip(names) {
         let source = fs::read_to_string(path)
             .with_context(|| format!("could not read {}", path.display()))?;
-        let module = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .context("a source file has no usable module name")?;
 
         let program_file = ty_python_semantic::Db::program_file(&db, *file);
         let parsed = ruff_db::parsed::parsed_module(&db, program_file.python_file(&db)).load(&db);
@@ -480,7 +625,7 @@ pub(crate) fn cmd_compile(
             &model.program_environment(),
             &model,
             parsed.suite(),
-            module,
+            name,
             options.language.unique_loop_bindings(),
         );
         // the real path, so a `#line` in the generated C resolves for a debugger
@@ -1045,6 +1190,29 @@ const BY_SOURCES: &[&str] = &["by", "byi"];
 /// output directory rather than beside the source, so a `.py` is an input
 const COMPILABLE_SOURCES: &[&str] = &["by", "byi", "py"];
 
+/// The [`NON_SOURCE_DIRS`] entries that ty's own `src.exclude` defaults don't already drop.
+///
+/// [`is_hidden_within`] runs over files that have *already* passed the project's file filter,
+/// so for a name ty excludes by default — `venv`, `dist`, `node_modules`, `.tox`, … — a file
+/// can only have reached it because the configuration deliberately re-included the directory
+/// with a negated pattern, which `src.exclude` documents as the way to override a default.
+/// Re-dropping such a file here would quietly undo that, and it's why a project could not
+/// compile a module of its own that happens to live in a directory named `venv`.
+///
+/// What's left are the names ty has no default opinion about, where this walk is the only
+/// thing keeping a dependency tree or a build output out of the emitted set. The unfiltered
+/// [`NON_SOURCE_DIRS`] still applies to [`may_contain_sources`], which walks the file system
+/// directly and never sees the project configuration at all.
+const NON_SOURCE_DIRS_TY_ALLOWS: &[&str] = &[
+    "env",
+    ".env",
+    "site-packages",
+    "__pycache__",
+    ".pytest_cache",
+    "build",
+    "out",
+];
+
 /// Whether `path` sits inside a hidden or build-output directory under `root`.
 fn is_hidden_within(path: &Path, root: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {
@@ -1055,7 +1223,7 @@ fn is_hidden_within(path: &Path, root: &Path) -> bool {
         .into_iter()
         .flat_map(Path::components)
         .filter_map(|component| component.as_os_str().to_str())
-        .any(|name| name.starts_with('.') || NON_SOURCE_DIRS.contains(&name))
+        .any(|name| name.starts_with('.') || NON_SOURCE_DIRS_TY_ALLOWS.contains(&name))
 }
 
 /// Build a project db rooted at `cwd`, returning it alongside the
@@ -1287,7 +1455,10 @@ pub(crate) fn cmd_version_by(output_format: crate::args::HelpFormat) -> ExitStat
 
 #[cfg(test)]
 mod tests {
-    use super::{is_hidden_within, module_relative_path, reverse_dir, reverse_dir_converting};
+    use super::{
+        dotted_module_name, is_hidden_within, module_relative_path, reverse_dir,
+        reverse_dir_converting,
+    };
     use crate::ExitStatus;
     use by_transforms::config::Config;
     use std::path::{Path, PathBuf};
@@ -1311,6 +1482,37 @@ mod tests {
             module_relative_path(&roots, Path::new("/p"), Path::new("/p/top.by")),
             PathBuf::from("top.py")
         );
+    }
+
+    /// a compiled module carries its name into every type it emits, and cpython
+    /// reads a class's `__module__` off the front of that — so the name of a file
+    /// inside the tree is the whole path to it, not the file's own stem
+    #[test]
+    fn a_file_inside_the_tree_is_named_for_its_whole_path() {
+        assert_eq!(
+            dotted_module_name(Path::new("pkg/sub/main.py")),
+            Some(by_ir::ModuleName::new("pkg.sub.main"))
+        );
+        assert_eq!(
+            dotted_module_name(Path::new("top.py")),
+            Some(by_ir::ModuleName::new("top"))
+        );
+    }
+
+    /// a package's `__init__` is not a module beside the package, it *is* the
+    /// package — which is the module a class written in it belongs to
+    #[test]
+    fn a_packages_init_is_named_for_the_package() {
+        let name = dotted_module_name(Path::new("pkg/__init__.py"));
+        assert_eq!(name, Some(by_ir::ModuleName::package("pkg")));
+        // and its artefact is the `__init__` inside the package, not a file
+        // called `pkg` beside it — that is the only place cpython's finder looks
+        assert_eq!(
+            name.map(|name| name.relative_path(".so")),
+            Some(PathBuf::from("pkg/__init__.so"))
+        );
+        // and at the root there is no package for it to be, so there is no name
+        assert_eq!(dotted_module_name(Path::new("__init__.py")), None);
     }
 
     /// a root that shares no prefix with the file — which is what `canonicalize`
@@ -1340,6 +1542,10 @@ mod tests {
         assert!(!is_hidden_within(Path::new("/p/src/pkg/main.by"), root));
         // the file's own name is not a directory component
         assert!(!is_hidden_within(Path::new("/p/.hidden.by"), root));
+        // a name ty excludes by default is left to the project filter, so that a
+        // negated `src.exclude` pattern re-including it isn't quietly undone here
+        assert!(!is_hidden_within(Path::new("/p/venv/__init__.by"), root));
+        assert!(!is_hidden_within(Path::new("/p/dist/main.by"), root));
     }
 
     /// a source that declares its own encoding converts like any other, and the
