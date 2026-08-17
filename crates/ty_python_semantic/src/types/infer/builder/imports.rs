@@ -468,7 +468,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             framework.package, framework.stubs_distribution,
         ));
         diagnostic.info(format_args!(
-            "Install it with `pip install {}` (or add it to your dev dependencies)",
+            "Install it with `uv add {} --dev`",
             framework.stubs_distribution,
         ));
     }

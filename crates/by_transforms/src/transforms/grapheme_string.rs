@@ -68,7 +68,7 @@ def _by_graphemes(_text):
     except ImportError as _err:
         raise ImportError(
             \"basedpython's grapheme string surface (character_count / first / last / \"
-            \"characters / character_at / ...) needs the 'regex' package: pip install regex\"
+            \"characters / character_at / ...) needs the 'regex' package: uv add regex\"
         ) from _err
     return _regex.findall(r\"\\X\", _text)
 ";
@@ -379,7 +379,7 @@ def _by_graphemes(_text):
     except ImportError as _err:
         raise ImportError(
             \"basedpython's grapheme string surface (character_count / first / last / \"
-            \"characters / character_at / ...) needs the 'regex' package: pip install regex\"
+            \"characters / character_at / ...) needs the 'regex' package: uv add regex\"
         ) from _err
     return _regex.findall(r\"\\X\", _text)
 

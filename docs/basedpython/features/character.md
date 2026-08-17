@@ -54,7 +54,7 @@ grapheme clusters via the [`regex`](https://pypi.org/project/regex/) module's
 UAX #29 correctly (zwj emoji, regional-indicator flags, …), so it is a **runtime
 dependency of the grapheme surface**: a program that uses `character_count` /
 `first` / `last` / `characters` / `character_at` must have `regex` installed
-(`pip install regex`). if it is missing, the helper raises a clear `ImportError`
+(`uv add regex`). if it is missing, the helper raises a clear `ImportError`
 rather than silently miscounting — `len`-style code-point splitting would give
 `5` for the facepalm above, not `1`
 
