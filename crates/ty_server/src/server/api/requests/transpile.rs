@@ -41,6 +41,16 @@ pub(crate) struct TranspileParams {
     /// When true, go the other way: python in, basedpython out.
     #[serde(default)]
     pub(crate) reverse: bool,
+
+    /// Text to transpile instead of the document's own.
+    ///
+    /// For a fragment that is not a file: a selection the user asked about has no document of its
+    /// own, and the alternative — the client writing it to a temp file and running the CLI over
+    /// that — is the very thing this request exists to remove. `text_document` still says which
+    /// document the fragment came from, because that is what routes the request to a server; the
+    /// fragment is checked on its own, which is all a fragment can be.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source: Option<String>,
 }
 
 /// What came out, or why nothing did.
@@ -98,13 +108,21 @@ impl BackgroundDocumentRequestHandler for TranspileRequestHandler {
         };
 
         let config = config_for(db, snapshot.uri());
-        let source = ruff_db::source::source_text(db, file);
+        let document = ruff_db::source::source_text(db, file);
+        let source = params.source.as_deref().unwrap_or(document.as_str());
 
-        // Reverse goes through the text form: there is no python project db to infer against, and
-        // the rewrite is syntactic anyway. Forward uses the project db, which is the whole reason
-        // for answering here — cross-module types resolve.
+        // Reverse always goes through the text form: the rewrite is syntactic, and there is no
+        // python project db to infer against. Forward uses the project db when it is the whole
+        // document that was asked about — that is the reason for answering here, since cross-module
+        // types resolve — and the single-file path for a fragment, which has no module to resolve
+        // against however it is transpiled.
         let response = if params.reverse {
-            match by_transforms::reverse_transpile(source.as_str(), &config) {
+            match by_transforms::reverse_transpile(source, &config) {
+                Ok(out) => TranspileResponse::generated(out),
+                Err(error) => TranspileResponse::failed(error),
+            }
+        } else if params.source.is_some() {
+            match by_transforms::transpile(source, &config) {
                 Ok(out) => TranspileResponse::generated(out),
                 Err(error) => TranspileResponse::failed(error),
             }
@@ -160,6 +178,12 @@ mod tests {
             serde_json::from_str(r#"{"textDocument":{"uri":"file:///a.py"},"reverse":true}"#)
                 .expect("both fields are accepted");
         assert!(reverse.reverse);
+        assert!(reverse.source.is_none());
+
+        let fragment: TranspileParams =
+            serde_json::from_str(r#"{"textDocument":{"uri":"file:///a.by"},"source":"x = 1\n"}"#)
+                .expect("a fragment carries its own text");
+        assert_eq!(fragment.source.as_deref(), Some("x = 1\n"));
     }
 
     /// A failure travels as a result, so the client can show the reason rather than a dead request.

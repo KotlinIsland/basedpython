@@ -9,9 +9,9 @@ pub use locator::Locator;
 pub use noqa::{SuppressionKind, generate_suppression_edits};
 #[cfg(feature = "clap")]
 pub use registry::clap_completion::RuleParser;
+pub use rule_documentation::rule_documentation;
 #[cfg(feature = "clap")]
 pub use rule_selector::clap_completion::UnresolvedRuleSelectorParser;
-pub use rule_documentation::rule_documentation;
 pub use rule_selector::{RuleSelector, UnresolvedRuleSelector};
 pub use rules::pycodestyle::rules::IOError;
 
@@ -41,8 +41,8 @@ pub mod packaging;
 pub mod preview;
 pub mod registry;
 mod renamer;
-mod rule_redirects;
 pub mod rule_documentation;
+mod rule_redirects;
 pub mod rule_selector;
 pub mod rules;
 pub mod settings;

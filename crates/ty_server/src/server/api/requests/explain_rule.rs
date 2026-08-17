@@ -15,8 +15,8 @@ use ty_python_semantic::default_lint_registry;
 use crate::server::api::traits::{
     BackgroundRequestHandler, RequestHandler, RetriableRequestHandler,
 };
-use crate::session::client::Client;
 use crate::session::SessionSnapshot;
+use crate::session::client::Client;
 
 pub(crate) enum ExplainRuleRequest {}
 
