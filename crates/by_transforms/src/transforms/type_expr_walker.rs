@@ -38,7 +38,7 @@ use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Operator, Parameters, Stmt, TypeParam, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::type_info::TypeInfo;
+use crate::type_info::{TypeInfo, trailing_name};
 
 /// the kind of type position currently being visited. lets visitors
 /// distinguish (e.g.) a syntactic annotation from an interior subtree
@@ -283,14 +283,7 @@ impl TypePosWalker<'_> {
         let Some(types) = self.types else {
             return false;
         };
-        match value {
-            Expr::Name(n) => types.subscript_is_known_type_context(n),
-            Expr::Attribute(a) => match a.value.as_ref() {
-                Expr::Name(base) => types.attr_base_is_type_context(base),
-                _ => false,
-            },
-            _ => false,
-        }
+        trailing_name(value).is_some() && types.subscript_is_known_type_context(value)
     }
 }
 

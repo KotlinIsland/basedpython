@@ -14,7 +14,7 @@ use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, ExprSubscript, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::type_info::TypeInfo;
+use crate::type_info::{TypeInfo, trailing_name};
 
 pub(crate) struct LiteralReverse<'src> {
     source: &'src str,
@@ -38,17 +38,7 @@ impl<'src> LiteralReverse<'src> {
     /// `Literal` or `typing.Literal` / `typing_extensions.Literal`, where the
     /// bare name resolves to an import or is unresolved
     fn is_literal_name(&self, value: &Expr) -> bool {
-        match value {
-            Expr::Name(n) => n.id.as_str() == "Literal" && self.types.subscript_is_type_context(n),
-            Expr::Attribute(a) => {
-                a.attr.id.as_str() == "Literal"
-                    && match a.value.as_ref() {
-                        Expr::Name(base) => self.types.attr_base_is_type_context(base),
-                        _ => false,
-                    }
-            }
-            _ => false,
-        }
+        trailing_name(value) == Some("Literal") && self.types.subscript_is_type_context(value)
     }
 
     fn rewrite_literal_subscript(&self, s: &ExprSubscript) -> Option<String> {

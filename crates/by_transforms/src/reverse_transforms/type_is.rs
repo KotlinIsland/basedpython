@@ -10,7 +10,7 @@ use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-use crate::type_info::TypeInfo;
+use crate::type_info::{TypeInfo, trailing_name};
 
 pub(crate) struct TypeIsReverse<'src> {
     source: &'src str,
@@ -32,14 +32,7 @@ impl<'src> TypeIsReverse<'src> {
     }
 
     fn is_type_is(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Name(n) => n.id.as_str() == "TypeIs" && self.types.subscript_is_type_context(n),
-            Expr::Attribute(a) => {
-                a.attr.id.as_str() == "TypeIs"
-                    && matches!(a.value.as_ref(), Expr::Name(n) if self.types.attr_base_is_type_context(n))
-            }
-            _ => false,
-        }
+        trailing_name(expr) == Some("TypeIs") && self.types.subscript_is_type_context(expr)
     }
 }
 

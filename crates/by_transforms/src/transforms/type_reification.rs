@@ -41,7 +41,7 @@ use ruff_python_ast::{self as ast, Expr, PythonVersion, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{PassContext, TypeAwarePass};
-use crate::type_info::TypeInfo;
+use crate::type_info::{TypeInfo, trailing_name};
 
 /// dunder assignments whose values static readers (linters, type checkers,
 /// dataclass machinery) require to stay literal displays
@@ -121,14 +121,10 @@ impl<'ast> Visitor<'ast> for Reifier<'_> {
                 // in a type-context subscript (`dict[str, int]`, legacy
                 // `Callable[[int], str]`) the slice is a type expression, and
                 // a display there is type syntax, not a value
-                let type_context = match subscript.value.as_ref() {
-                    Expr::Name(name) => self.types.subscript_is_type_context(name),
-                    Expr::Attribute(attribute) => match attribute.value.as_ref() {
-                        Expr::Name(base) => self.types.attr_base_is_type_context(base),
-                        _ => false,
-                    },
-                    _ => false,
-                };
+                let type_context = trailing_name(subscript.value.as_ref()).is_some()
+                    && self
+                        .types
+                        .subscript_is_type_context(subscript.value.as_ref());
                 if type_context {
                     self.visit_expr(&subscript.value);
                 } else {
