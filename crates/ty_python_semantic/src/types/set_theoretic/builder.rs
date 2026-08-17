@@ -1025,13 +1025,82 @@ impl<'db> UnionBuilder<'db> {
                             self.elements.swap_remove(index);
                         }
                     }
-                    _ => self.push_type(ty, seen_aliases),
+                    _ => {
+                        if !self.widen_ungrouped_literals(literal, seen_aliases) {
+                            self.push_type(ty, seen_aliases);
+                        }
+                    }
                 }
             }
             // Adding `object` to a union results in `object`.
             ty if ty.is_object() && !cycle_recovery => self.collapse_to_object(),
             _ => self.push_type(ty, seen_aliases),
         }
+    }
+
+    /// basedpython: stand a recursively defined union's float and complex literals down to
+    /// their instance type once there are more of them than the fixed point can afford.
+    ///
+    /// Every literal kind handled above lives in a [`UnionElement`] group of its own, and
+    /// widening that group is what stops a union defined in terms of itself from gaining an
+    /// element on every round of the fixed-point iteration. Float and complex literals —
+    /// which only basedpython has, and only basedpython does arithmetic on — are kept as
+    /// ordinary union elements, so nothing bounded them. A loop that computes the next value
+    /// from the last, `t = t * 2`, folds `0.1 | 0.2 | 0.4 | …` one element longer each round,
+    /// so no round repeats the one before it and the iteration never converges.
+    ///
+    /// The one type a loop like that really determines is `float`, so past the limit that is
+    /// what the literals stand for. Both places a growing union is assembled are covered: the
+    /// loop-header union that approximates a loop's fixed point, and the union a cycle
+    /// recovery function rebuilds.
+    ///
+    /// The rule is written for every literal kind without a group rather than for these two,
+    /// so a kind added later is bounded whether or not anybody remembers this. The kinds that
+    /// cannot proliferate — a `bool`, a `LiteralString` — never reach the limit anyway.
+    ///
+    /// Returns `true` when the literal is already accounted for and the caller must not add
+    /// it.
+    fn widen_ungrouped_literals(
+        &mut self,
+        literal: LiteralValueType<'db>,
+        seen_aliases: &mut Vec<Type<'db>>,
+    ) -> bool {
+        // A union not defined in terms of itself is complete as soon as it is built, so there
+        // is nothing to converge and no reason to give its literals up.
+        if !self.recursively_defined.is_yes() {
+            return false;
+        }
+
+        let db = self.db;
+        let fallback = literal.fallback_instance(db, &self.env);
+        let mut same_kind = SmallVec::<[usize; 8]>::new();
+        for (index, element) in self.elements.iter().enumerate() {
+            let UnionElement::Type(existing) = element else {
+                continue;
+            };
+            // Once widened, the instance type stands for every literal of its kind, this one
+            // included. Outside recovery `push_type` reaches the same conclusion through the
+            // ordinary redundancy check, which also applies the simplifications skipped here.
+            if self.cycle_recovery && *existing == fallback {
+                return true;
+            }
+            if let Type::LiteralValue(existing_literal) = existing
+                && existing_literal.fallback_instance(db, &self.env) == fallback
+            {
+                same_kind.push(index);
+            }
+        }
+
+        if same_kind.len() < MAX_RECURSIVE_UNION_LITERALS {
+            return false;
+        }
+
+        // Removing from the back leaves the earlier indices where they were.
+        for index in same_kind.into_iter().rev() {
+            self.elements.remove(index);
+        }
+        self.add_in_place_impl(fallback, seen_aliases);
+        true
     }
 
     fn push_type(&mut self, ty: Type<'db>, seen_aliases: &mut Vec<Type<'db>>) {
@@ -2083,6 +2152,60 @@ mod tests {
         );
 
         assert_eq!(union.build(), KnownClass::Int.to_instance(db, &env));
+
+        // basedpython: float literals have no `UnionElement` group of their own, so they are
+        // bounded by `widen_ungrouped_literals` instead. A loop doubling a float — the shape
+        // that first ran the fixed point out of iterations — reaches the limit this way. One
+        // value past the limit, since it takes that many to widen.
+        let doubling = || {
+            (0..=MAX_RECURSIVE_UNION_LITERALS).scan(0.1, |value, _| {
+                let doubled = *value;
+                *value *= 2.0;
+                Some(doubled)
+            })
+        };
+        let over_limit = doubling().map(Type::float_literal).collect::<Vec<_>>();
+
+        let float_union = over_limit.iter().copied().fold(
+            UnionBuilder::new(db, &env)
+                .cycle_recovery(true)
+                .recursively_defined(RecursivelyDefined::Yes),
+            UnionBuilder::add,
+        );
+        assert_eq!(float_union.build(), KnownClass::Float.to_instance(db, &env));
+
+        // The loop-header union that approximates a loop's fixed point is not built in
+        // recovery mode, and it grows the same way.
+        let float_loop_union = over_limit.iter().copied().fold(
+            UnionBuilder::new(db, &env).recursively_defined(RecursivelyDefined::Yes),
+            UnionBuilder::add,
+        );
+        assert_eq!(
+            float_loop_union.build(),
+            KnownClass::Float.to_instance(db, &env)
+        );
+
+        let complex_union = doubling()
+            .map(|value| Type::complex_literal(db, 0.0, value))
+            .fold(
+                UnionBuilder::new(db, &env)
+                    .cycle_recovery(true)
+                    .recursively_defined(RecursivelyDefined::Yes),
+                UnionBuilder::add,
+            );
+        assert_eq!(
+            complex_union.build(),
+            KnownClass::Complex.to_instance(db, &env)
+        );
+
+        // A union nothing defines in terms of itself settles in one go, so its literals are
+        // kept however many there are.
+        let non_recursive = over_limit
+            .iter()
+            .copied()
+            .fold(UnionBuilder::new(db, &env), UnionBuilder::add)
+            .build();
+        assert_ne!(non_recursive, KnownClass::Float.to_instance(db, &env));
 
         let assert_widens = |literal, instance| {
             for (first, second) in [(literal, instance), (instance, literal)] {

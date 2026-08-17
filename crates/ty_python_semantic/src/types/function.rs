@@ -1996,7 +1996,32 @@ impl<'db> FunctionType<'db> {
         )
     }
 
+    /// An inferred signature can mention the function it belongs to: `def f(self): return
+    /// self.f` gives `f` a return type that contains a bound method of `f`. Mapping that
+    /// signature reaches the same function again, so the descent has to be guarded here rather
+    /// than at each of the [`Type`] variants that hold a `FunctionType`.
     pub(crate) fn apply_type_mapping_impl<'a>(
+        self,
+        db: &'db dyn Db,
+        type_mapping: &TypeMapping<'a, 'db>,
+        tcx: TypeContext<'db>,
+        visitor: &ApplyTypeMappingVisitor<'_, 'db>,
+    ) -> Self {
+        let mapped = visitor.visit(db, Type::FunctionLiteral(self), type_mapping, || {
+            Type::FunctionLiteral(self.apply_type_mapping_to_signatures(
+                db,
+                type_mapping,
+                tcx,
+                visitor,
+            ))
+        });
+        let Type::FunctionLiteral(mapped) = mapped else {
+            return self;
+        };
+        mapped
+    }
+
+    fn apply_type_mapping_to_signatures<'a>(
         self,
         db: &'db dyn Db,
         type_mapping: &TypeMapping<'a, 'db>,

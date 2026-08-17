@@ -204,6 +204,30 @@ impl<'db> DisplaySettings<'db> {
         }
     }
 
+    /// Begin displaying the signature of `function`, or `None` when doing so would recurse.
+    ///
+    /// A function's signature can name the function itself: an inferred return type of
+    /// `self.f` makes `f` return a callable over `f`. Rendering that nests forever, so every
+    /// site that writes a signature belonging to a `FunctionType` must go through here — the
+    /// exhausted result is a truncated `(...)`. The depth limit catches the case where the
+    /// nested function is an equal-but-distinct value, as it is once a signature has been
+    /// rebound to a receiver.
+    #[must_use]
+    fn enter_function(&self, function: FunctionType<'db>) -> Option<Self> {
+        const MAX_FUNCTION_TYPE_DISPLAY_DEPTH: usize = 4;
+        if self.visited_function_types.contains(&function)
+            || self.visited_function_types.len() >= MAX_FUNCTION_TYPE_DISPLAY_DEPTH
+        {
+            return None;
+        }
+        let mut visited = (*self.visited_function_types).clone();
+        visited.insert(function);
+        Some(Self {
+            visited_function_types: Rc::new(visited),
+            ..self.clone()
+        })
+    }
+
     #[must_use]
     pub(crate) fn preserve_long_unions(self) -> Self {
         Self {
@@ -1701,9 +1725,29 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'_, 'db> {
                 .display_with(db, self.env, self.settings.clone())
                 .fmt_detailed(f),
             Type::BoundMethod(bound_method) => {
-                let function = bound_method.function(db);
-                let self_ty = bound_method.self_instance(db);
-                let bound_signatures = bound_method.bound_signatures(db);
+                let function = bound_method.function(self.db);
+                let self_ty = bound_method.self_instance(self.db);
+
+                let write_prefix = |f: &mut TypeWriter<'_, '_, 'db>| {
+                    f.set_invalid_type_annotation();
+                    f.write_str("bound method ")?;
+                    DisplayMaybeParenthesizedType {
+                        ty: self_ty,
+                        db: self.db,
+                        env: self.env,
+                        settings: self.settings.singleline(),
+                    }
+                    .fmt_detailed(f)?;
+                    f.write_char('.')?;
+                    f.with_type(self.ty).write_str(function.name(self.db))
+                };
+
+                let Some(settings) = self.settings.enter_function(function) else {
+                    write_prefix(f)?;
+                    return f.write_str("(...)");
+                };
+
+                let bound_signatures = bound_method.bound_signatures(self.db);
 
                 match bound_signatures.overloads.as_slice() {
                     [signature] => {
@@ -1711,50 +1755,38 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'_, 'db> {
                             signature.should_hide_self_from_display(db, self.env);
                         let type_parameters = DisplayOptionalGenericContext {
                             generic_context: signature.generic_context.as_ref(),
-                            db,
+                            db: self.db,
                             hide_unused_self,
                         };
-                        f.set_invalid_type_annotation();
-                        f.write_str("bound method ")?;
-                        DisplayMaybeParenthesizedType {
-                            ty: self_ty,
-                            db,
-                            env: self.env,
-                            settings: self.settings.singleline(),
-                        }
-                        .fmt_detailed(f)?;
-                        f.write_char('.')?;
-                        f.with_type(self.ty).write_str(function.name(db))?;
+                        write_prefix(f)?;
                         type_parameters.fmt_detailed(f)?;
                         signature
                             .display_with(
                                 self.db,
-                                env,
-                                self.settings
-                                    .disallow_signature_name()
-                                    .name_already_written(),
+                                self.env,
+                                settings.disallow_signature_name().name_already_written(),
                             )
                             .fmt_detailed(f)
                     }
                     signatures => {
                         // TODO: How to display overloads?
-                        if !self.settings.multiline {
+                        if !settings.multiline {
                             // TODO: This should ideally have a TypeDetail but we actually
                             // don't have a type for @overload (we just detect the decorator)
                             f.write_str("Overload")?;
                             f.write_char('[')?;
                         }
-                        let separator = if self.settings.multiline { "\n" } else { ", " };
+                        let separator = if settings.multiline { "\n" } else { ", " };
                         let mut join = f.join(separator);
                         for signature in signatures {
                             join.entry(&signature.display_with(
-                                db,
+                                self.db,
                                 self.env,
-                                self.settings.clone(),
+                                settings.clone(),
                             ));
                         }
                         join.finish()?;
-                        if !self.settings.multiline {
+                        if !settings.multiline {
                             f.write_str("]")?;
                         }
                         Ok(())
@@ -2511,25 +2543,14 @@ struct DisplayFunctionType<'env, 'db> {
 
 impl<'db> FmtDetailed<'db> for DisplayFunctionType<'_, 'db> {
     fn fmt_detailed(&self, f: &mut TypeWriter<'_, '_, 'db>) -> fmt::Result {
-        // Detect self-referential function types to prevent infinite recursion,
-        // and limit display depth for chains of different function types
-        // (e.g. multiple redefinitions with `TypeOf[foo]` return types).
-        const MAX_FUNCTION_TYPE_DISPLAY_DEPTH: usize = 4;
         let env = self.env;
         let db = self.db;
-        if self.settings.visited_function_types.contains(&self.ty)
-            || self.settings.visited_function_types.len() >= MAX_FUNCTION_TYPE_DISPLAY_DEPTH
-        {
+        let Some(settings) = self.settings.enter_function(self.ty) else {
             f.set_invalid_type_annotation();
             f.write_str("def ")?;
             write!(f, "{}", self.ty.name(db))?;
             return f.write_str("(...)");
-        }
-
-        let mut settings = self.settings.clone();
-        let mut visited = (*settings.visited_function_types).clone();
-        visited.insert(self.ty);
-        settings.visited_function_types = Rc::new(visited);
+        };
 
         let signature = self.ty.signature(db);
 

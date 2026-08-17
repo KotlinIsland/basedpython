@@ -2079,7 +2079,7 @@ impl ConstraintId {
 ///
 /// Atomic types and bare typevars have constructor depth zero. The typevar depth is `0` if `ty`
 /// does not contain any typevars.
-fn max_constructor_and_typevar_depth<'db>(
+pub(crate) fn max_constructor_and_typevar_depth<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     ty: Type<'db>,

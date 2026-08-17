@@ -1905,9 +1905,14 @@ impl<'db> Type<'db> {
             let unioned = UnionType::from_elements_cycle_recovery(db, env, [previous, self]);
             unioned.collapse_tuple_lengths(db, env)
         }
-        .recursive_type_normalized_impl_with_cycle(db, env, cycle)
+        // the widening comes before the normalizer, never after it: the tuple it builds has an
+        // element unioned out of the members it replaced, and an element mentioning the cycle's own
+        // marker is exactly what the normalizer folds back onto that marker. widening last would
+        // hand back a type the normalizer never saw, the next round would normalize it, and the
+        // widened and marked forms would alternate without either being reached
         .without_growing_tuple_lengths(db, env, previous)
         .without_growing_self_nesting(db, env, previous, cycle)
+        .recursive_type_normalized_impl_with_cycle(db, env, cycle)
     }
 
     /// basedpython: `self`, with a class nested inside itself that the fixed-point iteration
@@ -2107,7 +2112,9 @@ impl<'db> Type<'db> {
         let mut elements = Vec::new();
         for element in self.union_elements(db) {
             match element.exact_tuple_instance_spec(db) {
-                Some(spec) => elements.push(spec.homogeneous_element_type(db, env)),
+                Some(spec) => {
+                    elements.push(spec.homogeneous_element_type_in_cycle_recovery(db, env));
+                }
                 None => rest.push(element),
             }
         }
@@ -2157,15 +2164,17 @@ impl<'db> Type<'db> {
                 .and_then(|instance| instance.tuple_spec(db, env))
                 .filter(|spec| spec.as_fixed_length().is_some())
             {
-                Some(spec) => element_types.push(spec.homogeneous_element_type(db, env)),
+                Some(spec) => {
+                    element_types.push(spec.homogeneous_element_type_in_cycle_recovery(db, env));
+                }
                 None => kept.push(*element),
             }
         }
-        let element = UnionType::from_elements(db, env, element_types);
+        let element = UnionType::from_elements_cycle_recovery(db, env, element_types);
         kept.push(Type::tuple(Some(
             crate::types::tuple::TupleType::homogeneous(db, env, element),
         )));
-        UnionType::from_elements(db, env, kept)
+        UnionType::from_elements_cycle_recovery(db, env, kept)
     }
 
     pub(crate) fn is_deeply_nested(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
@@ -8770,28 +8779,23 @@ impl<'db> Type<'db> {
                 deferred.re_evaluate(db, env, operands)
             }
 
-            Type::FunctionLiteral(function) => visitor.visit(db, self, type_mapping, || {
+            Type::FunctionLiteral(function) => {
+                let mapped = Type::FunctionLiteral(function.apply_type_mapping_impl(
+                    db,
+                    type_mapping,
+                    tcx,
+                    visitor,
+                ));
                 match type_mapping {
                     // Promote the types within the signature before promoting the signature to its
                     // callable form.
                     TypeMapping::Promote(
                         PromotionMode::On,
                         PromotionKind::Regular | PromotionKind::RegularKeepingLiterals,
-                    ) => Type::FunctionLiteral(function.apply_type_mapping_impl(
-                        db,
-                        type_mapping,
-                        tcx,
-                        visitor,
-                    ))
-                    .promote_impl(db, visitor.env),
-                    _ => Type::FunctionLiteral(function.apply_type_mapping_impl(
-                        db,
-                        type_mapping,
-                        tcx,
-                        visitor,
-                    )),
+                    ) => mapped.promote_impl(db, visitor.env),
+                    _ => mapped,
                 }
-            }),
+            }
 
             Type::BoundMethod(method) => Type::BoundMethod(BoundMethodType::new(
                 db,

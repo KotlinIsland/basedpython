@@ -7220,9 +7220,16 @@ pub(super) fn refutable_unpacking_applies<'db>(
     // length is not worth complaining about when the contents were never stated either.
     // `Any` is a different matter: it is what someone writes to say the contents are
     // anything, and `list[Any]` states the length just as precisely as `list[int]` does
+    //
+    // the divergence marker is the same case at its strongest. a tuple grown out of its own
+    // value — `self.t = (a,)` where `a` came from unpacking `self.t` — is widened to
+    // `tuple[Divergent, ...]` by cycle recovery, because the iteration had no fixed point to
+    // reach. that variable length is the recovery's own artefact, not something the program
+    // says, so a `may not have exactly one element` here would be complaining about our
+    // having given up rather than about the code
     if value_tuple
         .variable_element_type(db)
-        .is_some_and(|element| element.is_unknown())
+        .is_some_and(|element| element.is_unknown() || element.is_divergent())
     {
         return false;
     }
