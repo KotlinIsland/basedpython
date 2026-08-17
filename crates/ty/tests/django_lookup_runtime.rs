@@ -221,6 +221,19 @@ fn python() -> Option<String> {
     std::env::var("PYTHON").ok()
 }
 
+/// where a venv keeps its installed packages, in the layout the host platform
+/// actually uses: `<sys.prefix>/Lib/site-packages` on windows, and
+/// `<sys.prefix>/lib/pythonX.Y/site-packages` everywhere else. ty resolves the
+/// directory the same way, and looks for the windows one directly rather than
+/// scanning `lib/`, so a unix layout hands it nothing to find
+fn site_packages() -> &'static str {
+    if cfg!(windows) {
+        ".venv/Lib/site-packages"
+    } else {
+        ".venv/lib/python3.13/site-packages"
+    }
+}
+
 fn write(root: &Path, relative: &str, contents: &str) {
     let path = root.join(relative);
     fs::create_dir_all(path.parent().expect("a relative path has a parent")).expect("create dir");
@@ -259,8 +272,7 @@ fn lookup_expressions_hand_django_the_keywords_they_spell() {
     let root = project.path();
     // ty only reads django's `KnownClass` names off a third-party search path,
     // so the mock lives in a venv's site-packages rather than beside the source
-    let site_packages = "\
-.venv/lib/python3.13/site-packages";
+    let site_packages = site_packages();
     for (relative, contents) in MOCK_DJANGO {
         write(root, &format!("{site_packages}/{relative}"), contents);
     }
@@ -301,8 +313,12 @@ fn lookup_expressions_hand_django_the_keywords_they_spell() {
         String::from_utf8_lossy(&output.stderr),
     );
 
+    // python's `print` ends a line with `\r\n` on windows, and the expectation
+    // below is written with the plain newlines of this file
+    let recorded = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
+        recorded.trim(),
         "\
 exact [('title', 'Left Hand')]
 relation [('author__name', 'Ursula')]
