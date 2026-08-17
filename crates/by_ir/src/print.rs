@@ -11,7 +11,7 @@ use crate::ops::{Mutation, Op, RegisterId, Terminator, UnaryOp, Value};
 
 /// render a whole module
 pub fn print_module(module: &ModuleIr) -> String {
-    let mut out = format!("module {}\n", module.name);
+    let mut out = format!("module {}\n", module.name.dotted());
     for function in &module.functions {
         out.push('\n');
         out.push_str(&print_function(function));
@@ -434,6 +434,14 @@ fn print_op(function: &Function, op: &Op) -> String {
         Op::LoadGlobal { dest, name: global } => {
             format!("{} = global {global}", name(*dest))
         }
+        Op::StoreGlobal {
+            dest,
+            name: global,
+            value: v,
+        } => format!("{} = global {global} <- {}", name(*dest), value(v)),
+        Op::DeleteGlobal { dest, name: global } => {
+            format!("{} = del global {global}", name(*dest))
+        }
         Op::LoadClass { dest, class } => {
             format!("{} = class {class}", name(*dest))
         }
@@ -699,6 +707,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            binding: crate::function::Binding::Instance,
         }
     }
 
@@ -724,7 +733,7 @@ b2:
     #[test]
     fn a_module_lists_declines_after_its_functions() {
         let module = ModuleIr {
-            name: "app".to_string(),
+            name: crate::ModuleName::new("app"),
             functions: vec![sample()],
             declined: vec![Declined {
                 range: None,
@@ -764,6 +773,7 @@ b2:
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            binding: crate::function::Binding::Instance,
         };
         assert!(print_function(&function).contains("return 1.0"));
     }

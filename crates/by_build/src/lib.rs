@@ -34,7 +34,7 @@ pub struct Artifact {
 /// C, and invoke the platform compiler
 pub fn build_source(
     source: &str,
-    module_name: &str,
+    module_name: impl Into<by_ir::ModuleName>,
     toolchain: &Toolchain,
     out_dir: &Path,
     options: &Options,
@@ -87,7 +87,7 @@ pub fn emit_lowered(
 /// be written, so `--emit-c-only` and a real build report the same layout
 pub fn emit_source(
     source: &str,
-    module_name: &str,
+    module_name: impl Into<by_ir::ModuleName>,
     out_dir: &Path,
     options: &Options,
 ) -> Result<Built> {
@@ -109,19 +109,30 @@ fn emit_verified(module: &ModuleIr, out_dir: &Path, options: &Options) -> Result
         .with_context(|| format!("could not create {}", out_dir.display()))?;
     fs::write(out_dir.join(by_rt::BY_H_NAME), by_rt::BY_H)?;
 
-    let last = module.name.rsplit('.').next().unwrap_or(&module.name);
-    let source_path = out_dir.join(format!("{last}.c"));
+    let source_path = out_dir.join(module.name.relative_path(".c"));
+    create_parent(&source_path)?;
     fs::write(&source_path, by_codegen_c::emit_module(module))
         .with_context(|| format!("could not write {}", source_path.display()))?;
 
     Ok(Built {
         artifact: Artifact {
             source: source_path,
-            extension: out_dir.join(format!("{last}.so")),
+            extension: out_dir.join(module.name.relative_path(".so")),
             annotation: write_annotation(module, out_dir, options)?,
         },
         declined: module.declined.clone(),
     })
+}
+
+/// make the directory `path` is to be written into
+///
+/// an artefact sits at its module's own place in the output tree, so a package
+/// member's directory may not exist yet
+fn create_parent(path: &Path) -> Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    fs::create_dir_all(parent).with_context(|| format!("could not create {}", parent.display()))
 }
 
 /// what a build is allowed to leave interpreted
@@ -173,8 +184,8 @@ fn write_annotation(
     if !options.annotate {
         return Ok(None);
     }
-    let last = module.name.rsplit('.').next().unwrap_or(&module.name);
-    let path = out_dir.join(format!("{last}.annotated"));
+    let path = out_dir.join(module.name.relative_path(".annotated"));
+    create_parent(&path)?;
     fs::write(&path, annotate::report(module))
         .with_context(|| format!("could not write {}", path.display()))?;
     Ok(Some(path))
@@ -191,7 +202,7 @@ fn render_declines<'a>(declines: impl Iterator<Item = &'a by_ir::function::Decli
 /// module's interpreted definitions
 fn lower(
     source: &str,
-    module_name: &str,
+    module_name: impl Into<by_ir::ModuleName>,
     options: &Options,
     version: Option<(u8, u8)>,
 ) -> Result<by_ir::function::ModuleIr> {
@@ -217,9 +228,11 @@ fn finish(
     // or a debugger lands on source somebody wrote. a caller that knows the real
     // path sets this itself — the bare module name is the fallback
     if module.lines.is_none() {
-        let last = module.name.rsplit('.').next().unwrap_or(&module.name);
+        let path = module
+            .name
+            .relative_path(&format!(".{}", options.language.extension()));
         module.lines = Some(by_ir::function::LineTable::new(
-            format!("{last}.{}", options.language.extension()),
+            path.display().to_string(),
             source,
         ));
     }
@@ -260,21 +273,25 @@ fn finish(
     // the version has to be the *interpreter's*, because this python runs inside
     // the extension at import time — emitting syntax the interpreter cannot parse
     // makes the whole module fail to load, taking every function with it
-    if options.language == by_irbuild::Language::Python {
-        // a `.py` source is already what runs: it is its own fallback
-        module.fallback_source = Some(source.to_string());
-        return Ok(module);
-    }
-    let mut config = options.fallback.clone().unwrap_or_default();
-    if let Some((major, minor)) = version
-        && let Ok(parsed) = format!("{major}.{minor}").parse()
-    {
-        config.min_version = parsed;
-    }
-    let transpiled = by_transforms::transpile(source, &config).map_err(|error| {
-        anyhow::anyhow!("could not transpile for the interpreted fallback: {error}")
-    })?;
-    module.fallback_source = Some(transpiled);
+    // a `.py` source is already what runs: it is its own fallback
+    let twin = if options.language == by_irbuild::Language::Python {
+        source.to_string()
+    } else {
+        let mut config = options.fallback.clone().unwrap_or_default();
+        if let Some((major, minor)) = version
+            && let Ok(parsed) = format!("{major}.{minor}").parse()
+        {
+            config.min_version = parsed;
+        }
+        by_transforms::transpile(source, &config).map_err(|error| {
+            anyhow::anyhow!("could not transpile for the interpreted fallback: {error}")
+        })?
+    };
+    // a decorator module init applies to the native definition would otherwise run here
+    // too, over the twin's — once for each definition rather than once for the name
+    let twin = by_irbuild::without_init_decorators(&twin, &module)
+        .map_err(|error| anyhow::anyhow!("could not prepare the interpreted fallback: {error}"))?;
+    module.fallback_source = Some(twin);
     Ok(module)
 }
 
@@ -304,14 +321,17 @@ pub fn build_module(module: &ModuleIr, toolchain: &Toolchain, out_dir: &Path) ->
     fs::create_dir_all(out_dir)
         .with_context(|| format!("could not create {}", out_dir.display()))?;
 
+    // the header stays at the root of the output tree, and the root is what is put
+    // on the include path — so one copy serves every artefact however deep its
+    // package goes
     let header = out_dir.join(by_rt::BY_H_NAME);
     let header_changed = write_if_changed(&header, by_rt::BY_H.as_bytes())?;
 
-    let last = module.name.rsplit('.').next().unwrap_or(&module.name);
-    let source = out_dir.join(format!("{last}.c"));
+    let source = out_dir.join(module.name.relative_path(".c"));
+    create_parent(&source)?;
     let source_changed = write_if_changed(&source, by_codegen_c::emit_module(module).as_bytes())?;
 
-    let extension = out_dir.join(toolchain.extension_file_name(&module.name));
+    let extension = out_dir.join(toolchain.extension_path(&module.name));
     // the C compiler is by far the slowest step, and the emitted C is a faithful
     // function of the optimized BIR — so identical C means an identical compile.
     // keying on the C rather than on the `.by` is what makes a comment-only edit,
@@ -470,7 +490,7 @@ mod tests {
         // returning a float from an int function
         builder.terminate(Terminator::Return(Value::Float(1.0)));
         let module = ModuleIr {
-            name: "bad".to_string(),
+            name: by_ir::ModuleName::new("bad"),
             functions: vec![builder.finish()],
             declined: Vec::new(),
             classes: Vec::new(),

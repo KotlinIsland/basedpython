@@ -150,6 +150,8 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::CallPython { .. }
         | Op::CallValue { .. }
         | Op::LoadGlobal { .. }
+        | Op::StoreGlobal { .. }
+        | Op::DeleteGlobal { .. }
         | Op::ImportModule { .. }
         | Op::ImportFrom { .. }
         | Op::NewInstance { .. }
@@ -267,7 +269,7 @@ mod tests {
 
     fn module(functions: Vec<by_ir::function::Function>) -> ModuleIr {
         ModuleIr {
-            name: "app".to_string(),
+            name: by_ir::ModuleName::new("app"),
             functions,
             declined: Vec::new(),
             classes: Vec::new(),

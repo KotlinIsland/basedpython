@@ -38,8 +38,39 @@ mod tests {
             "By_ObjCompare",
             "By_Truthy",
             "By_ApplyMethodDecorators",
+            "By_SpecClass",
+            "By_SpecSubclass",
         ] {
             assert!(BY_H.contains(symbol), "the runtime is missing {symbol}");
+        }
+    }
+
+    /// both constructions for a class whose fields sit past a base's instance answer
+    /// with nothing rather than with something else, because the caller's only move is
+    /// to leave the whole module as its interpreted definition already built it. one
+    /// that raised instead would make module init fail the import
+    #[test]
+    fn a_layout_that_does_not_hold_up_is_refused_rather_than_raised() {
+        for construction in ["By_SpecClass", "By_SpecSubclass"] {
+            let body = BY_H
+                .split_once(&format!("static inline PyObject *{construction}("))
+                .expect("the construction is defined")
+                .1
+                .split_once("\n}\n")
+                .expect("it ends")
+                .0;
+            assert!(
+                body.contains("if (!By_OffsetsHoldUp((PyTypeObject *)cls"),
+                "{construction} checks the finished type's offsets"
+            );
+            assert!(
+                !body.contains("PyErr_Set") && !body.contains("PyErr_Format"),
+                "{construction} raises nothing: {body}"
+            );
+            assert!(
+                body.contains("return NULL;"),
+                "{construction} answers with nothing"
+            );
         }
     }
 }

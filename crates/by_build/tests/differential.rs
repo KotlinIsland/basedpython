@@ -560,7 +560,7 @@ fn agree_in(
         language,
         ..Options::default()
     };
-    let built = match build_source(source, &module, &toolchain, &compiled_dir, &options) {
+    let built = match build_source(source, module.as_str(), &toolchain, &compiled_dir, &options) {
         Ok(built) => built,
         Err(error) => {
             // only an *absent* toolchain is a skip. anything else is the compiler
@@ -2427,6 +2427,1427 @@ def stacked(n: int) -> int:
             "m.stacked(1)",
         ],
     );
+}
+
+/// a decorator is evaluated once, and what it did on the way happened once
+///
+/// python evaluates it where the `def` stands. the interpreted twin is what stands there
+/// and module init evaluates it again over the compiled definition, so `mark` appended
+/// twice while the name it left behind was right either way — the whole of the defect was
+/// the second append. `mark` returns what it was handed, so nothing but `marked` can
+/// show it
+#[test]
+fn a_decorator_runs_once() {
+    agree(
+        "decoratoronce",
+        "\
+marked: list[int] = []
+
+
+def mark(f: object) -> object:
+    marked.append(1)
+    return f
+
+
+@mark
+def counted() -> int:
+    return 1
+
+
+@mark
+def counted_twice() -> int:
+    return 2
+",
+        &["m.counted()", "m.counted_twice()", "m.marked"],
+    );
+}
+
+/// a definition the module *reads* keeps its decorator, and declines
+///
+/// taking the decorator out of the twin's source leaves the name holding an undecorated
+/// definition from the twin's `def` until module init reaches it — a window nothing can
+/// see unless the module's own body looks. `AT_IMPORT` looks directly and `alias` keeps
+/// what it found, and both of them would otherwise hold what `double` never wrapped
+#[test]
+fn a_decorated_definition_the_module_reads_declines() {
+    agree_with_declines(
+        "decoratorread",
+        "\
+def double(f) -> object:
+    def wrapper() -> int:
+        return f() * 2
+    return wrapper
+
+
+@double
+def one() -> int:
+    return 1
+
+
+AT_IMPORT = one()
+alias = one
+",
+        &["m.one()", "m.AT_IMPORT", "m.alias()"],
+    );
+}
+
+/// the source both class-decorator tests below compile
+///
+/// `mark` hands back what it was given and records only the name, so the binding is right
+/// however many times it ran and `seen` is the one thing that can show a second run
+const MARKED_CLASSES: &str = "\
+seen = []
+
+
+def mark(o):
+    seen.append(o.__name__)
+    return o
+
+
+@mark
+class Marked:
+    def g(self) -> int:
+        return 1
+
+
+@mark
+class Second:
+    def h(self) -> int:
+        return 2
+";
+
+/// a class's decorator is evaluated once, and what it did on the way happened once
+///
+/// python runs it where the `class` statement stands. the interpreted twin is what stands
+/// there and module init ran it again over the namespace entry the compiled type had
+/// taken, so `seen` read `['Marked', 'Second', 'Marked', 'Second']` where python reads
+/// `['Marked', 'Second']` — and the class each name ended up bound to was right either
+/// way, which is what made it silent
+#[test]
+fn a_class_decorator_runs_once() {
+    agree_python(
+        "classdecoratoronce",
+        MARKED_CLASSES,
+        &["m.Marked().g()", "m.Second().h()", "m.seen"],
+    );
+}
+
+#[test]
+fn a_decorated_class_is_the_compiled_type() {
+    // the counts above are answered identically by a class that fell back to its
+    // interpreted definition, so they cannot say which build answered.
+    // `method_descriptor` can: a compiled type holds one where the interpreted class
+    // holds a plain function
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_classdecoratoronce_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        MARKED_CLASSES,
+        "by_diff_classdecoratoronce_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_classdecoratoronce_t as m\n\
+         print(type(m.Marked.__dict__['g']).__name__,\n\
+         \x20     type(m.Second.__dict__['h']).__name__)\n\
+         print(m.seen)\n",
+    );
+    assert_eq!(
+        out,
+        "method_descriptor method_descriptor\n['Marked', 'Second']"
+    );
+}
+
+/// a decorated class the module *reads* keeps its decorator, and declines
+///
+/// taking the decorator out of the twin's source leaves the interpreted definition
+/// standing undecorated from its `class` statement until module init reaches it. `TABLE`
+/// looks in that window and keeps what it found, so the list would hold a class the
+/// module's own name no longer means — `TABLE[0] is Held` would answer `False`
+#[test]
+fn a_decorated_class_the_module_reads_declines() {
+    agree_python_with_declines(
+        "classdecoratorread",
+        "\
+seen = []
+
+
+def mark(o):
+    seen.append(o.__name__)
+    return o
+
+
+@mark
+class Held:
+    def value(self) -> int:
+        return 1
+
+
+TABLE = [Held]
+",
+        &["m.Held().value()", "m.seen", "m.TABLE[0] is m.Held"],
+    );
+}
+
+/// a class named in an *unevaluated* annotation is not read, and keeps compiling
+///
+/// `from __future__ import annotations` makes `Held` in that signature a string nothing
+/// evaluates, so the module never holds the undecorated definition and the decorator can
+/// still move to init. without the future import this is `TABLE = [Held]` again
+#[test]
+fn a_decorated_class_named_in_a_deferred_annotation_still_compiles() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_classdecoratorannotation");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+from __future__ import annotations
+
+seen = []
+
+
+def mark(o):
+    seen.append(o.__name__)
+    return o
+
+
+@mark
+class Held:
+    def value(self) -> int:
+        return 1
+
+
+def through(h: Held) -> int:
+    return h.value()
+";
+    let built = match build_source(
+        source,
+        "by_diff_classdecoratorannotation",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_classdecoratorannotation as m\n\
+         print(type(m.Held.__dict__['value']).__name__, m.through(m.Held()))\n\
+         print(m.seen)\n",
+    );
+    assert_eq!(out, "method_descriptor 1\n['Held']");
+}
+
+/// a decorator written as a chain of attributes, which is what the ir grew an
+/// expression to hold
+///
+/// the ir carried a single `String` and codegen emitted one interned lookup of it, so
+/// `functools.cache` was a name to find whole in the module dict — it was declined
+/// rather than compiled, which is why it never raised. every step of a path is a *read*,
+/// which is what makes evaluating it at module init mean what it meant where the `def`
+/// stood
+#[test]
+fn a_decorator_written_as_a_path_agrees() {
+    agree_python(
+        "pathdeco",
+        "\
+import abc
+import functools
+
+CALLS = []
+
+
+class Wrappers:
+    @staticmethod
+    def tag(cls: type) -> type:
+        cls.tag = 'seen'
+        return cls
+
+
+@functools.cache
+def cached(n: int) -> int:
+    CALLS.append(n)
+    return n * 2
+
+
+class Marks:
+    @abc.abstractmethod
+    def area(self) -> int:
+        return 3
+
+
+@Wrappers.tag
+class Held:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def read(self) -> int:
+        return self.n
+
+
+def probe() -> int:
+    return cached(4) + cached(4)
+",
+        &[
+            // the wrapper the decorator returned is what the name holds, and it is
+            // reached from inside the module as well as outside
+            "m.probe()",
+            "m.cached(9)",
+            // and it ran once, so the second call was a cache hit
+            "[m.probe(), m.CALLS]",
+            "type(m.cached).__name__",
+            // a path off something that is not a module resolves the same way
+            "m.Held(2).read()",
+            "m.Held.tag",
+            // a method's decorator is resolved out of the module namespace too
+            "m.Marks.area.__isabstractmethod__",
+            "m.Marks().area()",
+        ],
+    );
+}
+
+/// the compiled leg answers the path-decorated definitions
+///
+/// the differential legs agree whichever one answered, so a decorator test passes with
+/// the codegen path switched off. this is where it is pinned
+#[test]
+fn a_path_decorated_definition_is_the_compiled_one() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_pathdecolive");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+import abc
+import functools
+
+
+class Wrappers:
+    @staticmethod
+    def tag(cls: type) -> type:
+        cls.tag = 'seen'
+        return cls
+
+
+@functools.cache
+def cached(n: int) -> int:
+    return n * 2
+
+
+class Marks:
+    @abc.abstractmethod
+    def area(self) -> int:
+        return 3
+
+
+@Wrappers.tag
+class Held:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def read(self) -> int:
+        return self.n
+";
+    let built = match build_source(
+        source,
+        "by_diff_pathdecolive",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_pathdecolive as m\n\
+         print(type(m.cached).__name__, type(m.cached.__wrapped__).__name__)\n\
+         print(type(m.Marks.area).__name__, type(m.Held.read).__name__)\n\
+         print(m.cached(4), m.Marks.area.__isabstractmethod__, m.Held.tag)\n",
+    );
+    assert_eq!(
+        out,
+        "_lru_cache_wrapper builtin_function_or_method\n\
+         method method_descriptor\n\
+         8 True seen"
+    );
+}
+
+/// a decorator that is a call keeps its decline
+///
+/// python calls `mark('x')` where the `def` stands. module-level code is not compiled,
+/// so the only moment init has is the end of the module — by which time the interpreted
+/// twin has already made that call. making it again would be a second one, in the wrong
+/// place, with whatever it did on the way happening twice
+#[test]
+fn a_decorator_that_is_a_call_declines() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_calldeco");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+MADE = []
+
+
+def mark(label: str):
+    MADE.append(label)
+
+    def apply(fn):
+        fn.label = label
+        return fn
+
+    return apply
+
+
+@mark('x')
+def f(n: int) -> int:
+    return n + 1
+";
+    let built = match build_source(
+        source,
+        "by_diff_calldeco",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(
+        built
+            .declined
+            .iter()
+            .any(|declined| declined.reason.contains("run it a second time")),
+        "declined: {:?}",
+        built.declined
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_calldeco as m\n\
+         print(m.f(1), m.f.label, m.MADE, type(m.f).__name__)\n",
+    );
+    // the factory ran once, where it was written, and the interpreted definition is
+    // what the name holds
+    assert_eq!(out, "2 x ['x'] function");
+}
+
+/// a decorator rooted at a name the class body bound keeps its decline
+///
+/// `@total.setter` reads the property the body bound above it. a decorator is resolved
+/// out of the *module* namespace at init, where there is no such name — the lookup would
+/// raise `NameError` and take the whole extension's import with it. that shape also
+/// writes two `def`s of one name, which is its own decline and answers first, so
+/// `Rooted` stands beside it with the same root and distinct names
+#[test]
+fn a_decorator_rooted_in_the_class_body_declines() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_classrooteddeco");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Box:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def total(self) -> int:
+        return self._n
+
+    @total.setter
+    def total(self, value: int) -> None:
+        self._n = value
+
+
+class Rooted:
+    def wrap(fn):
+        return fn
+
+    @wrap
+    def value(self) -> int:
+        return 3
+";
+    let built = match build_source(
+        source,
+        "by_diff_classrooteddeco",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    let reasons = |needle: &str| {
+        built
+            .declined
+            .iter()
+            .any(|declined| declined.reason.contains(needle))
+    };
+    assert!(
+        reasons("`wrap` is bound by the class body"),
+        "declined: {:?}",
+        built.declined
+    );
+    assert!(
+        reasons("`total` is defined more than once"),
+        "declined: {:?}",
+        built.declined
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_classrooteddeco as m\n\
+         b = m.Box(1)\n\
+         b.total = 7\n\
+         print(b.total, type(m.Box.total).__name__, m.Rooted().value())\n",
+    );
+    assert_eq!(out, "7 property 3");
+}
+
+/// a class whose type slots publish more than its body wrote keeps its decorator's
+/// decline
+///
+/// python reaches `<=` through `tp_richcompare`, one slot behind all six comparisons —
+/// so an emitted type that writes `__lt__` publishes `__le__` as well, answering
+/// `NotImplemented`. `functools.total_ordering` reads exactly that: it saw `__le__`
+/// already there, filled in nothing, and `a <= b` raised where the interpreted class
+/// answered `True`. that was a live wrong answer for the plain-name spelling before the
+/// path spelling could reach it at all
+#[test]
+fn a_class_decorator_over_a_partly_filled_slot_declines() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_partialslot");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+import functools
+
+
+@functools.total_ordering
+class Ranked:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Ranked) and self.n == other.n
+
+    def __lt__(self, other: object) -> bool:
+        return self.n < other.n
+";
+    let built = match build_source(
+        source,
+        "by_diff_partialslot",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(
+        built
+            .declined
+            .iter()
+            .any(|declined| declined.reason.contains("publishes `__le__`")),
+        "declined: {:?}",
+        built.declined
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_partialslot as m\n\
+         print(m.Ranked(1) <= m.Ranked(2), m.Ranked(3) > m.Ranked(2))\n\
+         print(type(m.Ranked.__init__).__name__)\n",
+    );
+    assert_eq!(out, "True True\nfunction");
+}
+
+#[test]
+fn a_call_to_a_decorated_function_from_the_same_module_agrees() {
+    // the module namespace holds what the decorator returned; the native entry holds
+    // what it was handed. a call written inside the module used to reach the entry, so
+    // `caller(1)` answered 2 compiled and 4 interpreted with nothing said about it
+    agree_python(
+        "decoratedcallee",
+        "\
+def double(fn):
+    def inner(x: int) -> int:
+        return fn(x) * 2
+    return inner
+
+
+@double
+def f(x: int) -> int:
+    return x + 1
+
+
+def caller(x: int) -> int:
+    return f(x)
+
+
+def plain(x: int) -> int:
+    return x + 1
+
+
+def other(x: int) -> int:
+    return plain(x)
+",
+        &[
+            "m.caller(1)",
+            "m.f(1)",
+            "m.other(1)",
+            // the decorator ran exactly once on whatever the name holds, rather than
+            // once per call site
+            "[m.caller(1), m.caller(1), m.f(1)]",
+        ],
+    );
+}
+
+#[test]
+fn a_construction_of_a_decorated_class_from_the_same_module_agrees() {
+    // a construction is written against the *name*, and a class decorator is what the
+    // name then holds. allocating the emitted layout instead skipped the decorator:
+    // `probe()` answered 3 compiled and 103 interpreted
+    agree_python(
+        "decoratedclassctor",
+        "\
+class Other:
+    def __init__(self, x: int) -> None:
+        self.x = x + 100
+
+
+def swap(cls):
+    return Other
+
+
+@swap
+class C:
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+
+def probe(x: int) -> int:
+    return C(x).x
+",
+        &[
+            "m.probe(3)",
+            "m.C(3).x",
+            "m.Other(1).x",
+            // the name is what a construction resolves, from either side of the module
+            "m.C is m.Other",
+        ],
+    );
+}
+
+#[test]
+fn a_method_modifier_is_not_looked_up_as_a_name() {
+    // a modifier reaches the ast as a decorator with no `@`. it was emitted as a name
+    // to look up in the module namespace at init, and there is no such name — so the
+    // extension built cleanly and then failed to import outright with `NameError: name
+    // 'override' is not defined`, taking every function in the module with it.
+    //
+    // `static` is the sharper case and is not here: it declines, because a method's
+    // slot zero is forced to the receiver and `staticmethod` says it is not one
+    agree(
+        "methodmodifier",
+        "\
+class Box:
+    abstract def area(self) -> int:
+        return 7
+
+def probe() -> int:
+    return Box().area()
+",
+        &[
+            "m.probe()",
+            "m.Box().area()",
+            // the modifier became `abstractmethod`, so the method carries the same
+            // marker the interpreted twin carries — not a name nobody bound
+            "getattr(m.Box.area, '__isabstractmethod__', None)",
+        ],
+    );
+}
+
+#[test]
+fn a_static_or_class_method_answers_the_same_through_the_class_and_through_an_instance() {
+    // slot zero used to be forced to the receiver for every method, and these two say
+    // it is not one — so the compiled `Box.make(3)` bound `3` to a `Box` and raised
+    // `unbound method Box.make() needs an argument` at its first call.
+    //
+    // each is reached four ways: through the class, through an instance, from a method
+    // of the same class, and from a module-level function. all four go through the
+    // *descriptor* the type publishes, so a wrong convention shows up in every one
+    agree_python(
+        "staticmethod",
+        "\
+class Box:
+    @staticmethod
+    def make(x: int) -> int:
+        return x + 7
+
+    @classmethod
+    def named(cls, y: int) -> str:
+        return cls.__name__ + str(y)
+
+    def n(self) -> int:
+        return 1
+
+    def inside(self) -> int:
+        return Box.make(1) + len(Box.named(2))
+
+
+class Alt:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    @classmethod
+    def of(cls, v: int) -> \"Alt\":
+        return cls(v)
+
+
+def probe() -> int:
+    return Box.make(3)
+",
+        &[
+            "m.probe()",
+            "m.Box.make(3)",
+            "m.Box().make(3)",
+            "m.Box.named(2)",
+            "m.Box().named(2)",
+            "m.Box().inside()",
+            "m.Box.make(x=3)",
+            // a class method is what an alternative constructor is written as, and
+            // `cls(v)` has to reach the class it was called on
+            "m.Alt.of(4).v",
+            "type(m.Alt.of(4)).__name__",
+            // `__self__` is the class for a class method and nothing at all for a
+            // static one, on either build
+            "m.Box.named.__self__ is m.Box",
+            "getattr(m.Box.make, '__self__', None)",
+        ],
+    );
+}
+
+#[test]
+fn a_static_or_class_method_is_the_compiled_one() {
+    // neither `agree` can say which build answered — a class that declines answers
+    // identically out of its interpreted definition. `type(C.__dict__['m'])` cannot
+    // say either: it is `staticmethod` on both legs.
+    //
+    // the *descriptor* is what differs. a compiled static or class method is reached
+    // through a `PyCFunction`, so `type(C.m)` is `builtin_function_or_method` where the
+    // interpreted leg has a plain `function` or a bound `method` — and the class
+    // method's dict entry is a `classmethod_descriptor` rather than a `classmethod`
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_staticmethod_which");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Box:
+    @staticmethod
+    def make(x: int) -> int:
+        return x + 7
+
+    @classmethod
+    def named(cls, y: int) -> str:
+        return cls.__name__ + str(y)
+";
+    let built = match build_source(
+        source,
+        "by_diff_staticmethod_which",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_staticmethod_which as m\n\
+         print(type(m.Box.make).__name__, type(m.Box.__dict__['make']).__name__)\n\
+         print(type(m.Box.named).__name__, type(m.Box.__dict__['named']).__name__)\n\
+         print(m.Box.make(3), m.Box.named(2))\n",
+    );
+    assert_eq!(
+        out,
+        "builtin_function_or_method staticmethod\n\
+         builtin_function_or_method classmethod_descriptor\n\
+         10 Box2"
+    );
+}
+
+#[test]
+fn a_static_or_class_method_on_a_class_built_through_its_metaclass_answers() {
+    // a class on a base out of this module may be built by *calling* its metaclass,
+    // and that construction puts the method table into a namespace rather than onto a
+    // type — so the descriptor is one the runtime builds. building the plain kind for
+    // either of these would hand the function the wrong receiver
+    agree_python(
+        "staticmethodmeta",
+        "\
+import collections.abc
+
+
+class Sized(collections.abc.Sized):
+    def __len__(self) -> int:
+        return 3
+
+    @staticmethod
+    def tag() -> str:
+        return \"sized\"
+
+    @classmethod
+    def kind(cls) -> str:
+        return cls.__name__
+",
+        &[
+            "m.Sized.tag()",
+            "m.Sized().tag()",
+            "m.Sized.kind()",
+            "m.Sized().kind()",
+            "len(m.Sized())",
+            "type(m.Sized).__name__",
+        ],
+    );
+}
+
+#[test]
+fn a_static_method_the_boundary_hands_over_reaches_the_plain_function() {
+    // a boundary that cannot establish a parameter hands the whole call to the
+    // interpreted twin, and for a *method* that twin is taken off the class with the
+    // receiver put back in front of it. a static method has no receiver — `self` holds
+    // nothing at all — and the twin taken off the class is already the plain function
+    // the `staticmethod` wraps, so prepending anything would have handed it NULL.
+    //
+    // both reasons to hand over are here: `float` admits an `int`, and a default that
+    // is not an immediate is one object every call has to share
+    agree_python(
+        "staticmethoddefer",
+        "\
+DEFAULT = [1, 2]
+
+
+class Box:
+    @staticmethod
+    def half(x: float) -> float:
+        return x / 2
+
+    @staticmethod
+    def counted(xs=DEFAULT) -> int:
+        return len(xs)
+
+    @staticmethod
+    def nests(n: int) -> int:
+        def inner(k: int) -> int:
+            return k + n
+        return inner(1)
+
+
+def nests(n: int) -> int:
+    def inner(k: int) -> int:
+        return k + n + 100
+    return inner(1)
+",
+        &[
+            "m.Box.half(5.0)",
+            // the int arrives where a `double` was compiled, so this is the call that
+            // goes back to the interpreted definition
+            "m.Box.half(5)",
+            "m.Box().half(5)",
+            "m.Box.counted()",
+            "m.Box.counted([1])",
+            "m.Box.counted() and m.Box.counted() is not None",
+            // the object the default holds is the module's, shared by every call
+            "m.Box.counted.__self__ if hasattr(m.Box.counted, '__self__') else None",
+            // a nested function lives on a generated class named after the frame that
+            // makes it, and these two frames are both called `nests`
+            "m.Box.nests(3)",
+            "m.nests(3)",
+        ],
+    );
+}
+
+#[test]
+fn a_class_method_the_boundary_would_hand_over_declines() {
+    // the twin a method's boundary hands over to is taken off the interpreted class,
+    // and for a class method python has already *bound* it — to that class, not to the
+    // one in slot zero. handing it the class as well would give the body two of them
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_classmethod_defer");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+DEFAULT = [1, 2]
+
+
+class Box:
+    @classmethod
+    def counted(cls, xs=DEFAULT) -> int:
+        return len(xs)
+";
+    let built = match build_source(
+        source,
+        "by_diff_classmethod_defer",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(
+        built.declined.iter().any(|declined| declined
+            .reason
+            .contains("already bound to the interpreted class")),
+        "declined: {:?}",
+        built.declined
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_classmethod_defer as m\n\
+         print(m.Box.counted(), m.Box.counted([1]))\n",
+    );
+    assert_eq!(out, "2 1");
+}
+
+#[test]
+fn a_global_a_frame_assigns_reaches_the_module_namespace() {
+    // the write half of a `global` declaration. there was no op for it, so the
+    // assignment bound a local and the module's name kept its old value — a wrong
+    // answer rather than a missing one, and the reason this shape was declined.
+    //
+    // `agree_python` asserts nothing declined, and
+    // `a_compiled_frame_is_what_reaches_the_module_namespace` below is what says the
+    // native function is the one python calls
+    agree_python(
+        "globalwrite",
+        "\
+inited = False
+counter = 0
+
+
+def init() -> None:
+    global inited, counter
+    inited = True
+    counter += 1
+
+
+def bump(n: int) -> int:
+    global counter
+    counter = counter + n
+    return counter
+",
+        &[
+            // read from *outside* after a write from a compiled frame: a register
+            // write is invisible here, which is the whole of the bug
+            "(m.inited, m.counter)",
+            "(m.init(), m.inited, m.counter)",
+            "(m.init(), m.counter)",
+            "(m.bump(5), m.counter)",
+            // and the interpreted world's own write is what the compiled frame's
+            // next read has to see, since both are the one dict
+            "(setattr(m, 'counter', 100), m.bump(1), m.counter)",
+        ],
+    );
+}
+
+#[test]
+fn a_global_a_frame_assigns_is_read_back_in_that_same_frame() {
+    // the other half, and the one a write alone can get wrong in the opposite
+    // direction: if the write reaches the namespace while a later read in the same
+    // frame still resolves a register, the two halves stop agreeing with each other.
+    //
+    // this is `mimetypes` in miniature — a constructor that initializes the module the
+    // first time it runs, and an `init` whose flag never landed, so the second
+    // construction called it again and the compiled leg recursed until the stack ran out
+    agree_python(
+        "globalselfread",
+        "\
+inited = False
+log: list[str] = []
+
+
+class C:
+    def __init__(self) -> None:
+        if not inited:
+            init()
+        self.x = 1
+
+
+def init() -> None:
+    global inited
+    log.append('init')
+    inited = True
+    # the read the write has to be visible to, in this frame and through `C`
+    if inited:
+        C()
+
+
+def flip() -> str:
+    global inited
+    inited = not inited
+    # written, read, written again: three answers out of one place
+    first = inited
+    inited = not inited
+    return f'{first} {inited}'
+",
+        &[
+            "(m.C().x, m.inited, m.log)",
+            "m.flip()",
+            "(m.flip(), m.inited)",
+        ],
+    );
+}
+
+#[test]
+fn a_global_a_frame_deletes_leaves_the_name_unbound() {
+    // `del x` under a `global x` unbinds the module's name, and reading it afterwards
+    // is a `NameError` — which is not the `KeyError` deleting from a dict raises, nor
+    // what a register could ever report
+    agree_python(
+        "globaldelete",
+        "\
+value = 1
+
+
+def drop() -> str:
+    global value
+    del value
+    try:
+        return repr(value)
+    except NameError as error:
+        return f'NameError: {error}'
+
+
+def again() -> str:
+    global value
+    try:
+        del value
+    except NameError as error:
+        return f'NameError: {error}'
+    return 'deleted'
+
+
+def restore(n: int) -> int:
+    global value
+    value = n
+    return value
+",
+        &[
+            "m.drop()",
+            "m.again()",
+            "(m.restore(7), m.value)",
+            "(m.drop(), m.again())",
+        ],
+    );
+}
+
+#[test]
+fn a_global_a_nested_frame_declares_is_not_the_enclosing_local_of_that_name() {
+    // the enclosing frame binds a local `seen` and the nested one declares `seen`
+    // global, so they are two different places. deciding captures without consulting
+    // the declaration makes the closure read and write the enclosing local instead,
+    // and both the module's name and the local then answer wrongly
+    agree_python(
+        "globalnested",
+        "\
+seen = 0
+tally = 0
+
+
+def outer(n: int) -> str:
+    seen = n
+
+    def inner() -> int:
+        global seen
+        seen = 5
+        return seen
+
+    return f'{inner()} {seen}'
+
+
+def only_reads(n: int) -> str:
+    # the nested frame declares the name and never writes it, so nothing about *it*
+    # says the enclosing local is the wrong place — only the declaration does
+    seen = n
+
+    def peek() -> int:
+        global seen
+        return seen
+
+    return f'{peek()} {seen}'
+
+
+def declared_out_here(n: int) -> str:
+    # and the mirror: the enclosing frame declares it and writes it, so it has no
+    # register for the nested frame to capture even though the name looks local
+    global tally
+    tally = n
+
+    def peek() -> int:
+        return tally
+
+    return f'{peek()} {tally}'
+
+
+def shadow(n: int) -> int:
+    # no declaration: an ordinary local that shadows the module's name
+    seen = n
+    return seen
+",
+        &[
+            "(m.outer(3), m.seen)",
+            "(m.only_reads(9), m.seen)",
+            "(m.declared_out_here(4), m.tally)",
+            "(m.shadow(9), m.seen)",
+        ],
+    );
+}
+
+#[test]
+fn a_global_a_generator_assigns_is_not_one_of_its_state_fields() {
+    // a generator's locals become fields of the state object, because the frame has to
+    // survive a suspension. a declared `global` is not one of them — the module
+    // namespace already outlives every suspension — so it must be kept out of that
+    // layout as much as out of a register, and each resumption has to write through
+    agree_python(
+        "globalgen",
+        "\
+total = 0
+steps: list[int] = []
+
+
+def counting(n: int):
+    global total
+    for i in range(n):
+        total = total + i
+        # the write has to be visible across the suspension, from outside and back
+        yield total
+
+
+def resets():
+    global total
+    total = 0
+    yield total
+    total = 100
+    yield total
+",
+        &[
+            "(list(m.counting(4)), m.total)",
+            "(list(m.counting(3)), m.total)",
+            // stepped by hand, reading the module's name between resumptions
+            "[(next(g), m.total) for g in [m.counting(5)] for _ in range(3)]",
+            "(list(m.resets()), m.total)",
+        ],
+    );
+}
+
+#[test]
+fn a_module_level_name_a_global_rebinds_is_found_through_the_namespace() {
+    // taking the write opened this: a frame can now rebind a name the module *defined*,
+    // and a call written against that name was reaching the definition directly. so the
+    // rebound function went on answering with the old body — the same thing a decorator
+    // does to a name, and it goes in the same set
+    agree_python(
+        "globalrebind",
+        "\
+def base() -> int:
+    return 1
+
+
+def other() -> int:
+    return 99
+
+
+def calls_base() -> int:
+    return base()
+
+
+def rebind() -> str:
+    global base
+    base = other
+    return f'{base()} {calls_base()}'
+
+
+def replaces_itself() -> int:
+    # `pydoc.pager` is this exactly: decide once what to be, rebind the name, then
+    # call *through the name*. reaching the native entry for that last call re-enters
+    # the body that just rebound it, and the stack runs out
+    global replaces_itself
+    replaces_itself = other
+    return replaces_itself()
+",
+        &[
+            "(m.calls_base(), m.base())",
+            "m.rebind()",
+            "(m.calls_base(), m.base())",
+            "m.replaces_itself()",
+            "(m.replaces_itself(), m.replaces_itself())",
+        ],
+    );
+}
+
+#[test]
+fn a_compiled_frame_is_what_reaches_the_module_namespace() {
+    // the differential tests above compare two legs, and a leg that fell back to its
+    // interpreted definition answers exactly as the interpreted leg does — so they
+    // cannot say *which* build wrote the global. this one can: a module-level function
+    // python calls through `PyModule_AddFunctions` is a `builtin_function_or_method`,
+    // and one that fell back is a `function`
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_globalidentity");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+inited = False
+
+
+class C:
+    def __init__(self) -> None:
+        if not inited:
+            init()
+        self.x = 1
+
+
+def init() -> None:
+    global inited
+    inited = True
+    C()
+";
+    let built = match build_source(
+        source,
+        "by_diff_globalidentity",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "{:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_globalidentity as m\n\
+         print(type(m.init).__name__, m.C().x, m.inited)\n",
+    );
+    // and `m.inited` read from out here is the module's own binding, which a register
+    // write never touched. before there was an op for it, `C()` inside `init` saw the
+    // old `False` and called `init` again until the stack ran out
+    assert_eq!(out, "builtin_function_or_method 1 True");
+}
+
+#[test]
+fn a_declined_function_reads_the_global_a_compiled_one_wrote() {
+    // the asymmetry the whole thing turns on. a compiled frame and the interpreted
+    // twin of a *declined* one are the same module, and the twin's `__globals__` is
+    // the dict the compiled frame binds into — so a write is visible to it at once.
+    // a register write is visible to nobody, which is why this had to decline
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_globaltwin");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+flag = 0
+
+
+def writes(n: int) -> int:
+    global flag
+    flag = n
+    return flag
+
+
+def declines_and_reads() -> str:
+    # `del` on a plain local has no lowering, so this whole function stays interpreted
+    tmp = 1
+    del tmp
+    return f'{flag}'
+";
+    let built = match build_source(
+        source,
+        "by_diff_globaltwin",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    // the two legs of the same module: one compiled, one not. if `del` on a local ever
+    // gains a lowering this stops being true, and the assertion says so rather than
+    // quietly testing two compiled functions
+    assert_eq!(
+        built
+            .declined
+            .iter()
+            .map(|declined| declined.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["declines_and_reads"],
+        "declined: {:?}",
+        built.declined
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_globaltwin as m\n\
+         print(type(m.writes).__name__, type(m.declines_and_reads).__name__,\n\
+         \x20     m.declines_and_reads(), m.writes(42), m.declines_and_reads(), m.flag)\n",
+    );
+    assert_eq!(out, "builtin_function_or_method function 0 42 42 42");
+}
+
+#[test]
+fn a_second_decorator_over_a_static_method_declines() {
+    // the runtime folds the rest of a method's decorators onto the attribute it reads
+    // back off the finished type — and reading a static method back hands over the
+    // plain function it wraps, which would be written back as an ordinary method. so
+    // the pair keeps the decline, and the interpreted definition is what answers
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_staticmethod_stacked");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def mark(fn):
+    fn.marked = True
+    return fn
+
+
+class Stacked:
+    @mark
+    @staticmethod
+    def both() -> int:
+        return 1
+";
+    let built = match build_source(
+        source,
+        "by_diff_staticmethod_stacked",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(
+        built
+            .declined
+            .iter()
+            .any(|declined| declined.reason.contains("a second decorator over")),
+        "declined: {:?}",
+        built.declined
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_staticmethod_stacked as m\n\
+         print(m.Stacked.both(), type(m.Stacked.__dict__['both']).__name__)\n",
+    );
+    assert_eq!(out, "1 staticmethod");
 }
 
 #[test]
@@ -6376,6 +7797,216 @@ def caught_by_either(which: int) -> str:
     );
 }
 
+/// the family a class appending storage grows: `TokenList` keeps a field past a `list`
+/// instance, and every class under it keeps that one and adds none
+///
+/// this is the stdlib's own shape — `email._header_value_parser` writes thirty-seven of
+/// them — and the whole point is that a subclass adding no field of its own appends
+/// nothing: what it stores is what `TokenList` stores, at the offset `TokenList` laid it
+/// out and through the descriptor `TokenList` published. `Restating` is the same class
+/// written the other way round, assigning an attribute the base already keeps
+const APPENDED_FAMILY: &str = "\
+class TokenList(list):
+
+    token_type = None
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.defects = []
+
+    def kind(self):
+        return self.token_type
+
+    def defect_count(self):
+        return len(self.defects)
+
+
+class Plain(TokenList):
+    pass
+
+
+class Named(TokenList):
+    token_type = 'named'
+
+
+class Deeper(Named):
+    token_type = 'deeper'
+
+    def kind(self):
+        return 'deep:' + str(self.token_type)
+
+
+class Restating(TokenList):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.defects = ['restated']
+";
+
+#[test]
+fn a_subclass_that_appends_nothing_past_a_base_agrees() {
+    agree_python(
+        "appendnothing",
+        APPENDED_FAMILY,
+        &[
+            "[(type(t).__name__, list(t), t.defects, t.kind(), t.defect_count())\n\
+             \x20 for t in (m.TokenList([0]), m.Plain([1]), m.Named([2]), m.Deeper([3]),\n\
+             \x20           m.Restating([4]))]",
+            // the base's field, written and read through a subclass instance
+            "[(p.defects.append('one'), p.defects, p.defect_count(),\n\
+             \x20  (p.append(9), list(p))[1]) for p in [m.Plain([1, 2])]]",
+            "[c.__name__ for c in m.Deeper.__mro__]",
+            "(isinstance(m.Deeper([1]), m.TokenList), isinstance(m.Restating([1]), list),\n\
+             \x20issubclass(m.Plain, m.TokenList))",
+            "(m.Plain.token_type, m.Named.token_type, m.Deeper.token_type)",
+            "(sorted(m.Plain([3, 1, 2])), m.Plain([1, 2]) == [1, 2], m.Plain([1]) + [2])",
+            // python's own subclass of one, built by the class statement rather than here
+            "[(list(s([5])), s([5]).defects, s([5]).kind())\n\
+             \x20 for s in [type('Py', (m.Plain,), {'token_type': 'py'})]]",
+            // every instance holds a cycle through the appended field, so the collector
+            // has to be able to see it and the deallocation has to release it
+            "(len([t for t in [m.Deeper([i]) for i in range(200)]\n\
+             \x20     if t.defects.append(t) is None]), __import__('gc').collect() >= 0)",
+        ],
+    );
+}
+
+#[test]
+fn a_subclass_that_appends_nothing_is_the_compiled_type() {
+    // the behaviour above is answered identically by a class that fell back to its
+    // interpreted definition, so it cannot say which build answered.
+    // `method_descriptor` can: a real type of ours holds one where the interpreted
+    // class holds a plain function
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_appendnothing_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        APPENDED_FAMILY,
+        "by_diff_appendnothing_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_appendnothing_t as m\n\
+         print(type(m.TokenList.__dict__['kind']).__name__,\n\
+         \x20     type(m.Deeper.__dict__['kind']).__name__)\n\
+         print(m.TokenList.__basicsize__ == m.Plain.__basicsize__\n\
+         \x20     == m.Named.__basicsize__ == m.Deeper.__basicsize__)\n\
+         print(m.Deeper([1]).defects, m.Restating([1]).defects)\n",
+    );
+    assert_eq!(
+        out,
+        "method_descriptor method_descriptor\n\
+         True\n\
+         [] ['restated']"
+    );
+}
+
+#[test]
+fn a_subclass_with_no_storage_stands_on_a_base_that_declined_later() {
+    // a base is settled as one of ours while the layouts settle, and only the body being
+    // lowered can turn it down after that — here a `__new__`, which fills a type slot
+    // with no adapter. a class with no storage of its own does not need the base to have
+    // stayed one: what stands under the name at import is a class either way, so it is
+    // built on the *name*, which is the construction every class over an outside base
+    // already takes.
+    //
+    // `method_descriptor` against `function` is what says which type answered: `Plain`
+    // and `Deeper` are compiled types standing on the interpreted `TokenList`
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_lostbase");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class TokenList(list):
+
+    token_type = None
+
+    def __new__(cls, *args):
+        return super().__new__(cls, *args)
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.defects = []
+
+    def kind(self):
+        return self.token_type
+
+
+class Plain(TokenList):
+    token_type = 'plain'
+
+    def side(self):
+        return 'side:' + str(self.token_type)
+
+
+class Deeper(Plain):
+    token_type = 'deeper'
+";
+    let built = match build_source(
+        source,
+        "by_diff_lostbase",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    let declined: Vec<(&str, &str)> = built
+        .declined
+        .iter()
+        .map(|declined| (declined.name.as_str(), declined.reason.as_str()))
+        .collect();
+    assert_eq!(
+        declined,
+        vec![(
+            "TokenList",
+            "`__new__` fills a type slot with no adapter yet"
+        )]
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_lostbase as m\n\
+         print([c.__name__ for c in m.Deeper.__mro__])\n\
+         print(type(m.Plain.__dict__['side']).__name__,\n\
+         \x20     type(m.TokenList.__dict__['kind']).__name__)\n\
+         print(list(m.Plain([1, 2])), m.Plain([1, 2]).defects, m.Plain([1]).side())\n\
+         print(m.Deeper([3]).kind(), m.Deeper([3]).side(), isinstance(m.Deeper([3]), m.TokenList))\n",
+    );
+    assert_eq!(
+        out,
+        "['Deeper', 'Plain', 'TokenList', 'list', 'object']\n\
+         method_descriptor function\n\
+         [1, 2] [] side:plain\n\
+         deeper side:deeper True"
+    );
+}
+
 #[test]
 fn a_base_this_module_emits_beside_one_it_does_not_agrees() {
     // a class may hold both kinds of base at once. it takes its whole layout from
@@ -6649,6 +8280,93 @@ def widened(value: object) -> str:
     );
 }
 
+/// a class inside a package reports the whole dotted module it was written in
+///
+/// the test above asks this of a top-level module, where the module's own name and
+/// its name inside its package are the same string — so it cannot see the
+/// difference. cpython reads a type's `__module__` off the front of its `tp_name`
+/// and its `__name__` off the back, and a compiled class that carried only its
+/// file's stem named a module `sys.modules` has nothing under. `dataclasses` looks
+/// exactly that up (`sys.modules.get(cls.__module__).__dict__`), so a package
+/// member with a dataclass in it failed to import at all
+#[test]
+fn a_class_in_a_package_reports_the_package_it_came_from() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let source = "\
+class Point:
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+    def total(self) -> int:
+        return self.x + self.y
+";
+    let base = std::env::temp_dir().join("by_diff_pkgmodule");
+    let _ = std::fs::remove_dir_all(&base);
+    let compiled_root = base.join("c");
+    let interpreted_root = base.join("i");
+    let compiled = compiled_root.join("by_diff_pkg");
+    let interpreted = interpreted_root.join("by_diff_pkg");
+    for dir in [&compiled, &interpreted] {
+        std::fs::create_dir_all(dir).expect("the package directory is created");
+        std::fs::write(dir.join("__init__.py"), "").expect("the package marker is written");
+    }
+    std::fs::write(interpreted.join("member.py"), source)
+        .expect("the interpreted module is written");
+
+    // the *root* of the output tree, not the package directory: the build writes the
+    // artefact at the module's own place within the tree, so handing it the package
+    // directory would nest a second `by_diff_pkg` inside the first
+    let built = match build_source(
+        source,
+        "by_diff_pkg.member",
+        &toolchain,
+        &compiled_root,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+
+    let body = "\
+import sys\n\
+import by_diff_pkg.member as m\n\
+print(m.Point.__module__, m.Point.__qualname__, m.Point.__name__)\n\
+print(sys.modules[m.Point.__module__] is m)\n\
+print(m.Point(2, 3).total())\n";
+    let compiled_out = run(&python, &compiled_root, body);
+    let interpreted_out = run(&python, &interpreted_root, body);
+    assert_eq!(
+        compiled_out, interpreted_out,
+        "compiled {compiled_out}, interpreted {interpreted_out}"
+    );
+    assert_eq!(
+        compiled_out, "by_diff_pkg.member Point Point\nTrue\n5",
+        "the module python imported is the module the class names"
+    );
+
+    // …and it really was the emitted type that answered. a class that fell back to
+    // its interpreted definition answers all of the above identically, and holds a
+    // plain function where a type of ours holds a descriptor
+    let descriptor = run(
+        &python,
+        &compiled_root,
+        "import by_diff_pkg.member as m\n\
+         print(type(m.Point.__dict__['total']).__name__)\n",
+    );
+    assert_eq!(descriptor, "method_descriptor");
+}
+
 #[test]
 fn a_class_keyword_reaches_init_subclass_agrees() {
     // a keyword is the metaclass's business, and a type spec has nowhere to put one.
@@ -6789,18 +8507,18 @@ class Keyed(metaclass=ABCMeta):
 }
 
 #[test]
-fn a_class_level_constant_keeps_its_class_off_the_metaclass_construction() {
-    // a class-level constant is copied onto the *finished* type, and through a metaclass
-    // that is too late: the metaclass has already decided what the class defines from a
-    // namespace the constant was never in. an `EnumType` handed a memberless namespace
-    // declares no members, and the copy then lands them in the type's dict behind its
-    // back — `Boundary.STRICT` answers while `_member_names_` is empty and
-    // `isinstance(FIRST, Boundary)` is False. that was a silent wrong answer, so a class
-    // with any constant keeps the interpreted definition instead.
+fn a_metaclass_that_remakes_a_class_level_constant_is_turned_down_after_the_call() {
+    // the constants go into the namespace the metaclass is handed, which is enough for a
+    // metaclass that only *reads* one. an `EnumType` does not read them: it builds a
+    // *member* out of `STRICT = auto()`, and the member is not the value the module body
+    // already took a reference to. `FIRST is Boundary.STRICT` is what that costs, and no
+    // amount of writing the namespace fixes it.
     //
-    // the two classes are the boundary: same base, same metaclass, and only `Boundary`
-    // has a constant. `function` against `method_descriptor` is what says the fallback is
-    // exactly that narrow — widening the gate would make `Plain` say `function` too
+    // so the class is asked afterwards whether it kept what it was handed, and where it
+    // did not the interpreted definition stands. the two classes are the boundary: same
+    // base, same metaclass, and only `Boundary` has a constant. `function` against
+    // `method_descriptor` is what says the refusal is exactly that narrow — a guard that
+    // never fired would make `Boundary` say `method_descriptor` and lose `FIRST`
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -6867,6 +8585,557 @@ FIRST = Boundary.STRICT
          EnumType EnumType\n\
          [] plain\n\
          function method_descriptor"
+    );
+}
+
+#[test]
+fn a_dunder_the_module_body_hangs_on_a_class_keeps_it_off_the_compiled_surface() {
+    // `ctypes` writes `c_byte.__ctype_le__ = c_byte.__ctype_be__ = c_byte` under the class
+    // statement, and the adoption that carries a twin's attributes across leaves every
+    // dunder behind — a dunder is what a type slot answers, and a second answer sitting in
+    // the dict would disagree with it. so the attribute has nowhere to land and the class
+    // has to decline.
+    //
+    // the two classes are the two constructions: `Meta` can only be built by calling its
+    // metaclass and `Spec` comes from a type spec, and the adoption is the same for both.
+    // `plain` is the boundary in the other direction — a name that is not a dunder *is*
+    // carried, and is not a reason to turn anything down
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_hungdunder");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+from abc import ABCMeta
+
+
+class Meta(metaclass=ABCMeta):
+    TAG = 1
+
+    def label(self) -> str:
+        return \"meta\"
+
+
+class Spec:
+    TAG = 2
+
+    def label(self) -> str:
+        return \"spec\"
+
+
+class Untouched:
+    TAG = 3
+
+    def label(self) -> str:
+        return \"untouched\"
+
+
+Meta.__marker__ = Meta
+Spec.__marker__ = Spec
+Untouched.plain = 4
+";
+    let built = match build_source(
+        source,
+        "by_diff_hungdunder",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    let declined: Vec<(&str, &str)> = built
+        .declined
+        .iter()
+        .map(|declined| (declined.name.as_str(), declined.reason.as_str()))
+        .collect();
+    assert_eq!(
+        declined,
+        vec![
+            (
+                "Meta",
+                "the module body writes `__marker__` onto `Meta`, which the emitted type does not carry"
+            ),
+            (
+                "Spec",
+                "the module body writes `__marker__` onto `Spec`, which the emitted type does not carry"
+            )
+        ]
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_hungdunder as m\n\
+         print(m.Meta.__marker__ is m.Meta, m.Spec.__marker__ is m.Spec, m.Untouched.plain)\n\
+         print(m.Meta().label(), m.Spec().label(), m.Untouched().label())\n\
+         print(type(m.Meta.label).__name__, type(m.Spec.label).__name__,\n\
+         \x20     type(m.Untouched.label).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "True True 4\n\
+         meta spec untouched\n\
+         function function method_descriptor"
+    );
+}
+
+#[test]
+fn a_constant_that_reads_back_differently_every_time_is_not_turned_down_for_it() {
+    // a class-level constant is read out of the *mapping* the class body wrote rather
+    // than through a lookup on the class, and `__class_getitem__ = classmethod(f)` is
+    // where the two differ: a lookup runs the descriptor and answers a freshly bound
+    // method, and one bound to the interpreted definition at that. copying that is what
+    // used to make `Holder[int]` answer the twin instead of `Holder`, and it made the
+    // check after the metaclass call — which compares the finished class against the
+    // values it was handed — turn down every class with such a constant, since no two
+    // reads are the same object. almost every container type in the stdlib has one.
+    //
+    // `Spec` is the boundary: both constructions carry the classmethod itself now, so
+    // both answer the class the interpreter answers
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_metaunstable");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+from abc import ABCMeta
+
+
+def _get(cls, item):
+    return cls
+
+
+class Holder(metaclass=ABCMeta):
+    __class_getitem__ = classmethod(_get)
+
+    def label(self) -> str:
+        return \"holder\"
+
+
+class Spec:
+    __class_getitem__ = classmethod(_get)
+
+    def label(self) -> str:
+        return \"spec\"
+";
+    let built = match build_source(
+        source,
+        "by_diff_metaunstable",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_metaunstable as m\n\
+         print(m.Holder().label(), m.Spec().label())\n\
+         print(type(m.Holder.label).__name__, type(m.Spec.label).__name__)\n\
+         print(m.Holder[int] is m.Holder, m.Spec[int] is m.Spec)\n\
+         print(m.Holder[int] is m.Spec[int])\n",
+    );
+    assert_eq!(
+        out,
+        "holder spec\n\
+         method_descriptor method_descriptor\n\
+         True True\n\
+         False"
+    );
+}
+
+#[test]
+fn a_metaclass_that_raises_on_the_namespace_it_is_handed_leaves_the_import_standing() {
+    // `ssl.Purpose`'s shape, and the one thing worse than a wrong answer: `EnumType` is
+    // handed a namespace whose members are the twin's *finished* ones and tries to build a
+    // member out of a member — `Obj.__new__(cls, a, b)` against a `__new__` that takes one
+    // argument. that raises before the check after the call could turn the class down, and
+    // propagating it fails `by_exec` and takes the whole import with it.
+    //
+    // the interpreted definition already built this class — the fallback source ran first —
+    // so the raise says the reconstruction is wrong, not that the class is unbuildable. it
+    // is the same refusal the check makes, reached earlier. `Plain` is the boundary: the
+    // same metaclass with a namespace it can work with still reaches the compiled type
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_metaraise");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+from collections import namedtuple
+from enum import Enum
+
+
+class Obj(namedtuple(\"Obj\", \"a b\")):
+    __slots__ = ()
+
+    def __new__(cls, text):
+        return super().__new__(cls, text, text.upper())
+
+
+class Kind(Obj, Enum):
+    ONE = \"one\"
+    TWO = \"two\"
+
+
+class Plain(Enum):
+    def shout(self) -> str:
+        return \"plain\"
+
+
+FIRST = Kind.ONE
+";
+    let built = match build_source(
+        source,
+        "by_diff_metaraise",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    // `Obj` names a call as its base, which is a decline of its own and not this one
+    assert_eq!(
+        built
+            .declined
+            .iter()
+            .map(|declined| declined.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Obj"]
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_metaraise as m\n\
+         print(m.Kind.ONE.a, m.Kind.ONE.b, m.FIRST is m.Kind.ONE)\n\
+         print(isinstance(m.FIRST, m.Kind), m.Kind(m.Kind.ONE.value) is m.FIRST)\n\
+         print(m.Kind._member_names_, type(m.Kind).__name__)\n\
+         print(type(m.Plain.shout).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "one ONE True\n\
+         True True\n\
+         ['ONE', 'TWO'] EnumType\n\
+         method_descriptor"
+    );
+}
+
+#[test]
+fn a_class_level_constant_beside_a_base_of_ours_reaches_the_metaclass_namespace() {
+    // the shape 69 of the stdlib's 84 instances of the old constant decline had: no class
+    // keyword anywhere, a base this module emits standing beside one from outside, and a
+    // constant. a spec cannot work that base list out, so the metaclass builds it — and
+    // the constant goes into the namespace it is handed rather than onto the type
+    // afterwards, which is what makes that construction answer for such a class at all.
+    //
+    // `issubclass` is what the decline used to be protecting: with `Reader` interpreted
+    // and `Codec` emitted it answers False where python answers True, so the two had to
+    // decline together. both are compiled here, and `method_descriptor` against
+    // `function` is what says so — `Alone` is the boundary that never needed the base
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_metaconstant_base");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+import codecs
+
+
+class Codec(codecs.Codec):
+    def label(self) -> str:
+        return \"codec\"
+
+
+class Reader(Codec, codecs.StreamReader):
+    tag = 1
+
+    def kind(self) -> str:
+        return \"reader\"
+
+
+class Alone(codecs.Codec):
+    tag = 2
+
+    def kind(self) -> str:
+        return \"alone\"
+";
+    let built = match build_source(
+        source,
+        "by_diff_metaconstant_base",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    let declined: Vec<(&str, &str)> = built
+        .declined
+        .iter()
+        .map(|declined| (declined.name.as_str(), declined.reason.as_str()))
+        .collect();
+    assert_eq!(declined, Vec::new());
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_metaconstant_base as m\n\
+         print(issubclass(m.Reader, m.Codec), m.Reader.tag, m.Alone.tag)\n\
+         print([c.__name__ for c in m.Reader.__mro__])\n\
+         print(type(m.Codec.label).__name__, type(m.Reader.kind).__name__,\n\
+         \x20     type(m.Alone.kind).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "True 1 2\n\
+         ['Reader', 'Codec', 'StreamReader', 'Codec', 'object']\n\
+         method_descriptor method_descriptor method_descriptor"
+    );
+}
+
+#[test]
+fn a_slots_declaration_reaches_the_metaclass_rather_than_the_finished_type() {
+    // `__slots__` is the constant that proves the namespace is where these have to go.
+    // `type.__new__` reads it *out of the namespace* to decide whether the instances get
+    // a dict at all, so one copied onto the finished type afterwards is not a `__slots__`
+    // — the class already has the dict, and the entry sits there saying otherwise.
+    //
+    // 29 stdlib classes are this shape. `Open` is the boundary: the same base and the
+    // same construction with no `__slots__`, and python gives *its* instances a dict, so
+    // this is not a rule about emitted classes but about what the body wrote
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_metaslots");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+from abc import ABC
+
+
+class Slotted(ABC):
+    __slots__ = ()
+
+    def label(self) -> str:
+        return \"slotted\"
+
+
+class Open(ABC):
+    def label(self) -> str:
+        return \"open\"
+";
+    let built = match build_source(
+        source,
+        "by_diff_metaslots",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_metaslots as m\n\
+         print(m.Slotted.__slots__, hasattr(m.Slotted(), '__dict__'), hasattr(m.Open(), '__dict__'))\n\
+         print(m.Slotted().label(), m.Open().label())\n\
+         print(type(m.Slotted.label).__name__, type(m.Open.label).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "() False True\n\
+         slotted open\n\
+         method_descriptor method_descriptor"
+    );
+}
+
+#[test]
+fn a_class_constant_naming_another_class_reaches_the_metaclass_namespace_remapped() {
+    // the value a constant carries comes off the twin, so `pair = Other` in a class body
+    // hands over the *interpreted* `Other` — a class nothing else in the module can
+    // reach, and one `isinstance` denies against `m.Other`. the substitution that fixes
+    // that is the copy's, and the namespace has to make the same one or the two
+    // constructions disagree about what a constant is.
+    //
+    // `Below` is what forces the metaclass here: `ABCMeta` closes the spec, so the
+    // constant goes in before the call rather than onto the type after it
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_metaconstant_remap");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+from abc import ABCMeta
+
+
+class Other:
+    def kind(self) -> str:
+        return \"other\"
+
+
+class Below(metaclass=ABCMeta):
+    pair = Other
+
+    def label(self) -> str:
+        return \"below\"
+";
+    let built = match build_source(
+        source,
+        "by_diff_metaconstant_remap",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_metaconstant_remap as m\n\
+         print(m.Below.pair is m.Other, isinstance(m.Below.pair(), m.Other))\n\
+         print(m.Below.pair().kind(), m.Below().label())\n\
+         print(type(m.Below.label).__name__, type(m.Other.kind).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "True True\n\
+         other below\n\
+         method_descriptor method_descriptor"
+    );
+}
+
+#[test]
+fn a_class_the_module_pops_out_of_its_own_globals_stays_off_the_compiled_surface() {
+    // `ast` builds `Num` and then pops the name straight out of its own globals. that is
+    // a `del` whose target this cannot read — the name comes off a comprehension there —
+    // so every definition the module writes is treated as one the pop could have taken.
+    // installing a compiled `Gone` over a name the body removed would put a class on the
+    // surface python does not have there, and the interpreted definition the construction
+    // would otherwise fall back to is not there to be found either.
+    //
+    // the class-level-constant gate used to carry this, and this is what stayed behind
+    // when it went. `Kept` is no longer a boundary — the rule reaches the whole module,
+    // which is what its second decline says
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_poppedclass");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+from abc import ABCMeta
+
+
+class Gone(metaclass=ABCMeta):
+    TAG = 1
+
+    def label(self) -> str:
+        return \"gone\"
+
+
+class Kept:
+    def label(self) -> str:
+        return \"kept\"
+
+
+HIDDEN = {name: globals().pop(name) for name in (\"Gone\",)}
+";
+    let built = match build_source(
+        source,
+        "by_diff_poppedclass",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    let declined: Vec<(&str, &str)> = built
+        .declined
+        .iter()
+        .map(|declined| (declined.name.as_str(), declined.reason.as_str()))
+        .collect();
+    assert_eq!(
+        declined,
+        vec![
+            (
+                "Gone",
+                "`Gone` is rebound at module level, so installing this over it would replace what the rebind produced"
+            ),
+            (
+                "Kept",
+                "`Kept` is rebound at module level, so installing this over it would replace what the rebind produced"
+            )
+        ]
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_poppedclass as m\n\
+         print('Gone' in m.__dict__, 'Kept' in m.__dict__)\n\
+         print(m.HIDDEN['Gone'].TAG, m.HIDDEN['Gone']().label(), m.Kept().label())\n\
+         print(type(m.HIDDEN['Gone'].label).__name__, type(m.Kept.label).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "False True\n\
+         1 gone kept\n\
+         function function"
     );
 }
 
@@ -7030,9 +9299,12 @@ fn a_late_gift_that_could_hand_the_interpreted_class_back_is_left_alone() {
     //
     // so `SAMPLE` (an instance of the interpreted class), `ITEMS` (a list, which can be
     // given one after the question is asked) and `HIDDEN` (a tuple holding one) do not
-    // come across, while `MARKER`, `PAIR` and `shout` do. a dunder never does: a name in
-    // the type's dict does not fill a type slot, so `__ge__` there would answer
-    // `a.__ge__(b)` while `a >= b` still went to the slot.
+    // come across, while `MARKER`, `PAIR` and `shout` do.
+    //
+    // a dunder never comes across either — a name in the type's dict does not fill a type
+    // slot, so `__ge__` there would answer `a.__ge__(b)` while `a >= b` still went to the
+    // slot — and that is why a class the body hangs one on is turned down instead. `Ordered`
+    // is that half: dropping the entry is as wrong an answer as carrying it would be.
     //
     // `method_descriptor` is what says the compiled type answered at all: a class that
     // fell back to its interpreted definition would carry every one of these, because it
@@ -7053,13 +9325,18 @@ class Held:
         return \"held\"
 
 
+class Ordered:
+    def tag(self) -> str:
+        return \"ordered\"
+
+
 Held.MARKER = 3
 Held.PAIR = Other
 Held.SAMPLE = Other()
 Held.ITEMS = [1, 2]
 Held.HIDDEN = (Other,)
-Held.__ge__ = lambda self, right: True
 Held.shout = lambda self: self.tag().upper()
+Ordered.__ge__ = lambda self, right: True
 ";
     let built = match build_source(
         source,
@@ -7078,20 +9355,30 @@ Held.shout = lambda self: self.tag().upper()
             return;
         }
     };
-    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    assert_eq!(
+        built
+            .declined
+            .iter()
+            .map(|declined| declined.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Ordered"]
+    );
     let out = run(
         &python,
         &dir,
         "import by_diff_twinshapes as m\n\
          print(m.Held.MARKER, m.Held.PAIR is m.Other, m.Held().shout())\n\
          print(hasattr(m.Held, 'SAMPLE'), hasattr(m.Held, 'ITEMS'), hasattr(m.Held, 'HIDDEN'))\n\
-         print(type(m.Held.tag).__name__, type(m.Other.tag).__name__)\n",
+         print(m.Ordered() >= m.Ordered(), m.Ordered().tag())\n\
+         print(type(m.Held.tag).__name__, type(m.Other.tag).__name__,\n\
+         \x20     type(m.Ordered.tag).__name__)\n",
     );
     assert_eq!(
         out,
         "3 True HELD\n\
          False False False\n\
-         method_descriptor method_descriptor"
+         True ordered\n\
+         method_descriptor method_descriptor function"
     );
 }
 
@@ -7403,17 +9690,19 @@ class Plain:
 }
 
 #[test]
-fn a_subclass_of_a_class_the_metaclass_gates_turn_down_is_built_here() {
-    // both metaclass gates are asked while the layouts settle, so a class either of them
-    // turns down leaves the layout set — and its subclass is then laid out on the
-    // interpreted definition the way every other declining class's subclass is. asked
-    // while the body was lowered instead, the base stayed in the set and each subclass
-    // cascaded behind it, which is what this pair of declines used to be four of.
+fn a_subclass_of_a_class_the_metaclass_gate_turns_down_is_built_here() {
+    // the metaclass gate is asked while the layouts settle, so a class it turns down
+    // leaves the layout set — and its subclass is then laid out on the interpreted
+    // definition the way every other declining class's subclass is. asked while the body
+    // was lowered instead, the base stayed in the set and the subclass cascaded behind
+    // it, which is what this decline used to be two of.
     //
-    // the bases here carry `ABCMeta`, so `PyType_FromSpecWithBases` is closed to the
-    // subclass and its metaclass builds it — `method_descriptor` is what says that
-    // construction happened at all, since a subclass that fell back would answer every
-    // value here from a `function`
+    // `Constant` is the other half, and it is the boundary: a class-level constant no
+    // longer turns a class down, so both it and its subclass are built here. the bases
+    // carry `ABCMeta`, so `PyType_FromSpecWithBases` is closed to every class in this
+    // module and the metaclass builds them — `method_descriptor` is what says that
+    // construction happened at all, since a class that fell back would answer from a
+    // `function`
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -7462,7 +9751,7 @@ class BelowConstant(Constant):
             return;
         }
     };
-    // exactly the two bases, and nothing behind them: a subclass in this list is the
+    // exactly the one base, and nothing behind it: a subclass in this list is the
     // cascade this move exists to stop
     assert_eq!(
         built
@@ -7470,7 +9759,7 @@ class BelowConstant(Constant):
             .iter()
             .map(|declined| declined.name.as_str())
             .collect::<Vec<_>>(),
-        ["Decorated", "Constant"]
+        ["Decorated"]
     );
     let out = run(
         &python,
@@ -7480,7 +9769,8 @@ class BelowConstant(Constant):
          print(m.BelowConstant().size(), m.BelowConstant.TAG, m.BelowConstant().label())\n\
          print([b.__name__ for b in m.BelowConstant.__mro__])\n\
          print(isinstance(m.BelowConstant(), m.Constant), isinstance(m.BelowDecorated(), m.Decorated))\n\
-         print(type(m.BelowDecorated.size).__name__, type(m.BelowConstant.size).__name__)\n",
+         print(type(m.BelowDecorated.size).__name__, type(m.BelowConstant.size).__name__,\n\
+         \x20     type(m.Constant.label).__name__)\n",
     );
     assert_eq!(
         out,
@@ -7488,22 +9778,22 @@ class BelowConstant(Constant):
          2 1 constant\n\
          ['BelowConstant', 'Constant', 'object']\n\
          True True\n\
-         method_descriptor method_descriptor"
+         method_descriptor method_descriptor method_descriptor"
     );
 }
 
 #[test]
-fn a_pair_the_body_cross_links_agrees_when_a_gate_took_their_base_out_of_the_layouts() {
-    // `urllib.parse`'s shape, and the one that reverted this move the first time: the
-    // base declines at the class-level-constant gate, so both result classes are built
-    // here — over an interpreted base whose metaclass is `type`, which means a real
-    // emitted type replaces each twin in the namespace. `_pair` then runs against the
-    // twins, because the whole module body runs before module init installs anything.
+fn a_pair_the_body_cross_links_agrees_when_the_link_is_made_after_the_class_statement() {
+    // `urllib.parse`'s shape, and the one that reverted this move the first time: `_pair`
+    // runs against the twins, because the whole module body runs before module init
+    // installs anything, and it hangs each result class off the other under a name no
+    // class body wrote.
     //
     // what makes it agree is that an emitted type carries what the body gave its twin
     // *and* remaps a carried twin to the type standing in for it — without the remap
     // `Text._encoded_counterpart()` builds something `isinstance` says is not a
-    // `m.Bytes`
+    // `m.Bytes`. the base used to decline at the class-level-constant gate and take the
+    // whole chain with it; it is emitted now, which is what the empty decline list says
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -7563,15 +9853,15 @@ _pair()
             return;
         }
     };
-    // `Root` and `Extra` follow `Mixin` down because an emitted class cannot have an
-    // interpreted subclass. `Text` and `Bytes` are the two that must not be here
+    // `Mixin` used to decline and take `Root` and `Extra` down with it, because an
+    // emitted class cannot have an interpreted subclass. none of the five is here now
     assert_eq!(
         built
             .declined
             .iter()
             .map(|declined| declined.name.as_str())
             .collect::<Vec<_>>(),
-        ["Mixin", "Root", "Extra"]
+        Vec::<&str>::new()
     );
     let out = run(
         &python,
@@ -7716,6 +10006,163 @@ class Tagged:
          print(type(m.Tagged.read).__name__)\n",
     );
     assert_eq!(out, "mine mine class-level\nfunction");
+}
+
+#[test]
+fn a_decorated_class_carries_the_body_its_own_decorator_was_handed() {
+    // a class-level constant is copied off the body the interpreted `class` statement
+    // wrote, taken while that statement runs and before any of the class's decorators is
+    // handed it. reading the finished definition instead is what this used to do, and by
+    // then the decorator has been over it.
+    //
+    // `@dataclass` shows both halves of what that cost. `later` has no default, so
+    // `_process_class` *deletes* the `field(init=False)` and left nothing to copy — the
+    // emitted type's annotation then read as a required argument after a defaulted one,
+    // and the module raised `TypeError` at import. `hidden` has one, so the `Field` was
+    // replaced by the bare `2` and `repr=False` went with it — the emitted `repr` showed
+    // a field the interpreted one hides, which no sweep can see.
+    //
+    // the descriptors are what say the compiled types answered: an interpreted leg has a
+    // plain `function` in both places
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_decoratedconstant");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+from dataclasses import dataclass, field
+
+
+@dataclass
+class Sub:
+    tag: str = \"b\"
+    later: list[str] = field(init=False)
+
+    def name(self) -> str:
+        return self.tag
+
+
+@dataclass
+class Holder:
+    shown: int = 1
+    hidden: int = field(default=2, repr=False)
+
+    def total(self) -> int:
+        return self.shown + self.hidden
+";
+    let built = match build_source(
+        source,
+        "by_diff_decoratedconstant",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "from dataclasses import fields\n\
+         import by_diff_decoratedconstant as m\n\
+         print(m.Sub('x').name(), repr(m.Holder()), m.Holder().total())\n\
+         print([(f.name, f.init, f.repr) for f in fields(m.Sub)])\n\
+         print([(f.name, f.init, f.repr) for f in fields(m.Holder)])\n\
+         print(type(m.Sub.name).__name__, type(m.Holder.total).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "x Holder(shown=1) 3\n\
+         [('tag', True, True), ('later', False, True)]\n\
+         [('shown', True, True), ('hidden', True, False)]\n\
+         method_descriptor method_descriptor"
+    );
+}
+
+#[test]
+fn the_class_body_capture_reaches_only_this_module_s_own_body() {
+    // the capture is a copy of the builtins mapping, carrying a `__build_class__` of ours,
+    // put in this module's dict for the length of the fallback run — so no other module and
+    // no other thread can reach it, which on a free-threaded interpreter is the difference
+    // between a scoped trick and a race.
+    //
+    // python gives a function the builtins its defining frame had, though, so every
+    // function the body defined holds that copy for as long as it lives. `make_held` is
+    // that function: calling it once the import is over must make an ordinary class, with
+    // nothing recorded into a mapping that has been released by then.
+    //
+    // it is also a class named `Held`, the same as the module-level one, and the body calls
+    // it before the module is finished. that inner one must not stand in for the outer:
+    // `EARLY` is the interpreted answer taken during the body, `Held.kind` is what the
+    // emitted type carried, and they say different things
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_capturescope");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Held:
+    kind = \"module\"
+
+    def where(self) -> str:
+        return \"outer\"
+
+
+def make_held():
+    class Held:
+        kind = \"local\"
+
+    return Held
+
+
+EARLY = make_held().kind
+";
+    let built = match build_source(
+        source,
+        "by_diff_capturescope",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    // `make_held` writes a class in a function body, which nothing lowers. the `Held` the
+    // module itself writes is the one that has to be emitted
+    assert!(
+        !built
+            .declined
+            .iter()
+            .any(|declined| declined.name == "Held"),
+        "declined: {:?}",
+        built.declined
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import builtins\n\
+         import by_diff_capturescope as m\n\
+         print(m.Held.kind, m.EARLY, m.make_held().kind)\n\
+         print(type(m.Held.where).__name__)\n\
+         print(m.__builtins__ is builtins.__dict__)\n\
+         print(m.make_held.__builtins__['__build_class__'] is builtins.__build_class__)\n",
+    );
+    assert_eq!(out, "module local local\nmethod_descriptor\nTrue\nTrue");
 }
 
 #[test]
@@ -8023,7 +10470,12 @@ fn a_class_whose_base_declined_declines_with_it() {
     // a class was emitted with its base *silently dropped* when that base declined:
     // codegen looked the base up among the emitted classes, found nothing, and built a
     // type with no bases at all. the subclass then lost everything the base brought,
-    // which is a wrong answer rather than a slow one
+    // which is a wrong answer rather than a slow one.
+    //
+    // `Inner` keeps its base by naming it: it stores nothing of its own, so it is built
+    // on whatever the name holds at import — the interpreted `Outer` — exactly as a
+    // class over a base out of this module is. `method_descriptor` against `function`
+    // is what says which of the two answered
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -8067,19 +10519,23 @@ class Inner(Outer):
     declined.sort_unstable();
     assert_eq!(
         declined,
-        vec![
-            ("Inner", "`Outer` declined, so it is not a base to build on"),
-            ("Outer", "`__new__` fills a type slot with no adapter yet"),
-        ]
+        vec![("Outer", "`__new__` fills a type slot with no adapter yet")]
     );
     let out = run(
         &python,
         &dir,
         "import by_diff_declinedbase as m\n\
          print(issubclass(m.Inner, m.Outer), isinstance(m.Inner(), m.Outer))\n\
-         print(m.Inner().label(), m.Inner().tag())\n",
+         print(m.Inner().label(), m.Inner().tag())\n\
+         print(type(m.Inner.__dict__['tag']).__name__,\n\
+         \x20     type(m.Outer.__dict__['label']).__name__)\n",
     );
-    assert_eq!(out, "True True\nouter inner");
+    assert_eq!(
+        out,
+        "True True\n\
+         outer inner\n\
+         method_descriptor function"
+    );
 }
 
 #[test]
@@ -8482,6 +10938,9 @@ class Listc(A):
     assert_eq!(
         declined,
         vec![
+            // `A` is not here on its own account any more: its `@classmethod` carries
+            // its convention on the method table entry, and it reads no slot zero. it
+            // is at the end of the list instead, behind the subclasses that declined
             (
                 "Cm",
                 "`classmethod` and `staticmethod` both leave something other than the receiver in slot zero"
@@ -8522,9 +10981,9 @@ class Listc(A):
                 "Listc",
                 "a `super()` in a comprehension reads that comprehension's own frame, which only python 3.12 and later fold into the method's"
             ),
-            // `A` is the base every class above extends, and `Cm` is the first of them
-            // to decline — so the base goes interpreted with it, or `Cm`'s interpreted
-            // definition would be subclassing a compiled type that refuses to be a base
+            // every one of those is a class the fallback leaves interpreted, and each
+            // extends `A` — so an emitted `A` would be a base with interpreted
+            // subclasses, which a static type refuses to be
             (
                 "A",
                 "`Cm` declined, so it extends the interpreted definition rather than this type"
@@ -8533,11 +10992,7 @@ class Listc(A):
     );
     // a declined class still answers, through the interpreted definition the fallback
     // left behind. only the two whose answer does not turn on the interpreter version
-    // are called: python raises in most of the rest, and differently across versions.
-    //
-    // `Cm->Acgo` is also what says the decline was needed — a compiled `classmethod`
-    // is a method descriptor behind one, which raises `TypeError` when a *type* is
-    // what reaches it
+    // are called: python raises in most of the rest, and differently across versions
     let out = run(
         &python,
         &dir,
@@ -10116,6 +12571,90 @@ def free(x: int, step: int = 1) -> int:
 }
 
 #[test]
+fn an_arity_error_is_worded_by_the_interpreter() {
+    // python's arity wording has rules a reimplementation keeps getting one short of:
+    // `and` from two names up, a comma *before* that `and` from three up, a range
+    // rather than a count once a parameter has a default, and a near miss offered to a
+    // caller who spelled a keyword almost right. the runtime does not reproduce them —
+    // it builds a function of the same shape and lets the interpreter refuse the call
+    //
+    // the three-name cases are what prove that happened. the wording the runtime keeps
+    // for itself is deliberately one comma short of python's, so a leg that answered
+    // from it rather than from the shape would differ here rather than pass
+    agree_python(
+        "arityword",
+        "\
+class Bare:
+    pass
+
+
+class Three:
+    def __init__(self, a: int, b: int, c: int) -> None:
+        self.a = a
+
+
+class Spread:
+    def __init__(self, a: int, b: int = 1, c: int = 2) -> None:
+        self.a = a
+
+
+class Box:
+    def __init__(self) -> None:
+        self.n = 0
+
+    def take(self, x: int, y: int, z: int) -> int:
+        return x + y + z
+
+
+def one(a: int) -> int:
+    return a
+
+
+def two(a: int, b: int) -> int:
+    return a
+
+
+def four(a: int, b: int, c: int, d: int) -> int:
+    return a
+
+
+def named(a: int, *, b: int, c: int, d: int) -> int:
+    return a
+
+
+def rest(a: int, b: int, *more: int) -> int:
+    return a
+",
+        &[
+            // one name, then two, then three: the separator changes at each step
+            "str(_capture(m.one))",
+            "str(_capture(m.two))",
+            "str(_capture(m.four))",
+            "str(_capture(m.named, 1))",
+            "str(_capture(m.rest))",
+            // a receiver is counted in the arity sentence and not in this one
+            "str(_capture(lambda: m.Box().take()))",
+            "str(_capture(lambda: m.Box().take(1, 2, 3, 4)))",
+            "str(_capture(m.Three))",
+            "str(_capture(lambda: m.Three(1)))",
+            // a default turns the count into a range
+            "str(_capture(lambda: m.Spread(1, 2, 3, 4)))",
+            // `object.__init__` refuses anything at all, and does not say which kind
+            "str(_capture(lambda: m.Bare(1)))",
+            "str(_capture_kw(m.Bare, (), {'q': 1}))",
+            // a keyword that nearly names a parameter is offered the parameter
+            "str(_capture_kw(m.two, (1, 2), {'aa': 1}))",
+            "str(_capture_kw(m.Three, (1, 2, 3), {'aa': 1}))",
+            "str(_capture_kw(lambda **k: m.Box().take(1, 2, 3, **k), (), {'xx': 1}))",
+            // and one that nearly names the *synthetic* receiver must not be offered it
+            "str(_capture_kw(m.two, (1, 2), {'_by_self': 1}))",
+            "str(_capture_kw(lambda **k: m.Box().take(1, 2, 3, **k), (), {'_by_rest': 1}))",
+            "str(_capture_kw(lambda **k: m.Box().take(**k), (), {'_by_self': 1}))",
+        ],
+    );
+}
+
+#[test]
 fn a_with_inside_a_generator_agrees() {
     // the manager has to survive every suspension the body makes, so it lives in a
     // field — and `__exit__` runs however the frame leaves: off the end, through
@@ -10390,14 +12929,17 @@ fn a_nested_function_may_be_decorated_or_generic() {
         return;
     }
     // a decorator on a nested function wraps the closure where the `def` stands,
-    // outermost last — the same order the statement itself applies them. the name
-    // is resolved the way the module-level ones are, as `LOAD_GLOBAL` would.
+    // outermost last — the same order the statement itself applies them. the whole
+    // *expression* is evaluated there, in this frame, which is what lets a call, a
+    // dotted name and a name the frame itself binds all be taken: `@wraps(fn)` reads
+    // `fn` out of a register, and `@held` reads the parameter holding the decorator.
     //
     // a type parameter is erased here as anywhere else, so a generic nested
     // function needed nothing beyond dropping the decline
     agree_python(
         "nesteddec",
         "\
+import functools
 from typing import Callable
 
 
@@ -10446,6 +12988,38 @@ def counted(n: int) -> list[int]:
 
         out.append(each(0))
     return out
+
+
+def by_call(n: int) -> Callable[[int], int]:
+    @scaled(3)
+    def inner(x: int) -> int:
+        return x + n
+
+    return inner
+
+
+def by_dotted(n: int) -> Callable[[int], int]:
+    @functools.cache
+    def inner(x: int) -> int:
+        return x + n
+
+    return inner
+
+
+def by_held(n: int, held: Callable[[Callable[[int], int]], Callable[[int], int]]) -> Callable[[int], int]:
+    @held
+    def inner(x: int) -> int:
+        return x + n
+
+    return inner
+
+
+def scaled(k: int) -> Callable[[Callable[[int], int]], Callable[[int], int]]:
+    def outer(fn: Callable[[int], int]) -> Callable[[int], int]:
+        def wrapper(x: int) -> int:
+            return fn(x) * k
+        return wrapper
+    return outer
 ",
         &[
             "m.offset(10)(1)",
@@ -10457,6 +13031,13 @@ def counted(n: int) -> list[int]:
             // each iteration decorates its own closure
             "m.counted(4)",
             "m.counted(0)",
+            // a decorator that is a call, evaluated where the `def` stands
+            "m.by_call(10)(1)",
+            "m.by_call(0)(5)",
+            // a dotted name, read off a module this one imported
+            "m.by_dotted(10)(1)",
+            // and one the frame is *holding*, which a global lookup would have missed
+            "m.by_held(10, m.twice)(1)",
         ],
     );
 }
@@ -11091,7 +13672,7 @@ fn the_arithmetic_dunders_reach_both_directions() {
     // whether this is `__add__` or `__radd__`. one direction the class does not
     // define answers `NotImplemented`
     agree_python(
-        "arith",
+        "arithdunders",
         "\
 class Vec:
     def __init__(self, x: int, y: int) -> None:
@@ -11310,7 +13891,7 @@ fn the_container_dunders_fill_their_slots() {
     // `__setitem__` share the mapping sub-table with `__len__`, and `__contains__`
     // needs a sequence table of its own
     agree_python(
-        "containers",
+        "containerdunders",
         "\
 class Grid:
     def __init__(self, items: list[int]) -> None:
@@ -12970,6 +15551,202 @@ def pairs(s: str) -> str:
 }
 
 #[test]
+fn a_class_decorator_is_handed_the_body_the_class_statement_wrote() {
+    // a decorator that only *reads* its class still reads the whole of it: the names the
+    // body bound, the values it gave them and the annotations it wrote. the annotations
+    // are the ones an emitted type gets last — they are carried over from the twin, and
+    // that carrying used to happen *after* every decorator had run, so each one was
+    // handed a class whose body had not arrived yet
+    agree_python(
+        "decoratorreads",
+        "\
+SEEN = {}
+
+
+def inspecting(cls: type) -> type:
+    SEEN[cls.__name__] = (cls.__annotations__, 'helper' in cls.__dict__, cls.limit)
+    return cls
+
+
+@inspecting
+class Widget:
+    tag: str
+    size: int
+    limit = 7
+
+    def helper(self) -> int:
+        return 4
+",
+        &[
+            "sorted(m.SEEN['Widget'][0].items(), key=str)",
+            "m.SEEN['Widget'][1]",
+            "m.SEEN['Widget'][2]",
+            "m.Widget.limit",
+            "m.Widget().helper()",
+        ],
+    );
+}
+
+#[test]
+fn a_dataclass_decorator_builds_a_constructor_that_runs() {
+    // `@dataclass` does not read a class so much as *generate* from it — an `__init__`
+    // taking one argument per annotation and assigning one attribute each — so it is the
+    // strictest question that can be asked about how faithful an emitted class is. it
+    // found two answers wrong at once: an empty `__annotations__` made it write
+    // `__init__(self)`, and once that was fixed the assignments had nowhere to land,
+    // because an emitted instance is its layout and this class has no fields at all.
+    //
+    // `y` carries a default, which is a class-level value the decorator reads and then
+    // rewrites: `_process_class` leaves the bare `5` where the `field(default=5)` stood.
+    // so the value the emitted type carries has to be the one the body wrote rather than
+    // the one left behind, and `_capture(m.Point)` is where that shows — a `Point` built
+    // with no arguments at all
+    agree_python(
+        "dataclassdecorator",
+        "\
+from dataclasses import dataclass, field, fields, replace
+
+
+@dataclass
+class Point:
+    x: int
+    y: int = field(default=5, repr=False)
+
+    def total(self) -> int:
+        return self.x + self.y
+
+
+def make(n: int) -> str:
+    return repr(Point(n, 5))
+",
+        &[
+            "m.make(3)",
+            "m.Point(1, 2)",
+            "m.Point(1)",
+            "m.Point(1, 2) == m.Point(1, 2)",
+            "m.Point(1, 2) == m.Point(1, 3)",
+            "m.Point(1, 2).total()",
+            "[(f.name, f.type, f.repr) for f in m.fields(m.Point)]",
+            "sorted(m.Point(1, 2).__dict__.items())",
+            "m.Point.__match_args__",
+            "m.replace(m.Point(1, 2), y=9)",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.Point)]]",
+        ],
+    );
+}
+
+#[test]
+fn a_decorated_class_is_the_compiled_one_and_its_dict_is_collectable() {
+    // the differential legs agree whichever class answered, so this is where the
+    // compiled one is pinned down. it is not a formality: the managed dict this class
+    // now carries moves `tp_dictoffset` off its base's, which `By_OffsetsHoldUp` read as
+    // the wrong kind of inheritance — the type was quietly dropped for its interpreted
+    // twin, and every compiled function went on reading that twin's instances as its own
+    // struct. `m.on_final(m.Fixed(2, 'x'))` answered a pointer
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_decoratedlive");
+    let _ = std::fs::remove_dir_all(&dir);
+    // `from __future__ import annotations` is what keeps `through`'s parameter from
+    // being a *read* of `Derived`: without it the module evaluates the annotation where
+    // the `def` stands, which is inside the window where `Derived` still holds the
+    // interpreted definition, and the class declines rather than move its decorator
+    let source = "\
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+def tagged(cls: type) -> type:
+    cls.tag = 'seen'
+    return cls
+
+
+@dataclass
+class Point:
+    x: int
+
+    def doubled(self) -> int:
+        return self.x * 2
+
+
+@tagged
+class Held:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def read(self) -> int:
+        return self.n
+
+
+class Plain:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def read(self) -> int:
+        return self.n
+
+
+@tagged
+class Derived(Plain):
+    def tripled(self) -> int:
+        return self.n * 3
+
+
+def through(d: Derived) -> int:
+    return d.tripled()
+";
+    let built = match build_source(
+        source,
+        "by_diff_decoratedlive",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import gc\n\
+         import by_diff_decoratedlive as m\n\
+         print(type(m.Point.doubled).__name__, type(m.Held.read).__name__,\n\
+         \x20     type(m.Plain.read).__name__, type(m.Derived.tripled).__name__)\n\
+         print(m.Point(3).doubled(), m.Held(4).read(), m.Plain(5).read())\n\
+         print(m.Point(3).__dict__, m.Held.tag)\n\
+         print(m.through(m.Derived(2)), m.Derived(2).read())\n\
+         gc.collect()\n\
+         base = len(gc.get_objects())\n\
+         for _ in range(200):\n\
+         \x20   h = m.Held(1)\n\
+         \x20   h.itself = h\n\
+         del h\n\
+         gc.collect()\n\
+         print('collected' if len(gc.get_objects()) <= base + 10 else 'leaked')\n\
+         print(gc.is_tracked(m.Held(1)), gc.is_tracked(m.Plain(1)))\n",
+    );
+    assert_eq!(
+        out,
+        "method_descriptor method_descriptor method_descriptor method_descriptor\n\
+         6 4 5\n\
+         {'x': 3} seen\n\
+         6 2\n\
+         collected\n\
+         True False"
+    );
+}
+
+#[test]
 fn field_defaults_and_keyword_construction_agree() {
     if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
         eprintln!("skipping: `data class` needs python 3.10");
@@ -14178,5 +16955,313 @@ def carried(n: int) -> object:
             "list(m.carried(3))[-1] + 10 ** 20",
             "[list(m.fine(a)) for a in (0, -3, 10 ** 20)]",
         ],
+    );
+}
+
+#[test]
+fn a_module_level_name_bound_to_a_class_follows_the_class_it_named() {
+    // the whole module body runs against the interpreted definitions, so a name it binds
+    // to a class holds that definition — and the compiled type only ever replaces the one
+    // name the `class` statement wrote. what that left was two classes of the same name in
+    // the same module: `Kind()` built an object `isinstance(obj, C)` denied, and the
+    // compiled `hi` refused it outright.
+    //
+    // a name that *is* a twin is the one shape that moves soundly, so it is moved onto
+    // whatever stands under the class's own name. the annotation on it is beside the
+    // point: `Kind: type[C] = C` and `Bare = C` are the same binding.
+    //
+    // `method_descriptor` is what says the compiled type answered at all — a class that
+    // fell back to its interpreted definition has one class and could not show this
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_classalias");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class C:
+    def hi(self) -> int:
+        return 7
+
+
+Kind: type[C] = C
+Bare = C
+Rebound = Bare
+";
+    let built = match build_source(
+        source,
+        "by_diff_classalias",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_classalias as m\n\
+         print(m.Kind is m.C, m.Bare is m.C, m.Rebound is m.C)\n\
+         print(isinstance(m.Kind(), m.C), isinstance(m.C(), m.Bare))\n\
+         print(m.C.hi(m.Kind()), m.Kind().hi())\n\
+         print(type(m.C.hi).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "True True True\n\
+         True True\n\
+         7 7\n\
+         method_descriptor"
+    );
+}
+
+#[test]
+fn a_class_constant_naming_another_class_is_the_type_that_replaced_it() {
+    // a class-level constant is taken off the interpreted definition, so `attr = C` in a
+    // body hands over the *twin* — and copying that verbatim gave the compiled type an
+    // attribute naming a class nothing else in the module could reach. it goes through the
+    // same substitution every carried attribute does.
+    //
+    // `held` is the boundary in the other direction: a constant that only *reaches* a twin
+    // cannot be substituted, because the tuple is the object the body built and its
+    // identity is not the twin's. it is pinned here as still *present*, because dropping
+    // those instead was built and backed out on the measurement — 65 attributes lost over
+    // the stdlib, `ipaddress`'s network constants among them. what the reach holds is a
+    // defect of its own and is left exactly as the interpreted definition had it
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_classconst");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class C:
+    def hi(self) -> int:
+        return 7
+
+
+class Holder:
+    attr = C
+    held = (C,)
+    plain = 3
+
+    def tag(self) -> str:
+        return \"holder\"
+";
+    let built = match build_source(
+        source,
+        "by_diff_classconst",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_classconst as m\n\
+         print(m.Holder.attr is m.C, m.Holder.plain)\n\
+         print(m.C.hi(m.Holder.attr()))\n\
+         print(hasattr(m.Holder, 'held'), len(m.Holder.held))\n\
+         print(type(m.C.hi).__name__, type(m.Holder.tag).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "True 3\n\
+         7\n\
+         True 1\n\
+         method_descriptor method_descriptor"
+    );
+}
+
+#[test]
+fn a_base_written_as_an_alias_reaches_the_class_it_was_bound_to() {
+    // `Alias` and `Root` are one class, so the two spellings have to build one class.
+    // taking the alias for a name out of this module built `Over` on the interpreted
+    // definition instead — the emitted type goes into the namespace under `Root`, and an
+    // alias is carried over to it only once every class has been built — so
+    // `isinstance(Over(), Root)` answered `False` where python answers `True`, while
+    // `Over.__mro__` still said `Root`. a wrong answer, and one no sweep reaches: the
+    // class builds, imports, constructs and subclasses with only its contents lying
+    agree_python(
+        "aliasbase",
+        "\
+class Root:
+    def root(self) -> str:
+        return \"root\"
+
+
+Alias = Root
+
+
+class Over(Alias):
+    def side(self) -> str:
+        return \"over\"
+",
+        &[
+            "isinstance(m.Over(), m.Root)",
+            "m.Over.__mro__[1] is m.Root",
+            "[c.__name__ for c in m.Over.__mro__]",
+            "m.Over().root()",
+            "m.Over().side()",
+            "issubclass(m.Over, m.Root)",
+        ],
+    );
+}
+
+#[test]
+fn an_alias_reaches_the_compiled_type_rather_than_the_twin() {
+    // the same source again, because `agree` cannot say which build answered: the
+    // interpreted definition answers every one of those calls identically. what is
+    // wanted is that the *compiled* type stands under the name, and `method_descriptor`
+    // against `function` is what says so
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_aliasbase_type");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Root:
+    def root(self) -> str:
+        return \"root\"
+
+
+Alias = Root
+
+
+class Over(Alias):
+    def side(self) -> str:
+        return \"over\"
+";
+    let built = match build_source(
+        source,
+        "by_diff_aliasbase_type",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "{:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_aliasbase_type as m\n\
+         print(type(m.Root.root).__name__, type(m.Over.side).__name__)\n\
+         print(m.Alias is m.Root, m.Over.__mro__[1] is m.Root)\n\
+         print(isinstance(m.Over(), m.Root))\n",
+    );
+    assert_eq!(
+        out,
+        "method_descriptor method_descriptor\n\
+         True True\n\
+         True"
+    );
+}
+
+#[test]
+fn an_alias_does_not_carry_a_base_this_module_lays_out_past_the_gate() {
+    // `class OnLaid(Laid, codecs.Codec)` is refused because the layout would have to be
+    // inherited from outside and laid out here at once. written through an alias it went
+    // straight past — the gate asks `layouts` about the *name* — and compiled the one
+    // shape it exists to refuse. so the refusal has to survive the spelling, and `Laid`
+    // has to go interpreted with it or `isinstance` disagrees for the same reason again
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_aliaslaid");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+import codecs
+
+
+class Laid:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def held(self) -> int:
+        return self.n
+
+
+Alias = Laid
+
+
+class OnLaid(Alias, codecs.Codec):
+    def side(self) -> int:
+        return 2
+";
+    let built = match build_source(
+        source,
+        "by_diff_aliaslaid",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    let declined: Vec<(&str, &str)> = built
+        .declined
+        .iter()
+        .map(|declined| (declined.name.as_str(), declined.reason.as_str()))
+        .collect();
+    assert_eq!(
+        declined,
+        vec![
+            (
+                "OnLaid",
+                "a base this module lays out cannot stand beside one it does not"
+            ),
+            (
+                "Laid",
+                "`OnLaid` declined, so it extends the interpreted definition rather than this type"
+            )
+        ]
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_aliaslaid as m\n\
+         print(m.Alias is m.Laid, m.OnLaid.__mro__[1] is m.Laid)\n\
+         print(isinstance(m.OnLaid(1), m.Laid), m.OnLaid(1).held(), m.OnLaid(1).side())\n\
+         print(type(m.Laid.held).__name__, type(m.OnLaid.side).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "True True\n\
+         True 1 2\n\
+         function function"
     );
 }

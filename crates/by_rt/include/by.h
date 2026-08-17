@@ -821,6 +821,29 @@ static inline char By_Truthy(PyObject *o) {
 #define By_TypeData(obj, cls) ((void *)(obj))
 #endif
 
+/* whether an emitted class may keep an instance dict beside its layout
+ *
+ * a managed dict lives in the pre-header, so it is the one form that leaves the struct,
+ * its base's prefix and every field offset alone — but walking and releasing it is
+ * `PyObject_VisitManagedDict` and `PyObject_ClearManagedDict`, which 3.13 published and
+ * nothing below it offers outside the internal headers. so a module holding such a class
+ * is left to its interpreted definitions on an older interpreter, decided at import
+ * rather than when the C is written */
+#if PY_VERSION_HEX >= 0x030D0000
+#define BY_HAS_MANAGED_DICT 1
+#define BY_MANAGED_DICT_FLAG Py_TPFLAGS_MANAGED_DICT
+#define By_VisitManagedDict(obj, visit, arg) PyObject_VisitManagedDict((obj), (visit), (arg))
+#define By_ClearManagedDict(obj) PyObject_ClearManagedDict(obj)
+#else
+#define BY_HAS_MANAGED_DICT 0
+/* the flag is spelled in a static initializer, which is written whatever the interpreter
+ * — and below 3.11 there is no such flag to name at all. these three are never reached:
+ * the module falls back before any instance of such a class exists */
+#define BY_MANAGED_DICT_FLAG 0
+#define By_VisitManagedDict(obj, visit, arg) ((void)(obj), (void)(visit), (void)(arg))
+#define By_ClearManagedDict(obj) ((void)(obj))
+#endif
+
 /* reading a local on a path that never assigned it. the phrasing is the running
  * python's, not the compiler's — it changed in 3.11 and a compiled module has to say
  * what the interpreter beside it would say */
@@ -892,6 +915,72 @@ static inline PyObject *By_LookupGlobalString(PyObject *dict, const char *name) 
     return value;
 }
 
+/* `root.a.b`: the root the way `LOAD_GLOBAL` resolves it, then a `getattr` each
+ *
+ * this is what a decorator expression written as a chain of attributes does, and all
+ * of what it does — every step is a read, which is why evaluating it at module init
+ * rather than where the `def` stood is faithful. a python identifier holds no `.`, so
+ * the path arrives as one string and is split back apart here */
+static inline PyObject *By_LookupDotted(PyObject *dict, const char *path) {
+    const char *dot = strchr(path, '.');
+    PyObject *value;
+    if (dot == NULL) return By_LookupGlobalString(dict, path);
+    {
+        PyObject *key = By_InternedStr(path, (Py_ssize_t)(dot - path));
+        if (key == NULL) return NULL;
+        value = By_LookupGlobal(dict, key);
+        Py_DECREF(key);
+    }
+    while (value != NULL && dot != NULL) {
+        const char *segment = dot + 1;
+        const char *next = strchr(segment, '.');
+        Py_ssize_t length = next == NULL ? (Py_ssize_t)strlen(segment)
+                                         : (Py_ssize_t)(next - segment);
+        PyObject *attr = By_InternedStr(segment, length);
+        PyObject *got;
+        if (attr == NULL) {
+            Py_DECREF(value);
+            return NULL;
+        }
+        got = PyObject_GetAttr(value, attr);
+        Py_DECREF(attr);
+        Py_DECREF(value);
+        value = got;
+        dot = next;
+    }
+    return value;
+}
+
+/* bind a name in the module namespace: an assignment under a `global` declaration
+ *
+ * this is the write `By_LookupGlobal` is the read of, and it has to reach the same
+ * dict. binding a register instead would keep the new value to the frame, where
+ * python's binding is the module's — every other reader sees it at once, the
+ * interpreted twin included, since that twin's `__globals__` *is* this dict.
+ *
+ * builtins are pointedly not consulted: python's `STORE_GLOBAL` binds in the module
+ * namespace whether or not the name already resolved to a builtin */
+static inline char By_StoreGlobal(PyObject *dict, PyObject *name, PyObject *value) {
+    if (dict == NULL || name == NULL || value == NULL) return 2;
+    return PyDict_SetItem(dict, name, value) < 0 ? 2 : 0;
+}
+
+/* unbind a name in the module namespace: `del x` under a `global x`
+ *
+ * a dict raises `KeyError` for a key it does not hold and python raises `NameError`
+ * for a name it does not bind, so the one has to be translated into the other */
+static inline char By_DeleteGlobal(PyObject *dict, PyObject *name) {
+    if (dict == NULL || name == NULL) return 2;
+    if (PyDict_DelItem(dict, name) < 0) {
+        if (PyErr_ExceptionMatches(PyExc_KeyError)) {
+            PyErr_Clear();
+            PyErr_Format(PyExc_NameError, "name '%U' is not defined", name);
+        }
+        return 2;
+    }
+    return 0;
+}
+
 /* whether a type spec can be built on this tuple of bases
  *
  * `PyType_FromSpecWithBases` gives the type it builds `type` as its own, so any base
@@ -919,14 +1008,27 @@ static inline int By_SpecTakesBases(PyObject *bases) {
  * deallocation.
  *
  * a class statement works the shape out from every base at once, so where the offsets
- * disagree with the layout base the interpreted definition is what answers */
-static inline int By_OffsetsHoldUp(PyTypeObject *type) {
+ * disagree with the layout base the interpreted definition is what answers.
+ *
+ * a spec that *asked* for a managed dict is the one exception, and the spec is passed in
+ * so that asking can be told from inheriting: python keeps a managed dict in a pre-header
+ * it allocates itself, so the room is there and the offset — the sentinel `-1` — is the
+ * answer that was wanted. without this a decorated class silently kept its interpreted
+ * definition while every compiled function went on reading that definition's instances as
+ * its own struct */
+static inline int By_OffsetsHoldUp(PyTypeObject *type, PyType_Spec *spec) {
     PyTypeObject *base = type->tp_base;
     if (base == NULL) {
         return 1;
     }
-    return type->tp_dictoffset == base->tp_dictoffset
-           && type->tp_weaklistoffset == base->tp_weaklistoffset;
+    if (type->tp_weaklistoffset != base->tp_weaklistoffset) {
+        return 0;
+    }
+    if (type->tp_dictoffset == base->tp_dictoffset) {
+        return 1;
+    }
+    return spec != NULL && (spec->flags & BY_MANAGED_DICT_FLAG) != 0
+           && type->tp_dictoffset == -1;
 }
 
 /* the type for a class whose fields sit past a base's instance, or nothing at all
@@ -987,7 +1089,74 @@ static inline PyObject *By_SpecClass(PyObject *module_dict, const char *name,
         PyErr_Clear();
         return NULL;
     }
-    if (!By_OffsetsHoldUp((PyTypeObject *)cls)) {
+    if (!By_OffsetsHoldUp((PyTypeObject *)cls, spec)) {
+        Py_DECREF(cls);
+        return NULL;
+    }
+    return cls;
+}
+
+/* the type for a class appending storage past one *this module also appends to*
+ *
+ * `By_SpecClass` refuses a heap base outright, and a class this module writes is always
+ * one: the interpreted definition under that name is a `class` statement's type, whose
+ * `tp_dealloc` is `subtype_dealloc`. that refusal is the right answer for a base python
+ * built — `subtype_dealloc` picks the deallocator to chain to out of `Py_TYPE(self)`,
+ * finds this class's own, and calls it back until the stack runs out.
+ *
+ * a base *this module builds from a spec* is the one heap base that is not like that.
+ * its three slots are ones we emitted: each reads the base to chain to from the type
+ * that declared it, so the chain walks down to the outside base and stops. so the whole
+ * chain of appended storage can be built, innermost first, each spec standing on the
+ * finished type of the one below rather than on the interpreted definition.
+ *
+ * `base` is that finished type. what is checked here is that the interpreted definition
+ * agrees the two are related the way the emitted pair are: `base_name` is still the twin
+ * this module's `base` was built from — nothing of this module's own is installed yet —
+ * and the twin settled on exactly it, as its layout base and as its only base. anything
+ * else and the emitted type would answer a shape the source never wrote */
+static inline PyObject *By_SpecSubclass(PyObject *module_dict, const char *name,
+                                        PyType_Spec *spec, const char *base_name,
+                                        PyObject *base) {
+    PyObject *twin = By_LookupGlobalString(module_dict, name);
+    PyObject *twin_base;
+    PyObject *bases;
+    PyObject *cls;
+    int agrees;
+    if (twin == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+    twin_base = By_LookupGlobalString(module_dict, base_name);
+    if (twin_base == NULL) {
+        PyErr_Clear();
+        Py_DECREF(twin);
+        return NULL;
+    }
+    agrees = PyType_Check(twin) && PyType_Check(twin_base)
+             && (PyObject *)((PyTypeObject *)twin)->tp_base == twin_base
+             && PyTuple_GET_SIZE(((PyTypeObject *)twin)->tp_bases) == 1
+             && PyTuple_GET_ITEM(((PyTypeObject *)twin)->tp_bases, 0) == twin_base
+             && By_SpecTakesBases(((PyTypeObject *)twin)->tp_bases);
+    Py_DECREF(twin_base);
+    Py_DECREF(twin);
+    if (!agrees) {
+        return NULL;
+    }
+    bases = PyTuple_Pack(1, base);
+    if (bases == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+    cls = PyType_FromSpecWithBases(spec, bases);
+    Py_DECREF(bases);
+    if (cls == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+    /* the same last question `By_SpecClass` asks, and for the same reason: a spec adds
+     * neither a `__dict__` nor a weakref, so both offsets have to be the base's */
+    if (!By_OffsetsHoldUp((PyTypeObject *)cls, spec)) {
         Py_DECREF(cls);
         return NULL;
     }
@@ -1126,6 +1295,120 @@ static inline int By_SetInNamespace(PyObject *ns, const char *key, PyObject *val
     return failed;
 }
 
+/* what a value carried onto an emitted type becomes — defined with the rest of the twin
+ * machinery, and named here because a class namespace is written before that */
+static PyObject *By_TwinReplacement(PyObject *value, PyObject *const *twins,
+                                    PyObject *const *types, Py_ssize_t count);
+
+/* the class-level constants a class body wrote, and where their values come from
+ *
+ * the interpreted definition evaluated each of them once at class-definition time, and it
+ * is the only place the same object can come from — so the body that definition wrote is
+ * what they are read off, under the substitution every carried attribute takes. that body
+ * is captured while the fallback source runs and before any of the class's own decorators
+ * are handed it; `By_RunModuleBody` says why the finished class will not do. `twins` and
+ * `types` are the module's arrays and `classes` how many entries they hold; `body` is NULL
+ * for a class no interpreted `class` statement wrote, and then there is nothing to carry */
+typedef struct {
+    PyObject *body;
+    const char *const *names;
+    Py_ssize_t count;
+    PyObject *const *twins;
+    PyObject *const *types;
+    Py_ssize_t classes;
+} By_ClassConstants;
+
+/* the value one of them takes, as a new reference
+ *
+ * NULL is "the body did not write that name", which is not a failure and leaves no
+ * exception set: a body under a conditional may not have written it */
+static inline PyObject *By_ConstantValue(const By_ClassConstants *constants, Py_ssize_t at) {
+    PyObject *value, *stands;
+    if (constants == NULL || constants->body == NULL) return NULL;
+    /* read out of the mapping rather than through a lookup on the class: a lookup runs
+     * the descriptor protocol, so a `__class_getitem__ = classmethod(f)` would come back
+     * as a method already bound to the interpreted class rather than as the classmethod
+     * the body wrote */
+    value = PyDict_GetItemString(constants->body, constants->names[at]);
+    if (value == NULL) return NULL;
+    /* a value that only *reaches* a twin keeps what the body gave it, exactly as
+     * `By_CopyClassConstant` leaves it — this is the value half of that copy */
+    stands = By_TwinReplacement(value, constants->twins, constants->types, constants->classes);
+    if (stands == NULL) stands = value;
+    return By_NewRef(stands);
+}
+
+/* write the constants into a class namespace, and hand back what was written
+ *
+ * the mapping is `{name: value}` for exactly the names the captured body wrote, and it is
+ * what the class is checked against afterwards */
+static inline PyObject *By_CarryConstants(PyObject *ns, const By_ClassConstants *constants) {
+    PyObject *carried = PyDict_New();
+    Py_ssize_t at;
+    if (carried == NULL) return NULL;
+    for (at = 0; constants != NULL && at < constants->count; at++) {
+        PyObject *value = By_ConstantValue(constants, at);
+        int failed;
+        if (value == NULL) continue;
+        failed = By_SetInNamespace(ns, constants->names[at], value) < 0
+                 || PyDict_SetItemString(carried, constants->names[at], value) < 0;
+        Py_DECREF(value);
+        if (failed) {
+            Py_DECREF(carried);
+            return NULL;
+        }
+    }
+    return carried;
+}
+
+/* whether the finished class answers every constant with the object it was handed
+ *
+ * writing them into the namespace is what lets the metaclass see them, and it is enough
+ * for a metaclass that only *reads* one — a `__slots__` an `ABCMeta` passes to
+ * `type.__new__`, an `_fields` a registry records. it is not enough for one that *makes*
+ * something of what the body wrote: an `EnumType` handed `STRICT = 'strict'` builds a
+ * member out of it, and the member is not the value, so every reference the module body
+ * already took would name the old one.
+ *
+ * name for name is what separates the two, and it is asked of the class's own dict —
+ * which is where a `class` statement's namespace lands, entry for entry, and the only
+ * place the comparison can be made against the raw object the body wrote. a lookup on the
+ * class would run the descriptor protocol instead, so a `__class_getitem__ = classmethod(f)`
+ * would answer a freshly bound method and never be identical to anything. where the check
+ * fails, the interpreted definition stands — which is the answer such a class had before
+ * any of this.
+ *
+ * that fallback carries the limit every fallback in `By_BuildClass` carries: a twin
+ * extends the *twin's* base, so a class refused here while a base of this module's is
+ * emitted would answer `issubclass` False where python answers True. the compile-time
+ * cascade is what keeps that from arising and the runtime cannot reach as far — the
+ * choice left here is between the twin and a failed import, and the twin is the better
+ * of the two. nothing over the stdlib is refused here at all */
+static inline int By_ConstantsHeldUp(PyObject *cls, PyObject *carried) {
+    PyObject *name, *wanted;
+    PyObject *own = cls != NULL && PyType_Check(cls) ? ((PyTypeObject *)cls)->tp_dict : NULL;
+    Py_ssize_t position = 0;
+    if (carried == NULL) return 1;
+    while (PyDict_Next(carried, &position, &name, &wanted)) {
+        int same;
+        if (own != NULL) {
+            /* borrowed, and nothing here runs while the walk is open */
+            same = PyDict_GetItem(own, name) == wanted;
+        } else {
+            /* a metaclass answering with something that is not a class at all */
+            PyObject *got = PyObject_GetAttr(cls, name);
+            if (got == NULL) {
+                PyErr_Clear();
+                return 0;
+            }
+            same = got == wanted;
+            Py_DECREF(got);
+        }
+        if (!same) return 0;
+    }
+    return 1;
+}
+
 /* one entry of a method table, as the descriptor a class namespace holds
  *
  * the three cases `type_add_methods` distinguishes: a class method and a static method
@@ -1144,8 +1427,8 @@ static inline PyObject *By_MethodDescriptor(PyTypeObject *owner, PyMethodDef *de
     return PyDescr_NewMethod(owner, def);
 }
 
-/* the class `meta(name, bases, namespace, **kwds)` builds, with `methods` in that
- * namespace
+/* the class `meta(name, bases, namespace, **kwds)` builds, with `methods` and
+ * `constants` in that namespace
  *
  * the methods go in *before* the call rather than onto the finished type, and both
  * halves of that matter. `type.__new__` fills the type slots from the namespace, so a
@@ -1153,14 +1436,22 @@ static inline PyObject *By_MethodDescriptor(PyTypeObject *owner, PyMethodDef *de
  * reads the namespace — an `ABCMeta` deciding which of the base's abstract methods
  * this class left abstract — sees what the class actually defines.
  *
+ * the constants go in for the same reason, and that is the whole of what makes a class
+ * with one buildable this way: copied onto the *finished* type they would land behind the
+ * metaclass's back, and a `__slots__` that arrived after `type.__new__` had already given
+ * the instances a dict is not a `__slots__` at all. what the copy cannot promise, the
+ * check after the call does — see `By_ConstantsHeldUp` — and where the call does not get
+ * that far, the raise is the same refusal by another route.
+ *
  * the descriptors name `object` as their owner because the type they belong to is what
  * this call produces. that is also the more faithful answer: the interpreted twin holds
  * plain functions there, and a plain function checks no receiver either */
 static inline PyObject *By_TypeThroughMetaclass(PyObject *module_dict, const char *name,
                                                 PyObject *bases, PyObject *orig_bases,
-                                                PyObject *kwds, PyMethodDef *methods) {
+                                                PyObject *kwds, PyMethodDef *methods,
+                                                const By_ClassConstants *constants) {
     PyMethodDef *def;
-    PyObject *module_name, *prepare, *args, *ns, *cls = NULL;
+    PyObject *module_name, *prepare, *args, *ns, *carried, *cls;
     PyObject *meta = By_Metaclass(bases, kwds);
     if (meta == NULL) return NULL;
     args = Py_BuildValue("(sO)", name, bases);
@@ -1211,20 +1502,40 @@ static inline PyObject *By_TypeThroughMetaclass(PyObject *module_dict, const cha
             return NULL;
         }
     }
+    /* after the methods, so that a body writing a name as both leaves the value there —
+     * which is the answer the check below is made against */
+    carried = By_CarryConstants(ns, constants);
+    if (carried == NULL) {
+        Py_DECREF(ns);
+        Py_DECREF(meta);
+        return NULL;
+    }
     args = Py_BuildValue("(sOO)", name, bases, ns);
     Py_DECREF(ns);
-    if (args != NULL) {
-        cls = PyObject_Call(meta, args, kwds);
-        Py_DECREF(args);
+    if (args == NULL) {
+        Py_DECREF(carried);
+        Py_DECREF(meta);
+        return NULL;
     }
+    cls = PyObject_Call(meta, args, kwds);
+    Py_DECREF(args);
     Py_DECREF(meta);
+    /* the interpreted definition already built this class — the fallback source ran
+     * before any of this — so a metaclass raising here is the reconstruction being wrong
+     * rather than the class being unbuildable, and taking the whole import down for it
+     * would be the worst of the three answers. `ssl`'s `Purpose` is the case: `EnumType`
+     * is handed a namespace whose members are the twin's finished ones, and building a
+     * member out of a member raises before the check below could turn it down */
+    if (cls == NULL) PyErr_Clear();
     /* a `metaclass` that is not a type may hand back anything, and what it hands back is
-     * what the name means — but it is not a type this module can hang a constant or a
-     * decorated method on, so the interpreted definition is what stands under it */
-    if (cls != NULL && !PyType_Check(cls)) {
-        Py_DECREF(cls);
+     * what the name means — but it is not a type this module can hang a decorated method
+     * on, so the interpreted definition is what stands under it. a class that disagrees
+     * with what its body wrote is turned down the same way and for the same reason */
+    if (cls == NULL || !PyType_Check(cls) || !By_ConstantsHeldUp(cls, carried)) {
+        Py_XDECREF(cls);
         cls = By_LookupGlobalString(module_dict, name);
     }
+    Py_DECREF(carried);
     return cls;
 }
 
@@ -1243,11 +1554,13 @@ static inline PyObject *By_TypeThroughMetaclass(PyObject *module_dict, const cha
  * layout — so `through_metaclass` is false for a class with fields of its own, and the
  * interpreted definition the fallback already ran is what answers for it. it is false
  * again for anything the caller can only put on the *finished* type: a method decorator
- * and a class-level constant both land after the metaclass has decided what the class
- * defines, and a metaclass that reads its namespace would disagree with them */
+ * lands after the metaclass has decided what the class defines, and a metaclass that
+ * reads its namespace would disagree with it. a class-level constant does not, because
+ * `constants` carries it into the namespace instead */
 static inline PyObject *By_BuildClass(PyObject *module_dict, const char *name,
                                       PyObject *bases, PyObject *kwds, PyMethodDef *methods,
-                                      PyType_Spec *spec, int through_metaclass) {
+                                      PyType_Spec *spec, int through_metaclass,
+                                      const By_ClassConstants *constants) {
     PyObject *cls, *resolved;
     if (bases == NULL) return NULL;
     resolved = By_ResolveBases(bases);
@@ -1257,13 +1570,14 @@ static inline PyObject *By_BuildClass(PyObject *module_dict, const char *name,
     }
     if (spec != NULL && By_SpecTakesBases(resolved)) {
         cls = PyType_FromSpecWithBases(spec, resolved);
-        if (cls != NULL && !By_OffsetsHoldUp((PyTypeObject *)cls)) {
+        if (cls != NULL && !By_OffsetsHoldUp((PyTypeObject *)cls, spec)) {
             Py_DECREF(cls);
             cls = By_LookupGlobalString(module_dict, name);
         }
     } else if (through_metaclass) {
         cls = By_TypeThroughMetaclass(module_dict, name, resolved,
-                                      resolved == bases ? NULL : bases, kwds, methods);
+                                      resolved == bases ? NULL : bases, kwds, methods,
+                                      constants);
     } else {
         cls = By_LookupGlobalString(module_dict, name);
     }
@@ -1472,28 +1786,6 @@ static inline char By_IsMatchSequence(PyObject *o) {
     return (char)(o != NULL && PyType_HasFeature(Py_TYPE(o), Py_TPFLAGS_SEQUENCE));
 }
 #endif
-
-/* move a class-level constant from the interpreted definition onto the compiled
- * type
- *
- * a *static* type is immutable to `setattr`, which is what licenses direct
- * dispatch — so this writes the type's dict, the way a C extension declares its
- * own class attributes
- */
-static inline int By_CopyClassConstant(PyObject *module_dict, const char *class_name,
-                                       PyTypeObject *type, const char *name) {
-    PyObject *twin = PyDict_GetItemString(module_dict, class_name);
-    if (twin == NULL) return 0;
-    PyObject *value = PyObject_GetAttrString(twin, name);
-    if (value == NULL) {
-        PyErr_Clear();
-        return 0;
-    }
-    int result = PyDict_SetItemString(type->tp_dict, name, value);
-    Py_DECREF(value);
-    if (result == 0) PyType_Modified(type);
-    return result;
-}
 
 /* the refusal `__annotations__` gives where a class's own could not be carried across
  *
@@ -1871,6 +2163,213 @@ static inline int By_AdoptTwinAttributes(PyObject *const *twins, PyObject *const
         PyType_Modified((PyTypeObject *)type);
     }
     return 0;
+}
+
+/* move a class-level constant from the interpreted definition onto the compiled type
+ *
+ * a *static* type is immutable to `setattr`, which is what licenses direct dispatch — so
+ * this writes the type's dict, the way a C extension declares its own class attributes.
+ *
+ * the value comes out of the body that definition wrote, so `attr = C` in a class body
+ * hands over the *interpreted* `C`, and copying that verbatim gives the type an attribute
+ * naming a class nothing else in the module can reach. a value that *is* a twin is
+ * therefore replaced by the type standing in for it, exactly as a carried attribute is.
+ *
+ * a value that merely *reaches* one is left as the interpreted definition had it, and that
+ * is the one place this differs from `By_AdoptTwinAttributes`. dropping it instead was
+ * built and backed out on the measurement: it loses 65 attributes over the corpus —
+ * `ipaddress` its network constants among them. absence would be the better failure if the
+ * reach were new, but it is a defect this copy has always had, and a question of its own
+ * rather than one to settle as a side effect of the identity
+ */
+static inline int By_CopyClassConstant(PyObject *body, PyTypeObject *type, const char *name,
+                                       PyObject *const *twins, PyObject *const *types,
+                                       Py_ssize_t count) {
+    const char *const names[] = {name};
+    By_ClassConstants constants = {body, names, 1, twins, types, count};
+    /* the same value a class built through its metaclass is handed before the call, so the
+     * two constructions cannot drift apart about what a constant is */
+    PyObject *stands = By_ConstantValue(&constants, 0);
+    int result;
+    if (stands == NULL) return 0;
+    result = PyDict_SetItemString(type->tp_dict, name, stands);
+    Py_DECREF(stands);
+    if (result == 0) PyType_Modified(type);
+    return result;
+}
+
+/* the module-level names still bound to an interpreted twin, moved onto what replaced it
+ *
+ * the whole module body runs against the interpreted definitions, so every name it binds
+ * to a class holds the twin — `Kind = C`, a re-export under another spelling, a name a
+ * conditional picked — while the compiled type only ever replaces the one name the
+ * `class` statement wrote. what that leaves is two classes of the same name in the same
+ * module: `Kind()` builds an object `isinstance(obj, C)` denies, and a compiled method
+ * handed one refuses it outright with `doesn't apply to a 'C' object`.
+ *
+ * a name that *is* a twin is the one shape that can be moved soundly, and it is the same
+ * substitution `By_TwinReplacement` makes for a carried attribute. it is made against
+ * whatever now stands under the class's own name rather than against the type directly,
+ * so a decorated class hands its aliases the decorator's answer — which is what the body
+ * bound them to — instead of the type the decorator was given.
+ *
+ * a value that merely *reaches* a twin is not moved and cannot be: an instance the body
+ * built has the twin for its type, and a list holding one is the same object the body
+ * kept. those stay as the body left them */
+static inline int By_RemapTwinAliases(PyObject *module_dict, PyObject *const *twins,
+                                      const char *const *names, Py_ssize_t count) {
+    /* the keys first: the dict is written while this walks, and only for keys it
+     * already holds, but nothing may run against it mid-walk either way */
+    PyObject *keys = PyDict_Keys(module_dict);
+    Py_ssize_t at;
+    if (keys == NULL) return -1;
+    for (at = 0; at < PyList_GET_SIZE(keys); at++) {
+        PyObject *key = PyList_GET_ITEM(keys, at);
+        PyObject *value = PyDict_GetItem(module_dict, key);
+        Py_ssize_t index;
+        if (value == NULL) continue;
+        for (index = 0; index < count; index++) {
+            PyObject *stands;
+            if (twins[index] == NULL || value != twins[index]) continue;
+            stands = PyDict_GetItemString(module_dict, names[index]);
+            /* the class's own name already holds it, and one whose type was never
+             * installed still holds the twin — neither is a move */
+            if (stands == NULL || stands == value) break;
+            if (PyDict_SetItem(module_dict, key, stands) < 0) {
+                Py_DECREF(keys);
+                return -1;
+            }
+            break;
+        }
+    }
+    Py_DECREF(keys);
+    return 0;
+}
+
+/* `__build_class__`, recording what each module-level `class` statement wrote
+ *
+ * `state` is `(the real __build_class__, the mapping to record into)`. the class is built
+ * first and read afterwards, because the namespace itself is never handed back: python
+ * gives it to the metaclass and to nobody else. what `type.__new__` made of it is the
+ * closer thing anyway — it is exactly what the interpreted class holds at the moment
+ * before the first of its decorators is handed it */
+static PyObject *By_CaptureClassBody(PyObject *state, PyObject *args, PyObject *kwds) {
+    PyObject *cls = PyObject_Call(PyTuple_GET_ITEM(state, 0), args, kwds);
+    PyObject *name, *qualified, *body;
+    int outermost;
+    if (cls == NULL || PyTuple_GET_SIZE(args) < 2 || !PyType_Check(cls)) return cls;
+    if (((PyTypeObject *)cls)->tp_dict == NULL) return cls;
+    name = PyTuple_GET_ITEM(args, 1);
+    /* a class written inside a function can be named the same as one at module level and
+     * is not the same class. `f.<locals>.C` against `C` is what tells them apart, and the
+     * body function python passes here is what carries that qualified name */
+    qualified = PyObject_GetAttrString(PyTuple_GET_ITEM(args, 0), "__qualname__");
+    if (qualified == NULL) {
+        PyErr_Clear();
+        return cls;
+    }
+    outermost = PyObject_RichCompareBool(qualified, name, Py_EQ);
+    Py_DECREF(qualified);
+    if (outermost != 1) {
+        if (outermost < 0) PyErr_Clear();
+        return cls;
+    }
+    body = PyDict_Copy(((PyTypeObject *)cls)->tp_dict);
+    /* a body that cannot be recorded is raised out of the `class` statement rather than
+     * passed over: what would follow is a type carrying no constants at all, and for a
+     * decorated class that is the defect this capture exists to remove */
+    if (body == NULL || PyDict_SetItem(PyTuple_GET_ITEM(state, 1), name, body) < 0) {
+        Py_XDECREF(body);
+        Py_DECREF(cls);
+        return NULL;
+    }
+    Py_DECREF(body);
+    return cls;
+}
+
+/* run a module's fallback source, capturing each class body before its decorators run
+ *
+ * the source is the whole interpreted module and it runs to completion before any emitted
+ * type is built, so by the time a class-level constant is copied onto one, the class it
+ * would be copied off has already been through its own decorators. a decorator that only
+ * *reads* the class leaves the value where the body put it, but one that makes something
+ * of it does not: `@dataclass` deletes the `field(init=False)` a body wrote, and leaves a
+ * bare `2` where `field(default=2, repr=False)` stood.
+ *
+ * so the body is taken while it still is the body. python routes every `class` statement
+ * through `__build_class__`, and the one a statement reaches is the `__build_class__` of
+ * *its own frame's* builtins — so a copy of the builtins mapping, put in this module's
+ * dict, reaches this module's body and nothing else in the process. swapping the entry in
+ * the real builtins instead would be seen by every thread importing at the same time,
+ * which on a free-threaded interpreter is a live hazard rather than a theoretical one.
+ *
+ * the copy outlives the exec whatever is done with it: python gives a function the
+ * builtins its defining frame had, so every function this body defines holds this dict for
+ * as long as it lives. that is why the real entry is put back afterwards rather than the
+ * dict simply dropped — otherwise a class one of those functions made, at any later point
+ * in the process, would still be recorded here.
+ *
+ * hands back `{name: body}` for the classes the body wrote at module level, as a new
+ * reference, or NULL with an exception set where the body raised */
+static inline PyObject *By_RunModuleBody(const char *source, PyObject *dict) {
+    static PyMethodDef capture = {"__build_class__",
+                                  (PyCFunction)(void (*)(void))By_CaptureClassBody,
+                                  METH_VARARGS | METH_KEYWORDS, NULL};
+    PyObject *bodies, *stood, *mapping, *builtins, *real, *state, *wrapper, *result;
+    int failed;
+    bodies = PyDict_New();
+    if (bodies == NULL) return NULL;
+    /* an emitted module's dict has no `__builtins__` of its own, and python would then
+     * give the body's frame the running interpreter's */
+    stood = PyDict_GetItemString(dict, "__builtins__");
+    if (stood == NULL) stood = PyEval_GetBuiltins();
+    Py_XINCREF(stood);
+    mapping = stood != NULL && PyModule_Check(stood) ? PyModule_GetDict(stood) : stood;
+    builtins = mapping != NULL && PyDict_Check(mapping) ? PyDict_Copy(mapping) : NULL;
+    real = builtins == NULL ? NULL : PyDict_GetItemString(builtins, "__build_class__");
+    if (real == NULL) {
+        Py_XDECREF(builtins);
+        Py_XDECREF(stood);
+        Py_DECREF(bodies);
+        if (!PyErr_Occurred()) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            "no builtins `__build_class__` to run the module body against");
+        }
+        return NULL;
+    }
+    Py_INCREF(real);
+    state = PyTuple_Pack(2, real, bodies);
+    wrapper = state == NULL ? NULL : PyCFunction_New(&capture, state);
+    Py_XDECREF(state);
+    failed = wrapper == NULL || PyDict_SetItemString(builtins, "__build_class__", wrapper) < 0
+             || PyDict_SetItemString(dict, "__builtins__", builtins) < 0;
+    Py_XDECREF(wrapper);
+    result = failed ? NULL : PyRun_String(source, Py_file_input, dict, dict);
+    Py_XDECREF(result);
+    /* whatever the body did, the capture stops here */
+    {
+        PyObject *type, *value, *traceback;
+        PyErr_Fetch(&type, &value, &traceback);
+        if (PyDict_SetItemString(builtins, "__build_class__", real) < 0
+            || PyDict_SetItemString(dict, "__builtins__", stood) < 0) {
+            PyErr_Clear();
+        }
+        PyErr_Restore(type, value, traceback);
+    }
+    Py_DECREF(real);
+    Py_DECREF(builtins);
+    Py_DECREF(stood);
+    if (failed || result == NULL) {
+        Py_DECREF(bodies);
+        return NULL;
+    }
+    return bodies;
+}
+
+/* the body captured for one class, as a borrowed reference, or NULL where there is none */
+static inline PyObject *By_ClassBody(PyObject *bodies, const char *name) {
+    if (bodies == NULL) return NULL;
+    return PyDict_GetItemString(bodies, name);
 }
 
 /* the answer a class pattern gives when the attribute it named is simply absent
@@ -2837,10 +3336,10 @@ static inline PyObject *By_Method(PyObject *fn) {
 /* apply a method's decorators, innermost first, to the finished type — which is the
  * only place a type spec leaves for them.
  *
- * each decorator is looked up in the module namespace, so `@property` and a
- * user-defined one resolve the same way. they are folded in memory and the result
- * written once, which is also what a class body does: the namespace never holds a
- * half-decorated method. `PyType_Modified` is what makes the change visible — the
+ * each decorator is resolved out of the module namespace by `By_LookupDotted`, so
+ * `@property` and `@abc.abstractmethod` come out the same way. they are folded in
+ * memory and the result written once, which is also what a class body does: the
+ * namespace never holds a half-decorated method. `PyType_Modified` is what makes the change visible — the
  * attribute cache would otherwise keep serving the undecorated one */
 static inline int By_ApplyMethodDecorators(PyTypeObject *type, PyObject *dict,
                                            const char *owner, const char *name,
@@ -2863,7 +3362,7 @@ static inline int By_ApplyMethodDecorators(PyTypeObject *type, PyObject *dict,
     }
     for (index = count; index > 0; index--) {
         PyObject *args[1] = {target};
-        PyObject *fn = By_LookupGlobalString(dict, decorators[index - 1]);
+        PyObject *fn = By_LookupDotted(dict, decorators[index - 1]);
         PyObject *wrapped;
         if (fn == NULL) {
             Py_DECREF(target);
@@ -2885,9 +3384,10 @@ static inline int By_ApplyMethodDecorators(PyTypeObject *type, PyObject *dict,
     return 0;
 }
 
-/* apply `dict[decorator]` to `dict[name]`, in place. this is what lets a
- * decorated function still be compiled: the native one goes into the namespace,
- * then the decorator wraps it, exactly as the `def` statement would have */
+/* apply the decorator `decorator` names to `dict[name]`, in place. this is what
+ * lets a decorated function still be compiled: the native one goes into the
+ * namespace, then the decorator wraps it, exactly as the `def` statement would
+ * have. `decorator` is a dotted path — see `By_LookupDotted` */
 static inline int By_ApplyDecorator(PyObject *dict, const char *name, const char *decorator) {
     PyObject *target = PyDict_GetItemString(dict, name);
     if (target == NULL) {
@@ -2895,7 +3395,7 @@ static inline int By_ApplyDecorator(PyObject *dict, const char *name, const char
         return -1;
     }
     Py_INCREF(target);
-    PyObject *fn = By_LookupGlobalString(dict, decorator);
+    PyObject *fn = By_LookupDotted(dict, decorator);
     if (fn == NULL) {
         Py_DECREF(target);
         return -1;
@@ -3197,13 +3697,6 @@ static inline PyObject *By_PackInitKwargs(PyObject *kwds, const char *const *nam
     return packed;
 }
 
-/* report every parameter the caller left out, in cpython's own wording.
- *
- * matching the message matters more than it looks: the differential harness compares
- * exception text, and a difference there is a difference a user would see */
-/* every parameter with no default that nothing filled, named the way python names
- * them — and positional and keyword-only are counted separately, because python
- * reports them in two different sentences */
 /* python began qualifying a method by its class in 3.10, so the name the compiler
  * wrote is trimmed back to its tail on an interpreter that would not have used it */
 static inline const char *By_ErrorName(const char *fname) {
@@ -3215,6 +3708,16 @@ static inline const char *By_ErrorName(const char *fname) {
 #endif
 }
 
+/* every parameter with no default that nothing filled, named the way python names them
+ * — positional and keyword-only counted separately, because python reports them in two
+ * different sentences
+ *
+ * this is the wording of *last resort*: [`By_Rephrase`] runs first and lets the
+ * interpreter word the refusal itself, and only a shape it could not build falls back
+ * to here. so the list joined below is deliberately left as it always was, one comma
+ * short of python's — a differential test that sees this text is a test whose rephrasing
+ * never ran, which is the one thing a comparison of two identical strings could not
+ * otherwise tell anyone */
 static inline int By_CheckRequired(const char *const *names, const unsigned char *required,
                                   Py_ssize_t count, Py_ssize_t kwonly, PyObject **out,
                                   const char *fname) {
@@ -3255,30 +3758,162 @@ static inline int By_CheckRequired(const char *const *names, const unsigned char
     return 0;
 }
 
+/* a spelling no parameter already has, for a synthetic one that has to be named
+ *
+ * the receiver, the `*args` and the `**kwargs` [`By_Rephrase`] writes are named in
+ * source nothing reads back, so any free spelling does and underscores are appended
+ * until one is free. free of the *real* names is not on its own enough, though:
+ * python offers a near miss to a caller who spelled a keyword wrongly, and it draws
+ * that suggestion from the parameters between the positional-only run and the end of
+ * the keyword-only one. a `*args` or `**kwargs` name lies outside that range and a
+ * positional-only one before it, which is why the receiver is written as one */
+static inline void By_SpareName(char *buffer, size_t size, const char *stem,
+                                const char *const *names, Py_ssize_t count) {
+    size_t used = strlen(stem);
+    if (used + 1 > size) used = size - 1;
+    memcpy(buffer, stem, used);
+    buffer[used] = '\0';
+    while (used + 1 < size) {
+        Py_ssize_t i = 0;
+        while (i < count && strcmp(buffer, names[i]) != 0) i++;
+        if (i == count) return;
+        buffer[used++] = '_';
+        buffer[used] = '\0';
+    }
+}
+
+/* the caller's positionals with the receiver python counts put back in front of them */
+static inline PyObject *By_ShapeArgs(PyObject *args, Py_ssize_t receiver) {
+    Py_ssize_t nargs = args == NULL ? 0 : PyTuple_GET_SIZE(args);
+    Py_ssize_t extra = receiver ? 1 : 0;
+    PyObject *made = PyTuple_New(nargs + extra);
+    if (made == NULL) return NULL;
+    if (extra) PyTuple_SET_ITEM(made, 0, By_NewRef(Py_None));
+    for (Py_ssize_t i = 0; i < nargs; i++) {
+        PyTuple_SET_ITEM(made, i + extra, By_NewRef(PyTuple_GET_ITEM(args, i)));
+    }
+    return made;
+}
+
+/* the refusal the interpreter itself would word for a call to a function of this shape
+ *
+ * nothing in the c api formats one. `format_missing`, `too_many_positional` and
+ * `format_kwargs_error` are all static to `ceval.c`, and their wording is fussier than
+ * it looks: `and` from two names up, a comma *before* that `and` from three up, a range
+ * rather than a count once any parameter has a default, and a receiver counted in the
+ * arity sentence but not in the missing-argument one. writing those rules out is what
+ * left the comma out of this message for the whole of the project's life, and it was
+ * right when it was written — so the next rule to change would go the same way
+ *
+ * so rather than the rules, the *shape*: a python function with the same parameters,
+ * handed the same call. its body is `pass`, so the only thing the call can do is raise
+ * what the interpreter raises for the real one. returns 1 having left that exception
+ * pending, or 0 having left none — which is the two binders disagreeing, and is why the
+ * caller's own wording stays behind this
+ *
+ * the caller's exception must be off the thread before this is reached: it compiles and
+ * it calls, and neither is reached with one pending */
+static inline int By_Rephrase(const char *const *names, const unsigned char *required,
+                              Py_ssize_t count, Py_ssize_t posonly, Py_ssize_t kwonly,
+                              int variadic, int extras, const char *fname,
+                              Py_ssize_t receiver, PyObject *args, PyObject *kwds) {
+    char self_name[32], rest_name[32], keys_name[32];
+    By_SpareName(self_name, sizeof(self_name), "_by_self", names, count);
+    By_SpareName(rest_name, sizeof(rest_name), "_by_rest", names, count);
+    By_SpareName(keys_name, sizeof(keys_name), "_by_keys", names, count);
+    /* a keyword spelled like the synthetic receiver would bind to it, and the shape
+     * would then answer about a parameter the real function does not have */
+    if (kwds != NULL && receiver && PyDict_GetItemString(kwds, self_name) != NULL) return 0;
+
+    Py_ssize_t limit = count - kwonly;
+    PyObject *source = PyUnicode_FromString("def _(");
+    if (receiver) {
+        PyUnicode_AppendAndDel(&source, PyUnicode_FromFormat("%s, ", self_name));
+        /* positional-only, so that no near miss is ever offered against it. where the
+         * function has a positional-only run of its own the marker comes after that */
+        if (posonly == 0) PyUnicode_AppendAndDel(&source, PyUnicode_FromString("/, "));
+    }
+    for (Py_ssize_t i = 0; i < limit; i++) {
+        PyUnicode_AppendAndDel(
+            &source, PyUnicode_FromFormat("%s%s, ", names[i], required[i] ? "" : "=None"));
+        if (i + 1 == posonly) PyUnicode_AppendAndDel(&source, PyUnicode_FromString("/, "));
+    }
+    if (variadic) {
+        PyUnicode_AppendAndDel(&source, PyUnicode_FromFormat("*%s, ", rest_name));
+    } else if (kwonly > 0) {
+        PyUnicode_AppendAndDel(&source, PyUnicode_FromString("*, "));
+    }
+    for (Py_ssize_t i = limit; i < count; i++) {
+        PyUnicode_AppendAndDel(
+            &source, PyUnicode_FromFormat("%s%s, ", names[i], required[i] ? "" : "=None"));
+    }
+    if (extras) PyUnicode_AppendAndDel(&source, PyUnicode_FromFormat("**%s", keys_name));
+    PyUnicode_AppendAndDel(&source, PyUnicode_FromString("): pass\n"));
+
+    /* the module namespace the definition lands in, which is also where it is read back
+     * from. nothing in the source needs a builtin, and evaluation supplies the
+     * interpreter's own where a namespace carries none */
+    PyObject *shape = NULL, *scope = NULL;
+    const char *text = source == NULL ? NULL : PyUnicode_AsUTF8(source);
+    if (text != NULL) scope = PyDict_New();
+    if (scope != NULL) {
+        PyObject *ran = PyRun_String(text, Py_file_input, scope, scope);
+        Py_XDECREF(ran);
+        if (ran != NULL) shape = PyDict_GetItemString(scope, "_");
+    }
+    int reworded = 0;
+    if (shape != NULL) {
+        /* every one of these messages names the *qualified* name, which for a function
+         * is the one it carries rather than the one its code object was compiled with */
+        PyObject *label = PyUnicode_FromString(fname);
+        int named = label != NULL && PyObject_SetAttrString(shape, "__qualname__", label) == 0;
+        Py_XDECREF(label);
+        PyObject *positional = named ? By_ShapeArgs(args, receiver) : NULL;
+        if (positional != NULL) {
+            PyObject *answer = PyObject_Call(shape, positional, kwds);
+            Py_DECREF(positional);
+            if (answer != NULL) Py_DECREF(answer);
+            else if (PyErr_ExceptionMatches(PyExc_TypeError)) reworded = 1;
+        }
+    }
+    Py_XDECREF(source);
+    Py_XDECREF(scope);
+    /* a shape that could not be built, or one that refused for a reason of its own,
+     * leaves the thread as it found it */
+    if (!reworded) PyErr_Clear();
+    return reworded;
+}
+
 /* the constructor's binding: the same rules [`By_BindArgs`] applies, read off a tuple
  * and a dict rather than a fastcall vector — which is the whole of what differs
  *
  * `out[i]` receives a *borrowed* pointer, or NULL where the caller supplied nothing
  * and the default fills it. python counts `self` in its arity message and not in its
  * missing-argument one, so this does too */
-static inline int By_BindInit(PyObject *args, PyObject *kwds, const char *const *names,
-                              Py_ssize_t count, const unsigned char *required,
-                              Py_ssize_t posonly, Py_ssize_t kwonly, PyObject **out,
-                              int variadic, int extras, const char *fname, int inherited) {
+static inline int By_BindInitPlain(PyObject *args, PyObject *kwds,
+                                   const char *const *names, Py_ssize_t count,
+                                   const unsigned char *required, Py_ssize_t posonly,
+                                   Py_ssize_t kwonly, PyObject **out, int variadic,
+                                   int extras, const char *fname, int inherited) {
     fname = By_ErrorName(fname);
     for (Py_ssize_t i = 0; i < count; i++) out[i] = NULL;
     Py_ssize_t nargs = args == NULL ? 0 : PyTuple_GET_SIZE(args);
     /* a keyword-only parameter is one nothing positional can reach, so the run a
      * caller may fill positionally ends where they begin */
     Py_ssize_t positional_limit = count - kwonly;
-    if (nargs > positional_limit && !variadic) {
-        /* a class with no `__init__` at all is rejected by `object.__init__`, which
-         * names the class and does not count a receiver it never had. a *written*
-         * `def __init__(self)` takes no arguments either and still reports as a method */
-        if (inherited) {
+    /* a class with no `__init__` at all is rejected by `object.__init__`, which names
+     * the class, does not count a receiver it never had, and asks only whether it was
+     * given anything — a keyword is as much an excess argument as a positional, and
+     * saying which one would be a distinction `object_init` never draws. such a class
+     * takes no parameters at all, so there is nothing else the call could be about. a
+     * *written* `def __init__(self)` takes no arguments either and still reports as a
+     * method, which is why this turns on how the class was written and not on `count` */
+    if (inherited) {
+        if (nargs > 0 || (kwds != NULL && PyDict_Size(kwds) > 0)) {
             PyErr_Format(PyExc_TypeError, "%s() takes no arguments", fname);
             return -1;
         }
+    } else if (nargs > positional_limit && !variadic) {
         return By_TooManyPositional(fname, required, positional_limit, nargs, 1);
     }
     Py_ssize_t positional = nargs < positional_limit ? nargs : positional_limit;
@@ -3306,6 +3941,32 @@ static inline int By_BindInit(PyObject *args, PyObject *kwds, const char *const 
     return By_CheckRequired(names, required, count, kwonly, out, fname);
 }
 
+/* the same binding, with a refusal put back into the interpreter's own words
+ *
+ * the plain binding writes nothing but `out`, and rewrites all of it before reading any
+ * — so where the shape declines to reword, running it a second time is how its own
+ * message comes back, and nothing has to be carried across the attempt */
+static inline int By_BindInit(PyObject *args, PyObject *kwds, const char *const *names,
+                              Py_ssize_t count, const unsigned char *required,
+                              Py_ssize_t posonly, Py_ssize_t kwonly, PyObject **out,
+                              int variadic, int extras, const char *fname, int inherited) {
+    if (By_BindInitPlain(args, kwds, names, count, required, posonly, kwonly, out, variadic,
+                         extras, fname, inherited) == 0) {
+        return 0;
+    }
+    /* a class that wrote no `__init__` is refused by `object.__init__`, which is not a
+     * python function and has no shape to model. and a refusal that is not a `TypeError`
+     * is not an arity one — it is the binding itself having failed */
+    if (inherited || !PyErr_ExceptionMatches(PyExc_TypeError)) return -1;
+    PyErr_Clear();
+    if (By_Rephrase(names, required, count, posonly, kwonly, variadic, extras,
+                    By_ErrorName(fname), 1, args, kwds)) {
+        return -1;
+    }
+    return By_BindInitPlain(args, kwds, names, count, required, posonly, kwonly, out,
+                            variadic, extras, fname, inherited);
+}
+
 /* bind fastcall arguments to parameter positions, honouring keywords.
  *
  * `receiver` is 1 for a method, whose `self` arrives outside the vector but which
@@ -3314,11 +3975,12 @@ static inline int By_BindInit(PyObject *args, PyObject *kwds, const char *const 
  * `out[i]` receives a *borrowed* pointer, or NULL where the caller did not supply
  * that parameter — the wrapper fills those from the defaults. returns -1 with an
  * exception set on a duplicate, an unexpected name, or too many positionals */
-static inline int By_BindArgs(PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames,
-                              const char *const *names, Py_ssize_t count,
-                              const unsigned char *required, Py_ssize_t posonly,
-                              Py_ssize_t kwonly, PyObject **out, int variadic, int extras,
-                              const char *fname, Py_ssize_t receiver) {
+static inline int By_BindArgsPlain(PyObject *const *args, Py_ssize_t nargs,
+                                   PyObject *kwnames, const char *const *names,
+                                   Py_ssize_t count, const unsigned char *required,
+                                   Py_ssize_t posonly, Py_ssize_t kwonly, PyObject **out,
+                                   int variadic, int extras, const char *fname,
+                                   Py_ssize_t receiver) {
     fname = By_ErrorName(fname);
     /* a keyword-only parameter is one nothing positional can reach, so the run a
      * caller may fill positionally ends where they begin */
@@ -3349,6 +4011,54 @@ static inline int By_BindArgs(PyObject *const *args, Py_ssize_t nargs, PyObject 
         out[found] = args[nargs + k];
     }
     return By_CheckRequired(names, required, count, kwonly, out, fname);
+}
+
+/* a fastcall vector as the tuple and dict a plain call takes. only the error path needs
+ * either, and it is cold */
+static inline PyObject *By_VectorTuple(PyObject *const *args, Py_ssize_t nargs) {
+    PyObject *made = PyTuple_New(nargs);
+    if (made == NULL) return NULL;
+    for (Py_ssize_t i = 0; i < nargs; i++) PyTuple_SET_ITEM(made, i, By_NewRef(args[i]));
+    return made;
+}
+
+static inline PyObject *By_VectorKwds(PyObject *const *args, Py_ssize_t nargs,
+                                      PyObject *kwnames) {
+    PyObject *made = PyDict_New();
+    if (made == NULL || kwnames == NULL) return made;
+    Py_ssize_t keywords = PyTuple_GET_SIZE(kwnames);
+    for (Py_ssize_t k = 0; k < keywords; k++) {
+        if (PyDict_SetItem(made, PyTuple_GET_ITEM(kwnames, k), args[nargs + k]) < 0) {
+            Py_DECREF(made);
+            return NULL;
+        }
+    }
+    return made;
+}
+
+/* the same binding, with a refusal put back into the interpreter's own words */
+static inline int By_BindArgs(PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames,
+                              const char *const *names, Py_ssize_t count,
+                              const unsigned char *required, Py_ssize_t posonly,
+                              Py_ssize_t kwonly, PyObject **out, int variadic, int extras,
+                              const char *fname, Py_ssize_t receiver) {
+    if (By_BindArgsPlain(args, nargs, kwnames, names, count, required, posonly, kwonly, out,
+                         variadic, extras, fname, receiver) == 0) {
+        return 0;
+    }
+    if (!PyErr_ExceptionMatches(PyExc_TypeError)) return -1;
+    PyErr_Clear();
+    PyObject *tuple = By_VectorTuple(args, nargs);
+    PyObject *dict = tuple == NULL ? NULL : By_VectorKwds(args, nargs, kwnames);
+    int reworded = dict != NULL
+                   && By_Rephrase(names, required, count, posonly, kwonly, variadic, extras,
+                                  By_ErrorName(fname), receiver, tuple, dict);
+    Py_XDECREF(tuple);
+    Py_XDECREF(dict);
+    if (reworded) return -1;
+    PyErr_Clear();
+    return By_BindArgsPlain(args, nargs, kwnames, names, count, required, posonly, kwonly,
+                            out, variadic, extras, fname, receiver);
 }
 
 /* `with EXPR`: the manager's `__enter__`, looked up on the *type* the way the

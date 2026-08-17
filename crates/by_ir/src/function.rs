@@ -4,6 +4,8 @@
 //! declared once with a type, which is what makes the representation invariant
 //! checkable: every write to a register must produce that register's type.
 
+use std::path::PathBuf;
+
 use crate::ops::{BlockId, Op, RegisterId, Terminator, Value};
 use crate::rtype::RType;
 
@@ -107,6 +109,103 @@ impl CallConvention {
     }
 }
 
+/// a decorator expression, as much of one as module init can evaluate
+///
+/// python evaluates the expression where the `def` or the `class` stands, in the
+/// enclosing frame. module-level code is not compiled — it runs from the interpreted
+/// twin — so there is no native frame standing there, and the only moment left is
+/// module init, once that twin has run the whole body and the native definition is in
+/// the namespace.
+///
+/// that is faithful for an expression which is nothing but *reads*, and only for one.
+/// a call would be made a second time, at the end of the module rather than where it
+/// was written, and whatever it did on the way would happen twice — so `@lru_cache(512)`
+/// has no variant here and declines instead
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decorator {
+    /// a name, or a chain of attributes read off one: `functools.cache`
+    ///
+    /// the root resolves the way `LOAD_GLOBAL` resolves it, so a decorator defined in
+    /// the module, imported into it, or a builtin all work; each attribute is then a
+    /// plain `getattr`
+    Path {
+        root: String,
+        attributes: Vec<String>,
+    },
+}
+
+impl Decorator {
+    /// a decorator written as a bare name — which is what every language *modifier*
+    /// translates to
+    pub fn name(name: impl Into<String>) -> Self {
+        Self::Path {
+            root: name.into(),
+            attributes: Vec::new(),
+        }
+    }
+
+    /// the bare name this is, where it is one
+    pub fn as_name(&self) -> Option<&str> {
+        match self {
+            Self::Path { root, attributes } if attributes.is_empty() => Some(root),
+            Self::Path { .. } => None,
+        }
+    }
+
+    /// the name the resolution starts from, whatever shape the rest is
+    pub fn root(&self) -> &str {
+        match self {
+            Self::Path { root, .. } => root,
+        }
+    }
+
+    /// the expression as written, which is also how codegen spells it: a python
+    /// identifier holds no `.`, so the join is unambiguous to split again
+    pub fn dotted(&self) -> String {
+        match self {
+            Self::Path { root, attributes } if attributes.is_empty() => root.clone(),
+            Self::Path { root, attributes } => format!("{root}.{}", attributes.join(".")),
+        }
+    }
+}
+
+/// what python leaves in slot zero when a method is called through the class
+///
+/// the three conventions `type_add_methods` distinguishes, and the reason they cannot
+/// be inferred from the parameter list: `def make(x)` under `@staticmethod` takes an
+/// `x`, and the same source without it takes a receiver written `x`. a module-level
+/// function is [`Instance`](Self::Instance) and nothing reads it there — the field
+/// only means anything about a method
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Binding {
+    /// slot zero holds the receiver: the ordinary method
+    #[default]
+    Instance,
+    /// there is no receiver, and slot zero is the first written parameter
+    Static,
+    /// slot zero holds the *class* rather than an instance of it
+    Class,
+}
+
+impl Binding {
+    /// whether the boundary is handed slot zero outside the argument vector
+    ///
+    /// true for a class method as much as an instance one: `METH_CLASS` puts the class
+    /// in `self`, which is the same slot in the same place
+    pub fn takes_slot_zero_from_self(self) -> bool {
+        matches!(self, Self::Instance | Self::Class)
+    }
+
+    /// the `METH_` flag this convention adds to a method table entry
+    pub fn method_flag(self) -> Option<&'static str> {
+        match self {
+            Self::Instance => None,
+            Self::Static => Some("METH_STATIC"),
+            Self::Class => Some("METH_CLASS"),
+        }
+    }
+}
+
 /// a compiled function
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
@@ -173,11 +272,14 @@ pub struct Function {
     /// not the arity
     pub computed_defaults: Vec<usize>,
     /// decorators to apply, outermost first, after the native function is
-    /// installed in the module namespace.
+    /// installed in the module namespace
+    pub decorators: Vec<Decorator>,
+    /// what python puts in slot zero when this method is reached through the class.
     ///
-    /// each is a name resolved the way `LOAD_GLOBAL` resolves it, so a decorator
-    /// defined in the module or imported into it both work
-    pub decorators: Vec<String>,
+    /// `staticmethod` and `classmethod` are honoured by the method table entry rather
+    /// than by [applying the decorator](Self::decorators) at init — the decorator is
+    /// dropped where this says anything other than [`Binding::Instance`]
+    pub binding: Binding,
 }
 
 impl Function {
@@ -448,7 +550,7 @@ pub struct ClassIr {
     /// a construction resolves the class through that namespace, so it gets whatever
     /// the decorator produced — which is what makes decorating the *class* sound
     /// where decorating a construction site would not be
-    pub decorators: Vec<String>,
+    pub decorators: Vec<Decorator>,
     /// methods, whose first parameter is the receiver
     pub methods: Vec<Function>,
     /// how the class resumes, when it is a generator or a coroutine
@@ -544,8 +646,8 @@ impl LineTable {
 /// a module's worth of compiled functions
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleIr {
-    /// the dotted module name, as python will import it
-    pub name: String,
+    /// the module's name — see [`ModuleName`] for why that is not one string
+    pub name: ModuleName,
     pub functions: Vec<Function>,
     pub classes: Vec<ClassIr>,
     /// functions the compiler declined, with the reason. these fall back to the
@@ -615,7 +717,65 @@ pub fn qualify(owner: Option<&str>, name: &str) -> String {
     }
 }
 
+/// a module-level definition whose decorators module init applies to the native one
+///
+/// python evaluates a decorator where the `def` or the `class` stands. the interpreted
+/// twin is what stands there, so the twin evaluates it — and module init then evaluates
+/// it a second time, over the native definition that replaces the twin's. the binding
+/// the namespace ends up with is right either way, so what shows is not a wrong value
+/// but a side effect that happened twice: a registry with two entries for one function.
+///
+/// the decorator is therefore taken out of the source the twin runs, and this is the one
+/// description of which ones: it drives both that removal and the C that applies them, so
+/// the two cannot come to disagree.
+///
+/// a module-level *function* and a module-level *class* are both here. a class the
+/// module body still reaches before init has run does not get this far: it declines
+/// instead, because between the twin's `class` statement and init the name holds an
+/// undecorated definition, and whatever read it in that window keeps what it read
+///
+/// a *method* is deliberately not here, and its decorator still runs twice. it is not
+/// only a side effect that would move: the class *construction* reads what a method
+/// decorator wrote, and `ABCMeta` is the case — it computes `__abstractmethods__` from
+/// the namespace the body left, so taking `@abstractmethod` out of the twin empties that
+/// set on every class whose construction falls back to the interpreted definition. a
+/// method's decorator has to be applied where the `def` stands, which means the answer
+/// is to carry the *result* across rather than to move the decorator; see the module docs
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InitDecoration<'a> {
+    /// the name as written, which is the name the twin's source binds it under
+    pub name: &'a str,
+    /// outermost first, the order they are written in
+    pub decorators: &'a [Decorator],
+}
+
 impl ModuleIr {
+    /// every module-level definition init decorates — see [`InitDecoration`]
+    pub fn decorated_at_init(&self) -> impl Iterator<Item = InitDecoration<'_>> {
+        // a closure environment is not in the namespace under any name, so there is no
+        // entry to apply anything to — and it carries no decorator anyway
+        let classes = self
+            .classes
+            .iter()
+            .filter(|class| class.exported && !class.decorators.is_empty())
+            .map(|class| InitDecoration {
+                name: class.name.as_str(),
+                decorators: &class.decorators,
+            });
+        // an unboxed edition is a second `Function` under a mangled name the namespace
+        // never holds, and it carries the decorators of the function it is an edition
+        // of. reaching for that name here would fail the import with a `NameError`
+        let functions = self
+            .functions
+            .iter()
+            .filter(|function| function.exported && !function.decorators.is_empty())
+            .map(|function| InitDecoration {
+                name: function.name.as_str(),
+                decorators: &function.decorators,
+            });
+        classes.chain(functions)
+    }
+
     /// every compiled function, methods included
     ///
     /// a pass that iterates `functions` alone silently skips every method, which
@@ -634,7 +794,7 @@ impl ModuleIr {
         )
     }
 
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(name: impl Into<ModuleName>) -> Self {
         Self {
             name: name.into(),
             functions: Vec::new(),
@@ -650,8 +810,116 @@ impl ModuleIr {
     /// the C identifier for the module's init function, which cpython looks up by
     /// name when loading the extension
     pub fn init_symbol(&self) -> String {
-        let last = self.name.rsplit('.').next().unwrap_or(&self.name);
-        format!("PyInit_{}", mangle(last))
+        format!("PyInit_{}", mangle(self.name.last_component()))
+    }
+}
+
+/// a module's name, in the forms a build needs
+///
+/// they are different things, and conflating them is what made a class in
+/// `tkinter/m.py` answer `__module__ == "m"`. only the dotted name is stored, so
+/// they cannot drift apart: the shorter ones are derived from it on demand
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct ModuleName {
+    dotted: String,
+    /// whether the name belongs to a package's `__init__` rather than to a plain
+    /// module
+    ///
+    /// the dotted name cannot say, and the difference decides which file the
+    /// artefact is written to: `a.b` is `a/b.py` for one and `a/b/__init__.py`
+    /// for the other
+    is_package: bool,
+}
+
+impl ModuleName {
+    /// a plain module — one written in a file named after its own last component
+    pub fn new(dotted: impl Into<String>) -> Self {
+        Self {
+            dotted: dotted.into(),
+            is_package: false,
+        }
+    }
+
+    /// a package, written in the `__init__` inside the directory the name spells
+    ///
+    /// `dotted` is the package's own name, not its `__init__`'s: `a/b/__init__.py`
+    /// is the module `a.b`, because that is what python imports it as and what a
+    /// class written in it reports as its `__module__`
+    pub fn package(dotted: impl Into<String>) -> Self {
+        Self {
+            dotted: dotted.into(),
+            is_package: true,
+        }
+    }
+
+    /// the name python imports the module as, dots and all
+    ///
+    /// this is what a type's `tp_name` carries: cpython splits `tp_name` at its
+    /// last dot to answer `__module__` and `__name__`, so a class in the module
+    /// `tkinter.m` needs the whole of it to say where it came from.
+    ///
+    /// it is also what every emitted C identifier is prefixed with, once the
+    /// mangling has turned the dots into underscores — two modules of the same
+    /// name in different packages then get different symbols
+    pub fn dotted(&self) -> &str {
+        &self.dotted
+    }
+
+    /// the last dotted component — the module's own name inside its package
+    ///
+    /// this is cpython's rule rather than ours: cpython derives the init function
+    /// it looks up from the last component of the *spec* name, so an extension
+    /// imported as `tkinter.m` has to export `PyInit_m` however deep the package
+    /// goes, and a package imported as `tkinter.sub` exports `PyInit_sub` even
+    /// though its file is called `__init__`
+    ///
+    /// it is emphatically **not** the file name — see [`Self::relative_path`]
+    pub fn last_component(&self) -> &str {
+        self.dotted.rsplit('.').next().unwrap_or(&self.dotted)
+    }
+
+    /// where the module's file belongs inside an output tree, given the suffix the
+    /// file carries (`".c"`, or the interpreter's extension suffix)
+    ///
+    /// the tree has to mirror the module tree, because that is the only layout
+    /// python will import these back under: `a.b.c` is only reachable as
+    /// `a/b/c<suffix>`. a flat directory can offer nothing but the last component,
+    /// which is both unimportable as a package member and a collision — two
+    /// members of one package ending in the same component overwrite each other.
+    ///
+    /// a package is the case the dotted name alone gets wrong: `a.b` as a package
+    /// is the *directory* `a/b`, and its file is the `__init__` inside it
+    pub fn relative_path(&self, suffix: &str) -> PathBuf {
+        let mut directories: Vec<&str> = self
+            .dotted
+            .split('.')
+            // an empty component would contribute nothing to the path but would
+            // shift which component names the file, so it is dropped rather than
+            // joined
+            .filter(|component| !component.is_empty())
+            .collect();
+        // a package's last component names the directory holding its `__init__`; a
+        // plain module's names the file itself
+        let stem = if self.is_package {
+            "__init__"
+        } else {
+            directories.pop().unwrap_or_default()
+        };
+        let mut path: PathBuf = directories.into_iter().collect();
+        path.push(format!("{stem}{suffix}"));
+        path
+    }
+}
+
+impl From<&str> for ModuleName {
+    fn from(dotted: &str) -> Self {
+        Self::new(dotted)
+    }
+}
+
+impl From<String> for ModuleName {
+    fn from(dotted: String) -> Self {
+        Self::new(dotted)
     }
 }
 
@@ -664,6 +932,8 @@ fn mangle(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use crate::ops::BlockId;
 
@@ -701,7 +971,28 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            binding: Binding::Instance,
         }
+    }
+
+    /// an unboxed edition is a second `Function` under a mangled name, carrying the
+    /// decorators of the function it is an edition of. the namespace never binds that
+    /// name, so a decorator applied to it at init would raise `NameError` and take the
+    /// whole import with it
+    #[test]
+    fn a_definition_the_namespace_does_not_bind_is_not_decorated_at_init() {
+        let mut module = ModuleIr::new("m");
+        let mut exported = function();
+        exported.decorators = vec![Decorator::name("mark")];
+        let mut edition = exported.clone();
+        edition.name = "add$arr0l".to_string();
+        edition.exported = false;
+        module.functions = vec![exported, edition];
+        let named: Vec<&str> = module
+            .decorated_at_init()
+            .map(|decoration| decoration.name)
+            .collect();
+        assert_eq!(named, ["add"]);
     }
 
     #[test]
@@ -713,10 +1004,71 @@ mod tests {
 
     #[test]
     fn the_init_symbol_uses_only_the_last_component() {
-        // cpython looks up PyInit_<basename> in the loaded object
+        // cpython looks up PyInit_<last component of the spec name>
         let module = ModuleIr::new("pkg.sub.mod");
         assert_eq!(module.init_symbol(), "PyInit_mod");
         assert_eq!(ModuleIr::new("mod").init_symbol(), "PyInit_mod");
+    }
+
+    /// a package's file is called `__init__`, but cpython still derives the init
+    /// symbol from the last component of the name it is imported under — so the
+    /// symbol and the file name disagree, and only for a package
+    #[test]
+    fn a_packages_init_symbol_is_named_after_the_package_not_its_file() {
+        let module = ModuleIr::new(ModuleName::package("pkg.sub"));
+        assert_eq!(module.init_symbol(), "PyInit_sub");
+        assert_eq!(
+            module.name.relative_path(".so"),
+            Path::new("pkg/sub/__init__.so")
+        );
+    }
+
+    /// the two halves a module name has to keep apart: what python imports the
+    /// module as, and the shorter name cpython's loader uses
+    #[test]
+    fn a_module_name_keeps_its_dotted_form_and_its_last_component() {
+        let name = ModuleName::new("pkg.sub.mod");
+        assert_eq!(name.dotted(), "pkg.sub.mod");
+        assert_eq!(name.last_component(), "mod");
+
+        // a top-level module is the same string twice, which is why the two were
+        // conflated for so long
+        let alone = ModuleName::new("mod");
+        assert_eq!(alone.dotted(), "mod");
+        assert_eq!(alone.last_component(), "mod");
+    }
+
+    /// the artefact tree is the module tree: a name is only importable back from
+    /// the path its dots spell out
+    #[test]
+    fn a_module_name_spells_out_the_path_its_artefact_is_written_to() {
+        assert_eq!(
+            ModuleName::new("pkg.sub.mod").relative_path(".c"),
+            Path::new("pkg/sub/mod.c")
+        );
+        assert_eq!(
+            ModuleName::package("pkg.sub").relative_path(".c"),
+            Path::new("pkg/sub/__init__.c")
+        );
+        assert_eq!(
+            ModuleName::new("mod").relative_path(".c"),
+            Path::new("mod.c")
+        );
+        assert_eq!(
+            ModuleName::package("pkg").relative_path(".cpython-313-darwin.so"),
+            Path::new("pkg/__init__.cpython-313-darwin.so")
+        );
+    }
+
+    /// two members of one package can share a last component, and a flat output
+    /// directory would give them the same file — this is the collision the tree
+    /// layout removes
+    #[test]
+    fn two_package_members_sharing_a_last_component_take_different_paths() {
+        assert_ne!(
+            ModuleName::new("pkg.dup").relative_path(".so"),
+            ModuleName::new("pkg.sub.dup").relative_path(".so")
+        );
     }
 
     #[test]

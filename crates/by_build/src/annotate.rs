@@ -15,7 +15,7 @@ use by_ir::print::print_function;
 
 /// render the report for a lowered module
 pub fn report(module: &ModuleIr) -> String {
-    let mut out = format!("# {}\n", module.name);
+    let mut out = format!("# {}\n", module.name.dotted());
 
     let native: Vec<&Function> = module.all_functions().collect();
     let _ = writeln!(

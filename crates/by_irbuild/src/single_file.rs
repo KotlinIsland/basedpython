@@ -64,7 +64,7 @@ fn make_db(source: &str, language: Language) -> (TestDb, File) {
 /// lower source into a module named `module_name`
 pub fn module_from_source(
     source: &str,
-    module_name: &str,
+    module_name: impl Into<by_ir::ModuleName>,
     language: Language,
 ) -> by_ir::function::ModuleIr {
     with_source_in(source, language, |db, env, model, suite| {
