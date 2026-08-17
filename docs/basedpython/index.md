@@ -60,9 +60,11 @@ def main():
 >
 > \- Guido van Rossum
 
-Python and it's type system are held back due to an inability to make changes and a hesitation to introduce new syntax
+Python and it's type system are held back due to an inability to make breaking changes and a
+hesitation to introduce new syntax
 
-other languages have indulged in modern features and powerful type systems, and integrated tooling. we want to close that gap
+other languages have indulged in modern features, powerful type systems, and integrated tooling.
+we want to close that gap
 
 ## what you get
 
