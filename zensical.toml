@@ -220,6 +220,7 @@ development = [
     "development/compilation/optimizations.md",
     "development/compilation/planned-features.md",
     "development/compilation/runtime.md",
+    "development/compilation/benchmarks.md",
     "development/compilation/plan.md",
   ] },
 ]

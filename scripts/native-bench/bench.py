@@ -145,6 +145,17 @@ class Ratio:
         return {"median": self.median, "low": self.low, "high": self.high}
 
 
+def ratio_json(result: Result, leg: str) -> dict | None:
+    """a leg's paired ratio as json, or `None` where there was no pairing
+
+    the three json rows all read a ratio that may not exist — a leg the run did not
+    time has none — and two of the three used to read it without asking. one place
+    to forget rather than three
+    """
+    ratio = result.ratio(leg)
+    return ratio.as_json() if ratio else None
+
+
 def paired(numerator: list[float], denominator: list[float]) -> Ratio:
     """the ratio of two builds, round by round rather than time against time
 
@@ -537,9 +548,7 @@ def run_program(
 # ── reporting ────────────────────────────────────────────────────────────────
 
 
-def render(
-    results: list[Result], metadata: dict, show_declines: bool, limit: float
-) -> None:
+def render(results: list[Result], metadata: dict, show_declines: bool, limit: float):
     header = (
         f"{'benchmark':<15}{'group':<10}{'cpython':>10}{'by':>10}{'mypyc':>10}"
         f"  {'vs cpython':>15}{'vs mypyc':>16}{'noise':>10}{'dec':>5}"
@@ -571,6 +580,13 @@ def render(
         against_cpython = result.ratio("cpython")
         against_mypyc = result.ratio("mypyc")
         noise = result.noise
+        # `ok` says every leg ran, not that every leg was *timed* — a leg whose samples
+        # were all discarded leaves no median behind. rather than assume the status
+        # covers it, say so in the row: a blank number is a measurement nobody has,
+        # which is not the same as a slow one
+        if cpython is None or by is None or noise is None:
+            print(f"{name:<15}{group:<10}  no timing recorded")
+            continue
         print(
             f"{name:<15}{group:<10}"
             f"{cpython * 1000:>9.2f}m{by * 1000:>9.2f}m"
@@ -614,7 +630,7 @@ def render(
                     print(f"  {decline}")
 
 
-def render_verification(results: list[Result]) -> None:
+def render_verification(results: list[Result]):
     """everything the suite checks that does not involve a clock
 
     this half is deterministic, so it is the half that can run anywhere — a
@@ -656,10 +672,17 @@ def compare(
         previous = baseline["benchmarks"].get(result.program.name)
         if result.status != "ok" or previous is None or previous.get("status") != "ok":
             continue
+        against_cpython = result.ratio("cpython")
+        new_noise = result.noise
+        # the same gap as in the table above: `ok` does not promise a timing survived.
+        # a row with nothing to compare is left out of the comparison rather than
+        # compared against a number that is not there
+        if against_cpython is None or new_noise is None:
+            continue
         old = previous["vs_cpython"]["median"]
-        new = result.ratio("cpython").median
+        new = against_cpython.median
         change = new / old - 1
-        old_noise, new_noise = previous["noise"], result.noise
+        old_noise = previous["noise"]
         # a row either run could not measure is skipped rather than compared
         # with a very wide bar. a pair of identical builds that disagreed by 70%
         # says the machine was preempting samples, and under preemption the
@@ -706,7 +729,7 @@ def self_check(by: Path, python: str, python_version: str) -> int:
     root = Path(tempfile.mkdtemp(prefix="native-bench-selfcheck-"))
     failures = []
 
-    def expect(what: str, refusal: str | None, wanted: str) -> None:
+    def expect(what: str, refusal: str | None, wanted: str):
         if refusal is None:
             failures.append(f"{what}: was accepted, and should have been refused")
         elif wanted not in refusal:
@@ -897,6 +920,9 @@ def main() -> int:
             "confidence interval degenerates to the range of what was seen"
         )
 
+    # self-check returns before anything reads this, but an empty list rather than an
+    # unbound name says that here instead of leaving it to be inferred from control flow
+    programs: list[Program] = []
     if not args.self_check:
         programs = load_manifest(args.programs)
 
@@ -929,7 +955,15 @@ def main() -> int:
     )
     if probe.returncode != 0:
         raise Failure(f"{python} does not run: {probe.stderr.strip()}")
-    full_version, implementation, _ = probe.stdout.split()
+    # the probe below prints three fields, but a python that printed something else
+    # would unpack into an unhelpful ValueError here rather than say what it answered
+    fields = probe.stdout.split()
+    if len(fields) < 2:
+        raise Failure(
+            f"{python} answered {probe.stdout.strip()!r}, "
+            "not a version and an implementation"
+        )
+    full_version, implementation = fields[0], fields[1]
     python_version = ".".join(full_version.split(".")[:2])
 
     if args.self_check:
@@ -1019,11 +1053,9 @@ def main() -> int:
                 "times": result.times,
                 **(
                     {
-                        "vs_cpython": result.ratio("cpython").as_json(),
-                        "vs_mypyc": result.ratio("mypyc").as_json()
-                        if result.ratio("mypyc")
-                        else None,
-                        "control": result.ratio("control").as_json(),
+                        "vs_cpython": ratio_json(result, "cpython"),
+                        "vs_mypyc": ratio_json(result, "mypyc"),
+                        "control": ratio_json(result, "control"),
                         "noise": result.noise,
                         "noisy": result.noisy(args.noise_limit),
                     }

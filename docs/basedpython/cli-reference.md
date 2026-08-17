@@ -105,6 +105,12 @@ by compile --no-any             # refuse to leave a gradual-typed function inter
 by compile --require-native     # refuse to leave *any* function interpreted
 ```
 
+the output directory mirrors the *module* tree, the way `by build`'s does: the
+package member `pkg/sub/dup.py` lands at `out/pkg/sub/dup.cpython-313-darwin.so`,
+and the package `pkg/sub/__init__.py` at
+`out/pkg/sub/__init__.cpython-313-darwin.so` — so `out/` can go on `sys.path` as
+it stands and every module imports under the dotted name it was compiled as
+
 `--no-any` buys no speed on its own — it is a **predictability contract**. a
 gradual type is the commonest reason a function silently stays interpreted, and a
 decline is invisible unless you look for it, so a module that means to be fully

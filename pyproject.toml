@@ -84,6 +84,11 @@ release = { requires-python = ">=3.12" }
 [tool.ruff]
 target-version = "py38"
 extend-exclude = [
+    # benchmark programs are measurement inputs, not code. an autofix that
+    # rewrites `i = i + 1` or hoists a loop changes what is being measured, and
+    # the isort rule alone would put `from __future__ import annotations` at the
+    # top of every one of them
+    "scripts/native-bench/programs/",
     "crates/ty_vendored/vendor/",
     "crates/ruff/resources/",
     "crates/ruff_linter/resources/",

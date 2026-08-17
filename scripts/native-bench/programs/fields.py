@@ -7,7 +7,7 @@ layout, and on an interpreted one it is a dict lookup through `__dict__`
 
 
 class State:
-    def __init__(self) -> None:
+    def __init__(self):
         self.a = 0
         self.b = 1
         self.c = 2
