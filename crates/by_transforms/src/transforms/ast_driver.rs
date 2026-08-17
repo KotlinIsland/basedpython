@@ -44,9 +44,9 @@ use super::{
     implicit_typing, inferred_annotation, init_method, just_float, kw_subscript, literal_string,
     literal_types, local_once, main_function, match_type, modifiers, mutable_defaults, none_chain,
     optional_type, overload, parametric_is, postfix_await, propagate, properties, protocol_type,
-    raises_clause, reified_generic, repeated_underscore, sentinel, some_ctor, soundness,
-    statement_expression, string_tag, super_keyword, symbolic_type_op, template_type, top_star,
-    trailing_lambda, tuple_index, type_fn, type_is, type_reification, typed_dict_literal,
+    raises_clause, reified_generic, repeated_underscore, runtime_union, sentinel, some_ctor,
+    soundness, statement_expression, string_tag, super_keyword, symbolic_type_op, template_type,
+    top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification, typed_dict_literal,
     typed_lambda, typeof_keyword, unique_loop_bindings, unpack, use_site_variance,
 };
 use crate::Config;
@@ -546,7 +546,7 @@ pub(crate) fn run_against_source<'a>(
     let typed_dict_literal_pass = typed_dict_literal::TypedDictLiteralPass::new(source_ref);
     let just_float_pass = just_float::JustFloatPass::new();
     let float_const_pass = float_const::FloatConstPass::new();
-    let kw_subscript_pass = kw_subscript::KwSubscriptPass::new(source_ref);
+    let kw_subscript_pass = kw_subscript::KwSubscriptPass::new(source_ref, config.min_version);
     let generic_call_pass = generic_call::GenericCallStripPass::new(source_ref);
     let reified_generic_pass =
         reified_generic::ReifiedGenericPass::new(source_ref, config.min_version);
@@ -556,7 +556,7 @@ pub(crate) fn run_against_source<'a>(
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
     let inferred_annotation_pass = inferred_annotation::InferredAnnotationPass::new();
     let template_type_pass = template_type::TemplateTypePass;
-    let tuple_types_pass = annotation::TupleLiteralTypePass::new(source_ref);
+    let tuple_types_pass = annotation::TupleLiteralTypePass::new(source_ref, config.clone());
     let literal_types_pass = literal_types::LiteralTypePass::new(source_ref);
     let callable_pass = callable::CallableSyntaxPass::new(source_ref);
     let protocol_type_pass = protocol_type::ProtocolTypePass::new(source_ref, config.clone());
@@ -565,13 +565,14 @@ pub(crate) fn run_against_source<'a>(
     let some_ctor_pass = some_ctor::SomeCtorPass::new();
     let propagate_pass = propagate::PropagatePass::new(source_ref);
     let none_chain_pass = none_chain::NoneChainPass::new(source_ref);
-    let optional_type_pass = optional_type::OptionalTypePass::new(source_ref);
+    let optional_type_pass = optional_type::OptionalTypePass::new(source_ref, config.min_version);
+    let runtime_union_pass = runtime_union::RuntimeUnionPass::new(config.min_version);
     let generics_pass = generics::GenericPolyfillPass::new(source_ref, config.clone());
     let soundness_pass = soundness::SoundnessPass::new(source_ref, config);
     let checked_cast_pass = checked_cast::CheckedCastPass;
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
-    let if_let_pass = if_let::IfLetPass::new(source_ref, config.min_version);
-    let destructure_pass = destructure::DestructurePass::new(source_ref, config.min_version);
+    let if_let_pass = if_let::IfLetPass::new(source_ref);
+    let destructure_pass = destructure::DestructurePass::new(source_ref);
     let statement_expression_pass = statement_expression::StatementExpressionPass::new(source_ref);
     let context_params_pass = context_params::ContextParamsPass::new(source_ref);
     let extension_block_pass = extension::ExtensionBlockPass::new(source_ref);
@@ -776,6 +777,11 @@ pub(crate) fn run_against_source<'a>(
         // `T?` → `T | None`; a type-position edit, disjoint from the
         // value-position `??` / `?.` lowerings below
         &optional_type_pass,
+        // a PEP 604 union the runtime will evaluate (`isinstance(x, int | str)`)
+        // is spelled the way the target can. its template covers the whole
+        // union, and the sort puts a wider replacement first, so the lowerings
+        // inside each arm are materialized rather than dropped
+        &runtime_union_pass,
         // coalesce sees `?.` LHS via source ranges; must run BEFORE
         // none_chain so its wider `??` edit wins over none_chain's narrow
         // `?.` edit when both target the same span

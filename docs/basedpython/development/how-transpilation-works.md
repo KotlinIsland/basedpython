@@ -40,13 +40,25 @@ source (.by)
   ├─ phase 2c  lazy-import marking
   │     └─ lower imports to the `lazy` keyword (3.15+) or a runtime polyfill
   │
+  ├─ phase 2d  version polyfill
+  │     └─ rewrite syntax the target python cannot parse. today that is the
+  │        `match` statement, lowered to an `if`/`elif` chain for a target below
+  │        3.10. it runs over the *finished* python rather than over `.by`, so a
+  │        `match` an earlier lowering generated is lowered by the same code as
+  │        one the author wrote
+  │
   └─ phase 3  syntax verification
         ├─ parse the final output as `.py` — any parse error aborts with a
         │  source-annotated diagnostic (the span is mapped back to `.by`)
-        └─ scan the AST for leftover basedpython-only flags
-           (`is_anon_named_tuple`, `is_anon_named_tuple_value`, `is_typeof`).
-           a leftover flag means a transform failed to lower its construct; the
-           pipeline aborts rather than emit syntactically-valid-but-wrong Python
+        ├─ scan the AST for leftover basedpython-only flags
+        │  (`is_anon_named_tuple`, `is_anon_named_tuple_value`, `is_typeof`).
+        │  a leftover flag means a transform failed to lower its construct; the
+        │  pipeline aborts rather than emit syntactically-valid-but-wrong Python
+        └─ parse it again *as the target version* and report any construct that
+           version cannot parse. the first check asks whether the output is
+           python at all; this one asks whether it is python the declared floor
+           can run, so syntax no polyfill covers is a diagnostic instead of a
+           `SyntaxError` at import time in generated code
 ```
 
 entry points in `crates/by_transforms/src/lib.rs`:

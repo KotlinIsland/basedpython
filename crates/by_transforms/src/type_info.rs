@@ -156,6 +156,14 @@ pub(crate) trait TypeInfo {
     /// reject as its classinfo argument at runtime
     fn is_keeps_identity(&self, expr: &Expr) -> bool;
 
+    /// whether `expr` is a PEP 604 union standing where the runtime will
+    /// evaluate it — `isinstance(x, int | str)`, a `cast` target, an alias
+    /// assigned at module level. `type.__or__` only arrived in python 3.10, so
+    /// below that the union has to be spelled another way; an annotation is not
+    /// one of these, since the lowering defers every annotation for such a
+    /// target and nothing ever evaluates it
+    fn is_runtime_union(&self, expr: &Expr) -> bool;
+
     /// when `attribute` resolves to a basedpython `extension` member, the
     /// backing-function rewrite to apply (`xs.second()` →
     /// `_by_ext__list__second(xs)`). `None` for ordinary attributes —
@@ -622,6 +630,22 @@ impl TypeInfo for SemanticModel<'_> {
                 ty,
             )
         })
+    }
+
+    fn is_runtime_union(&self, expr: &Expr) -> bool {
+        // `x = int | str` reads as the `types.UnionType` object it builds. in a
+        // position that is *also* a type expression — a `cast` target, an
+        // `isinstance` classinfo — the same operator reads as a `TypeForm`: the
+        // type it denotes rather than the object it makes. both are evaluated
+        // at runtime, so both have to be lowered.
+        //
+        // every other reading is left alone, which is what keeps an ordinary
+        // `a | b` — and a class whose metaclass gives `|` a meaning of its own —
+        // out of this
+        matches!(
+            expr.inferred_type(self),
+            Some(Type::KnownInstance(KnownInstanceType::UnionType(_)) | Type::TypeForm(_))
+        )
     }
 
     fn extension_attribute_info(

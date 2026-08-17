@@ -35,7 +35,7 @@
 //! namespace.
 
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
-use ruff_python_ast::{Expr, Pattern, PythonVersion, Stmt, StmtIf};
+use ruff_python_ast::{Expr, Pattern, Stmt, StmtIf};
 use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
@@ -44,20 +44,13 @@ use super::destructure::{NameGen, push_destructure};
 use super::source_util::{line_indent, temporary_name};
 use crate::type_info::TypeInfo;
 
-/// `match` statements — which the lowering emits — are python 3.10 syntax.
-const MIN_VERSION: PythonVersion = PythonVersion::PY310;
-
 pub(crate) struct IfLetPass<'src> {
     source: &'src str,
-    min_version: PythonVersion,
 }
 
 impl<'src> IfLetPass<'src> {
-    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
-        Self {
-            source,
-            min_version,
-        }
+    pub(crate) fn new(source: &'src str) -> Self {
+        Self { source }
     }
 }
 
@@ -69,7 +62,6 @@ impl TypeAwarePass for IfLetPass<'_> {
             edits: Vec::new(),
             errors: Vec::new(),
             counter: 0,
-            supported: self.min_version >= MIN_VERSION,
             names: NameGen::default(),
         };
         for stmt in stmts {
@@ -95,7 +87,6 @@ struct IfLetLower<'a, 'src> {
     errors: Vec<String>,
     /// monotonic across the file so sibling chains get distinct selectors
     counter: usize,
-    supported: bool,
     /// names the temporaries a clause's destructuring needs
     names: NameGen,
 }
@@ -153,15 +144,6 @@ impl IfLetLower<'_, '_> {
                 .iter()
                 .all(|clause| clause.pattern.is_none())
         {
-            return;
-        }
-
-        if !self.supported {
-            self.errors.push(format!(
-                "`if let` needs python 3.10 or later (it lowers to a `match` statement) \
-                (line {})",
-                self.line_of(if_stmt.range().start()),
-            ));
             return;
         }
 
@@ -533,13 +515,15 @@ mod tests {
         );
     }
 
+    /// the `match` this lowering emits is itself lowered for a target that
+    /// predates it, so an `if let` reaches every version the polyfill covers
     #[test]
-    fn needs_python_310() {
+    fn lowers_below_python_310() {
         let config = Config {
             min_version: PythonVersion::PY39,
             ..Config::test_default()
         };
-        let err = transpile(
+        let out = transpile(
             indoc! {"
                 opt: int | None = 1
                 if let int(x) := opt:
@@ -547,30 +531,9 @@ mod tests {
             "},
             &config,
         )
-        .unwrap_err();
-        assert!(err.contains("`if let` needs python 3.10"), "got:\n{err}");
-        assert!(err.contains("(line 2)"), "reports the line, got:\n{err}");
-    }
-
-    /// a chain nested in another statement is reported too — the walk descends
-    /// past the statement it could not lower
-    #[test]
-    fn needs_python_310_when_nested() {
-        let config = Config {
-            min_version: PythonVersion::PY39,
-            ..Config::test_default()
-        };
-        let err = transpile(
-            indoc! {"
-                def f(opt: int | None):
-                    if opt:
-                        if let int(x) := opt:
-                            print(x)
-            "},
-            &config,
-        )
-        .unwrap_err();
-        assert!(err.contains("`if let` needs python 3.10"), "got:\n{err}");
-        assert!(err.contains("(line 3)"), "reports the line, got:\n{err}");
+        .unwrap();
+        assert!(!out.contains("match "), "got:\n{out}");
+        assert!(out.contains("x := "), "binds the capture, got:\n{out}");
+        assert!(out.contains("print(x)"), "keeps the body, got:\n{out}");
     }
 }

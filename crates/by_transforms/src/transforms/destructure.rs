@@ -58,8 +58,8 @@
 
 use ruff_python_ast::visitor::{Visitor, walk_pattern, walk_stmt};
 use ruff_python_ast::{
-    AnyParameterRef, Expr, ModModule, Parameters, Pattern, PatternMatchAnd, PythonVersion, Stmt,
-    StmtFor, StmtLet, StmtMatch, StmtWith,
+    AnyParameterRef, Expr, ModModule, Parameters, Pattern, PatternMatchAnd, Stmt, StmtFor, StmtLet,
+    StmtMatch, StmtWith,
 };
 use ruff_python_parser::semantic_errors::AND_PATTERN_IN_ALTERNATIVE;
 use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
@@ -68,21 +68,13 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use super::ast_driver::{AstPass, Fragment, PassContext};
 use super::source_util::{line_indent, line_start, temporary_name};
 
-/// `match` statements — which every destructuring lowers to — are python 3.10
-/// syntax.
-const MIN_VERSION: PythonVersion = PythonVersion::PY310;
-
 pub(crate) struct DestructurePass<'src> {
     source: &'src str,
-    min_version: PythonVersion,
 }
 
 impl<'src> DestructurePass<'src> {
-    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
-        Self {
-            source,
-            min_version,
-        }
+    pub(crate) fn new(source: &'src str) -> Self {
+        Self { source }
     }
 }
 
@@ -92,7 +84,6 @@ impl AstPass for DestructurePass<'_> {
             source: self.source,
             edits: Vec::new(),
             errors: Vec::new(),
-            supported: self.min_version >= MIN_VERSION,
             names: NameGen::default(),
         };
         for stmt in &module.body {
@@ -107,7 +98,6 @@ struct DestructureLower<'src> {
     source: &'src str,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     errors: Vec<String>,
-    supported: bool,
     names: NameGen,
 }
 
@@ -131,19 +121,6 @@ impl DestructureLower<'_> {
     /// The 1-based line number of `offset`, for diagnostics.
     fn line_of(&self, offset: TextSize) -> usize {
         1 + self.source[..usize::from(offset)].matches('\n').count()
-    }
-
-    /// Whether a destructuring at `offset` can be lowered at all, reporting the
-    /// python version it needs when it cannot.
-    fn supported_at(&mut self, offset: TextSize) -> bool {
-        if !self.supported {
-            self.errors.push(format!(
-                "destructuring needs python 3.10 or later (it lowers to a `match` statement) \
-                (line {})",
-                self.line_of(offset),
-            ));
-        }
-        self.supported
     }
 
     /// The end of the `:` that ends the header of the block `body` belongs to.
@@ -215,7 +192,7 @@ impl DestructureLower<'_> {
 
     /// basedpython `let <pattern> := <subject> [else: ...]`.
     fn lower_let(&mut self, let_stmt: &StmtLet) {
-        if !self.supported_at(let_stmt.range().start()) || !self.alone_on_its_line(let_stmt) {
+        if !self.alone_on_its_line(let_stmt) {
             return;
         }
         let indent = line_indent(self.source, let_stmt.range().start()).to_owned();
@@ -272,9 +249,6 @@ impl DestructureLower<'_> {
         let Some(pattern) = for_stmt.pattern.as_deref() else {
             return;
         };
-        if !self.supported_at(for_stmt.range().start()) {
-            return;
-        }
         let Some(colon_end) = self.header_colon_end(for_stmt.iter.range().end(), &for_stmt.body)
         else {
             // an empty body cannot read the captures, so there is nothing to bind
@@ -305,9 +279,6 @@ impl DestructureLower<'_> {
             )
             .collect::<Vec<_>>();
         if destructuring.is_empty() {
-            return;
-        }
-        if !self.supported_at(with_stmt.range().start()) {
             return;
         }
 
@@ -341,9 +312,6 @@ impl DestructureLower<'_> {
         let Some((first, _)) = destructuring.first() else {
             return;
         };
-        if !self.supported_at(first.range().start()) {
-            return;
-        }
 
         let Some(colon_end) = self.header_colon_end(parameters.range().end(), body) else {
             // an empty body cannot read the captures, so there is nothing to bind
@@ -457,9 +425,6 @@ impl DestructureLower<'_> {
             .iter()
             .any(|case| contains_and_pattern(&case.pattern))
         {
-            return;
-        }
-        if !self.supported_at(match_stmt.range().start()) {
             return;
         }
 
@@ -1257,17 +1222,18 @@ mod tests {
         assert!(out.contains("        z = "), "got:\n{out}");
     }
 
+    /// the `match` a destructuring lowers to is itself lowered for a target
+    /// that predates it, so the construct reaches every version the polyfill
+    /// covers rather than being an error below 3.10
     #[test]
-    fn needs_python_310() {
+    fn lowers_below_python_310() {
         let config = Config {
             min_version: PythonVersion::PY39,
             ..Config::test_default()
         };
-        let err = transpile("let (a, b) := (1, 2)\n", &config).unwrap_err();
-        assert!(
-            err.contains("destructuring needs python 3.10"),
-            "got:\n{err}"
-        );
-        assert!(err.contains("(line 1)"), "reports the line, got:\n{err}");
+        let out = transpile("let (a, b) := (1, 2)\n", &config).unwrap();
+        assert!(!out.contains("match "), "got:\n{out}");
+        assert!(out.contains("a := "), "binds the captures, got:\n{out}");
+        assert!(out.contains("b := "), "binds the captures, got:\n{out}");
     }
 }
