@@ -1044,6 +1044,16 @@ pub struct TypeVarNonce(u32);
 // This type does not have any heap storage.
 impl get_size2::GetSize for TypeVarNonce {}
 
+/// How far a signature's typevars may be freshened past the signature it is compared against.
+///
+/// Freshening only has to lift one signature's typevars clear of the other's, so the distance
+/// needed is the nesting of same-context generic signatures inside one comparison — a handful
+/// at most in real code. It is unbounded only when a comparison reproduces itself at a greater
+/// freshness, which a self-referential inferred return type does: `def f(self): return self.f`
+/// makes each comparison of `f` against itself demand a signature one nonce fresher than the
+/// last, so no two rounds are ever equal and no memo or cycle guard can close the loop.
+pub(crate) const MAX_TYPEVAR_FRESHNESS_DELTA: u32 = 32;
+
 impl TypeVarNonce {
     pub(crate) const NONE: Self = Self(0);
     const FIRST: Self = Self(1);

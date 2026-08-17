@@ -2410,14 +2410,49 @@ impl<'db> Tuple<Type<'db>, VariableSegment<'db>> {
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
     ) -> Type<'db> {
+        self.element_types_unioned(db, env, false)
+    }
+
+    /// basedpython: the same answer as [`Self::homogeneous_element_type`], for a caller that is
+    /// itself part of a cycle recovery function.
+    ///
+    /// The ordinary union builder simplifies its elements against one another, and a relation
+    /// check can force arbitrary inference — a type variable standing for an unannotated
+    /// parameter answers what its bound is by inferring the whole enclosing function body. A
+    /// recovery function that reached a query already on the stack would acquire a cycle head of
+    /// its own, which salsa rejects outright, so recovery builds its unions without that
+    /// simplification.
+    pub(crate) fn homogeneous_element_type_in_cycle_recovery(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Type<'db> {
+        self.element_types_unioned(db, env, true)
+    }
+
+    fn element_types_unioned(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        cycle_recovery: bool,
+    ) -> Type<'db> {
+        // cycle recovery mode already leaves aliases packed, so the two modes agree about aliases
+        let mut builder = UnionBuilder::new(db, env)
+            .unpack_aliases(false)
+            .cycle_recovery(cycle_recovery);
         match self {
             Tuple::Fixed(tuple) => {
-                UnionType::from_elements_leave_aliases(db, env, tuple.iter_all_elements())
+                for element in tuple.iter_all_elements() {
+                    builder.add_in_place(element);
+                }
             }
             Tuple::Variable(tuple) => {
-                UnionType::from_elements_leave_aliases(db, env, tuple.iter_all_elements(db))
+                for element in tuple.iter_all_elements(db) {
+                    builder.add_in_place(element);
+                }
             }
         }
+        builder.build()
     }
 
     fn tuple_class_type(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {

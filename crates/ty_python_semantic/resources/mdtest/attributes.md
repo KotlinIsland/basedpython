@@ -4090,7 +4090,11 @@ class ManyCycles2:
         self.x3 = [1]
 
     def f1(self: "ManyCycles2"):
-        # revealed: list[int] | list[Divergent] | UnsafeUnion[list[int], list[Divergent]]
+        # the union carries `UnsafeUnion[list[int], list[Divergent]]` twice over, and a
+        # three-element variant of the same thing. that redundancy is the recovery's, not the
+        # program's — a union of a cycle's rounds is not being collapsed to one element per
+        # distinct type. pinned as it stands so a change to it is visible rather than silent
+        # revealed: list[int] | list[Divergent] | UnsafeUnion[list[int], list[Divergent]] | UnsafeUnion[list[int], list[Divergent]] | UnsafeUnion[list[int], list[Divergent], list[Divergent]] | list[Divergent]
         reveal_type(self.x3)
 
         self.x1 = [self.x2] + [self.x3]

@@ -42,7 +42,8 @@ use crate::types::relation::{
 use crate::types::tuple::{Tuple, TupleType, VariableSegment};
 use crate::types::typed_dict::extract_unpacked_typed_dict_keys_from_kwargs_annotation;
 use crate::types::typevar::{
-    TypeVarInstance, TypeVarKind, TypeVarSet, max_typevar_freshness_matching_generic_context,
+    MAX_TYPEVAR_FRESHNESS_DELTA, TypeVarInstance, TypeVarKind, TypeVarSet,
+    max_typevar_freshness_matching_generic_context,
 };
 use crate::types::{
     ApplyTypeMappingVisitor, BindingContext, BoundTypeVarIdentity, BoundTypeVarInstance,
@@ -2683,6 +2684,9 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                 .max_typevar_freshness_matching_generic_context(db, generic_context)
                 .map(|freshness| freshness.increment().value())
         {
+            if delta > MAX_TYPEVAR_FRESHNESS_DELTA {
+                return self.diverged_signature_pair();
+            }
             freshened_source = source.freshen_bound_typevars(db, env, delta);
             &freshened_source
         } else {
@@ -2695,6 +2699,9 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                 .max_typevar_freshness_matching_generic_context(db, generic_context)
                 .map(|freshness| freshness.increment().value())
         {
+            if delta > MAX_TYPEVAR_FRESHNESS_DELTA {
+                return self.diverged_signature_pair();
+            }
             freshened_target = target.freshen_bound_typevars(db, env, delta);
             &freshened_target
         } else {

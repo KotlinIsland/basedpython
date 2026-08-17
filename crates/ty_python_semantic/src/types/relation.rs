@@ -1251,6 +1251,17 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
         self.never()
     }
 
+    /// The answer for a pair of signatures whose comparison reproduces itself at an ever
+    /// greater typevar freshness.
+    ///
+    /// Such a pair is undecidable for the same reason a recursively-specialized structural
+    /// type is, and gets the same conservative answer — see
+    /// [`Self::recursive_type_pair_fallback`]. Rejecting is what keeps both members of a
+    /// self-referential union rather than folding one into the other.
+    pub(super) fn diverged_signature_pair(&self) -> ConstraintSet<'db, 'c> {
+        self.never()
+    }
+
     /// Is `target` a metaclass instance (a nominal instance of a subclass of `builtins.type`)?
     ///
     /// This does not include all types that are subtypes of `builtins.type`! The semantic

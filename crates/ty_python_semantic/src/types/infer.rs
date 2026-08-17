@@ -610,7 +610,7 @@ impl<'db> InferExpression<'db> {
         expression: Expression<'db>,
         tcx: TypeContext<'db>,
     ) -> InferExpression<'db> {
-        if tcx.annotation().is_some() {
+        if tcx.is_worth_interning(db, &ProgramEnvironment::from_scope(expression.scope(db))) {
             InferExpression::WithContext(ExpressionWithContext::new(db, expression, tcx))
         } else {
             InferExpression::Bare(expression)
@@ -645,7 +645,7 @@ pub(super) struct ScopeWithContext<'db> {
 
 impl<'db> InferScope<'db> {
     fn new(db: &'db dyn Db, scope: ScopeId<'db>, tcx: TypeContext<'db>) -> InferScope<'db> {
-        if tcx.annotation().is_some() {
+        if tcx.is_worth_interning(db, &ProgramEnvironment::from_scope(scope)) {
             InferScope::WithContext(ScopeWithContext::new(db, scope, tcx))
         } else {
             InferScope::Bare(scope)
@@ -727,6 +727,24 @@ impl<'db> TypeContext<'db> {
             return None;
         }
         self.target
+    }
+
+    /// basedpython: whether this context earns a query key of its own
+    ///
+    /// the key an annotated inference runs under is *interned*, so a context that differs from the
+    /// one the last round used is a different query, carrying a `Type::divergent` initial value
+    /// named after it. a context holding a divergence marker closes that into a loop: the marker is
+    /// named after the query, the query is named by the key, and the key holds the marker — so a
+    /// cycle interns one more key every round and never reaches a fixed point, however settled the
+    /// types it is computing already are
+    ///
+    /// a marker is the cycle's stand-in for a type it has not reached yet, which is no guidance at
+    /// all, so the context is dropped and the expression is inferred bare. the next round drops the
+    /// same context and asks for the same bare key, unchanged
+    fn is_worth_interning(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
+        self.annotation().is_some_and(|annotation| {
+            !any_over_type(db, env, annotation, false, |ty| ty.is_divergent())
+        })
     }
 
     /// basedpython: the expected type a bare name in this context resolves

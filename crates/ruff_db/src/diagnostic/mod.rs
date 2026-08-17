@@ -1051,6 +1051,31 @@ pub enum DiagnosticId {
     /// or remove the `include` option.
     EmptyInclude,
 
+    /// A negated `exclude` pattern that can never take effect.
+    ///
+    /// ## Why is this bad?
+    /// A negated pattern can only re-include a path whose parent directories are all still
+    /// walked. Once a directory is excluded nothing inside it is looked at, so a negation
+    /// pointing into that directory silently matches nothing. `dist` is excluded by default,
+    /// so `!dist/generated.py` never re-includes anything: the walk stops at `dist`.
+    ///
+    /// ## Example
+    /// ```toml
+    /// [src]
+    /// exclude = ["!dist/generated.py"]
+    /// ```
+    ///
+    /// Use instead:
+    ///
+    /// ```toml
+    /// [src]
+    /// exclude = ["!**/dist/", "**/dist/**", "!**/dist/generated.py"]
+    /// ```
+    ///
+    /// which re-includes the directory, excludes its contents again, then re-includes the
+    /// one file.
+    UnreachableExcludeNegation,
+
     /// An override configuration is unnecessary because it applies to all files.
     ///
     /// ## Why is this bad?
@@ -1159,6 +1184,7 @@ impl DiagnosticId {
             DiagnosticId::InvalidGlob => "invalid-glob",
             DiagnosticId::InvalidClassName => "invalid-class-name",
             DiagnosticId::EmptyInclude => "empty-include",
+            DiagnosticId::UnreachableExcludeNegation => "unreachable-exclude-negation",
             DiagnosticId::UnnecessaryOverridesSection => "unnecessary-overrides-section",
             DiagnosticId::UselessOverridesSection => "useless-overrides-section",
             DiagnosticId::DeprecatedSetting => "deprecated-setting",

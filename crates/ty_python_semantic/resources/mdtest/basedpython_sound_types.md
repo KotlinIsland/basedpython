@@ -1322,6 +1322,34 @@ def recur(a):
 reveal_type(recur([]))  # revealed: list[Divergent]
 ```
 
+### recursion no marker survives
+
+that marker only survives while the type is *built*. a body that hands itself to a generic call gets
+its return type back out of that call's solve, which leaves a concrete type behind with nothing to
+fold on — `map(g, n)` is `map[map[...]]` receding by one constructor every round. the recursion is
+recognised by a round adding nothing but depth, and collapsed onto the marker one level in:
+
+```py
+def g(n):
+    return map(g, n)
+
+reveal_type(g([]))  # revealed: map[Divergent]
+```
+
+the same holds when the recursion goes round two functions:
+
+```py
+def to(n):
+    return map(fro, n)
+
+def fro(n):
+    return map(to, n)
+
+# the mutual case settles a level shallower than the single-function one above, which is the
+# recursion being recognised on a different round rather than anything the program says
+reveal_type(to([]))  # revealed: map[map[Never]]
+```
+
 ### recursion that grows a tuple
 
 a body that concatenates onto its own result adds an element every round, so no tuple length is the
@@ -1349,6 +1377,26 @@ def inner(b):
     return (1,) + outer(b)
 
 reveal_type(outer([]))  # revealed: tuple[Literal[1], ...]
+```
+
+### a tuple whose elements are the round that built them
+
+an attribute taken apart and put back together is defined in terms of itself, so its elements are
+the marker. giving up the length would union those elements into one — and an element standing for
+the cycle is precisely what the marker replaces, so the widened tuple has to be handed back through
+the marker rather than around it. a round that widened and a round that marked would otherwise each
+undo the other, and the two answers would alternate without either ever being reached:
+
+```py
+class C:
+    def __init__(self):
+        self._t = (0, 0)
+
+    def f(self):
+        a, b = self._t
+        reveal_type(a)  # revealed: Divergent
+        self._t = (a, b)
+        reveal_type(self._t)  # revealed: tuple[Divergent, Divergent]
 ```
 
 ### generators

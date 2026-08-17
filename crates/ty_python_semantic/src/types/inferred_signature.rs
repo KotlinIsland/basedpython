@@ -34,7 +34,7 @@ use crate::reachability::ReachabilityConstraintsExtension;
 use crate::types::ProgramEnvironment;
 use crate::types::call::CallArguments;
 use crate::types::callable::CallableType;
-use crate::types::constraints::ConstraintSetBuilder;
+use crate::types::constraints::{ConstraintSetBuilder, max_constructor_and_typevar_depth};
 use crate::types::function::OverloadLiteral;
 use crate::types::narrow::{NarrowingConstraint, infer_narrowing_constraints};
 use crate::types::protocol_class::InlineProtocolMember;
@@ -64,7 +64,7 @@ use crate::types::{
     cycle_initial = |_, id, _| Type::divergent(id),
     cycle_fn = |db, cycle, previous: &Type<'db>, value: Type<'db>, overload: OverloadLiteral<'db>| {
         let env = &ProgramEnvironment::from_file(overload.program_file(db));
-        value.cycle_normalized(db, env, *previous, cycle)
+        divergence_bounded(db, env, value, cycle).cycle_normalized(db, env, *previous, cycle)
     },
     heap_size = ruff_memory_usage::heap_size,
 )]
@@ -89,6 +89,41 @@ pub(crate) fn inferred_return_type<'db>(
         can_implicitly_return_none(db, index.use_def_map(file_scope_id)),
         |expr| inference.expression_type(expr),
     )
+}
+
+/// The deepest a recovered return type may nest before the recursion that built it
+/// is called what it is.
+///
+/// A hand-written return type is a constructor or two deep — `list[int]`,
+/// `dict[str, list[int]]`. Anything far past that inside a cycle was assembled one
+/// layer per iteration rather than written by anybody.
+const RETURN_TYPE_NESTING_LIMIT: u16 = 8;
+
+/// `value` with a return type that grows a constructor deeper every iteration
+/// replaced by the divergence marker it already stands for.
+///
+/// A body that returns a call taking the function itself — `def g(n): return map(g, n)`
+/// — has no return type to reach: it is `map[map[…]]` without end. Ordinarily
+/// [`Type::cycle_normalized`] folds such a type back onto the marker the cycle started
+/// from, but the marker only survives while the type is *built*; passing through a
+/// generic call's solve leaves a concrete type behind with nothing left to fold on, and
+/// the fixed point recedes by one constructor per iteration forever.
+///
+/// So bound the nesting rather than the iterations: past the bound the value is
+/// replaced by the cycle head's own `Divergent`, which is what the marker-preserving
+/// path would have produced, and the next iteration reproduces it unchanged. The bound
+/// reads only the value and the cycle, so the query stays a function of its inputs.
+fn divergence_bounded<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    value: Type<'db>,
+    cycle: &salsa::Cycle,
+) -> Type<'db> {
+    let (constructor_depth, _) = max_constructor_and_typevar_depth(db, env, value);
+    if constructor_depth < RETURN_TYPE_NESTING_LIMIT {
+        return value;
+    }
+    cycle.head_ids().next().map_or(value, Type::divergent)
 }
 
 /// The return type `node`'s body determines, given what its expressions were inferred as.
@@ -314,9 +349,19 @@ pub(crate) fn inferred_parameter_bound<'db>(
 ///
 /// Every parameter is answered in one pass, because the expensive half — inferring
 /// the body, and re-binding each call in it — is shared between them.
+///
+/// This reads the body, and the body is checked against the bounds this produces, so
+/// the answer is reached by iterating the two to a fixed point. Each round is allowed
+/// to say more about a parameter than the round before it, and to say something
+/// different; the one thing it may not do is stop answering for a parameter it has
+/// already answered for, which is what [`ParameterConstraints::keeping_requirements_seen`]
+/// enforces.
 #[salsa::tracked(
     returns(ref),
     cycle_initial = |_, _, _| ParameterConstraints::default(),
+    cycle_fn = |_, _, previous: &ParameterConstraints<'db>, value: ParameterConstraints<'db>, _| {
+        value.keeping_requirements_seen(previous)
+    },
     heap_size = ruff_memory_usage::heap_size,
 )]
 pub(crate) fn body_parameter_constraints<'db>(
@@ -416,6 +461,43 @@ impl<'db> ParameterConstraints<'db> {
             .filter(|(key, _)| *key == parameter)
             .map(|(_, ty)| *ty)
             .collect()
+    }
+
+    /// This round's requirements, plus those of every parameter this round stopped
+    /// answering for.
+    ///
+    /// What a body requires of a parameter is a fact about the body, so a requirement one
+    /// round of the cycle found does not stop holding because a later round could not find
+    /// it. A round really can lose one. `assert isinstance(x, int) and x <= 5` narrows `x`
+    /// to `int` only while `isinstance(x, int)` can still come out false; the round after
+    /// that narrowing has become `x`'s bound the test is statically true, and an `and` arm
+    /// that is always true says nothing about which branch this is, so it is dropped —
+    /// taking its narrowing with it. That puts the bound back where it started, and the
+    /// round after finds the narrowing again. Neither round repeats the one before it, and
+    /// the iteration has no fixed point to reach.
+    ///
+    /// Requirements only ever being added is what leaves it one.
+    fn keeping_requirements_seen(mut self, previous: &Self) -> Self {
+        let dropped: Vec<_> = previous
+            .entries
+            .iter()
+            .filter(|(parameter, _)| {
+                !self
+                    .entries
+                    .iter()
+                    .any(|(answered, _)| answered == parameter)
+            })
+            .copied()
+            .collect();
+        if dropped.is_empty() {
+            return self;
+        }
+
+        let mut entries = self.entries.into_vec();
+        entries.extend(dropped);
+        entries.sort_by_key(|(parameter, _)| *parameter);
+        self.entries = entries.into_boxed_slice();
+        self
     }
 }
 
