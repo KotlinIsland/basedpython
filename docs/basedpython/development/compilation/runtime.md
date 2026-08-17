@@ -124,6 +124,38 @@ a class whose construction fell back to the interpreted definition is skipped: t
 `def`s the fallback ran already carry their decorators, and applying them a second
 time would wrap twice
 
+### how many times a decorator runs
+
+python evaluates a decorator **once**, where the definition stands. the twin is
+what stands there, so the twin evaluates it — and module init then evaluates the
+same decorator a second time over the native definition that replaced the twin's.
+the name each definition ends up bound to is right either way, so nothing shows
+but the side effect: `@register` puts two entries in its registry, `@count_them`
+counts one function twice
+
+for a module-level **function** and a module-level **class** the decorator is
+therefore blanked out of the source the twin runs, so init's is the only
+evaluation. blanking rather than cutting keeps every line where it was, which is
+what a traceback through the twin quotes
+
+that leaves a window: from the twin's `def` or `class` to the moment init reaches
+it, the name holds a definition nothing has decorated yet. only the module's own
+body can look — everything else runs after init — so a definition whose name that
+body reads **declines** rather than be compiled and decorated twice. the reads
+followed are the ones the body makes as it runs, plus, transitively, everything
+held behind any definition it names: `TABLE = f()` reads directly,
+`def g(): return f()` called at import reads just the same. an annotation counts
+only where python evaluates one, so a module with
+`from __future__ import annotations` may name a class in a signature freely
+
+a **method's** decorator still runs twice. it is not only a side effect that
+would move: the class construction itself reads what the decorator wrote, and
+`ABCMeta` is the case — it computes `__abstractmethods__` from the namespace the
+body left, so taking `@abstractmethod` out of the twin empties that set on every
+class whose construction falls back to the interpreted definition. the answer
+there is to carry the decorated method *across* from the twin rather than to
+re-apply the decorator, which is not built
+
 ### boxed classes and interpreted fallbacks
 
 a construct with no native lowering is not a compile error. the module emits its

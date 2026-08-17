@@ -305,16 +305,50 @@ jobs:
   # transitive dep and fails on the api skew. the fork publishes only the
   # `basedpython` wheel to pypi, never these crates to crates.io
 
-  # the project supports 3.13 as well as `PYTHON_VERSION`, and the two differ in what a
-  # class does with its annotations and in the wording of several exceptions. a job of
-  # its own rather than a step on `cargo test (linux)`: as a step it pushed that job past
-  # its budget and the doctest and dogfood steps after it never ran at all
-  cargo-test-backend-other-python:
-    name: "cargo test (native backend, python 3.13)"
+  # `by compile` builds against the running interpreter's headers, links its abi and has
+  # to answer exactly as that interpreter does, so *which* interpreter is a first-class
+  # variable and belongs in the workflow rather than in whatever a runner image ships.
+  #
+  # the supported set is python 3.13 and 3.14, each in its gil and its free-threaded
+  # build. `PYTHON_VERSION` is the primary and `cargo test (linux)` runs the whole suite
+  # against it; this job covers the other three. 3.12 is deliberately absent — it is
+  # below the project's floor, and it was only ever reached because an image shipped it.
+  #
+  # only the version-sensitive targets run here, because only they start an interpreter:
+  #   * the six backend crates, which emit and then load real extension modules
+  #   * `by_transforms`' `*_runtime` tests, which transpile and then execute
+  #   * `ty`'s divergence and end-to-end tests, which do the same
+  # the rest of the suite reads a vendored typeshed and a configured `python-version`,
+  # so its answers do not move with the interpreter and repeating it buys nothing.
+  #
+  # a job of its own rather than steps on `cargo test (linux)`: as a step it pushed that
+  # job past its budget and the doctest and dogfood steps after it never ran at all
+  cargo-test-interpreter:
+    name: "cargo test (python ${{ matrix.python }})"
     runs-on: ${{ github.repository == 'astral-sh/ruff' && 'depot-ubuntu-22.04-16' || 'ubuntu-latest' }}
     needs: determine_changes
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-test') && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
-    timeout-minutes: 30
+    timeout-minutes: 45
+    strategy:
+      # one interpreter failing says nothing about the others, and which ones are green
+      # is the whole answer this job exists to give
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.13"
+            backend_filter: "all()"
+          # the free-threaded builds run the same tests, minus one that cannot be
+          # observed there: `a_closure_does_not_leak_its_environment` asserts that
+          # `sys.getrefcount` *rises* while a closure holds a string, and a
+          # free-threaded interpreter reports the immortal sentinel for that string
+          # (4294967295 on 3.13t, 3221225472 on 3.14t) whoever holds it. an ordinary
+          # cpython closure fails the same assertion, so it measures the instrument
+          # rather than the backend. the leak half of that test — the count is
+          # unchanged after 20000 closures — runs and passes on both
+          - python: "3.13t"
+            backend_filter: "not test(=a_closure_does_not_leak_its_environment)"
+          - python: "3.14t"
+            backend_filter: "not test(=a_closure_does_not_leak_its_environment)"
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
@@ -338,14 +372,62 @@ jobs:
         with:
           version: "0.11.31"
           enable-cache: "true"
+      # `PYTHON` is the load-bearing pin: every harness that starts an interpreter reads
+      # it first. `PATH` is set as well because each of those harnesses falls back to a
+      # bare name if the variable is ever unset, and `by_transforms` tries `python3.13`
+      # *before* `python3` — so an unpinned run does not merely drift, it drifts towards
+      # one particular version. uv's managed installs put a `python3` next to the
+      # versioned name, and in a free-threaded install that `python3` is itself the
+      # free-threaded build
       - name: "Pin the interpreter"
+        env:
+          PY: ${{ matrix.python }}
         run: |
-          uv python install 3.13
-          echo "PYTHON=$(uv python find 3.13)" >> "$GITHUB_ENV"
+          uv python install "$PY"
+          python_path="$(uv python find "$PY")"
+          echo "PYTHON=$python_path" >> "$GITHUB_ENV"
+          dirname "$python_path" >> "$GITHUB_PATH"
+      # a leg that silently resolved to a different interpreter would report a green that
+      # belongs to some other version, which is the failure mode this whole job is about
+      - name: "Verify the interpreter is the one asked for"
+        env:
+          PY: ${{ matrix.python }}
+        run: |
+          echo "PYTHON=$PYTHON"
+          "$PYTHON" -VV
+          echo "python3 on PATH: $(command -v python3)"
+          # a free-threaded leg has to be genuinely free-threaded rather than a gil
+          # build answering to a `t` name, so the probe reports both facts at once
+          want_version="${PY%t}"
+          want="$want_version false"
+          if [ "$PY" != "$want_version" ]; then
+            want="$want_version true"
+          fi
+          probe='import sys, sysconfig; print("%d.%d" % sys.version_info[:2], "true" if sysconfig.get_config_var("Py_GIL_DISABLED") else "false")'
+          got=$("$PYTHON" -c "$probe")
+          echo "PYTHON reports: $got (want: $want)"
+          [ "$got" = "$want" ] || { echo "::error::PYTHON is not $PY"; exit 1; }
+          # the harnesses fall back to a bare `python3` when the variable is unset, so
+          # that has to be the same interpreter too
+          got_path=$(python3 -c "$probe")
+          echo "python3 reports: $got_path (want: $want)"
+          [ "$got_path" = "$want" ] || { echo "::error::python3 on PATH is not $PY"; exit 1; }
       - name: "Run the native backend"
+        env:
+          BACKEND_FILTER: ${{ matrix.backend_filter }}
         run: |
           cargo nextest run \
-            -p by_build -p by_ir -p by_irbuild -p by_opt -p by_codegen_c -p by_rt
+            -p by_build -p by_ir -p by_irbuild -p by_opt -p by_codegen_c -p by_rt \
+            -E "$BACKEND_FILTER"
+      # a separate invocation on purpose: the backend's differential tests fork processes
+      # and compile C, and sharing a run with `by_transforms`' ~1800 other tests starves
+      # them into failures that pass on their own
+      - name: "Run the transpiler's runtime tests"
+        run: cargo nextest run -p by_transforms -E 'binary(/_runtime$/)'
+      - name: "Run ty's divergence and end-to-end tests"
+        run: |
+          cargo nextest run -p ty \
+            -E 'binary(mdtest_divergence) + binary(by_e2e) + binary(django_lookup_runtime)'
 
   cargo-test-linux:
     name: "cargo test (linux)"
@@ -404,17 +486,24 @@ jobs:
         # Ignore errors if this step fails; we want to continue to later steps in the workflow anyway.
         # This step is just to get nice GitHub annotations on the PR diff in the files-changed tab.
         run: cargo test -p ty_python_semantic --test mdtest || true
-      # the native backend's tests run against whatever `python3` is first on `PATH`,
+      # the tests that execute python run against whatever `python3` is first on `PATH`,
       # which without this is whichever interpreter the runner image happens to ship —
       # a 3.14 on macos and a 3.12 on linux, so the version under test moved with the
       # image rather than with the project. `by compile` builds against the running
       # interpreter's headers and has to answer as that interpreter does, so which one
-      # it is belongs in the workflow. the other platforms are deliberately left on the
-      # image's own interpreter: that is coverage on top of this, not instead of it
-      - name: "Pin the interpreter the native backend is tested against"
+      # it is belongs in the workflow.
+      #
+      # `PATH` as well as `PYTHON`: the harnesses all read the variable first, but each
+      # falls back to a bare name when it is unset, and `by_transforms` tries
+      # `python3.13` *before* `python3` — so a run that lost the variable would not
+      # drift randomly, it would drift to one particular version. the rest of the
+      # supported set is covered by `cargo test (python …)`
+      - name: "Pin the interpreter the python-executing tests use"
         run: |
           uv python install "${PYTHON_VERSION}"
-          echo "PYTHON=$(uv python find "${PYTHON_VERSION}")" >> "$GITHUB_ENV"
+          python_path="$(uv python find "${PYTHON_VERSION}")"
+          echo "PYTHON=$python_path" >> "$GITHUB_ENV"
+          dirname "$python_path" >> "$GITHUB_PATH"
       - name: "Run tests"
         run: cargo insta test --all-features --unreferenced reject --test-runner nextest --disable-nextest-doctest
       - name: "Run doctests"
@@ -479,13 +568,30 @@ jobs:
       - name: "Run doctests"
         run: cargo test --doc --profile profiling --all-features
 
+  # these two used to take whatever interpreter the runner image shipped. that drift did
+  # find real bugs — a 3.14 macos image surfaced six failures nobody was looking for —
+  # but it found them as a red that named no version, and a green said nothing about
+  # which version was covered. the same job could change answer between two reruns of
+  # the same commit. so the interpreter is pinned here too, and the coverage the drift
+  # used to buy by accident is bought on purpose by `cargo test (python …)` instead.
+  #
+  # the two platforms take different versions, so the platform axis and the version axis
+  # are both covered without a third job: windows takes the newest because its toolchain
+  # path is the most version-sensitive code in the backend (it has to name the
+  # interpreter's import library, whose stem carries both the version and the
+  # free-threaded `t`), and macos takes the floor version
   cargo-test-other:
     strategy:
+      # each leg is now a distinct platform *and* version, so cancelling the other one
+      # on the first failure throws away half the answer
+      fail-fast: false
       matrix:
-        platform:
-          - ${{ github.repository == 'astral-sh/ruff' && 'namespace-profile-windows-2022-x86-64-16x32' || 'windows-latest' }}
-          - ${{ github.repository == 'astral-sh/ruff' && 'namespace-profile-macos-15' || 'macos-latest' }}
-    name: "cargo test (${{ matrix.platform }})"
+        include:
+          - platform: ${{ github.repository == 'astral-sh/ruff' && 'namespace-profile-windows-2022-x86-64-16x32' || 'windows-latest' }}
+            python: "3.14"
+          - platform: ${{ github.repository == 'astral-sh/ruff' && 'namespace-profile-macos-15' || 'macos-latest' }}
+            python: "3.13"
+    name: "cargo test (${{ matrix.platform }}, python ${{ matrix.python }})"
     runs-on: ${{ matrix.platform }}
     needs: determine_changes
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-test') && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
@@ -519,8 +625,21 @@ jobs:
         with:
           version: "0.12.3"
           enable-cache: "true"
+      # `PATH` as well as `PYTHON`, for the fallback reason described on
+      # `cargo test (python …)`. the interpreter reports its own directory rather than
+      # `dirname` doing it: on windows this shell is git bash but `uv python find` answers
+      # with a backslash-separated path, which `dirname` reads as a single component
+      - name: "Pin the interpreter the python-executing tests use"
+        env:
+          PY: ${{ matrix.python }}
+        run: |
+          uv python install "$PY"
+          python_path="$(uv python find "$PY")"
+          echo "PYTHON=$python_path" >> "$GITHUB_ENV"
+          "$python_path" -c 'import os, sys; print(os.path.dirname(sys.executable))' >> "$GITHUB_PATH"
       - name: "Run tests"
         run: |
+          python3 -VV
           cargo nextest run --all-features --profile ci
           cargo test --all-features --doc
 
@@ -1481,6 +1600,7 @@ jobs:
       - cargo-fmt
       - cargo-clippy
       - cargo-test-linux
+      - cargo-test-interpreter
       - cargo-test-wasm
       - cargo-build-msrv
       - shellcheck

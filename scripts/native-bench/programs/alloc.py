@@ -8,7 +8,7 @@ allocation half on its own
 
 
 class Pair:
-    def __init__(self, x: int, y: int) -> None:
+    def __init__(self, x: int, y: int):
         self.x = x
         self.y = y
 

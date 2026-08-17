@@ -8,7 +8,7 @@ measured
 
 
 class Counter:
-    def __init__(self, base: int) -> None:
+    def __init__(self, base: int):
         self.base = base
 
     def step(self, k: int) -> int:

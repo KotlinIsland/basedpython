@@ -370,6 +370,7 @@ dependencies = [
  "by_ir",
  "ruff_db",
  "ruff_python_ast",
+ "ruff_python_parser",
  "ruff_python_stdlib",
  "ruff_text_size",
  "thin-vec",

@@ -173,4 +173,6 @@ because two of them change this design rather than extend it:
     what each buys the compiler, and what codegen needs their design to preserve
 - [runtime](runtime.md) — object model, refcounting, exceptions, interop,
     debugging
+- [benchmarks](benchmarks.md) — what the suite measures, the method it enforces,
+    and what it refuses to time
 - [plan](plan.md) — semantic deltas, testing, milestones, risks

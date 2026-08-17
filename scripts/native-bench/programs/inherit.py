@@ -8,7 +8,7 @@ compiler has to get right and a direct-calling one has to get wrong loudly
 
 
 class Shape:
-    def __init__(self, size: int) -> None:
+    def __init__(self, size: int):
         self.size = size
 
     def area(self) -> int:

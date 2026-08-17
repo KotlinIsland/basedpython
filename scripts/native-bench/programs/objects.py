@@ -7,7 +7,7 @@ that moves this one without moving any of those is worth explaining
 
 
 class Vec:
-    def __init__(self, x: float, y: float) -> None:
+    def __init__(self, x: float, y: float):
         self.x = x
         self.y = y
 
