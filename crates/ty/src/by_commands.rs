@@ -25,55 +25,20 @@ use crate::ExitStatus;
 use crate::args::LoweringArgs;
 use crate::by_staging::{Staging, relative_destination, transpiled_destination};
 
-/// The python version the emitted code must run on when `--min-version` is not
-/// given: the one the project configures (`environment.python-version`, else the
-/// `requires-python` lower bound), so the checker and the emitter agree about
-/// which python this project targets. Falls back to the transpiler's own default
-/// outside a project, or when the configuration names no version.
-fn configured_min_version(cwd: &Path) -> PythonVersion {
-    let Some(sys_cwd) = SystemPath::from_std_path(cwd) else {
-        return Config::default().min_version;
-    };
-    let system = OsSystem::new(sys_cwd);
-    let Ok(metadata) = ProjectMetadata::discover(sys_cwd, &system) else {
-        return Config::default().min_version;
-    };
-    let db = ProjectDatabase::use_defaults(metadata, system);
-    db.project()
-        .program(&db)
-        .python_version(&db)
-        .to_string()
-        .parse()
-        .unwrap_or_else(|_| Config::default().min_version)
-}
-
-/// The python version the project *declares* it targets, if it declares one —
-/// `environment.python-version`, or the `requires-python` lower bound.
-///
-/// Distinct from [`configured_min_version`], which fills in a default when the
-/// project says nothing. A default is not a declaration, and treating it as one
-/// refuses to run every project without a `requires-python` on anything but the
-/// newest python there is — which is a thing nobody asked for and a thing the
-/// author cannot act on.
-fn declared_min_version(cwd: &Path) -> Option<PythonVersion> {
-    let sys_cwd = SystemPath::from_std_path(cwd)?;
-    let system = OsSystem::new(sys_cwd);
-    let metadata = ProjectMetadata::discover(sys_cwd, &system).ok()?;
-    let declared = metadata
-        .options()
-        .environment
-        .as_ref()?
-        .python_version
-        .as_ref()?;
-    declared.to_string().parse().ok()
-}
-
 /// The transpile config for a command whose `--min-version` is optional.
+///
+/// Without the flag the target is the version the project configures, so that the
+/// checker and the emitter agree about which python this project is for. Outside a
+/// project — `by transpile` reading a lone file — the transpiler's own default
+/// stands in.
 fn version_config(min_version: Option<&str>, cwd: &Path) -> anyhow::Result<Config> {
     match min_version {
         Some(spelled) => parse_version(spelled),
         None => Ok(Config {
-            min_version: configured_min_version(cwd),
+            min_version: ResolvedProject::discover(cwd).map_or_else(
+                |_| Config::default().min_version,
+                |project| project.python_version(),
+            ),
             ..Config::default()
         }),
     }
@@ -149,7 +114,11 @@ pub(crate) fn cmd_run(
     python_flag: Option<&Path>,
 ) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
-    let interpreter = discover_interpreter(python_flag, &cwd);
+    // one resolution of the project, for the environment and the target version
+    // both: they are two readings of the same configuration and must not be able
+    // to disagree
+    let project = ResolvedProject::discover(&cwd)?;
+    let interpreter = discover_interpreter(python_flag, &project)?;
     let python = interpreter.path.clone();
     // `run` executes on a specific interpreter, so by default target *its*
     // version: the emitted code (dataclass `slots=`, PEP 695 syntax, …) must
@@ -182,7 +151,7 @@ pub(crate) fn cmd_run(
     // for (`match`, for one), and the failure lands as a `SyntaxError` inside
     // generated code rather than as anything the author can act on
     if let Some(found) = probed
-        && let Some(configured) = declared_min_version(&cwd)
+        && let Some(configured) = project.declared_python_version()
     {
         if min_version.is_none() && found < configured {
             anyhow::bail!(
@@ -610,17 +579,30 @@ fn configured_main(db: &ProjectDatabase) -> Option<String> {
 /// targeting 3.9 for its whole life without anyone choosing to.
 pub(crate) fn default_project_python_version() -> PythonVersion {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let interpreter = discover_interpreter(None, &cwd);
+    // `by init` runs before there is a project to resolve, so a failure here is
+    // the ordinary case rather than a problem
+    let Ok(project) = ResolvedProject::discover(&cwd) else {
+        return latest_python_version();
+    };
+    let Ok(interpreter) = discover_interpreter(None, &project) else {
+        return latest_python_version();
+    };
     if interpreter.is_from_path {
-        return ruff_python_ast::PythonVersion::latest()
-            .to_string()
-            .parse()
-            .unwrap_or_else(|_| Config::default().min_version);
+        return latest_python_version();
     }
     detect_python_version(&interpreter.path).unwrap_or_else(|| Config::default().min_version)
 }
 
+/// The newest python this release can emit for.
+fn latest_python_version() -> PythonVersion {
+    ruff_python_ast::PythonVersion::latest()
+        .to_string()
+        .parse()
+        .unwrap_or_else(|_| Config::default().min_version)
+}
+
 /// The interpreter `by run` executes on, and how it was chosen.
+#[derive(Clone)]
 struct Interpreter {
     path: String,
     origin: String,
@@ -633,11 +615,24 @@ struct Interpreter {
 ///
 /// The project environment comes first, because that is the environment the
 /// project *is*: `by check` resolved this project's imports against it, so
-/// running against a different python answers a question nobody asked. An
-/// explicit choice still wins over discovery — `--python` for this one run,
-/// `$PYTHON` for a shell that has already decided — and a bare `python3` off
-/// `PATH` is the last resort rather than the first.
-fn discover_interpreter(flag: Option<&Path>, root: &Path) -> Interpreter {
+/// running against a different python answers a question nobody asked. That has
+/// to mean the same environment the checker used, resolved the same way — the
+/// `environment.python` the project configures, then an activated virtual
+/// environment, a conda environment, or a `.venv` beside the project's
+/// `pyproject.toml`.
+///
+/// The project root is what all of that is relative to, not the working
+/// directory: `by run` from a subdirectory is still this project, and its `.venv`
+/// is still the one at the top.
+///
+/// `--python` overrides everything, for one run. `$PYTHON` is below discovery
+/// because it names an interpreter rather than an environment, so it stands in
+/// only where there is no project environment to prefer — but it still beats the
+/// bare `python3` that discovery falls back to.
+fn discover_interpreter(
+    flag: Option<&Path>,
+    project: &ResolvedProject,
+) -> anyhow::Result<Interpreter> {
     let named = |path: String, origin: &str| Interpreter {
         path,
         origin: origin.to_owned(),
@@ -648,45 +643,153 @@ fn discover_interpreter(flag: Option<&Path>, root: &Path) -> Interpreter {
         // a `--python` may name the interpreter itself or the environment it
         // lives in, the same way `by check --python` does
         if flag.is_file() {
-            return named(flag.display().to_string(), "`--python`");
+            return Ok(named(flag.display().to_string(), "`--python`"));
         }
         if let Some(interpreter) =
             interpreter_in_environment(flag, SysPrefixPathOrigin::PythonCliFlag)
         {
-            return named(interpreter, "`--python`");
+            return Ok(named(interpreter, "`--python`"));
         }
-        return named(flag.display().to_string(), "`--python`");
+        return Ok(named(flag.display().to_string(), "`--python`"));
+    }
+
+    // what the project says its environment is, which is what the checker used.
+    // a configured environment that cannot be resolved is an error rather than
+    // something to fall past: `by check` refuses it outright, and running on a
+    // different python than the one just type-checked against — reporting it as
+    // a version mismatch, which names the wrong cause — is how the two commands
+    // came to disagree in the first place
+    if let Some(configured) = project.configured_environment() {
+        let Some(interpreter) =
+            interpreter_in_environment(&configured, SysPrefixPathOrigin::PythonCliFlag)
+        else {
+            anyhow::bail!(
+                "`environment.python` is `{}`, which is not a python environment — \
+                 the same setting `by check` reads, so neither command can use it",
+                configured.display()
+            );
+        };
+        return Ok(named(interpreter, "`environment.python`"));
+    }
+
+    let discovered = discovered_environment(project.root());
+    if let Some(found) = &discovered
+        && !found.is_from_path
+    {
+        return Ok(found.clone());
     }
 
     if let Ok(python) = std::env::var(EnvVars::PYTHON) {
-        return named(python, "`PYTHON`");
+        return Ok(named(python, "`PYTHON`"));
     }
 
-    if let Some(sys_root) = SystemPath::from_std_path(root) {
-        let system = OsSystem::new(sys_root);
-        if let Ok(Some(environment)) = PythonEnvironment::discover(sys_root, &system)
-            && let Some(interpreter) = environment.interpreter(&system)
-        {
-            // discovery ends by falling back to whatever python is on `PATH`,
-            // which is an interpreter but not a *project* environment — the
-            // difference matters to anything asking what this project targets
-            let is_from_path = matches!(
-                environment.origin(),
-                SysPrefixPathOrigin::PythonBinary | SysPrefixPathOrigin::SelfEnvironment
-            );
-            return Interpreter {
-                path: interpreter.to_string(),
-                origin: environment.origin().to_string(),
-                is_from_path,
-            };
-        }
-    }
-
-    Interpreter {
+    Ok(discovered.unwrap_or_else(|| Interpreter {
         path: "python3".to_owned(),
         origin: "`PATH`".to_owned(),
         is_from_path: true,
+    }))
+}
+
+/// A project, resolved once.
+///
+/// Discovery walks up from the working directory reading configuration, and
+/// every answer taken from it — where the root is, which environment the project
+/// declares, which python it targets — has to be the same answer. Resolving it
+/// per question was not only repeated work: the copies disagreed about failure,
+/// one falling back to the working directory where another gave up.
+pub(crate) struct ResolvedProject {
+    root: PathBuf,
+    metadata: ProjectMetadata,
+}
+
+impl ResolvedProject {
+    fn discover(cwd: &Path) -> anyhow::Result<Self> {
+        let sys_cwd = SystemPath::from_std_path(cwd)
+            .with_context(|| format!("non-utf8 path: {}", cwd.display()))?;
+        let system = OsSystem::new(sys_cwd);
+        let metadata = ProjectMetadata::discover(sys_cwd, &system)
+            .with_context(|| format!("failed to discover project at {sys_cwd}"))?;
+        let root = PathBuf::from(metadata.root().as_str());
+        Ok(Self { root, metadata })
     }
+
+    fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// The environment the project configures, as an absolute path.
+    fn configured_environment(&self) -> Option<PathBuf> {
+        let sys_root = SystemPath::from_std_path(&self.root)?;
+        let system = OsSystem::new(sys_root);
+        let configured = self
+            .metadata
+            .options()
+            .environment
+            .as_ref()?
+            .python
+            .as_ref()?;
+        Some(PathBuf::from(
+            configured.absolute(sys_root, &system).as_str(),
+        ))
+    }
+
+    /// The python version the emitted code must run on: the one the project
+    /// configures (`environment.python-version`, else the `requires-python` lower
+    /// bound), so the checker and the emitter agree about which python this
+    /// project targets.
+    /// The python version the project *declares* it targets, if it declares one.
+    ///
+    /// Distinct from [`Self::python_version`], which fills in a default when the
+    /// project says nothing. A default is not a declaration, and treating it as
+    /// one refuses to run every project without a `requires-python` on anything
+    /// but the newest python there is — a thing nobody asked for, and a thing the
+    /// author cannot act on.
+    fn declared_python_version(&self) -> Option<PythonVersion> {
+        let declared = self
+            .metadata
+            .options()
+            .environment
+            .as_ref()?
+            .python_version
+            .as_ref()?;
+        declared.to_string().parse().ok()
+    }
+
+    fn python_version(&self) -> PythonVersion {
+        let Some(sys_root) = SystemPath::from_std_path(&self.root) else {
+            return Config::default().min_version;
+        };
+        let system = OsSystem::new(sys_root);
+        let db = ProjectDatabase::use_defaults(self.metadata.clone(), system);
+        db.project()
+            .program(&db)
+            .python_version(&db)
+            .to_string()
+            .parse()
+            .unwrap_or_else(|_| Config::default().min_version)
+    }
+}
+
+/// The environment discovery finds for this project: an activated virtual
+/// environment, a conda environment, or a `.venv` at the project root — and,
+/// failing all of those, whatever python is on `PATH`.
+fn discovered_environment(root: &Path) -> Option<Interpreter> {
+    let sys_root = SystemPath::from_std_path(root)?;
+    let system = OsSystem::new(sys_root);
+    let environment = PythonEnvironment::discover(sys_root, &system).ok()??;
+    let interpreter = environment.interpreter(&system)?;
+    // discovery ends by falling back to whatever python is on `PATH`, which is
+    // an interpreter but not a *project* environment — the difference is what
+    // decides whether it outranks `$PYTHON`, and what a new project targets
+    let is_from_path = matches!(
+        environment.origin(),
+        SysPrefixPathOrigin::PythonBinary | SysPrefixPathOrigin::SelfEnvironment
+    );
+    Some(Interpreter {
+        path: interpreter.to_string(),
+        origin: environment.origin().to_string(),
+        is_from_path,
+    })
 }
 
 /// The interpreter inside the environment rooted at `path`, if there is one.
@@ -1761,6 +1864,17 @@ fn build_project_db(
     let system = OsSystem::new(sys_cwd);
     let project_metadata = ProjectMetadata::discover(sys_cwd, &system)
         .with_context(|| format!("failed to discover project at {sys_cwd}"))?;
+
+    // the project is the project wherever the command was run from. rooting this
+    // at the working directory instead means `by run` inside `tests/` transpiles
+    // `tests/` and nothing else, and then cannot find the module it was asked to
+    // run — the same mistake as looking for `.venv` beside the caller rather than
+    // beside the project
+    let canonical_root = std::fs::canonicalize(project_metadata.root().as_std_path())
+        .unwrap_or_else(|_| PathBuf::from(project_metadata.root().as_str()));
+    let sys_root = SystemPath::from_std_path(&canonical_root)
+        .with_context(|| format!("non-utf8 path: {}", canonical_root.display()))?;
+
     let metadata = project_metadata.clone();
     let db = ProjectDatabase::use_defaults(project_metadata, system);
 
@@ -1784,7 +1898,7 @@ fn build_project_db(
         // a hidden directory (`.claude/worktrees`, `.venv`, …) holds copies and
         // dependencies, not this project's sources — emitting them would write
         // a parallel tree nobody asked for
-        .filter(|(path, _)| !is_hidden_within(path, &canonical_cwd))
+        .filter(|(path, _)| !is_hidden_within(path, &canonical_root))
         // nor is the last build's output. it holds a copy of every `.by` source
         // this build is about to read, and reading those instead would build the
         // project into itself, one directory deeper each time
@@ -1799,10 +1913,10 @@ fn build_project_db(
         .collect();
     let rebuilder = Rebuilder {
         metadata,
-        root: sys_cwd.to_path_buf(),
+        root: sys_root.to_path_buf(),
         included,
     };
-    Ok((db, sources, rebuilder, canonical_cwd))
+    Ok((db, sources, rebuilder, canonical_root))
 }
 
 /// How much of the check outcome blocks emitting output.
