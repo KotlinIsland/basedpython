@@ -139,11 +139,18 @@ impl WireObservation {
 pub(crate) struct DataFlowFinding {
     /// where in the document
     pub(crate) range: lsp_types::Range,
-    /// what kind of finding: `condition` or `unreachable`
+    /// what kind of finding: `condition`, `unreachable` or `value`
     pub(crate) kind: String,
-    /// which way a condition goes. absent for an unreachable range
+    /// which way a condition goes. absent for anything else
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) taken: Option<bool>,
+    /// what a decided read will find, written the way a source writes it. absent for anything else
+    ///
+    /// carried beside [`label`](Self::label), which already spells it, because a client that wants
+    /// to do anything but draw the label — colour by value, offer it for a copy — should not have
+    /// to take a string written for a human back apart
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) value: Option<String>,
     /// what to draw beside the source
     pub(crate) label: String,
 }
@@ -202,18 +209,18 @@ impl BackgroundDocumentRequestHandler for DataFlowRequestHandler {
                 if &location.uri != document {
                     return None;
                 }
+                let label = finding.label();
+                let (kind, taken, value) = match finding.kind {
+                    FindingKind::Condition { taken } => ("condition", Some(taken), None),
+                    FindingKind::Unreachable => ("unreachable", None, None),
+                    FindingKind::Value { value, .. } => ("value", None, Some(value)),
+                };
                 Some(DataFlowFinding {
                     range: location.range,
-                    kind: match finding.kind {
-                        FindingKind::Condition { .. } => "condition",
-                        FindingKind::Unreachable => "unreachable",
-                    }
-                    .to_string(),
-                    taken: match finding.kind {
-                        FindingKind::Condition { taken } => Some(taken),
-                        FindingKind::Unreachable => None,
-                    },
-                    label: finding.label().to_string(),
+                    kind: kind.to_string(),
+                    taken,
+                    value,
+                    label,
                 })
             })
             .collect();

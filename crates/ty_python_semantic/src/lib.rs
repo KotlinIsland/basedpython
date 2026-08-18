@@ -67,6 +67,7 @@ pub use types::{DisplaySettings, ProgramEnvironment, TypeQualifiers};
 
 pub mod api_lockfile;
 mod assumed;
+pub use assumed::stop_offset;
 mod db;
 pub mod dependencies;
 pub mod django_settings;

@@ -191,11 +191,10 @@ pub(crate) fn seeds<'db>(
         return seeds;
     }
 
-    let source = source_text(db, source_file);
     let Some(line) = OneIndexed::new(assumptions.line(db) as usize) else {
         return seeds;
     };
-    let stop = line_index(db, source_file).line_start(line, &source);
+    let stop = stop_offset(db, source_file, line);
 
     let file_scope = scope.file_scope_id(db);
     if *stopped_scope(db, file, stop) != Some(file_scope) {
@@ -228,12 +227,50 @@ pub(crate) fn seeds<'db>(
     seeds
 }
 
+/// where in the source a program stopped on `line` actually is
+///
+/// the first character of the line that is not indentation, rather than the line's first byte. a
+/// debugger reports a line, and everything downstream of that wants an offset — which scope the
+/// stop is in, which bindings are behind it, which code is below it.
+///
+/// the line's first byte was the obvious offset and it was wrong, in a way that only showed on one
+/// shape of source. every statement's range starts at its first token, so the indentation in front
+/// of it belongs to no statement at all — and [`body_contains`] asks whether the stop falls between
+/// the first statement's start and the last one's end. a stop on the *first* statement of a
+/// function body therefore landed just before that body, [`stopped_scope`] answered with the
+/// enclosing scope instead, and every seed was refused for being about another frame:
+///
+/// ```py
+/// def price(qty: int, member: bool):
+///     discount = 0.0    # ← stopped here: line_start is in the indent, before `discount`
+///     if qty >= 10: ...  # nothing decided. one line further down, everything decided
+/// ```
+///
+/// widening the *body* to include its first line's indentation was the alternative. it loses on a
+/// compound statement written on one line — `def f(): return 1`, where the body's first statement
+/// shares the header's line, and a stop there would then be read as inside the body rather than on
+/// the header. narrowing the stop instead leaves that distinction exactly where it was
+///
+/// a blank or all-whitespace line has no such character, and answers with the line start. nothing
+/// is written there for the answer to be wrong about
+pub fn stop_offset(db: &dyn Db, file: ruff_db::files::File, line: OneIndexed) -> TextSize {
+    let source = source_text(db, file);
+    let start = line_index(db, file).line_start(line, &source);
+    let indent = source[usize::from(start)..]
+        .find(|character: char| !matches!(character, ' ' | '\t' | '\x0c'))
+        .unwrap_or(0);
+    start + TextSize::try_from(indent).unwrap_or_default()
+}
+
 /// the innermost scope the stop line falls inside
 ///
 /// walked over the syntax rather than asked of the scope tree because the question is "which frame
 /// is this", and a frame is a function body or the module body. the scopes that have no statements
 /// to stop on — a lambda, a comprehension, a type-parameter list — are not candidates, so a stop
 /// inside one of them answers with the function or module that contains it
+///
+/// `stop` is a [`stop_offset`], not a line start: this walk compares it against statement ranges,
+/// which begin at a statement's first token
 #[salsa::tracked(heap_size=ruff_memory_usage::heap_size)]
 pub(crate) fn stopped_scope<'db>(
     db: &'db dyn Db,
@@ -448,11 +485,10 @@ pub(crate) fn is_at_or_below_stop_line<'db>(
     if source_file != assumptions.file(db) {
         return false;
     }
-    let source = source_text(db, source_file);
     let Some(line) = OneIndexed::new(assumptions.line(db) as usize) else {
         return false;
     };
-    range.start() >= line_index(db, source_file).line_start(line, &source)
+    range.start() >= stop_offset(db, source_file, line)
 }
 
 /// module-level names basedpython renames on the way out, generated name first
@@ -716,6 +752,64 @@ def f():
             0,
             "a class in a module that does not resolve is a reading this cannot express, and \
              inventing a type that is nearly it would be worse than staying quiet"
+        );
+    }
+
+    /// which scope a stop on each line of an indented body is read as being in
+    fn scope_stopped_in(db: &TestDb, line: u32) -> Option<FileScopeId> {
+        let file = system_path_to_file(db, "/src/stopped.py").expect("the fixture was written");
+        let stop = stop_offset(
+            db,
+            file,
+            OneIndexed::new(line as usize).expect("a one-based line"),
+        );
+        *stopped_scope(db, db.program().program_file(db, file), stop)
+    }
+
+    #[test]
+    fn a_stop_on_the_first_statement_of_a_body_is_read_as_inside_that_body() {
+        // the offset a stop is taken at used to be the first byte of the line, which is in the
+        // indentation — and a body's extent is measured from its first statement's first *token*.
+        // so a stop on line 2 fell just outside `f`, the scope came back as the module, and every
+        // seed was refused for being about another frame. a stop on line 3 was fine, which is what
+        // made it look like a fault in the analysis rather than in the offset
+        let db = db_with(
+            "\
+def f():
+    limit = compute()
+    if limit > 100:
+        over = 1
+",
+        );
+        let inside = scope_stopped_in(&db, 3);
+        assert_ne!(
+            inside,
+            Some(FileScopeId::global()),
+            "the fixture is wrong: line 3 was supposed to be inside `f`"
+        );
+        assert_eq!(
+            scope_stopped_in(&db, 2),
+            inside,
+            "a stop on the first statement of `f` is in `f`, the same as one on the second"
+        );
+    }
+
+    #[test]
+    fn a_stop_on_a_function_header_is_read_as_outside_it() {
+        // the other edge of the same offset. a `def` line is written in the scope that contains
+        // the function, not in the function — nothing of the body has been entered yet, and a
+        // frame for it does not exist. narrowing the stop to the line's first token rather than
+        // widening the body to its first line is what keeps this true
+        let db = db_with(
+            "\
+def f():
+    limit = compute()
+",
+        );
+        assert_eq!(
+            scope_stopped_in(&db, 1),
+            Some(FileScopeId::global()),
+            "a stop on `def f():` is in the module, not in `f`"
         );
     }
 }
