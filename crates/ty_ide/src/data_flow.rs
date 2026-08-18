@@ -216,6 +216,67 @@ if limit > 100:
         );
     }
 
+    /// the case the float observation exists for: the value came out of a call, so the file alone
+    /// says `float` and cannot say which one. this is what reaches the reader beside the code
+    #[test]
+    fn a_float_read_off_the_program_is_shown_as_the_value_it_holds() {
+        let found = at(
+            "\
+ratio = measure()
+<CURSOR>
+scaled = ratio
+",
+            vec![("ratio", Observed::IsFloat("0.25".to_string()))],
+        );
+        assert!(
+            found.iter().any(|f| f == "ratio: ratio = 0.25"),
+            "the read below the stop should say what it holds, and found {found:?}"
+        );
+    }
+
+    /// every float, including the two source cannot write. a reading is a statement about the
+    /// value, and `nan` really is what the name holds — replacing it with `float` would drop a
+    /// fact to defend against a comparison nothing folds. see the note on
+    /// `fold_literal_rich_comparison`, which is where that defence belongs
+    #[test]
+    fn the_floats_source_cannot_write_are_still_shown() {
+        for text in ["nan", "-0.0", "inf"] {
+            let found = at(
+                "\
+ratio = measure()
+<CURSOR>
+scaled = ratio
+",
+                vec![("ratio", Observed::IsFloat(text.to_string()))],
+            );
+            assert!(
+                found.iter().any(|f| f.starts_with("ratio: ratio = ")),
+                "{text} is a value the debugger really read, and found {found:?}"
+            );
+        }
+    }
+
+    /// the boundary, pinned deliberately rather than left to be discovered: `by` folds `Int`,
+    /// `Bool`, `String` and `Bytes` literal comparisons and not `Float`, so a float seed narrows
+    /// and displays but decides no branch. if this ever starts finding something, the `Float` arm
+    /// has been added and the `nan` / `-0.0` cases above it have to have been handled
+    #[test]
+    fn a_float_does_not_yet_decide_a_comparison() {
+        let found = at(
+            "\
+ratio = measure()
+<CURSOR>
+if ratio > 0.5:
+    high = 1
+",
+            vec![("ratio", Observed::IsFloat("0.25".to_string()))],
+        );
+        assert!(
+            !found.iter().any(|f| f.contains("ratio > 0.5")),
+            "float comparisons are not folded, and found {found:?}"
+        );
+    }
+
     #[test]
     fn without_the_observation_the_same_file_settles_nothing() {
         // the control for the test above. if this ever finds something, the feature is reporting

@@ -105,6 +105,14 @@ pub enum Observed {
     /// as a literal falls back to `int`, which is still narrower than nothing
     IsInt(String),
 
+    /// the value is exactly this float, as `float.__repr__` writes it
+    ///
+    /// python's own text, so `inf`, `-inf`, `nan` and `-0.0` all survive the crossing. two of them
+    /// cannot become a literal type on the other side and are not this module's business to filter
+    /// — the vocabulary records what was read, and `ty_python_semantic::assumed` decides what can
+    /// be said with it
+    IsFloat(String),
+
     /// the value is exactly this string
     IsStr(String),
 
