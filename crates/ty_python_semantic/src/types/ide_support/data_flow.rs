@@ -37,6 +37,15 @@ pub struct ConditionVerdict {
     pub verdict: Truthiness,
 }
 
+/// what one read of a name will find when the program reaches it
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub struct ValueVerdict {
+    /// the read itself — the `discount` in `return discount`, not the statement around it
+    pub range: TextRange,
+    /// the value, written the way a source writes it: `0.0`, `3`, `False`, `"hi"`
+    pub value: String,
+}
+
 /// what the runtime state settles that the source alone does not
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataFlow {
@@ -44,6 +53,8 @@ pub struct DataFlow {
     pub conditions: Box<[ConditionVerdict]>,
     /// the code below the stop line that is now known not to run
     pub unreachable: Box<[UnreachableRange]>,
+    /// the reads below the stop line that will find exactly one value
+    pub values: Box<[ValueVerdict]>,
 }
 
 /// what a seeded reading of `file` decides that the unseeded reading of `unseeded` does not
@@ -59,7 +70,7 @@ pub fn data_flow<'db>(
 ) -> DataFlow {
     let without = verdicts(db, unseeded);
 
-    let conditions = verdicts(db, seeded)
+    let conditions: Box<[ConditionVerdict]> = verdicts(db, seeded)
         .iter()
         .copied()
         .filter(|decided| decided.range.start() >= below)
@@ -78,9 +89,31 @@ pub fn data_flow<'db>(
         .copied()
         .collect();
 
+    let already_known = values(db, unseeded);
+    let values = values(db, seeded)
+        .iter()
+        .filter(|read| read.range.start() >= below)
+        // the same comparison the conditions get, and for the same reason: a value the source
+        // alone already fixes is not the debugger's doing, and comparing the *value* rather than
+        // only the range means a disagreement between the two readings is reported instead of
+        // quietly dropped here
+        .filter(|read| !already_known.contains(read))
+        // a read inside a condition this pass has already decided is that same finding written
+        // twice. `qty >= 10` gets a `= false`; adding `qty = 3` beside it is the working rather
+        // than the answer, and both labels land in the one margin, so it is also the only place
+        // two of this feature's labels would compete for the same space
+        .filter(|read| {
+            !conditions
+                .iter()
+                .any(|decided: &ConditionVerdict| decided.range.contains_range(read.range))
+        })
+        .cloned()
+        .collect();
+
     DataFlow {
         conditions,
         unreachable,
+        values,
     }
 }
 
@@ -113,6 +146,81 @@ fn verdicts<'db>(db: &'db dyn Db, file: ProgramFile<'db>) -> Box<[ConditionVerdi
             })
         })
         .collect()
+}
+
+/// every read in the file that this reading pins to one value
+///
+/// the whole file and cached per program, for the same reason [`verdicts`] is: the unseeded half of
+/// the comparison is computed once and answered from salsa for the rest of the debug session
+///
+/// ## the value is the type, and that is the whole check
+///
+/// a read is decided when its inferred type stands for exactly one value — `Literal[3]`, `0.0`,
+/// `Literal[False]`. that is not a second analysis bolted on beside the reachability one, it is the
+/// same one asked a different question, and it is what makes "only what follows from decided
+/// branches plus observed seeds" true by construction rather than by a rule written here:
+///
+/// * a value that depends on anything unobserved is a union or an instance type, not one value, so
+///   it answers nothing. there is no "probably" to invent — the type system has no way to spell one
+/// * a name rebound below the stop line by a branch that will not run has that binding dropped by
+///   the reachability the seed decided, so the one live binding is what is left. this is the case
+///   the feature is for: `discount = 0.0` still holds at `return discount` because the two `if`s
+///   that would have touched it are dead
+/// * a fact that goes stale is not expressible as one value in the first place. a list's length is
+///   a property of a `list[int]`, and `list[int]` is not a value — so the rule that a fact only
+///   travels to code that has not run when it will still be true there needs no separate guard
+///
+/// [`Type::display_value`] is the same rendering the enum-value inlay hint uses, so a value has one
+/// spelling in the editor however it got there. it answers nothing for a `LiteralString`, a
+/// template or an enum member, which are a *set* of values, a shape, and a name rather than a
+/// value — leaving those out is that helper's own rule, and giving them a second spelling here
+/// would be this feature disagreeing with the rest of the editor about what a value looks like
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+fn values<'db>(db: &'db dyn Db, file: ProgramFile<'db>) -> Box<[ValueVerdict]> {
+    let parsed = ruff_db::parsed::parsed_module(db, file.python_file(db)).load(db);
+    let mut collector = Reads { found: Vec::new() };
+    source_order::walk_body(&mut collector, parsed.suite());
+
+    let model = SemanticModel::new(db, file);
+    let env = ProgramEnvironment::from_file(file);
+
+    collector
+        .found
+        .into_iter()
+        .filter_map(|read| {
+            let value = read.inferred_type(&model)?.display_value(db, &env)?;
+            Some(ValueVerdict {
+                range: read.range(),
+                value: value.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// collects the places a value is read out of
+///
+/// loads only. a store's value is spelled on the line the store is written on, so annotating it
+/// would be repeating the source back at the reader — a load is where somebody has to work out
+/// what arrived
+///
+/// attributes as well as bare names, because the observations are a vocabulary of "a name or a
+/// dotted path": a `self.limit` a debugger saw can decide a branch, and a feature that then refused
+/// to say what `self.limit` itself holds would be inconsistent for no reason. nothing else — a
+/// subscript or a call is a place where deciding the value means deciding what the call did, which
+/// is precisely what a seeded reading does not claim to know
+struct Reads<'ast> {
+    found: Vec<&'ast ast::Expr>,
+}
+
+impl<'ast> SourceOrderVisitor<'ast> for Reads<'ast> {
+    fn visit_expr(&mut self, expr: &'ast ast::Expr) {
+        match expr {
+            ast::Expr::Name(node) if node.ctx.is_load() => self.found.push(expr),
+            ast::Expr::Attribute(node) if node.ctx.is_load() => self.found.push(expr),
+            _ => {}
+        }
+        source_order::walk_expr(self, expr);
+    }
 }
 
 /// collects the expressions that decide which way control flows

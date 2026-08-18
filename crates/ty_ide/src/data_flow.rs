@@ -13,6 +13,7 @@ use ruff_source_file::OneIndexed;
 use ruff_text_size::TextRange;
 use ty_python_core::assumptions::{Assumptions, Observation};
 use ty_python_core::{ProgramFile, Truthiness};
+use ty_python_semantic::stop_offset;
 use ty_python_semantic::types::ide_support::{UnreachableRange, data_flow};
 
 use crate::Db;
@@ -27,7 +28,7 @@ pub struct Finding {
 }
 
 /// what kind of thing was settled
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FindingKind {
     /// this condition will go this way
     Condition {
@@ -36,6 +37,13 @@ pub enum FindingKind {
     },
     /// this code will not run
     Unreachable,
+    /// this read will find this value
+    Value {
+        /// the name being read, as the source spells it
+        name: String,
+        /// what it will hold, written the way a source writes it
+        value: String,
+    },
 }
 
 impl Finding {
@@ -43,11 +51,20 @@ impl Finding {
     ///
     /// short on purpose: it is drawn inline, in the editor font, beside code somebody is reading
     /// while stopped in a debugger
-    pub fn label(&self) -> &'static str {
-        match self.kind {
-            FindingKind::Condition { taken: true } => "= true",
-            FindingKind::Condition { taken: false } => "= false",
-            FindingKind::Unreachable => "will not run",
+    ///
+    /// a value's label names the name it is about — `discount = 0.0` — where a condition's does
+    /// not. that is not a style difference, it is where the label goes: a client draws these in the
+    /// margin past the end of the line, not against the expression, because an inlay there reflows
+    /// the code it is annotating. a `= false` in that margin is unambiguous when the line holds one
+    /// condition; a bare `= 0.0` past `total = base + discount` would be read as being about
+    /// `total`. the `a: 1` an IDE's own debugger draws was the alternative, and it loses for the
+    /// same reason — that hint is drawn *at* the variable, where the subject needs no naming
+    pub fn label(&self) -> String {
+        match &self.kind {
+            FindingKind::Condition { taken: true } => "= true".to_string(),
+            FindingKind::Condition { taken: false } => "= false".to_string(),
+            FindingKind::Unreachable => "will not run".to_string(),
+            FindingKind::Value { name, value } => format!("{name} = {value}"),
         }
     }
 }
@@ -80,7 +97,11 @@ pub fn data_flow_at(
     };
 
     let source = ruff_db::source::source_text(db, source_file);
-    let below = ruff_db::source::line_index(db, source_file).line_start(line, &source);
+    // asked for rather than computed here, so that the boundary deciding which findings are below
+    // the stop and the one deciding which seeds survive it are the one offset. they were computed
+    // separately once, agreed on every file anybody tried, and disagreed about a stop on the first
+    // statement of a function body — see [`ty_python_semantic::stop_offset`]
+    let below = stop_offset(db, source_file, line);
 
     let assumptions = Assumptions::new(db, source_file, stop_line, observations.into_boxed_slice());
     let seeded = file.program(db).seeded(db, assumptions);
@@ -105,13 +126,34 @@ pub fn data_flow_at(
             kind: FindingKind::Unreachable,
         });
 
-    conditions.chain(unreachable).collect()
+    let values = flow.values.iter().filter_map(|read| {
+        let name = &source[read.range];
+        // a read written across lines — `obj.\n    attr` — has no one-line spelling, and a label
+        // with a newline in it cannot be drawn in a margin. dropping it loses a fact; drawing it
+        // would break the line the reader is looking at
+        if name.contains('\n') {
+            return None;
+        }
+        Some(Finding {
+            range: read.range,
+            kind: FindingKind::Value {
+                name: name.to_string(),
+                value: read.value.clone(),
+            },
+        })
+    });
+
+    let mut findings: Vec<Finding> = conditions.chain(unreachable).chain(values).collect();
+    // in source order, because a client stacks the labels for one line in the order it is given
+    // them and a margin that reads back-to-front is one the reader has to sort out
+    findings.sort_by_key(|finding| finding.range.start());
+    findings
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::cursor_test;
+    use crate::tests::CursorTest;
     use ruff_python_ast::name::Name;
     use ty_python_core::assumptions::{ClassName, Observed};
 
@@ -123,8 +165,13 @@ mod tests {
     ///
     /// `<CURSOR>` marks the line the program is stopped on, which is what the test is really
     /// about: everything below it is the question and everything above it has already run
+    ///
+    /// the fixture is a `.by` file because that is the only kind this feature is ever asked about:
+    /// the plugin fires on a basedpython file type and on nothing else. it is not a formality —
+    /// basedpython infers a literal type for a float and python does not, so `discount = 0.0` is
+    /// `float` in a `.py` fixture and `0.0` in the file a user is actually stopped in
     fn at(source: &str, observations: Vec<(&str, Observed)>) -> Vec<String> {
-        let test = cursor_test(source);
+        let test = CursorTest::builder().source("main.by", source).build();
         let file = test.cursor.file;
         let text = ruff_db::source::source_text(&test.db, file);
         let line = text[..usize::from(test.cursor.offset)]
@@ -534,6 +581,176 @@ if isinstance(thing, Runner):
             found
                 .iter()
                 .any(|f| f == "isinstance(thing, Runner): = true"),
+            "found {found:?}"
+        );
+    }
+
+    /// the function a user reported both of this module's bugs against, called with `qty=3` and
+    /// `member=False`
+    ///
+    /// worth keeping verbatim: the first defect only appeared because line 2 is the *first*
+    /// statement of the body, and the second only appeared because `discount` is a float
+    const PRICE: &str = "\
+def price(qty: int, member: bool):
+    discount = 0.0
+    if qty >= 10:
+        discount = 0.1
+    if member:
+        discount += 0.05
+    return discount
+";
+
+    /// what the two parameters were, at whichever line the program stopped on
+    fn priced() -> Vec<(&'static str, Observed)> {
+        vec![
+            ("qty", Observed::IsInt("3".to_string())),
+            ("member", Observed::IsBool(false)),
+        ]
+    }
+
+    #[test]
+    fn a_stop_on_the_first_statement_of_a_function_body_is_still_inside_that_function() {
+        // reported as "nothing is shown until the stop reaches the `if`". a statement's range
+        // begins at its first token, so the indentation in front of the first statement of a body
+        // belonged to no statement — and a stop offset taken at the start of the line landed just
+        // before the body, which made `stopped_scope` answer with the module and every seed get
+        // refused as being about another frame. one line further down the same file decided
+        // everything, which is what made it look like the analysis rather than the offset
+        let found = at(
+            &PRICE.replacen("    discount = 0.0", "    <CURSOR>discount = 0.0", 1),
+            priced(),
+        );
+        assert!(
+            found.iter().any(|f| f == "qty >= 10: = false")
+                && found.iter().any(|f| f == "member: = false"),
+            "both branches are below this stop and both parameters were observed, and found {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_stop_one_line_lower_reaches_exactly_the_same_answer() {
+        // the control for the test above. these two stops differ only in which line the program is
+        // held on, and nothing between them binds or reads anything — so an answer that differed
+        // would be the offset showing through again
+        let first = at(
+            &PRICE.replacen("    discount = 0.0", "    <CURSOR>discount = 0.0", 1),
+            priced(),
+        );
+        let second = at(
+            &PRICE.replacen("    if qty >= 10:", "    <CURSOR>if qty >= 10:", 1),
+            priced(),
+        );
+        assert_eq!(first, second, "the two stops disagree");
+    }
+
+    #[test]
+    fn the_value_a_name_still_holds_below_two_dead_branches_is_reported() {
+        // the whole point of the feature past reachability: neither `if` runs, so neither
+        // assignment to `discount` runs, so the `0.0` from line 2 is what `return discount` finds.
+        // no observation of `discount` is involved — a float is not an observation this can carry,
+        // and it does not need to be. the source says what it was assigned and the seeds say which
+        // of the later assignments are dead
+        let found = at(
+            &PRICE.replacen("    if qty >= 10:", "    <CURSOR>if qty >= 10:", 1),
+            priced(),
+        );
+        assert!(
+            found.iter().any(|f| f == "discount: discount = 0.0"),
+            "found {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_read_inside_a_decided_condition_gets_no_value_of_its_own() {
+        // `qty >= 10` already carries a `= false`, and it is drawn in the same margin. `qty = 3`
+        // beside it is the working rather than the answer
+        let found = at(
+            &PRICE.replacen("    if qty >= 10:", "    <CURSOR>if qty >= 10:", 1),
+            priced(),
+        );
+        assert!(
+            !found.iter().any(|f| f.starts_with("qty: ")),
+            "found {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_value_that_depends_on_something_unobserved_is_not_guessed_at() {
+        // the control for the value half. `qty` decides one branch and nothing decides the other,
+        // so `discount` at the return is `0.0` or `0.15` and the honest answer is neither. a
+        // feature that picked the likelier one would be worth less than one that says nothing,
+        // because the reason to trust it at all is that it only reports what follows
+        let found = at(
+            "\
+def price(qty: int, member: bool):
+    discount = 0.0
+    <CURSOR>if qty >= 10:
+        discount = 0.1
+    if member:
+        discount += 0.05
+    return discount
+",
+            vec![("qty", Observed::IsInt("3".to_string()))],
+        );
+        assert!(
+            !found.iter().any(|f| f.starts_with("discount: ")),
+            "found {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_value_the_source_alone_already_fixes_is_not_reported_as_the_debuggers_doing() {
+        // `rate` is 0.2 whether or not anything is being debugged, and the editor is not being
+        // told that by a debugger. reporting it would credit ordinary inference to the stop
+        let found = at(
+            "\
+def price(qty: int):
+    rate = 0.2
+    <CURSOR>if qty >= 10:
+        big = 1
+    return rate
+",
+            vec![("qty", Observed::IsInt("3".to_string()))],
+        );
+        assert!(
+            !found.iter().any(|f| f.starts_with("rate: ")),
+            "found {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_container_whose_length_a_dead_branch_would_have_changed_reports_no_value() {
+        // the rule that a fact only travels to code that has not run when it will still be true
+        // there. this needs no guard of its own: a list is a `list[int]` and a `list[int]` is not
+        // one value, so there is nothing for the value half to report. the test is here because
+        // that is a property of the design rather than of anything written down, and a future
+        // change that started reporting a container would break it silently
+        let found = at(
+            "\
+def collect(flag: bool):
+    items = []
+    <CURSOR>if flag:
+        items.append(1)
+    return items
+",
+            vec![("flag", Observed::IsBool(false))],
+        );
+        assert!(
+            !found.iter().any(|f| f.starts_with("items: ")),
+            "found {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_store_is_not_annotated_with_the_value_it_is_storing() {
+        // `discount = 0.1` says `0.1` on its own line. the value half is for reads, where somebody
+        // has to work out what arrived
+        let found = at(
+            &PRICE.replacen("    if qty >= 10:", "    <CURSOR>if qty >= 10:", 1),
+            priced(),
+        );
+        assert!(
+            found.iter().all(|f| f != "discount: discount = 0.1"),
             "found {found:?}"
         );
     }
