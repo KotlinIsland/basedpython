@@ -339,6 +339,18 @@ pub(crate) fn deferred_comparison<'db>(
 /// same numeric/string/bytes ordering the value-level literal comparison uses. `bool`
 /// operands are treated as `0`/`1`. Returns `None` for operand pairs that don't fold
 /// to a definite result (e.g. mixed numeric/string ordering).
+///
+/// **A `Float` arm here needs two special cases, and neither can be read off the type.**
+/// `nan` is not equal to itself, so identical literals must fold `==` to `false` and `!=` to
+/// `true`; and `-0.0 == 0.0` is true while the two are distinct literals, so distinct ones must
+/// not fold `==` to `false`.
+///
+/// Both are already reachable, which is why this is a warning rather than a hypothetical:
+/// basedpython writes `float.nan` and `±float.inf` as literal types in type positions (see
+/// `docs/basedpython/features/float-literals.md`), and an ordinary `-0.0` in a value position
+/// infers as one. `assumed::seeded_type` adds a third route — a float read off a running program,
+/// where every one of these is unremarkable — but it did not create the hazard, and removing it
+/// would not close it.
 fn fold_literal_rich_comparison<'db>(
     db: &'db dyn Db,
     left: LiteralValueType<'db>,

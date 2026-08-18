@@ -53,6 +53,25 @@ pub(crate) fn seeded_type<'db>(
             Type::int_literal,
         )),
 
+        // the float as it was read, every value of it — `inf`, `-inf`, `nan` and `-0.0` included.
+        //
+        // a literal for those is a *true* statement about the value, and the reading is what gets
+        // displayed beside the code, so filtering them here would replace a fact with `float` for
+        // no gain. what they are dangerous for is comparison folding, which is a rule about types
+        // rather than a statement about a value: `nan` is not equal to itself and `-0.0` *is* equal
+        // to `0.0`, so an arm that decided `==` from literal identity would answer both the wrong
+        // way. `by` folds `Int`, `Bool`, `String` and `Bytes` and not `Float`, so nothing decides
+        // them today — and a seed is neither where that would be decided nor the only way one
+        // arrives: basedpython already writes `float.nan` and `±float.inf` as literal types. the
+        // warning belongs where such an arm would be written, and is in `types::infer::comparisons`
+        //
+        // text that will not parse falls back to the class, which is the trade `IsInt` makes for an
+        // integer too wide to hold: still narrows a `str | float`, still says less than nothing did
+        Observed::IsFloat(text) => Some(text.parse::<f64>().map_or_else(
+            |_| crate::types::KnownClass::Float.to_instance(db, env),
+            Type::float_literal,
+        )),
+
         Observed::IsStr(text) => Some(Type::string_literal(db, text.as_str())),
 
         Observed::IsBytes(bytes) => Some(Type::bytes_literal(db, bytes)),
@@ -235,9 +254,9 @@ pub(crate) fn seeds<'db>(
 ///
 /// the line's first byte was the obvious offset and it was wrong, in a way that only showed on one
 /// shape of source. every statement's range starts at its first token, so the indentation in front
-/// of it belongs to no statement at all — and [`body_contains`] asks whether the stop falls between
+/// of it belongs to no statement at all — and `body_contains` asks whether the stop falls between
 /// the first statement's start and the last one's end. a stop on the *first* statement of a
-/// function body therefore landed just before that body, [`stopped_scope`] answered with the
+/// function body therefore landed just before that body, `stopped_scope` answered with the
 /// enclosing scope instead, and every seed was refused for being about another frame:
 ///
 /// ```py

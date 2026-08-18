@@ -88,6 +88,11 @@ pub(crate) enum WireObserved {
     IsBool { value: bool },
     /// the value is exactly this integer, in decimal
     IsInt { text: String },
+    /// the value is exactly this float, as `float.__repr__` writes it
+    ///
+    /// text rather than a json number, for the reason an integer is text: a reader that went
+    /// through json's number would lose `inf` and `nan`, which have no json spelling at all
+    IsFloat { text: String },
     /// the value is exactly this string
     IsStr { text: String },
     /// the value is exactly these bytes
@@ -112,6 +117,7 @@ impl WireObservation {
             WireObserved::IsNone => Observed::IsNone,
             WireObserved::IsBool { value } => Observed::IsBool(value),
             WireObserved::IsInt { text } => Observed::IsInt(text),
+            WireObserved::IsFloat { text } => Observed::IsFloat(text),
             WireObserved::IsStr { text } => Observed::IsStr(text),
             WireObserved::IsBytes { bytes } => Observed::IsBytes(bytes.into_boxed_slice()),
             WireObserved::IsExactly { module, qualname } => {
@@ -271,6 +277,24 @@ mod tests {
         // the wire format is closed for the same reason `Observed` is: an unrecognised reading
         // swept into a catch-all would be a reading nothing understands, treated as one that is
         assert!(params(r#"{"name":"x","observed":"isImaginary","value":1}"#).is_err());
+    }
+
+    /// `float.__repr__`'s text, and the two spellings json has no number for
+    #[test]
+    fn a_float_observation_survives_the_crossing_including_its_infinities() {
+        for text in ["0.25", "-0.0", "inf", "-inf", "nan"] {
+            let parsed = params(&format!(
+                r#"{{"name":"ratio","observed":"isFloat","text":"{text}"}}"#
+            ))
+            .expect("a float observation is one of the wire forms");
+            let observation = parsed
+                .observations
+                .into_iter()
+                .next()
+                .expect("one observation was sent")
+                .into_observation();
+            assert_eq!(observation.observed, Observed::IsFloat(text.to_string()));
+        }
     }
 
     #[test]
