@@ -23,6 +23,7 @@ mod goto_type_definition;
 mod hints;
 mod hover;
 mod importer;
+mod injection;
 mod inlay_hints;
 mod markup;
 mod module_rename;
@@ -66,6 +67,7 @@ pub use goto::{goto_declaration, goto_definition, goto_type_definition};
 pub use goto_implementation::goto_implementation;
 pub use hints::{Hint, HintKind, hints};
 pub use hover::hover;
+pub use injection::{Injection, InjectionOrigin, injections};
 pub use inlay_hints::{
     InlayHintKind, InlayHintLabel, InlayHintSettings, InlayHintTextEdit, inlay_hints,
 };
