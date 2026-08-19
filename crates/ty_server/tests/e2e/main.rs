@@ -38,6 +38,7 @@ mod folding_range;
 mod hover;
 mod implementation;
 mod initialize;
+mod injections;
 mod inlay_hints;
 mod notebook;
 mod publish_diagnostics;
