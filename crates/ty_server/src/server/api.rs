@@ -94,6 +94,13 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::TranspileRequestHandler::METHOD => background_document_request_task::<
             requests::TranspileRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        // The client re-asks on every change to keep its injected fragments in step with the
+        // buffer, so this is on the typing path in the way semantic tokens are.
+        requests::InjectionsRequestHandler::METHOD => background_document_request_task::<
+            requests::InjectionsRequestHandler,
+        >(
+            req, BackgroundSchedule::LatencySensitive
+        ),
         requests::ExplainTranspilationHandler::METHOD => background_document_request_task::<
             requests::ExplainTranspilationHandler,
         >(req, BackgroundSchedule::Worker),
