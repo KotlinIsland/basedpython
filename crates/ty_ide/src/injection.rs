@@ -51,6 +51,7 @@ use ruff_python_ast::visitor::source_order::{
 };
 use ruff_python_ast::{self as ast, AnyNodeRef};
 use ruff_text_size::{Ranged, TextRange};
+use rustc_hash::FxHashMap;
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_semantic::SemanticModel;
@@ -133,6 +134,7 @@ pub fn injections<'db>(db: &'db dyn Db, file: ProgramFile<'db>) -> Vec<Injection
         model: &model,
         source: source.as_str(),
         markers: &markers,
+        expectations: Expectations::default(),
         found: Vec::new(),
     };
     walk_body(&mut finder, module.suite());
@@ -174,20 +176,32 @@ fn language_from_marker(text: &str) -> Option<String> {
     (!id.is_empty()).then(|| id.to_string())
 }
 
+/// What a parameter was already found to expect, so that a function called many
+/// times in one file is looked at once.
+///
+/// Only answers reached without running into [`MAX_PROPAGATION_DEPTH`] are kept,
+/// which is every answer started from a call site: one cut short by the bound
+/// depends on how far along a chain it was asked, and reusing it somewhere
+/// nearer the start would report nothing where there was something to report.
+type Expectations<'db> = FxHashMap<(Definition<'db>, String), Option<(String, InjectionOrigin)>>;
+
 struct InjectionFinder<'a, 'db> {
     db: &'db dyn Db,
     model: &'a SemanticModel<'db>,
     source: &'a str,
     markers: &'a [(TextRange, String)],
+    expectations: Expectations<'db>,
     found: Vec<Injection>,
 }
 
 impl InjectionFinder<'_, '_> {
     /// The language a marker comment gives the statement starting at
-    /// `statement`, if the nearest marker above it is separated from it by
-    /// nothing but blank text.
+    /// `statement`, if nothing but blank lines and further comments separate
+    /// them.
     ///
     /// A marker with a statement between it and this one belongs to that one.
+    /// More comments do not break the run, so a marker can be written above the
+    /// note that explains it.
     fn marker_for_statement(&self, statement: &ast::Stmt) -> Option<String> {
         self.markers
             .iter()
@@ -197,7 +211,11 @@ impl InjectionFinder<'_, '_> {
                 let between = TextRange::new(range.end(), statement.start());
                 self.source
                     .get(between.start().to_usize()..between.end().to_usize())
-                    .is_some_and(|text| text.trim().is_empty())
+                    .is_some_and(|text| {
+                        text.lines().all(|line| {
+                            line.trim().is_empty() || line.trim_start().starts_with('#')
+                        })
+                    })
             })
             .map(|(_, language)| language.clone())
     }
@@ -225,7 +243,7 @@ impl InjectionFinder<'_, '_> {
             let ast::Expr::StringLiteral(string) = argument.value() else {
                 continue;
             };
-            let Some((language, origin)) = self.language_of_argument(call, index, 0) else {
+            let Some((language, origin)) = self.language_of_argument(call, index) else {
                 continue;
             };
             self.found.push(Injection {
@@ -239,31 +257,45 @@ impl InjectionFinder<'_, '_> {
     /// The language declared for the parameter that argument `index` of `call`
     /// binds to.
     fn language_of_argument(
-        &self,
+        &mut self,
         call: &ast::ExprCall,
         index: usize,
-        depth: usize,
     ) -> Option<(String, InjectionOrigin)> {
-        for details in call_signature_details(self.model, call) {
-            let Some(definition) = details.definition else {
+        for (definition, name) in parameters_matching(self.model, call, index) {
+            if let Some(known) = self.expectations.get(&(definition, name.clone())) {
+                if let Some(found) = known {
+                    return Some(found.clone());
+                }
                 continue;
-            };
-            let Some(Some(parameter)) = details
-                .argument_to_displayed_parameter_mapping
-                .get(index)
-                .copied()
-            else {
-                continue;
-            };
-            let Some(parameter) = details.parameters.get(parameter) else {
-                continue;
-            };
-            if let Some(found) = parameter_language(self.db, definition, &parameter.name, depth) {
-                return Some(found);
+            }
+            let found = parameter_language(self.db, definition, &name, 0);
+            self.expectations.insert((definition, name), found.clone());
+            if found.is_some() {
+                return found;
             }
         }
         None
     }
+}
+
+/// The parameters argument `index` of `call` could bind to, as the function that
+/// declares each and the parameter's name.
+///
+/// More than one when the callee is a union or is overloaded, in which case the
+/// argument is the same string whichever signature took it.
+fn parameters_matching<'db>(
+    model: &SemanticModel<'db>,
+    call: &ast::ExprCall,
+    index: usize,
+) -> Vec<(Definition<'db>, String)> {
+    call_signature_details(model, call)
+        .into_iter()
+        .filter_map(|details| {
+            let definition = details.definition?;
+            let parameter = (*details.argument_to_displayed_parameter_mapping.get(index)?)?;
+            Some((definition, details.parameters.get(parameter)?.name.clone()))
+        })
+        .collect()
 }
 
 impl<'db> SourceOrderVisitor<'db> for InjectionFinder<'_, 'db> {
@@ -331,17 +363,10 @@ fn parameter_language(
     }
 
     let model = SemanticModel::new(db, definition.program_file(db));
-    let source = source_text(db, definition.file(db));
-    let finder = InjectionFinder {
-        db,
-        model: &model,
-        source: source.as_str(),
-        markers: &[],
-        found: Vec::new(),
-    };
     uses.found.into_iter().find_map(|(call, index)| {
-        finder
-            .language_of_argument(call, index, depth + 1)
+        parameters_matching(&model, call, index)
+            .into_iter()
+            .find_map(|(inner, name)| parameter_language(db, inner, &name, depth + 1))
             // Whatever named the language, this parameter is one call further
             // out than the one that did.
             .map(|(language, _)| (language, InjectionOrigin::Propagated))
@@ -540,9 +565,7 @@ mod tests {
                 ),
             );
             let first = ranges.next().expect("an injection to cover something");
-            main.annotate(Annotation::primary(
-                Span::from(self.file).with_range(first),
-            ));
+            main.annotate(Annotation::primary(Span::from(self.file).with_range(first)));
             for range in ranges {
                 main.annotate(Annotation::secondary(
                     Span::from(self.file).with_range(range),
@@ -597,6 +620,25 @@ snippet = \"None\"
           |
         2 | snippet = "None"
           |            ^^^^
+        "#);
+    }
+
+    #[test]
+    fn a_note_below_the_marker_does_not_break_it() {
+        let test = injection_test(
+            "\
+# language=javascript
+# what this runs, and why
+script = \"const x = 1\"
+",
+        );
+
+        assert_snapshot!(test.injections(), @r#"
+        info[injection]: javascript (comment)
+         --> main.by:3:11
+          |
+        3 | script = "const x = 1"
+          |           ^^^^^^^^^^^
         "#);
     }
 

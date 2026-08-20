@@ -12,8 +12,8 @@
 use anyhow::Result;
 use lsp_types::{
     DidOpenTextDocumentNotification, DidOpenTextDocumentParams, DocumentDiagnosticParams,
-    DocumentDiagnosticReport, DocumentDiagnosticRequest, LanguageKind, LspRequestMethod,
-    Message, MessageDirection, PartialResultParams, Request, TextDocumentIdentifier, TextDocumentItem, Uri,
+    DocumentDiagnosticReport, DocumentDiagnosticRequest, LanguageKind, LspRequestMethod, Message,
+    MessageDirection, PartialResultParams, Request, TextDocumentIdentifier, TextDocumentItem, Uri,
     WorkDoneProgressParams,
 };
 use ruff_db::system::SystemPath;
@@ -47,7 +47,10 @@ fn fragments(answer: &serde_json::Value) -> Vec<Fragment> {
         .expect("the response to carry a list of injections")
         .iter()
         .map(|injection| Fragment {
-            language: injection["language"].as_str().unwrap_or_default().to_string(),
+            language: injection["language"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
             origin: injection["origin"].as_str().unwrap_or_default().to_string(),
             ranges: injection["ranges"]
                 .as_array()
@@ -246,7 +249,10 @@ fn a_fragment_opened_as_its_own_document_is_checked_like_any_other() -> Result<(
         .iter()
         .map(|diagnostic| {
             let Message::String(message) = &diagnostic.message else {
-                panic!("a diagnostic message should be a string, and was {:#?}", diagnostic.message)
+                panic!(
+                    "a diagnostic message should be a string, and was {:#?}",
+                    diagnostic.message
+                )
             };
             (
                 message.clone(),
@@ -258,7 +264,11 @@ fn a_fragment_opened_as_its_own_document_is_checked_like_any_other() -> Result<(
 
     // in the fragment's own coordinates, which is what lets a client map them back through the
     // injection it made
-    assert_eq!(reported.len(), 1, "the fragment's error should be reported once, and was {reported:?}");
+    assert_eq!(
+        reported.len(),
+        1,
+        "the fragment's error should be reported once, and was {reported:?}"
+    );
     assert_eq!((reported[0].1, reported[0].2), (0, 9));
     assert!(
         reported[0].0.contains("int"),

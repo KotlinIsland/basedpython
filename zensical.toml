@@ -91,6 +91,7 @@ features = [
     { "api lockfile" = "features/api-lock.md" },
     { "declared dependencies" = "features/dependencies.md" },
     { "editor support" = "features/editor.md" },
+    { "language injection" = "features/language-injection.md" },
     { "linting" = "features/linter.md" },
   ] },
   { "standard library" = [
