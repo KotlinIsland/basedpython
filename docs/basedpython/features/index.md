@@ -41,6 +41,8 @@ features that apply to a project rather than to a file
     `pyproject.toml`, and a quick fix that declares them
 - [editor support](editor.md) — postfix templates, completions, inlay hints
     and the outline
+- [language injection](language-injection.md) — a string that says what
+    language is written inside it
 - [linting](linter.md) — the `BY` rules, and how ruff's own rules read `.by`
     source
 
