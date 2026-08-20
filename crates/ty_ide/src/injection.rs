@@ -262,14 +262,15 @@ impl InjectionFinder<'_, '_> {
         index: usize,
     ) -> Option<(String, InjectionOrigin)> {
         for (definition, name) in parameters_matching(self.model, call, index) {
-            if let Some(known) = self.expectations.get(&(definition, name.clone())) {
-                if let Some(found) = known {
-                    return Some(found.clone());
+            let key = (definition, name);
+            let found = match self.expectations.get(&key) {
+                Some(known) => known.clone(),
+                None => {
+                    let found = parameter_language(self.db, key.0, &key.1, 0);
+                    self.expectations.insert(key, found.clone());
+                    found
                 }
-                continue;
-            }
-            let found = parameter_language(self.db, definition, &name, 0);
-            self.expectations.insert((definition, name), found.clone());
+            };
             if found.is_some() {
                 return found;
             }
