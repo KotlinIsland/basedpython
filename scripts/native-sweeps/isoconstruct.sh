@@ -125,8 +125,8 @@ for b in $(sweep_modules "$LIB" "$@"); do
   cp "$root/drive.py" "$SWEEP_RUN_I/drive.py"; cp "$root/drive.py" "$SWEEP_RUN_C/drive.py"
   # a traceback names the file it came from, and the two legs run from different
   # directories — so the *path* would read as a difference the module never had
-  i=$(leg "$SWEEP_RUN_I")
-  c=$(leg "$SWEEP_RUN_C")
+  i=$(sweep_canonical "$(leg "$SWEEP_RUN_I")")
+  c=$(sweep_canonical "$(leg "$SWEEP_RUN_C")")
   if [ "$i" = "$c" ]; then
     # a module that cannot be imported here agrees on both legs and exercises nothing —
     # kept apart from `same` so the denominator stays honest

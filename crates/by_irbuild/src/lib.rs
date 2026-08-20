@@ -4662,6 +4662,35 @@ fn signature(
         .chain(parameters.args.iter())
         .chain(parameters.kwonlyargs.iter())
         .collect::<Vec<_>>();
+
+    // a parameter's register has to cover every value written into it, and its own
+    // body is one of the writers. an *unannotated* parameter is declared by its
+    // default — ty reads `def quote_from_bytes(bs, safe='/')` as taking a `str` — and
+    // python is perfectly happy for the body to rebind the name, which
+    // `safe = safe.encode('ascii', 'ignore')` does. a register shaped for the default
+    // then either refuses that store or narrows it with a check, and the check raises
+    // on a call the interpreter answers without complaint
+    //
+    // this lives here rather than where the body is lowered because a parameter's
+    // representation is part of the calling convention: a caller coerces its arguments
+    // to it and the boundary unboxes to it, so every reader of the signature has to
+    // see the same widening the body will
+    //
+    // the editions are deliberately empty rather than the real ones. which lists live
+    // in an unboxed buffer is still being settled when the signature tables are built,
+    // so consulting them here would make a signature depend on *when* it was computed.
+    // a parameter that already is a buffer is left alone below for the same reason
+    let rebound: HashMap<String, RType> = local_representations(
+        db,
+        env,
+        model,
+        &function.body,
+        layouts,
+        &ArrayEditions::new(),
+    )
+    .into_iter()
+    .collect();
+
     for (index, parameter) in named.iter().enumerate() {
         // a *literal* default is evaluated once in python and cannot change, so
         // inlining it is the same thing.
@@ -4721,7 +4750,29 @@ fn signature(
                 }
             }
         };
-        params.push((parameter.parameter.name.to_string(), rtype));
+        let name = parameter.parameter.name.as_str();
+        let rtype = match rebound.get(name) {
+            // an unboxed edition's parameter *is* the caller's buffer, and a buffer is
+            // not a value that widens: handing one out means copying it, and a copy is
+            // a different list. the store in the body declines instead, as it already
+            // did before a parameter's writes were counted at all
+            Some(_) if matches!(rtype, RType::Array(_)) => rtype,
+            Some(written) => {
+                let covered = covering(&rtype, written);
+                // slot zero is the receiver, which every field read in the body is
+                // written against — a frame whose `self` has become an object no
+                // longer has one to read a field off
+                if covered != rtype && index == 0 && matches!(receiver, Some(Receiver::Explicit(_)))
+                {
+                    return Err(Decline::new(
+                        "a method whose body rebinds its receiver is not lowered yet",
+                    ));
+                }
+                covered
+            }
+            None => rtype,
+        };
+        params.push((name.to_string(), rtype));
     }
 
     // the return type comes from the returns themselves rather than from the
@@ -4960,6 +5011,23 @@ fn return_type(
     }
 }
 
+/// the one representation that covers two writes to the same place
+///
+/// there is no union representation, so two that do not already agree meet at the
+/// object at the top of the lattice. a `bit` and a `bool` are the same byte, and so
+/// meet at `bool` rather than falling all the way up
+fn covering(left: &RType, right: &RType) -> RType {
+    if left == right {
+        return left.clone();
+    }
+    if matches!(left, RType::Primitive(Primitive::Bit | Primitive::Bool))
+        && matches!(right, RType::Primitive(Primitive::Bit | Primitive::Bool))
+    {
+        return RType::BOOL;
+    }
+    RType::OBJECT
+}
+
 /// the representation each local needs, covering every value assigned to it
 ///
 /// computed before any lowering, because a register is declared once and every
@@ -4975,24 +5043,19 @@ fn local_representations(
     let mut order: Vec<String> = Vec::new();
     let mut found: HashMap<String, RType> = HashMap::new();
 
-    let mut record = |name: &str, rtype: RType, found: &mut HashMap<String, RType>| {
-        match found.get(name) {
+    let mut record =
+        |name: &str, rtype: RType, found: &mut HashMap<String, RType>| match found.get(name) {
             None => {
                 order.push(name.to_string());
                 found.insert(name.to_string(), rtype);
             }
-            Some(existing) if *existing == rtype => {}
-            // a `bit` and a `bool` are the same byte; anything else widens
-            Some(RType::Primitive(Primitive::Bit | Primitive::Bool))
-                if matches!(rtype, RType::Primitive(Primitive::Bit | Primitive::Bool)) =>
-            {
-                found.insert(name.to_string(), RType::BOOL);
+            Some(existing) => {
+                let covered = covering(existing, &rtype);
+                if covered != *existing {
+                    found.insert(name.to_string(), covered);
+                }
             }
-            Some(_) => {
-                found.insert(name.to_string(), RType::OBJECT);
-            }
-        }
-    };
+        };
 
     // deliberately *not* `map_local_type`: that one may answer with an unboxed
     // array, and the array decision belongs to the two sites below that ask
@@ -5076,6 +5139,15 @@ fn local_representations(
         let mut targets: Vec<(String, RType)> = Vec::new();
         for expr in crate::closures::statement_expressions(stmt) {
             crate::closures::visit_expressions(expr, &mut |child| {
+                // `x := v` binds wherever it stands, so it is a write like any other —
+                // and one that hides inside an expression rather than standing as a
+                // statement, which is why it is looked for here
+                if let Expr::Named(node) = child
+                    && let Expr::Name(name) = node.target.as_ref()
+                {
+                    targets.push((name.id.to_string(), peek(&node.value)));
+                    return;
+                }
                 let generators = match child {
                     Expr::ListComp(node) => &node.generators,
                     Expr::SetComp(node) => &node.generators,
@@ -5148,6 +5220,17 @@ fn local_representations(
                 // lowering narrows to with a checked unbox
                 for (name, rtype) in target_names(&node.target) {
                     record(&name, rtype, &mut found);
+                }
+            }
+            // `except E as e` binds the caught exception, which the lowering fetches
+            // as a plain object — so this is the one write whose representation is
+            // known without asking the checker anything
+            Stmt::Try(node) => {
+                for handler in &node.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    if let Some(bound) = &handler.name {
+                        record(bound.as_str(), RType::OBJECT, &mut found);
+                    }
                 }
             }
             // a nested `def` binds its name to a callable

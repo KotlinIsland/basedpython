@@ -26,10 +26,58 @@
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+/* `PyMarshal_ReadObjectFromString`, which reads the interpreted twin's code object
+ * back. `Python.h` does not pull this one in */
+#include <marshal.h>
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
 #include <stddef.h>
+
+/* the major and minor at the front of a cpython version string
+ *
+ * `Py_GetVersion` answers the whole banner — `"3.14.0a1 (main, ...) [Clang ...]"` — and
+ * only its first two numbers are wanted. anything that does not begin with two
+ * dot-separated runs of digits leaves both at -1, which no build matches, so an
+ * unreadable banner is refused exactly as a mismatched one is */
+static inline void By_ParseVersion(const char *version, int *major, int *minor) {
+    const char *at = version;
+    int read_major = 0;
+    int read_minor = 0;
+    *major = -1;
+    *minor = -1;
+    if (version == NULL || *at < '0' || *at > '9') return;
+    while (*at >= '0' && *at <= '9') read_major = read_major * 10 + (*at++ - '0');
+    if (*at != '.' || at[1] < '0' || at[1] > '9') return;
+    at++;
+    while (*at >= '0' && *at <= '9') read_minor = read_minor * 10 + (*at++ - '0');
+    *major = read_major;
+    *minor = read_minor;
+}
+
+/* does the interpreter that is running match the one this module was built against?
+ *
+ * every `PY_VERSION_HEX` branch in this header is decided by the headers the build
+ * compiled against, so an artefact loaded by a different minor version runs branches
+ * written for a layout that interpreter does not have. that is a crash rather than a
+ * wrong answer, and nothing upstream of here refuses it: the version tag lives in the
+ * *file name*, and a bare `.so` — which every 3.x lists in `EXTENSION_SUFFIXES` — is
+ * offered to whatever is running. so an artefact renamed, or copied out of a wheel built
+ * elsewhere, reaches module init with no check having happened.
+ *
+ * `Py_GetVersion` rather than `Py_Version`: it is the one of the two that every version
+ * this header compiles against exports, and a module built against newer headers naming
+ * a symbol the running interpreter lacks is the same failure by another road */
+static inline int By_InterpreterMatches(void) {
+    int major;
+    int minor;
+    By_ParseVersion(Py_GetVersion(), &major, &minor);
+    if (major == PY_MAJOR_VERSION && minor == PY_MINOR_VERSION) return 1;
+    PyErr_Format(PyExc_ImportError,
+                 "this module was compiled for python %d.%d, and python %d.%d is running",
+                 PY_MAJOR_VERSION, PY_MINOR_VERSION, major, minor);
+    return 0;
+}
 
 /* ── tagged integers ──────────────────────────────────────────────────────────
  *
@@ -2287,9 +2335,114 @@ static PyObject *By_CaptureClassBody(PyObject *state, PyObject *args, PyObject *
     return cls;
 }
 
-/* run a module's fallback source, capturing each class body before its decorators run
+/* a module's interpreted twin, in the two forms an artefact carries it
  *
- * the source is the whole interpreted module and it runs to completion before any emitted
+ * `source` is the twin as text and is always here. `code` is the same program already
+ * compiled, by the interpreter this artefact was built for, and it is the whole reason
+ * an import is cheap: parsing a module the size of `argparse` costs milliseconds and
+ * reading a marshalled code object costs tens of microseconds.
+ *
+ * it is a cache of the source rather than a replacement for it, and the two fields below
+ * it say who may use it. an interpreter that does not match compiles the source instead,
+ * which is slower and is the same program — the outcome must never turn on which of the
+ * two ran */
+typedef struct {
+    const char *source;
+    /* `marshal.dumps` of the module body's code object, or NULL where the build had no
+     * interpreter to compile it with */
+    const char *code;
+    Py_ssize_t length;
+    /* the bytecode magic of the interpreter that wrote it. cpython bumps this whenever a
+     * code object stops meaning what it did, which is why an upgraded interpreter
+     * regenerates a `.pyc` rather than misreading one — the same check, for the same
+     * reason */
+    long magic;
+    /* the optimization level it was compiled at. `-O` takes `assert` out of the bytecode
+     * and `-OO` takes docstrings too, so the same source at another level is a different
+     * program. running the twin under `python -O` has always meant `-O`, and reading back
+     * a code object compiled without it would quietly stop meaning that */
+    int optimize;
+} By_Fallback;
+
+/* this interpreter's optimization level, or -1 where it will not say
+ *
+ * `sys.flags.optimize` rather than any of the C-level flags: those have been deprecated
+ * and moved about across the versions this compiler targets, and this one is the reading
+ * python's own `compile` takes */
+static inline int By_OptimizeLevel(void) {
+    PyObject *flags = PySys_GetObject("flags"); /* borrowed */
+    PyObject *level;
+    long value;
+    if (flags == NULL) {
+        PyErr_Clear();
+        return -1;
+    }
+    level = PyObject_GetAttrString(flags, "optimize");
+    if (level == NULL) {
+        PyErr_Clear();
+        return -1;
+    }
+    value = PyLong_AsLong(level);
+    Py_DECREF(level);
+    if (value == -1 && PyErr_Occurred()) {
+        PyErr_Clear();
+        return -1;
+    }
+    return (int)value;
+}
+
+/* the twin's code object, where this interpreter may use the one the artefact carries
+ *
+ * hands back a new reference, or NULL. NULL with no exception set means there is nothing
+ * here for *this* interpreter and the source should be compiled instead; NULL with one
+ * set means there was and it would not read, which is a broken artefact rather than a
+ * mismatched one and is raised rather than papered over. that distinction is what keeps a
+ * defect in how these bytes are emitted from showing up as nothing worse than a slow
+ * import nobody looks at */
+static inline PyObject *By_FallbackCode(const By_Fallback *fallback) {
+    PyObject *code;
+    if (fallback->code == NULL || fallback->length <= 0) return NULL;
+    if (PyImport_GetMagicNumber() != fallback->magic) {
+        PyErr_Clear();
+        return NULL;
+    }
+    if (By_OptimizeLevel() != fallback->optimize) return NULL;
+    code = PyMarshal_ReadObjectFromString(fallback->code, fallback->length);
+    if (code == NULL) {
+        if (!PyErr_Occurred()) {
+            PyErr_SetString(PyExc_ImportError,
+                            "the interpreted definitions of this module could not be read");
+        }
+        return NULL;
+    }
+    if (!PyCode_Check(code)) {
+        Py_DECREF(code);
+        PyErr_SetString(PyExc_ImportError,
+                        "the interpreted definitions of this module are not a code object");
+        return NULL;
+    }
+    return code;
+}
+
+/* run the twin in `dict`, from the code object where there is a usable one
+ *
+ * `PyEval_EvalCode` and `PyRun_String` reach the same evaluator by the same route, and
+ * both take the builtins the frame runs against from `dict["__builtins__"]` — which is
+ * what lets the capture below swap that entry and have it seen */
+static inline PyObject *By_ExecModuleBody(const By_Fallback *fallback, PyObject *dict) {
+    PyObject *code = By_FallbackCode(fallback), *result;
+    if (code != NULL) {
+        result = PyEval_EvalCode(code, dict, dict);
+        Py_DECREF(code);
+        return result;
+    }
+    if (PyErr_Occurred()) return NULL;
+    return PyRun_String(fallback->source, Py_file_input, dict, dict);
+}
+
+/* run a module's interpreted twin, capturing each class body before its decorators run
+ *
+ * the twin is the whole interpreted module and it runs to completion before any emitted
  * type is built, so by the time a class-level constant is copied onto one, the class it
  * would be copied off has already been through its own decorators. a decorator that only
  * *reads* the class leaves the value where the body put it, but one that makes something
@@ -2311,7 +2464,7 @@ static PyObject *By_CaptureClassBody(PyObject *state, PyObject *args, PyObject *
  *
  * hands back `{name: body}` for the classes the body wrote at module level, as a new
  * reference, or NULL with an exception set where the body raised */
-static inline PyObject *By_RunModuleBody(const char *source, PyObject *dict) {
+static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *dict) {
     static PyMethodDef capture = {"__build_class__",
                                   (PyCFunction)(void (*)(void))By_CaptureClassBody,
                                   METH_VARARGS | METH_KEYWORDS, NULL};
@@ -2344,7 +2497,7 @@ static inline PyObject *By_RunModuleBody(const char *source, PyObject *dict) {
     failed = wrapper == NULL || PyDict_SetItemString(builtins, "__build_class__", wrapper) < 0
              || PyDict_SetItemString(dict, "__builtins__", builtins) < 0;
     Py_XDECREF(wrapper);
-    result = failed ? NULL : PyRun_String(source, Py_file_input, dict, dict);
+    result = failed ? NULL : By_ExecModuleBody(fallback, dict);
     Py_XDECREF(result);
     /* whatever the body did, the capture stops here */
     {
@@ -3384,6 +3537,40 @@ static inline int By_ApplyMethodDecorators(PyTypeObject *type, PyObject *dict,
     return 0;
 }
 
+/* the decorated method, taken from the class body where the body already built one
+ *
+ * a method's decorators run *inside* the class body: `@mark def g` is a `def` statement,
+ * and the interpreted definition ran it before anything of this module existed. so the
+ * body already holds the decorator's answer, and applying the decorators again to the
+ * native method calls them a **second time**. a decorator that only reads its argument is
+ * unharmed; one that registers registers twice, which is a silent miscompile —
+ * `@atexit.register`, a route table, any `SEEN.append(fn)`.
+ *
+ * so the body's answer is taken where there is one. the price is that such a method is the
+ * *interpreted* one: a decorator is handed whatever the body gave it, and there is no way
+ * to hand it the native method without calling it again. an undecorated method is not
+ * touched and stays native, which is where the speed of a compiled class lives anyway.
+ *
+ * where there is no body answer to take, the decorators are applied — and that is not a
+ * second application but the only one, because the double is *caused* by a body having run
+ * them. a class with no interpreted `class` statement never ran any.
+ *
+ * a class whose construction fell back to the interpreted definition is already exactly
+ * what this would build, and is under its own name in the namespace where nothing this
+ * module built can be yet */
+static inline int By_DecoratedMethod(PyObject *body, PyTypeObject *type, PyObject *dict,
+                                     const char *owner, const char *name,
+                                     const char *const *decorators, Py_ssize_t count,
+                                     PyObject *const *twins, PyObject *const *types,
+                                     Py_ssize_t classes) {
+    if (count <= 0) return 0;
+    if ((PyObject *)type == PyDict_GetItemString(dict, owner)) return 0;
+    if (body != NULL && PyDict_GetItemString(body, name) != NULL) {
+        return By_CopyClassConstant(body, type, name, twins, types, classes);
+    }
+    return By_ApplyMethodDecorators(type, dict, owner, name, decorators, count);
+}
+
 /* apply the decorator `decorator` names to `dict[name]`, in place. this is what
  * lets a decorated function still be compiled: the native one goes into the
  * namespace, then the decorator wraps it, exactly as the `def` statement would
@@ -3508,6 +3695,10 @@ static inline void By_RaiseWithMessage(PyObject *cls, const char *message) {
     PyErr_SetString(cls, message);
 }
 
+/* defined with the rest of the await protocol, below; a resumable frame's return
+ * has to be able to reach it from here */
+static inline void By_RaiseWith(PyObject *error, PyObject *value);
+
 /* the frame has left for good, so `$state` says finished
  *
  * python marks a generator completed the moment control leaves its frame, whether
@@ -3521,12 +3712,32 @@ static inline void By_FinishGenerator(ByTagged *state) {
     *state = By_ShortFrom(-1);
 }
 
-/* resume a generator's frame, finishing it when the frame leaves by raising */
-static inline PyObject *By_StepGenerator(PyObject *self, ByTagged *state,
+/* the value a `return` handed back, turned into the exception the iterator protocol
+ * expects
+ *
+ * a resume reports its return by *storing* it in `$returned` rather than by raising,
+ * so that `am_send` can answer what a frame returned without an exception ever being
+ * built. every consumer that owes python a raise builds it here instead, which is the
+ * one place the two faces can drift apart and so the one place to keep them together.
+ *
+ * `*returned` empty means the frame left by raising and the error is already set */
+static inline PyObject *By_TakeReturn(PyObject **returned) {
+    PyObject *value = *returned;
+    if (value == NULL) return NULL;
+    *returned = NULL;
+    By_RaiseWith(PyExc_StopIteration, value);
+    Py_DECREF(value);
+    return NULL;
+}
+
+/* resume a generator's frame, finishing it when the frame leaves for good */
+static inline PyObject *By_StepGenerator(PyObject *self, PyObject **returned,
+                                         ByTagged *state,
                                          PyObject *(*resume)(PyObject *)) {
     PyObject *result = resume(self);
-    if (result == NULL) By_FinishGenerator(state);
-    return result;
+    if (result != NULL) return result;
+    By_FinishGenerator(state);
+    return By_TakeReturn(returned);
 }
 
 /* `throw(exc)`: raise it *at the suspension point*.
@@ -3538,8 +3749,9 @@ static inline PyObject *By_StepGenerator(PyObject *self, ByTagged *state,
  * only the resumption finishes the machine. rejecting the argument never reaches
  * the frame at all, and python leaves a generator resumable after a `throw` it
  * refused to make sense of */
-static inline PyObject *By_ThrowInto(PyObject *self, PyObject **thrown, ByTagged *state,
-                                   PyObject *exception, PyObject *(*resume)(PyObject *)) {
+static inline PyObject *By_ThrowInto(PyObject *self, PyObject **thrown, PyObject **returned,
+                                   ByTagged *state, PyObject *exception,
+                                   PyObject *(*resume)(PyObject *)) {
     if (thrown == NULL) return NULL;
     PyObject *instance = NULL;
     if (PyExceptionInstance_Check(exception)) {
@@ -3554,18 +3766,18 @@ static inline PyObject *By_ThrowInto(PyObject *self, PyObject **thrown, ByTagged
     PyObject *old = *thrown;
     *thrown = instance;
     Py_XDECREF(old);
-    return By_StepGenerator(self, state, resume);
+    return By_StepGenerator(self, returned, state, resume);
 }
 
 /* `close()`: throw `GeneratorExit` in and accept the three legal outcomes.
  *
  * exhausting, re-raising `GeneratorExit`, or being already finished are all a clean
  * close. *yielding* is not — cpython calls that a `RuntimeError` */
-static inline int By_CloseGenerator(PyObject *self, PyObject **thrown, ByTagged *state,
-                                   PyObject *(*resume)(PyObject *)) {
+static inline int By_CloseGenerator(PyObject *self, PyObject **thrown, PyObject **returned,
+                                   ByTagged *state, PyObject *(*resume)(PyObject *)) {
     PyObject *exit = PyObject_CallNoArgs(PyExc_GeneratorExit);
     if (exit == NULL) return -1;
-    PyObject *result = By_ThrowInto(self, thrown, state, exit, resume);
+    PyObject *result = By_ThrowInto(self, thrown, returned, state, exit, resume);
     Py_DECREF(exit);
     if (result != NULL) {
         Py_DECREF(result);
@@ -4310,6 +4522,77 @@ static inline void By_RaiseWith(PyObject *error, PyObject *value) {
         return;
     }
     PyErr_SetObject(error, value);
+}
+
+/* an iterator that has already failed: stepping it hands back nothing and leaves the
+ * pending exception exactly where it was.
+ *
+ * a frame that finishes *by raising* still has to be reported to `am_send`'s caller
+ * as one of the three outcomes, and a `StopIteration` among those raises is a
+ * *return* rather than an error. the rule for reading its value back is subtle — a
+ * bare one carries `None`, a subclass carries whatever its own `value` holds, a
+ * raised type has to be instantiated first, and a tuple must not be spread across the
+ * constructor — and a copy of it that drifted would be a wrong answer about what a
+ * frame returned. so rather than restate the rule, this asks for it: handing cpython
+ * an iterator that has already failed is the shape `PyIter_Send` applies the rule to,
+ * and the answer comes back the same as if the slot had never been there.
+ *
+ * the type is never readied and never instantiated. `PyIter_Send` reads `tp_as_async`
+ * and `tp_iternext` off it and nothing else, and both are what the initializer says */
+typedef struct {
+    PyObject_HEAD
+} ByRaisedIter;
+
+static PyObject *By_RaisedIter_next(PyObject *self) {
+    (void)self;
+    return NULL;
+}
+
+static PyTypeObject By_RaisedIter_Type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "by.raised",
+    .tp_basicsize = sizeof(ByRaisedIter),
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_iternext = By_RaisedIter_next,
+};
+
+static ByRaisedIter By_RaisedIter = {PyObject_HEAD_INIT(&By_RaisedIter_Type)};
+
+/* one step of a resumable frame, reported the way `PyIter_Send` reports one
+ *
+ * a yielded value, a return, or a real error — and the return arrives structurally,
+ * out of `$returned`, which is the whole reason this slot is worth answering. that is
+ * the difference between a completed `await` costing an exception and costing a
+ * pointer read.
+ *
+ * `arg` is dispatched exactly as `PyIter_Send` would have dispatched it against a
+ * type with no `am_send`: `None` goes the way `tp_iternext` goes and carries nothing
+ * in, and anything else parks the value the suspended `yield` evaluates to, the way
+ * `send` does. keeping that split is what makes the slot invisible rather than a
+ * second set of semantics */
+static inline PySendResult By_SendGenerator(PyObject *self, PyObject **sent,
+                                            PyObject **returned, ByTagged *state,
+                                            PyObject *(*resume)(PyObject *), PyObject *arg,
+                                            PyObject **result) {
+    PyObject *step;
+    if (arg != Py_None) {
+        PyObject *old = *sent;
+        *sent = By_NewRef(arg);
+        Py_XDECREF(old);
+    }
+    step = resume(self);
+    if (step != NULL) {
+        *result = step;
+        return PYGEN_NEXT;
+    }
+    By_FinishGenerator(state);
+    step = *returned;
+    if (step != NULL) {
+        *returned = NULL;
+        *result = step;
+        return PYGEN_RETURN;
+    }
+    return By_IterSend((PyObject *)&By_RaisedIter, Py_None, result);
 }
 
 /* read a shared closure cell. a cell starts unset, exactly as a python cell does,

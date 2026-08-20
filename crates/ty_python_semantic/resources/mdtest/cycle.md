@@ -870,6 +870,25 @@ def run():
         reveal_type(t)  # revealed: float
 ```
 
+## a float literal a recursive function recomputes from itself through a generic call
+
+A loop is not the only thing that can recompute a value from itself. `rec` calls itself to get the
+value it doubles, so its inferred return type grows the same way — but there is no loop header here,
+and the only union that grows is the one the generic call's solve builds out of `min`'s arguments.
+
+The solve collects one lower bound per element, so the union `rec` returned is taken apart before
+the solve ever builds anything. Whatever recorded that the union was defined in terms of itself has
+to survive being taken apart, or the union the solve builds back up has no reason to give its
+literals up and grows one element per round with no fixed point.
+
+```by
+def rec():
+    return min(0.1, rec() * 2)
+
+def check():
+    reveal_type(rec())  # revealed: float
+```
+
 ## a complex literal a loop recomputes from itself
 
 Complex literals fold the same way and are held the same way, so they need the same bound.

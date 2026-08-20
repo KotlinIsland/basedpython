@@ -37,7 +37,7 @@ leg() {
   out=$(cd "$dir" && "$PY" -c "$probe" 2>&1); LEG_STATUS=$?
   # the two legs run from different directories, so a message that names a file would
   # read as a difference the module never had. each is made relative to its own root
-  LEG_TEXT=$(printf '%s' "$out" | tail -1 | sed "s|$dir/||g")
+  LEG_TEXT=$(sweep_canonical "$(printf '%s' "$out" | tail -1 | sed "s|$dir/||g")")
 }
 
 for b in $(sweep_modules "$LIB" "$@"); do

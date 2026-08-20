@@ -188,6 +188,35 @@ paying a function call for every field read is the opposite of the exercise.
 mypyc reached the same conclusion. this is worth revisiting only if
 [HPy](https://hpyproject.org) stabilizes with a performant CPython ABI mode
 
+### an artefact is pinned to one minor version, and says so itself
+
+taking the full API means the runtime header reads layouts that move between
+versions, so `by.h` is full of `#if PY_VERSION_HEX` branches — and those are
+decided by the headers the *build* compiled against. an artefact loaded by a
+different minor version therefore runs branches written for a layout that
+interpreter does not have, which is a crash rather than a wrong answer
+
+cpython does not prevent this. the version tag lives in the **file name**, and
+every 3.x also lists a bare `.so` in `EXTENSION_SUFFIXES` — so an artefact that
+is renamed, or copied out of a wheel built elsewhere, is offered to whatever is
+running. that is not hypothetical: `argparse` built for 3.13 and renamed
+segfaults inside a type construction under 3.14, in a build with no marshalled
+code object in it at all
+
+so every emitted module refuses one itself. `PyInit_` calls
+`By_InterpreterMatches` before it hands its module definition over — before
+anything of the build's own layout is read — and a mismatch is an `ImportError`
+naming both versions. the reading is `Py_GetVersion` rather than the newer
+`Py_Version`, because it is the one every version this header compiles against
+exports: a module built against newer headers naming a symbol the running
+interpreter lacks would be the same failure by another road
+
+this is the general form of the check the marshalled fallback makes for itself.
+that one compares the bytecode magic, which moves for a different reason and can
+move within a micro release, and a disagreement there *declines* to the embedded
+source rather than refusing the import — the code object is a cache, while the
+compiled code is the module
+
 ### free-threading is a design constraint now, not a migration later
 
 cpython 3.13 introduced free-threaded builds and 3.14 made them supported.

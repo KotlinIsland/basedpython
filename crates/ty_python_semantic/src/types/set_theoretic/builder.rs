@@ -1295,6 +1295,19 @@ impl<'db> UnionBuilder<'db> {
                         )
                     }));
                 }
+                // basedpython: a literal without a group of its own — a float or a complex —
+                // is carried as an ordinary element, so it is the only place the union's
+                // `recursively_defined` can be recorded for it. The grouped kinds above are
+                // rebuilt from their value and get the flag the same way. Without this the flag
+                // lives only on the `UnionType` wrapper, and anything that takes the union apart
+                // into its elements — the constraint solver turning a union into one lower bound
+                // per element, say — hands those elements on with nothing left to say the union
+                // they came from was defined in terms of itself.
+                UnionElement::Type(Type::LiteralValue(literal)) if recursively_defined.is_yes() => {
+                    types.push(Type::LiteralValue(
+                        literal.with_recursively_defined(recursively_defined),
+                    ));
+                }
                 UnionElement::Type(ty) => types.push(ty),
             }
         }
@@ -2197,6 +2210,26 @@ mod tests {
             complex_union.build(),
             KnownClass::Complex.to_instance(db, &env)
         );
+
+        // Taking a recursively defined union apart and building a fresh one out of its elements
+        // — which is what a generic call's solve does, collecting one lower bound per element —
+        // must not lose the fact that it was defined in terms of itself. Nothing carries that
+        // here except the elements themselves, so a builder left at its default still reaches
+        // the same widened answer.
+        let under_limit = doubling().take(2).map(Type::float_literal).fold(
+            UnionBuilder::new(db, &env).recursively_defined(RecursivelyDefined::Yes),
+            UnionBuilder::add,
+        );
+        let Type::Union(under_limit) = under_limit.build() else {
+            panic!("two distinct float literals should not have collapsed to one type");
+        };
+        let rebuilt = under_limit
+            .elements(db)
+            .iter()
+            .copied()
+            .chain(doubling().skip(2).map(Type::float_literal))
+            .fold(UnionBuilder::new(db, &env), UnionBuilder::add);
+        assert_eq!(rebuilt.build(), KnownClass::Float.to_instance(db, &env));
 
         // A union nothing defines in terms of itself settles in one go, so its literals are
         // kept however many there are.

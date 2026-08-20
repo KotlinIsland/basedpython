@@ -180,6 +180,22 @@ pub fn map_type(
         return Ok(RType::OBJECT);
     }
 
+    // the bottom of the lattice proves nothing either, for the mirror image of the
+    // reason the top does: `Never` is assignable to *everything*, so every test below
+    // answers yes and whichever is written first wins. that was `None`, a representation
+    // with no width at all — and ty gives every expression in unreachable code the type
+    // `Never`, so
+    //
+    //     def f(line: str):
+    //         return
+    //         b = not line
+    //
+    // asked to store a `bit` into a place that cannot hold one, and declined a function
+    // for code that never runs. the same two statements without the `return` compile
+    if ty.is_never() {
+        return Ok(RType::OBJECT);
+    }
+
     let none = Type::none(db, env);
     if ty.is_assignable_to(db, env, none) {
         return Ok(RType::NONE);
@@ -217,7 +233,8 @@ mod tests {
     fn param_repr(annotation: &str) -> Result<RType, String> {
         with_source(
             &format!(
-                "from typing import Any, Literal\ndef f(a: {annotation}) -> None:\n    pass\n"
+                "from typing import Any, Literal, Never\n\
+                 def f(a: {annotation}) -> None:\n    pass\n"
             ),
             |db, env, model, suite| {
                 let ruff_python_ast::Stmt::FunctionDef(function) = &suite[1] else {
@@ -290,6 +307,17 @@ mod tests {
         // `object` assumes nothing, so it needs no check — the representation
         // invariant only bites when narrowing
         assert_eq!(param_repr("Any"), Ok(RType::OBJECT));
+    }
+
+    #[test]
+    fn the_bottom_of_the_lattice_is_the_widest_representation_too() {
+        // `Never` is assignable to *everything*, so every test in `map_type` answers
+        // yes and whichever is written first wins. that was `None`, which has no width
+        // at all — and since ty types every expression in unreachable code as `Never`,
+        // a dead `b = not line` after a `return` had a `bit` and nowhere to put it
+        assert_eq!(param_repr("Never"), Ok(RType::OBJECT));
+        // and a real `None` still gets the representation that says so
+        assert_eq!(param_repr("None"), Ok(RType::NONE));
     }
 
     #[test]

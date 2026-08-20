@@ -39,7 +39,7 @@ pub fn build_source(
     out_dir: &Path,
     options: &Options,
 ) -> Result<Built> {
-    let module = lower(source, module_name, options, toolchain.version)?;
+    let module = lower(source, module_name, options, Some(toolchain))?;
     let mut artifact = build_module(&module, toolchain, out_dir)?;
     artifact.annotation = write_annotation(&module, out_dir, options)?;
     Ok(Built {
@@ -61,7 +61,7 @@ pub fn build_lowered(
     out_dir: &Path,
     options: &Options,
 ) -> Result<Built> {
-    let module = finish(module, source, options, toolchain.version)?;
+    let module = finish(module, source, options, Some(toolchain))?;
     let mut artifact = build_module(&module, toolchain, out_dir)?;
     artifact.annotation = write_annotation(&module, out_dir, options)?;
     Ok(Built {
@@ -71,14 +71,18 @@ pub fn build_lowered(
 }
 
 /// as [`build_lowered`], but writing only the generated C
+///
+/// the toolchain is still wanted, and for the same reason a real build wants it: it
+/// is the interpreted twin's compiled form that a caller passing `None` gives up,
+/// and the C then written is not the C a build would have written
 pub fn emit_lowered(
     module: ModuleIr,
     source: &str,
+    toolchain: Option<&Toolchain>,
     out_dir: &Path,
     options: &Options,
-    version: Option<(u8, u8)>,
 ) -> Result<Built> {
-    let module = finish(module, source, options, version)?;
+    let module = finish(module, source, options, toolchain)?;
     emit_verified(&module, out_dir, options)
 }
 
@@ -89,11 +93,11 @@ pub fn emit_lowered(
 pub fn emit_source(
     source: &str,
     module_name: impl Into<by_ir::ModuleName>,
+    toolchain: Option<&Toolchain>,
     out_dir: &Path,
     options: &Options,
-    version: Option<(u8, u8)>,
 ) -> Result<Built> {
-    let module = lower(source, module_name, options, version)?;
+    let module = lower(source, module_name, options, toolchain)?;
     emit_verified(&module, out_dir, options)
 }
 
@@ -206,13 +210,13 @@ fn lower(
     source: &str,
     module_name: impl Into<by_ir::ModuleName>,
     options: &Options,
-    version: Option<(u8, u8)>,
+    toolchain: Option<&Toolchain>,
 ) -> Result<by_ir::function::ModuleIr> {
     finish(
         by_irbuild::module_from_source(source, module_name, options.language),
         source,
         options,
-        version,
+        toolchain,
     )
 }
 
@@ -224,7 +228,7 @@ fn finish(
     mut module: by_ir::function::ModuleIr,
     source: &str,
     options: &Options,
-    version: Option<(u8, u8)>,
+    toolchain: Option<&Toolchain>,
 ) -> Result<by_ir::function::ModuleIr> {
     // the generated C points back at the `.by` it came from, so a compiler warning
     // or a debugger lands on source somebody wrote. a caller that knows the real
@@ -280,7 +284,7 @@ fn finish(
         source.to_string()
     } else {
         let mut config = options.fallback.clone().unwrap_or_default();
-        if let Some((major, minor)) = version
+        if let Some((major, minor)) = toolchain.and_then(|toolchain| toolchain.version)
             && let Ok(parsed) = format!("{major}.{minor}").parse()
         {
             config.min_version = parsed;
@@ -293,6 +297,10 @@ fn finish(
     // too, over the twin's — once for each definition rather than once for the name
     let twin = by_irbuild::without_init_decorators(&twin, &module)
         .map_err(|error| anyhow::anyhow!("could not prepare the interpreted fallback: {error}"))?;
+    // and the same program compiled, so that importing the artefact does not have to
+    // parse it all over again. it is asked for after every rewrite above, because what
+    // gets compiled has to be exactly what would otherwise be run
+    module.fallback_code = toolchain.and_then(|toolchain| toolchain.marshal(&twin));
     module.fallback_source = Some(twin);
     Ok(module)
 }
@@ -500,6 +508,7 @@ mod tests {
             promoted: Vec::new(),
             lines: None,
             fallback_source: None,
+            fallback_code: None,
         };
         let dir = std::env::temp_dir().join("by_build_refuses_test");
         let _ = fs::remove_dir_all(&dir);

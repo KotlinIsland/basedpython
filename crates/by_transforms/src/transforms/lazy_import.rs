@@ -442,8 +442,16 @@ const LAZY_ATTR_PROXY: &str = r#"class _LazyAttr:
                 try:
                     v = _by_il.import_module(self._by_mod + "." + self._by_attr)
                 except ImportError:
+                    # worded as the import machinery words it, down to the module's
+                    # file: a `from x import y` that fails is something programs catch
+                    # and report, so the report must not say where the import was
+                    # written. `name_from` is left off — cpython's own constructor
+                    # only took it from 3.12, and this polyfill runs on 3.9
+                    p = getattr(m, "__file__", None)
                     raise ImportError("cannot import name " + repr(self._by_attr) +
-                                      " from " + repr(self._by_mod), name=self._by_mod) from None
+                                      " from " + repr(self._by_mod) +
+                                      ("" if p is None else " (" + p + ")"),
+                                      name=self._by_mod, path=p) from None
             object.__setattr__(self, "_by_val", v)
             object.__setattr__(self, "_by_has", True)
         return self._by_val

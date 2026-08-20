@@ -2,7 +2,7 @@
 
 use crate::transforms::trailing_lambda::RECEIVER_PARAMETER;
 use ruff_python_ast::helpers::is_dotted_name;
-use ruff_python_ast::{Expr, ExprCall, ExprName, ExprRef, Stmt, StmtClassDef};
+use ruff_python_ast::{Expr, ExprCall, ExprName, ExprRef, Parameter, Stmt, StmtClassDef};
 use ruff_python_parser::parse_expression;
 use ruff_python_stdlib::basedpython::IMPLICIT_TYPING_NAMES;
 use ruff_text_size::TextRange;
@@ -403,6 +403,16 @@ pub(crate) trait TypeInfo {
     /// when the type has no faithful runtime test or its name doesn't resolve
     /// at module scope
     fn soundness_check_plan(&self, expr: &Expr) -> Option<SoundnessCheck>;
+
+    /// the runtime soundness check for a *parameter*, planned against the type its
+    /// source states rather than the one its annotation node spells
+    ///
+    /// the two differ exactly where there is no annotation to spell. `def f(safe='/')`
+    /// opens a hole bounded by everything the function requires of `safe`, and a hole
+    /// has no runtime test — so asking about the annotation answered nothing, and the
+    /// interpreted leg wrote no check where the native backend was already enforcing
+    /// the bound at its boundary
+    fn parameter_check_plan(&self, parameter: &Parameter) -> Option<SoundnessCheck>;
 
     /// the soundness check for the parameter that the positional argument at
     /// `index` binds to in a call through `callee` (see
@@ -1027,6 +1037,16 @@ impl TypeInfo for SemanticModel<'_> {
     fn soundness_check_plan(&self, expr: &Expr) -> Option<SoundnessCheck> {
         let ty = expr.inferred_type(self)?;
         ty_python_semantic::types::soundness::runtime_check_plan(
+            self.db(),
+            &self.program_environment(),
+            self.file(),
+            ty,
+        )
+    }
+
+    fn parameter_check_plan(&self, parameter: &Parameter) -> Option<SoundnessCheck> {
+        let ty = parameter.inferred_type(self)?;
+        ty_python_semantic::types::soundness::parameter_runtime_check_plan(
             self.db(),
             &self.program_environment(),
             self.file(),

@@ -134,6 +134,39 @@ def f(x):
 a synthesized bound is spelled as the [inline protocol](inline-protocol.md) that would declare it,
 so the recovered signature is something you could have written by hand
 
+an operator, a subscript, iteration and calling the parameter itself are members like any other,
+so each of those is a requirement too
+
+```python
+def f(s):
+    a = s.rstrip("\r\n")
+    b = s[:5]
+# def f(s: some protocol(def __getitem__(self, slice[None, 5, None], /) -> Unknown; def rstrip(self, str, /) -> object))
+```
+
+iterating asks for two members at once — `__iter__`, and a `__next__` on whatever that hands back —
+so what a loop body does with the loop variable is a requirement on what the argument *yields*
+
+```python
+def total(xs):
+    for x in xs:
+        x.bit_length()
+# def total(xs: some protocol(def __iter__(self, /) -> protocol(def __next__(self, /) -> protocol(def bit_length(self, /) -> object))))
+```
+
+only the *left* operand of a binary operation carries the requirement. python reaches the right
+operand's reflected dunder only when the left one returns `NotImplemented`, and which of the two an
+operation takes is decided by the argument, so `2 * x` asks nothing of `x` — see
+[a bound has to type the body it came from](#a-bound-has-to-type-the-body-it-came-from) for what
+that then means for `x`
+
+a member the body reached this way reads back as `Unknown` rather than `object`, because recording
+a requirement is about what the *call site* has to supply and it should not change what the body
+itself reads. so does a member the body named: the requirement is that it **exist**, and nothing
+about naming it says what it holds. `object` would not describe such a value, it would forbid every
+use of it — and that claim travels, because a member's type becomes the recovered return type of the
+function that read it
+
 a parameter the argument is forwarded into is a requirement too
 
 ```python
@@ -145,14 +178,19 @@ def f(x):
 f("a")  # error: invalid-argument-type
 ```
 
-and reading a member into somewhere that says what it holds constrains that member, not just the
-parameter. an annotated assignment, a call argument and a declared return type are all such places
+and reading a value into somewhere that says what it holds is a requirement on that value. an
+annotated assignment, a call argument and a declared return type are all such places, and each of
+them constrains whichever value was read into it — a member, or the parameter itself
 
 ```python
 def f(x):
     a: int = x.foo()
     return x
 # def f(x: some protocol(def foo(self, /) -> int)) -> x
+
+def g(x) -> str:
+    return x
+# def g(x: some str) -> str
 ```
 
 an *inferred* return type is not one of them: it is read off the body, so it cannot also constrain
@@ -173,6 +211,26 @@ longer the parameter, and what happens to it afterwards says nothing about the a
 that a member's value was given to is read the same way: a name bound more than once cannot stand
 for one value, and a use under a narrowing is about something narrower than the value it was bound
 to
+
+saying nothing is not the same as costing nothing. a narrowed *parameter* still carries the hole, so
+the body goes on being checked against whatever bound the rest of it recovers — through a use no
+requirement was ever built from, which is what
+[a bound has to type the body it came from](#a-bound-has-to-type-the-body-it-came-from) rules out. so
+a use like that takes the recovered bound away, exactly as the unnarrowed form of it would
+
+```python
+def bits(x):
+    x.bit_length()
+    if x:
+        return 2 * x
+    return 0
+# def bits(x)
+```
+
+a narrowing the bound already implies is not one of these, which is what keeps the `assert` below
+working. once `int` is `x`'s bound, `x` narrowed to an `int` *is* the hole, so the uses under such an
+`assert` are recorded like any other — and what they record is then checked against the very bound
+the `assert` put there
 
 a parameter its own body rebinds keeps nothing at all, for the same reason. the reads above the
 rebinding are not enough on their own: walking a linked structure asks only that the argument have
@@ -203,12 +261,60 @@ f("a")  # error: invalid-argument-type
 the same test inside an `if` says nothing — the author plainly meant the other branch to be
 reachable
 
+### a bound has to type the body it came from
+
+every requirement above is read off the body, so the body is checked against the bound they add up
+to. that makes one thing non-negotiable: a bound that the body's *own* code would fail against is
+worse than no bound at all, because it makes the checker report an error in the very function it
+claims to have understood
+
+so a use the analysis cannot state does not get passed over — it takes the bound away
+
+```python
+def area(r):
+    a = r.bit_length()
+    return 2 * r
+# def area(r)
+```
+
+reading `r.bit_length()` on its own asks for a protocol. `2 * r` two lines later is exactly what such
+a protocol cannot answer: python reaches `r`'s reflected dunder only when `int.__mul__` returns
+`NotImplemented`, and which of the two routes an operation takes is decided by the argument, so there
+is nothing here to ask of `r`. keeping the protocol would make `area`'s own body stop compiling
+against `area`'s own signature, so the protocol goes
+
+the same rule applies one member deep: a use nothing can be said about takes away only the value it
+is about. `x.foo` still has to be there, and still has to be callable the way the body called it
+
+```python
+def held(x):
+    return 1 + x.foo()
+# def held(x: some protocol(def foo(self, /) -> Unknown))
+```
+
 ### what is left out
 
-nothing is invented from a use that was not understood, so a body keeps type-checking exactly as it
-did and its call sites stay unchecked. a forwarded type that mentions a type variable is left out
-too: it is bound to the callee's own scope, and the same rule stops two functions that forward into
-each other from each defining the other
+the uses that cannot be stated are the ones where python's own answer is a disjunction, or a shape an
+inline protocol has no way to write:
+
+- an operand on the *right* of an operation whose left operand does not take anything, as above
+- `in`, which runs through `__contains__`, `__iter__` *or* `__getitem__` on the container
+- `await`, `async for`, `with`, `raise`, `del x.a`, `match`, and `**x` in a call
+- writing a member rather than reading one — `x.a = 1`
+- a call whose arguments are splatted, since no fixed parameter list says how many there are
+- an argument whose parameter cannot be worked out, or is one this cannot write down
+- anything at all written on a name a test narrowed, unless the position takes anything: the branch
+    was written because the author meant the other one to be reachable, so holding every argument to
+    what this one does would reject the very calls the test exists for
+
+the other side of that rule is what keeps most code unaffected: wherever a position accepts `object`
+it accepts whatever bound the body recovers, so nothing has to be recorded and nothing is lost.
+printing a value, formatting one, reading one for its truth, looking a key up in a mapping and
+`"%s" % x` are all positions like that
+
+a forwarded type that mentions a type variable is left out too: it is bound to the callee's own
+scope, and the same rule stops two functions that forward into each other from each defining the
+other
 
 a value the body reached *through* a parameter is left out on the same grounds. reading a member
 off one leaves the shape this analysis invented for that member, so requiring a method to accept it
@@ -378,10 +484,21 @@ a type variable a call leaves *unsolved* is a separate matter, and is covered by
 
 these are known gradual-guarantee costs that `sound-types` does **not** currently address
 
-- **a use the body analysis cannot read** contributes nothing: `def f(x): return x + 1` leaves `x`
-    gradual. only attribute reads, method calls, forwarding into an annotated parameter and a
-    top-level `assert` are read. operators, subscripting, iteration and calling the parameter itself
-    are not
+- **a use the body analysis cannot read** contributes nothing: `def f(x): return 1 in x` leaves `x`
+    gradual, because `in` runs through `__contains__`, `__iter__` *or* `__getitem__` and asking for
+    any one of the three would demand something the body never needed. an `async for`, a `with` and
+    an operation whose left operand is not the parameter are left out for the same kind of reason
+- **an operation gives way to what the program states**: where a default value, an `assert` or a
+    forwarded parameter type rules the operation out, the statement wins and the operation is
+    reported in the body where it lives rather than at every call site. `def g(x=0): x + "foo"` is
+    an error in `g`
+- **a call recorded twice needs one signature**: two calls of the same member union position by
+    position, so `m.group("a")` and `m.group("b")` ask for a `group` that takes `str`. two calls of
+    different *shape* would need an overload, which cannot be written here, so such a member
+    degrades to asking only that it exist and be callable
+- **a call site whose argument is itself an unsolved hole** is where most of the remaining noise
+    lives: the callee's requirement cannot be propagated onto the caller's own hole, because it is
+    a shape this analysis invented, so the forward is reported instead
 - **`*args` / `**kwargs` do not open a hole**: one type parameter cannot name a run of arguments, so
     they stay `tuple[Unknown, ...]` / `dict[str, Unknown]`, and a `target(**kwargs)` forward is
     entirely unchecked

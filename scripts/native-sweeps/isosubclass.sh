@@ -137,8 +137,8 @@ for b in $(sweep_modules "$LIB" "$@"); do
   if ! sweep_built "$d"; then printf '%s\tno-artifact\n' "$b" >> "$OUT"; continue; fi
   sweep_place "$d"
   cp "$root/drive.py" "$SWEEP_RUN_I/drive.py"; cp "$root/drive.py" "$SWEEP_RUN_C/drive.py"
-  i=$(leg "$SWEEP_RUN_I")
-  c=$(leg "$SWEEP_RUN_C")
+  i=$(sweep_canonical "$(leg "$SWEEP_RUN_I")")
+  c=$(sweep_canonical "$(leg "$SWEEP_RUN_C")")
   if [ "$i" = "$c" ]; then
     # a module that cannot be imported here agrees on both legs and exercises nothing —
     # kept apart from `same` so the denominator stays honest

@@ -222,6 +222,43 @@ fn compile_refuses_two_sources_that_would_write_the_same_artifact() {
 }
 
 #[test]
+fn compile_declines_a_package_body_whose_package_has_no_importable_name() {
+    // an `__init__.py` is the body of the package its directory names, and `a-one`
+    // is not a name python can import — so there is no package for the file to be
+    // the body of. compiled under its stem it became a module called `__init__`,
+    // which loads and answers `__name__ == "__init__"`: its relative imports have
+    // no package to be relative to and its submodules are bound to nothing. a
+    // sibling that *is* nameable from its own directory still compiles, because
+    // its stem really is the only name it could be imported under
+    let dir = std::env::temp_dir().join("by_cli_unnameable_package");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("a-one")).unwrap();
+    std::fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("a-one/__init__.py"), "VALUE = 1\n").unwrap();
+    std::fs::write(dir.join("a-one/inner.py"), "VALUE = 2\n").unwrap();
+
+    let out = dir.join("o");
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["compile", "-o"])
+        .arg(&out)
+        .arg("--emit-c-only")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    // declining one source is not a failed build — the rest of the project is
+    // compiled, and what was left out is said rather than silently produced
+    assert!(result.status.success(), "{stderr}");
+    assert!(stderr.contains("skipping"), "{stderr}");
+    assert!(!out.join("__init__.c").exists(), "{stderr}");
+    assert!(out.join("inner.c").exists(), "{stderr}");
+}
+
+#[test]
 fn compile_transpiles_the_fallback_with_the_lowering_options_it_was_given() {
     // a declined function *runs* from the embedded source, so `by compile` has to
     // transpile it with the same options a `by transpile` would use. the library
@@ -2794,4 +2831,99 @@ def main():
             && rendered.contains("which the method it overrides cannot"),
         "expected the override to be reported once enabled:\n{rendered}"
     );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn a_lazy_from_import_resolves_a_submodule_and_refuses_a_missing_name_as_python_does() {
+    // `_LazyAttr` defers the attribute read, and reading an attribute is not how a
+    // submodule gets bound: `urllib/__init__.py` never imports `parse`, and cpython
+    // binds it only because `__import__` is handed a fromlist. so a transpiled
+    // `from urllib import parse` used to raise `AttributeError` where the same source
+    // run by cpython is fine — a wrong answer in shipped output rather than a decline
+    //
+    // the refusal for a name that really is missing is asserted against the
+    // interpreter's own, on the same interpreter, rather than against a string
+    // written here: a program that catches this reports it, so the report must not
+    // say where the import was written
+    let Some(python) = ["python3.13", "python3"].into_iter().find(|p| {
+        Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }) else {
+        eprintln!("skipping: no python interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "from urllib import parse\nfrom urllib import nosuch\n\n\n\
+         def main():\n\
+         \x20   print(parse.quote(\"a b\"))\n\
+         \x20   try:\n\
+         \x20       print(nosuch)\n\
+         \x20   except ImportError as e:\n\
+         \x20       print(type(e).__name__, str(e), e.name, e.path, sep=\"|\")\n",
+    )
+    .unwrap();
+
+    let transpiled = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["transpile", "main.by"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        transpiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&transpiled.stderr)
+    );
+    let program = String::from_utf8_lossy(&transpiled.stdout).into_owned();
+    // the laziness is the thing under test, so its absence must not pass silently
+    assert!(
+        program.contains("_lazy_attr(\"urllib\", \"parse\")"),
+        "{program}"
+    );
+    fs::write(dir.path().join("prog.py"), &program).unwrap();
+
+    let run = |body: &str| {
+        let out = Command::new(python)
+            .args(["-c", body])
+            .current_dir(dir.path())
+            .output()
+            .expect("the interpreter runs");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let mut lines = run("import prog; prog.main()")
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lines.first().map(String::as_str),
+        Some("a%20b"),
+        "{lines:?}"
+    );
+    let ours = lines.pop().expect("the refusal is printed");
+
+    // the same import, written the way python writes it, refused by python itself
+    let theirs = run(
+        "try:\n    from urllib import nosuch\nexcept ImportError as e:\n\
+         \x20   print(type(e).__name__, str(e), e.name, e.path, sep='|')\n",
+    );
+    assert_eq!(ours, theirs);
 }
