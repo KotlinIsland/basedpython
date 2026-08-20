@@ -10,7 +10,12 @@
 //! server's own types
 
 use anyhow::Result;
-use lsp_types::{LspRequestMethod, MessageDirection, Request};
+use lsp_types::{
+    DidOpenTextDocumentNotification, DidOpenTextDocumentParams, DocumentDiagnosticParams,
+    DocumentDiagnosticReport, DocumentDiagnosticRequest, LanguageKind, LspRequestMethod,
+    Message, MessageDirection, PartialResultParams, Request, TextDocumentIdentifier, TextDocumentItem, Uri,
+    WorkDoneProgressParams,
+};
 use ruff_db::system::SystemPath;
 use ty_server::ClientOptions;
 
@@ -186,6 +191,80 @@ script = \"const x = 1\"
     )?;
 
     assert_eq!(found, Vec::new());
+
+    Ok(())
+}
+
+/// the fragment, opened the way an editor that injects basedpython into basedpython opens it: as a
+/// document of its own, named after the host it was cut from
+///
+/// this is the other half of injection, and the half that only works because the fragment *is* a
+/// basedpython module. the server is not asked anything new here — it is asked
+/// `textDocument/diagnostic` about a document, exactly as it is for a file — which is the point:
+/// everything the server already answers about a `.by` file, it answers about a fragment
+#[test]
+fn a_fragment_opened_as_its_own_document_is_checked_like_any_other() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let main = SystemPath::new("src/main.by");
+    let host = "# language=basedpython\nsnippet = \"\"\"\nx: int = \"no\"\n\"\"\"\n";
+
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(ClientOptions::default())
+        .with_workspace(workspace_root, None)?
+        .with_file(main, host)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(main, host, 1);
+
+    // the uri names the host and which of its fragments this is, and ends in `.by` because that is
+    // how the server knows what it is reading
+    let fragment = Uri::parse("by-injected:/src/main.by/0.by").expect("a uri a client can build");
+    server.send_notification::<DidOpenTextDocumentNotification>(DidOpenTextDocumentParams {
+        text_document: TextDocumentItem {
+            uri: fragment.clone(),
+            language_id: LanguageKind::from("basedpython".to_string()),
+            version: 1,
+            text: "x: int = \"no\"\n".to_string(),
+        },
+    });
+
+    let report = server.send_request_await::<DocumentDiagnosticRequest>(DocumentDiagnosticParams {
+        text_document: TextDocumentIdentifier { uri: fragment },
+        identifier: Some("ty".to_string()),
+        previous_result_id: None,
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    });
+
+    let DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(report) = report else {
+        panic!("the server should have checked the fragment, and answered with a full report");
+    };
+    let reported: Vec<_> = report
+        .full_document_diagnostic_report
+        .items
+        .iter()
+        .map(|diagnostic| {
+            let Message::String(message) = &diagnostic.message else {
+                panic!("a diagnostic message should be a string, and was {:#?}", diagnostic.message)
+            };
+            (
+                message.clone(),
+                diagnostic.range.start.line,
+                diagnostic.range.start.character,
+            )
+        })
+        .collect();
+
+    // in the fragment's own coordinates, which is what lets a client map them back through the
+    // injection it made
+    assert_eq!(reported.len(), 1, "the fragment's error should be reported once, and was {reported:?}");
+    assert_eq!((reported[0].1, reported[0].2), (0, 9));
+    assert!(
+        reported[0].0.contains("int"),
+        "the message should be about the assignment, and was {:?}",
+        reported[0].0,
+    );
 
     Ok(())
 }
