@@ -18,7 +18,7 @@ use std::process::Command;
 
 use by_build::{Options, Toolchain, build_module, build_source};
 use by_ir::builder::FunctionBuilder;
-use by_ir::function::{CallConvention, ModuleIr, ModuleName};
+use by_ir::function::{CallConvention, FallbackCode, ModuleIr, ModuleName};
 use by_ir::ops::{BinOp, CmpOp, Op, Terminator, Value};
 use by_ir::rtype::RType;
 
@@ -122,6 +122,7 @@ fn arith_module() -> ModuleIr {
         promoted: Vec::new(),
         lines: None,
         fallback_source: None,
+        fallback_code: None,
     }
 }
 
@@ -186,6 +187,7 @@ fn fib_module() -> ModuleIr {
         promoted: Vec::new(),
         lines: None,
         fallback_source: None,
+        fallback_code: None,
     }
 }
 
@@ -322,6 +324,7 @@ fn division_floors_like_python_and_raises_on_zero() {
         promoted: Vec::new(),
         lines: None,
         fallback_source: None,
+        fallback_code: None,
     };
     let Some(dir) = built(&module, &toolchain, "divzero") else {
         return;
@@ -378,6 +381,7 @@ fn floats_are_unboxed_and_exclude_int() {
         promoted: Vec::new(),
         lines: None,
         fallback_source: None,
+        fallback_code: None,
     };
     let Some(dir) = built(&module, &toolchain, "float") else {
         return;
@@ -449,6 +453,7 @@ fn calls_between_compiled_functions_stay_native() {
         promoted: Vec::new(),
         lines: None,
         fallback_source: None,
+        fallback_code: None,
     };
     let Some(dir) = built(&module, &toolchain, "call") else {
         return;
@@ -568,9 +573,9 @@ def kept(a: str, b: str) -> object:
     return (joined, a)
 ",
         "by_e2e_append",
+        None,
         &dir,
         &Options::default(),
-        None,
     )
     .expect("the module emits");
     let emitted = std::fs::read_to_string(&built.artifact.source).expect("the C is readable");
@@ -1101,9 +1106,9 @@ fn the_emitted_c_names_no_pointer_type_it_does_not_mean() {
     let built = by_build::emit_source(
         POINTER_SOURCE,
         "by_e2e_pointers",
+        None,
         &dir,
         &Options::default(),
-        None,
     )
     .expect("the module emits");
 
@@ -1222,4 +1227,319 @@ fn a_package_is_built_as_a_tree_and_imports_under_its_dotted_names() {
         // that happened to be lying beside it
         assert!(fields[4].ends_with(&toolchain.ext_suffix), "{printed}");
     }
+}
+
+/// a module that is nothing but its interpreted twin
+///
+/// which of the two forms of that twin an import runs is what the tests below are
+/// about, and a compiled function beside it would only be noise
+fn twin_module(name: &str, source: &str, code: Option<FallbackCode>) -> ModuleIr {
+    let mut module = ModuleIr::new(name);
+    module.fallback_source = Some(source.to_string());
+    module.fallback_code = code;
+    module
+}
+
+/// the twin as source and the same twin compiled, saying *different* things
+///
+/// nothing else can tell the two apart. an artefact whose code object silently will
+/// not read falls back to its source and behaves identically — so a test that gave
+/// both forms the same program would pass with the whole compiled path disabled,
+/// and the only thing lost would be an import speed nobody asserts on
+const TWIN_SOURCE: &str = "WHICH = \"source\"\n";
+const TWIN_CODE: &str = "WHICH = \"code\"\n";
+
+/// what an import of a `twin_module` answered, or `None` where it did not import
+fn which_twin_ran(python: &str, dir: &Path, name: &str) -> Option<String> {
+    let printed = script(
+        python,
+        dir,
+        &format!(
+            "try:\n\
+             \x20   import {name}\n\
+             except BaseException as error:\n\
+             \x20   print('!' + type(error).__name__)\n\
+             else:\n\
+             \x20   print({name}.WHICH)\n"
+        ),
+    );
+    if printed.starts_with('!') {
+        return None;
+    }
+    Some(printed)
+}
+
+#[test]
+fn the_compiled_twin_is_what_an_import_runs() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let Some(code) = toolchain.marshal(TWIN_CODE) else {
+        eprintln!("skipping: the interpreter would not compile the twin");
+        return;
+    };
+    let module = twin_module("by_e2e_twincode", TWIN_SOURCE, Some(code));
+    let Some(dir) = built(&module, &toolchain, "twincode") else {
+        return;
+    };
+    assert_eq!(
+        which_twin_ran(&python, &dir, "by_e2e_twincode").as_deref(),
+        Some("code")
+    );
+}
+
+#[test]
+fn a_twin_compiled_by_another_interpreter_is_left_where_it_is() {
+    // marshal promises nothing across versions, and it does not fail softly either:
+    // handing cpython 3.14 a code object 3.13 wrote segfaults the process outright.
+    // the bytecode magic is cpython's own answer to that — it is what makes an
+    // upgraded interpreter regenerate a `.pyc` rather than misread one — and one that
+    // does not match has to send the import back to the source
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let Some(mut code) = toolchain.marshal(TWIN_CODE) else {
+        eprintln!("skipping: the interpreter would not compile the twin");
+        return;
+    };
+    code.magic += 1;
+    let module = twin_module("by_e2e_twinmagic", TWIN_SOURCE, Some(code));
+    let Some(dir) = built(&module, &toolchain, "twinmagic") else {
+        return;
+    };
+    assert_eq!(
+        which_twin_ran(&python, &dir, "by_e2e_twinmagic").as_deref(),
+        Some("source")
+    );
+}
+
+#[test]
+fn a_twin_compiled_at_another_optimization_level_is_left_where_it_is() {
+    // the level is part of what the source compiles *to*, not a setting beside it:
+    // `-O` takes `assert` out of the bytecode and `-OO` takes docstrings too. this
+    // test process runs at level 0, so a code object claiming any other level is one
+    // this interpreter would not have produced
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let Some(mut code) = toolchain.marshal(TWIN_CODE) else {
+        eprintln!("skipping: the interpreter would not compile the twin");
+        return;
+    };
+    code.optimize = 2;
+    let module = twin_module("by_e2e_twinoptimize", TWIN_SOURCE, Some(code));
+    let Some(dir) = built(&module, &toolchain, "twinoptimize") else {
+        return;
+    };
+    assert_eq!(
+        which_twin_ran(&python, &dir, "by_e2e_twinoptimize").as_deref(),
+        Some("source")
+    );
+}
+
+#[test]
+fn a_twin_this_interpreter_should_read_and_cannot_fails_the_import() {
+    // the two guards above are mismatches, and a mismatch is ordinary: the source is
+    // compiled instead and nothing is wrong. a code object that says it *is* for this
+    // interpreter and then will not read is a broken artefact, and falling back to the
+    // source there would leave a defect in how these bytes are written costing nothing
+    // more visible than an import nobody times
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let Some(mut code) = toolchain.marshal(TWIN_CODE) else {
+        eprintln!("skipping: the interpreter would not compile the twin");
+        return;
+    };
+    // no marshal type is written as a NUL, so this is refused before anything is built
+    // out of it — a *truncated* code object would be read into one and is not a safe
+    // thing to hand an interpreter
+    code.marshalled = vec![0u8; 8].into();
+    let module = twin_module("by_e2e_twinunreadable", TWIN_SOURCE, Some(code));
+    let Some(dir) = built(&module, &toolchain, "twinunreadable") else {
+        return;
+    };
+    assert_eq!(which_twin_ran(&python, &dir, "by_e2e_twinunreadable"), None);
+}
+
+#[test]
+fn a_twin_that_reads_back_as_something_other_than_code_fails_the_import() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let Some(mut code) = toolchain.marshal(TWIN_CODE) else {
+        eprintln!("skipping: the interpreter would not compile the twin");
+        return;
+    };
+    // marshal's `TYPE_INT`: the tag, then the value in four little-endian bytes. it
+    // reads back perfectly well and is not a code object, which is the case a bare
+    // "did it read" test would hand straight to the evaluator
+    code.marshalled = vec![b'i', 42, 0, 0, 0].into();
+    let module = twin_module("by_e2e_twinnotcode", TWIN_SOURCE, Some(code));
+    let Some(dir) = built(&module, &toolchain, "twinnotcode") else {
+        return;
+    };
+    assert_eq!(which_twin_ran(&python, &dir, "by_e2e_twinnotcode"), None);
+}
+
+#[test]
+fn running_the_interpreter_with_o_still_means_o_for_the_twin() {
+    // the whole-artefact statement of the level guard. the twin has always been
+    // compiled by the importing interpreter, so `python -O` took its `assert`
+    // statements out; a code object compiled at the build's own level would quietly
+    // put them back. the module *body* is where this is visible, because that is the
+    // part of a compiled module that always runs interpreted
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_e2e_twinoptrun");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+try:
+    assert False, \"still here\"
+except AssertionError:
+    ASSERTED = True
+else:
+    ASSERTED = False
+";
+    let Ok(_) = build_source(
+        source,
+        "by_e2e_twinoptrun",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) else {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    };
+    let asserted = |flags: &[&str]| {
+        let mut command = Command::new(&python);
+        command.args(flags).args([
+            "-c",
+            &format!(
+                "import sys\nsys.path.insert(0, {:?})\n\
+                 import by_e2e_twinoptrun as m\nprint(m.ASSERTED)\n",
+                dir.display().to_string()
+            ),
+        ]);
+        let out = command.output().expect("the interpreter runs");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(asserted(&[]), "True");
+    assert_eq!(asserted(&["-O"]), "False");
+}
+
+#[test]
+fn compiling_the_twin_twice_gives_the_same_bytes() {
+    // the emitted C has to be a function of the source alone, or a rebuild recompiles a
+    // module nothing about which changed — and the C compiler is the slowest step there
+    // is. a `frozenset` of strings is the one constant whose written form could turn on
+    // something outside the source, because string hashes are seeded per process, so it
+    // is what this asks about
+    let Some((_, toolchain)) = environment() else {
+        return;
+    };
+    let source =
+        "PICKED = \"m\" in {\"a\", \"quite\", \"long\", \"spread\", \"of\", \"words\", \"m\"}\n";
+    let (Some(first), Some(second)) = (toolchain.marshal(source), toolchain.marshal(source)) else {
+        eprintln!("skipping: the interpreter would not compile the twin");
+        return;
+    };
+    assert_eq!(first, second);
+}
+
+/// the header's version branches are decided by the headers the build compiled against,
+/// so an artefact loaded by another minor version runs branches for a layout that
+/// interpreter does not have — a crash rather than a wrong answer. the running version is
+/// read out of `Py_GetVersion`'s banner, which is prose with two numbers on the front, so
+/// what that reading does with a real banner and with junk is worth executing rather than
+/// reasoning about
+#[test]
+fn the_running_version_is_read_off_the_banner() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_e2e_version");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("the build directory is made");
+    std::fs::write(dir.join(by_rt::BY_H_NAME), by_rt::BY_H).expect("the header is written");
+
+    // banners cpython has really printed, then the shapes a reading could get wrong: a
+    // major with no minor, a minor that is not a number, an empty string
+    let source = r#"
+#include "by.h"
+
+static PyObject *parse(PyObject *self, PyObject *text) {
+    int major, minor;
+    (void)self;
+    By_ParseVersion(PyUnicode_AsUTF8(text), &major, &minor);
+    return Py_BuildValue("(ii)", major, minor);
+}
+
+static PyObject *running(PyObject *self, PyObject *unused) {
+    int major, minor;
+    (void)self;
+    (void)unused;
+    By_ParseVersion(Py_GetVersion(), &major, &minor);
+    return Py_BuildValue("(ii)", major, minor);
+}
+
+static PyMethodDef methods[] = {{"parse", parse, METH_O, NULL},
+                                {"running", running, METH_NOARGS, NULL},
+                                {NULL, NULL, 0, NULL}};
+static struct PyModuleDef def = {PyModuleDef_HEAD_INIT, "by_e2e_version", NULL, -1,
+                                 methods, NULL, NULL, NULL, NULL};
+PyMODINIT_FUNC PyInit_by_e2e_version(void) { return PyModule_Create(&def); }
+"#;
+    let c = dir.join("by_e2e_version.c");
+    std::fs::write(&c, source).expect("the probe is written");
+    let output = dir.join(format!("by_e2e_version{}", toolchain.ext_suffix));
+    let args = by_build::compile_command(&toolchain, &c, &output, &dir);
+    let (program, rest) = args
+        .split_first()
+        .expect("the compiler command is not empty");
+    let compiled = Command::new(program)
+        .args(rest)
+        .output()
+        .expect("the compiler runs");
+    if !compiled.status.success() {
+        eprintln!(
+            "skipping: no working C toolchain\n{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        return;
+    }
+
+    let answers = script(
+        &python,
+        &dir,
+        "import sys, by_e2e_version as m\n\
+         for text in ['3.14.0a1 (main, x) [Clang]', '3.9.7 (default, y)', '3.13.0', '3',\n\
+                      '3.x.1', '', '.13', 'python 3.13']:\n\
+         \x20   print(m.parse(text))\n\
+         print(m.running())\n\
+         print((sys.version_info[0], sys.version_info[1]))\n",
+    );
+    let mut lines = answers.lines();
+    for expected in [
+        "(3, 14)", "(3, 9)", "(3, 13)",
+        // a major alone names no minor, so it names no interpreter
+        "(-1, -1)", "(-1, -1)", "(-1, -1)", "(-1, -1)", "(-1, -1)",
+    ] {
+        assert_eq!(lines.next(), Some(expected), "in:\n{answers}");
+    }
+    // and the reading of a live banner is the interpreter's own answer about itself
+    let running = lines.next().expect("the running version is printed");
+    assert_eq!(
+        running,
+        lines.next().expect("`sys.version_info` is printed")
+    );
 }

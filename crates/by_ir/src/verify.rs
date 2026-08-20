@@ -1861,6 +1861,7 @@ mod tests {
             promoted: Vec::new(),
             lines: None,
             fallback_source: None,
+            fallback_code: None,
         };
         let errors = verify_module(&module).unwrap_err();
         assert_eq!(errors.len(), 1);
@@ -1896,6 +1897,7 @@ mod tests {
             promoted: Vec::new(),
             lines: None,
             fallback_source: None,
+            fallback_code: None,
         };
         let errors = verify_module(&module).unwrap_err();
         assert!(

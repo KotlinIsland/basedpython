@@ -40,6 +40,7 @@ mod tests {
             "By_ApplyMethodDecorators",
             "By_SpecClass",
             "By_SpecSubclass",
+            "By_InterpreterMatches",
         ] {
             assert!(BY_H.contains(symbol), "the runtime is missing {symbol}");
         }

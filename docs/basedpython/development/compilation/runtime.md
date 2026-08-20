@@ -176,6 +176,32 @@ call reads that refusal as proof no override exists. so a base an interpreted
 class extends is left interpreted too, and `by compile --verbose` names the
 subclass that caused it
 
+#### the twin arrives compiled
+
+parsing that source is most of what importing a compiled module costs — a
+stdlib-sized module is milliseconds of it, enough that a compiled module could
+import slower than the `.py` it came from. so the build asks the target
+interpreter to compile the twin once and embeds the code object beside the
+source. an import reads that instead: `argparse` goes from 6.6ms to 0.31ms and
+`_pydecimal` from 11.2ms to 0.52ms
+
+a code object is only good for the interpreter that wrote it, so the artefact
+records two things about the one that did and the runtime checks both before
+using it:
+
+- the **bytecode magic**, cpython's own answer to the same question — it is what
+    makes an upgraded interpreter regenerate a `.pyc` rather than misread one.
+    handing 3.14 a code object 3.13 wrote segfaults the process, so this is not a
+    tidiness check
+- the **optimization level**, because `-O` takes `assert` out of the bytecode and
+    `-OO` takes docstrings too. the twin has always been compiled by the importing
+    interpreter, so `python -O` has always meant `-O` for it, and a code object
+    compiled at the build's level would quietly stop meaning that
+
+either mismatch sends the import back to the source, which is slower and is the
+same program. a code object that passes both checks and then will not read is a
+broken artefact rather than a mismatched one, and fails the import
+
 ## integers
 
 `int` is `CPyTagged`: a pointer-sized word where an even value is a small

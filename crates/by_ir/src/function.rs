@@ -676,6 +676,40 @@ pub struct ModuleIr {
     /// declined functions exist, and the natively compiled functions are then
     /// installed over the top of their interpreted definitions
     pub fallback_source: Option<String>,
+    /// the same program, already compiled by the interpreter this artefact is
+    /// being built for, when the build had one to ask.
+    ///
+    /// parsing a module the size of `argparse` costs milliseconds and reading a
+    /// marshalled code object costs tens of microseconds, and every import pays
+    /// the difference. it is a *cache* of [`Self::fallback_source`] and never a
+    /// replacement for it — see [`FallbackCode`] for what an interpreter has to
+    /// match before it may use one
+    pub fallback_code: Option<FallbackCode>,
+}
+
+/// a module body compiled to a code object, and what an interpreter has to match
+/// before it may run that code object rather than the source
+///
+/// both conditions are about the code object being *the same program* the source
+/// would have compiled to on this interpreter. neither is a guess: they are the two
+/// things cpython itself keys a `.pyc` on
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FallbackCode {
+    /// `marshal.dumps` of the module body's code object
+    pub marshalled: Box<[u8]>,
+    /// the bytecode magic number of the interpreter that wrote it.
+    ///
+    /// cpython bumps this whenever a code object stops meaning what it did, which
+    /// is why an upgraded interpreter regenerates `.pyc` files instead of misreading
+    /// them. an interpreter whose own magic differs falls back to the source
+    pub magic: i64,
+    /// the optimization level it was compiled at.
+    ///
+    /// `-O` takes `assert` out of the bytecode and `-OO` takes docstrings too, so
+    /// source compiled at one level is a different program from the same source
+    /// compiled at another. an interpreter running at a different level falls back
+    /// to the source, which is what makes `python -O` still mean `-O` here
+    pub optimize: i32,
 }
 
 /// a gradual type in a compiled signature
@@ -804,6 +838,7 @@ impl ModuleIr {
             promoted: Vec::new(),
             lines: None,
             fallback_source: None,
+            fallback_code: None,
         }
     }
 

@@ -5,11 +5,13 @@
 //! compiler, the flags, and the include and library paths used to build it, and
 //! those are exactly the ones an extension has to match.
 
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use by_ir::ModuleName;
+use by_ir::function::FallbackCode;
 use serde::Deserialize;
 
 /// everything needed to compile and link an extension for one interpreter
@@ -81,6 +83,29 @@ print(json.dumps({
     'platform': sys.platform,
     'version': f'{sys.version_info[0]}.{sys.version_info[1]}',
 }))
+";
+
+/// compile a module body and hand back the marshalled code object
+///
+/// this runs in the *target* interpreter for the same reason the probe above does:
+/// a code object is only readable by the interpreter that wrote it, and this is the
+/// one that will read it. the source arrives on stdin because a module body is
+/// routinely a hundred kilobytes, which is past what an argument list will take on
+/// some platforms
+///
+/// `<string>` is the filename, which is what `PyRun_String` calls a module body — so
+/// a traceback out of the interpreted twin says exactly what it said before
+const MARSHAL: &str = r"
+import importlib.util, marshal, sys
+
+level = sys.flags.optimize
+source = sys.stdin.buffer.read().decode('utf-8')
+blob = marshal.dumps(compile(source, '<string>', 'exec', dont_inherit=True, optimize=level))
+magic = int.from_bytes(importlib.util.MAGIC_NUMBER, 'little')
+out = sys.stdout.buffer
+out.write(('%d %d %d\n' % (magic, level, len(blob))).encode('ascii'))
+out.write(blob)
+out.flush()
 ";
 
 /// the probe's answers, exactly as the interpreter reported them
@@ -181,6 +206,69 @@ impl Toolchain {
     pub fn extension_path(&self, module: &ModuleName) -> PathBuf {
         module.relative_path(&self.ext_suffix)
     }
+
+    /// compile a module body in this interpreter, for the artefact to carry
+    ///
+    /// the answer is a cache and nothing depends on having it, so every way this can
+    /// fail — no such interpreter, a body it will not compile, an answer we cannot
+    /// read — reads as `None` and leaves the artefact running the source. that is
+    /// what it does today, so the worst outcome is the speed we already have
+    pub fn marshal(&self, source: &str) -> Option<FallbackCode> {
+        // the emitted C has to be a function of the source and nothing else — that is
+        // what lets a rebuild skip the C compiler, which is by far its slowest step. the
+        // one thing in a code object that could vary between two runs of one interpreter
+        // is a `set` or `frozenset` constant, which `x in {"a", "b"}` compiles to: it
+        // holds strings, whose hashes are seeded per process. cpython 3.13 and 3.14 both
+        // write such a constant in a fixed order regardless, so pinning the seed changes
+        // nothing measurable today — it is here so that this does not *depend* on their
+        // doing so. it cannot change the program either way: the set is rebuilt under the
+        // reading interpreter's own hashing
+        let mut child = Command::new(&self.python)
+            .args(["-c", MARSHAL])
+            .env("PYTHONHASHSEED", "0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        // the child is waited for whatever happens to the write, because a `Child` that
+        // is merely dropped is never reaped — and a whole-project build runs one of these
+        // per module
+        let written = child
+            .stdin
+            .take()
+            .is_some_and(|mut stdin| stdin.write_all(source.as_bytes()).is_ok());
+        let output = child.wait_with_output().ok()?;
+        if !written || !output.status.success() {
+            return None;
+        }
+        parse_marshal(&output.stdout)
+    }
+}
+
+/// read what [`MARSHAL`] wrote: one ascii header line, then the bytes it counted
+fn parse_marshal(output: &[u8]) -> Option<FallbackCode> {
+    let split = output.iter().position(|byte| *byte == b'\n')?;
+    let header = std::str::from_utf8(&output[..split]).ok()?;
+    let mut fields = header.split(' ');
+    let magic: i64 = fields.next()?.parse().ok()?;
+    let optimize: i32 = fields.next()?.parse().ok()?;
+    let length: usize = fields.next()?.parse().ok()?;
+    if fields.next().is_some() {
+        return None;
+    }
+    let marshalled = output.get(split + 1..)?;
+    // a short read means the interpreter was interrupted partway through writing, and
+    // a long one means something else wrote to its stdout — either way these are not
+    // the bytes it counted, and half a code object is worse than none
+    if marshalled.len() != length || length == 0 {
+        return None;
+    }
+    Some(FallbackCode {
+        marshalled: marshalled.into(),
+        magic,
+        optimize,
+    })
 }
 
 #[cfg(test)]
@@ -292,6 +380,28 @@ mod tests {
                 r"C:\hostedtoolcache\Python\3.12.10\x64\Include"
             )]
         );
+    }
+
+    #[test]
+    fn a_marshal_result_parses_into_a_code_object_and_its_guards() {
+        // the payload is binary and may hold anything, newlines included — only the
+        // *first* one ends the header, and the count says where the rest stops
+        let code = parse_marshal(b"168627699 0 5\n\xc3\n\x00\xffz").unwrap();
+        assert_eq!(code.magic, 168_627_699);
+        assert_eq!(code.optimize, 0);
+        assert_eq!(&*code.marshalled, b"\xc3\n\x00\xffz");
+    }
+
+    #[test]
+    fn a_marshal_result_that_does_not_match_its_own_count_is_refused() {
+        // a code object is worthless in halves, and an interpreter that printed
+        // something of its own before ours has not left us the bytes it counted
+        assert!(parse_marshal(b"168627699 0 9\n\xc3\xc3").is_none());
+        assert!(parse_marshal(b"168627699 0 1\n\xc3\xc3").is_none());
+        assert!(parse_marshal(b"168627699 0 0\n").is_none());
+        assert!(parse_marshal(b"168627699 0\n\xc3").is_none());
+        assert!(parse_marshal(b"168627699 0 1 4\n\xc3").is_none());
+        assert!(parse_marshal(b"no header at all").is_none());
     }
 
     #[test]

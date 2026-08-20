@@ -18,6 +18,31 @@ the observable behaviour of a compiled module and its interpreted twin must be
 identical. that is not an aspiration, it is the property the entire test
 strategy is built on ([plan](plan.md#differential-testing))
 
+it holds for the programs `by check` accepts, and a compiled function is the leg
+that has to be *made* to hold it: it checks its arguments at its boundary, where
+an interpreted one checks nothing until the opt-in `parameters` soundness gate is
+turned on. that gate used to read a parameter's plan off its **annotation**, so a
+type stated with a default was invisible to it:
+
+```python
+def f(safe='/'):
+    return len(safe)
+
+f(b'abc')   # compiled: TypeError.  twin, before: 3
+```
+
+a default is a written type. `def f(safe='/')` says `safe` is a `str` as plainly
+as an annotation would — if something else belonged there, something else would
+be written — and the type system already agrees: a default's requirement is
+`WhenContradicted::Stands`, holding even where the body contradicts it, while
+everything the body merely *samples* can be withdrawn. so the gate now plans
+against the parameter, and reaches what the source stated either way.
+
+it deliberately stops there. the rest of an unannotated parameter's bound is
+recovered from how its body happens to use it, and a recovered requirement is not
+something to raise a `TypeError` over. `x=None` states nothing either — that says
+the argument may be left out, not that `None` is what belongs there
+
 ## why a second backend and not a mypyc invocation
 
 the obvious cheap move is to transpile `.by` to `.py` and hand the result to

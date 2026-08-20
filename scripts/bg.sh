@@ -30,16 +30,41 @@
 
 set -u
 
+# where a job's markers live: outside the project, and *per checkout*
+#
+# keeping them out of the project matters because `by compile` compiles every
+# source it finds beside the file it was given. keeping them per checkout matters
+# because `$TMPDIR` is per *user* on macos, not per session — several worktrees
+# are worked in at once here, and two of them starting a job under the same
+# obvious name (`relbuild`, `tests`) shared one set of markers. the second
+# session's `start` deleted the first's, so the first waited on a log another
+# process was writing and read a status that was never its own. that really
+# happened
+#
+# the checkout's own path is used rather than a hash of it: it is exact, so two
+# trees can never land on one directory, and each component is short enough that
+# the nesting costs nothing
 dir() {
-  # the scratchpad if the harness gave us one, else a temp dir. keeping the
-  # markers out of the project matters: `by compile` compiles every source it
-  # finds beside the file it was given
-  printf '%s\n' "${BY_BG_DIR:-${TMPDIR:-/tmp}/by-bg}"
+  if [ -n "${BY_BG_DIR:-}" ]; then
+    printf '%s\n' "$BY_BG_DIR"
+    return
+  fi
+  local root
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || root=$PWD
+  printf '%s\n' "${TMPDIR:-/tmp}/by-bg$root"
 }
 
 start() {
   local name="$1"; shift
   local d; d=$(dir); mkdir -p "$d"
+  # a name still in use is the caller's mistake, not something to paper over:
+  # clearing the markers under a live job orphans it, and the log it goes on
+  # writing then belongs to a job nobody is waiting for
+  local state; state=$(status "$name")
+  if [ "$state" = running ]; then
+    printf '%s is already running — pick another name or wait for it\n' "$name" >&2
+    return 1
+  fi
   rm -f "$d/$name.done" "$d/$name.log" "$d/$name.pid"
   # the marker is written by the same shell that runs the command, after it
   # exits, so it cannot be missed and it carries the real status

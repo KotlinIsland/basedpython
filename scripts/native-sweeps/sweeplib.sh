@@ -280,9 +280,185 @@ sweep_warm() {
   return 0
 }
 
+# canonicalise a set literal in a leg's output, so its *order* is not read as a difference
+#
+# a set has none. `__abstractmethods__` is a frozenset, and cpython's own
+# `DeprecationWarning: Unimplemented abstract methods {...}` prints it in whatever order
+# the hashes fell — which differed between the two legs consistently, and the rungs compare
+# text, so it read as `DIFFERS` for a module where both legs name the same two methods
+#
+# ⚠️ only a *set*. a dict prints in insertion order and that order is meaningful, so a
+# `{...}` that parses as a dict is left exactly as written. the span is parsed with
+# `ast.literal_eval` rather than matched with a regex, precisely so the two cannot be
+# confused — a nested `{'a': 1}` inside a set of tuples would defeat any "contains a colon"
+# test. anything that does not parse as a literal is left alone
+sweep_canonical() {
+  # an address is never a difference: two processes print two addresses for the same
+  # object, so a leg that merely *mentions* one differs from itself. cpython prints them
+  # unbidden — `Exception ignored in: <function X.__del__ at 0x101eb3880>` reaches a
+  # comparison from the garbage collector, and `tempfile` scored a difference on that line
+  # alone, which a perfect compiler would also have scored
+  set -- "$(printf '%s' "$1" | sed -E 's/0x[0-9a-fA-F]+/0xX/g')"
+  case $1 in *'{'*) ;; *) printf '%s' "$1"; return 0 ;; esac
+  printf '%s' "$1" | "$PY" -c '
+import ast, sys
+text = sys.stdin.read()
+out, i = [], 0
+while i < len(text):
+    if text[i] != "{":
+        out.append(text[i]); i += 1; continue
+    depth, j = 0, i
+    while j < len(text):
+        if text[j] == "{": depth += 1
+        elif text[j] == "}":
+            depth -= 1
+            if depth == 0: break
+        j += 1
+    span = text[i:j+1]
+    try:
+        value = ast.literal_eval(span)
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+        value = None
+    if isinstance(value, (set, frozenset)):
+        out.append("{" + ", ".join(sorted(repr(v) for v in value)) + "}")
+    else:
+        out.append(span)
+    i = j + 1
+sys.stdout.write("".join(out))
+'
+}
+
 # true when the build actually left an extension module behind. `-d o` is not enough:
 # a build that fails halfway leaves the directory and no artefact, and the compiled leg
 # then fails to import for a reason that is not the defect the sweep is looking for
 sweep_built() {
   sweep_artifact "$1" >/dev/null
+}
+
+# write the shared value renderer next to a leg, as `sweepcanon.py`
+#
+# named apart from `sweep_canonical` on purpose: that one takes *text* a leg already
+# printed and normalises it, and three rungs call it that way. this one takes a
+# *directory* and writes a python module into it. one name for both would have been
+# resolved by bash in favour of whichever was defined last, and the text callers would
+# have silently stopped canonicalising
+#
+# a rung that compares *values* rather than names has to answer one question first: what
+# in a repr moves between two runs of the same program, and is therefore never a defect?
+# two things do. an address — `<random.Random object at 0x104a2b3d0>` — differs between
+# any two processes. and the order a `set` or a `frozenset` prints in differs with the
+# hash seed and with insertion history, so the same set prints two ways. a `dict`'s order
+# is *not* in that class: it is insertion order, it is part of the answer, and a compiled
+# module that built one in a different order has a real defect. so sets are sorted and
+# dicts are left exactly as they came
+#
+# the renderer also takes a list of aliases — text to substitute before comparing. the
+# rungs use it for the one difference that is already reported elsewhere: an emitted
+# class in a package answers `m` for its `__module__` where its twin answers `pkg.m`,
+# and that spelling is inside every repr and every AttributeError message a probe
+# produces. `isosurface` reports that defect once per class, which is where it belongs;
+# repeating it inside every value would leave nothing else visible
+sweep_write_renderer() {
+  cat > "$1/sweepcanon.py" <<'PYEOF'
+"""turn a value, or the exception reading it raised, into text two processes agree on"""
+
+import re
+import types
+
+_ADDR = re.compile(r'0x[0-9a-fA-F]+')
+
+# a container is rendered element by element rather than repr'd, so these bound the work
+# and the output. they apply to both legs identically, so a cap can hide a difference
+# past the cap but can never invent one
+ELEMENTS = 50
+CHARACTERS = 200
+DEPTH = 3
+# past this a set is described rather than rendered: sorting is what makes a set
+# comparable, and sorting has to see all of it
+SET_LIMIT = 2000
+
+# read off an instance, a method is a `bound method` on the interpreted leg and a
+# `builtin_function_or_method` on the compiled one — the same member, two spellings.
+# so a callable is rendered by its name and its kind is dropped
+_CALLABLE = (
+    types.FunctionType, types.MethodType, types.BuiltinFunctionType,
+    types.MethodDescriptorType, types.WrapperDescriptorType,
+    types.MethodWrapperType, types.ClassMethodDescriptorType,
+    types.GetSetDescriptorType, types.MemberDescriptorType,
+    staticmethod, classmethod,
+)
+
+
+class Canon:
+    def __init__(self, aliases=()):
+        # longest first: `pkg.m.Outer.Inner` must not be half-replaced by `pkg.m.Outer`
+        self.aliases = sorted(aliases, key=lambda pair: len(pair[0]), reverse=True)
+
+    def scrub(self, text):
+        text = _ADDR.sub('0xX', text)
+        for old, new in self.aliases:
+            text = text.replace(old, new)
+        # a rung compares its two legs line by line, so a rendered value has to stay on
+        # one line: `str()` of an object and of an exception both readily contain a
+        # newline, and one that reached the output would split a probe's answer into
+        # rows the comparison could pair up wrongly
+        text = text.replace('\\', '\\\\').replace('\n', '\\n').replace('\t', '\\t')
+        if len(text) > CHARACTERS:
+            text = text[:CHARACTERS] + '...'
+        return text
+
+    def render(self, value, depth=0):
+        try:
+            return self._render(value, depth)
+        except BaseException as error:
+            return '<render raised %s>' % type(error).__name__
+
+    def _render(self, value, depth):
+        if depth > DEPTH:
+            return '...'
+        if value is None or value is True or value is False:
+            return repr(value)
+        kind = type(value)
+        if kind in (int, float, complex, str, bytes, bytearray):
+            return self.scrub(repr(value))
+        if kind in (list, tuple):
+            return self._sequence(value, depth, '[%s]' if kind is list else '(%s)')
+        if kind in (set, frozenset):
+            if len(value) > SET_LIMIT:
+                return '<%s of %d>' % (kind.__name__, len(value))
+            # the whole set is rendered before anything is dropped: capping first would
+            # cap an arbitrary slice, which is the very thing sorting exists to defeat
+            items = sorted(self.render(item, depth + 1) for item in value)
+            return '{%s}' % ', '.join(self._cap(items, len(value)))
+        if kind is dict:
+            items = ['%s: %s' % (self.render(key, depth + 1), self.render(item, depth + 1))
+                     for key, item in list(value.items())[:ELEMENTS]]
+            return '{%s}' % ', '.join(self._cap(items, len(value)))
+        if isinstance(value, type):
+            return '<class %s>' % self.scrub(
+                '%s.%s' % (getattr(value, '__module__', '?'),
+                           getattr(value, '__qualname__', value.__name__)))
+        if isinstance(value, types.ModuleType):
+            return '<module %s>' % self.scrub(getattr(value, '__name__', '?'))
+        if isinstance(value, _CALLABLE):
+            return '<callable %s>' % self.scrub(str(getattr(value, '__name__', '?')))
+        return self.scrub(repr(value))
+
+    def _sequence(self, value, depth, shape):
+        items = [self.render(item, depth + 1) for item in list(value)[:ELEMENTS]]
+        return shape % ', '.join(self._cap(items, len(value)))
+
+    def _cap(self, items, total):
+        if total > ELEMENTS:
+            return items[:ELEMENTS] + ['...+%d' % (total - ELEMENTS)]
+        return items
+
+    def raised(self, error):
+        """an exception is an answer too, so its type *and* its wording are compared"""
+        try:
+            text = str(error)
+        except BaseException:
+            text = '<str raised>'
+        return '<raised %s: %s>' % (type(error).__name__, self.scrub(text))
+PYEOF
 }

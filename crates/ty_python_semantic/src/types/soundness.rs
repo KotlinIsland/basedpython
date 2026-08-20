@@ -289,6 +289,37 @@ pub fn runtime_check_plan<'db>(
     runtime_check_target(db, env, file, ty).map(CheckKind::Isinstance)
 }
 
+/// [`runtime_check_plan`] for a *parameter*, whose type may be a hole rather than
+/// a written type.
+///
+/// An unannotated parameter opens a hole bounded by everything the function
+/// requires of it, and a hole has no faithful runtime test of its own — so asking
+/// [`runtime_check_plan`] about one answers nothing, and the interpreted leg wrote
+/// no check where the native backend was already enforcing the bound.
+///
+/// What the check is planned against is the part of that bound the source
+/// *states*: the parameter's default. `def f(safe='/')` says `safe` is a `str`,
+/// and if something else belonged there something else would be written. The rest
+/// of the bound is recovered from how the body happens to use the parameter, and a
+/// recovered requirement is not something to raise a `TypeError` over — it is a
+/// sample, and it can be withdrawn.
+pub fn parameter_runtime_check_plan<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+) -> Option<CheckKind> {
+    let stated = match ty {
+        Type::TypeVar(typevar) => {
+            let definition = typevar.typevar(db).definition(db)?;
+            crate::types::inferred_signature::stated_parameter_bound(db, definition)?
+        }
+        // a written annotation is already the stated type
+        written => written,
+    };
+    runtime_check_plan(db, env, file, stated)
+}
+
 /// whether a runtime check against `ty` must silently drop a type-argument
 /// claim: `ty` carries a written generic specialization, but its arguments are
 /// erased at runtime, so only the origin class can be tested. this is what

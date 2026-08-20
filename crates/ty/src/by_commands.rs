@@ -387,19 +387,31 @@ fn resolved_module_name(db: &ProjectDatabase, file: ruff_db::files::File) -> Opt
 /// package, and its artefact is the `__init__` inside the directory. A file the
 /// resolver could not reach has no dotted name at all: it falls back to its stem,
 /// which is the only name it could be imported under, from its own directory.
+///
+/// `None` where even that fallback names nothing the source meant. An
+/// `__init__.py` is the body of the package its directory names, and a directory
+/// the resolver could not reach names no package — `a-one/__init__.py` is the
+/// plainest case, since `a-one` is not an identifier and nothing can import it.
+/// Compiling such a file under its stem produces a module called `__init__`: it
+/// loads, it answers `__name__ == "__init__"`, its relative imports have no
+/// package to be relative to, and its submodules are bound to nothing. Two of
+/// them in different directories then claim one artefact, which is how the clash
+/// error was first proven reachable. A source whose own identity the artefact
+/// cannot carry is declined rather than half-built.
 fn compiled_module_name(
     db: &ProjectDatabase,
     path: &Path,
     file: ruff_db::files::File,
-) -> anyhow::Result<by_ir::ModuleName> {
+) -> anyhow::Result<Option<by_ir::ModuleName>> {
     let stem = path
         .file_stem()
         .and_then(|stem| stem.to_str())
         .context("a source file has no usable module name")?;
     Ok(match resolved_module_name(db, file) {
-        Some(resolved) if stem == "__init__" => by_ir::ModuleName::package(resolved),
-        Some(resolved) => by_ir::ModuleName::new(resolved),
-        None => by_ir::ModuleName::new(stem),
+        Some(resolved) if stem == "__init__" => Some(by_ir::ModuleName::package(resolved)),
+        Some(resolved) => Some(by_ir::ModuleName::new(resolved)),
+        None if stem == "__init__" => None,
+        None => Some(by_ir::ModuleName::new(stem)),
     })
 }
 
@@ -637,10 +649,20 @@ pub(crate) fn cmd_compile(
     // what each source will be compiled as, worked out before anything is written:
     // two sources that land on the same artefact used to leave only the second, and
     // nothing said so
-    let mut names: Vec<by_ir::ModuleName> = Vec::with_capacity(handles.len());
+    let mut planned: Vec<(&(PathBuf, ruff_db::files::File), by_ir::ModuleName)> =
+        Vec::with_capacity(handles.len());
     let mut claimed: HashMap<PathBuf, &Path> = HashMap::new();
-    for (path, file) in &handles {
-        let name = compiled_module_name(&db, path, *file)?;
+    for handle in &handles {
+        let (path, file) = handle;
+        let Some(name) = compiled_module_name(&db, path, *file)? else {
+            eprintln!(
+                "skipping {}: it is the body of the package `{}` names, \
+                 and no import path reaches that directory",
+                path.display(),
+                path.parent().unwrap_or(path).display()
+            );
+            continue;
+        };
         // keyed on the artefact rather than on the name, because the artefact is
         // what would be overwritten — and a file the resolver cannot name falls
         // back to its stem, which two directories can share
@@ -654,10 +676,10 @@ pub(crate) fn cmd_compile(
                 name.dotted()
             );
         }
-        names.push(name);
+        planned.push((handle, name));
     }
 
-    for ((path, file), name) in handles.iter().zip(names) {
+    for ((path, file), name) in planned {
         let source = fs::read_to_string(path)
             .with_context(|| format!("could not read {}", path.display()))?;
 
@@ -685,7 +707,7 @@ pub(crate) fn cmd_compile(
         ));
 
         let built = if emit_c_only {
-            by_build::emit_lowered(lowered, &source, &out_dir, &options, toolchain.version)
+            by_build::emit_lowered(lowered, &source, Some(&toolchain), &out_dir, &options)
         } else {
             by_build::build_lowered(lowered, &source, &toolchain, &out_dir, &options).inspect(
                 |built| {

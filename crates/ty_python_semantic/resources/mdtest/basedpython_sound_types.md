@@ -179,7 +179,7 @@ class A:
 def f(x):
     return x.name
 
-reveal_type(f(A()))  # revealed: object
+reveal_type(f(A()))  # revealed: Unknown
 
 f(A())  # ok
 f(1)  # error: [invalid-argument-type]
@@ -223,6 +223,210 @@ def f(x):
 f(A())  # ok
 # error: [invalid-argument-type] "Argument type `Literal[1]` does not satisfy `<Protocol with members 'foo', 'name'>`, inferred for parameter `x`"
 f(1)
+```
+
+### a subscript
+
+`x[k]` is a call on `__getitem__`, which is a member like any other, so subscripting a parameter is
+a requirement on the argument in the same way reading an attribute off it is
+
+```by
+def f(s):
+    return s[:5]
+
+# revealed: def f(s: some protocol(def __getitem__(self, slice[None, 5, None], /) -> Unknown)) -> Unknown
+reveal_type(f)
+
+f("hello")  # ok
+f(1)  # error: [invalid-argument-type]
+```
+
+`x[k] = v` asks for `__setitem__` instead, taking the key and the value
+
+```by
+def store(d):
+    d["k"] = 1
+
+reveal_type(store)  # revealed: def store(d: some protocol(def __setitem__(self, str, int, /) -> Unknown))
+
+store({"k": 1})  # ok
+store([])  # error: [invalid-argument-type]
+```
+
+### an operator
+
+an operator is a call on the left operand's dunder
+
+```by
+def sub(n):
+    return n - 1
+
+reveal_type(sub)  # revealed: def sub(n: some protocol(def __sub__(self, int, /) -> Unknown)) -> Unknown
+
+sub(5)  # ok
+sub("nope")  # error: [invalid-argument-type]
+```
+
+the unary operators and the ordering comparisons are read the same way. `==`, `!=` and the identity
+tests are not, because `object` answers those itself and they require nothing
+
+```by
+def measure(v):
+    return -v
+
+reveal_type(measure)  # revealed: def measure(v: some protocol(def __neg__(self, /) -> Unknown)) -> Unknown
+
+measure(5)  # ok
+measure(None)  # error: [invalid-argument-type]
+
+def ordered(v):
+    return v < 0
+
+reveal_type(ordered)  # revealed: def ordered(v: some protocol(def __lt__(self, int, /) -> Unknown)) -> Unknown
+
+ordered(5)  # ok
+ordered(None)  # error: [invalid-argument-type]
+
+def identical(v):
+    return v == 1
+
+identical(object())  # ok
+```
+
+the value an operator produces is not itself a value this tracks, so what the body goes on to do
+with `n - 1` is no requirement on what `n`'s `__sub__` returns
+
+```by
+def stepped(n):
+    return (n - 1).bit_length()
+
+reveal_type(stepped)  # revealed: def stepped(n: some protocol(def __sub__(self, int, /) -> Unknown)) -> Unknown
+```
+
+### iteration
+
+iterating a parameter asks for `__iter__`, and for a `__next__` on whatever that hands back. the two
+together are what makes an *element* a value in its own right, so what the loop body does with the
+loop variable is a requirement on what the argument yields rather than on the argument
+
+```by
+def total(xs):
+    for x in xs:
+        x.bit_length()
+
+# revealed: def total(xs: some protocol(def __iter__(self, /) -> protocol(def __next__(self, /) -> protocol(def bit_length(self, /) -> Unknown))))
+reveal_type(total)
+
+total([1, 2])  # ok
+total(["a"])  # error: [invalid-argument-type]
+total(1)  # error: [invalid-argument-type]
+```
+
+a comprehension, a splatted argument and a destructuring assignment all iterate too
+
+```by
+def comprehended(xs):
+    return [x for x in xs]
+
+def splatted(xs):
+    print(*xs)
+
+def destructured(xs):
+    a, b = xs
+
+comprehended([1])  # ok
+comprehended(1)  # error: [invalid-argument-type]
+splatted([1])  # ok
+splatted(1)  # error: [invalid-argument-type]
+destructured([1, 2])  # ok
+destructured(1)  # error: [invalid-argument-type]
+```
+
+### calling the parameter itself
+
+calling a parameter asks for a `__call__` shaped like the call, which is what a function has
+
+```by
+def apply(fn):
+    return fn(1)
+
+reveal_type(apply)  # revealed: def apply(fn: some protocol(def __call__(self, int, /) -> Unknown)) -> Unknown
+
+def takes_int(a: int) -> str:
+    return ""
+
+apply(takes_int)  # ok
+apply(1)  # error: [invalid-argument-type]
+```
+
+### a member called twice takes both
+
+each call is a separate requirement and all of them have to hold, so the member has to accept every
+argument any of them passed. a parameter is contravariant, so the calls combine by unioning position
+by position
+
+```by
+class Two:
+    def group(self, which: str) -> int:
+        return 1
+
+class One:
+    def group(self, which: "indent") -> int:
+        return 1
+
+def f(m):
+    m.group("indent")
+    m.group("source")
+
+reveal_type(f)  # revealed: def f(m: some protocol(def group(self, str, /) -> Unknown))
+
+f(Two())  # ok
+f(One())  # error: [invalid-argument-type]
+```
+
+### calls that do not agree on their shape
+
+two calls of different arity need an overload, which cannot be written here. such a member degrades
+to asking only that it exist and be callable
+
+```by
+def f(m):
+    m.group("indent")
+    m.group(1, 2)
+
+reveal_type(f)  # revealed: def f(m: some protocol(def group(self, /, *args: Any, **kwargs: Any) -> Unknown))
+```
+
+### a member nothing was required of reads back gradually
+
+recording a requirement is about what the *call site* has to supply, and it does not change what the
+body itself reads. `x[k]` and `x - 1` read as `Unknown` whether or not anything was recorded, which
+is what keeps a body that used to check from acquiring errors about a value nothing learned anything
+about
+
+a member the body *named* reads back the same way. the requirement is that the member **exist** —
+nothing about it says what it holds, and `object` would not describe that value, it would forbid
+every use of it. that is a stronger claim than the source made, and it travels: a member's type
+becomes the recovered *return* type of the function that read it, so `config = yaml.safe_load(fp)`
+came back as an `object` and `config["plugins"]` was an error no annotation could take back
+
+```py
+def f(x):
+    reveal_type(x[0])  # revealed: Unknown
+    reveal_type(x - 1)  # revealed: Unknown
+    reveal_type(x.name)  # revealed: Unknown
+```
+
+### a requirement another requirement already meets is left out
+
+`int` has the `__mul__` the body needs, so intersecting the two would only cost the body the `int`
+it could otherwise read back
+
+```py
+def twice(n=1):
+    return n * 2
+
+reveal_type(twice)  # revealed: def twice(n: some int = 1) -> int
 ```
 
 ### a declared place says what the member's value has to be
@@ -468,8 +672,9 @@ g(Deep())  # error: [invalid-argument-type]
 
 ### a chain through a reassigned local says nothing
 
-which of a name's values a later use is about is not a question this can answer, so the chain stops
-there and the member's value only has to exist
+which of a name's values a later use is about is not a question this can answer. so the chain stops
+there: the member still has to be there, and what it hands back is a value nothing here can say
+anything about
 
 ```by
 class A:
@@ -482,7 +687,7 @@ def f(x, flag):
         a = 1
     assert a is int
 
-reveal_type(f)  # revealed: def f(x: some protocol(def foo(self, /) -> object), flag)
+reveal_type(f)  # revealed: def f(x: some protocol(def foo(self, /) -> Unknown), flag)
 
 f(A(), True)  # ok
 ```
@@ -499,7 +704,7 @@ def guarded(x):
     if a is int:
         a.bit_length()
 
-reveal_type(guarded)  # revealed: def guarded(x: some protocol(def foo(self, /) -> object))
+reveal_type(guarded)  # revealed: def guarded(x: some protocol(def foo(self, /) -> Unknown))
 
 def returned(x):
     a = x.foo()
@@ -507,14 +712,14 @@ def returned(x):
         return None
     a.bit_length()
 
-reveal_type(returned)  # revealed: def returned(x: some protocol(def foo(self, /) -> object))
+reveal_type(returned)  # revealed: def returned(x: some protocol(def foo(self, /) -> Unknown))
 
 def branched(x, flag):
     a = x.foo()
     if flag:
         a.bar()
 
-# revealed: def branched(x: some protocol(def foo(self, /) -> protocol(def bar(self, /) -> object)), flag)
+# revealed: def branched(x: some protocol(def foo(self, /) -> protocol(def bar(self, /) -> Unknown)), flag)
 reveal_type(branched)
 ```
 
@@ -523,11 +728,266 @@ reveal_type(branched)
 nothing is invented from a use that was not understood, so a body keeps type-checking exactly as it
 did and its call sites stay unchecked
 
+`in` is such a use where the container decides what it takes. it runs through `__contains__`,
+`__iter__` *or* `__getitem__` on the right-hand operand, and asking for any one of the three would
+demand something the body never needed
+
 ```py
 def f(x):
-    return x + 1
+    return 1 in x
 
 f("anything")  # ok
+```
+
+an operation whose *left* operand is not the parameter is another. python only reaches the right
+operand's reflected dunder when the left operand's own returns `NotImplemented`, and which of the
+two routes it takes is decided by the argument: `"%s" % attr` runs entirely through `str.__mod__`,
+and requiring `attr` to have `__rmod__` would reject every `str`
+
+```py
+def g(x):
+    return "%s" % x
+
+g("anything")  # ok
+```
+
+### a bound has to type the body it was read off
+
+every requirement above is read off the body, so the body is checked against the bound they add up
+to. a use of the *same* parameter that no requirement can state is what makes that fail: the bound
+is built without that use and then checked against it anyway, and the function's own code stops
+fitting the signature the function itself produced
+
+so a use like that takes the bound away rather than being passed over. reading `r.bit_length()` asks
+for a protocol, and `2 * r` two lines later is exactly the operation such a protocol cannot answer,
+so `r` keeps nothing
+
+```py
+def area(r):
+    a = r.bit_length()
+    return 2 * r
+
+reveal_type(area)  # revealed: def area(r) -> Unknown
+area("anything")  # ok
+```
+
+the same body without that line keeps everything it read
+
+```py
+def bits(r):
+    a = r.bit_length()
+    return r
+
+# revealed: def bits(r: some <Protocol with members 'bit_length'>) -> r
+reveal_type(bits)
+```
+
+### a use that cannot be stated only takes away what it is about
+
+a use of a *member's* value says nothing about the member itself. `x.foo` still has to be there and
+still has to be callable the way the body called it; what it hands back is the part nothing can be
+said about, so that part reads back as gradual
+
+```py
+def held(x):
+    return 1 + x.foo()
+
+# revealed: def held(x: some <Protocol with members 'foo'>) -> Unknown
+reveal_type(held)
+
+held(1)  # error: [invalid-argument-type]
+```
+
+### a narrowed use takes the bound away too
+
+a name a test narrowed stands for something narrower than the argument, so nothing done with it is a
+requirement on the argument. it is still the same argument underneath, though, and the type it now
+has still mentions the hole — so the body goes on being checked against whatever bound the rest of
+it recovers, through a use no requirement was ever built from. that is the failure above reached by
+a route the walk does not see, and it is closed the same way
+
+```py
+def bits(x):
+    x.bit_length()
+    if x:
+        return 2 * x
+    return 0
+
+reveal_type(bits)  # revealed: def bits(x) -> int
+bits("anything")  # ok
+```
+
+a member read under a narrowing goes the same way, and for a reason of its own: the branch was
+written because the author meant the other one to be reachable, so requiring of every argument what
+this one does would reject the very calls the test exists for
+
+```py
+def branch(x):
+    x.foo()
+    if x:
+        return x.bar()
+    return 0
+
+reveal_type(branch)  # revealed: def branch(x) -> Unknown | Literal[0]
+```
+
+### a narrowing the bound already implies is no narrowing
+
+`assert isinstance(x, int)` puts `int` into the bound, and from there `x` narrowed to an `int` is
+the hole itself. so the uses below such an `assert` are recorded like any other — and what they
+record is checked against the very bound the `assert` put there, which is what makes recording them
+safe
+
+```py
+def f(x):
+    assert isinstance(x, int)
+    return x + 1
+
+reveal_type(f)  # revealed: def f(x: some int) -> int
+
+f(1)  # ok
+f("a")  # error: [invalid-argument-type]
+```
+
+### a narrowing costs only a bound the body itself recovered
+
+what it takes away is what the walk read off the body, so where the walk read nothing there is
+nothing for the narrowed use to fail against and nothing to take. that is what lets an `assert` be
+read from inside its own test: `isinstance(proto, int)` narrows `proto` for the arm beside it, and
+nothing else in this body asks anything of `proto` at all
+
+```py
+def opcode(proto):
+    assert isinstance(proto, int) and proto <= 5
+
+reveal_type(opcode)  # revealed: def opcode(proto: some int)
+
+opcode(1)  # ok
+opcode("a")  # error: [invalid-argument-type]
+```
+
+### the uses that cannot be stated
+
+each of these asks something of the parameter that no requirement here can write down, so each one
+leaves the parameter gradual however much else its body said
+
+writing a member, rather than reading one:
+
+```py
+def written(x):
+    x.foo()
+    x.other = 1
+
+reveal_type(written)  # revealed: def written(x)
+```
+
+a call whose arguments are splatted, since no fixed parameter list says how many of them there are:
+
+```py
+def spread(x, args):
+    x.foo(*args)
+    x.bar()
+
+# revealed: def spread(x, args: some <Protocol with members '__iter__'>)
+reveal_type(spread)
+```
+
+and the statements that ask for a shape of their own — `raise` for a `BaseException`, `with` for a
+pair of context-manager methods:
+
+```py
+def thrown(x):
+    x.foo()
+    raise x
+
+reveal_type(thrown)  # revealed: def thrown(x) -> Never
+
+def entered(x):
+    x.foo()
+    with x:
+        pass
+
+reveal_type(entered)  # revealed: def entered(x)
+```
+
+### a position that takes anything asks nothing
+
+the other side of the same rule: where a position accepts `object` it accepts whatever bound the
+rest of the body recovers, so the body goes on checking and the bound stays
+
+that covers a great deal of ordinary python — a value printed or formatted, one read for its truth,
+a key looked up in a mapping, an argument to an overloaded callee every reading of which takes
+anything
+
+```py
+def shown(x):
+    x.foo()
+    print(x)
+    print(f"{x}")
+    print(str(x))
+    return x or 0
+
+# revealed: def shown(x: some <Protocol with members 'foo'>) -> (x & ~AlwaysFalsy) | Literal[0]
+reveal_type(shown)
+
+def keyed(x, d: dict[str, int]):
+    x.foo()
+    return d[x] if x in d else 0
+
+# revealed: def keyed(x: some <Protocol with members 'foo'>, d: dict[str, int]) -> int
+reveal_type(keyed)
+```
+
+`"%s" % x` is the same thing read through an operator: `str.__mod__` takes anything, so the operand
+written on its right is asked nothing and keeps whatever else the body said about it
+
+```py
+def formatted(x):
+    x.foo()
+    return "%s" % x
+
+# revealed: def formatted(x: some <Protocol with members 'foo'>) -> str
+reveal_type(formatted)
+```
+
+a narrowed value is still a value, and a position like this takes one of those too, so a narrowing
+whose uses all sit in positions like this costs nothing
+
+```py
+def guarded(x):
+    x.foo()
+    if x:
+        print(x)
+        print(f"{x}")
+        print("%s" % x)
+    return 0
+
+# revealed: def guarded(x: some <Protocol with members 'foo'>) -> Literal[0]
+reveal_type(guarded)
+```
+
+### a place that says what it holds says it about the parameter too
+
+reading a *member* into a declared place constrains that member. reading the parameter itself into
+one constrains the parameter, for the same reason and by the same rule
+
+```py
+def stored(x):
+    a: int = x
+    return a
+
+reveal_type(stored)  # revealed: def stored(x: some int) -> x
+
+stored("no")  # error: [invalid-argument-type]
+```
+
+```py
+def returned(x) -> str:
+    return x
+
+reveal_type(returned)  # revealed: def returned(x: some str) -> str
+
+returned(1)  # error: [invalid-argument-type]
 ```
 
 ### an operation on a hole nothing bounded answers gradually
@@ -850,7 +1310,7 @@ def f(x, y: object):
     if hasattr(y, "a"):
         x.b(y)
 
-# revealed: def f(x: some protocol(def b(self, protocol(a: object), /) -> object), y: object)
+# revealed: def f(x: some protocol(def b(self, protocol(a: object), /) -> Unknown), y: object)
 reveal_type(f)
 ```
 
@@ -862,7 +1322,7 @@ def f(x, y: object):
         case [_]:
             x.b(y)
 
-# revealed: def f(x: some protocol(def b(self, Sequence[object] & protocol(def __getitem__(self, index: 0, /) -> object; def __len__(self, /) -> 1 | True) & not str & not bytes & not bytearray, /) -> object), y: object)
+# revealed: def f(x: some protocol(def b(self, Sequence[object] & protocol(def __getitem__(self, index: 0, /) -> object; def __len__(self, /) -> 1 | True) & not str & not bytes & not bytearray, /) -> Unknown), y: object)
 reveal_type(f)
 ```
 
@@ -878,7 +1338,7 @@ def f(x, y: T | dict[str, int]):
     if "k" in y:
         x.b(y)
 
-# revealed: def f(x: some protocol(def b(self, T | (dict[str, int] & protocol(def __contains__(self, key: "k", /) -> True)), /) -> object), y: T | dict[str, int])
+# revealed: def f(x: some protocol(def b(self, T | (dict[str, int] & protocol(def __contains__(self, key: "k", /) -> True)), /) -> Unknown), y: T | dict[str, int])
 reveal_type(f)
 ```
 

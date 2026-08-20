@@ -1778,7 +1778,7 @@ impl<'db> Type<'db> {
         )
     }
 
-    pub(crate) const fn is_never(&self) -> bool {
+    pub const fn is_never(&self) -> bool {
         matches!(
             self,
             Type::Never
@@ -2897,7 +2897,7 @@ impl<'db> Type<'db> {
     }
 
     /// Detects types which are valid to appear inside a `Literal[…]` type annotation.
-    fn is_literal_or_union_of_literals(
+    pub(crate) fn is_literal_or_union_of_literals(
         &self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,

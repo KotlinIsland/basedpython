@@ -79,6 +79,24 @@ fn field_decl<'a>(
         .and_then(|candidate| candidate.fields.iter().find(|decl| decl.name == field))
 }
 
+/// whether `function` is the method a resumable class steps through
+///
+/// its `return` is not an ordinary one: it is the end of a generator or a coroutine,
+/// and how it is reported is what the send slot and the iterator protocol disagree
+/// about
+fn resumes(module: &ModuleIr, function: &Function) -> bool {
+    let Some(owner) = &function.owner else {
+        return false;
+    };
+    module.classes.iter().any(|class| {
+        &class.name == owner
+            && class
+                .resume
+                .as_ref()
+                .is_some_and(|resume| resume.method == function.name)
+    })
+}
+
 fn mangle_member(name: &str) -> String {
     by_ir::function::FieldDecl {
         name: name.to_string(),
@@ -492,6 +510,14 @@ fn emit_class_struct(module: &ModuleIr, class: &ClassIr) -> String {
         "typedef struct {} {{\n{header}",
         class.struct_name(module.name.dotted())
     );
+    // where a `return` puts its value. a resumable frame reports finishing by writing
+    // here and handing back nothing, so that the slot python asks with — `am_send` —
+    // can say what the frame returned without an exception ever being built. it is not
+    // one of the frontend's fields because no python code can name it and nothing
+    // parks across a suspension in it: it is written once, on the way out
+    if class.resume.is_some() {
+        out.push_str("    PyObject *by_returned;\n");
+    }
     for field in &class.fields {
         let _ = writeln!(out, "    {} {};", ctype(module, &field.ty), field.member());
         // `tp_alloc` zeroes the instance, so "never written" is the state an object
@@ -544,6 +570,11 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
         }
         if keeps_a_dict {
             out.push_str("    By_ClearManagedDict((PyObject *)self);\n");
+        }
+        // a return nobody asked for still owns its value: a generator dropped between
+        // its frame finishing and the finish being read leaves one here
+        if class.resume.is_some() {
+            out.push_str("    Py_XDECREF(self->by_returned);\n");
         }
         for field in &class.fields {
             if let Some(release) = dec_ref(&field.ty, &format!("self->{}", field.member())) {
@@ -1024,7 +1055,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
              \x20   PyObject *by_old = self->{};\n\
              \x20   self->{} = By_NewRef(args[0]);\n\
              \x20   Py_XDECREF(by_old);\n\
-             \x20   return By_StepGenerator(selfobj, &self->{state},\n\
+             \x20   return By_StepGenerator(selfobj, &self->by_returned, &self->{state},\n\
              \x20                           (PyObject *(*)(PyObject *)){symbol});\n}}",
             mangle_member(crate::GENERATOR_SENT),
             mangle_member(crate::GENERATOR_SENT),
@@ -1037,7 +1068,8 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             "static PyObject *{type_name}_close(PyObject *selfobj, PyObject *const *args, Py_ssize_t nargs) {{\n\
              \x20   (void)args; (void)nargs;\n\
              \x20   {struct_name} *self = ({struct_name} *)selfobj;\n\
-             \x20   int by_r = By_CloseGenerator(selfobj, &self->{}, &self->{state},\n\
+             \x20   int by_r = By_CloseGenerator(selfobj, &self->{}, &self->by_returned,\n\
+             \x20                                &self->{state},\n\
              \x20                                (PyObject *(*)(PyObject *)){symbol});\n\
              \x20   By_FinishGenerator(&self->{state});\n\
              \x20   if (by_r < 0) return NULL;\n\
@@ -1055,6 +1087,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
              \x20       return NULL;\n\
              \x20   }}\n\
              \x20   return By_ThrowInto(selfobj, &(({struct_name} *)selfobj)->{},\n\
+             \x20                       &(({struct_name} *)selfobj)->by_returned,\n\
              \x20                       &(({struct_name} *)selfobj)->{state}, args[0],\n\
              \x20                       (PyObject *(*)(PyObject *)){symbol});\n}}",
             mangle_member(crate::GENERATOR_THROWN),
@@ -1160,10 +1193,34 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             let _ = writeln!(
                 out,
                 "static PyObject *{type_name}_iternext(PyObject *self) {{\n\
-                 \x20   return By_StepGenerator(self, &(({struct_name} *)self)->{state},\n\
+                 \x20   return By_StepGenerator(self, &(({struct_name} *)self)->by_returned,\n\
+                 \x20                           &(({struct_name} *)self)->{state},\n\
                  \x20                           (PyObject *(*)(PyObject *)){symbol});\n}}",
                 state = mangle_member(crate::GENERATOR_STATE)
             );
+            // the slot `PyIter_Send` prefers, and the reason a `return` is reported by
+            // writing it down rather than by raising: an `await` that completes gets its
+            // answer without an exception being built and immediately unpacked again.
+            //
+            // an async generator's state object deliberately has none — python's own
+            // has none either. what a caller sends into one goes through `asend`, whose
+            // awaitable is a different object with a different suspension to report
+            if resume.surface != Surface::AsyncGenerator {
+                let _ = writeln!(
+                    out,
+                    "#if PY_VERSION_HEX >= 0x030A0000\n\
+                     static PySendResult {type_name}_send_slot(PyObject *self, PyObject *by_arg,\n\
+                     \x20                                     PyObject **by_result) {{\n\
+                     \x20   return By_SendGenerator(self, &(({struct_name} *)self)->{sent},\n\
+                     \x20                           &(({struct_name} *)self)->by_returned,\n\
+                     \x20                           &(({struct_name} *)self)->{state},\n\
+                     \x20                           (PyObject *(*)(PyObject *)){symbol},\n\
+                     \x20                           by_arg, by_result);\n}}\n\
+                     #endif",
+                    sent = mangle_member(crate::GENERATOR_SENT),
+                    state = mangle_member(crate::GENERATOR_STATE)
+                );
+            }
             // the member the frontend writes the suspension kind into
             let kind_member = class
                 .fields
@@ -1208,6 +1265,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20   PyObject *by_step;\n\
                      \x20   if (by_carried != NULL && by_self->by_mode == 3) {{\n\
                      \x20       by_step = By_ThrowInto((PyObject *)by_gen, &by_gen->{thrown},\n\
+                     \x20                              &by_gen->by_returned,\n\
                      \x20                              &by_gen->{state}, by_carried,\n\
                      \x20                              (PyObject *(*)(PyObject *)){symbol});\n\
                      \x20       Py_DECREF(by_carried);\n\
@@ -1217,7 +1275,8 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20           by_gen->{sent} = by_carried;\n\
                      \x20           Py_XDECREF(by_old);\n\
                      \x20       }}\n\
-                     \x20       by_step = By_StepGenerator((PyObject *)by_gen, &by_gen->{state},\n\
+                     \x20       by_step = By_StepGenerator((PyObject *)by_gen, &by_gen->by_returned,\n\
+                     \x20                                  &by_gen->{state},\n\
                      \x20                                  (PyObject *(*)(PyObject *)){symbol});\n\
                      \x20   }}\n\
                      \x20   if (by_step == NULL) return By_EndAsyncIteration();\n\
@@ -1302,14 +1361,27 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                     "static PyObject *{type_name}_await(PyObject *self) {{\n\
                      \x20   return By_NewRef(self);\n}}\n\
                      static PyAsyncMethods {type_name}_async = {{\n\
-                     \x20   .am_await = {type_name}_await,\n}};"
+                     \x20   .am_await = {type_name}_await,\n\
+                     #if PY_VERSION_HEX >= 0x030A0000\n\
+                     \x20   .am_send = {type_name}_send_slot,\n\
+                     #endif\n}};"
                 );
                 format!(
                     "             .tp_as_async = &{type_name}_async,\n             .tp_iternext = {type_name}_iternext,\n             .tp_finalize = {type_name}_finalize,\n"
                 )
             } else {
+                // a generator answers the send slot too — a `yield from` reaches it the
+                // same way an `await` does. the table exists for that one entry, and the
+                // awaitable slots stay empty so a generator is still not awaitable
+                let _ = writeln!(
+                    out,
+                    "#if PY_VERSION_HEX >= 0x030A0000\n\
+                     static PyAsyncMethods {type_name}_async = {{\n\
+                     \x20   .am_send = {type_name}_send_slot,\n}};\n\
+                     #endif"
+                );
                 format!(
-                    "             .tp_iter = PyObject_SelfIter,\n             .tp_iternext = {type_name}_iternext,\n             .tp_finalize = {type_name}_finalize,\n"
+                    "#if PY_VERSION_HEX >= 0x030A0000\n             .tp_as_async = &{type_name}_async,\n#endif\n             .tp_iter = PyObject_SelfIter,\n             .tp_iternext = {type_name}_iternext,\n             .tp_finalize = {type_name}_finalize,\n"
                 )
             }
         }
@@ -2931,13 +3003,6 @@ fn object_expr(function: &Function, value: &Value) -> String {
     }
 }
 
-/// whether reading this operand produces a value the reader must release
-///
-/// nothing does any more: a string literal is a borrowed static
-fn value_is_owned(_value: &Value) -> bool {
-    false
-}
-
 fn c_string(text: &str) -> String {
     c_byte_string(text.as_bytes())
 }
@@ -3151,12 +3216,11 @@ fn emit_op(
             };
             let expr = value_expr(src);
             let mut out = String::new();
-            if value_is_owned(src) || !decl.ty.is_refcounted() {
+            // an operand is always borrowed — a literal is a static and a register is
+            // the frame's — so an assignment never has an error edge of its own, and
+            // one whose destination holds no reference is a plain store
+            if !decl.ty.is_refcounted() {
                 out.push_str(&assign_owned(module, function, *dest, &expr));
-                if value_is_owned(src) {
-                    let check = error_check(&decl.ty, &local(*dest));
-                    let _ = writeln!(out, "    if ({check}) goto by_error;");
-                }
             } else {
                 // copying a register: retain the new value before releasing the
                 // old, so `a = a` is safe
@@ -4017,12 +4081,36 @@ fn emit_op(
             let _ = writeln!(out, "      {}.f1 = (char)by_done; }}", local(*dest));
             out
         }
-        Op::RaiseWith { error, value } => format!(
-            "    By_RaiseWith({}, {});\n    goto {};\n",
-            error.c_name(),
-            value_expr(value),
-            error_label(error_target)
-        ),
+        Op::RaiseWith { error, value } => {
+            // a resumable frame's `return` is the one raise that is not really one: the
+            // value is written into the state object and the frame hands back nothing,
+            // so that `am_send` can report a return for the price of a pointer read
+            // instead of building a `StopIteration` for its caller to unpack again.
+            // whoever owes python an exception builds it from there, in `By_TakeReturn`.
+            //
+            // only the form that carries a value takes this route. a bare `return` is
+            // lowered to the same op a written `raise StopIteration` is, and the two
+            // must not be confused: one finishes the frame, the other is an exception
+            // the body chose to raise
+            if *error == by_ir::ops::StandardError::StopIteration && resumes(module, function) {
+                let receiver = local(RegisterId(0));
+                format!(
+                    "    {{ PyObject *by_t = By_NewRef({});\n\
+                     \x20     Py_XDECREF({receiver}->by_returned);\n\
+                     \x20     {receiver}->by_returned = by_t; }}\n\
+                     \x20   goto {};\n",
+                    value_expr(value),
+                    error_label(error_target)
+                )
+            } else {
+                format!(
+                    "    By_RaiseWith({}, {});\n    goto {};\n",
+                    error.c_name(),
+                    value_expr(value),
+                    error_label(error_target)
+                )
+            }
+        }
         Op::GetCell {
             dest,
             receiver,
@@ -4873,6 +4961,14 @@ fn emit_wrapper(module: &ModuleIr, function: &Function, is_method: bool) -> Stri
         ctype(module, &function.ret),
         function.native_symbol(module.name.dotted())
     );
+    // a resume hands back nothing both when the frame returned and when it raised, and
+    // the second is the only one a python caller can be given. anything reaching the
+    // step through this wrapper rather than through the iterator protocol still gets
+    // the `StopIteration`, because a wrapper that returned NULL with no exception set
+    // would be a `SystemError` at best
+    if resumes(module, function) {
+        out.push_str("    if (by_result == NULL) (void)By_TakeReturn(&a0->by_returned);\n");
+    }
     if function.convention.can_fail() {
         let _ = writeln!(
             out,
@@ -4951,6 +5047,22 @@ fn c_string_chunked(text: &str) -> String {
         out.push_str(&c_string(&chunk));
     }
     out
+}
+
+/// a C string literal for arbitrary bytes, split into adjacent literals
+///
+/// as [`c_string_chunked`], but the input is not text: a marshalled code object is
+/// mostly bytes no character stands for, and every one of them is escaped. the length
+/// is carried separately because these bytes contain NULs
+fn c_bytes_chunked(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "\"\"".to_string();
+    }
+    bytes
+        .chunks(1024)
+        .map(c_byte_string)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// the statements that resolve a dotted name out of the module namespace into `into`
@@ -5151,6 +5263,30 @@ fn emit_module_init(module: &ModuleIr) -> String {
         "static const char by_fallback_source[] =\n{};\n",
         c_string_chunked(module.fallback_source.as_deref().unwrap_or(""))
     );
+    // and the same program as a code object, so that an import reads it rather than
+    // parsing the text over again. the text stays: a code object is only good for the
+    // interpreter that wrote it — `By_Fallback` says which — and a build with no
+    // interpreter to ask has none at all
+    match &module.fallback_code {
+        Some(code) => {
+            let _ = writeln!(
+                out,
+                "static const char by_fallback_code[] =\n{};\n\n\
+                 static const By_Fallback by_fallback = {{\n\
+                 \x20   by_fallback_source, by_fallback_code, {}, {}L, {}}};\n",
+                c_bytes_chunked(&code.marshalled),
+                code.marshalled.len(),
+                code.magic,
+                code.optimize
+            );
+        }
+        None => {
+            let _ = writeln!(
+                out,
+                "static const By_Fallback by_fallback = {{by_fallback_source, NULL, 0, 0L, 0}};\n"
+            );
+        }
+    }
 
     out.push_str("static PyMethodDef by_methods[] = {\n");
     for function in &module.functions {
@@ -5223,12 +5359,17 @@ fn emit_module_init(module: &ModuleIr) -> String {
         conditions.push("!BY_HAS_MANAGED_DICT");
     }
     // whether the fallback source has to be run with its class bodies captured. the
-    // capture costs a dict copy per class the body writes, so a module with no constant
-    // to carry runs its body the plain way
-    let captures_bodies = module
-        .classes
-        .iter()
-        .any(|class| class.exported && !class.constants.is_empty());
+    // capture costs a dict copy per class the body writes, so a module with nothing to
+    // take out of one runs its body the plain way. a decorated method is taken out of a
+    // body too — the body is where the decorator's single application landed
+    let captures_bodies = module.classes.iter().any(|class| {
+        class.exported
+            && (!class.constants.is_empty()
+                || class
+                    .methods
+                    .iter()
+                    .any(|method| !method.decorators.is_empty()))
+    });
     let release_bodies = if captures_bodies {
         "    Py_XDECREF(by_bodies);\n"
     } else {
@@ -5317,7 +5458,15 @@ fn emit_module_init(module: &ModuleIr) -> String {
         // constant's value comes from — the twin has been through its own decorators by
         // now, and `By_RunModuleBody` says what that costs. borrowed from `by_bodies`,
         // which is held for the whole of this function
-        if twins.iter().any(|class| !class.constants.is_empty()) {
+        // a decorated method takes its value from here too, so the bodies are needed
+        // whenever either asks for one
+        if twins.iter().any(|class| {
+            !class.constants.is_empty()
+                || class
+                    .methods
+                    .iter()
+                    .any(|method| !method.decorators.is_empty())
+        }) {
             let _ = writeln!(twin_init, "    PyObject *by_body[{count}];");
             for (slot, class) in twins.iter().enumerate() {
                 let _ = writeln!(
@@ -5522,13 +5671,18 @@ fn emit_module_init(module: &ModuleIr) -> String {
                 .map(|decorator| c_string(&decorator.dotted()))
                 .collect::<Vec<_>>()
                 .join(", ");
+            // a class with no interpreted `class` statement has no body to take the
+            // decorator's answer from — and never ran the decorators either, so
+            // applying them there is the only application rather than a second one
+            let body = slot.map_or_else(|| "NULL".to_string(), |slot| format!("by_body[{slot}]"));
             let _ = writeln!(
                 class_init,
                 "    {{ static const char *const by_decorators[] = {{{names}}};\n\
-                 \x20     if (By_ApplyMethodDecorators((PyTypeObject *){type_name}_OBJ, dict, {}, {}, by_decorators, {}) < 0) return -1; }}",
+                 \x20     if (By_DecoratedMethod({body}, (PyTypeObject *){type_name}_OBJ, dict, {}, {}, by_decorators, {}, by_twin, by_type, {}) < 0) return -1; }}",
                 c_string(&class.name),
                 c_string(&method.name),
-                method.decorators.len()
+                method.decorators.len(),
+                twins.len()
             );
         }
         // a closure environment is a real type with a real layout, and nothing
@@ -5605,7 +5759,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
     let run_body = if captures_bodies {
         "\x20   PyObject *by_bodies = NULL;\n\
          \x20   if (by_fallback_source[0] != '\\0') {\n\
-         \x20       by_bodies = By_RunModuleBody(by_fallback_source, dict);\n\
+         \x20       by_bodies = By_RunModuleBody(&by_fallback, dict);\n\
          \x20       if (by_bodies == NULL) return -1;\n\
          \x20   }\n"
             .to_string()
@@ -5615,7 +5769,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
          \x20           PyDict_SetItemString(dict, \"__builtins__\", PyEval_GetBuiltins()) < 0) {\n\
          \x20           return -1;\n\
          \x20       }\n\
-         \x20       PyObject *result = PyRun_String(by_fallback_source, Py_file_input, dict, dict);\n\
+         \x20       PyObject *result = By_ExecModuleBody(&by_fallback, dict);\n\
          \x20       if (result == NULL) return -1;\n\
          \x20       Py_DECREF(result);\n\
          \x20   }\n"
@@ -5656,6 +5810,10 @@ fn emit_module_init(module: &ModuleIr) -> String {
          \x20   PyModuleDef_HEAD_INIT, \"{last}\", NULL, 0, NULL, by_slots, NULL, NULL, NULL\n\
          }};\n\n\
          PyMODINIT_FUNC {}(void) {{\n\
+         \x20   /* before `by_module` itself is handed over: a module definition is a\n\
+         \x20    * struct this build laid out, so a mismatched interpreter must be turned\n\
+         \x20    * away without reading one */\n\
+         \x20   if (!By_InterpreterMatches()) return NULL;\n\
          \x20   return PyModuleDef_Init(&by_module);\n\
          }}\n",
         module.init_symbol()
@@ -5687,6 +5845,7 @@ mod tests {
             promoted: Vec::new(),
             lines: None,
             fallback_source: None,
+            fallback_code: None,
         }
     }
 
@@ -6120,6 +6279,7 @@ mod tests {
             promoted: Vec::new(),
             lines: None,
             fallback_source: None,
+            fallback_code: None,
         };
         let c = emit_module(&module);
         // the forward declaration precedes the body, so take the last split
@@ -6314,6 +6474,7 @@ mod tests {
             }],
             lines: None,
             fallback_source: None,
+            fallback_code: None,
         };
         let c = emit_module(&module);
         assert!(c.contains("PyMODINIT_FUNC PyInit_app(void)"));
@@ -6321,6 +6482,26 @@ mod tests {
         assert!(c.contains(
             "{\"add\", (PyCFunction)(void(*)(void))byw_pkg_app_add, METH_FASTCALL | METH_KEYWORDS, NULL},"
         ));
+    }
+
+    /// the version tag an artefact carries is in its file name, and every 3.x also
+    /// accepts a bare `.so` — so a renamed artefact is offered to an interpreter the
+    /// build never saw. the emitted init refuses one before it reads `by_module`,
+    /// because that struct's layout is the build's own
+    #[test]
+    fn the_module_init_refuses_a_mismatched_interpreter_first() {
+        let c = emit_module(&module_with(add()));
+        let init = c
+            .split_once("PyMODINIT_FUNC PyInit_app(void)")
+            .expect("the module init is emitted")
+            .1;
+        let guard = init
+            .find("if (!By_InterpreterMatches()) return NULL;")
+            .expect("the init guards on the running interpreter");
+        let hand_over = init
+            .find("PyModuleDef_Init(&by_module)")
+            .expect("the init hands the definition over");
+        assert!(guard < hand_over);
     }
 
     /// cpython reads a class's `__module__` off the front of its `tp_name` and its
@@ -6362,7 +6543,7 @@ mod tests {
         let c = emit_module(&module);
         // the natives must be installed from the exec slot, not from m_methods,
         // or the interpreted definitions would overwrite them
-        assert!(c.contains("PyRun_String(by_fallback_source"), "{c}");
+        assert!(c.contains("By_ExecModuleBody(&by_fallback, dict)"), "{c}");
         assert!(
             c.contains("PyModule_AddFunctions(module, by_methods)"),
             "{c}"
@@ -6411,6 +6592,121 @@ mod tests {
             declaration.matches("\"\n\"").count() > 1,
             "expected several concatenated literals"
         );
+    }
+
+    /// read a run of adjacent C string literals back into the bytes they stand for
+    ///
+    /// the emitted escaping is only worth having if it is exact, and "the module still
+    /// imports" cannot say that it is: an artefact whose code object will not read
+    /// falls back to its source and behaves identically, just slower. so the literal is
+    /// decoded here and compared byte for byte
+    fn decode_c_literals(text: &str) -> Vec<u8> {
+        let bytes = text.as_bytes();
+        let mut out = Vec::new();
+        let mut at = 0;
+        let mut inside = false;
+        while at < bytes.len() {
+            let byte = bytes[at];
+            at += 1;
+            if !inside {
+                inside = byte == b'"';
+                continue;
+            }
+            match byte {
+                b'"' => inside = false,
+                b'\\' => {
+                    let escape = bytes[at];
+                    at += 1;
+                    match escape {
+                        b'n' => out.push(b'\n'),
+                        b'r' => out.push(b'\r'),
+                        b't' => out.push(b'\t'),
+                        b'"' => out.push(b'"'),
+                        b'\\' => out.push(b'\\'),
+                        // octal, always exactly three digits so a digit that follows
+                        // stays a digit
+                        _ => {
+                            let digits = std::str::from_utf8(&bytes[at - 1..at + 2])
+                                .expect("an octal escape is ascii");
+                            out.push(u8::from_str_radix(digits, 8).expect("three octal digits"));
+                            at += 2;
+                        }
+                    }
+                }
+                other => out.push(other),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_compiled_twin_is_emitted_byte_for_byte_beside_its_source() {
+        // marshalled bytes are not text: every value from 0 to 255 turns up, NULs and
+        // quotes and backslashes among them, and a digit landing right after an escaped
+        // byte is what a two-digit octal escape would swallow
+        let mut module = module_with(add());
+        module.fallback_source = Some("x = 1\n".to_string());
+        let marshalled: Vec<u8> = (0..=255u8).chain([b'\\', b'1', 1, b'7', b'"', 0]).collect();
+        module.fallback_code = Some(by_ir::function::FallbackCode {
+            marshalled: marshalled.clone().into(),
+            magic: 168_627_699,
+            optimize: 2,
+        });
+        let c = emit_module(&module);
+        let declaration = c
+            .split("static const By_Fallback")
+            .next()
+            .expect("the literal precedes the struct");
+        let literal = declaration
+            .split("static const char by_fallback_code[] =")
+            .nth(1)
+            .expect("the code object is emitted");
+        assert_eq!(decode_c_literals(literal), marshalled);
+        assert!(
+            c.contains(&format!(
+                "by_fallback_source, by_fallback_code, {}, 168627699L, 2}}",
+                marshalled.len()
+            )),
+            "{c}"
+        );
+    }
+
+    #[test]
+    fn a_module_with_no_compiled_twin_stands_a_null_in_its_place() {
+        // `--emit-c-only` with no interpreter to ask is the case: the artefact still
+        // carries its source, and the runtime reads a NULL as "compile that instead"
+        let mut module = module_with(add());
+        module.fallback_source = Some("x = 1\n".to_string());
+        let c = emit_module(&module);
+        assert!(!c.contains("by_fallback_code[]"), "{c}");
+        assert!(
+            c.contains(
+                "static const By_Fallback by_fallback = {by_fallback_source, NULL, 0, 0L, 0};"
+            ),
+            "{c}"
+        );
+    }
+
+    #[test]
+    fn a_long_compiled_twin_is_split_into_adjacent_literals() {
+        // the same implementation-defined maximum the source literal has to dodge
+        let mut module = module_with(add());
+        module.fallback_source = Some("x = 1\n".to_string());
+        module.fallback_code = Some(by_ir::function::FallbackCode {
+            marshalled: vec![b'a'; 5000].into(),
+            magic: 1,
+            optimize: 0,
+        });
+        let c = emit_module(&module);
+        let literal = c
+            .split("static const char by_fallback_code[] =")
+            .nth(1)
+            .expect("the code object is emitted")
+            .split("static const By_Fallback")
+            .next()
+            .expect("the struct follows it");
+        assert_eq!(literal.matches("\"\n\"").count(), 4, "{literal}");
+        assert_eq!(decode_c_literals(literal), vec![b'a'; 5000]);
     }
 
     #[test]

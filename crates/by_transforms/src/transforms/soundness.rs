@@ -65,7 +65,7 @@
 use std::fmt::Write as _;
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Comprehension, Expr, ExprCall, Stmt, StmtFunctionDef, UnaryOp};
+use ruff_python_ast::{Comprehension, Expr, ExprCall, Parameter, Stmt, StmtFunctionDef, UnaryOp};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
@@ -230,6 +230,15 @@ impl<'a> Soundness<'a> {
             .filter(|plan| !matches!(plan, SoundnessCheck::Isinstance(t) if t == "type(None)"))
     }
 
+    /// [`Self::check_plan`] for a parameter, read off the parameter rather than off
+    /// its annotation — which is the only way to see a type the source stated with a
+    /// default instead of with an annotation
+    fn parameter_plan(&self, parameter: &Parameter) -> Option<SoundnessCheck> {
+        self.types
+            .parameter_check_plan(parameter)
+            .filter(|plan| !matches!(plan, SoundnessCheck::Isinstance(t) if t == "type(None)"))
+    }
+
     /// wrap `source[range]` in `helper(<source>, <trailing-args>)`. `trailing`
     /// carries its own leading `, ` (e.g. `", str"` or `", A[int], (0,)"`)
     fn wrap_call(&mut self, range: TextRange, helper: &str, trailing: &str) {
@@ -352,11 +361,18 @@ impl<'a> Soundness<'a> {
         }
     }
 
-    /// insert entry guards validating each annotated, checkable parameter of
-    /// `func` at the top of its body — the `parameters` position, defending
-    /// the contract against callers the checker never saw. variadic
-    /// (`*args` / `**kwargs`) and unannotated parameters, and those whose type
-    /// has no runtime test, are skipped
+    /// insert entry guards validating each checkable parameter of `func` at the
+    /// top of its body — the `parameters` position, defending the contract
+    /// against callers the checker never saw. variadic (`*args` / `**kwargs`)
+    /// parameters are skipped, and so is any parameter whose source states no
+    /// type: an unannotated one with no default states nothing, and `x=None`
+    /// says the argument may be left out rather than that `None` belongs there
+    ///
+    /// the plan is read off the *parameter*, not off its annotation, because a
+    /// default is a written type too. `def f(safe='/')` says `safe` is a `str`
+    /// — the native backend lays the parameter out at that bound and checks it
+    /// at the boundary, and asking the annotation node left the interpreted twin
+    /// silently more permissive than its own compiled form
     fn insert_param_guards(&mut self, func: &StmtFunctionDef) {
         let params = &func.parameters;
         let mut guards: Vec<String> = Vec::new();
@@ -367,9 +383,7 @@ impl<'a> Soundness<'a> {
             .chain(&params.kwonlyargs)
         {
             let parameter = &pwd.parameter;
-            if let Some(annotation) = &parameter.annotation
-                && let Some(plan) = self.check_plan(annotation)
-            {
+            if let Some(plan) = self.parameter_plan(parameter) {
                 let guard = self.guard_stmt(parameter.name.as_str(), &plan);
                 guards.push(guard);
             }
@@ -1189,6 +1203,34 @@ mod tests {
         let out = check_with("def f(s: str, n: int): ...\n", params_only());
         assert!(out.contains("_soundness_check(s, str)"), "got:\n{out}");
         assert!(out.contains("_soundness_check(n, int)"), "got:\n{out}");
+    }
+
+    /// a default is a written type. `def f(safe='/')` says `safe` is a `str` as
+    /// plainly as an annotation would — if something else belonged there, something
+    /// else would be written — and the native backend already lays the parameter out
+    /// at that bound and refuses `f(b'x')` at its boundary. reading the plan off the
+    /// annotation *node* could not see it, so the interpreted twin was silently more
+    /// permissive than its own compiled form
+    #[test]
+    fn a_default_states_a_type_as_an_annotation_does() {
+        let out = check_with("def f(safe = \"/\", n = 1): ...\n", params_only());
+        assert!(out.contains("_soundness_check(safe, str)"), "got:\n{out}");
+        // and the literal is promoted, so it is the class rather than the value
+        assert!(!out.contains("Literal"), "got:\n{out}");
+        assert!(out.contains("_soundness_check(n, int)"), "got:\n{out}");
+    }
+
+    /// what the source states is the *default*, not everything the bound accumulates.
+    /// a parameter with nothing to state gets no guard: `None` is the sentinel every
+    /// optional parameter is spelled with — it says the argument may be left out, not
+    /// that `None` is what belongs there — and a bare parameter states nothing at all
+    #[test]
+    fn a_parameter_whose_source_states_nothing_is_not_guarded() {
+        let out = check_with(
+            "def f(bare, maybe = None, *rest, **kw): ...\n",
+            params_only(),
+        );
+        assert!(!out.contains("_soundness_check"), "got:\n{out}");
     }
 
     #[test]

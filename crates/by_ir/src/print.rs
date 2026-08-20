@@ -745,6 +745,7 @@ b2:
             promoted: Vec::new(),
             lines: None,
             fallback_source: None,
+            fallback_code: None,
         };
         let text = print_module(&module);
         assert!(text.starts_with("module app\n"));

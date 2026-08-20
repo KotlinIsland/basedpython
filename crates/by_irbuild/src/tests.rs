@@ -576,6 +576,96 @@ def f(a: int, /, b: int, *, c: int) -> int:
     );
 }
 
+/// the representation of one parameter of the single function in `source`
+fn param_type(source: &str, function: &str, parameter: &str) -> RType {
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        module
+            .all_functions()
+            .find(|candidate| candidate.name == function)
+            .and_then(|lowered| {
+                lowered
+                    .params()
+                    .iter()
+                    .find(|decl| decl.name.as_deref() == Some(parameter))
+                    .map(|decl| decl.ty.clone())
+            })
+            .unwrap_or_else(|| panic!("{function} has no parameter {parameter}"))
+    })
+}
+
+#[test]
+fn a_parameter_its_own_body_rebinds_covers_every_write() {
+    // an unannotated parameter is declared by its default, so `safe='/'` alone would
+    // make the register a `str`. the body writes to it too, and `safe.encode(...)` is
+    // bytes: a `str` register would have to narrow that store with a check, and the
+    // check raises on a call the interpreter answers
+    assert_eq!(
+        param_type(
+            "\
+def quoted(safe='/'):
+    safe = safe.encode('ascii')
+    return repr(safe)
+",
+            "quoted",
+            "safe",
+        ),
+        RType::OBJECT
+    );
+}
+
+#[test]
+fn a_walrus_and_a_handler_name_are_writes_a_parameter_has_to_cover() {
+    // neither is an assignment statement: a walrus binds from inside an expression,
+    // and a handler's name hangs off the `try` rather than standing in its body. both
+    // were invisible to the walk that decides a register's representation
+    assert_eq!(
+        param_type(
+            "\
+def walrused(safe='/'):
+    if (safe := safe.encode('ascii')):
+        return repr(safe)
+    return 'empty'
+",
+            "walrused",
+            "safe",
+        ),
+        RType::OBJECT
+    );
+    assert_eq!(
+        param_type(
+            "\
+def caught(tag='t'):
+    try:
+        raise ValueError('boom')
+    except ValueError as tag:
+        return repr(tag)
+",
+            "caught",
+            "tag",
+        ),
+        RType::OBJECT
+    );
+}
+
+#[test]
+fn a_parameter_its_own_body_leaves_alone_keeps_its_declared_representation() {
+    // the widening is per parameter and driven by the writes, so a body that only
+    // *reads* one costs it nothing — a `str` here stays laid out as a `str`
+    assert_eq!(
+        param_type(
+            "\
+def quoted(safe='/'):
+    return repr(safe)
+",
+            "quoted",
+            "safe",
+        ),
+        RType::STR
+    );
+}
+
 #[test]
 fn a_comprehension_gives_each_for_its_own_header() {
     // an `if` guard skips to the next value of *its own* loop, so a guard on the
@@ -1043,6 +1133,30 @@ class Tagged:
     assert!(
         reasons.iter().any(|(name, reason)| name == "Tagged"
             && reason.contains("both a class-level constant and a field")),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_method_that_rebinds_its_receiver_declines() {
+    // every other parameter widens to cover what its body writes into it. slot zero
+    // cannot: it is the receiver each field read in the body is addressed against, and
+    // a frame whose `self` has become an ordinary object has no layout left to read
+    let reasons = declines(
+        "\
+class Tagged:
+    def __init__(self, kind: str) -> None:
+        self.kind = kind
+
+    def read(self) -> object:
+        self = 3
+        return self
+",
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|(name, reason)| name == "Tagged" && reason.contains("rebinds its receiver")),
         "{reasons:?}"
     );
 }

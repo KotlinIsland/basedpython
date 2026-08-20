@@ -158,6 +158,7 @@ mod tests {
             promoted: Vec::new(),
             lines: None,
             fallback_source: None,
+            fallback_code: None,
         };
         assert!(optimize(&mut module).is_ok());
         let fixed = |id: by_ir::ops::RegisterId| {
@@ -193,6 +194,7 @@ mod tests {
             promoted: Vec::new(),
             lines: None,
             fallback_source: None,
+            fallback_code: None,
         };
         assert!(optimize(&mut module).is_ok());
         // both passes fired: the copy is gone and the function is infallible
