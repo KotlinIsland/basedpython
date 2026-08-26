@@ -34,6 +34,17 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* the floor, restated for the compiler
+ *
+ * `by compile` refuses an older interpreter before it emits anything — the floor it
+ * checks is `by_build::MINIMUM_PYTHON`, which is where the number is decided. this is
+ * for a compile that did not come through it: the emitted C names things an older
+ * cpython has no declaration for, so the alternative here is dozens of errors none of
+ * which mentions a version */
+#if PY_VERSION_HEX < 0x030B0000
+#error "a basedpython extension needs python 3.11 or later"
+#endif
+
 /* the major and minor at the front of a cpython version string
  *
  * `Py_GetVersion` answers the whole banner — `"3.14.0a1 (main, ...) [Clang ...]"` — and
@@ -833,7 +844,7 @@ static inline char By_ObjCompare(PyObject *a, PyObject *b, int op) {
  * the instance's *own* type, not the class that declared the field: a subclass
  * inherits the layout, and python names the subclass. a compiled type carries its
  * module in `tp_name` where a class defined in python does not, so it is trimmed
- * back to its tail the way `By_ErrorName` trims a method's */
+ * back to its tail */
 static inline const char *By_TypeName(PyObject *o) {
     const char *name = Py_TYPE(o)->tp_name;
     const char *dot = strrchr(name, '.');
@@ -892,18 +903,29 @@ static inline char By_Truthy(PyObject *o) {
 #define By_ClearManagedDict(obj) ((void)(obj))
 #endif
 
+/* the flags a class asking for an instance dict declares, or nothing where the running
+ * interpreter has no managed dict to give it
+ *
+ * a dict of arbitrary values has to be one the collector walks, so the two flags go
+ * together and are named together — a type carrying only one of them is either a dict the
+ * collector cannot reach or a collected type with nothing extra to reach. below 3.13
+ * there is neither, and the class is built exactly as every emitted class was before
+ * dicts existed: its layout is the whole of it. a class whose *generated* code cannot run
+ * without a dict is not left to that — the module holding one refuses to install anything
+ * at all down there */
+#if BY_HAS_MANAGED_DICT
+#define BY_INSTANCE_DICT_FLAGS (Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_MANAGED_DICT)
+#else
+#define BY_INSTANCE_DICT_FLAGS 0
+#endif
+
 /* reading a local on a path that never assigned it. the phrasing is the running
- * python's, not the compiler's — it changed in 3.11 and a compiled module has to say
- * what the interpreter beside it would say */
+ * python's, not the compiler's — 3.11 rewrote it, and since 3.11 is the floor there is
+ * only the one wording left to say */
 static inline void By_RaiseUnboundLocal(const char *name) {
-#if PY_VERSION_HEX >= 0x030B0000
     PyErr_Format(PyExc_UnboundLocalError,
                  "cannot access local variable '%s' where it is not associated with a value",
                  name);
-#else
-    PyErr_Format(PyExc_UnboundLocalError,
-                 "local variable '%s' referenced before assignment", name);
-#endif
 }
 
 /* an interned string, built once per call site
@@ -1032,9 +1054,15 @@ static inline char By_DeleteGlobal(PyObject *dict, PyObject *name) {
 /* whether a type spec can be built on this tuple of bases
  *
  * `PyType_FromSpecWithBases` gives the type it builds `type` as its own, so any base
- * with another metaclass is a conflict python rejects at import. it also wants a base
- * to pick a layout from, which an empty tuple does not offer — `type` supplies `object`
- * for that case and a spec does not */
+ * with another metaclass is a conflict. python's own answer to it moved: 3.13 builds the
+ * type anyway and warns that it will stop, and 3.14 raises `TypeError: Metaclasses with
+ * custom tp_new are not supported`. so the two supported versions disagree about a base
+ * whose metaclass is `abc.ABCMeta` — which is the shape nearly every declining class in
+ * the standard library has — and this refuses it on both rather than emitting a module
+ * that imports on one and not the other.
+ *
+ * it also wants a base to pick a layout from, which an empty tuple does not offer —
+ * `type` supplies `object` for that case and a spec does not */
 static inline int By_SpecTakesBases(PyObject *bases) {
     Py_ssize_t index;
     if (PyTuple_GET_SIZE(bases) == 0) return 0;
@@ -1343,8 +1371,9 @@ static inline int By_SetInNamespace(PyObject *ns, const char *key, PyObject *val
     return failed;
 }
 
-/* what a value carried onto an emitted type becomes — defined with the rest of the twin
- * machinery, and named here because a class namespace is written before that */
+/* what a value carried onto an emitted type becomes, as a new reference — defined with the
+ * rest of the twin machinery, and named here because a class namespace is written before
+ * that */
 static PyObject *By_TwinReplacement(PyObject *value, PyObject *const *twins,
                                     PyObject *const *types, Py_ssize_t count);
 
@@ -1382,8 +1411,7 @@ static inline PyObject *By_ConstantValue(const By_ClassConstants *constants, Py_
     /* a value that only *reaches* a twin keeps what the body gave it, exactly as
      * `By_CopyClassConstant` leaves it — this is the value half of that copy */
     stands = By_TwinReplacement(value, constants->twins, constants->types, constants->classes);
-    if (stands == NULL) stands = value;
-    return By_NewRef(stands);
+    return stands != NULL ? stands : By_NewRef(value);
 }
 
 /* write the constants into a class namespace, and hand back what was written
@@ -1829,11 +1857,9 @@ static inline char By_IsInstance(PyObject *o, PyObject *class_) {
     return result < 0 ? 2 : (char)result;
 }
 
-#if PY_VERSION_HEX >= 0x030A0000
 static inline char By_IsMatchSequence(PyObject *o) {
     return (char)(o != NULL && PyType_HasFeature(Py_TYPE(o), Py_TPFLAGS_SEQUENCE));
 }
-#endif
 
 /* the refusal `__annotations__` gives where a class's own could not be carried across
  *
@@ -1883,7 +1909,7 @@ static inline PyObject *By_LostAnnotations(void) {
  * on 3.14 they are worked out on demand, and every name in one resolves through the
  * module namespace — which is about to stop holding this module's classes, because the
  * compiled types are about to replace them. so a deferred read would answer about
- * whichever class was under the name by then, and it is `By_ReachesTwin`'s whole job to
+ * whichever class was under the name by then, and it is `By_SettledValue`'s whole job to
  * know that the two are different. reading here settles them against the definitions the
  * body wrote, exactly as every version below 3.14 settles them at the `class` statement.
  *
@@ -1950,109 +1976,421 @@ static PyTypeObject *By_UnionType(void) {
     return cached;
 }
 
-/* whether `value` could hand one of this module's interpreted class twins back
+/* how far into a value the settling below looks
  *
- * this is the whole safety of adopting an attribute. a twin is a class that is about to
- * stop being the one under its name, so anything holding it will answer about a class
- * nothing else can reach: that is a *silent* wrong answer, where not adopting at all
- * leaves the loud one the attribute already gave. so the shapes that provably cannot
- * hold a twin are enumerated, and every other shape answers yes and is left alone.
+ * it bounds the recursion rather than the reachability: past it every shape is refused
+ * rather than assumed safe, so a value nested deeper than this is left where it is */
+#define BY_SETTLE_DEPTH 4
+
+/* the type that replaced `value`, where `value` is one of this module's twins and the
+ * replacement already stands. the answer is borrowed, because the module holds it
  *
- * a function is safe with an empty closure and simple defaults because the only other
- * route it has to a class is a name it resolves through a namespace at call time — and
- * the namespace this module owns holds the *compiled* type by then, which is the answer
- * that name should give
- *
- * `depth` bounds the recursion rather than the reachability: past it every shape answers
- * yes, so a value nested deeper than this looked is refused rather than assumed */
-static int By_ReachesTwin(PyObject *value, PyObject *const *twins, Py_ssize_t count,
-                          int depth) {
+ * a twin whose type has not been built yet answers nothing, and must: the class arrays are
+ * filled one class at a time and a constant is copied as each type is made, so a body
+ * naming a class further down the module is asking about a replacement that does not exist
+ * yet. it is not safe as itself either — it is about to stop being what its name means */
+static PyObject *By_TwinFor(PyObject *value, PyObject *const *twins,
+                            PyObject *const *types, Py_ssize_t count) {
     Py_ssize_t index;
-    if (value == NULL || value == Py_None) return 0;
     for (index = 0; index < count; index++) {
-        if (value == twins[index]) return 1;
+        if (value == twins[index] && types[index] != NULL) return types[index];
     }
-    if (depth <= 0) return 1;
-    if (PyBool_Check(value) || PyLong_Check(value) || PyFloat_Check(value)
-        || PyComplex_Check(value) || PyUnicode_Check(value) || PyBytes_Check(value)) {
+    return NULL;
+}
+
+/* what should stand where `value` does, as a new reference, or NULL where nothing may
+ *
+ * this is the whole safety of carrying a value the fallback module body produced. a twin
+ * is a class that has stopped being the one under its name, so anything still holding one
+ * answers about a class nothing else in the process can reach: that is a *silent* wrong
+ * answer, where refusing leaves the loud one the value already gave.
+ *
+ * three outcomes, then. a value that *is* a twin becomes the type that replaced it. a
+ * value that provably cannot hold a twin — a number, a string, a class standing on no twin
+ * — is handed back exactly as it is. and everything between is **settled**: the shapes
+ * whose contents can be reached are walked, every twin found inside is moved onto its
+ * replacement, and only a shape with no known route to its contents is refused.
+ *
+ * settling is the part a bare "does this reach a twin?" predicate could not do, and it is
+ * what a class needs to keep what its module body gave it after the `class` statement.
+ * `multiprocessing.managers` is the case that found it: sixteen `SyncManager.register(...)`
+ * calls follow the class statement, and each installs a closure over the proxy type it
+ * registers while recording the same in a `_registry` dict. a predicate answers "may reach
+ * a twin" for a closure and for a dict alike, so the emitted `SyncManager` carried none of
+ * the sixteen methods and an empty registry — it lost everything the body gave it.
+ *
+ * where a container can be written it is settled in place, so every holder of it sees the
+ * same move; where it cannot — a tuple — a settled copy is built and the original left
+ * alone. a caller that wants only the moves throws the answer away, which is what
+ * `By_SettleTwins` is for.
+ *
+ * a container keeps settling its remaining members after one of them has been refused.
+ * that matters for exactly that caller: a dict with one unreachable value still has every
+ * other entry moved, and only the *answer* records that it cannot be carried */
+static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
+                                 PyObject *const *types, Py_ssize_t count, int depth);
+
+/* whether settling `value` left it as the very object it was
+ *
+ * the question a place that cannot be written asks — a set's member, a dict's key, what a
+ * property holds. anything it captured is settled where it stands, and a value that would
+ * have had to be *replaced* is a refusal rather than a move */
+static int By_SettlesInPlace(PyObject *value, PyObject *const *twins,
+                             PyObject *const *types, Py_ssize_t count, int depth) {
+    PyObject *stands = By_SettledValue(value, twins, types, count, depth);
+    int same = stands == value;
+    Py_XDECREF(stands);
+    return same;
+}
+
+/* settle every value of a dict, in place, and say whether the dict now holds no twin
+ *
+ * a twin used as a *key* is refused rather than moved: a dict is keyed on the object a
+ * class hashes as, so replacing one is a removal and an insertion, and doing that to a
+ * mapping somebody else is holding is a bigger claim than this has evidence for */
+static int By_SettleDictValues(PyObject *dict, PyObject *const *twins,
+                               PyObject *const *types, Py_ssize_t count, int depth) {
+    /* the keys first: a value is settled one at a time and anything at all may run while
+     * that happens, so nothing may be walking the dict itself */
+    PyObject *keys = PyDict_Keys(dict);
+    Py_ssize_t at;
+    int settled = 1;
+    if (keys == NULL) {
+        PyErr_Clear();
         return 0;
     }
+    for (at = 0; at < PyList_GET_SIZE(keys); at++) {
+        PyObject *key = PyList_GET_ITEM(keys, at);
+        /* held rather than borrowed: settling one entry can run arbitrary code, and the
+         * entry this is about to write back over must not have gone away underneath it */
+        PyObject *value = By_NewRef(PyDict_GetItem(dict, key));
+        PyObject *stands;
+        if (value == NULL) continue;
+        if (!By_SettlesInPlace(key, twins, types, count, depth)) {
+            Py_DECREF(value);
+            settled = 0;
+            continue;
+        }
+        stands = By_SettledValue(value, twins, types, count, depth);
+        if (stands == NULL) {
+            Py_DECREF(value);
+            settled = 0;
+            continue;
+        }
+        if (stands != value && PyDict_SetItem(dict, key, stands) < 0) {
+            PyErr_Clear();
+            settled = 0;
+        }
+        Py_DECREF(stands);
+        Py_DECREF(value);
+    }
+    Py_DECREF(keys);
+    return settled;
+}
+
+/* settle every item of a list, in place, and say whether the list now holds no twin */
+static int By_SettleListItems(PyObject *list, PyObject *const *twins,
+                              PyObject *const *types, Py_ssize_t count, int depth) {
+    Py_ssize_t at;
+    int settled = 1;
+    /* the size is read afresh each time round: settling an item can run arbitrary code,
+     * and a list that shrank under us must not be indexed past its end */
+    for (at = 0; at < PyList_GET_SIZE(list); at++) {
+        PyObject *value = By_NewRef(PyList_GetItem(list, at)); /* held, not borrowed */
+        PyObject *stands;
+        if (value == NULL) {
+            PyErr_Clear();
+            settled = 0;
+            continue;
+        }
+        stands = By_SettledValue(value, twins, types, count, depth);
+        if (stands == NULL) {
+            Py_DECREF(value);
+            settled = 0;
+            continue;
+        }
+        if (stands != value && at < PyList_GET_SIZE(list)
+            && PyList_SetItem(list, at, By_NewRef(stands)) < 0) {
+            PyErr_Clear();
+            settled = 0;
+        }
+        Py_DECREF(stands);
+        Py_DECREF(value);
+    }
+    return settled;
+}
+
+/* settle what a function captured, in place, and say whether it now holds no twin
+ *
+ * a `def` evaluates its defaults and closes over its cells where it stands, and everything
+ * the fallback module body produced did that before any emitted type was installed. so a
+ * default or a captured name holding a class of this module holds the **twin**, while
+ * every later read of that name answers the type that replaced it. the two are different
+ * objects, and a body comparing them by identity gets the wrong answer:
+ *
+ *     class Empty: pass
+ *     def f(ann=Empty): return ann is Empty     # python True, and this said False
+ *
+ * that is every sentinel-by-identity api in a compiled module at once — it is why
+ * `inspect.Signature()` rendered `() -> _empty`. a cell is the same staleness through the
+ * other route a function keeps a value, and it is the route a factory that installs a
+ * method uses: `BaseManager.register` closes over the proxy type it was handed and
+ * `setattr`s the result, so refusing a closure outright cost `SyncManager` all sixteen of
+ * its methods.
+ *
+ * a definition with nothing to move is left exactly as it was — the defaults tuple is
+ * rebuilt only when some entry really is stale, so the common case allocates nothing */
+static int By_SettleFunction(PyObject *fn, PyObject *const *twins, PyObject *const *types,
+                             Py_ssize_t count, int depth) {
+    PyObject *closure = PyFunction_GetClosure(fn); /* borrowed, NULL when there is none */
+    PyObject *defaults, *kwdefaults;
+    Py_ssize_t at;
+    int settled = 1;
+
+    if (closure != NULL && PyTuple_Check(closure)) {
+        for (at = 0; at < PyTuple_GET_SIZE(closure); at++) {
+            PyObject *cell = PyTuple_GET_ITEM(closure, at);
+            PyObject *held, *stands;
+            if (!PyCell_Check(cell)) {
+                settled = 0;
+                continue;
+            }
+            held = PyCell_Get(cell); /* a new reference, and NULL for an unbound cell */
+            if (held == NULL) {
+                PyErr_Clear();
+                continue;
+            }
+            stands = By_SettledValue(held, twins, types, count, depth);
+            if (stands == NULL) {
+                settled = 0;
+            } else {
+                if (stands != held && PyCell_Set(cell, stands) < 0) {
+                    PyErr_Clear();
+                    settled = 0;
+                }
+                Py_DECREF(stands);
+            }
+            Py_DECREF(held);
+        }
+    }
+
+    /* read after the closure and not before: settling a cell can run arbitrary code, and
+     * what this is about to write back must be what the function holds now */
+    defaults = By_NewRef(PyFunction_GetDefaults(fn));
+    if (defaults != NULL && PyTuple_Check(defaults)) {
+        PyObject *moved = By_SettledValue(defaults, twins, types, count, depth);
+        if (moved == NULL) {
+            settled = 0;
+        } else {
+            if (moved != defaults && PyFunction_SetDefaults(fn, moved) < 0) {
+                PyErr_Clear();
+                settled = 0;
+            }
+            Py_DECREF(moved);
+        }
+    }
+    Py_XDECREF(defaults);
+
+    kwdefaults = By_NewRef(PyFunction_GetKwDefaults(fn));
+    if (kwdefaults != NULL && PyDict_Check(kwdefaults)
+        && !By_SettleDictValues(kwdefaults, twins, types, count, depth)) {
+        settled = 0;
+    }
+    Py_XDECREF(kwdefaults);
+    return settled;
+}
+
+static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
+                                 PyObject *const *types, Py_ssize_t count, int depth) {
+    PyObject *replacement;
+    Py_ssize_t index;
+    if (value == NULL) return NULL;
+    replacement = By_TwinFor(value, twins, types, count);
+    if (replacement != NULL) return By_NewRef(replacement);
+    for (index = 0; index < count; index++) {
+        if (value == twins[index]) return NULL;
+    }
+    /* the atoms are answered before the bound, not after it. `depth` is there to stop the
+     * recursion, and a value with nothing inside it is not a step into anything — reading
+     * it costs the same at any depth, and refusing it would refuse whatever holds it. a
+     * `True` sitting five levels down as a keyword default is how that was found: it took
+     * the whole `_registry` dict of `multiprocessing.managers` with it */
+    if (value == Py_None || PyBool_Check(value) || PyLong_Check(value)
+        || PyFloat_Check(value) || PyComplex_Check(value) || PyUnicode_Check(value)
+        || PyBytes_Check(value)) {
+        return By_NewRef(value);
+    }
+    if (depth <= 0) return NULL;
     /* a class is safe as itself: every class this module's body wrote with a `class`
      * statement is among the twins, so one that is not is a class both the interpreted
      * module and this one hold the same object for. what it must not do is *stand* on a
-     * twin — a class built at runtime over one has a base nothing else can reach */
+     * twin — a class built at runtime over one has a base nothing else can reach, and its
+     * bases are not something this can rewrite */
     if (PyType_Check(value)) {
         PyObject *mro = ((PyTypeObject *)value)->tp_mro;
         Py_ssize_t at;
-        if (mro == NULL || !PyTuple_Check(mro)) return 1;
+        if (mro == NULL || !PyTuple_Check(mro)) return NULL;
         for (at = 0; at < PyTuple_GET_SIZE(mro); at++) {
             for (index = 0; index < count; index++) {
-                if (PyTuple_GET_ITEM(mro, at) == twins[index]) return 1;
+                if (PyTuple_GET_ITEM(mro, at) == twins[index]) return NULL;
             }
         }
-        return 0;
+        return By_NewRef(value);
     }
     /* the two parameterised forms python builds in C — `list[int]` and `int | None`. each
      * is an origin and a tuple of arguments and nothing besides, both read off a member
-     * rather than through anything that runs. `typing.Optional[int]` is a python object
-     * whose attribute access is python code, and is not among these */
+     * rather than through anything that runs. neither can be written, so one reaching a
+     * twin is refused rather than settled. `typing.Optional[int]` is a python object whose
+     * attribute access is python code, and is not among these */
     if (Py_TYPE(value) == &Py_GenericAliasType || Py_TYPE(value) == By_UnionType()) {
         static const char *const parts[] = {"__origin__", "__args__"};
+        int settled = 1;
         for (index = 0; index < 2; index++) {
             PyObject *part = PyObject_GetAttrString(value, parts[index]);
-            int reaches;
             if (part == NULL) {
                 PyErr_Clear();
                 continue;
             }
-            reaches = By_ReachesTwin(part, twins, count, depth - 1);
+            if (!By_SettlesInPlace(part, twins, types, count, depth - 1)) settled = 0;
             Py_DECREF(part);
-            if (reaches) return 1;
         }
-        return 0;
+        return settled ? By_NewRef(value) : NULL;
     }
-    /* a tuple only, of the containers: a list, a dict or a set can be given a twin
-     * after this has answered */
+    /* a tuple cannot be written, so a settled copy is built and the original left for
+     * whoever else holds it. the copy is made only when something really moved */
     if (PyTuple_Check(value)) {
-        for (index = 0; index < PyTuple_GET_SIZE(value); index++) {
-            if (By_ReachesTwin(PyTuple_GET_ITEM(value, index), twins, count, depth - 1)) {
-                return 1;
+        Py_ssize_t size = PyTuple_GET_SIZE(value);
+        PyObject *moved = NULL;
+        int settled = 1;
+        for (index = 0; index < size; index++) {
+            PyObject *item = PyTuple_GET_ITEM(value, index);
+            PyObject *stands = By_SettledValue(item, twins, types, count, depth - 1);
+            if (stands == NULL) {
+                settled = 0;
+                continue;
+            }
+            if (stands != item) {
+                if (moved == NULL) {
+                    Py_ssize_t at;
+                    moved = PyTuple_New(size);
+                    if (moved == NULL) {
+                        PyErr_Clear();
+                        Py_DECREF(stands);
+                        return NULL;
+                    }
+                    for (at = 0; at < size; at++) {
+                        PyTuple_SET_ITEM(moved, at, By_NewRef(PyTuple_GET_ITEM(value, at)));
+                    }
+                }
+                Py_DECREF(PyTuple_GET_ITEM(moved, index));
+                PyTuple_SET_ITEM(moved, index, By_NewRef(stands));
+            }
+            Py_DECREF(stands);
+        }
+        if (!settled) {
+            Py_XDECREF(moved);
+            return NULL;
+        }
+        return moved != NULL ? moved : By_NewRef(value);
+    }
+    if (PyList_Check(value)) {
+        return By_SettleListItems(value, twins, types, count, depth - 1) ? By_NewRef(value)
+                                                                        : NULL;
+    }
+    if (PyDict_Check(value)) {
+        return By_SettleDictValues(value, twins, types, count, depth - 1) ? By_NewRef(value)
+                                                                         : NULL;
+    }
+    /* a set's members are what it is hashed on, so one holding a twin is refused rather
+     * than settled — the same reason a dict's keys are */
+    if (PyAnySet_Check(value)) {
+        PyObject *members = PySequence_List(value);
+        Py_ssize_t at;
+        int settled = 1;
+        if (members == NULL) {
+            PyErr_Clear();
+            return NULL;
+        }
+        for (at = 0; settled && at < PyList_GET_SIZE(members); at++) {
+            if (!By_SettlesInPlace(PyList_GET_ITEM(members, at), twins, types, count,
+                                   depth - 1)) {
+                settled = 0;
             }
         }
-        return 0;
+        Py_DECREF(members);
+        return settled ? By_NewRef(value) : NULL;
     }
     if (PyFunction_Check(value)) {
-        PyObject *closure = PyFunction_GetClosure(value);
-        PyObject *kwdefaults;
-        if (closure != NULL && PyTuple_GET_SIZE(closure) > 0) return 1;
-        if (By_ReachesTwin(PyFunction_GetDefaults(value), twins, count, depth - 1)) return 1;
-        kwdefaults = PyFunction_GetKwDefaults(value);
-        if (kwdefaults != NULL && PyDict_Check(kwdefaults)) {
-            PyObject *key, *item;
-            Py_ssize_t position = 0;
-            while (PyDict_Next(kwdefaults, &position, &key, &item)) {
-                if (By_ReachesTwin(item, twins, count, depth - 1)) return 1;
-            }
-        }
-        return 0;
+        return By_SettleFunction(value, twins, types, count, depth - 1) ? By_NewRef(value)
+                                                                       : NULL;
     }
+    /* a function written in C. the only thing it can hand back that python chose is
+     * `__self__` — the module it was defined in, or the object a method of a built-in type
+     * is bound to. its body resolves no names through a closure and none through a
+     * namespace this module owns, so there is no other route in. a module receiver is safe
+     * outright, including this module's own: by the time anything is settled its namespace
+     * already holds the compiled types.
+     *
+     * `threading.RLock` is why this is here — `multiprocessing.managers` registers it, and
+     * refusing a built-in cost the whole `_registry` dict it sits in */
+    if (PyCFunction_Check(value)) {
+        PyObject *receiver = PyCFunction_GetSelf(value);
+        if (receiver == NULL) {
+            PyErr_Clear();
+            return By_NewRef(value);
+        }
+        if (PyModule_Check(receiver)) return By_NewRef(value);
+        return By_SettlesInPlace(receiver, twins, types, count, depth - 1) ? By_NewRef(value)
+                                                                          : NULL;
+    }
+    /* a bound method is what a class hands back for the `classmethod` in its dict, so this
+     * is the shape a declined class's methods are read as. what it binds is settled where
+     * it stands; what it is bound *to* cannot be rewritten, so a method already bound to a
+     * twin is refused */
+    if (PyMethod_Check(value)) {
+        PyObject *function = PyMethod_Function(value); /* borrowed */
+        PyObject *receiver = PyMethod_Self(value);     /* borrowed */
+        int settled = function != NULL
+                      && By_SettlesInPlace(function, twins, types, count, depth - 1);
+        if (receiver != NULL && !By_SettlesInPlace(receiver, twins, types, count, depth - 1)) {
+            settled = 0;
+        }
+        return settled ? By_NewRef(value) : NULL;
+    }
+    /* a property and the two method wrappers hold functions they will not let go of, so
+     * what they hold is settled where it stands and never replaced */
     if (Py_TYPE(value) == &PyProperty_Type || Py_TYPE(value) == &PyStaticMethod_Type
         || Py_TYPE(value) == &PyClassMethod_Type) {
         static const char *const parts[] = {"fget", "fset", "fdel", "__func__"};
+        int settled = 1;
         for (index = 0; index < 4; index++) {
             PyObject *part = PyObject_GetAttrString(value, parts[index]);
-            int reaches;
             if (part == NULL) {
                 PyErr_Clear();
                 continue;
             }
-            reaches = By_ReachesTwin(part, twins, count, depth - 1);
+            if (!By_SettlesInPlace(part, twins, types, count, depth - 1)) settled = 0;
             Py_DECREF(part);
-            if (reaches) return 1;
         }
-        return 0;
+        return settled ? By_NewRef(value) : NULL;
     }
-    return 1;
+    return NULL;
+}
+
+/* settle whatever `value` reaches and discard the answer
+ *
+ * `By_RemapTwinAliases` walks the module namespace for the names still bound to a twin,
+ * and everything it passes is settled on the way — a function's defaults and closure, a
+ * dict the body built, a declined class's methods. whether the value would be *carriable*
+ * is not the question there, because it stays where it is either way; only the moves
+ * matter, so a settled copy of something that could not be written is thrown away rather
+ * than put in the original's place */
+static inline void By_SettleTwins(PyObject *value, PyObject *const *twins,
+                                  PyObject *const *types, Py_ssize_t count) {
+    PyObject *settled;
+    if (value == NULL) return;
+    settled = By_SettledValue(value, twins, types, count, BY_SETTLE_DEPTH);
+    Py_XDECREF(settled);
 }
 
 /* whether a name is one python spells with two underscores at each end */
@@ -2067,17 +2405,12 @@ static inline int By_IsDunder(PyObject *name) {
 /* what should stand for `value` on an emitted type, or NULL where nothing may
  *
  * a value that *is* a twin becomes the type replacing it, which is what makes a carried
- * attribute agree with the namespace. anything else is carried only where it provably
- * cannot reach a twin at all. the answer is a borrowed reference, because every value
- * here is held by either the source dict or the module namespace */
+ * attribute agree with the namespace, and everything else goes through `By_SettledValue`.
+ * the answer is a new reference: settling can have to *build* the value that stands, and a
+ * borrowed answer would have nobody holding that one */
 static PyObject *By_TwinReplacement(PyObject *value, PyObject *const *twins,
                                     PyObject *const *types, Py_ssize_t count) {
-    Py_ssize_t index;
-    for (index = 0; index < count; index++) {
-        if (value == twins[index] && types[index] != NULL) return types[index];
-    }
-    if (By_ReachesTwin(value, twins, count, 4)) return NULL;
-    return value;
+    return By_SettledValue(value, twins, types, count, BY_SETTLE_DEPTH);
 }
 
 /* the annotations a class body wrote, carried onto the type that takes its place
@@ -2122,12 +2455,15 @@ static inline int By_CarryAnnotations(PyObject *source, PyObject *target,
             PyObject *stands = value == NULL
                                    ? NULL
                                    : By_TwinReplacement(value, twins, types, count);
+            int failed_here;
             if (stands == NULL) {
                 Py_DECREF(carried);
                 carried = By_LostAnnotations();
                 break;
             }
-            if (PyDict_SetItem(carried, key, stands) < 0) {
+            failed_here = PyDict_SetItem(carried, key, stands) < 0;
+            Py_DECREF(stands);
+            if (failed_here) {
                 Py_DECREF(carried);
                 Py_DECREF(names);
                 return -1;
@@ -2137,7 +2473,7 @@ static inline int By_CarryAnnotations(PyObject *source, PyObject *target,
     } else {
         /* a body that assigned `__annotations__` itself, which python leaves alone */
         PyObject *stands = By_TwinReplacement(written, twins, types, count);
-        carried = stands == NULL ? By_LostAnnotations() : By_NewRef(stands);
+        carried = stands == NULL ? By_LostAnnotations() : stands;
     }
     if (carried == NULL) return -1;
     failed = PyDict_SetItemString(target, BY_ANNOTATIONS, carried) < 0;
@@ -2158,8 +2494,11 @@ static inline int By_CarryAnnotations(PyObject *source, PyObject *target,
  * `ParseResultBytes` — a *twin* — so copying it makes the class answer with an object
  * `isinstance` says is not the `ParseResultBytes` under that name. so a value that is
  * itself a twin is replaced by the type standing in for it, which is what makes the
- * carried attribute agree with the namespace, and every other value is carried only
- * where `By_ReachesTwin` says no.
+ * carried attribute agree with the namespace, and every other value goes through
+ * `By_SettledValue` — carried where every twin in it could be moved, and refused where one
+ * could not. that is what lets a class keep the methods a factory installed on it after
+ * the `class` statement: `multiprocessing.managers` installs sixteen closures on
+ * `SyncManager` that way, and a rule that only tested for a twin refused all of them.
  *
  * a dunder is never carried. a name written into `tp_dict` does not fill a type slot,
  * so an adopted `__ge__` would answer `a.__ge__(b)` while `a >= b` still went to the
@@ -2187,7 +2526,7 @@ static inline int By_AdoptTwinAttributes(PyObject *const *twins, PyObject *const
         for (at = 0; at < PyList_GET_SIZE(names); at++) {
             PyObject *key = PyList_GET_ITEM(names, at);
             PyObject *value, *carried;
-            int present;
+            int present, failed;
             if (!PyUnicode_Check(key) || By_IsDunder(key)) continue;
             present = PyDict_Contains(target, key);
             if (present != 0) {
@@ -2201,7 +2540,9 @@ static inline int By_AdoptTwinAttributes(PyObject *const *twins, PyObject *const
             if (value == NULL) continue;
             carried = By_TwinReplacement(value, twins, types, count);
             if (carried == NULL) continue;
-            if (PyDict_SetItem(target, key, carried) < 0) {
+            failed = PyDict_SetItem(target, key, carried) < 0;
+            Py_DECREF(carried);
+            if (failed) {
                 Py_DECREF(names);
                 return -1;
             }
@@ -2264,7 +2605,63 @@ static inline int By_CopyClassConstant(PyObject *body, PyTypeObject *type, const
  * a value that merely *reaches* a twin is not moved and cannot be: an instance the body
  * built has the twin for its type, and a list holding one is the same object the body
  * kept. those stay as the body left them */
+/* everything a declined class still holds, given the same treatment as a module-level name
+ *
+ * a class this module left to its interpreted definition keeps its own methods, and those
+ * methods captured their defaults and their closures while the fallback source ran — so
+ * what they hold for a class that *was* replaced is the twin. `inspect.Signature.__init__`
+ * is the case that found this: its `return_annotation=_empty` kept the twin `_empty` while
+ * the module's own name answered the compiled type, so `Signature()` rendered
+ * `() -> _empty` where python renders `()`.
+ *
+ * only a heap type is walked, and only its own dict. a type this module emitted is not one
+ * of these — its attributes come from `By_AdoptTwinAttributes` and `By_CopyClassConstant`,
+ * which make the same substitution at the point they copy */
+static inline int By_RemapTwinsInClass(PyObject *cls, PyObject *const *twins,
+                                       PyObject *const *types, Py_ssize_t count) {
+    PyObject *dict;
+    PyObject *keys;
+    Py_ssize_t at;
+    if (!PyType_Check(cls) || !(((PyTypeObject *)cls)->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
+        return 0;
+    }
+    dict = PyObject_GetAttrString(cls, "__dict__");
+    if (dict == NULL) {
+        PyErr_Clear();
+        return 0;
+    }
+    keys = PyMapping_Keys(dict);
+    Py_DECREF(dict);
+    if (keys == NULL) {
+        PyErr_Clear();
+        return 0;
+    }
+    for (at = 0; at < PyList_GET_SIZE(keys); at++) {
+        PyObject *key = PyList_GET_ITEM(keys, at);
+        PyObject *value = PyObject_GetAttr(cls, key);
+        PyObject *stands;
+        if (value == NULL) {
+            PyErr_Clear();
+            continue;
+        }
+        By_SettleTwins(value, twins, types, count);
+        /* a class attribute holding a twin — `Signature.empty = _empty` — is the same
+         * staleness one step along, and rebinding the name answers it. only a name that
+         * *is* a twin is rebound: settling a value it could not write in place hands back
+         * a copy, and putting a copy where the original stood would break every other
+         * holder's `is` against it */
+        stands = By_TwinFor(value, twins, types, count);
+        if (stands != NULL && stands != value && PyObject_SetAttr(cls, key, stands) < 0) {
+            PyErr_Clear();
+        }
+        Py_DECREF(value);
+    }
+    Py_DECREF(keys);
+    return 0;
+}
+
 static inline int By_RemapTwinAliases(PyObject *module_dict, PyObject *const *twins,
+                                      PyObject *const *types,
                                       const char *const *names, Py_ssize_t count) {
     /* the keys first: the dict is written while this walks, and only for keys it
      * already holds, but nothing may run against it mid-walk either way */
@@ -2276,6 +2673,12 @@ static inline int By_RemapTwinAliases(PyObject *module_dict, PyObject *const *tw
         PyObject *value = PyDict_GetItem(module_dict, key);
         Py_ssize_t index;
         if (value == NULL) continue;
+        /* whatever else becomes of this name, what it holds may have captured a twin */
+        By_SettleTwins(value, twins, types, count);
+        if (By_RemapTwinsInClass(value, twins, types, count) < 0) {
+            Py_DECREF(keys);
+            return -1;
+        }
         for (index = 0; index < count; index++) {
             PyObject *stands;
             if (twins[index] == NULL || value != twins[index]) continue;
@@ -2576,11 +2979,9 @@ static inline PyObject *By_AsyncIter(PyObject *o, int next) {
     return get(o);
 }
 
-#if PY_VERSION_HEX >= 0x030A0000
 static inline char By_IsMatchMapping(PyObject *o) {
     return (char)(o != NULL && PyType_HasFeature(Py_TYPE(o), Py_TPFLAGS_MAPPING));
 }
-#endif
 
 /* `map[key]`, where absent is an answer rather than a failure */
 static inline PyObject *By_MatchKey(PyObject *map, PyObject *key) {
@@ -2722,6 +3123,86 @@ static inline char By_Contains(PyObject *container, PyObject *value, int negated
                                              : PySequence_Contains(container, value);
     if (found < 0) return 2;
     return (char)(negated ? !found : found);
+}
+
+/* what a class body *assigned* to a slot dunder, bound to the receiver
+ *
+ * a name in `tp_dict` does not fill a type slot: python reads `tp_repr` for `repr(x)`
+ * and never consults the name. so a class writing `__repr__ = _repr` gets a slot of its
+ * own that reaches the assigned value, and this is how that slot binds it — the way
+ * python's own `slot_tp_repr` does, through the descriptor protocol. a `def` becomes a
+ * bound method, a `staticmethod` unwraps to the plain function, a `classmethod` binds to
+ * the type, and a callable that is not a descriptor at all is handed over as it stands
+ * and so is called *without* a receiver, which is what python does with one too
+ *
+ * the value comes out of a cell module init filled from the type's dict, rather than out
+ * of a lookup made here: a lookup would find the slot wrapper `PyType_Ready` writes for
+ * this very slot in the window before the copy, and calling that would call back into
+ * here forever */
+static inline PyObject *By_BindSlotAlias(PyObject *value, PyObject *self) {
+    descrgetfunc bind;
+    if (value == NULL) {
+        PyErr_SetString(PyExc_SystemError,
+                        "a type slot was emitted for a name the class body never bound");
+        return NULL;
+    }
+    bind = Py_TYPE(value)->tp_descr_get;
+    if (bind == NULL) return By_NewRef(value);
+    return bind(value, self, (PyObject *)Py_TYPE(self));
+}
+
+/* an assigned dunder called with the arguments its slot was handed */
+static inline PyObject *By_CallSlotAlias(PyObject *value, PyObject *self,
+                                         PyObject *const *argv, Py_ssize_t argc) {
+    /* `PyObject_Vectorcall` reads no argument when there are none, but it is still handed
+     * somewhere to read from rather than NULL */
+    PyObject *empty = NULL;
+    PyObject *bound = By_BindSlotAlias(value, self);
+    PyObject *result;
+    if (bound == NULL) return NULL;
+    result = PyObject_Vectorcall(bound, argc > 0 ? argv : &empty, (size_t)argc, NULL);
+    Py_DECREF(bound);
+    return result;
+}
+
+/* the same, for the one slot handed a tuple and a dict rather than a vector */
+static inline PyObject *By_CallSlotAliasTuple(PyObject *value, PyObject *self, PyObject *args,
+                                              PyObject *kwargs) {
+    PyObject *bound = By_BindSlotAlias(value, self);
+    PyObject *result;
+    if (bound == NULL) return NULL;
+    result = PyObject_Call(bound, args, kwargs);
+    Py_DECREF(bound);
+    return result;
+}
+
+/* take the assigned value out of the type's dict and hold it for the slot to call
+ *
+ * run at module init, straight after `By_CopyClassConstant` has put the value there. an
+ * absent name means the emitter wrote a slot for something the body never bound, which is
+ * a defect in the emitter rather than anything the module can carry on from.
+ *
+ * the second refusal is the sharper one. `PyType_Ready` writes a slot wrapper into the
+ * dict under the name of every slot the spec filled, so a copy that did not happen leaves
+ * *this slot's own wrapper* sitting where the assigned value should be — and holding that
+ * would make the slot call itself until the stack ran out. it is the same defect as an
+ * absent name and it has to fail the same way, at import and by name, rather than on the
+ * first `repr()` and as a `RecursionError` */
+static inline int By_HoldSlotAlias(PyTypeObject *type, const char *name, PyObject **held) {
+    PyObject *value = PyDict_GetItemString(type->tp_dict, name); /* borrowed */
+    if (value == NULL) {
+        PyErr_Format(PyExc_SystemError, "`%s.%s` fills a type slot and was never bound",
+                     type->tp_name, name);
+        return -1;
+    }
+    if (Py_IS_TYPE(value, &PyWrapperDescr_Type)
+        && ((PyDescrObject *)value)->d_type == type) {
+        PyErr_Format(PyExc_SystemError, "`%s.%s` fills a type slot with the slot itself",
+                     type->tp_name, name);
+        return -1;
+    }
+    Py_XSETREF(*held, By_NewRef(value));
+    return 0;
 }
 
 /* a `tp_call` slot is handed a tuple and a dict where a method wrapper wants a
@@ -3730,13 +4211,102 @@ static inline PyObject *By_TakeReturn(PyObject **returned) {
     return NULL;
 }
 
+/* which surface a resumable frame presents, which pep 479 words its error after and
+ * an async generator needs one more conversion than the other two */
+#define BY_FRAME_GENERATOR 0
+#define BY_FRAME_COROUTINE 1
+#define BY_FRAME_ASYNC_GENERATOR 2
+
+/* pep 479: a `StopIteration` that *escapes* a generator frame becomes a
+ * `RuntimeError`, so that an accidental one — most often from a bare `next()` on an
+ * exhausted iterator somewhere inside the body — cannot masquerade as the frame
+ * having ended.
+ *
+ * the distinction this rests on is the whole reason a finish is [`Op::FinishFrame`]
+ * and not a raise. a frame that *ends* reports its value through `$returned` and no
+ * exception is built until a consumer needs one, so the only way an exception can be
+ * standing here is that the body raised it. were the two the same operation, this
+ * conversion would turn every ordinary `return` into a `RuntimeError`.
+ *
+ * an async generator converts `StopAsyncIteration` as well, and for the same reason:
+ * that is the exception *its* protocol uses to mean "ended", so a body raising one
+ * would be forging its own exhaustion. a plain generator raising `StopAsyncIteration`
+ * means nothing in particular and is left alone.
+ *
+ * the original is chained as both `__cause__` and `__context__`, which is what
+ * `_PyErr_FormatFromCause` does for cpython's own generators — setting the cause is
+ * also what sets `__suppress_context__`, so the traceback shows the conversion once
+ * rather than twice */
+static inline void By_ConvertStopIteration(int frame) {
+    const char *ended;
+    if (PyErr_ExceptionMatches(PyExc_StopIteration)) {
+        ended = "StopIteration";
+    } else if (frame == BY_FRAME_ASYNC_GENERATOR
+               && PyErr_ExceptionMatches(PyExc_StopAsyncIteration)) {
+        ended = "StopAsyncIteration";
+    } else {
+        return;
+    }
+    const char *surface = frame == BY_FRAME_COROUTINE          ? "coroutine"
+                          : frame == BY_FRAME_ASYNC_GENERATOR  ? "async generator"
+                                                               : "generator";
+    PyObject *type, *value, *tb;
+    PyErr_Fetch(&type, &value, &tb);
+    PyErr_NormalizeException(&type, &value, &tb);
+    if (value == NULL) {
+        /* nothing to convert and nothing to put back; normalization only fails when
+         * it is already raising something else, which is left standing */
+        Py_XDECREF(type);
+        Py_XDECREF(tb);
+        return;
+    }
+    if (tb != NULL) PyException_SetTraceback(value, tb);
+    PyErr_Format(PyExc_RuntimeError, "%s raised %s", surface, ended);
+    PyObject *raised_type, *raised, *raised_tb;
+    PyErr_Fetch(&raised_type, &raised, &raised_tb);
+    PyErr_NormalizeException(&raised_type, &raised, &raised_tb);
+    if (raised == NULL) {
+        Py_XDECREF(raised_type);
+        Py_XDECREF(raised_tb);
+        PyErr_Restore(type, value, tb);
+        return;
+    }
+    /* both setters *steal*, so the cause needs its own reference and the context
+     * consumes the one this function has been holding */
+    PyException_SetCause(raised, By_NewRef(value));
+    PyException_SetContext(raised, value);
+    PyErr_Restore(raised_type, raised, raised_tb);
+    Py_XDECREF(type);
+    Py_XDECREF(tb);
+}
+
+/* park the value the suspended `yield` expression is about to evaluate to.
+ *
+ * every resumption carries one, and a resumption that carries nothing carries `None`:
+ * `next(g)` *is* `g.send(None)`, and a python generator has no third state. the store
+ * cannot be skipped when the value is `None`, which is the whole bug this exists to
+ * close — the field would keep whatever the last `send` left in it, and the next
+ * `yield` would read that same value a second time.
+ *
+ * on 3.12 and later `None` is immortal, so the pair of reference counts a `next()`
+ * pays here are both branches that do no work */
+static inline void By_ParkSent(PyObject **sent, PyObject *value) {
+    PyObject *old = *sent;
+    *sent = By_NewRef(value);
+    Py_XDECREF(old);
+}
+
 /* resume a generator's frame, finishing it when the frame leaves for good */
-static inline PyObject *By_StepGenerator(PyObject *self, PyObject **returned,
-                                         ByTagged *state,
+static inline PyObject *By_StepGenerator(PyObject *self, PyObject **sent, PyObject **returned,
+                                         ByTagged *state, int frame, PyObject *arg,
                                          PyObject *(*resume)(PyObject *)) {
+    By_ParkSent(sent, arg);
     PyObject *result = resume(self);
     if (result != NULL) return result;
     By_FinishGenerator(state);
+    /* an empty `$returned` is what says the frame left by *raising* rather than by
+     * ending, and so is the one condition pep 479 asks about */
+    if (*returned == NULL) By_ConvertStopIteration(frame);
     return By_TakeReturn(returned);
 }
 
@@ -3746,11 +4316,18 @@ static inline PyObject *By_StepGenerator(PyObject *self, PyObject **returned,
  * point raises it — which is what lets a `yield` inside `try` enter its own handler
  * rather than the exception appearing at the generator's entry.
  *
- * only the resumption finishes the machine. rejecting the argument never reaches
- * the frame at all, and python leaves a generator resumable after a `throw` it
- * refused to make sense of */
-static inline PyObject *By_ThrowInto(PyObject *self, PyObject **thrown, PyObject **returned,
-                                   ByTagged *state, PyObject *exception,
+ * rejecting the argument never reaches the frame at all, and python leaves a
+ * generator resumable after a `throw` it refused to make sense of. a machine with no
+ * suspension point does not reach the frame either, but a throw does finish it — see
+ * below. otherwise it is the resumption that decides, and a body that catches what
+ * was thrown leaves the machine usable.
+ *
+ * the resumption raises instead of producing a value, so nothing rides in on `$sent`
+ * — it is parked as `None` all the same, because leaving the last `send`'s value
+ * standing is what would let a later `yield` read it again */
+static inline PyObject *By_ThrowInto(PyObject *self, PyObject **sent, PyObject **thrown,
+                                   PyObject **returned, ByTagged *state, int frame,
+                                   PyObject *exception,
                                    PyObject *(*resume)(PyObject *)) {
     if (thrown == NULL) return NULL;
     PyObject *instance = NULL;
@@ -3760,24 +4337,62 @@ static inline PyObject *By_ThrowInto(PyObject *self, PyObject **thrown, PyObject
         instance = PyObject_CallNoArgs(exception);
         if (instance == NULL) return NULL;
     } else {
-        PyErr_SetString(PyExc_TypeError, "exceptions must derive from BaseException");
+        /* `throw` words this differently from `raise`, and names what it was given */
+        PyErr_Format(PyExc_TypeError,
+                     "exceptions must be classes or instances deriving from BaseException, not %s",
+                     Py_TYPE(exception)->tp_name);
+        return NULL;
+    }
+    /* a machine with no suspension point has nowhere to raise *at*: one that never
+     * started has not reached a `yield` yet, and a finished one has left its frame for
+     * good. python raises the exception at the call site for both and runs no body at
+     * all, so this does not catch its own throw:
+     *
+     *     def g():
+     *         try:
+     *             yield 1
+     *         except ValueError:
+     *             yield 2
+     *     g().throw(ValueError)       # ValueError, and the generator is now closed
+     *
+     * resuming instead would run the body from the top for a machine that never
+     * started, and report exhaustion for one that has finished — two different wrong
+     * answers about which exception the caller is holding */
+    if (By_ShortValue(*state) <= 0) {
+        By_FinishGenerator(state);
+        PyErr_SetObject((PyObject *)Py_TYPE(instance), instance);
+        Py_DECREF(instance);
         return NULL;
     }
     PyObject *old = *thrown;
     *thrown = instance;
     Py_XDECREF(old);
-    return By_StepGenerator(self, returned, state, resume);
+    return By_StepGenerator(self, sent, returned, state, frame, Py_None, resume);
 }
 
 /* `close()`: throw `GeneratorExit` in and accept the three legal outcomes.
  *
  * exhausting, re-raising `GeneratorExit`, or being already finished are all a clean
- * close. *yielding* is not — cpython calls that a `RuntimeError` */
-static inline int By_CloseGenerator(PyObject *self, PyObject **thrown, PyObject **returned,
-                                   ByTagged *state, PyObject *(*resume)(PyObject *)) {
+ * close. *yielding* is not — cpython calls that a `RuntimeError`.
+ *
+ * the `StopIteration` accepted below is the frame's own *end*, which is the only kind
+ * that can still be standing here: one the body raised has already become a
+ * `RuntimeError` on its way out, and comes back as the failure it is */
+static inline int By_CloseGenerator(PyObject *self, PyObject **sent, PyObject **thrown,
+                                   PyObject **returned, ByTagged *state, int frame,
+                                   PyObject *(*resume)(PyObject *)) {
+    /* a machine with no suspension point has nothing to unwind, and closing one runs
+     * no body at all — not even a `finally` the body has not reached yet. asking
+     * `By_ThrowInto` would give the right answer for a finished frame and the wrong
+     * one for a frame that never started, which would run the whole body under a
+     * `GeneratorExit` it had no way to see */
+    if (By_ShortValue(*state) <= 0) {
+        By_FinishGenerator(state);
+        return 0;
+    }
     PyObject *exit = PyObject_CallNoArgs(PyExc_GeneratorExit);
     if (exit == NULL) return -1;
-    PyObject *result = By_ThrowInto(self, thrown, returned, state, exit, resume);
+    PyObject *result = By_ThrowInto(self, sent, thrown, returned, state, frame, exit, resume);
     Py_DECREF(exit);
     if (result != NULL) {
         Py_DECREF(result);
@@ -3909,17 +4524,6 @@ static inline PyObject *By_PackInitKwargs(PyObject *kwds, const char *const *nam
     return packed;
 }
 
-/* python began qualifying a method by its class in 3.10, so the name the compiler
- * wrote is trimmed back to its tail on an interpreter that would not have used it */
-static inline const char *By_ErrorName(const char *fname) {
-#if PY_VERSION_HEX >= 0x030A0000
-    return fname;
-#else
-    const char *dot = strrchr(fname, '.');
-    return dot == NULL ? fname : dot + 1;
-#endif
-}
-
 /* every parameter with no default that nothing filled, named the way python names them
  * — positional and keyword-only counted separately, because python reports them in two
  * different sentences
@@ -3933,7 +4537,6 @@ static inline const char *By_ErrorName(const char *fname) {
 static inline int By_CheckRequired(const char *const *names, const unsigned char *required,
                                   Py_ssize_t count, Py_ssize_t kwonly, PyObject **out,
                                   const char *fname) {
-    fname = By_ErrorName(fname);
     Py_ssize_t positional = count - kwonly;
     for (int pass = 0; pass < 2; pass++) {
         Py_ssize_t from = pass == 0 ? 0 : positional;
@@ -4107,7 +4710,6 @@ static inline int By_BindInitPlain(PyObject *args, PyObject *kwds,
                                    const unsigned char *required, Py_ssize_t posonly,
                                    Py_ssize_t kwonly, PyObject **out, int variadic,
                                    int extras, const char *fname, int inherited) {
-    fname = By_ErrorName(fname);
     for (Py_ssize_t i = 0; i < count; i++) out[i] = NULL;
     Py_ssize_t nargs = args == NULL ? 0 : PyTuple_GET_SIZE(args);
     /* a keyword-only parameter is one nothing positional can reach, so the run a
@@ -4172,7 +4774,7 @@ static inline int By_BindInit(PyObject *args, PyObject *kwds, const char *const 
     if (inherited || !PyErr_ExceptionMatches(PyExc_TypeError)) return -1;
     PyErr_Clear();
     if (By_Rephrase(names, required, count, posonly, kwonly, variadic, extras,
-                    By_ErrorName(fname), 1, args, kwds)) {
+                    fname, 1, args, kwds)) {
         return -1;
     }
     return By_BindInitPlain(args, kwds, names, count, required, posonly, kwonly, out,
@@ -4193,7 +4795,6 @@ static inline int By_BindArgsPlain(PyObject *const *args, Py_ssize_t nargs,
                                    Py_ssize_t posonly, Py_ssize_t kwonly, PyObject **out,
                                    int variadic, int extras, const char *fname,
                                    Py_ssize_t receiver) {
-    fname = By_ErrorName(fname);
     /* a keyword-only parameter is one nothing positional can reach, so the run a
      * caller may fill positionally ends where they begin */
     Py_ssize_t positional_limit = count - kwonly;
@@ -4264,7 +4865,7 @@ static inline int By_BindArgs(PyObject *const *args, Py_ssize_t nargs, PyObject 
     PyObject *dict = tuple == NULL ? NULL : By_VectorKwds(args, nargs, kwnames);
     int reworded = dict != NULL
                    && By_Rephrase(names, required, count, posonly, kwonly, variadic, extras,
-                                  By_ErrorName(fname), receiver, tuple, dict);
+                                  fname, receiver, tuple, dict);
     Py_XDECREF(tuple);
     Py_XDECREF(dict);
     if (reworded) return -1;
@@ -4386,50 +4987,9 @@ static inline int By_RegisterCoroutine(PyObject *type) {
     return 0;
 }
 
-#if PY_VERSION_HEX < 0x030A0000
-/* `PyIter_Send`'s contract, for interpreters that predate it.
- *
- * the outcomes it reports are the same. what it cannot do is take the `am_send`
- * shortcut, so a delegation that finishes still pays to build the
- * `StopIteration` and to read its value back through the attribute */
-typedef enum { PYGEN_RETURN = 0, PYGEN_ERROR = -1, PYGEN_NEXT = 1 } PySendResult;
-
-static inline PySendResult By_IterSend(PyObject *iter, PyObject *arg, PyObject **result) {
-    PyObject *type = NULL, *value = NULL, *traceback = NULL, *carried = NULL;
-    if (arg == Py_None && PyIter_Check(iter)) {
-        *result = Py_TYPE(iter)->tp_iternext(iter);
-        /* a plain exhausted iterator returns NULL with nothing set */
-        if (*result == NULL && !PyErr_Occurred()) {
-            *result = By_NewRef(Py_None);
-            return PYGEN_RETURN;
-        }
-    } else {
-        PyObject *send = PyObject_GetAttrString(iter, "send");
-        if (send == NULL) {
-            *result = NULL;
-            return PYGEN_ERROR;
-        }
-        *result = PyObject_Vectorcall(send, &arg, 1, NULL);
-        Py_DECREF(send);
-    }
-    if (*result != NULL) return PYGEN_NEXT;
-    if (!PyErr_ExceptionMatches(PyExc_StopIteration)) return PYGEN_ERROR;
-    PyErr_Fetch(&type, &value, &traceback);
-    PyErr_NormalizeException(&type, &value, &traceback);
-    if (value != NULL) carried = PyObject_GetAttrString(value, "value");
-    Py_XDECREF(type);
-    Py_XDECREF(value);
-    Py_XDECREF(traceback);
-    if (carried == NULL) {
-        PyErr_Clear();
-        carried = By_NewRef(Py_None);
-    }
-    *result = carried;
-    return PYGEN_RETURN;
-}
-#else
+/* `PyIter_Send` is the call the `SEND` opcode makes, and 3.11 is the floor, so there is
+ * nothing older to stand in for it */
 #define By_IterSend PyIter_Send
-#endif
 
 /* one step of delegation: send `sent` into `inner` and report what happened.
  *
@@ -4565,21 +5125,16 @@ static ByRaisedIter By_RaisedIter = {PyObject_HEAD_INIT(&By_RaisedIter_Type)};
  * the difference between a completed `await` costing an exception and costing a
  * pointer read.
  *
- * `arg` is dispatched exactly as `PyIter_Send` would have dispatched it against a
- * type with no `am_send`: `None` goes the way `tp_iternext` goes and carries nothing
- * in, and anything else parks the value the suspended `yield` evaluates to, the way
- * `send` does. keeping that split is what makes the slot invisible rather than a
- * second set of semantics */
+ * `arg` is parked exactly as `send` parks it, `None` included — `PyIter_Send` with
+ * `None` is `next()`, and `next()` is `send(None)`, so all three leave the suspended
+ * `yield` evaluating to the same thing. treating `None` as "carries nothing" and
+ * skipping the store is what used to let a value survive into a later `yield` */
 static inline PySendResult By_SendGenerator(PyObject *self, PyObject **sent,
-                                            PyObject **returned, ByTagged *state,
+                                            PyObject **returned, ByTagged *state, int frame,
                                             PyObject *(*resume)(PyObject *), PyObject *arg,
                                             PyObject **result) {
     PyObject *step;
-    if (arg != Py_None) {
-        PyObject *old = *sent;
-        *sent = By_NewRef(arg);
-        Py_XDECREF(old);
-    }
+    By_ParkSent(sent, arg);
     step = resume(self);
     if (step != NULL) {
         *result = step;
@@ -4592,6 +5147,11 @@ static inline PySendResult By_SendGenerator(PyObject *self, PyObject **sent,
         *result = step;
         return PYGEN_RETURN;
     }
+    /* the frame raised rather than ended — this slot's other exit, and the one pep
+     * 479 speaks about. converting here rather than only in `By_StepGenerator` is
+     * what keeps `yield from` and `await`, which reach a frame through this slot,
+     * from seeing an error the iterator protocol would not have shown them */
+    By_ConvertStopIteration(frame);
     return By_IterSend((PyObject *)&By_RaisedIter, Py_None, result);
 }
 

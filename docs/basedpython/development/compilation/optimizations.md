@@ -568,8 +568,10 @@ can, and it is worth designing toward even though it lands last
 - **`is` on small ints and interned strings**, which is observable. note that
     unboxed fixed-length tuples already break `is` in mypyc; we take the same
     trade and document it in [plan](plan.md#semantic-deltas)
-- **`__dict__` on native classes**, which we do not synthesize at all unless a
-    class opts in
+- **the instance dict on a native class**, which every class keeps unless it
+    declares `__slots__` — the layout is faster and the dict costs an allocation,
+    but a class that quietly refused a name its interpreted twin stored would be
+    buying that with a wrong answer
 - anything where the win is smaller than the divergence risk. the differential
     harness is the arbiter, and a passing benchmark that fails it is not an
     optimization

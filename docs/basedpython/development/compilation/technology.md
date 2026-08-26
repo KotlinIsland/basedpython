@@ -188,6 +188,37 @@ paying a function call for every field read is the opposite of the exercise.
 mypyc reached the same conclusion. this is worth revisiting only if
 [HPy](https://hpyproject.org) stabilizes with a performant CPython ABI mode
 
+### the floor is python 3.11, and it is refused rather than discovered
+
+taking the full API also means there is an oldest cpython the emitted C makes sense
+against. `Py_TPFLAGS_IMMUTABLETYPE`, which every emitted type carries, arrived in
+3.10; the unbound-local wording a compiled function has to match is 3.11's; and
+`PyIter_Send`, which every `yield from` and `await` goes through, is 3.10's
+
+for most of this backend's life none of that was checked. an older interpreter got a
+build that ran all the way to the C compiler and then a screen of errors about an
+undeclared identifier — which is the bottom rung of this project's own ladder, below
+both a decline and a wrong answer, and it named nothing a user could act on
+
+so `by compile` states the floor and refuses beneath it, before it lowers anything:
+
+```console
+$ PYTHON=python3.9 by compile m.py -o out
+by failed
+  Cause: could not read `python3.9`'s build configuration; set PYTHON to an interpreter with development headers
+  Cause: a native build needs python 3.11 or later, and `python3.9` is python 3.9
+```
+
+the first line is the command's standing hint for every way a probe can fail, and it
+overstates this one — the configuration was read, and read successfully; it is the
+answer that was refused
+
+the number lives in exactly one place on the rust side, `by_build::MINIMUM_PYTHON`,
+and `by.h` restates it as an `#error` for a compile that did not come through
+`by compile`. everything below it has been taken out of the header: there is one
+wording of the unbound-local error now, one `By_IterSend`, and the match-shape tests
+stand unguarded
+
 ### an artefact is pinned to one minor version, and says so itself
 
 taking the full API means the runtime header reads layouts that move between

@@ -5,13 +5,11 @@ SP="$1"; BY="$2"; PY="$3"; OUT="$4"; shift 4
 # shellcheck source=scripts/native-sweeps/sweeplib.sh
 . "$(dirname "$0")/sweeplib.sh"
 LIB=$(sweep_lib "$PY")
-root="$SP/census.$$"; rm -rf "$root"; mkdir -p "$root"
-trap 'rm -rf "$root"' EXIT
-: > "$OUT"
+sweep_begin census || exit 1
 for b in $(sweep_modules "$LIB" "$@"); do
   f="$LIB/$b"
   [ -f "$f" ] || continue
-  d="$root/w"; sweep_stage "$d" "$LIB" "$b"
+  d="$SWEEP_ROOT/w"; sweep_stage "$d" "$LIB" "$b"
   sweep_compile "$b" "$d" "$PY" "$BY" --annotate --emit-c-only
   report="$(sweep_out_dir "$d")/m.annotated"
   if [ ! -f "$report" ]; then printf '%s\tno-report\n' "$b" >> "$OUT"; continue; fi
@@ -23,3 +21,4 @@ for b in $(sweep_modules "$LIB" "$@"); do
     /^## class / { print b "\tclass\t" $3 }
   ' "$report" >> "$OUT"
 done
+sweep_end || exit 1

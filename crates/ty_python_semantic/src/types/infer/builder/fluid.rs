@@ -1138,12 +1138,48 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     /// the creation-time type as a constraint for re-solving the specialization, or
     /// `None` if it binds nothing (e.g. `list[Unknown]` from an empty literal, which
     /// must not leak `Unknown` into the widened solution)
+    ///
+    /// basedpython: a creation type built around the cycle's own divergence marker binds,
+    /// even though the marker reads as gradual before it is materialized and as `Never`
+    /// once it bottom-materializes — the two shapes this otherwise discards. the marker is
+    /// neither: it stands for a type the fixed-point iteration has not finished computing,
+    /// and it is the one thing cycle recovery cannot lose. dropping it leaves the re-solve
+    /// with nothing to bind the element to, so a use observes `set[Unknown]` where creation
+    /// said `set[Divergent]`, and with no marker left for `recursive_type_normalized` to
+    /// fold on, a recursion read back through a parametric context
+    ///
+    /// ```python
+    /// def h(n: int):
+    ///     if n:
+    ///         return "a"
+    ///     t = {h(n)}
+    ///     return "b" + next(iter(t))
+    /// ```
+    ///
+    /// settles on `str | Unknown` rather than `str`. only a context parametric enough to
+    /// re-solve reaches that path — `iter`'s `Iterable[T]`, not a subscript — which is why
+    /// the same recursion read back with `t[0]` always settled
+    ///
+    /// this says nothing about whether the marker *locks* the binding, which is what the
+    /// other callers of [`Self::fluid_constraint_binds_typevars`] ask. a marker that
+    /// escapes into a nested scope must still be presented gradually rather than shown to
+    /// a reader as `list[Divergent]`, so those keep reading it as the gradual type it
+    /// materializes to
     fn fluid_creation_constraint(
         &self,
         identity_instance: Type<'db>,
         generic_context: GenericContext<'db>,
         creation: Type<'db>,
     ) -> Option<Type<'db>> {
+        if any_over_type(
+            self.db(),
+            self.program_environment(),
+            creation,
+            false,
+            |ty| ty.is_divergent(),
+        ) {
+            return Some(creation);
+        }
         self.fluid_constraint_binds_typevars(identity_instance, generic_context, creation)
             .then_some(creation)
     }

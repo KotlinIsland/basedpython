@@ -359,6 +359,30 @@ impl Function {
         }
     }
 
+    /// whether this function reaches into a class of this module's own, by name
+    ///
+    /// three places say so, and all three are needed. an operation may name a class
+    /// outright — see [`Op::named_classes`]. a register may be *typed* as an instance
+    /// of one, which is what licenses every direct field read the body then makes of
+    /// it. and the return type is a register's type one frame along: a caller that
+    /// takes the answer into an instance-typed register reads it as that struct.
+    ///
+    /// a tuple or an array of instances counts too, which is why the types are asked
+    /// rather than matched — see [`RType::instance_classes`]
+    pub fn names_class(&self, class: &str) -> bool {
+        self.ret.instance_classes().contains(&class)
+            || self
+                .registers
+                .iter()
+                .any(|decl| decl.ty.instance_classes().contains(&class))
+            || self.blocks.iter().any(|block| {
+                block
+                    .ops
+                    .iter()
+                    .any(|op| op.named_classes().contains(&class))
+            })
+    }
+
     /// the entry block, which is always block 0
     pub const fn entry() -> BlockId {
         BlockId(0)
@@ -530,6 +554,13 @@ pub struct ClassIr {
     /// then `object.__init__` is what rejects a call with arguments, and python names
     /// the *class* in that message rather than a method the class does not have
     pub inherited_init: bool,
+    /// whether the class body declares `__slots__`.
+    ///
+    /// python reads that as "this instance's attributes are exactly these names", and
+    /// gives such an instance no `__dict__` — so a class that declares it is asking for
+    /// the layout an emitted class has anyway, and one that does not is asking for a
+    /// name it never mentioned to still have somewhere to go
+    pub declares_slots: bool,
     /// whether the class declares type parameters.
     ///
     /// they are erased in the *layout* — every `T` field is an object, whatever
@@ -544,6 +575,13 @@ pub struct ClassIr {
     /// keeps the object identical between the two, which is what python's
     /// evaluate-once rule means
     pub constants: Vec<String>,
+    /// the constants that are dunders filling a type slot, and so need one emitted.
+    ///
+    /// a name in `tp_dict` does not fill a slot: python reads `tp_repr` for `repr(x)`
+    /// and never consults the name. so `__repr__ = _repr` needs a slot of its own that
+    /// reaches the assigned value, or the class answers twice — the inherited slot for
+    /// `repr(x)` and the assignment for `x.__repr__()`
+    pub slot_aliases: Vec<SlotAlias>,
     pub fields: Vec<FieldDecl>,
     /// decorators to apply, outermost first, after the type is in the namespace.
     ///
@@ -561,6 +599,25 @@ pub struct ClassIr {
     /// and every other one reaches `__init_subclass__`. a type spec has nowhere to put
     /// them, so a class with any is built through its metaclass instead
     pub keywords: Vec<ClassKeyword>,
+}
+
+/// a dunder the class body *assigned* rather than defined, which fills a type slot
+///
+/// the value is not here for the same reason a constant's is not: the interpreted
+/// definition evaluated it once, and module init copies that same object across. the
+/// slot reaches it back out of the type's dict, so both `repr(x)` and `x.__repr__()`
+/// answer with the one object the assignment named
+#[derive(Debug, Clone, PartialEq)]
+pub struct SlotAlias {
+    /// the dunder written on the left of the assignment
+    pub name: String,
+    /// whether the body assigned `None`, which is how python says a type does not
+    /// support the operation at all rather than naming something to call.
+    ///
+    /// only `__hash__` reaches this: it is the one slot with a standing value for
+    /// "unsupported" (`PyObject_HashNotImplemented`), and every other dunder assigned
+    /// `None` is declined
+    pub unsupported: bool,
 }
 
 /// one `name=value` in a class header

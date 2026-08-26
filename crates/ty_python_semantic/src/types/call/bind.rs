@@ -4599,12 +4599,38 @@ impl<'db> CallableBinding<'db> {
                 .matching_overloads()
                 .map(|(_, overload)| overload.return_type())
                 .collect::<Vec<_>>();
-            let return_type = match UnsafeUnionType::from_elements(db, possible_return_types) {
-                // A dynamic return type admits every materialization, so the menu is no longer
-                // finite. Keep the marker type instead, which records that this `Unknown` came
-                // from a degraded overload match.
-                Type::Dynamic(_) => Type::Dynamic(DynamicType::AmbiguousOverload),
-                return_type => return_type,
+            // basedpython: a divergence marker among the possible results dominates them, the
+            // way it dominates an intersection. The marker stands for a type the fixed-point
+            // iteration has not finished computing, so the menu of materializations it offers
+            // is not finite either — but unlike `Unknown` it can still be folded on, and losing
+            // it costs a recursion its convergence:
+            //
+            // ```python
+            // def h(n: int):
+            //     if n:
+            //         return "a"
+            //     t = set([h(n)])
+            //     return "b" + next(iter(t))
+            // ```
+            //
+            // In the round where `t` is still the bare marker, `iter(t)` matches both of its
+            // overloads and lands here. Answering `Unknown` records that `Unknown` as the
+            // element type of the `[h(n)]` literal — a query of its own, which the return
+            // type's early-round discard never revisits — and every later round reads it back,
+            // so the recursion settles on `str | Unknown` rather than `str`.
+            let divergent_result = possible_return_types
+                .iter()
+                .copied()
+                .find(Type::is_divergent);
+            let return_type = match divergent_result {
+                Some(divergent_result) => divergent_result,
+                None => match UnsafeUnionType::from_elements(db, possible_return_types) {
+                    // A dynamic return type admits every materialization, so the menu is no longer
+                    // finite. Keep the marker type instead, which records that this `Unknown` came
+                    // from a degraded overload match.
+                    Type::Dynamic(_) => Type::Dynamic(DynamicType::AmbiguousOverload),
+                    return_type => return_type,
+                },
             };
             self.overload_call_return_type = Some(OverloadCallReturnType::Ambiguous(return_type));
         }

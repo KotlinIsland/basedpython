@@ -24,14 +24,17 @@ use by_ir::rtype::RType;
 
 mod common;
 
-/// an interpreter and its build settings, or `None` when this machine cannot run
-/// the test at all
 /// a test whose *source* needs a newer interpreter than this one has nothing to
 /// say: neither leg can run it, so there is nothing to compare
+///
+/// only above `by_build::MINIMUM_PYTHON` — anything at or below the floor is already
+/// guaranteed, because a toolchain below it never gets built
 fn supports(toolchain: &Toolchain, least: (u8, u8)) -> bool {
     toolchain.version.is_none_or(|version| version >= least)
 }
 
+/// an interpreter and its build settings, or `None` when this machine cannot run
+/// the test at all
 fn environment() -> Option<(String, Toolchain)> {
     let python = match std::env::var("PYTHON") {
         Ok(python) => python,
@@ -45,7 +48,17 @@ fn environment() -> Option<(String, Toolchain)> {
             })?
             .to_string(),
     };
-    let toolchain = Toolchain::probe(&python).ok()?;
+    // an interpreter below `by_build::MINIMUM_PYTHON` is refused by the probe, so
+    // every test that goes through here skips on one rather than failing: below the
+    // floor there is no native leg to compare against, and the failure that used to
+    // stand in for that answer was a wall of C compiler errors
+    let toolchain = match Toolchain::probe(&python) {
+        Ok(toolchain) => toolchain,
+        Err(error) => {
+            eprintln!("skipping: {error}");
+            return None;
+        }
+    };
     Some((python, toolchain))
 }
 
@@ -774,9 +787,6 @@ corpus! {
 
 #[test]
 fn a_caller_supplied_lowering_is_compiled_the_same_way() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 11))) {
-        return;
-    }
     // `by compile` lowers against a project database so a type imported from a
     // sibling module resolves. this asserts the entry point behind that: a module
     // the caller lowered itself gets the same gates, passes, and fallback

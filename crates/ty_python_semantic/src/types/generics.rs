@@ -4397,10 +4397,50 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                 formal @ (Type::NominalInstance(_) | Type::ProtocolInstance(_)),
                 Type::NominalInstance(actual_nominal),
             ) => {
+                // basedpython: an actual carrying a divergence marker reads a protocol formal
+                // structurally, off the actual's own MRO, instead of through the constraint set.
+                //
+                // The constraint set reasons about a gradual source through its materializations,
+                // and a marker's bottom materialization is `Never`. So `Iterable[T]` solved
+                // against `list[Divergent]` records `Never ≤ T` and the marker is gone, while the
+                // same parameter declared `list[T]` — read structurally below — keeps it. That is
+                // the difference between
+                //
+                // ```python
+                // def h(n: int):
+                //     if n:
+                //         return "a"
+                //     t = set([h(n)])
+                //     return "b" + next(iter(t))
+                // ```
+                //
+                // settling on `str | Unknown` and settling on `str`: `set.__init__` takes an
+                // `Iterable`, so the round that still has only the marker to go on solves the
+                // element to `Never`, and the `Unknown` that follows from it is recorded as the
+                // element type of the `[h(n)]` literal — a query of its own, which the return
+                // type's early-round discard never revisits.
+                //
+                // Only a protocol the actual's MRO actually lists can be read this way; an
+                // implicitly implemented one still goes through the constraint set below.
+                let structural_protocol = match formal {
+                    Type::ProtocolInstance(formal_protocol)
+                        if any_over_type(db, self.env, actual, false, |ty| ty.is_divergent()) =>
+                    {
+                        formal_protocol
+                            .nominal_origin_instance(db)
+                            .and_then(|nominal| nominal.class(db, self.env).into_generic_alias())
+                    }
+                    _ => None,
+                };
+
                 // Extract formal_alias if this is a generic class
                 let formal_alias = match formal {
                     Type::NominalInstance(formal_nominal) => {
                         formal_nominal.class(db, self.env).into_generic_alias()
+                    }
+
+                    Type::ProtocolInstance(_) if structural_protocol.is_some() => {
+                        structural_protocol
                     }
 
                     Type::ProtocolInstance(_) => {
@@ -4444,6 +4484,15 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                         return Ok(());
                     }
                 }
+
+                // The actual does not list this protocol in its MRO, so the structural read had
+                // nothing to descend into; the constraint set is still the only way to relate them
+                if structural_protocol.is_some() {
+                    let when = actual.when_constraint_set_assignable_to_owned(db, self.env, formal);
+                    let when = self.constraints.load(db, self.env, &when);
+                    self.infer_from_constraint_set(when)?;
+                    return Ok(());
+                }
             }
 
             // TODO: in principle this could be a generalized Union-actual arm that maps over the
@@ -4468,6 +4517,49 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                 let when = actual.when_constraint_set_assignable_to_owned(db, self.env, formal);
                 let when = self.constraints.load(db, self.env, &when);
                 self.infer_from_constraint_set(when)?;
+                return Ok(());
+            }
+
+            // basedpython: an argument that is the cycle's own divergence marker solves the
+            // formal's typevars to the marker, rather than leaving them unsolved.
+            //
+            // A marker is not a value nothing is known about — it stands for a type the
+            // fixed-point iteration has not finished computing, and it is the one thing cycle
+            // recovery folds on. Left unsolved, the typevars default to `Unknown`, so the call
+            // hands back `Unknown` and the marker is gone:
+            //
+            // ```python
+            // def h(n: int):
+            //     if n:
+            //         return "a"
+            //     t = list([h(n)])
+            //     return "b" + next(iter(t))
+            // ```
+            //
+            // In the round where `t`'s own definition is still being computed, `t` reads as the
+            // bare marker, so `iter(t)` and `next(...)` are calls on it. Answering `Unknown` for
+            // those records that `Unknown` as the element type of the `[h(n)]` literal — a query
+            // of its own, which the return type's early-round discard never revisits — and every
+            // later round reads it back, so the recursion settles on `str | Unknown` rather than
+            // `str`.
+            //
+            // The marker materializes to the same gradual type the unsolved default would have
+            // produced. What changes is that it survives the call.
+            (_, Type::Divergent(_)) if formal.has_typevar(db, env) => {
+                let formal_typevars = Cell::new(Vec::new());
+                any_over_type(db, self.env, formal, false, |ty| {
+                    if let Type::TypeVar(bound_typevar) = ty
+                        && bound_typevar.is_inferable(db, self.inferable)
+                    {
+                        let mut collected = formal_typevars.take();
+                        collected.push(bound_typevar);
+                        formal_typevars.set(collected);
+                    }
+                    false
+                });
+                for bound_typevar in formal_typevars.into_inner() {
+                    self.add_type_mapping(bound_typevar, actual, polarity);
+                }
                 return Ok(());
             }
 

@@ -44,9 +44,7 @@ SP="$1"; BY="$2"; PY="$3"; OUT="$4"; shift 4
 # shellcheck source=scripts/native-sweeps/sweeplib.sh
 . "$(dirname "$0")/sweeplib.sh"
 LIB=$(sweep_lib "$PY")
-root="$SP/isoinst.$$"; rm -rf "$root"; mkdir -p "$root"
-trap 'rm -rf "$root"' EXIT
-: > "$OUT"
+sweep_begin isoinst || exit 1
 
 # how long one construction or one probe is given. it is the same two seconds
 # `isoconstruct` allows a constructor, for the same reason: a member that blocks must
@@ -59,7 +57,7 @@ export SWEEP_PROBE_BOUND=${SWEEP_PROBE_BOUND:-2}
 # as `<callable ...>`, and a handful of modules define hundreds of classes
 export SWEEP_MEMBER_LIMIT=${SWEEP_MEMBER_LIMIT:-40}
 
-cat > "$root/plan.py" <<'PYEOF'
+cat > "$SWEEP_ROOT/plan.py" <<'PYEOF'
 """what both legs will touch, decided once by the interpreted class
 
 a leg that chose for itself would choose differently — a compiled class's members are
@@ -132,7 +130,7 @@ for name in sorted(vars(m)):
         print('@PLAN\t%s\t%s\t%s' % line, flush=True)
 PYEOF
 
-cat > "$root/probe.py" <<'PYEOF'
+cat > "$SWEEP_ROOT/probe.py" <<'PYEOF'
 """construct each class the plan names, then touch it the way a program would"""
 
 import importlib
@@ -295,8 +293,12 @@ leg() {
   local dir="$1" start=0 attempts=0 text="" out="" status=0 done_lines=0
   while [ "$attempts" -lt 40 ]; do
     attempts=$((attempts+1))
-    out=$(cd "$dir" && "$PY" probe.py "$start" 2>&1 | grep -E '^@(P[0-9]+|IMPORT-FAILED)\t'
-          exit "${PIPESTATUS[0]}"); status=$?
+    # through `sweep_capture` rather than a command substitution around the probe: a
+    # constructor is free to start a process that inherits the leg's stdout, and a pipe
+    # one of those still holds never reaches end of file. the reasons are with the
+    # helper, in `sweeplib.sh`
+    sweep_capture "$dir" "$PY" probe.py "$start"; status=$SWEEP_CAPTURE_STATUS
+    out=$(printf '%s' "$SWEEP_CAPTURE_TEXT" | grep -E '^@(P[0-9]+|IMPORT-FAILED)\t')
     # *both* legs' directories are replaced, in both legs, and the compiled one first
     # because it sits inside the interpreted one. scrubbing only the leg's own directory
     # would leave the other leg's spelling of the same idea standing: `wsgiref.handlers`
@@ -308,6 +310,11 @@ leg() {
     done_lines=$(printf '%s' "$text" | grep -c '^@P')
     text="$text@P$done_lines"$'\t'"DIED"$'\t'"signal=$status"$'\t'"-"$'\t'"died"$'\n'
     start=$((done_lines + 1))
+    # 137 is the whole-leg bound killing a leg that does not finish, which is a different
+    # claim from a probe dying: restarting past one probe assumes the next will get
+    # further, and a leg that hangs after its last answer would hang again forty times
+    # over. the death row above carries it into the comparison either way
+    [ "$status" -eq 137 ] && break
   done
   printf '%s' "$text"
 }
@@ -333,12 +340,12 @@ keys() {
 for b in $(sweep_modules "$LIB" "$@"); do
   f="$LIB/$b"
   [ -f "$f" ] || continue
-  d="$root/w"; sweep_stage "$d" "$LIB" "$b"
+  d="$SWEEP_ROOT/w"; sweep_stage "$d" "$LIB" "$b"
   sweep_compile "$b" "$d" "$PY" "$BY"
   if ! sweep_built "$d"; then printf '%s\tno-artifact\n' "$b" >> "$OUT"; continue; fi
   sweep_place "$d"
   for run in "$SWEEP_RUN_I" "$SWEEP_RUN_C"; do
-    cp "$root/plan.py" "$run/plan.py"; cp "$root/probe.py" "$run/probe.py"
+    cp "$SWEEP_ROOT/plan.py" "$run/plan.py"; cp "$SWEEP_ROOT/probe.py" "$run/probe.py"
     sweep_write_renderer "$run"
   done
   # the plan is drawn up on the interpreted leg and handed to both. a module the
@@ -349,7 +356,10 @@ for b in $(sweep_modules "$LIB" "$@"); do
   # and so is everything the probe program says. without that, twenty lines of poetry
   # became twenty malformed plan entries, the probe program raised on the first of them,
   # and the module was reported as a crash on both legs
-  said=$(cd "$SWEEP_RUN_I" && "$PY" plan.py 2>&1)
+  #
+  # it is read through `sweep_capture` for the same reason the probes are: it builds every
+  # class in the module, so it starts — and leaks — whatever a constructor starts
+  sweep_capture "$SWEEP_RUN_I" "$PY" plan.py; said=$SWEEP_CAPTURE_TEXT
   plan=$(printf '%s' "$said" | grep '^@PLAN'$'\t' | cut -f2-)
   if printf '%s' "$said" | grep -q '^@IMPORT-FAILED'$'\t'; then
     printf '%s\timport-failed\t%s\n' "$b" \
@@ -394,12 +404,17 @@ for b in $(sweep_modules "$LIB" "$@"); do
   fi
   compared=$(printf '%s' "$steady" | grep -c '')
   unstable=$(( $(printf '%s' "$plan" | grep -c '') - compared ))
-  if printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$i1" "$i2" "$c1" "$c2" "$i3" "$c3" | grep -q $'\tDIED\t'; then
-    # a leg that was killed answered nothing, and two legs killed the same way answer
-    # nothing in the same words — which is not agreement. this was not hypothetical: a
-    # broken copy of this script made both legs die identically forty times, and the
-    # first version scored the pair `same`. so a death is its own verdict, and the diff
-    # goes with it so the probe that caused it is named
+  # a leg that was killed answered nothing, and two legs killed the same way answer
+  # nothing in the same words — which is not agreement. this was not hypothetical: a
+  # broken copy of this script made both legs die identically forty times, and the first
+  # version scored the pair `same`. so a death is its own verdict, and the diff goes with
+  # it so the probe that caused it is named
+  #
+  # what a death *looks like* is `sweep_pair_died`'s to know, and the fact of one is
+  # recorded where `sweep_end` cross-checks it against the verdict written here — this
+  # rung gets that check right, and the check exists so that the next one need not
+  if sweep_pair_died "$i1$i2$i3" "$c1$c2$c3"; then
+    sweep_note_death "$b"
     { printf '%s\tCRASHED\t%s\tunstable=%s\n' "$b" "$compared" "$unstable"
       diff <(printf '%s\n' "$i") <(printf '%s\n' "$c") | awk -v b="$b" '{print b "\t| " $0}'
     } >> "$OUT"
@@ -415,4 +430,5 @@ for b in $(sweep_modules "$LIB" "$@"); do
     } >> "$OUT"
   fi
 done
+sweep_end || exit 1
 echo "walked: $(grep -cE $'\t(same|DIFFERS|CRASHED|timed-out|import-failed|compiled-import-failed|nothing-to-probe|nothing-stable|no-artifact)\t?' "$OUT")   exercised: $(grep -cE $'\t(same|DIFFERS)\t' "$OUT")   differing: $(grep -c $'\tDIFFERS\t' "$OUT")   crashed: $(grep -c $'\tCRASHED\t' "$OUT")   nothing-stable: $(grep -c $'\tnothing-stable' "$OUT")   nothing-to-probe: $(grep -c $'\tnothing-to-probe' "$OUT")   timed-out: $(grep -c $'\ttimed-out' "$OUT")   import-failed: $(grep -c $'\timport-failed' "$OUT")   compiled-import-failed: $(grep -c $'\tcompiled-import-failed' "$OUT")   no-artifact: $(grep -c $'\tno-artifact' "$OUT")"

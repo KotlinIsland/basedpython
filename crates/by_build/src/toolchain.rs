@@ -14,6 +14,19 @@ use by_ir::ModuleName;
 use by_ir::function::FallbackCode;
 use serde::Deserialize;
 
+/// the oldest interpreter a native build supports, stated once
+///
+/// this is the *only* place the floor is written on the rust side, so raising or
+/// lowering it is one edit. it is a refusal rather than a decline because there is
+/// nothing partial to fall back to: the emitted C names symbols an older cpython
+/// does not have — `Py_TPFLAGS_IMMUTABLETYPE` arrived in 3.10, and the header's
+/// unbound-local wording is 3.11's — so what an older interpreter gets without this
+/// check is a wall of C compiler errors that names none of that
+///
+/// the C half of the same fact is the `#error` at the top of `by.h`, which catches a
+/// compile driven by something other than `by compile`
+pub const MINIMUM_PYTHON: (u8, u8) = (3, 11);
+
 /// everything needed to compile and link an extension for one interpreter
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Toolchain {
@@ -187,6 +200,19 @@ impl Toolchain {
             let (major, minor) = text.split_once('.')?;
             Some((major.parse().ok()?, minor.parse().ok()?))
         });
+        // only a version we could *read* is refused. the probe always asks for one, so
+        // an unknown here means an answer that would not parse — which is not evidence
+        // of an old python, and turning it into a version verdict would refuse a
+        // working interpreter over a formatting surprise
+        if let Some((major, minor)) = version
+            && (major, minor) < MINIMUM_PYTHON
+        {
+            let (least_major, least_minor) = MINIMUM_PYTHON;
+            bail!(
+                "a native build needs python {least_major}.{least_minor} or later, \
+                 and `{python}` is python {major}.{minor}"
+            );
+        }
 
         Ok(Self {
             python: python.to_string(),
@@ -293,6 +319,42 @@ mod tests {
     #[test]
     fn a_probe_with_no_version_leaves_it_unknown() {
         let json = SAMPLE.replace(r#", "version": "3.13""#, "");
+        let toolchain = Toolchain::from_probe("python3", &json).unwrap();
+        assert_eq!(toolchain.version, None);
+    }
+
+    #[test]
+    fn an_interpreter_below_the_floor_is_refused_by_name() {
+        // what an old interpreter used to get instead was a wall of C compiler errors
+        // over an undeclared `Py_TPFLAGS_IMMUTABLETYPE`, which says nothing about the
+        // version. the refusal names the floor and what was found, the way the emitted
+        // `PyInit_`'s own version guard does
+        let json = SAMPLE.replace(r#""version": "3.13""#, r#""version": "3.9""#);
+        let error = Toolchain::from_probe("python3.9", &json).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "a native build needs python 3.11 or later, and `python3.9` is python 3.9"
+        );
+    }
+
+    #[test]
+    fn the_floor_itself_is_supported() {
+        // an off-by-one here would refuse the very version the floor names
+        let (major, minor) = MINIMUM_PYTHON;
+        let json = SAMPLE.replace(
+            r#""version": "3.13""#,
+            &format!(r#""version": "{major}.{minor}""#),
+        );
+        let toolchain = Toolchain::from_probe("python3", &json).unwrap();
+        assert_eq!(toolchain.version, Some(MINIMUM_PYTHON));
+    }
+
+    #[test]
+    fn an_unreadable_version_is_not_refused_as_an_old_one() {
+        // the floor is a statement about interpreters known to be too old. a probe that
+        // did not answer has not made that statement, and refusing it would turn a
+        // parse gap into a version verdict
+        let json = SAMPLE.replace(r#""version": "3.13""#, r#""version": "three.nine""#);
         let toolchain = Toolchain::from_probe("python3", &json).unwrap();
         assert_eq!(toolchain.version, None);
     }

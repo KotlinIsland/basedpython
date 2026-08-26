@@ -11,9 +11,7 @@ SP="$1"; BY="$2"; PY="$3"; OUT="$4"; shift 4
 # shellcheck source=scripts/native-sweeps/sweeplib.sh
 . "$(dirname "$0")/sweeplib.sh"
 LIB=$(sweep_lib "$PY")
-root="$SP/isoimp.$$"; rm -rf "$root"; mkdir -p "$root"
-trap 'rm -rf "$root"' EXIT
-: > "$OUT"
+sweep_begin isoimp || exit 1
 
 # an import that never returns would stall the whole sweep, and a package member is far
 # likelier to start something than a top-level module. the alarm is left at its default
@@ -33,17 +31,21 @@ probe='import importlib, os, signal; signal.alarm(int(os.environ["SWEEP_IMPORT_B
 # says nothing is the case this exists for, so the two are returned apart rather than
 # packed into one string an empty half would collapse
 leg() {
-  local dir="$1" out
-  out=$(cd "$dir" && "$PY" -c "$probe" 2>&1); LEG_STATUS=$?
+  local dir="$1"
+  # through `sweep_capture` rather than a command substitution around the interpreter: a
+  # module body is free to start a process that inherits the leg's stdout, and a pipe one
+  # of those still holds never reaches end of file. the reasons are with the helper, in
+  # `sweeplib.sh`
+  sweep_capture "$dir" "$PY" -c "$probe"; LEG_STATUS=$SWEEP_CAPTURE_STATUS
   # the two legs run from different directories, so a message that names a file would
   # read as a difference the module never had. each is made relative to its own root
-  LEG_TEXT=$(sweep_canonical "$(printf '%s' "$out" | tail -1 | sed "s|$dir/||g")")
+  LEG_TEXT=$(sweep_canonical "$(printf '%s' "$SWEEP_CAPTURE_TEXT" | tail -1 | sed "s|$dir/||g")")
 }
 
 for b in $(sweep_modules "$LIB" "$@"); do
   f="$LIB/$b"
   [ -f "$f" ] || continue
-  d="$root/w"; sweep_stage "$d" "$LIB" "$b"
+  d="$SWEEP_ROOT/w"; sweep_stage "$d" "$LIB" "$b"
   sweep_compile "$b" "$d" "$PY" "$BY"
   if ! sweep_built "$d"; then printf '%s\tno-artifact\n' "$b" >> "$OUT"; continue; fi
   sweep_place "$d"
@@ -62,4 +64,5 @@ for b in $(sweep_modules "$LIB" "$@"); do
   else printf '%s\tDIFFERS\tinterpreted[%s]\tcompiled[%s]\n' "$b" "$i" "$c"
   fi >> "$OUT"
 done
+sweep_end || exit 1
 echo "walked: $(wc -l < "$OUT")   exercised: $(grep -c $'\tsame\t$' "$OUT")   differing: $(grep -c $'\tDIFFERS' "$OUT")   died: $(grep -c $'\tDIED' "$OUT")   timed-out: $(grep -c $'\ttimed-out' "$OUT")   import-failed: $(grep -cE $'\tsame\t.' "$OUT")   no-artifact: $(grep -c $'\tno-artifact' "$OUT")"

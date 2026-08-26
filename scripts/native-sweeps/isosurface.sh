@@ -33,11 +33,9 @@ SP="$1"; BY="$2"; PY="$3"; OUT="$4"; shift 4
 # shellcheck source=scripts/native-sweeps/sweeplib.sh
 . "$(dirname "$0")/sweeplib.sh"
 LIB=$(sweep_lib "$PY")
-root="$SP/isosurf.$$"; rm -rf "$root"; mkdir -p "$root"
-trap 'rm -rf "$root"' EXIT
-: > "$OUT"
+sweep_begin isosurf || exit 1
 
-cat > "$root/drive.py" <<'PYEOF'
+cat > "$SWEEP_ROOT/drive.py" <<'PYEOF'
 import importlib
 import os
 import signal
@@ -83,20 +81,6 @@ except BaseException as error:
 
 def show(line):
     print(line, flush=True)
-
-
-def safe(text):
-    # a repr carrying an address differs between two processes for no reason of ours
-    if ' at 0x' in text or ' object at ' in text:
-        return '<addr>'
-    return text
-
-
-def value_of(target, key):
-    try:
-        return safe(repr(getattr(target, key)))
-    except BaseException as error:
-        return '<raised %s>' % type(error).__name__
 
 
 def owned(value):
@@ -164,15 +148,25 @@ PYEOF
 for b in $(sweep_modules "$LIB" "$@"); do
   f="$LIB/$b"
   [ -f "$f" ] || continue
-  d="$root/w"; sweep_stage "$d" "$LIB" "$b"
+  d="$SWEEP_ROOT/w"; sweep_stage "$d" "$LIB" "$b"
   sweep_compile "$b" "$d" "$PY" "$BY"
   if ! sweep_built "$d"; then printf '%s\tno-artifact\n' "$b" >> "$OUT"; continue; fi
   sweep_place "$d"
-  cp "$root/drive.py" "$SWEEP_RUN_I/drive.py"; cp "$root/drive.py" "$SWEEP_RUN_C/drive.py"
+  cp "$SWEEP_ROOT/drive.py" "$SWEEP_RUN_I/drive.py"; cp "$SWEEP_ROOT/drive.py" "$SWEEP_RUN_C/drive.py"
   # a traceback names the file it came from, and the two legs run from different
   # directories — so the *path* would read as a difference the module never had
-  i=$(cd "$SWEEP_RUN_I" && "$PY" drive.py 2>&1 | sed "s|$SWEEP_RUN_I/||g")
-  c=$(cd "$SWEEP_RUN_C" && "$PY" drive.py 2>&1 | sed "s|$SWEEP_RUN_C/||g")
+  #
+  # each leg runs through `sweep_capture` rather than a command substitution around the
+  # driver: a module body is free to start a process that inherits the leg's stdout, and a
+  # pipe one of those still holds never reaches end of file. the reasons are with the
+  # helper, in `sweeplib.sh`. it also hands back the driver's own status, which used to
+  # need `PIPESTATUS` — and the status is the *only* thing that can tell a leg that
+  # finished from a leg that stopped, because this rung has no restart loop and two legs
+  # killed at the same class truncate to the same text
+  sweep_capture "$SWEEP_RUN_I" "$PY" drive.py; istat=$SWEEP_CAPTURE_STATUS
+  i=$(printf '%s' "$SWEEP_CAPTURE_TEXT" | sed "s|$SWEEP_RUN_I/||g")
+  sweep_capture "$SWEEP_RUN_C" "$PY" drive.py; cstat=$SWEEP_CAPTURE_STATUS
+  c=$(printf '%s' "$SWEEP_CAPTURE_TEXT" | sed "s|$SWEEP_RUN_C/||g")
   # a `has` line is one-directional: only its loss counts, so the compiled leg's extra
   # names are dropped before the comparison and the interpreted leg's are kept
   ionly=$(echo "$i" | grep -v ' has ')
@@ -182,7 +176,16 @@ for b in $(sweep_modules "$LIB" "$@"); do
     # a module that cannot be imported here agrees on both legs and exercises nothing —
     # kept apart from `same` so the denominator stays honest
     case "$i" in IMPORT-FAILED*) printf '%s\timport-failed\t%s\n' "$b" "$i" ;;
-      *) printf '%s\tsame\t%s\n' "$b" "$(echo "$i" | wc -l | tr -d ' ')" ;;
+      # a leg that was killed truncates identically to the other leg killed at the same
+      # class, so the *text* of an agreeing pair proves nothing about whether either leg
+      # got to the end. only the status does
+      *) if [ "$istat" -ne 0 ] || [ "$cstat" -ne 0 ]; then
+           sweep_note_death "$b"
+           printf '%s\tCRASHED\t%s\tinterpreted[%s]\tcompiled[%s]\n' \
+             "$b" "$(echo "$i" | wc -l | tr -d ' ')" "$istat" "$cstat"
+         else
+           printf '%s\tsame\t%s\n' "$b" "$(echo "$i" | wc -l | tr -d ' ')"
+         fi ;;
     esac >> "$OUT"
   elif printf '%s%s' "$i" "$c" | grep -q '_Slow timed out'; then
     # the import bound is 30 seconds and a loaded machine loses it on one leg and not
@@ -195,4 +198,5 @@ for b in $(sweep_modules "$LIB" "$@"); do
     echo "$lost" | awk -v b="$b" 'NF {print b "\t| lost " $0}'
   fi >> "$OUT"
 done
-echo "walked: $(grep -cE $'\t(same|DIFFERS|timed-out|import-failed|no-artifact)' "$OUT")   exercised: $(grep -cE $'\t(same|DIFFERS)' "$OUT")   differing: $(grep -c $'\tDIFFERS' "$OUT")   lost: $(grep -c $'\t| lost ' "$OUT")   timed-out: $(grep -c $'\ttimed-out' "$OUT")   import-failed: $(grep -c $'\timport-failed' "$OUT")   no-artifact: $(grep -c $'\tno-artifact' "$OUT")"
+sweep_end || exit 1
+echo "walked: $(grep -cE $'\t(same|DIFFERS|CRASHED|timed-out|import-failed|no-artifact)' "$OUT")   exercised: $(grep -cE $'\t(same|DIFFERS)' "$OUT")   differing: $(grep -c $'\tDIFFERS' "$OUT")   crashed: $(grep -c $'\tCRASHED\t' "$OUT")   lost: $(grep -c $'\t| lost ' "$OUT")   timed-out: $(grep -c $'\ttimed-out' "$OUT")   import-failed: $(grep -c $'\timport-failed' "$OUT")   no-artifact: $(grep -c $'\tno-artifact' "$OUT")"

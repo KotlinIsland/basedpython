@@ -2320,6 +2320,30 @@ impl<'db> Type<'db> {
         })
     }
 
+    /// Whether this type is a class, in the sense [`Type::has_default_metaclass`] asks
+    /// about: something with a metaclass to read at all.
+    ///
+    /// The native backend needs the two reasons apart. A base whose metaclass is
+    /// `ABCMeta` is a class that cannot carry a type spec; a base that is not a class in
+    /// the first place — a name in a branch this platform never reaches, most often —
+    /// says nothing about a metaclass either way, and telling a reader it "has" one
+    /// would be an invention.
+    pub fn is_class_object(self, db: &'db dyn Db) -> bool {
+        self.to_class_type(db).is_some()
+    }
+
+    /// The name of this class's metaclass, where the type is a class and its metaclass
+    /// settles on one class rather than on a union or a gradual type.
+    ///
+    /// This is the companion of [`Type::has_default_metaclass`]: where that answers no,
+    /// the native backend declines, and the decline is far easier to act on when it
+    /// names the metaclass it found instead of only the one it wanted.
+    pub fn metaclass_name(self, db: &'db dyn Db) -> Option<&'db str> {
+        self.to_class_type(db)
+            .and_then(|class| class.metaclass(db).as_class_literal())
+            .map(|meta| meta.name(db).as_str())
+    }
+
     pub const fn is_dynamic(&self) -> bool {
         matches!(
             self,

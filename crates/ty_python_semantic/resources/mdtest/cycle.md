@@ -582,6 +582,235 @@ nested = defaultdict(tree)
 reveal_type(nested)  # revealed: defaultdict[Unknown, defaultdict[Unknown, Divergent]]
 ```
 
+## a recursive return value carried in a tuple element
+
+a recursion routed through a tuple is the same recursion as one written directly, and settles the
+same way. it did not, because a tuple is the one container an uninhabited element makes uninhabited:
+on the first round that element is the cycle's divergence marker, the marker stands for the least
+type there is, and the tuple built around it came back `Never`. the recursive branch then
+contributed nothing, the marker was gone, and every later round saw an ordinary string one character
+longer than the last — a family of literals that gains a member per round and has no fixed point.
+
+a marker is not a claim that no value exists; it is a type the iteration has not finished computing,
+and the tuple has to survive it for the recursion to still be there when recovery folds it back.
+
+```py
+def through_tuple(n: int):
+    if n:
+        return "a"
+    t = (through_tuple(n),)
+    return "b" + t[0]
+
+reveal_type(through_tuple(1))  # revealed: str
+
+# the same recursion spelled directly and through a list, which always converged
+def direct(n: int):
+    if n:
+        return "a"
+    return "b" + direct(n)
+
+reveal_type(direct(1))  # revealed: str
+
+def through_list(n: int):
+    if n:
+        return "a"
+    t = [through_list(n)]
+    return "b" + t[0]
+
+reveal_type(through_list(1))  # revealed: str
+
+# a branch that adds nothing to what the other branch already returns stays exact
+def unchanged(n: int):
+    if n:
+        return "a"
+    t = (unchanged(n),)
+    return t[0]
+
+reveal_type(unchanged(1))  # revealed: Literal["a"]
+```
+
+## a recursive return value read back through a parametric context
+
+reading a value back out of a container is the same recursion whichever way it is spelled, so
+`next(iter(t))` has to settle where `t[0]` does. it did not, because the two reads take different
+paths through a fluid binding: a subscript observes the binding as it was created, while `iter` asks
+for an `Iterable[T]` — a context parametric enough that the binding's specialization is solved again
+for that use.
+
+that re-solve is driven by the creation type, and it was dropping the creation type on the floor
+whenever the only thing in it was the cycle's divergence marker. a marker reads as gradual before it
+is materialized and as `Never` once it bottom-materializes, and both of those are exactly what the
+re-solve discards as saying nothing about the element. with nothing left to bind the element to, the
+use observed `set[Unknown]` where creation had said `set[Divergent]`, and once the marker was gone
+recovery had nothing to fold the recursion back onto — so `Unknown` stayed in the answer for good.
+
+which container holds the value has nothing to do with it: a set and a list read back the same way
+settle the same way.
+
+```py
+def through_set(n: int):
+    if n:
+        return "a"
+    t = {through_set(n)}
+    return "b" + next(iter(t))
+
+reveal_type(through_set(1))  # revealed: str
+
+def through_list(n: int):
+    if n:
+        return "a"
+    t = [through_list(n)]
+    return "b" + next(iter(t))
+
+reveal_type(through_list(1))  # revealed: str
+```
+
+nor does it have to be a container at all. any generic built around the marker and read back through
+one of its own type parameters took the same path.
+
+```py
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Box(Generic[T]):
+    def __init__(self, value: T):
+        self.value = value
+
+def through_box(n: int):
+    if n:
+        return "a"
+    t = Box(through_box(n))
+    return "b" + t.value
+
+reveal_type(through_box(1))  # revealed: str
+```
+
+preserving the marker costs no precision elsewhere: a binding built around one and never read back
+keeps the literals it was built from, because the marker only ever stood in for the element the
+recursion had not settled yet.
+
+```py
+def never_read(n: int):
+    if n:
+        return "a"
+    t = {never_read(n)}
+    return "b"
+
+reveal_type(never_read(1))  # revealed: Literal["a", "b"]
+```
+
+## a recursive value handed to a constructor
+
+`set([h(n)])` is the second way of writing `{h(n)}`, so it has to settle where the display does. it
+did not, because building the container by calling its class puts the recursion through two places a
+display never reaches, and both of them threw the cycle's divergence marker away.
+
+the first is the constructor's own solve. `set.__init__` takes an `Iterable`, and a protocol formal
+is related to its argument through the constraint solver, which reasons about a gradual argument by
+its materializations — and a marker's bottom materialization is `Never`. so `Iterable[T]` solved
+against `list[Divergent]` learned `Never ≤ T` and the marker was gone before anything else saw it.
+reading the same parameter off the argument's own bases keeps it, which is why the identical
+constructor declared `list[T]` always settled.
+
+```py
+def through_set(n: int):
+    if n:
+        return "a"
+    t = set([through_set(n)])
+    return "b" + next(iter(t))
+
+reveal_type(through_set(1))  # revealed: str
+
+def through_frozenset(n: int):
+    if n:
+        return "a"
+    t = frozenset([through_frozenset(n)])
+    return "b" + next(iter(t))
+
+reveal_type(through_frozenset(1))  # revealed: str
+
+def through_list(n: int):
+    if n:
+        return "a"
+    t = list([through_list(n)])
+    return "b" + next(iter(t))
+
+reveal_type(through_list(1))  # revealed: str
+```
+
+nothing about this is particular to the containers typeshed ships. a class of one's own taking an
+`Iterable` took the same path, and one taking a `list` never did.
+
+```py
+from typing import Generic, Iterable, TypeVar
+
+T = TypeVar("T")
+
+class ViaProtocol(Generic[T]):
+    def __init__(self, values: Iterable[T], /) -> None:
+        self.first = next(iter(values))
+
+def through_protocol_parameter(n: int):
+    if n:
+        return "a"
+    t = ViaProtocol([through_protocol_parameter(n)])
+    return "b" + t.first
+
+reveal_type(through_protocol_parameter(1))  # revealed: str
+```
+
+the marker only ever stood in for the element the recursion had not settled yet, so keeping it costs
+nothing where there was never a recursion to settle.
+
+```py
+def literal_element(n: int):
+    return set(["a"])
+
+reveal_type(literal_element(1))  # revealed: set[str]
+```
+
+## a recursive value read back through a call on the marker
+
+the round that builds the binding is the round in which the binding's own definition is still being
+computed, so the name reads as the bare marker there and reading it back is a call *on* the marker.
+such a call used to answer `Unknown` twice over: the marker bound none of the callee's typevars, and
+where several overloads matched it the menu of possible results collapsed to a gradual type.
+
+that `Unknown` does not stay where it was produced. it is recorded as the element type of the list
+literal the binding was built from — a query of its own, which the return type's discard of its
+first rounds never revisits — so every later round reads it back and the recursion settles on
+`str | Unknown`.
+
+```py
+def through_dunder_iter(n: int):
+    if n:
+        return "a"
+    t = list([through_dunder_iter(n)])
+    return "b" + next(t.__iter__())
+
+reveal_type(through_dunder_iter(1))  # revealed: str
+
+def through_second_container(n: int):
+    if n:
+        return "a"
+    t = list([through_second_container(n)])
+    return "b" + list(t)[0]
+
+reveal_type(through_second_container(1))  # revealed: str
+```
+
+a marker is what the answer is *not yet*, so a call on one answers with the marker. a genuinely
+gradual argument still answers gradually, since there is no fixed point on its way.
+
+```py
+from typing import Any
+
+def gradual_argument(x: Any):
+    reveal_type(iter(x))  # revealed: Unknown
+    reveal_type(set([x]))  # revealed: set[Any]
+```
+
 ## a statement call whose callee is still being inferred
 
 a call on a line of its own is asked whether it returns before anything after it is checked, because

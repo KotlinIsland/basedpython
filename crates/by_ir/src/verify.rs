@@ -1226,6 +1226,12 @@ impl Verifier<'_> {
             Op::RaiseWith { value, .. } => {
                 self.expect(block, value, &RType::OBJECT, "a raise with a value");
             }
+            // the value is what the frame handed back, and it is stored as an object
+            // for whichever face asks for it — a finish never gets a chance to widen
+            // it later
+            Op::FinishFrame { value } => {
+                self.expect(block, value, &RType::OBJECT, "a frame's return value");
+            }
         }
     }
 

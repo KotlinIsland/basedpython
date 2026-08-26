@@ -922,7 +922,9 @@ mod tests {
             }],
             decorators: Vec::new(),
             constants: Vec::new(),
+            slot_aliases: Vec::new(),
             generic: false,
+            declares_slots: false,
             methods: Vec::new(),
         });
         run(&mut m);
@@ -983,7 +985,9 @@ mod tests {
             }],
             decorators: Vec::new(),
             constants: Vec::new(),
+            slot_aliases: Vec::new(),
             generic: false,
+            declares_slots: false,
             methods: Vec::new(),
         });
         run(&mut m);
@@ -1035,7 +1039,9 @@ mod tests {
             }],
             decorators: Vec::new(),
             constants: Vec::new(),
+            slot_aliases: Vec::new(),
             generic: false,
+            declares_slots: false,
             methods: Vec::new(),
         });
         run(&mut m);
@@ -1089,7 +1095,9 @@ mod tests {
             }],
             decorators: Vec::new(),
             constants: Vec::new(),
+            slot_aliases: Vec::new(),
             generic: false,
+            declares_slots: false,
             methods: Vec::new(),
         });
         run(&mut m);

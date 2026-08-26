@@ -53,7 +53,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use by_ir::builder::FunctionBuilder;
 use by_ir::function::{
     Binding, CallConvention, ClassBase, ClassKeyword, Declined, Decorator, Function, GradualUse,
-    KeywordValue, ModuleIr, ModuleName, qualify,
+    KeywordValue, ModuleIr, ModuleName, SlotAlias, qualify,
 };
 use by_ir::ops::{
     BinOp, BlockId, CmpOp, Conversion, Mutation, Op, RegisterId, StandardError, Terminator,
@@ -138,6 +138,8 @@ pub fn build_module(
 
     // every name this module reads anywhere — see `names_read`
     let read = names_read(suite);
+    // every attribute a `del` anywhere in this module names — see `deleted_attributes`
+    let deleted = deleted_attributes(suite);
 
     // pass one: which classes get an emitted layout. a body cannot be lowered
     // until this is known, because whether `self.x` is a field read or a
@@ -170,7 +172,7 @@ pub fn build_module(
             if let Stmt::ClassDef(class) = stmt
                 && layouts.contains_key(class.name.as_str())
             {
-                match class_fields(db, env, model, suite, class, &layouts) {
+                match class_fields(db, env, model, suite, class, &layouts, &deleted) {
                     Ok(fields) => {
                         if layouts.get(class.name.as_str()) != Some(&fields) {
                             layouts.insert(class.name.to_string(), fields);
@@ -393,6 +395,7 @@ pub fn build_module(
         native_callees: &native_callees,
         decorated: &decorated,
         read: &read,
+        deleted: &deleted,
         suite,
         layouts: &layouts,
         methods: &methods,
@@ -814,6 +817,7 @@ fn lower_generator(
         constructor,
         vec![by_ir::function::ClassIr {
             exported: false,
+            declares_slots: false,
             name: class,
             // the machine is the same; only the surface differs. a coroutine answers
             // `__await__` and is deliberately *not* iterable
@@ -828,6 +832,7 @@ fn lower_generator(
             fields,
             decorators: Vec::new(),
             constants: Vec::new(),
+            slot_aliases: Vec::new(),
             generic: false,
             methods: vec![resume],
             base: None,
@@ -1087,7 +1092,12 @@ fn lower_resume(
         lowering.builder.switch_to(next);
     }
 
-    // exhausted: mark it so, and raise the way the iterator protocol expects
+    // exhausted: mark it so, and finish handing back `None`.
+    //
+    // both ways a frame ends without naming a value arrive here — running off the end
+    // of the body, and being resumed again once it already has — and python answers
+    // both with `StopIteration(None)`. it is a *finish* rather than a raise, so the
+    // send slot can report it without an exception being built at all
     lowering.builder.switch_to(exhausted);
     lowering.builder.push(Op::SetField {
         receiver: Value::Register(receiver),
@@ -1095,9 +1105,13 @@ fn lower_resume(
         field: generators::STATE_FIELD.to_string(),
         value: Value::Int(-1),
     });
-    lowering.builder.push(Op::RaiseStandard {
-        error: by_ir::ops::StandardError::StopIteration,
-        message: String::new(),
+    let nothing = lowering.builder.temp(RType::OBJECT);
+    lowering.builder.push(Op::Box {
+        dest: nothing,
+        src: Value::None,
+    });
+    lowering.builder.push(Op::FinishFrame {
+        value: Value::Register(nothing),
     });
     lowering.builder.terminate(Terminator::Unreachable);
 
@@ -1466,6 +1480,7 @@ fn lower_class<'a>(
         model,
         suite,
         layouts,
+        deleted,
         ..
     } = unit;
     // every frame written inside this body mangles a private name against this class,
@@ -1481,10 +1496,11 @@ fn lower_class<'a>(
     let (is_data, class_decorators) = class_modifiers(db, model, class)?;
     let base = base_class(db, env, model, suite, class, layouts)?;
 
-    let fields = class_fields(db, env, model, suite, class, layouts)?;
+    let fields = class_fields(db, env, model, suite, class, layouts, deleted)?;
     let mut lowered = Vec::new();
     let mut environments = Vec::new();
     let mut constants = Vec::new();
+    let mut slot_aliases = Vec::new();
     for statement in &class.body {
         match statement {
             // an annotation is not a binding, but an annotated *assignment* is the
@@ -1493,8 +1509,9 @@ fn lower_class<'a>(
             // in a `data class` the annotations are the fields instead, and the
             // layout has taken them already
             Stmt::AnnAssign(node) if !is_data && node.value.is_some() => {
-                match node.target.as_ref() {
-                    Expr::Name(name) => {
+                match (node.target.as_ref(), node.value.as_deref()) {
+                    (Expr::Name(name), Some(value)) => {
+                        slot_aliases.extend(assigned_slot(name.id.as_str(), value)?);
                         constants.push(mangled(Some(&class.name), name.id.as_str()));
                     }
                     _ => return Err(Decline::new("only a plain class-level name is lowered yet")),
@@ -1507,100 +1524,9 @@ fn lower_class<'a>(
                 // `__init__`, and every other dunder fills a type slot the method
                 // table does not reach
                 let own_init = !is_data && method.name.as_str() == "__init__";
-                // a dunder fills a *type slot*, which a method table cannot reach:
-                // python reads `tp_repr` for `repr(x)` and never consults the name.
-                // only the ones the emitter has a slot adapter for are lowered
-                let slotted = matches!(
-                    method.name.as_str(),
-                    "__repr__"
-                        | "__str__"
-                        | "__len__"
-                        | "__bool__"
-                        | "__hash__"
-                        | "__eq__"
-                        | "__ne__"
-                        | "__lt__"
-                        | "__le__"
-                        | "__gt__"
-                        | "__ge__"
-                        | "__add__"
-                        | "__radd__"
-                        | "__sub__"
-                        | "__rsub__"
-                        | "__mul__"
-                        | "__rmul__"
-                        | "__truediv__"
-                        | "__rtruediv__"
-                        | "__aiter__"
-                        | "__anext__"
-                        | "__await__"
-                        | "__iter__"
-                        | "__next__"
-                        | "__getitem__"
-                        | "__setitem__"
-                        | "__delitem__"
-                        | "__int__"
-                        | "__float__"
-                        | "__index__"
-                        | "__contains__"
-                        | "__neg__"
-                        | "__pos__"
-                        | "__abs__"
-                        | "__invert__"
-                        | "__call__"
-                        | "__get__"
-                        | "__iadd__"
-                        | "__isub__"
-                        | "__imul__"
-                        | "__itruediv__"
-                        | "__floordiv__"
-                        | "__rfloordiv__"
-                        | "__mod__"
-                        | "__rmod__"
-                        | "__divmod__"
-                        | "__rdivmod__"
-                        | "__lshift__"
-                        | "__rlshift__"
-                        | "__rshift__"
-                        | "__rrshift__"
-                        | "__and__"
-                        | "__rand__"
-                        | "__xor__"
-                        | "__rxor__"
-                        | "__or__"
-                        | "__ror__"
-                        | "__matmul__"
-                        | "__rmatmul__"
-                        | "__pow__"
-                        | "__rpow__"
-                        | "__ifloordiv__"
-                        | "__imod__"
-                        | "__ilshift__"
-                        | "__irshift__"
-                        | "__iand__"
-                        | "__ixor__"
-                        | "__ior__"
-                        | "__imatmul__"
-                        | "__del__"
-                        | "__getattr__"
-                );
-                // `tp_finalize` is reached from `tp_dealloc`, and the dealloc that would
-                // reach it belongs to whichever class owns the instance layout. a class
-                // that extends a base is freed through *that* base's, which may or may
-                // not call a finalizer at all — so the cleanups would run by accident
-                if method.name.as_str() == "__del__" && base.is_some() {
-                    return Err(Decline::new(
-                        "`__del__` is reached from the dealloc of the class that owns the layout, and this one extends a base",
-                    ));
-                }
-                // the hook runs the *ordinary* lookup first and falls back to the method
-                // only where that raised. what the ordinary one is, is the base's answer
-                // — so this is lowered where the base is `object`, whose answer is the
-                // generic lookup the adapter runs
-                if method.name.as_str() == "__getattr__" && base.is_some() {
-                    return Err(Decline::new(
-                        "`__getattr__` falls back from the lookup a base may have replaced, and this class extends one",
-                    ));
+                let slotted = has_a_slot_adapter(method.name.as_str());
+                if method.name.as_str() == "__getattr__" {
+                    getattr_hook_stands_alone(base.as_ref())?;
                 }
                 if method.name.starts_with("__")
                     && !own_init
@@ -1636,7 +1562,15 @@ fn lower_class<'a>(
             // a class-level constant: whatever it is, the interpreted definition
             // evaluated it already and module init copies it across
             Stmt::Assign(assign) => match assign.targets.as_slice() {
-                [Expr::Name(name)] => constants.push(mangled(Some(&class.name), name.id.as_str())),
+                // a dunder that fills a type slot needs one emitted alongside the copy.
+                // the copy writes into `tp_dict`, and a name there does not fill a slot —
+                // so `__repr__ = _repr` on its own leaves `repr(x)` going to the slot
+                // python inherited while `x.__repr__()` answers the assignment, which is
+                // two answers where the interpreted class has one
+                [Expr::Name(name)] => {
+                    slot_aliases.extend(assigned_slot(name.id.as_str(), &assign.value)?);
+                    constants.push(mangled(Some(&class.name), name.id.as_str()));
+                }
                 _ => return Err(Decline::new("only a plain class-level name is lowered yet")),
             },
             Stmt::Pass(_) => {}
@@ -1659,6 +1593,22 @@ fn lower_class<'a>(
     {
         return Err(Decline::new(format!(
             "`{clash}` is both a class-level constant and a field"
+        )));
+    }
+    // the same question the `def` above asks, for a body that assigned the hook instead
+    if slot_aliases.iter().any(|alias| alias.name == "__getattr__") {
+        getattr_hook_stands_alone(base.as_ref())?;
+    }
+    // a slot has one filler. a name written both ways would put the assignment's value
+    // over the method's descriptor in the type's dict while the slot still called the
+    // method, which is the two answers this whole path exists to prevent
+    if let Some(clash) = slot_aliases
+        .iter()
+        .find(|alias| lowered.iter().any(|method| method.name == alias.name))
+    {
+        return Err(Decline::new(format!(
+            "`{}` is both defined and assigned, and its type slot has room for one",
+            clash.name
         )));
     }
     // this class's own decorators are applied at init and taken out of the twin's source,
@@ -1684,12 +1634,66 @@ fn lower_class<'a>(
             fields,
             decorators: class_decorators,
             generic: class.type_params.is_some(),
+            declares_slots: declared_slots(class).is_some(),
             constants,
+            slot_aliases,
             methods: lowered,
             keywords,
         },
         environments,
     ))
+}
+
+/// `__getattr__` stands *behind* the ordinary lookup rather than replacing it
+///
+/// the hook runs the ordinary lookup first and falls back to the method only where that
+/// raised. what the ordinary one is, is the base's answer — so this is lowered where the
+/// base is `object`, whose answer is the generic lookup the adapter runs
+fn getattr_hook_stands_alone(base: Option<&ClassBase>) -> Lowered<()> {
+    if base.is_some() {
+        return Err(Decline::new(
+            "`__getattr__` falls back from the lookup a base may have replaced, and this class extends one",
+        ));
+    }
+    Ok(())
+}
+
+/// the type slot a class-level assignment to `name` has to fill, where it fills one
+///
+/// python reads `tp_repr` for `repr(x)` and never consults the name, so a class writing
+/// `__repr__ = _repr` would otherwise answer twice: the inherited slot for `repr(x)` and
+/// the assignment for `x.__repr__()`. `optparse.Option` and `http.cookies.BaseCookie` are
+/// the shape, and both were silently answering `object.__repr__`. the emitter fills the
+/// slot from the assigned value where it has an adapter, and this declines where it does
+/// not — the same question [`has_a_slot_adapter`] settles for a `def`
+fn assigned_slot(name: &str, value: &Expr) -> Lowered<Option<SlotAlias>> {
+    if !fills_a_type_slot(name) {
+        return Ok(None);
+    }
+    // `__hash__ = None` names nothing to call: it is how python says an instance cannot
+    // be hashed at all, and `tp_hash` has a standing value for exactly that. no other
+    // slot does, so `None` anywhere else is turning an operation off in a way the
+    // emitter cannot reproduce
+    if value.is_none_literal_expr() {
+        if name == "__hash__" {
+            return Ok(Some(SlotAlias {
+                name: name.to_string(),
+                unsupported: true,
+            }));
+        }
+        return Err(Decline::new(format!(
+            "`{name} = None` turns a type slot off, and only `__hash__` has a standing value for that"
+        )));
+    }
+    if !has_a_slot_adapter(name) {
+        return Err(Decline::new(format!(
+            "`{name}` fills a type slot with no adapter yet"
+        )));
+    }
+    Ok(Some(SlotAlias {
+        name: name.to_string(),
+        unsupported: false,
+    }))
 }
 
 /// the parameter a call leaves in slot zero, which for a method is the receiver
@@ -1704,13 +1708,230 @@ fn slot_zero(parameters: &ast::Parameters) -> Option<&ast::ParameterWithDefault>
         .or_else(|| parameters.args.first())
 }
 
-/// the fields of a plain class: the attributes its `__init__` gives the instance
+/// the instance methods of a class, each with the name it calls its receiver
+///
+/// `staticmethod` and `classmethod` are left out because slot zero is not an instance
+/// for either: a `classmethod` writing `cls.x` is giving the *class* an attribute, and
+/// recording that as a field would give every instance storage the source never asked
+/// for. only a bare name says which convention, exactly as [`method_binding`] reads it —
+/// `abc.abstractmethod` is not one however its last segment reads
+fn instance_methods(class: &ast::StmtClassDef) -> Vec<(&ast::StmtFunctionDef, &str)> {
+    class
+        .body
+        .iter()
+        .filter_map(|statement| {
+            let Stmt::FunctionDef(method) = statement else {
+                return None;
+            };
+            let convention = method.decorator_list.iter().any(|decorator| {
+                matches!(&decorator.expression, Expr::Name(name)
+                    if matches!(name.id.as_str(), "staticmethod" | "classmethod"))
+            });
+            if convention {
+                return None;
+            }
+            Some((
+                method,
+                slot_zero(&method.parameters)?.parameter.name.as_str(),
+            ))
+        })
+        .collect()
+}
+
+/// the attributes of `receiver` one assignment *target* writes, with the sub-expression
+/// each is written through
+///
+/// a target is a tree rather than a name: `self.a, (self.b, *self.rest) = xs` writes
+/// three attributes, and every one of them has to reach the layout. an attribute the
+/// layout never hears about is not simply missed — the write falls through to the dynamic
+/// form, and an emitted instance has no `__dict__` for that to land in, so it raises where
+/// the interpreted class stored a value
+fn target_attributes<'a>(
+    target: &'a Expr,
+    receiver: &str,
+    owner: Option<&str>,
+) -> Lowered<Vec<(String, &'a Expr)>> {
+    match target {
+        // `self.a[i] = v` and `self.a.b = v` write through the attribute rather than to
+        // it, so the layout hears nothing new — but the read they begin with does have to
+        // find it, which is the same field the assignment that put it there declared
+        Expr::Name(_) | Expr::Subscript(_) => Ok(Vec::new()),
+        Expr::Attribute(_) => match attribute_of(target, receiver, owner) {
+            Some(name) => Ok(vec![(name, target)]),
+            None => Ok(Vec::new()),
+        },
+        Expr::Starred(starred) => target_attributes(&starred.value, receiver, owner),
+        Expr::Tuple(ast::ExprTuple { elts, .. }) | Expr::List(ast::ExprList { elts, .. }) => {
+            let mut out = Vec::new();
+            for element in elts {
+                out.extend(target_attributes(element, receiver, owner)?);
+            }
+            Ok(out)
+        }
+        // python has no other target form, so nothing reaches here — and a form that
+        // did would be one the layout had not been shown, which is the shape of the
+        // bug this whole walk exists to rule out
+        other => Err(Decline::new(format!(
+            "{other:?} is not an assignment target the layout can read"
+        ))),
+    }
+}
+
+/// the attributes of `receiver` one *statement* writes
+///
+/// every statement that binds a name binds an attribute the same way, so all six forms
+/// are asked here rather than only the two an assignment uses. `for self.item in xs` and
+/// `with open(p) as self.file` each give the instance an attribute exactly as
+/// `self.item = x` does, and each was silently invisible to the layout
+///
+/// this does not descend into a nested body of its own: the caller walks those, and
+/// which of them are *definite* is a separate question — see [`completing_assignments`]
+fn receiver_writes<'a>(
+    statement: &'a Stmt,
+    receiver: &str,
+    owner: Option<&str>,
+) -> Lowered<Vec<(String, &'a Expr)>> {
+    let mut out = Vec::new();
+    match statement {
+        // a chained assignment binds every target to the one value
+        Stmt::Assign(node) => {
+            for target in &node.targets {
+                out.extend(target_attributes(target, receiver, owner)?);
+            }
+        }
+        // an annotation with no value declares rather than assigns
+        Stmt::AnnAssign(node) if node.value.is_some() => {
+            out.extend(target_attributes(&node.target, receiver, owner)?);
+        }
+        // an augmented assignment reads the attribute and writes it back, so the
+        // layout has to hold it for either half to work
+        Stmt::AugAssign(node) => out.extend(target_attributes(&node.target, receiver, owner)?),
+        Stmt::For(node) => out.extend(target_attributes(&node.target, receiver, owner)?),
+        Stmt::With(node) => {
+            for item in &node.items {
+                if let Some(bound) = &item.optional_vars {
+                    out.extend(target_attributes(bound, receiver, owner)?);
+                }
+            }
+        }
+        _ => {}
+    }
+    // an emitted instance *is* its layout: `__dict__` is not a field it could be given,
+    // because the namespace it stands for is the thing an emitted class does not have.
+    // `__weakref__` is the same answer — a type spec adds neither, which is what
+    // `slot_fields` already tells a `__slots__` that asks for one
+    if let Some((name, _)) = out
+        .iter()
+        .find(|(name, _)| matches!(name.as_str(), "__dict__" | "__weakref__"))
+    {
+        return Err(Decline::new(format!(
+            "`{name}` is written on the receiver, and an emitted instance is its layout with nothing behind it"
+        )));
+    }
+    Ok(out)
+}
+
+/// every statement a body contains, however deeply — the bodies of nested `def`s and
+/// `class`es included
+///
+/// [`walk`] and [`walk_with_cases`] deliberately stop at a nested definition, because
+/// what a nested frame binds is not what this one binds. a question about the *values* a
+/// frame reaches has no such boundary: a closure reads the enclosing frame's names, so a
+/// write it makes is a write this frame's receiver sees
+fn every_statement(body: &[Stmt]) -> Vec<&Stmt> {
+    struct Collect<'a>(Vec<&'a Stmt>);
+    impl<'a> ruff_python_ast::visitor::Visitor<'a> for Collect<'a> {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            self.0.push(stmt);
+            ruff_python_ast::visitor::walk_stmt(self, stmt);
+        }
+    }
+    let mut collect = Collect(Vec::new());
+    for stmt in body {
+        ruff_python_ast::visitor::Visitor::visit_stmt(&mut collect, stmt);
+    }
+    collect.0
+}
+
+/// a `classmethod` that binds an attribute on the class it is handed
+///
+/// slot zero of a `classmethod` holds the emitted *type*, and an emitted type is sealed:
+/// immutable to `setattr`, so `cls.x = 1` raises `TypeError: cannot set attribute of
+/// immutable type` where python binds a class attribute. unsealing it is not the answer —
+/// a write into `tp_dict` would replace the descriptor a field publishes there, and every
+/// instance would read the class's value instead of its own.
+///
+/// so the class declines, and declining is enough: a method's decline takes its class
+/// with it, and the interpreted class python is then left with takes the write exactly as
+/// the source meant it.
+///
+/// a function nested inside the method counts, because it captures the same class
+/// object — so the walk reaches every body, not only this one. a nested `def` that binds
+/// the name itself is a name of its own and not the class at all, but declining it too
+/// costs a class python could have had rather than giving one an answer it never gives
+fn class_object_is_not_written(
+    function: &ast::StmtFunctionDef,
+    owner: Option<&str>,
+) -> Lowered<()> {
+    let Some(parameter) = slot_zero(&function.parameters) else {
+        return Ok(());
+    };
+    let receiver = parameter.parameter.name.as_str();
+    let refuse = |name: &str| {
+        Err(Decline::new(format!(
+            "`{receiver}.{name}` binds an attribute on the class, and the type this \
+             module emits for it is sealed"
+        )))
+    };
+    for statement in every_statement(&function.body) {
+        if let Some((name, _)) = receiver_writes(statement, receiver, owner)?.first() {
+            return refuse(name);
+        }
+        // `del cls.x` reaches the same sealed type, and unbinds a class attribute where
+        // python unbinds one
+        if let Stmt::Delete(node) = statement {
+            for target in &node.targets {
+                if let Expr::Attribute(attribute) = target
+                    && matches!(attribute.value.as_ref(), Expr::Name(name) if name.id == *receiver)
+                {
+                    return refuse(&attribute.attr);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// as [`receiver_writes`], keeping only the writes that are *certain* to have happened
+/// once the statement is past
+///
+/// a `for` target is bound once per iteration, so an empty iterable binds it never. that
+/// leaves the loop saying only that the attribute exists somewhere in the class, which is
+/// the optional field with a presence byte beside it that the width pass gives it. every
+/// other form here runs exactly once — a `with` binds what `__enter__` handed back before
+/// its body starts, and the body of a `with` is not a body that may be skipped
+fn certain_writes<'a>(
+    statement: &'a Stmt,
+    receiver: &str,
+    owner: Option<&str>,
+) -> Lowered<Vec<(String, &'a Expr)>> {
+    if matches!(statement, Stmt::For(_)) {
+        return Ok(Vec::new());
+    }
+    receiver_writes(statement, receiver, owner)
+}
+
+/// the fields of a plain class: the attributes its body gives the instance
 ///
 /// a fixed layout needs every field to exist by the time anything can read one,
 /// which for a plain class means `__init__` assigns it *unconditionally*. an
-/// assignment inside a branch or a loop leaves the question open, so the class
-/// declines rather than inventing an answer — python would raise `AttributeError`
-/// there, and a struct field has no way to be absent
+/// assignment inside a branch or a loop leaves the question open, so the field takes a
+/// presence byte beside it rather than the class inventing an answer — python raises
+/// `AttributeError` there, and a struct field has no other way to be absent.
+///
+/// every write reaches here, whatever statement made it, because the layout is the only
+/// place an attribute can go: one it never heard about is lowered as the dynamic form and
+/// lands nowhere at all
 fn init_fields(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
@@ -1719,88 +1940,80 @@ fn init_fields(
     layouts: &Layouts,
     mut fields: Vec<by_ir::function::FieldDecl>,
 ) -> Lowered<Vec<by_ir::function::FieldDecl>> {
-    let Some(init) = class.body.iter().find_map(|statement| match statement {
-        Stmt::FunctionDef(function) if function.name.as_str() == "__init__" => Some(function),
-        _ => None,
-    }) else {
-        // no `__init__` is not the same as no *layout*: a class of methods has an empty
-        // one, which is as representable as any other. what it cannot have is fields,
-        // and it does not claim any
-        return Ok(fields);
-    };
-    let Some(receiver) = slot_zero(&init.parameters) else {
+    let methods = instance_methods(class);
+    if class.body.iter().any(|statement| {
+        matches!(statement, Stmt::FunctionDef(function)
+            if function.name.as_str() == "__init__"
+                && slot_zero(&function.parameters).is_none())
+    }) {
         return Err(Decline::new("`__init__` takes no receiver"));
-    };
-    let receiver = receiver.parameter.name.as_str();
+    }
 
     // the representation a field needs has to cover *every* write to it, not only
     // the one in `__init__`: a method assigning a wider value would otherwise be
     // storing something the struct cannot hold
     let mut widths: Vec<(String, RType)> = Vec::new();
-    let written = class.body.iter().filter_map(|statement| match statement {
-        Stmt::FunctionDef(method) => Some(walk(&method.body)),
-        _ => None,
-    });
-    for statement in written.flatten() {
-        let target = match statement {
-            Stmt::Assign(node) => match node.targets.as_slice() {
-                [target] => target,
-                _ => continue,
-            },
-            Stmt::AnnAssign(node) => node.target.as_ref(),
-            _ => continue,
-        };
-        let Some(name) = attribute_of(target, receiver, Some(&class.name)) else {
-            continue;
-        };
-        let ty = target
-            .inferred_type(model)
-            .ok_or_else(|| Decline::new("an attribute assignment has no inferred type"))?;
-        let rtype = map_type_with(db, env, ty, layouts)?;
-        match widths.iter_mut().find(|(written, _)| *written == name) {
-            Some((_, existing)) => {
-                if *existing != rtype {
-                    *existing = RType::OBJECT;
+    for (method, receiver) in &methods {
+        for statement in walk_with_cases(&method.body) {
+            for (name, target) in receiver_writes(statement, receiver, Some(&class.name))? {
+                let ty = target
+                    .inferred_type(model)
+                    .ok_or_else(|| Decline::new("an attribute assignment has no inferred type"))?;
+                let rtype = map_type_with(db, env, ty, layouts)?;
+                match widths.iter_mut().find(|(written, _)| *written == name) {
+                    Some((_, existing)) => {
+                        if *existing != rtype {
+                            *existing = RType::OBJECT;
+                        }
+                    }
+                    None => widths.push((name, rtype)),
                 }
             }
-            None => widths.push((name, rtype)),
         }
     }
+
+    // a class with no `__init__` gives the instance nothing at construction, so every
+    // attribute it has is one some later method wrote — which is the optional field the
+    // last pass below declares. it is not the same as having no *layout*: a class of
+    // methods has an empty one, which is as representable as any other
+    let Some((init, receiver)) = methods
+        .iter()
+        .find(|(method, _)| method.name.as_str() == "__init__")
+    else {
+        for (name, ty) in &widths {
+            if fields.iter().any(|field| field.name == *name) {
+                continue;
+            }
+            fields.push(by_ir::function::FieldDecl {
+                name: name.clone(),
+                ty: ty.clone(),
+                default: None,
+                optional: true,
+            });
+        }
+        return Ok(fields);
+    };
 
     // an attribute every path through `__init__` assigns is as much a field as one
     // assigned at the top: the layout only needs to know it is always there
     let definite = definitely_assigned_attributes(&init.body, receiver, Some(&class.name));
     for statement in &init.body {
-        let target = match statement {
-            Stmt::Assign(node) => match node.targets.as_slice() {
-                [target] => target,
-                // `self.a = self.b = v` gives both, and a tuple target gives each
-                _ => {
-                    return Err(Decline::new(
-                        "only a single assignment target is lowered yet",
-                    ));
-                }
-            },
-            Stmt::AnnAssign(node) => node.target.as_ref(),
-            _ => continue,
-        };
-        let Some(name) = attribute_of(target, receiver, Some(&class.name)) else {
-            continue;
-        };
-        if fields.iter().any(|field| field.name == name) {
-            continue;
+        for (name, _) in certain_writes(statement, receiver, Some(&class.name))? {
+            if fields.iter().any(|field| field.name == name) {
+                continue;
+            }
+            let ty = widths
+                .iter()
+                .find(|(written, _)| *written == name)
+                .map(|(_, rtype)| rtype.clone())
+                .ok_or_else(|| Decline::new("an attribute assignment has no representation"))?;
+            fields.push(by_ir::function::FieldDecl {
+                name,
+                ty,
+                default: None,
+                optional: false,
+            });
         }
-        let ty = widths
-            .iter()
-            .find(|(written, _)| *written == name)
-            .map(|(_, rtype)| rtype.clone())
-            .ok_or_else(|| Decline::new("an attribute assignment has no representation"))?;
-        fields.push(by_ir::function::FieldDecl {
-            name,
-            ty,
-            default: None,
-            optional: false,
-        });
     }
 
     // the ones assigned on every path but not at the top come next, in the order the
@@ -2563,6 +2776,11 @@ fn base_class(
                         "a base out of this module needs to resolve to a class",
                     ));
                 }
+                if base_is_special_form(model, base) {
+                    return Err(Decline::new(
+                        "a typing special form builds the class itself, and what it builds is not a layout",
+                    ));
+                }
                 paths.push(path);
             }
             Ok(Some(ClassBase::External(paths)))
@@ -2772,8 +2990,24 @@ fn external_base_resolves(model: &SemanticModel<'_>, base: &Expr) -> bool {
     base.inferred_type(model).is_some_and(|ty| !ty.is_dynamic())
 }
 
-/// whether every base out of this module has `type` for its metaclass, as far as the
-/// types say
+/// whether a base is one of typing's special forms rather than a class
+///
+/// `class Point(NamedTuple)` does not mean "a class deriving from `NamedTuple`". the
+/// special form is machinery: python reads the annotations in the body and builds a
+/// `tuple` subclass with `_fields`, a generated `__new__` and a fixed arity, none of which
+/// a layout can describe. and the result is an ordinary `type` over `tuple`, so nothing
+/// downstream refuses it the way a `TypedDict`'s own metaclass is refused — it was emitted
+/// as a class with **no fields at all**, which built, imported, and answered
+/// `Point(1, "x")` with a `TypeError` while `Point()` succeeded
+fn base_is_special_form(model: &SemanticModel<'_>, base: &Expr) -> bool {
+    matches!(
+        base.inferred_type(model),
+        Some(ty_python_semantic::types::Type::SpecialForm(_))
+    )
+}
+
+/// the first base whose metaclass is not `type`, said as the tail of a decline —
+/// which base it is and what it has instead
 ///
 /// a class built from a type spec gets `type` as its own metaclass, so a base with
 /// another one is a conflict python rejects. only a class **appending storage** to its
@@ -2781,18 +3015,50 @@ fn external_base_resolves(model: &SemanticModel<'_>, base: &Expr) -> bool {
 /// instead — so this is what decides whether such a class can be compiled at all.
 /// typeshed does not always record a metaclass, and an unrecorded one reads as `type`
 /// here; the emitted module tests the bases again at import for that reason
-fn every_base_metaclass_is_type(
+///
+/// what it found is named rather than only what it wanted, because the two are not the
+/// same question and the answer decides what to do next. `abc.ABCMeta` is nearly the
+/// whole of this over the standard library — an `io` abstract base under a class that
+/// keeps a buffer of its own — and cpython refuses that outright from 3.14, where
+/// `PyType_FromSpecWithBases` over such a base raises `TypeError: Metaclasses with
+/// custom tp_new are not supported`. so a report saying `ABCMeta` is a report saying
+/// "not without a construction other than a type spec", which the fixed wording was not
+///
+/// the answer is the *stub's*, and for the `io` family the stub and the interpreter
+/// disagree: typeshed writes `TextIOWrapper(TextIOBase, ...)`, so its metaclass reads
+/// as `ABCMeta`, while `io.py` only calls `TextIOBase.register(TextIOWrapper)` and the
+/// runtime type keeps plain `type`. naming the metaclass is what makes that visible in
+/// the report at all
+///
+/// a base that is not a class gets said so rather than given a metaclass it never had.
+/// a module ending its own import on the platforms it does not serve — `raise
+/// ImportError('win32 only')` — leaves everything below unreachable, and a base named
+/// there settles on nothing; `asyncio`'s windows modules are the whole of that here
+fn base_with_another_metaclass(
     db: &dyn ty_python_semantic::Db,
     model: &SemanticModel<'_>,
     class: &ast::StmtClassDef,
-) -> bool {
+) -> Option<String> {
     class
         .arguments
         .iter()
         .flat_map(|arguments| arguments.args.iter())
-        .all(|base| {
-            base.inferred_type(model)
-                .is_some_and(|ty| ty.has_default_metaclass(db))
+        .find_map(|base| {
+            let named =
+                dotted_path(base).map_or_else(|| "a base".to_string(), |path| format!("`{path}`"));
+            let Some(ty) = base.inferred_type(model) else {
+                return Some(format!("{named} has no inferred type to read one off"));
+            };
+            if ty.has_default_metaclass(db) {
+                return None;
+            }
+            if !ty.is_class_object(db) {
+                return Some(format!("{named} is not a class the types settle on"));
+            }
+            Some(match ty.metaclass_name(db) {
+                Some(metaclass) => format!("{named} has `{metaclass}`"),
+                None => format!("{named} has one that does not settle on a class"),
+            })
         })
 }
 
@@ -2852,6 +3118,7 @@ fn class_fields(
     suite: &[Stmt],
     class: &ast::StmtClassDef,
     layouts: &Layouts,
+    deleted: &HashSet<String>,
 ) -> Lowered<Vec<by_ir::function::FieldDecl>> {
     if stores_through_setattr(class) {
         return Err(Decline::new(
@@ -2901,9 +3168,46 @@ fn class_fields(
         spec_built_where_needed(db, env, model, suite, class, base.as_ref(), layouts, fields)?
     };
     metaclass_carries_the_body(class, base.as_ref(), layouts)?;
-    Ok(presence_where_a_finalizer_reads(
-        db, env, model, suite, layouts, class, fields,
-    ))
+    finalizer_reaches_a_dealloc_of_ours(class, base.as_ref())?;
+    let mut fields =
+        presence_where_a_finalizer_reads(db, env, model, suite, layouts, class, fields);
+    for field in &mut fields {
+        if deleted.contains(&field.name) {
+            field.optional = true;
+        }
+    }
+    Ok(fields)
+}
+
+/// whether a `__del__` this class writes is one the deallocation would ever reach
+///
+/// `tp_finalize` is reached from `tp_dealloc`, and the dealloc that would reach it
+/// belongs to whichever class owns the instance layout. a class that extends a base is
+/// freed through *that* base's, which may or may not call a finalizer at all — so the
+/// cleanups would run by accident.
+///
+/// asked while the layouts are still settling, for the reason `metaclass_carries_the_body`
+/// gives: a class turned down here leaves the layout set, so a subclass of one takes the
+/// external base every declining class's subclass takes rather than being laid out on a
+/// base that is never emitted and cascading behind it. `asyncio.selector_events` lost
+/// every compiled definition it had that way — `_SelectorTransport` writes a `__del__`,
+/// and the transport built on it dragged the event loop and ten of its generators down
+fn finalizer_reaches_a_dealloc_of_ours(
+    class: &ast::StmtClassDef,
+    base: Option<&ClassBase>,
+) -> Lowered<()> {
+    if base.is_none() {
+        return Ok(());
+    }
+    let finalizes = class.body.iter().any(|statement| {
+        matches!(statement, Stmt::FunctionDef(method) if method.name.as_str() == "__del__")
+    });
+    if finalizes {
+        return Err(Decline::new(
+            "`__del__` is reached from the dealloc of the class that owns the layout, and this one extends a base",
+        ));
+    }
+    Ok(())
 }
 
 /// whether a class only its metaclass can build carries what only the finished type
@@ -2984,7 +3288,10 @@ fn data_fields(
                 });
             }
             Stmt::FunctionDef(method) if method.name.starts_with("__") => {
-                return Err(Decline::new("a dunder method is not lowered yet"));
+                return Err(Decline::new(format!(
+                    "`{}` on a data class is not lowered yet",
+                    method.name
+                )));
             }
             Stmt::FunctionDef(_) | Stmt::Pass(_) => {}
             Stmt::Expr(node) if matches!(node.value.as_ref(), Expr::StringLiteral(_)) => {}
@@ -3021,9 +3328,22 @@ fn spec_built_where_needed(
         ));
     }
     if appends_past_a_base_of_ours(db, env, model, suite, base, layouts) {
-        return Err(Decline::new(
-            "a class whose fields sit past a base's instance needs a base python frees itself, and one this module writes is not",
-        ));
+        // the one base of ours this class *can* keep its storage past is one this module
+        // builds from a spec of its own: such a base carries the three slots we emitted,
+        // each reading the base to chain to from the type that declared it, so the chain
+        // walks down to the outside base and stops. every other base of ours is a `class`
+        // statement's type at import — the interpreted definition where the class
+        // declined, or the one its metaclass built — and python's own three resolve from
+        // `Py_TYPE(self)`, find this class's back, and recur until the stack runs out
+        if !stands_on_a_spec_built_base(db, env, model, suite, class, base, layouts) {
+            return Err(Decline::new(
+                "a class whose fields sit past a base's instance needs a base python frees itself, and one this module builds from a spec is the only one of ours that is",
+            ));
+        }
+        // the keyword such a class cannot carry is turned down earlier, where the base is
+        // resolved: a base of ours beside a keyword has no construction whatever the
+        // fields are, because the layout would have to be one only a spec lays out
+        return Ok(fields);
     }
     if base.and_then(ClassBase::external).is_none() {
         return Ok(fields);
@@ -3033,10 +3353,10 @@ fn spec_built_where_needed(
             "a class keyword on a class with fields of its own is not lowered yet",
         ));
     }
-    if !every_base_metaclass_is_type(db, model, class) {
-        return Err(Decline::new(
-            "a class with fields of its own needs a base whose metaclass is `type`",
-        ));
+    if let Some(found) = base_with_another_metaclass(db, model, class) {
+        return Err(Decline::new(format!(
+            "a class with fields of its own needs `type` for every base's metaclass, and {found}"
+        )));
     }
     Ok(fields)
 }
@@ -3073,6 +3393,73 @@ fn appends_past_a_base_of_ours(
             base.plain_names()
                 .any(|name| class_written(suite, name).is_some())
         })
+}
+
+/// whether the base this class appends its storage to is one this module builds from a
+/// type spec of its own — the one base of ours a spec can stand on
+///
+/// what makes that base different from every other class of ours is that its
+/// `tp_dealloc`, `tp_traverse` and `tp_clear` are ones we emitted. each of the three
+/// reads the base to chain to from the type that *declared* it, so a chain of them walks
+/// down to the outside base and stops. `subtype_dealloc` — which is what a `class`
+/// statement's type carries — reads it from `Py_TYPE(self)` instead, finds this class's
+/// own deallocator, and calls it back until the stack runs out.
+///
+/// the questions are exactly the ones the backend asks before it builds a base from a
+/// spec, because the two have to name the same set: a class lowered here whose base the
+/// backend then builds some other way has no construction left at all. so the base must
+/// be one of ours, keep storage of its own past a layout from outside, carry no class
+/// keyword, and stand on no base of ours beside one from outside. and it has to be
+/// written *before* this class, because module init builds them in that order and this
+/// class's spec stands on the finished type
+fn stands_on_a_spec_built_base(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    model: &SemanticModel<'_>,
+    suite: &[Stmt],
+    class: &ast::StmtClassDef,
+    base: Option<&ClassBase>,
+    layouts: &Layouts,
+) -> bool {
+    let Some(name) = base.and_then(ClassBase::in_module) else {
+        // a base from outside is python's own to free, and this class's storage sits past
+        // an instance it allocated — which is the shape a spec was made for
+        return false;
+    };
+    let Some(written) = class_written(suite, name) else {
+        return false;
+    };
+    if position_of(suite, name) >= position_of(suite, class.name.as_str()) {
+        return false;
+    }
+    // a base with no storage of its own is built by calling its metaclass, so its type is
+    // a `class` statement's after all
+    if layouts.get(name).is_none_or(Vec::is_empty) {
+        return false;
+    }
+    if !laid_out_from_outside(db, env, model, suite, layouts, name) {
+        return false;
+    }
+    if class_keywords(written).is_ok_and(|keywords| !keywords.is_empty()) {
+        return false;
+    }
+    let under = base_class(db, env, model, suite, written, layouts)
+        .ok()
+        .flatten();
+    !stands_on_an_emitted_base(under.as_ref(), layouts)
+}
+
+/// where in the module body the class statement under a name is written
+///
+/// a base written after the class that names it cannot be built first, and module init
+/// builds the two in the order the source declares them
+fn position_of(suite: &[Stmt], name: &str) -> usize {
+    suite
+        .iter()
+        .position(
+            |statement| matches!(statement, Stmt::ClassDef(class) if class.name.as_str() == name),
+        )
+        .unwrap_or(usize::MAX)
 }
 
 /// the class statement this module writes under a name, where it writes one
@@ -3116,6 +3503,58 @@ fn presence_where_a_finalizer_reads(
         field.optional = true;
     }
     fields
+}
+
+/// every field a `del` in this module names, written down as one that may be absent
+///
+/// `del self.buffer` has somewhere to go only where the field can record that it is
+/// gone, and that is the presence byte an optional one carries: the delete clears it,
+/// a read while it is clear raises `AttributeError` the way python does, and a later
+/// write sets it again. a field with no byte has no absent state at all, so a delete
+/// on one can only refuse — which is the `cannot delete an attribute` an emitted class
+/// used to answer where the interpreted twin deleted.
+///
+/// the names are collected module-wide rather than per class, for two reasons. a
+/// delete need not be written in a method at all — `del handle.buffer` in a plain
+/// function reaches the same field — and a subclass's layout begins with its base's,
+/// so marking on the *name* keeps a base and a subclass agreeing about what the shared
+/// fields cost without either having to work the other out
+fn deleted_attributes(suite: &[Stmt]) -> HashSet<String> {
+    /// the walk, carrying the class body each name is written in so that a private
+    /// one is mangled the way python mangles it — `del self.__held` in `class C`
+    /// names the field `_C__held`
+    struct Deleted<'a> {
+        owner: Option<&'a str>,
+        names: HashSet<String>,
+    }
+    impl<'a> ruff_python_ast::visitor::Visitor<'a> for Deleted<'a> {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            match stmt {
+                Stmt::ClassDef(class) => {
+                    let outer = self.owner.replace(class.name.as_str());
+                    ruff_python_ast::visitor::walk_stmt(self, stmt);
+                    self.owner = outer;
+                }
+                Stmt::Delete(node) => {
+                    for target in &node.targets {
+                        if let Expr::Attribute(attribute) = target {
+                            self.names.insert(mangled(self.owner, &attribute.attr));
+                        }
+                    }
+                    ruff_python_ast::visitor::walk_stmt(self, stmt);
+                }
+                _ => ruff_python_ast::visitor::walk_stmt(self, stmt),
+            }
+        }
+    }
+    let mut deleted = Deleted {
+        owner: None,
+        names: HashSet::new(),
+    };
+    for stmt in suite {
+        ruff_python_ast::visitor::Visitor::visit_stmt(&mut deleted, stmt);
+    }
+    deleted.names
 }
 
 /// whether any class sharing this one's layout writes a `__del__`
@@ -3403,22 +3842,16 @@ fn completing_assignments(
 ) -> Option<HashSet<String>> {
     let mut out = HashSet::new();
     for statement in body {
+        // the writes this statement makes in its own right, whatever form it is. a
+        // declining shape is not reported here: the width pass walks the same statements
+        // and has already turned the class down over it
+        out.extend(
+            certain_writes(statement, receiver, owner)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(name, _)| name),
+        );
         match statement {
-            Stmt::Assign(node) => {
-                if let [target] = node.targets.as_slice()
-                    && let Some(name) = attribute_of(target, receiver, owner)
-                {
-                    out.insert(name);
-                }
-            }
-            Stmt::AnnAssign(node) => {
-                // an annotation with no value declares rather than assigns
-                if node.value.is_some()
-                    && let Some(name) = attribute_of(&node.target, receiver, owner)
-                {
-                    out.insert(name);
-                }
-            }
             // the body runs, so what it assigns is assigned — and if it never
             // completes, neither does this
             Stmt::With(node) => {
@@ -3699,6 +4132,9 @@ fn lower_function_with_receiver(
         Binding::Static => None,
         Binding::Class => Some(Receiver::Explicit(&class_object)),
     };
+    if binding == Binding::Class {
+        class_object_is_not_written(function, unit.owner)?;
+    }
 
     // a generator and a coroutine do not run their body when called: they allocate a
     // state object and hand it back. the body becomes a method of that object
@@ -4176,8 +4612,10 @@ fn lower_function_with_receiver(
                     resume: None,
                     keywords: Vec::new(),
                     exported: false,
+                    declares_slots: false,
                     decorators: Vec::new(),
                     constants: Vec::new(),
+                    slot_aliases: Vec::new(),
                     generic: false,
                     name: outer.name,
                     fields: outer.fields,
@@ -4191,8 +4629,10 @@ fn lower_function_with_receiver(
                 resume: None,
                 keywords: Vec::new(),
                 exported: false,
+                declares_slots: false,
                 decorators: Vec::new(),
                 constants: Vec::new(),
+                slot_aliases: Vec::new(),
                 generic: false,
                 name: environment.name.clone(),
                 fields: environment.fields,
@@ -4232,6 +4672,8 @@ struct Unit<'a> {
     decorated: &'a HashSet<String>,
     /// every name the module reads anywhere — see [`names_read`]
     read: &'a BTreeSet<&'a str>,
+    /// every attribute a `del` in the module names — see [`deleted_attributes`]
+    deleted: &'a HashSet<String>,
     /// the module body, so a class can be asked about a base's base — which is what
     /// says whether its own fields sit inside a base's instance or past one
     suite: &'a [Stmt],
@@ -4834,6 +5276,89 @@ fn reaches_the_end(body: &[Stmt]) -> bool {
     }
 }
 
+/// whether the emitter has a slot adapter for this dunder
+///
+/// [`fills_a_type_slot`] is the whole of CPython's `slotdefs`; this is the part of
+/// it the emitter can write a slot for. a dunder in neither is ordinary and the
+/// method table answers it, and one in the first but not this is a decline —
+/// whether the class body wrote it as a `def` or as an assignment
+fn has_a_slot_adapter(name: &str) -> bool {
+    matches!(
+        name,
+        "__repr__"
+            | "__str__"
+            | "__len__"
+            | "__bool__"
+            | "__hash__"
+            | "__eq__"
+            | "__ne__"
+            | "__lt__"
+            | "__le__"
+            | "__gt__"
+            | "__ge__"
+            | "__add__"
+            | "__radd__"
+            | "__sub__"
+            | "__rsub__"
+            | "__mul__"
+            | "__rmul__"
+            | "__truediv__"
+            | "__rtruediv__"
+            | "__aiter__"
+            | "__anext__"
+            | "__await__"
+            | "__iter__"
+            | "__next__"
+            | "__getitem__"
+            | "__setitem__"
+            | "__delitem__"
+            | "__int__"
+            | "__float__"
+            | "__index__"
+            | "__contains__"
+            | "__neg__"
+            | "__pos__"
+            | "__abs__"
+            | "__invert__"
+            | "__call__"
+            | "__get__"
+            | "__iadd__"
+            | "__isub__"
+            | "__imul__"
+            | "__itruediv__"
+            | "__floordiv__"
+            | "__rfloordiv__"
+            | "__mod__"
+            | "__rmod__"
+            | "__divmod__"
+            | "__rdivmod__"
+            | "__lshift__"
+            | "__rlshift__"
+            | "__rshift__"
+            | "__rrshift__"
+            | "__and__"
+            | "__rand__"
+            | "__xor__"
+            | "__rxor__"
+            | "__or__"
+            | "__ror__"
+            | "__matmul__"
+            | "__rmatmul__"
+            | "__pow__"
+            | "__rpow__"
+            | "__ifloordiv__"
+            | "__imod__"
+            | "__ilshift__"
+            | "__irshift__"
+            | "__iand__"
+            | "__ixor__"
+            | "__ior__"
+            | "__imatmul__"
+            | "__del__"
+            | "__getattr__"
+    )
+}
+
 /// whether python reads this name out of a *type slot* rather than looking it up
 ///
 /// that is the whole of what makes a dunder special to the emitter. `repr(x)` reads
@@ -5417,6 +5942,25 @@ fn walk(body: &[Stmt]) -> Vec<&Stmt> {
     out
 }
 
+/// as [`walk`], reaching the body of every `case` as well
+///
+/// a `case` body is a body like any other and what it writes is a field like any other,
+/// so the field passes have to see into one. this is a step of their own rather than a
+/// widening of [`walk`] because that walk is shared with the passes that choose a
+/// register's representation, and a `match` arm arriving there changes what they choose
+fn walk_with_cases(body: &[Stmt]) -> Vec<&Stmt> {
+    let mut out = Vec::new();
+    for stmt in walk(body) {
+        out.push(stmt);
+        if let Stmt::Match(node) = stmt {
+            for case in &node.cases {
+                out.extend(walk_with_cases(&case.body));
+            }
+        }
+    }
+    out
+}
+
 struct Lowering<'a, 'db> {
     db: &'db dyn ty_python_semantic::Db,
     model: &'a SemanticModel<'db>,
@@ -5494,6 +6038,57 @@ impl Lowering<'_, '_> {
     /// spelling
     fn attribute_name(&self, written: &str) -> String {
         mangled(self.owner.as_deref(), written)
+    }
+
+    /// whether an instance whose type is `class` — or, where the receiver is not exact,
+    /// any emitted class under it — has somewhere to keep an attribute called `name`
+    ///
+    /// an emitted instance **is** its layout: there is no `__dict__` behind it, so a name
+    /// nothing declares cannot be stored at all. two things widen what counts as declaring
+    /// it, and missing either turns a working write into a decline:
+    ///
+    /// - a class that adds no field of its own declares an *empty* layout even though its
+    ///   instances carry every one of its base's, reached through the descriptors the base
+    ///   published. so the answer is the chain's, not this one class's
+    /// - a receiver typed as a base may hold a subclass this module also emitted, and the
+    ///   descriptor the dynamic form finds is then that subclass's
+    fn holds_attribute(&self, class: &str, exact: bool, name: &str) -> bool {
+        let declares = |candidate: &str| {
+            self.layouts
+                .get(candidate)
+                .is_some_and(|fields| fields.iter().any(|field| field.name == name))
+        };
+        let mut current = class;
+        // bounded by the class count, the way every base walk here is: a chain that
+        // visits a class twice is a cycle, and the layouts never settle on one
+        for _ in 0..=self.bases.len() {
+            if declares(current) {
+                return true;
+            }
+            match self.bases.get(current) {
+                Some(base) => current = base,
+                None => break,
+            }
+        }
+        if exact {
+            return false;
+        }
+        self.layouts
+            .keys()
+            .any(|candidate| declares(candidate) && self.descends_from(candidate, class))
+    }
+
+    /// whether `candidate` stands on `ancestor` through this module's own layout chain
+    fn descends_from(&self, candidate: &str, ancestor: &str) -> bool {
+        let mut current = candidate;
+        for _ in 0..=self.bases.len() {
+            match self.bases.get(current) {
+                Some(base) if base == ancestor => return true,
+                Some(base) => current = base,
+                None => return false,
+            }
+        }
+        false
     }
 
     fn block(&mut self, body: &[Stmt]) -> Lowered<()> {
@@ -5681,21 +6276,22 @@ impl Lowering<'_, '_> {
                     field: generators::STATE_FIELD.to_string(),
                     value: Value::Int(-1),
                 });
-                // the value rides on the exception, which is how it reaches whatever
-                // was driving the iteration — and how `await` gets a result
-                match value {
-                    Some(place) => {
-                        let (value, _) = self.read_place(&place)?;
-                        self.builder.push(Op::RaiseWith {
-                            error: by_ir::ops::StandardError::StopIteration,
-                            value,
+                // the frame is finished, and the value goes with the finish — which is
+                // how it reaches whatever was driving the iteration, and how `await`
+                // gets a result. a bare `return` finishes with `None`, exactly as a
+                // bare `return` from a plain function does
+                let value = match value {
+                    Some(place) => self.read_place(&place)?.0,
+                    None => {
+                        let nothing = self.builder.temp(RType::OBJECT);
+                        self.builder.push(Op::Box {
+                            dest: nothing,
+                            src: Value::None,
                         });
+                        Value::Register(nothing)
                     }
-                    None => self.builder.push(Op::RaiseStandard {
-                        error: by_ir::ops::StandardError::StopIteration,
-                        message: String::new(),
-                    }),
-                }
+                };
+                self.builder.push(Op::FinishFrame { value });
                 self.builder.terminate(Terminator::Unreachable);
                 self.builder.set_error_target(previous);
                 Ok(())
@@ -7816,6 +8412,20 @@ impl Lowering<'_, '_> {
                         value,
                     });
                     return Ok(());
+                }
+                // the dynamic form is where a write goes when the compiler does not know
+                // the receiver's layout. it is the wrong answer when it *does*: an
+                // emitted instance is its layout and there is no `__dict__` behind it, so
+                // `PyObject_SetAttr` for a name no field holds raises where the
+                // interpreted class stored a value. the field passes are meant to have
+                // seen every write, and this is the invariant that says so
+                if let RType::Instance { class, exact } = receiver_ty
+                    && self.layouts.contains_key(class)
+                    && !self.holds_attribute(class, *exact, name)
+                {
+                    return Err(Decline::new(format!(
+                        "`{name}` is written on a `{class}`, whose layout has nowhere to keep it"
+                    )));
                 }
                 let receiver = self.widen_to_object(receiver.clone(), receiver_ty);
                 let value = self.widen_to_object(value, ty);
@@ -10206,6 +10816,22 @@ impl Lowering<'_, '_> {
                 field: name,
             });
             return Ok((Value::Register(dest), field_ty));
+        }
+
+        // every other name on an emitted instance still goes out through the dynamic
+        // form, because the type is where a method and a class-level constant live and
+        // the lookup finds them there. these two are the exception: `__dict__` stands for
+        // a namespace an emitted instance does not have, and `__weakref__` for support a
+        // type spec does not add, so neither is anywhere to be found — the read raises
+        // where the interpreted class answered. `multiprocessing.dummy.Namespace` reads
+        // its own `__dict__`, and `tkinter.Event` reads one in `__repr__`
+        if let RType::Instance { class, .. } = &receiver_ty
+            && self.layouts.contains_key(class)
+            && matches!(name.as_str(), "__dict__" | "__weakref__")
+        {
+            return Err(Decline::new(format!(
+                "`{name}` is read off a `{class}`, and an emitted instance is its layout with nothing behind it"
+            )));
         }
 
         let receiver = self.widen_to_object(receiver, &receiver_ty);

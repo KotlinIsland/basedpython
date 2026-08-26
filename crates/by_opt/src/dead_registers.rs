@@ -417,7 +417,7 @@ fn rewrite_op(
             }
         }
         Op::RaiseStandard { .. } => {}
-        Op::RaiseWith { value, .. } => rewrite_value(value, remap),
+        Op::RaiseWith { value, .. } | Op::FinishFrame { value } => rewrite_value(value, remap),
         Op::Enter { dest, manager } => {
             rewrite_dest(dest);
             rewrite_value(manager, remap);

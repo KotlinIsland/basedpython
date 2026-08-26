@@ -24,9 +24,10 @@
 
 use std::collections::BTreeSet;
 use std::fmt::Write;
+use std::ptr;
 
 use by_ir::function::{
-    Binding, ClassBase, ClassIr, Function, KeywordValue, ModuleIr, RegisterDecl, Surface,
+    Binding, ClassBase, ClassIr, Function, KeywordValue, ModuleIr, RegisterDecl, SlotAlias, Surface,
 };
 use by_ir::ops::{BinOp, BlockId, CmpOp, Mutation, Op, RegisterId, Terminator, UnaryOp, Value};
 use by_ir::rtype::{Primitive, RType, tuple_mangle};
@@ -95,6 +96,18 @@ fn resumes(module: &ModuleIr, function: &Function) -> bool {
                 .as_ref()
                 .is_some_and(|resume| resume.method == function.name)
     })
+}
+
+/// which surface the runtime should word a pep 479 conversion after.
+///
+/// the runtime cannot work this out for itself: an emitted state object is an ordinary
+/// static type, so there is no `PyCoro_CheckExact` to ask the way cpython asks its own
+fn frame_kind(surface: Surface) -> &'static str {
+    match surface {
+        Surface::Generator => "BY_FRAME_GENERATOR",
+        Surface::Coroutine => "BY_FRAME_COROUTINE",
+        Surface::AsyncGenerator => "BY_FRAME_ASYNC_GENERATOR",
+    }
 }
 
 fn mangle_member(name: &str) -> String {
@@ -425,7 +438,10 @@ fn emit_appended_storage(module: &ModuleIr, class: &ClassIr) -> String {
 
     let mut visits = String::new();
     let mut clears = String::new();
-    for field in class.fields.iter().filter(|field| collectable(field)) {
+    for field in own_fields(module, class)
+        .iter()
+        .filter(|field| collectable(field))
+    {
         let _ = writeln!(
             out_slot(&mut visits),
             "    Py_VISIT(by_f->{});",
@@ -472,7 +488,7 @@ fn emit_appended_storage(module: &ModuleIr, class: &ClassIr) -> String {
     // in a cycle but it still holds a reference, and `dec_ref` is what knows the
     // difference between releasing one of those and releasing an object
     let mut releases = String::new();
-    for field in &class.fields {
+    for field in own_fields(module, class) {
         if let Some(release) = dec_ref(&field.ty, &format!("by_f->{}", field.member())) {
             let _ = writeln!(out_slot(&mut releases), "    {release}");
         }
@@ -518,7 +534,7 @@ fn emit_class_struct(module: &ModuleIr, class: &ClassIr) -> String {
     if class.resume.is_some() {
         out.push_str("    PyObject *by_returned;\n");
     }
-    for field in &class.fields {
+    for field in own_fields(module, class) {
         let _ = writeln!(out, "    {} {};", ctype(module, &field.ty), field.member());
         // `tp_alloc` zeroes the instance, so "never written" is the state an object
         // starts in and the constructor has nothing to do
@@ -542,8 +558,13 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
     if external_storage(module, class) {
         out.push_str(&emit_appended_storage(module, class));
     } else {
+        // the pair only exists where the dict does: below 3.13 the type never asks to be
+        // collected, and a function nothing reaches is a warning the build turns into an
+        // error
         if keeps_a_dict {
+            out.push_str("#if BY_HAS_MANAGED_DICT\n");
             out.push_str(&emit_collected_instance(module, class));
+            out.push_str("#endif\n\n");
         }
         // dealloc releases each refcounted field, then the object
         let _ = writeln!(
@@ -551,9 +572,11 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
             "static void {type_name}_dealloc({struct_name} *self) {{"
         );
         // a collected instance is on the collector's list until it says otherwise, and
-        // a list holding a half-freed object is what the next collection walks
+        // a list holding a half-freed object is what the next collection walks. below
+        // 3.13 the instance was never on that list, and asking about an object with no
+        // collector header in front of it reads memory that is not there
         if keeps_a_dict {
-            out.push_str("    PyObject_GC_UnTrack(self);\n");
+            out.push_str("#if BY_HAS_MANAGED_DICT\n    PyObject_GC_UnTrack(self);\n#endif\n");
         }
         // a finalizer does not run itself: `subtype_dealloc` calls it, and a type that
         // writes its own dealloc has to do the same or the cleanups never happen. a
@@ -612,7 +635,10 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
         out.push_str(&emit_class_members(module, class));
         return out;
     }
-    let _ = writeln!(out, "    {}", bind_self(module, class, "selfobj"));
+    // a generated constructor fills every field the class declares, and where those sit
+    // in a chain of appended storage each rung keeps its own in a region of its own — so
+    // it binds one pointer per rung rather than the single `self` everything else needs
+    let _ = writeln!(out, "    {}", bind_storage_chain(module, class));
     // the fields this constructor *takes*, which for a generated one are the class's own
     // — a `data class` is its annotations, and each becomes a parameter.
     //
@@ -688,15 +714,16 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
             "      if ({}) return -1;",
             error_check(&field.ty, "by_v")
         );
-        let release = release_old(field);
+        let storage = storage_name(module, class, &field.name);
+        let release = release_old(field, &storage);
         if !release.is_empty() {
             let _ = writeln!(out, "      {release}");
         }
-        let _ = writeln!(out, "      self->{} = by_v;", field.member());
+        let _ = writeln!(out, "      {storage}->{} = by_v;", field.member());
         // the byte beside an optional field is what a later read and the deallocation
         // both ask, so filling one here has to answer them
         if field.optional {
-            let _ = writeln!(out, "      self->{} = 1;", field.presence());
+            let _ = writeln!(out, "      {storage}->{} = 1;", field.presence());
         }
         out.push_str("    }\n");
     }
@@ -925,24 +952,66 @@ fn emit_class_getitem(module: &ModuleIr, class: &ClassIr, type_name: &str) -> St
 /// an optional one may hold nothing at all, and the byte beside it is what says so —
 /// releasing a value that was never written would be releasing whatever `tp_alloc`
 /// left there
-fn release_old(field: &by_ir::function::FieldDecl) -> String {
-    let Some(release) = dec_ref(&field.ty, &format!("self->{}", field.member())) else {
+fn release_old(field: &by_ir::function::FieldDecl, storage: &str) -> String {
+    let Some(release) = dec_ref(&field.ty, &format!("{storage}->{}", field.member())) else {
         return String::new();
     };
     if field.optional {
-        format!("if (self->{}) {{ {release} }}", field.presence())
+        format!("if ({storage}->{}) {{ {release} }}", field.presence())
     } else {
         release
     }
 }
 
 /// the assignment that records an optional field as written
-fn mark_present(field: &by_ir::function::FieldDecl) -> String {
+fn mark_present(field: &by_ir::function::FieldDecl, storage: &str) -> String {
     if field.optional {
-        format!("\x20   self->{} = 1;\n", field.presence())
+        format!("\x20   {storage}->{} = 1;\n", field.presence())
     } else {
         String::new()
     }
+}
+
+/// `del obj.field`, which python reaches through the setter with no value
+///
+/// the presence byte is what makes this expressible at all: clearing it puts the field
+/// back into the state `tp_alloc` left it in, which a read already answers with
+/// `AttributeError` and a later write already sets again. so the delete is the write
+/// read backwards, and a field with no byte — one `__init__` assigns on every path and
+/// nothing deletes — has no absent state to return to and keeps refusing.
+///
+/// the order is the one `PyObject_GenericSetAttr` uses on a slot, and it is not
+/// cosmetic: releasing the old value can run a `__del__` that reaches back into this
+/// same instance, so the field has to already read as gone by the time anything else
+/// can look at it. zeroing the member rather than only the byte is what keeps the
+/// deallocation safe — it releases every field unconditionally, relying on the zero
+/// `tp_alloc` left being harmless for each representation, and a member left dangling
+/// behind a cleared byte would be released a second time there
+fn delete_field(module: &ModuleIr, field: &by_ir::function::FieldDecl, storage: &str) -> String {
+    if !field.optional {
+        return "\x20   if (by_value == NULL) {\n\
+                \x20       PyErr_SetString(PyExc_AttributeError, \"cannot delete an attribute\");\n\
+                \x20       return -1;\n\
+                \x20   }\n"
+            .to_string();
+    }
+    let member = field.member();
+    let release = dec_ref(&field.ty, "by_old")
+        .map_or_else(String::new, |release| format!("\x20       {release}\n"));
+    format!(
+        "\x20   if (by_value == NULL) {{\n\
+         \x20       if (!{storage}->{presence}) {{ PyErr_Format(PyExc_AttributeError, \
+         \"'%s' object has no attribute '%s'\", By_TypeName(selfobj), {name}); return -1; }}\n\
+         \x20       {ty} by_old = {storage}->{member};\n\
+         \x20       memset(&{storage}->{member}, 0, sizeof({storage}->{member}));\n\
+         \x20       {storage}->{presence} = 0;\n\
+         {release}\
+         \x20       return 0;\n\
+         \x20   }}\n",
+        presence = field.presence(),
+        name = c_string(&field.name),
+        ty = ctype(module, &field.ty),
+    )
 }
 
 /// the getters, setters, slot table and type spec python sees
@@ -969,7 +1038,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             out,
             "static PyObject *{type_name}_get_{}(PyObject *selfobj, void *closure) {{\n                 (void)closure;\n                 {}\n{absent}                 return {};\n}}",
             field.name,
-            bind_self(module, class, "selfobj"),
+            bind_self(module, field_owner(module, class, &field.name), "selfobj"),
             box_borrowed(&field.ty, &format!("self->{}", field.member()))
         );
     }
@@ -985,10 +1054,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             "static int {type_name}_set_{}(PyObject *selfobj, PyObject *by_value, void *closure) {{\n\
              \x20   (void)closure;\n\
              \x20   {}\n\
-             \x20   if (by_value == NULL) {{\n\
-             \x20       PyErr_SetString(PyExc_AttributeError, \"cannot delete an attribute\");\n\
-             \x20       return -1;\n\
-             \x20   }}\n\
+             {}\
              \x20   {} by_v = {};\n\
              \x20   if ({}) return -1;\n\
              \x20   {}\n\
@@ -996,13 +1062,14 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
              {}\
              \x20   return 0;\n}}\n",
             field.name,
-            bind_self(module, class, "selfobj"),
+            bind_self(module, field_owner(module, class, &field.name), "selfobj"),
+            delete_field(module, field, "self"),
             ctype(module, &field.ty),
             unbox_checked(module, &field.ty, "by_value"),
             error_check(&field.ty, "by_v"),
-            release_old(field),
+            release_old(field, "self"),
             field.member(),
-            mark_present(field)
+            mark_present(field, "self")
         );
     }
     let _ = writeln!(out, "static PyGetSetDef {type_name}_getset[] = {{");
@@ -1025,7 +1092,9 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // refusal such a class already gives is at least loud
     if instance_dict(module, class) && class.fields.is_empty() {
         out.push_str(
-            "    {\"__dict__\", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},\n",
+            "#if BY_HAS_MANAGED_DICT\n\
+             \x20   {\"__dict__\", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},\n\
+             #endif\n",
         );
     }
     out.push_str("    {NULL, NULL, NULL, NULL, NULL}\n};\n\n");
@@ -1035,6 +1104,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // `close` marks the machine exhausted — with `yield` inside `try` declined there
     // is no handler to run first
     if let Some(resume) = &class.resume {
+        let frame = frame_kind(resume.surface);
         // the *native* entry point, not the wrapper: `tp_iternext` already has the
         // receiver, and the wrapper's argument binding is pure overhead on what is a
         // generator's hottest path
@@ -1052,13 +1122,10 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
              \x20       return NULL;\n\
              \x20   }}\n\
              \x20   {struct_name} *self = ({struct_name} *)selfobj;\n\
-             \x20   PyObject *by_old = self->{};\n\
-             \x20   self->{} = By_NewRef(args[0]);\n\
-             \x20   Py_XDECREF(by_old);\n\
-             \x20   return By_StepGenerator(selfobj, &self->by_returned, &self->{state},\n\
+             \x20   return By_StepGenerator(selfobj, &self->{sent}, &self->by_returned,\n\
+             \x20                           &self->{state}, {frame}, args[0],\n\
              \x20                           (PyObject *(*)(PyObject *)){symbol});\n}}",
-            mangle_member(crate::GENERATOR_SENT),
-            mangle_member(crate::GENERATOR_SENT),
+            sent = mangle_member(crate::GENERATOR_SENT),
             state = mangle_member(crate::GENERATOR_STATE)
         );
         // `close` throws `GeneratorExit` in, which runs every enclosing `finally`, then
@@ -1068,13 +1135,14 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             "static PyObject *{type_name}_close(PyObject *selfobj, PyObject *const *args, Py_ssize_t nargs) {{\n\
              \x20   (void)args; (void)nargs;\n\
              \x20   {struct_name} *self = ({struct_name} *)selfobj;\n\
-             \x20   int by_r = By_CloseGenerator(selfobj, &self->{}, &self->by_returned,\n\
-             \x20                                &self->{state},\n\
+             \x20   int by_r = By_CloseGenerator(selfobj, &self->{sent}, &self->{thrown},\n\
+             \x20                                &self->by_returned, &self->{state}, {frame},\n\
              \x20                                (PyObject *(*)(PyObject *)){symbol});\n\
              \x20   By_FinishGenerator(&self->{state});\n\
              \x20   if (by_r < 0) return NULL;\n\
              \x20   Py_RETURN_NONE;\n}}",
-            mangle_member(crate::GENERATOR_THROWN),
+            sent = mangle_member(crate::GENERATOR_SENT),
+            thrown = mangle_member(crate::GENERATOR_THROWN),
             state = mangle_member(crate::GENERATOR_STATE)
         );
         // `throw` resumes *by raising*, at the suspension point — so a `yield` inside
@@ -1086,11 +1154,13 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
              \x20       PyErr_SetString(PyExc_TypeError, \"throw() takes at least one argument\");\n\
              \x20       return NULL;\n\
              \x20   }}\n\
-             \x20   return By_ThrowInto(selfobj, &(({struct_name} *)selfobj)->{},\n\
+             \x20   return By_ThrowInto(selfobj, &(({struct_name} *)selfobj)->{sent},\n\
+             \x20                       &(({struct_name} *)selfobj)->{thrown},\n\
              \x20                       &(({struct_name} *)selfobj)->by_returned,\n\
-             \x20                       &(({struct_name} *)selfobj)->{state}, args[0],\n\
+             \x20                       &(({struct_name} *)selfobj)->{state}, {frame}, args[0],\n\
              \x20                       (PyObject *(*)(PyObject *)){symbol});\n}}",
-            mangle_member(crate::GENERATOR_THROWN),
+            sent = mangle_member(crate::GENERATOR_SENT),
+            thrown = mangle_member(crate::GENERATOR_THROWN),
             state = mangle_member(crate::GENERATOR_STATE)
         );
     }
@@ -1184,6 +1254,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     let iterator = match &class.resume {
         None => String::new(),
         Some(resume) => {
+            let frame = frame_kind(resume.surface);
             let symbol = class
                 .methods
                 .iter()
@@ -1193,9 +1264,11 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             let _ = writeln!(
                 out,
                 "static PyObject *{type_name}_iternext(PyObject *self) {{\n\
-                 \x20   return By_StepGenerator(self, &(({struct_name} *)self)->by_returned,\n\
-                 \x20                           &(({struct_name} *)self)->{state},\n\
+                 \x20   return By_StepGenerator(self, &(({struct_name} *)self)->{sent},\n\
+                 \x20                           &(({struct_name} *)self)->by_returned,\n\
+                 \x20                           &(({struct_name} *)self)->{state}, {frame}, Py_None,\n\
                  \x20                           (PyObject *(*)(PyObject *)){symbol});\n}}",
+                sent = mangle_member(crate::GENERATOR_SENT),
                 state = mangle_member(crate::GENERATOR_STATE)
             );
             // the slot `PyIter_Send` prefers, and the reason a `return` is reported by
@@ -1208,15 +1281,13 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             if resume.surface != Surface::AsyncGenerator {
                 let _ = writeln!(
                     out,
-                    "#if PY_VERSION_HEX >= 0x030A0000\n\
-                     static PySendResult {type_name}_send_slot(PyObject *self, PyObject *by_arg,\n\
+                    "static PySendResult {type_name}_send_slot(PyObject *self, PyObject *by_arg,\n\
                      \x20                                     PyObject **by_result) {{\n\
                      \x20   return By_SendGenerator(self, &(({struct_name} *)self)->{sent},\n\
                      \x20                           &(({struct_name} *)self)->by_returned,\n\
-                     \x20                           &(({struct_name} *)self)->{state},\n\
+                     \x20                           &(({struct_name} *)self)->{state}, {frame},\n\
                      \x20                           (PyObject *(*)(PyObject *)){symbol},\n\
-                     \x20                           by_arg, by_result);\n}}\n\
-                     #endif",
+                     \x20                           by_arg, by_result);\n}}",
                     sent = mangle_member(crate::GENERATOR_SENT),
                     state = mangle_member(crate::GENERATOR_STATE)
                 );
@@ -1263,21 +1334,31 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20   PyObject *by_carried = by_self->by_value;\n\
                      \x20   by_self->by_value = NULL;\n\
                      \x20   PyObject *by_step;\n\
+                     \x20   /* an `athrow` into a frame that has already finished neither\n\
+                     \x20    * resumes it nor re-raises: python ends the await with `None`.\n\
+                     \x20    * one that never *started* is the other case, and raises at the\n\
+                     \x20    * call site — which is what `By_ThrowInto` does with it */\n\
+                     \x20   if (by_carried != NULL && by_self->by_mode == 3\n\
+                     \x20       && By_ShortValue(by_gen->{state}) < 0) {{\n\
+                     \x20       Py_DECREF(by_carried);\n\
+                     \x20       PyErr_SetNone(PyExc_StopIteration);\n\
+                     \x20       return NULL;\n\
+                     \x20   }}\n\
                      \x20   if (by_carried != NULL && by_self->by_mode == 3) {{\n\
-                     \x20       by_step = By_ThrowInto((PyObject *)by_gen, &by_gen->{thrown},\n\
-                     \x20                              &by_gen->by_returned,\n\
-                     \x20                              &by_gen->{state}, by_carried,\n\
+                     \x20       by_step = By_ThrowInto((PyObject *)by_gen, &by_gen->{sent},\n\
+                     \x20                              &by_gen->{thrown}, &by_gen->by_returned,\n\
+                     \x20                              &by_gen->{state}, {frame}, by_carried,\n\
                      \x20                              (PyObject *(*)(PyObject *)){symbol});\n\
                      \x20       Py_DECREF(by_carried);\n\
                      \x20   }} else {{\n\
-                     \x20       if (by_carried != NULL) {{\n\
-                     \x20           PyObject *by_old = by_gen->{sent};\n\
-                     \x20           by_gen->{sent} = by_carried;\n\
-                     \x20           Py_XDECREF(by_old);\n\
-                     \x20       }}\n\
-                     \x20       by_step = By_StepGenerator((PyObject *)by_gen, &by_gen->by_returned,\n\
-                     \x20                                  &by_gen->{state},\n\
+                     \x20       /* `__anext__` carries nothing, which is `None` and not\n\
+                     \x20        * whatever the last `asend` left standing */\n\
+                     \x20       by_step = By_StepGenerator((PyObject *)by_gen, &by_gen->{sent},\n\
+                     \x20                                  &by_gen->by_returned, &by_gen->{state},\n\
+                     \x20                                  {frame},\n\
+                     \x20                                  by_carried != NULL ? by_carried : Py_None,\n\
                      \x20                                  (PyObject *(*)(PyObject *)){symbol});\n\
+                     \x20       Py_XDECREF(by_carried);\n\
                      \x20   }}\n\
                      \x20   if (by_step == NULL) return By_EndAsyncIteration();\n\
                      \x20   if (by_gen->{kind} != By_ShortFrom(1)) return by_step;\n\
@@ -1362,9 +1443,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20   return By_NewRef(self);\n}}\n\
                      static PyAsyncMethods {type_name}_async = {{\n\
                      \x20   .am_await = {type_name}_await,\n\
-                     #if PY_VERSION_HEX >= 0x030A0000\n\
-                     \x20   .am_send = {type_name}_send_slot,\n\
-                     #endif\n}};"
+                     \x20   .am_send = {type_name}_send_slot,\n}};"
                 );
                 format!(
                     "             .tp_as_async = &{type_name}_async,\n             .tp_iternext = {type_name}_iternext,\n             .tp_finalize = {type_name}_finalize,\n"
@@ -1375,13 +1454,11 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                 // awaitable slots stay empty so a generator is still not awaitable
                 let _ = writeln!(
                     out,
-                    "#if PY_VERSION_HEX >= 0x030A0000\n\
-                     static PyAsyncMethods {type_name}_async = {{\n\
-                     \x20   .am_send = {type_name}_send_slot,\n}};\n\
-                     #endif"
+                    "static PyAsyncMethods {type_name}_async = {{\n\
+                     \x20   .am_send = {type_name}_send_slot,\n}};"
                 );
                 format!(
-                    "#if PY_VERSION_HEX >= 0x030A0000\n             .tp_as_async = &{type_name}_async,\n#endif\n             .tp_iter = PyObject_SelfIter,\n             .tp_iternext = {type_name}_iternext,\n             .tp_finalize = {type_name}_finalize,\n"
+                    "             .tp_as_async = &{type_name}_async,\n             .tp_iter = PyObject_SelfIter,\n             .tp_iternext = {type_name}_iternext,\n             .tp_finalize = {type_name}_finalize,\n"
                 )
             }
         }
@@ -1427,10 +1504,10 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     let collected = if external_storage(module, class) {
         " | Py_TPFLAGS_HAVE_GC"
     } else if instance_dict(module, class) {
-        // the dict holds whatever a decorator's generated code put in it, so the
-        // collector has to be able to walk it — and a managed one is only allowed on a
-        // type it can walk
-        " | Py_TPFLAGS_HAVE_GC | BY_MANAGED_DICT_FLAG"
+        // the dict holds whatever was put in it, so the collector has to be able to walk
+        // it — and a managed one is only allowed on a type it can walk. the pair is one
+        // macro because below 3.13 there is no dict and so nothing extra to collect
+        " | BY_INSTANCE_DICT_FLAGS"
     } else {
         ""
     };
@@ -1480,11 +1557,15 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             format!("{init}\x20   {{Py_tp_new, (void *)PyType_GenericNew}},\n")
         };
         // a collected type has to hand the collector both halves, or an instance in a
-        // cycle is never reached at all
+        // cycle is never reached at all. guarded for the reason [`dict_on_every_version`]
+        // gives: below 3.13 the type asks for no dict, so it is not a collected type and
+        // has no pair to hand over
         let walked = if instance_dict(module, class) {
             format!(
-                "\x20   {{Py_tp_traverse, (void *){type_name}_traverse}},\n\
-                 \x20   {{Py_tp_clear, (void *){type_name}_clear}},\n"
+                "#if BY_HAS_MANAGED_DICT\n\
+                 \x20   {{Py_tp_traverse, (void *){type_name}_traverse}},\n\
+                 \x20   {{Py_tp_clear, (void *){type_name}_clear}},\n\
+                 #endif\n"
             )
         } else {
             String::new()
@@ -1542,25 +1623,86 @@ fn decorated_chain(module: &ModuleIr, class: &ClassIr) -> bool {
 
 /// whether an emitted instance keeps a `__dict__` of its own
 ///
-/// a class decorator is arbitrary python handed the class, and what it hands back is
-/// often code it *generated* from what it read — `@dataclass` writes an `__init__` that
-/// assigns one attribute per annotation. that code is ordinary python and assumes an
-/// ordinary instance, so on an emitted one, whose whole state is its layout, every
-/// assignment falls off: `E(3)` raised where the interpreted class answered. the decline
-/// that would otherwise be the answer is not open here — a class has no runtime fallback
-/// — so the class is given the one thing the generated code needs instead.
+/// python gives an instance somewhere to put a name its class never mentioned, and an
+/// emitted class **is** its layout — so `o.brand_new = 7`, which the interpreted twin
+/// stores, refused. a class has no runtime fallback to decline into, so that refusal is
+/// not a decline but an `AttributeError` in the middle of a working program.
 ///
-/// a managed dict costs the layout nothing: python keeps it in the pre-header, so the
+/// `__slots__` is python's own way of saying an instance's attributes are exactly the
+/// declared ones, and a class that says it wants precisely the layout an emitted class
+/// has anyway. so it is what decides here: a chain that declares it throughout keeps the
+/// bare layout, and anything else takes a dict. that also keeps the *opposite* answer
+/// right — a compiled class that accepted what its twin refuses would be a divergence in
+/// the other direction.
+///
+/// a class decorator is a second reason, and an older one. what a decorator hands back
+/// is often code it *generated* from what it read — `@dataclass` writes an `__init__`
+/// that assigns one attribute per annotation — and that code is ordinary python which
+/// assumes an ordinary instance, so on a bare layout every assignment fell off and
+/// `E(3)` raised. see [`dict_on_every_version`] for what follows from the difference
+/// between wanting a dict and not working without one.
+///
+/// a managed dict costs the *layout* nothing: python keeps it in the pre-header, so the
 /// struct, its base's prefix and every offset a compiled function reads are untouched.
-/// what it costs is collection — a type with a dict of arbitrary values must be one the
-/// collector walks — which is why only the classes that need it take it.
+/// what it costs is allocation — an instance grows by the pre-header and the two words a
+/// collected type carries, which for a two-field class is a doubling and took about a
+/// quarter off `alloc` and `objects`. a class writing `__slots__` gets all of it back:
+/// the same source built with the declaration times identically to the same source built
+/// before the dict existed.
 ///
 /// only a class that owns its layout from `object`. one standing on a base outside the
 /// module takes that base's answer about a dict, and a spec claiming one anyway would be
 /// claiming room the base never allocated — which is how 24 of the `encodings` modules
-/// once segfaulted
+/// once segfaulted. and only an *exported* one: a closure environment and a generator
+/// machine are types nothing can name, so no attribute can be written on one
 fn instance_dict(module: &ModuleIr, class: &ClassIr) -> bool {
-    heap_type(module, class) && !inherits_layout(module, class) && decorated_chain(module, class)
+    class.exported
+        && heap_type(module, class)
+        && !inherits_layout(module, class)
+        && (decorated_chain(module, class) || !slots_declared_throughout(module, class))
+}
+
+/// whether a class keeps its dict on *every* interpreter this C could be built against
+///
+/// a managed dict is the one form that leaves the struct alone, and nothing below 3.13
+/// publishes a way to walk or release one — so below that the dict is simply not there,
+/// and the class is built exactly as it was before dicts existed. that is a fair answer
+/// for a class that merely *wants* one, and no answer at all for a class whose generated
+/// code cannot run without one: a module holding one of those refuses to install anything
+/// at all below 3.13, so its dict is there whatever is running.
+///
+/// so this is the predicate a *decline* may rest on. lifting a refusal because a class
+/// has a dict is only sound where the dict is there on every version, and a refusal that
+/// held on 3.13 and not on 3.12 would be a wrong answer on one of them
+fn dict_on_every_version(module: &ModuleIr, class: &ClassIr) -> bool {
+    instance_dict(module, class) && decorated_chain(module, class)
+}
+
+/// whether every class this one takes its layout from declares `__slots__`
+///
+/// python gives an instance a `__dict__` unless *every* class contributing to its layout
+/// declared one: `class C(B): __slots__ = ("a",)` over a `B` that did not still has a
+/// dict, through `B`. so a single class without the declaration anywhere in the chain is
+/// what puts a dict on the instance
+fn slots_declared_throughout(module: &ModuleIr, class: &ClassIr) -> bool {
+    let mut current = class;
+    // bounded the way [`inherits_layout`] is: a chain that visits a class twice is a
+    // cycle, and one here would hang the compiler rather than fail it
+    for _ in 0..=module.classes.len() {
+        if !current.declares_slots {
+            return false;
+        }
+        let Some(name) = current.base.as_ref().and_then(ClassBase::in_module) else {
+            return true;
+        };
+        match class_named(module, name) {
+            Some(next) => current = next,
+            // a base this module does not emit after all: nothing can be said about what
+            // it gives an instance, so the class is left as it was before a dict existed
+            None => return true,
+        }
+    }
+    true
 }
 
 /// whether this class takes its instance layout from a base outside the module
@@ -1675,12 +1817,14 @@ fn appends_storage_from_a_spec(module: &ModuleIr, class: &ClassIr) -> bool {
 /// statement cannot name a base declared after it, so this only ever rules out a shape
 /// the source could not have written.
 ///
-/// and the subclass has to declare only what it *adds*. the other layout model for an
-/// in-module base is the struct extension, where a subclass restates its base's fields
-/// so that a pointer to one is a pointer to the other — restating them in an appended
-/// region instead would give the pair two copies of each, and the base's methods and the
-/// subclass's would write different ones. so a field the base already stores is the
-/// signal that this is the other model, and it is not appended over anything
+/// and the two field lists have to line up the way the frontend lays a subclass out: a
+/// class's declared fields *begin* with its base's, in the same order, and what it adds
+/// of its own is the run past them. that run is the whole of what this class stores —
+/// the base keeps its own fields in a region of its own, reached through the type that
+/// declared them, so a subclass that stored copies of them would give the pair two of
+/// each and the base's methods and the subclass's would write different ones. a list
+/// that is not its base's followed by something more is some other shape entirely, and
+/// this says nothing about it
 fn appended_over_an_emitted_base<'a>(module: &'a ModuleIr, class: &ClassIr) -> Option<&'a ClassIr> {
     let wanted = class.base.as_ref()?.in_module()?;
     let base = module
@@ -1688,12 +1832,250 @@ fn appended_over_an_emitted_base<'a>(module: &'a ModuleIr, class: &ClassIr) -> O
         .iter()
         .take_while(|candidate| candidate.name != class.name)
         .find(|candidate| candidate.name == wanted)?;
-    let restates = class.fields.iter().any(|field| {
-        base.fields
+    let extends = class.fields.len() > base.fields.len()
+        && class
+            .fields
             .iter()
-            .any(|inherited| inherited.name == field.name)
-    });
-    (appends_storage_from_a_spec(module, base) && !restates).then_some(base)
+            .zip(&base.fields)
+            .all(|(field, inherited)| field == inherited);
+    (appends_storage_from_a_spec(module, base) && extends).then_some(base)
+}
+
+/// whether this class names `name` in its own header
+///
+/// module init builds every class's type whatever else it leaves out, and a class that
+/// stands on another is handed that other's type object to build on — the spec chain
+/// through `By_SpecSubclass`, and the ordinary construction which packs it into a bases
+/// tuple. so this reference is live even where nothing ever constructs either class
+fn stands_on(class: &ClassIr, name: &str) -> bool {
+    class
+        .base
+        .as_ref()
+        .is_some_and(|base| base.plain_names().any(|written| written == name))
+}
+
+/// whether anything that still happens reaches into `name`'s storage
+///
+/// `unbuilt` is the classes whose types module init is leaving NULL, so their methods can
+/// never be called and are not asked. everything else is: this module's own functions, and
+/// the methods and fields of every class that still gets a type — and, whatever is in
+/// `unbuilt`, every class that [stands on](stands_on) this one, because that read happens
+/// while the type is built rather than when an instance is made
+fn read_outside(module: &ModuleIr, unbuilt: &[&ClassIr], name: &str) -> bool {
+    module
+        .classes
+        .iter()
+        .any(|candidate| stands_on(candidate, name))
+        || module
+            .functions
+            .iter()
+            .any(|function| function.names_class(name))
+        || module
+            .classes
+            .iter()
+            .filter(|candidate| !unbuilt.iter().any(|held| ptr::eq(*held, *candidate)))
+            .any(|candidate| {
+                candidate
+                    .fields
+                    .iter()
+                    .any(|field| field.ty.instance_classes().contains(&name))
+                    || candidate
+                        .methods
+                        .iter()
+                        .any(|method| method.names_class(name))
+            })
+}
+
+/// the classes that go unbuilt with `class`, where it is left as its interpreted definition
+///
+/// a spec class's own methods are not the only compiled code that reads its storage. a
+/// generator method's state object and a nested function's closure environment are each a
+/// class of their own, and each captures the `self` it was made from — so each names the
+/// class exactly as any other reader would. counting those against it is what made the
+/// narrower refusal fire on nothing: every spec class with a generator method or a nested
+/// function has one.
+///
+/// but neither is in the module namespace under any name, and neither is built by anything
+/// except the methods of the class it belongs to. where that class has no type its methods
+/// never run, so these are never constructed — and they are gathered up with it rather
+/// than held against it.
+///
+/// computed by removal, which is also what makes a cycle come out right: two helpers that
+/// only ever build each other are reached from nothing and both stay. the set starts as
+/// everything that could go unbuilt and gives up whatever some still-running code turns
+/// out to reach, until it stops shrinking. that terminates because [`read_outside`] only
+/// ever becomes *more* true as the set shrinks, so nothing given up is ever taken back
+fn unbuilt_with<'a>(module: &'a ModuleIr, class: &'a ClassIr) -> Vec<&'a ClassIr> {
+    let mut held: Vec<&ClassIr> = vec![class];
+    held.extend(
+        module
+            .classes
+            .iter()
+            // by identity: two classes in one module may be written with the same name
+            .filter(|candidate| !ptr::eq(*candidate, class) && !candidate.exported),
+    );
+    loop {
+        let reached = held
+            .iter()
+            .position(|candidate| read_outside(module, &held, &candidate.name));
+        match reached {
+            // the class being asked about is reached itself, so there is nothing to
+            // decide about the rest: the caller reads the set it is alone in as the
+            // whole-module refusal it always had
+            Some(0) => return vec![class],
+            Some(index) => {
+                held.remove(index);
+            }
+            None => return held,
+        }
+    }
+}
+
+/// whether a class this module could not build may be left out on its own, with the rest
+/// of the module still compiled
+///
+/// a spec that appends storage can refuse — the base may be a heap type, or carry a
+/// metaclass, or put its `__dict__` somewhere the spec cannot reach — and there is no
+/// second construction to try. the standing answer to that is to refuse the *module*: the
+/// interpreted definition already built every class, so leaving it standing is a whole
+/// module that is merely slow rather than a half-native mixture that is wrong.
+///
+/// that is heavier than it needs to be where nothing compiled would ever have touched the
+/// class. the reason the refusal has to be whole-module is that a compiled function may
+/// read one of these instances as its own struct, at an offset only the emitted type lays
+/// out — and against the interpreted definition's instance, which stops where the base's
+/// does, that read lands past the end of the object. where no compiled code that can still
+/// run names the class, there is no such read to be wrong: the class alone falls back to
+/// its interpreted definition and every compiled function in the module goes on standing.
+///
+/// what counts as reaching into it is deliberately wide, because missing one costs a wrong
+/// answer or a segfault where an extra one costs only the whole-module refusal we already
+/// had. see [`read_outside`] for the three places, [`stands_on`] for the one that holds
+/// however little else runs, and [`unbuilt_with`] for the helper classes that go quiet
+/// along with it
+fn declines_on_its_own(module: &ModuleIr, class: &ClassIr) -> bool {
+    appends_storage_from_a_spec(module, class) && answers_for_its_classes(module) && {
+        let unbuilt = unbuilt_with(module, class);
+        !read_outside(module, &unbuilt, &class.name)
+    }
+}
+
+/// the emitted class an operand holds an instance of, where the walk in
+/// [`answers_for_its_classes`] has seen one put there
+fn instance_held<'a>(holds: &[(RegisterId, &'a str)], value: &Value) -> Option<&'a str> {
+    let Value::Register(id) = value else {
+        return None;
+    };
+    holds
+        .iter()
+        .find(|(held, _)| held == id)
+        .map(|(_, class)| *class)
+}
+
+/// whether every class this module emits can answer for the attributes its own compiled
+/// code reaches on an instance of one
+///
+/// an emitted class **is** its layout and there is nothing behind it: no instance dict, so
+/// an attribute the layout does not hold cannot be written at all, and `__dict__` is not
+/// there to be read. where the frontend has no field for either it lowers the dynamic
+/// form — the receiver boxed to an object and `PyObject_SetAttr` over it — which python
+/// then refuses on a type that publishes no dict.
+///
+/// the frontend answers this now: every shape that gives the receiver an attribute reaches
+/// the layout, and a write of a name nothing in the receiver's chain holds declines rather
+/// than lowering the dynamic form. `concurrent.futures.process._ThreadWakeup`, which
+/// assigns `self._reader, self._writer` from a pair, is laid out with both;
+/// `multiprocessing.dummy.Namespace`, which writes through `self.__dict__`, declines.
+///
+/// so this asks a question the IR reaching it should already have settled, over the
+/// emitted IR rather than over the source it came from — which is where a lowering added
+/// later would be caught. what it must not do is *install* such a class: a module that
+/// held together only because it gave itself up whole would start doing so the moment one
+/// refusal narrowed. so while a module holds one, the guard keeps the whole-module answer
+/// it already gave
+fn answers_for_its_classes(module: &ModuleIr) -> bool {
+    !module.all_functions().any(|function| {
+        // which register holds an instance of which emitted class. the receiver of the
+        // dynamic form has been boxed to an object by then, so the declared type no
+        // longer says — where the value came from does
+        let mut holds: Vec<(RegisterId, &str)> = Vec::new();
+        for (id, decl) in function.registers.iter().enumerate() {
+            if let Some(class) = decl.ty.instance_classes().first() {
+                holds.push((RegisterId(id), class));
+            }
+        }
+        function.blocks.iter().any(|block| {
+            let mut boxed = holds.clone();
+            for op in &block.ops {
+                match op {
+                    Op::Box { dest, src } => {
+                        if let Some(class) = instance_held(&boxed, src) {
+                            boxed.push((*dest, class));
+                        }
+                    }
+                    // any write of a name the class does not hold, and the one read that
+                    // is never a method or a class-level constant somewhere else
+                    Op::SetAttr { receiver, name, .. } | Op::GetAttr { receiver, name, .. }
+                        if matches!(op, Op::SetAttr { .. }) || name == "__dict__" =>
+                    {
+                        if let Some(class) = instance_held(&boxed, receiver)
+                            && let Some(owner) = class_named(module, class)
+                            && !dict_on_every_version(module, owner)
+                            && !owner.fields.iter().any(|field| field.name == *name)
+                        {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            false
+        })
+    })
+}
+
+/// the fields this class keeps in storage of its own
+///
+/// for a class appended over an emitted base that is the run past its base's fields:
+/// the base's own storage is a region of its own, and this class's region holds only
+/// what it adds. every other class stores the whole of what it declares — the struct
+/// extension model, where a subclass's struct begins with its base's so that a pointer
+/// to one is a pointer to the other
+fn own_fields<'a>(module: &ModuleIr, class: &'a ClassIr) -> &'a [by_ir::function::FieldDecl] {
+    match appended_over_an_emitted_base(module, class) {
+        Some(base) => class.fields.get(base.fields.len()..).unwrap_or_default(),
+        None => &class.fields,
+    }
+}
+
+/// how far down a chain of appended storage the region holding `field` is, and the class
+/// that keeps it there
+///
+/// each rung of such a chain keeps its own fields in a region of its own, so a field a
+/// base declared is reached through the base's type rather than through this one's.
+/// everywhere else the answer is this class at rung zero, which is what every generated
+/// body already assumes
+fn field_rung<'a>(module: &'a ModuleIr, class: &'a ClassIr, field: &str) -> (usize, &'a ClassIr) {
+    let mut current = class;
+    // bounded by the class count, for the reason [`inherits_layout`] gives
+    for rung in 0..=module.classes.len() {
+        if own_fields(module, current)
+            .iter()
+            .any(|decl| decl.name == field)
+        {
+            return (rung, current);
+        }
+        match appended_over_an_emitted_base(module, current) {
+            Some(base) => current = base,
+            None => return (rung, current),
+        }
+    }
+    (0, class)
+}
+
+/// the class whose storage holds `field` for a receiver this class's methods see
+fn field_owner<'a>(module: &'a ModuleIr, class: &'a ClassIr, field: &str) -> &'a ClassIr {
+    field_rung(module, class, field).1
 }
 
 /// whether this class can be built the way a `class` statement builds one — by calling
@@ -1766,15 +2148,55 @@ fn bind_self(module: &ModuleIr, class: &ClassIr, object: &str) -> String {
     )
 }
 
-/// the field storage of a receiver named by the IR, as an expression
-fn receiver_fields(module: &ModuleIr, class: &str, receiver: &Value) -> String {
+/// the field storage a receiver named by the IR keeps `field` in, as an expression
+///
+/// the class the op names is the receiver's, which for an inherited field is not the
+/// class that stores it — a chain of appended storage gives every rung a region of its
+/// own, and the field lives in the region of the rung that declared it
+fn receiver_fields(module: &ModuleIr, class: &str, field: &str, receiver: &Value) -> String {
     match class_named(module, class) {
-        Some(owner) if external_storage(module, owner) => {
-            fields_of(module, owner, &value_expr(receiver))
-        }
+        Some(owner) if external_storage(module, owner) => fields_of(
+            module,
+            field_owner(module, owner, field),
+            &value_expr(receiver),
+        ),
         // the register already *is* the storage, and saying so again would only add a
         // cast to every field access in the module
         _ => value_expr(receiver),
+    }
+}
+
+/// the storage bindings a constructor needs, one per rung of appended storage
+///
+/// a constructor fills every field the class declares, and a chain of appended storage
+/// keeps each rung's in a region of its own — so it needs a pointer to each. the class's
+/// own is `self`, which is what every other generated body already reads
+fn bind_storage_chain(module: &ModuleIr, class: &ClassIr) -> String {
+    let mut out = bind_self(module, class, "selfobj");
+    let mut current = class;
+    let mut rung = 0;
+    // bounded by the class count, for the reason [`inherits_layout`] gives
+    for _ in 0..=module.classes.len() {
+        let Some(base) = appended_over_an_emitted_base(module, current) else {
+            break;
+        };
+        rung += 1;
+        let _ = write!(
+            out,
+            "\n    {} *by_up{rung} = {};",
+            base.struct_name(module.name.dotted()),
+            fields_of(module, base, "selfobj")
+        );
+        current = base;
+    }
+    out
+}
+
+/// the name [`bind_storage_chain`] bound for the storage holding `field`
+fn storage_name(module: &ModuleIr, class: &ClassIr, field: &str) -> String {
+    match field_rung(module, class, field).0 {
+        0 => "self".to_string(),
+        rung => format!("by_up{rung}"),
     }
 }
 
@@ -2073,42 +2495,45 @@ const POWER: (&str, &str, &str, &str) = ("__pow__", "__rpow__", "Py_nb_power", "
 fn on_our_operand(
     module: &ModuleIr,
     type_name: &str,
-    method: &Function,
+    filler: &SlotFiller<'_>,
     receiver: &str,
     args: &[&str],
 ) -> String {
     format!(
         "    if (PyObject_TypeCheck({receiver}, (PyTypeObject *){type_name}_OBJ)) {{\n\
          \x20       PyObject *by_argv[] = {{ {} }};\n\
-         \x20       return {}({receiver}, by_argv, {}, NULL);\n    }}\n",
+         \x20       return {};\n    }}\n",
         args.join(", "),
-        method.wrapper_symbol(module.name.dotted()),
-        args.len()
+        filler.call(module, receiver, "by_argv", args.len())
     )
 }
 
 /// `nb_power`, which `__pow__` and `__rpow__` share with the three-argument `pow`
 fn emit_power_adapter(module: &ModuleIr, class: &ClassIr, type_name: &str) -> String {
     let (name, reflected, _, field) = POWER;
-    let (forward, backward) = (dunder(class, name), dunder(class, reflected));
+    let forward = slot_filler(class, type_name, name);
+    let backward = slot_filler(class, type_name, reflected);
     if forward.is_none() && backward.is_none() {
         return String::new();
     }
     let mut binary = String::new();
-    for (method, receiver, other) in [(forward, "by_a", "by_b"), (backward, "by_b", "by_a")] {
-        let Some(method) = method else { continue };
+    for (filler, receiver, other) in [
+        (forward.as_ref(), "by_a", "by_b"),
+        (backward.as_ref(), "by_b", "by_a"),
+    ] {
+        let Some(filler) = filler else { continue };
         binary.push_str(&on_our_operand(
             module,
             type_name,
-            method,
+            filler,
             receiver,
             &[other],
         ));
     }
     // a modulus reaches only the left operand's `__pow__`, and a class that wrote a
     // two-parameter one raises there — which is what python raises too
-    let ternary = forward.map_or_else(String::new, |method| {
-        on_our_operand(module, type_name, method, "by_a", &["by_b", "by_c"])
+    let ternary = forward.as_ref().map_or_else(String::new, |filler| {
+        on_our_operand(module, type_name, filler, "by_a", &["by_b", "by_c"])
     });
     format!(
         "static PyObject *{type_name}_{field}(PyObject *by_a, PyObject *by_b, PyObject *by_c) {{\n\
@@ -2166,6 +2591,75 @@ fn dunder<'a>(class: &'a ClassIr, name: &str) -> Option<&'a Function> {
     class.methods.iter().find(|method| method.name == name)
 }
 
+/// the value the class body *assigned* to `dunder`, where it assigned one to call
+///
+/// `__hash__ = None` is left out on purpose: it names nothing to call, and the slot it
+/// asks for is python's standing "unhashable" rather than an adapter — see
+/// [`hash_slot_override`]
+fn assigned_dunder<'a>(class: &'a ClassIr, name: &str) -> Option<&'a SlotAlias> {
+    class
+        .slot_aliases
+        .iter()
+        .find(|alias| alias.name == name && !alias.unsupported)
+}
+
+/// the C variable holding what the body assigned to `name`, filled by module init
+fn alias_cell(type_name: &str, name: &str) -> String {
+    format!("{type_name}_alias_{}", name.trim_matches('_'))
+}
+
+/// what answers a type slot: a method the class defined, or a value its body assigned
+///
+/// `__repr__ = _repr` has to fill `tp_repr` exactly as a `def __repr__` does, and the
+/// only difference is where the callable is found. a method is reached through its own
+/// wrapper symbol; an assignment through the cell module init copied its value into
+enum SlotFiller<'a> {
+    Method(&'a Function),
+    Assigned(String),
+}
+
+impl SlotFiller<'_> {
+    /// the call that answers the slot, with `argv` a `PyObject *const *` expression
+    fn call(&self, module: &ModuleIr, receiver: &str, argv: &str, argc: usize) -> String {
+        match self {
+            SlotFiller::Method(method) => format!(
+                "{}({receiver}, {argv}, {argc}, NULL)",
+                method.wrapper_symbol(module.name.dotted())
+            ),
+            SlotFiller::Assigned(cell) => {
+                format!("By_CallSlotAlias({cell}, {receiver}, {argv}, {argc})")
+            }
+        }
+    }
+
+    /// the call for a slot handed a tuple and a dict rather than a vector
+    fn call_with_tuple(&self, module: &ModuleIr, receiver: &str, args: &str, kw: &str) -> String {
+        match self {
+            SlotFiller::Method(method) => format!(
+                "By_CallSlot({}, {receiver}, {args}, {kw})",
+                method.wrapper_symbol(module.name.dotted())
+            ),
+            SlotFiller::Assigned(cell) => {
+                format!("By_CallSlotAliasTuple({cell}, {receiver}, {args}, {kw})")
+            }
+        }
+    }
+}
+
+/// what fills this slot for this class, where anything does
+fn slot_filler<'a>(class: &'a ClassIr, type_name: &str, name: &str) -> Option<SlotFiller<'a>> {
+    if let Some(method) = dunder(class, name) {
+        return Some(SlotFiller::Method(method));
+    }
+    assigned_dunder(class, name)
+        .map(|alias| SlotFiller::Assigned(alias_cell(type_name, &alias.name)))
+}
+
+/// whether anything the class body wrote answers this slot
+fn answers_slot(class: &ClassIr, name: &str) -> bool {
+    dunder(class, name).is_some() || assigned_dunder(class, name).is_some()
+}
+
 /// the other method that fills the same slot as `name`
 ///
 /// `del obj[k]` is `mp_ass_subscript` with a NULL value, so `__setitem__` and
@@ -2177,10 +2671,10 @@ fn slot_companion(name: &str) -> Option<&'static str> {
     }
 }
 
-/// whether the class fills this slot, by either of the methods that can
+/// whether the class fills this slot, by either of the two that can
 fn fills_slot(class: &ClassIr, name: &str) -> bool {
-    dunder(class, name).is_some()
-        || slot_companion(name).is_some_and(|other| dunder(class, other).is_some())
+    answers_slot(class, name)
+        || slot_companion(name).is_some_and(|other| answers_slot(class, other))
 }
 
 /// `mp_ass_subscript`, which `__setitem__` and `__delitem__` share
@@ -2189,18 +2683,23 @@ fn fills_slot(class: &ClassIr, name: &str) -> bool {
 /// the slot, and the half it does not have raises what python raises when a slot
 /// looks a missing method up — an `AttributeError` naming the method, rather than
 /// the `TypeError` an absent protocol would give
-fn emit_ass_subscript_adapter(module: &ModuleIr, class: &ClassIr, symbol: &str) -> String {
-    let half = |method: Option<&Function>, absent: &str, argc: usize| match method {
-        Some(method) => format!(
-            "        PyObject *by_r = {}(self, by_argv, {argc}, NULL);\n\
+fn emit_ass_subscript_adapter(
+    module: &ModuleIr,
+    class: &ClassIr,
+    type_name: &str,
+    symbol: &str,
+) -> String {
+    let half = |name: &str, argc: usize| match slot_filler(class, type_name, name) {
+        Some(filler) => format!(
+            "        PyObject *by_r = {};\n\
              \x20       if (by_r == NULL) return -1;\n\
              \x20       Py_DECREF(by_r);\n\
              \x20       return 0;\n",
-            method.wrapper_symbol(module.name.dotted())
+            filler.call(module, "self", "by_argv", argc)
         ),
         None => format!(
             "        PyErr_SetString(PyExc_AttributeError, {});\n\x20       return -1;\n",
-            c_string(absent)
+            c_string(name)
         ),
     };
     format!(
@@ -2209,8 +2708,8 @@ fn emit_ass_subscript_adapter(module: &ModuleIr, class: &ClassIr, symbol: &str) 
          \x20   if (by_value == NULL) {{\n\
          {}\x20   }}\n\
          {}}}\n",
-        half(dunder(class, "__delitem__"), "__delitem__", 1),
-        half(dunder(class, "__setitem__"), "__setitem__", 2)
+        half("__delitem__", 1),
+        half("__setitem__", 2)
     )
 }
 
@@ -2220,6 +2719,19 @@ fn emit_ass_subscript_adapter(module: &ModuleIr, class: &ClassIr, symbol: &str) 
 /// representation checks and the boxing are the ones every other call gets
 fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> String {
     let mut out = String::new();
+    // an assigned dunder is reached through a cell rather than a symbol, so the cell has
+    // to stand before the adapters that read it. module init fills it from the type's
+    // dict, once the constant copy has put the assigned value there
+    for alias in &class.slot_aliases {
+        if alias.unsupported {
+            continue;
+        }
+        let _ = writeln!(
+            out,
+            "static PyObject *{} = NULL;",
+            alias_cell(type_name, &alias.name)
+        );
+    }
     for (name, _, _, shape) in DUNDER_SLOTS {
         if !fills_slot(class, name) {
             continue;
@@ -2228,16 +2740,15 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
         // the shared slot is built from the *class*, because either of the two
         // methods that fill it may be the absent one
         if matches!(shape, SlotShape::SetItem) {
-            out.push_str(&emit_ass_subscript_adapter(module, class, &symbol));
+            out.push_str(&emit_ass_subscript_adapter(
+                module, class, type_name, &symbol,
+            ));
             continue;
         }
-        let Some(method) = dunder(class, name) else {
+        let Some(filler) = slot_filler(class, type_name, name) else {
             continue;
         };
-        let call = format!(
-            "{}(self, NULL, 0, NULL)",
-            method.wrapper_symbol(module.name.dotted())
-        );
+        let call = filler.call(module, "self", "NULL", 0);
         match shape {
             SlotShape::Unary => {
                 let _ = writeln!(
@@ -2261,8 +2772,8 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
                     out,
                     "static PyObject *{symbol}(PyObject *self, PyObject *by_arg) {{\n\
                      \x20   PyObject *by_argv[] = {{ by_arg }};\n\
-                     \x20   return {}(self, by_argv, 1, NULL);\n}}",
-                    method.wrapper_symbol(module.name.dotted())
+                     \x20   return {};\n}}",
+                    filler.call(module, "self", "by_argv", 1)
                 );
             }
             // emitted above, from both of the methods that fill this slot
@@ -2274,8 +2785,8 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
                 let _ = writeln!(
                     out,
                     "static PyObject *{symbol}(PyObject *self, PyObject *by_args, PyObject *by_kw) {{\n\
-                     \x20   return By_CallSlot({}, self, by_args, by_kw);\n}}",
-                    method.wrapper_symbol(module.name.dotted())
+                     \x20   return {};\n}}",
+                    filler.call_with_tuple(module, "self", "by_args", "by_kw")
                 );
             }
             SlotShape::GetAttrHook => {
@@ -2290,8 +2801,8 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
                      \x20   if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return NULL;\n\
                      \x20   PyErr_Clear();\n\
                      \x20   PyObject *by_argv[] = {{ by_name }};\n\
-                     \x20   return {}(self, by_argv, 1, NULL);\n}}",
-                    method.wrapper_symbol(module.name.dotted())
+                     \x20   return {};\n}}",
+                    filler.call(module, "self", "by_argv", 1)
                 );
             }
             SlotShape::Finalize => {
@@ -2319,8 +2830,8 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
                     "static PyObject *{symbol}(PyObject *self, PyObject *by_obj, PyObject *by_type) {{\n\
                      \x20   PyObject *by_argv[] = {{ by_obj ? by_obj : Py_None,\n\
                      \x20                          by_type ? by_type : Py_None }};\n\
-                     \x20   return {}(self, by_argv, 2, NULL);\n}}",
-                    method.wrapper_symbol(module.name.dotted())
+                     \x20   return {};\n}}",
+                    filler.call(module, "self", "by_argv", 2)
                 );
             }
             SlotShape::Contains => {
@@ -2328,12 +2839,12 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
                     out,
                     "static int {symbol}(PyObject *self, PyObject *by_value) {{\n\
                      \x20   PyObject *by_argv[] = {{ by_value }};\n\
-                     \x20   PyObject *by_r = {}(self, by_argv, 1, NULL);\n\
+                     \x20   PyObject *by_r = {};\n\
                      \x20   if (by_r == NULL) return -1;\n\
                      \x20   int by_v = PyObject_IsTrue(by_r);\n\
                      \x20   Py_DECREF(by_r);\n\
                      \x20   return by_v;\n}}",
-                    method.wrapper_symbol(module.name.dotted())
+                    filler.call(module, "self", "by_argv", 1)
                 );
             }
             SlotShape::Hash => {
@@ -2362,7 +2873,7 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
     }
     if COMPARISONS
         .iter()
-        .any(|(name, _)| dunder(class, name).is_some())
+        .any(|(name, _)| answers_slot(class, name))
     {
         let _ = writeln!(
             out,
@@ -2371,13 +2882,13 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
              \x20   switch (op) {{"
         );
         for (name, opcode) in COMPARISONS {
-            let Some(method) = dunder(class, name) else {
+            let Some(filler) = slot_filler(class, type_name, name) else {
                 continue;
             };
             let _ = writeln!(
                 out,
-                "    case {opcode}: return {}(self, by_argv, 1, NULL);",
-                method.wrapper_symbol(module.name.dotted())
+                "    case {opcode}: return {};",
+                filler.call(module, "self", "by_argv", 1)
             );
         }
         // a comparison the class does not define is not an error: answering
@@ -2386,7 +2897,8 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
     }
 
     for (name, reflected, _, field) in ARITHMETIC {
-        let (forward, backward) = (dunder(class, name), dunder(class, reflected));
+        let forward = slot_filler(class, type_name, name);
+        let backward = slot_filler(class, type_name, reflected);
         if forward.is_none() && backward.is_none() {
             continue;
         }
@@ -2394,12 +2906,12 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
             out,
             "static PyObject *{type_name}_{field}(PyObject *by_a, PyObject *by_b) {{"
         );
-        for (method, receiver, other) in [(forward, "by_a", "by_b"), (backward, "by_b", "by_a")] {
-            let Some(method) = method else { continue };
+        for (filler, receiver, other) in [(forward, "by_a", "by_b"), (backward, "by_b", "by_a")] {
+            let Some(filler) = filler else { continue };
             out.push_str(&on_our_operand(
                 module,
                 type_name,
-                method,
+                &filler,
                 receiver,
                 &[other],
             ));
@@ -2413,10 +2925,10 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
     // a static type reaches `nb_bool` and `mp_length` through a sub-table, which
     // has to exist before the type that points at it
     let mut mapping = String::new();
-    if dunder(class, "__len__").is_some() {
+    if answers_slot(class, "__len__") {
         let _ = writeln!(mapping, "    .mp_length = {type_name}_len,");
     }
-    if dunder(class, "__getitem__").is_some() {
+    if answers_slot(class, "__getitem__") {
         let _ = writeln!(mapping, "    .mp_subscript = {type_name}_getitem,");
     }
     if fills_slot(class, "__setitem__") {
@@ -2428,7 +2940,7 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
             "static PyMappingMethods {type_name}_mapping = {{\n{mapping}}};"
         );
     }
-    if dunder(class, "__contains__").is_some() {
+    if answers_slot(class, "__contains__") {
         let _ = writeln!(
             out,
             "static PySequenceMethods {type_name}_sequence = {{\n\
@@ -2478,7 +2990,7 @@ fn sub_table_fields(class: &ClassIr, type_name: &str, table: &str) -> String {
 fn number_fields(class: &ClassIr, type_name: &str) -> String {
     let mut out = String::new();
     for (name, reflected, _, field) in ARITHMETIC.iter().copied().chain([POWER]) {
-        if dunder(class, name).is_some() || dunder(class, reflected).is_some() {
+        if answers_slot(class, name) || answers_slot(class, reflected) {
             let _ = writeln!(out, "    .{field} = {type_name}_{field},");
         }
     }
@@ -2486,18 +2998,25 @@ fn number_fields(class: &ClassIr, type_name: &str) -> String {
     out
 }
 
-/// the value `tp_hash` takes, when the class does not set it itself
+/// the value `tp_hash` takes, where it is not an adapter of this class's own
 ///
-/// python makes a class that defines `__eq__` and not `__hash__` unhashable — two
-/// objects that compare equal have to hash equal, and an inherited hash cannot
-/// promise that. `type_new` does it for a class written in python; a type built
-/// from a spec has to do it here or the compiled class would be hashable where
-/// the interpreted one is not
-fn inherited_hash(class: &ClassIr) -> Option<&'static str> {
+/// two ways a class ends up unhashable. it can say so outright, by writing
+/// `__hash__ = None` — `numbers.Number` is the corpus's example — and python spells
+/// that in the slot as `PyObject_HashNotImplemented`. or it can define `__eq__` and
+/// no `__hash__`, and then python makes it unhashable for it: two objects that
+/// compare equal have to hash equal, and an inherited hash cannot promise that.
+/// `type_new` does the second for a class written in python; a type built from a spec
+/// has to do both here or the compiled class would be hashable where the interpreted
+/// one is not
+fn hash_slot_override(class: &ClassIr) -> Option<&'static str> {
+    let disowned = class
+        .slot_aliases
+        .iter()
+        .any(|alias| alias.name == "__hash__" && alias.unsupported);
     let defines_equality = COMPARISONS
         .iter()
-        .any(|(name, _)| matches!(*name, "__eq__" | "__ne__") && dunder(class, name).is_some());
-    (defines_equality && dunder(class, "__hash__").is_none())
+        .any(|(name, _)| matches!(*name, "__eq__" | "__ne__") && answers_slot(class, name));
+    (disowned || (defines_equality && !answers_slot(class, "__hash__")))
         .then_some("PyObject_HashNotImplemented")
 }
 
@@ -2515,18 +3034,18 @@ fn dunder_slots(class: &ClassIr, type_name: &str) -> Vec<(String, String)> {
         .collect();
     if COMPARISONS
         .iter()
-        .any(|(name, _)| dunder(class, name).is_some())
+        .any(|(name, _)| answers_slot(class, name))
     {
         slots.push((
             "Py_tp_richcompare".to_string(),
             format!("{type_name}_richcompare"),
         ));
     }
-    if let Some(hash) = inherited_hash(class) {
+    if let Some(hash) = hash_slot_override(class) {
         slots.push(("Py_tp_hash".to_string(), hash.to_string()));
     }
     for (name, reflected, slot, field) in ARITHMETIC.iter().copied().chain([POWER]) {
-        if dunder(class, name).is_some() || dunder(class, reflected).is_some() {
+        if answers_slot(class, name) || answers_slot(class, reflected) {
             slots.push((slot.to_string(), format!("{type_name}_{field}")));
         }
     }
@@ -2551,19 +3070,19 @@ fn dunder_initializers(class: &ClassIr, type_name: &str) -> String {
     }
     if COMPARISONS
         .iter()
-        .any(|(name, _)| dunder(class, name).is_some())
+        .any(|(name, _)| answers_slot(class, name))
     {
         let _ = writeln!(
             out,
             "             .tp_richcompare = {type_name}_richcompare,"
         );
     }
-    if let Some(hash) = inherited_hash(class) {
+    if let Some(hash) = hash_slot_override(class) {
         let _ = writeln!(out, "             .tp_hash = {hash},");
     }
     // `__bool__` names the number table already; an arithmetic method without one
     // still needs it pointed at
-    if dunder(class, "__bool__").is_none() && !number_fields(class, type_name).is_empty() {
+    if !answers_slot(class, "__bool__") && !number_fields(class, type_name).is_empty() {
         let _ = writeln!(out, "             .tp_as_number = &{type_name}_number,");
     }
     out
@@ -4002,19 +4521,28 @@ fn emit_op(
                 // `tp_alloc` zeroes the block, so `None` leaves the field NULL —
                 // which is what an unset cell is
                 let Some(value) = value else { continue };
+                // a field a base declared sits in that base's region rather than this
+                // class's, so it is reached through the base's type — `by_new` is only
+                // the storage of what this class adds
+                let declared = field_owner(module, owner, &field.name);
+                let target = if declared.name == owner.name {
+                    "by_new".to_string()
+                } else {
+                    fields_of(module, declared, "by_obj")
+                };
                 if let Some(retain) = inc_ref(&field.ty, &value_expr(value)) {
                     let _ = writeln!(out, "      {retain}");
                 }
                 let _ = writeln!(
                     out,
-                    "      by_new->{} = {};",
+                    "      {target}->{} = {};",
                     field.member(),
                     value_expr(value)
                 );
                 // the zero `tp_alloc` left says "never written", so a field filled here
                 // has to say otherwise
                 if field.optional {
-                    let _ = writeln!(out, "      by_new->{} = 1;", field.presence());
+                    let _ = writeln!(out, "      {target}->{} = 1;", field.presence());
                 }
             }
             out.push_str("      }\n");
@@ -4081,35 +4609,41 @@ fn emit_op(
             let _ = writeln!(out, "      {}.f1 = (char)by_done; }}", local(*dest));
             out
         }
-        Op::RaiseWith { error, value } => {
-            // a resumable frame's `return` is the one raise that is not really one: the
-            // value is written into the state object and the frame hands back nothing,
-            // so that `am_send` can report a return for the price of a pointer read
-            // instead of building a `StopIteration` for its caller to unpack again.
-            // whoever owes python an exception builds it from there, in `By_TakeReturn`.
-            //
-            // only the form that carries a value takes this route. a bare `return` is
-            // lowered to the same op a written `raise StopIteration` is, and the two
-            // must not be confused: one finishes the frame, the other is an exception
-            // the body chose to raise
-            if *error == by_ir::ops::StandardError::StopIteration && resumes(module, function) {
-                let receiver = local(RegisterId(0));
-                format!(
-                    "    {{ PyObject *by_t = By_NewRef({});\n\
-                     \x20     Py_XDECREF({receiver}->by_returned);\n\
-                     \x20     {receiver}->by_returned = by_t; }}\n\
-                     \x20   goto {};\n",
-                    value_expr(value),
-                    error_label(error_target)
-                )
-            } else {
-                format!(
-                    "    By_RaiseWith({}, {});\n    goto {};\n",
-                    error.c_name(),
-                    value_expr(value),
-                    error_label(error_target)
-                )
-            }
+        Op::RaiseWith { error, value } => format!(
+            "    By_RaiseWith({}, {});\n    goto {};\n",
+            error.c_name(),
+            value_expr(value),
+            error_label(error_target)
+        ),
+        // a finish is the one exit that leaves without an exception: the value is
+        // written into the state object and the frame hands back nothing, so that
+        // `am_send` can report a return for the price of a pointer read instead of
+        // building a `StopIteration` for its caller to unpack again. whoever owes
+        // python an exception builds it from there, in `By_TakeReturn`.
+        //
+        // it goes to the *function's* exit rather than to `error_target`: the frame's
+        // cleanups have already run, and a finish that entered an enclosing `except`
+        // would be a `return` the body caught
+        Op::FinishFrame { value } => {
+            debug_assert!(
+                resumes(module, function),
+                "a finish belongs to a resumable frame, and `{}` is not one",
+                function.name
+            );
+            debug_assert!(
+                error_target.is_none(),
+                "a finish in `{}` still stands under a handler, which would catch it",
+                function.name
+            );
+            let receiver = local(RegisterId(0));
+            format!(
+                "    {{ PyObject *by_t = By_NewRef({});\n\
+                 \x20     Py_XDECREF({receiver}->by_returned);\n\
+                 \x20     {receiver}->by_returned = by_t; }}\n\
+                 \x20   goto {};\n",
+                value_expr(value),
+                error_label(None)
+            )
         }
         Op::GetCell {
             dest,
@@ -4387,7 +4921,7 @@ fn emit_op(
             // a field read at a compile-time offset *into the storage*: no hash lookup
             // and no descriptor, though for a class appending to a base the storage has
             // to be found first
-            let fields = receiver_fields(module, class, receiver);
+            let fields = receiver_fields(module, class, field, receiver);
             let expr = format!("{fields}->{}", mangle_member(field));
             // an attribute `__init__` assigns on only some paths may not be there, and
             // python answers a read of one with `AttributeError` rather than a value
@@ -4428,7 +4962,7 @@ fn emit_op(
             field,
             value,
         } => {
-            let fields = receiver_fields(module, class, receiver);
+            let fields = receiver_fields(module, class, field, receiver);
             let target = format!("{fields}->{}", mangle_member(field));
             let mut out = String::new();
             let ty = function.value_type(value).unwrap_or(RType::OBJECT);
@@ -5348,13 +5882,16 @@ fn emit_module_init(module: &ModuleIr) -> String {
     {
         conditions.push("!BY_HAS_TYPE_DATA");
     }
-    // a class keeping an instance dict is the same question again: below 3.13 there is
-    // no published way to walk or release a managed one, and a collected type that
-    // cannot walk what it holds is worse than no compiled type at all
+    // a class whose *generated* code cannot run without an instance dict is the same
+    // question again: below 3.13 there is no published way to walk or release a managed
+    // one, and a class whose decorator writes assignments that would all fall off is
+    // worse than no compiled type at all. a class that merely wants a dict is not in
+    // here — it does without one down there, which is what every emitted class did
+    // before dicts existed
     if module
         .classes
         .iter()
-        .any(|class| instance_dict(module, class))
+        .any(|class| dict_on_every_version(module, class))
     {
         conditions.push("!BY_HAS_MANAGED_DICT");
     }
@@ -5406,6 +5943,14 @@ fn emit_module_init(module: &ModuleIr) -> String {
                     c_string(&class.name)
                 ),
             };
+            // a class nothing else compiled reaches into is left where it stands: the
+            // NULL is carried forward, every step that would have installed it is
+            // skipped, and its interpreted definition keeps the name. see
+            // `declines_on_its_own`
+            if declines_on_its_own(module, class) {
+                let _ = writeln!(layout_guard, "    {type_name} = {construction};");
+                continue;
+            }
             // giving up here leaves every interpreted definition standing, and their
             // decorators have been taken out of the source that built them — so this
             // exit has to run them for the same reason the guard above does. a module
@@ -5492,10 +6037,23 @@ fn emit_module_init(module: &ModuleIr) -> String {
             .map(|class| c_string(&class.name))
             .collect::<Vec<_>>()
             .join(", ");
+        // a retained interpreted definition evaluated its defaults and closed over its
+        // cells while the fallback source ran, so one naming a class of this module
+        // captured the *twin* — and the name it was read from now answers the type that
+        // replaced it. a body comparing the two by identity is then wrong, which is every
+        // sentinel-by-identity api at once. done here because it is the last point where
+        // both arrays still stand
+        for function in module.all_functions().filter(|function| function.defers()) {
+            let _ = writeln!(
+                twin_remap,
+                "    By_SettleTwins({}, by_twin, by_type, {count});",
+                function.interpreted_symbol(module.name.dotted())
+            );
+        }
         let _ = writeln!(
             twin_remap,
             "    {{ static const char *const by_name[] = {{{names}}};\n\
-             \x20     int by_remapped = By_RemapTwinAliases(dict, by_twin, by_name, {count});\n\
+             \x20     int by_remapped = By_RemapTwinAliases(dict, by_twin, by_type, by_name, {count});\n\
              \x20     for (Py_ssize_t by_at = 0; by_at < {count}; by_at++) Py_XDECREF(by_twin[by_at]);\n\
              \x20     if (by_remapped < 0) return -1; }}"
         );
@@ -5611,14 +6169,18 @@ fn emit_module_init(module: &ModuleIr) -> String {
                  \x20   if ({type_name} == NULL) return -1;"
             )
         };
+        // everything that only makes sense once this class's type exists. a class the
+        // layout guard was allowed to leave unbuilt has none, so the whole run is put
+        // behind a test of it rather than emitted straight into `class_init`
+        let mut installed = String::new();
         if !ready.is_empty() {
-            let _ = writeln!(class_init, "{ready}");
+            let _ = writeln!(installed, "{ready}");
         }
         // the type exists from here, so it is what stands for this class's twin in every
         // remap below. a class built in the layout guard was built before the array even
         // existed, which is why this is not written where the construction is
         if let Some(slot) = slot {
-            let _ = writeln!(class_init, "    by_type[{slot}] = {type_name}_OBJ;");
+            let _ = writeln!(installed, "    by_type[{slot}] = {type_name}_OBJ;");
         }
         // the awaitable `__anext__` hands back is a type of its own, and an unreadied
         // type has no `tp_free` — `PyObject_New` on one segfaults rather than failing
@@ -5628,7 +6190,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
             .is_some_and(|resume| resume.surface == Surface::AsyncGenerator)
         {
             let _ = writeln!(
-                class_init,
+                installed,
                 "    if (PyType_Ready(&{type_name}_asend_type) < 0) return -1;"
             );
         }
@@ -5640,7 +6202,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
             .is_some_and(|resume| resume.surface == Surface::Coroutine)
         {
             let _ = writeln!(
-                class_init,
+                installed,
                 "    if (By_RegisterCoroutine({type_name}_OBJ) < 0) return -1;"
             );
         }
@@ -5651,10 +6213,25 @@ fn emit_module_init(module: &ModuleIr) -> String {
             // a class no interpreted `class` statement wrote has no body to take one off
             let Some(slot) = slot else { continue };
             let _ = writeln!(
-                class_init,
+                installed,
                 "    if (By_CopyClassConstant(by_body[{slot}], (PyTypeObject *){type_name}_OBJ, {}, by_twin, by_type, {}) < 0) return -1;",
                 c_string(constant),
                 twins.len()
+            );
+        }
+        // a dunder the body assigned is now in the type's dict under its own name, and
+        // the slot emitted for it reads the value back out of a cell rather than looking
+        // it up on every call. that is what keeps `repr(x)` and `x.__repr__()` on the one
+        // object, and it has to come *after* the copy that put the object there
+        for alias in &class.slot_aliases {
+            if alias.unsupported {
+                continue;
+            }
+            let _ = writeln!(
+                installed,
+                "    if (By_HoldSlotAlias((PyTypeObject *){type_name}_OBJ, {}, &{}) < 0) return -1;",
+                c_string(&alias.name),
+                alias_cell(&type_name, &alias.name)
             );
         }
         // a decorated method is decorated *after* the type exists, which is the only
@@ -5676,7 +6253,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
             // applying them there is the only application rather than a second one
             let body = slot.map_or_else(|| "NULL".to_string(), |slot| format!("by_body[{slot}]"));
             let _ = writeln!(
-                class_init,
+                installed,
                 "    {{ static const char *const by_decorators[] = {{{names}}};\n\
                  \x20     if (By_DecoratedMethod({body}, (PyTypeObject *){type_name}_OBJ, dict, {}, {}, by_decorators, {}, by_twin, by_type, {}) < 0) return -1; }}",
                 c_string(&class.name),
@@ -5689,7 +6266,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
         // should be able to name it
         if class.exported {
             let _ = writeln!(
-                class_init,
+                installed,
                 "    if (PyDict_SetItemString(dict, \"{}\", {type_name}_OBJ) < 0) return -1;",
                 class.name
             );
@@ -5705,6 +6282,24 @@ fn emit_module_init(module: &ModuleIr) -> String {
                     c_string(&decorator.dotted())
                 );
             }
+        }
+        // a class the layout guard was allowed to leave unbuilt has a NULL here, and
+        // everything above would have written through it. the namespace entry it would
+        // have replaced is left holding the interpreted definition, which is what the
+        // class means from now on — so that definition is what stands for its own twin
+        // in every remap below, rather than the nothing a never-filled slot would say.
+        // its own decorators are applied either way, because `class_decorate` applies
+        // them to the namespace entry rather than to the type
+        if declines_on_its_own(module, class) {
+            let stands = slot.map_or_else(String::new, |slot| {
+                format!("    else {{ by_type[{slot}] = by_twin[{slot}]; }}\n")
+            });
+            let _ = write!(
+                class_init,
+                "    if ({type_name} != NULL) {{\n{installed}    }}\n{stands}"
+            );
+        } else {
+            class_init.push_str(&installed);
         }
     }
 
@@ -5864,6 +6459,74 @@ mod tests {
         builder.finish()
     }
 
+    /// a module-level function that builds an instance of `class`, which is the plainest
+    /// way for compiled code to read that class's appended storage as its own struct
+    ///
+    /// a class the module reaches into like this is one whose refusal has to be the whole
+    /// module's — see `declines_on_its_own`
+    fn constructs(class: &str) -> Function {
+        let mut builder = FunctionBuilder::new("make", RType::OBJECT);
+        let tag = builder.param("tag", RType::OBJECT);
+        let made = builder.temp(RType::OBJECT);
+        builder.push(Op::NewInstance {
+            dest: made,
+            class: class.to_string(),
+            fields: vec![Some(Value::Register(tag))],
+        });
+        builder.terminate(Terminator::Return(Value::Register(made)));
+        builder.finish()
+    }
+
+    /// a method that reads a field off an instance of `class` — the direct struct read
+    /// that only the emitted type's layout has an offset for
+    fn reads_a_field_of(class: &str) -> Function {
+        let mut builder = FunctionBuilder::new("look", RType::OBJECT);
+        let held = builder.param(
+            "held",
+            RType::Instance {
+                class: class.to_string(),
+                exact: true,
+            },
+        );
+        let tag = builder.temp(RType::OBJECT);
+        builder.push(Op::GetField {
+            dest: tag,
+            receiver: Value::Register(held),
+            class: class.to_string(),
+            field: "tag".to_string(),
+        });
+        builder.terminate(Terminator::Return(Value::Register(tag)));
+        builder.finish()
+    }
+
+    /// a method that writes `spare` on an instance of `class` through the dynamic form —
+    /// the receiver boxed to an object first, which is what the frontend emits where it
+    /// has no field to write instead
+    fn writes_an_unheld_attribute(class: &str) -> Function {
+        let mut builder = FunctionBuilder::new("fill", RType::NONE);
+        let held = builder.param(
+            "held",
+            RType::Instance {
+                class: class.to_string(),
+                exact: true,
+            },
+        );
+        let boxed = builder.temp(RType::OBJECT);
+        builder.push(Op::Box {
+            dest: boxed,
+            src: Value::Register(held),
+        });
+        let status = builder.temp(RType::BIT);
+        builder.push(Op::SetAttr {
+            dest: status,
+            receiver: Value::Register(boxed),
+            name: "spare".to_string(),
+            value: Value::Int(1),
+        });
+        builder.terminate(Terminator::Return(Value::None));
+        builder.finish()
+    }
+
     #[test]
     fn a_native_signature_uses_the_mangled_symbol() {
         let module = module_with(add());
@@ -5979,7 +6642,9 @@ mod tests {
     /// — which has that fallback — must never be asked about it
     #[test]
     fn a_class_appending_storage_is_never_built_through_the_fallback() {
-        let mut module = module_with(add());
+        // a module that builds one of these is a module whose refusal is a whole-module
+        // one, which is what makes the ordering below the thing under test
+        let mut module = module_with(constructs("Wrapped"));
         module.classes.push(ClassIr {
             name: "Wrapped".to_string(),
             immutable: false,
@@ -5987,7 +6652,9 @@ mod tests {
             base: Some(ClassBase::External(vec!["Exception".to_string()])),
             inherited_init: false,
             generic: false,
+            declares_slots: false,
             constants: Vec::new(),
+            slot_aliases: Vec::new(),
             fields: vec![by_ir::function::FieldDecl {
                 name: "tag".to_string(),
                 ty: RType::OBJECT,
@@ -6088,13 +6755,9 @@ mod tests {
     /// it back until the stack runs out
     #[test]
     fn appended_storage_over_appended_storage_stands_on_the_emitted_base() {
-        let mut module = module_with(add());
+        let mut module = module_with(constructs("Deeper"));
         module.classes.push(appending_class());
-        let mut inner = appending_class();
-        inner.name = "Deeper".to_string();
-        inner.base = Some(ClassBase::InModule("Wrapped".to_string()));
-        inner.fields[0].name = "depth".to_string();
-        module.classes.push(inner);
+        module.classes.push(deeper_class());
         let c = emit_module(&module);
 
         assert!(
@@ -6116,6 +6779,276 @@ mod tests {
         assert!(
             c.contains("if (By_app_Deeper_Type == NULL) return 0;"),
             "{c}"
+        );
+    }
+
+    /// the same pair, with nothing constructing either. `Wrapped` is still the whole
+    /// module's to refuse — `Deeper` is built on its type object, and a NULL there is not
+    /// something a bases tuple can be packed from — where `Deeper`, which nothing stands
+    /// on and nothing builds, is left out on its own
+    #[test]
+    fn a_class_another_stands_on_refuses_the_whole_module() {
+        let mut module = module_with(add());
+        module.classes.push(appending_class());
+        module.classes.push(deeper_class());
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
+            "the base a class stands on refuses for the module: {c}"
+        );
+        assert!(
+            !c.contains("if (By_app_Deeper_Type == NULL) return 0;"),
+            "nothing stands on the subclass, so it refuses alone: {c}"
+        );
+    }
+
+    /// a class appending storage that no compiled code reaches into is left out on its
+    /// own: the construction is still the guard's, but a NULL is carried forward instead
+    /// of ending the init, and every step that would have installed the type is put
+    /// behind a test of it
+    #[test]
+    fn a_class_nothing_reaches_into_declines_on_its_own() {
+        let mut module = module_with(add());
+        module.classes.push(appending_class());
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains(
+                "By_app_Wrapped_Type = By_SpecClass(dict, \"Wrapped\", &By_app_Wrapped_Type_spec);"
+            ),
+            "the construction is unchanged: {c}"
+        );
+        assert!(
+            !c.contains("return 0;\n    By_app_Wrapped_Type")
+                && !c.contains("Wrapped_Type == NULL) return 0"),
+            "nothing reaches into it, so the module is not refused: {c}"
+        );
+        assert!(
+            c.contains("if (By_app_Wrapped_Type != NULL) {"),
+            "the install waits on the type: {c}"
+        );
+        assert!(
+            c.contains("if (PyDict_SetItemString(dict, \"Wrapped\", By_app_Wrapped_Type_OBJ) < 0) return -1;"),
+            "and installs it where there is one: {c}"
+        );
+    }
+
+    /// and where there is not, the interpreted definition keeps the name — so it is what
+    /// stands for its own twin in the remaps below, rather than the nothing a slot left
+    /// unfilled would say. without this an attribute of some *other* compiled class that
+    /// named this one would be dropped rather than carried
+    #[test]
+    fn a_class_left_unbuilt_stands_for_its_own_twin() {
+        let mut module = module_with(add());
+        module.classes.push(appending_class());
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("else { by_type[0] = by_twin[0]; }"),
+            "the twin stands in for itself: {c}"
+        );
+    }
+
+    /// a module-level function that builds one is exactly the reader the whole-module
+    /// refusal exists for: it reads the instance as its own struct, at an offset the
+    /// interpreted definition's instance does not reach
+    #[test]
+    fn a_class_a_function_builds_refuses_the_whole_module() {
+        let mut module = module_with(constructs("Wrapped"));
+        module.classes.push(appending_class());
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
+            "a module function reaching into it refuses for the module: {c}"
+        );
+    }
+
+    /// a module holding a class that is written an attribute its layout does not hold
+    /// keeps the whole-module refusal
+    ///
+    /// an emitted class has no instance dict, so such a write lands nowhere — the class's
+    /// instances are ones only the interpreted definition can build. the frontend no longer
+    /// hands over IR like this: an unpacking target is a field like any other now, and a
+    /// write of a name the layout chain has nowhere for declines. the IR is built by hand
+    /// here for that reason, because this is the guard for a lowering added *later* that
+    /// finds a way past both
+    #[test]
+    fn a_class_written_an_attribute_it_does_not_hold_keeps_the_module_refusing() {
+        let mut module = module_with(add());
+        module.classes.push(appending_class());
+        let mut wakeup = appending_class();
+        wakeup.name = "Wakeup".to_string();
+        wakeup.base = None;
+        wakeup.methods.push(writes_an_unheld_attribute("Wakeup"));
+        module.classes.push(wakeup);
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
+            "a class the module cannot answer for keeps the whole-module refusal: {c}"
+        );
+    }
+
+    /// and the same class with the attribute in its layout does not, because then the
+    /// write is an offset the emitted type really has
+    #[test]
+    fn a_class_that_holds_what_it_is_written_lets_the_module_narrow() {
+        let mut module = module_with(add());
+        module.classes.push(appending_class());
+        let mut wakeup = appending_class();
+        wakeup.name = "Wakeup".to_string();
+        wakeup.base = None;
+        wakeup.fields.push(by_ir::function::FieldDecl {
+            name: "spare".to_string(),
+            ty: RType::OBJECT,
+            default: None,
+            optional: false,
+        });
+        wakeup.methods.push(writes_an_unheld_attribute("Wakeup"));
+        module.classes.push(wakeup);
+        let c = emit_module(&module);
+
+        assert!(
+            !c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
+            "a class that holds the attribute does not hold the module: {c}"
+        );
+    }
+
+    /// a function *typed* on the class, whose body names it in no operation at all
+    ///
+    /// an instance-typed register is what licenses a direct call and a pinned instance
+    /// size, and it is the *type* the later stages read to decide either — so it counts as
+    /// reaching into the class whether or not the body has been lowered to an operation
+    /// that says so yet. for a class appending storage the emitted C is a bare
+    /// `PyObject *` either way, which is exactly why this has to be asked of the type
+    /// rather than read back off the C
+    #[test]
+    fn a_function_typed_on_the_class_holds_the_whole_module() {
+        let mut builder = FunctionBuilder::new("pass_along", RType::OBJECT);
+        let held = builder.param(
+            "held",
+            RType::Instance {
+                class: "Wrapped".to_string(),
+                exact: true,
+            },
+        );
+        builder.terminate(Terminator::Return(Value::Register(held)));
+        let mut module = module_with(builder.finish());
+        module.classes.push(appending_class());
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
+            "a register typed on it reaches into it: {c}"
+        );
+    }
+
+    /// and the answer a function hands back is a register's type one frame along: a caller
+    /// taking it into an instance-typed register of its own reads it as that class
+    #[test]
+    fn a_function_that_answers_with_the_class_holds_the_whole_module() {
+        let mut builder = FunctionBuilder::new(
+            "hand_back",
+            RType::Instance {
+                class: "Wrapped".to_string(),
+                exact: true,
+            },
+        );
+        builder.terminate(Terminator::Unreachable);
+        let mut module = module_with(builder.finish());
+        module.classes.push(appending_class());
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
+            "the type it answers with reaches into it: {c}"
+        );
+    }
+
+    /// a method of some *other* class that still gets a type is the same reader one step
+    /// along, and refuses the same way
+    #[test]
+    fn a_class_a_method_of_another_class_reads_refuses_the_whole_module() {
+        let mut module = module_with(add());
+        module.classes.push(appending_class());
+        let mut reader = appending_class();
+        reader.name = "Reader".to_string();
+        reader.methods.push(reads_a_field_of("Wrapped"));
+        module.classes.push(reader);
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
+            "another class's method reaching into it refuses for the module: {c}"
+        );
+    }
+
+    /// the state object a generator method suspends into is a class of its own, and it
+    /// captured the `self` it was made from — so it names the class exactly as any other
+    /// reader would. but nothing in the namespace is bound to it and nothing but the
+    /// class's own methods ever builds one, so where that class has no type this is never
+    /// constructed and its reads never happen. counting it would leave the narrower
+    /// refusal firing on nothing, because every spec class with a generator method or a
+    /// nested function has one
+    #[test]
+    fn a_helper_class_only_the_class_itself_builds_goes_unbuilt_with_it() {
+        let mut module = module_with(add());
+        module.classes.push(appending_class());
+        let mut state = appending_class();
+        state.name = "Wrapped_step_gen".to_string();
+        state.exported = false;
+        state.methods.push(reads_a_field_of("Wrapped"));
+        module.classes.push(state);
+        let c = emit_module(&module);
+
+        assert!(
+            !c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
+            "a helper nothing else builds does not hold the module: {c}"
+        );
+        assert!(
+            c.contains("if (By_app_Wrapped_Type != NULL) {"),
+            "the class is still left out on its own: {c}"
+        );
+    }
+
+    /// the same helper, put in the namespace. an exported class is reachable by name from
+    /// anywhere at all, so its methods may run whatever became of the class they read —
+    /// and the refusal goes back to being the module's
+    #[test]
+    fn an_exported_helper_holds_the_whole_module() {
+        let mut module = module_with(add());
+        module.classes.push(appending_class());
+        let mut state = appending_class();
+        state.name = "Wrapped_step_gen".to_string();
+        state.exported = true;
+        state.methods.push(reads_a_field_of("Wrapped"));
+        module.classes.push(state);
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
+            "an exported reader holds the module: {c}"
+        );
+    }
+
+    /// and a helper some *still-running* code builds is reachable after all, so it is not
+    /// gathered up with the class and its reads count
+    #[test]
+    fn a_helper_a_module_function_builds_holds_the_whole_module() {
+        let mut module = module_with(constructs("Wrapped_step_gen"));
+        module.classes.push(appending_class());
+        let mut state = appending_class();
+        state.name = "Wrapped_step_gen".to_string();
+        state.exported = false;
+        state.methods.push(reads_a_field_of("Wrapped"));
+        module.classes.push(state);
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
+            "a helper the module still builds holds it: {c}"
         );
     }
 
@@ -6166,23 +7099,85 @@ mod tests {
         assert!(read < free, "{c}");
     }
 
-    /// the other layout model for an in-module base: the subclass restates its base's
-    /// fields so that a pointer to one is a pointer to the other. an appended region
-    /// would give the pair two copies of each, so such a class is not appended over
-    /// anything and keeps the construction that answers from reality — which refuses
+    /// the subclass's own region holds only what it adds: the base keeps its fields in a
+    /// region of its own, reached through the type that declared them, and a copy here
+    /// would give the pair two of each — the base's methods writing one and the
+    /// subclass's the other
     #[test]
-    fn a_subclass_restating_its_bases_fields_is_not_appended_over_it() {
+    fn an_appended_subclass_declares_only_the_fields_it_adds() {
+        let mut module = module_with(add());
+        module.classes.push(appending_class());
+        module.classes.push(deeper_class());
+        let c = emit_module(&module);
+
+        let declaration = c
+            .split("typedef struct By_app_Deeper {")
+            .nth(1)
+            .and_then(|rest| rest.split_once("} By_app_Deeper;"))
+            .map(|(body, _)| body.to_string())
+            .expect("the subclass declares a struct");
+        assert!(declaration.contains("by_f_depth;"), "{declaration}");
+        assert!(!declaration.contains("by_f_tag;"), "{declaration}");
+        // and a read of the inherited field goes to the base's region rather than this
+        // one's, which is what keeps the single copy single
+        assert!(
+            c.contains(
+                "static PyObject *By_app_Deeper_Type_get_tag(PyObject *selfobj, void *closure) {\n\
+                 \x20                (void)closure;\n\
+                 \x20                By_app_Wrapped *self = ((By_app_Wrapped *)By_TypeData(selfobj, By_app_Wrapped_Type_OBJ));"
+            ),
+            "{c}"
+        );
+    }
+
+    /// a generated constructor still fills every field the class declares, so it binds
+    /// one pointer per rung: the inherited field is written into the base's region and
+    /// the added one into this class's, which is where each is read back from
+    #[test]
+    fn an_appended_subclass_constructor_writes_each_field_into_its_own_rung() {
+        let mut module = module_with(add());
+        module.classes.push(appending_class());
+        module.classes.push(deeper_class());
+        let c = emit_module(&module);
+
+        let init = c
+            .split("static int By_app_Deeper_Type_init(")
+            .nth(1)
+            .and_then(|rest| rest.split_once("\n}\n"))
+            .map(|(body, _)| body.to_string())
+            .expect("the subclass generates a constructor");
+        assert!(
+            init.contains(
+                "By_app_Deeper *self = ((By_app_Deeper *)By_TypeData(selfobj, By_app_Deeper_Type_OBJ));"
+            ),
+            "{init}"
+        );
+        assert!(
+            init.contains(
+                "By_app_Wrapped *by_up1 = ((By_app_Wrapped *)By_TypeData(selfobj, By_app_Wrapped_Type_OBJ));"
+            ),
+            "{init}"
+        );
+        assert!(init.contains("by_up1->by_f_tag = by_v;"), "{init}");
+        assert!(init.contains("self->by_f_depth = by_v;"), "{init}");
+        // and both are still bound from the call, in the order the class declares them
+        assert!(
+            init.contains("static const char *const by_names[] = { \"tag\", \"depth\" };"),
+            "{init}"
+        );
+    }
+
+    /// a field list that is not its base's followed by something more is some other
+    /// layout entirely, and there is no region to append. such a class keeps the
+    /// construction that answers from reality — which refuses a heap base
+    #[test]
+    fn a_subclass_whose_fields_do_not_extend_its_bases_is_not_appended_over_it() {
         let mut module = module_with(add());
         module.classes.push(appending_class());
         let mut inner = appending_class();
         inner.name = "Deeper".to_string();
         inner.base = Some(ClassBase::InModule("Wrapped".to_string()));
-        inner.fields.push(by_ir::function::FieldDecl {
-            name: "depth".to_string(),
-            ty: RType::OBJECT,
-            default: None,
-            optional: false,
-        });
+        inner.fields[0].name = "depth".to_string();
         module.classes.push(inner);
         let c = emit_module(&module);
 
@@ -6228,7 +7223,9 @@ mod tests {
             base: Some(ClassBase::External(vec!["Exception".to_string()])),
             inherited_init: false,
             generic: false,
+            declares_slots: false,
             constants: Vec::new(),
+            slot_aliases: Vec::new(),
             fields: vec![by_ir::function::FieldDecl {
                 name: "tag".to_string(),
                 ty: RType::OBJECT,
@@ -6240,6 +7237,22 @@ mod tests {
             resume: None,
             keywords: Vec::new(),
         }
+    }
+
+    /// a class appending storage over [`appending_class`], laid out the way the frontend
+    /// lays a subclass out: the declared fields begin with the base's, and what it adds
+    /// of its own is the run past them
+    fn deeper_class() -> ClassIr {
+        let mut inner = appending_class();
+        inner.name = "Deeper".to_string();
+        inner.base = Some(ClassBase::InModule("Wrapped".to_string()));
+        inner.fields.push(by_ir::function::FieldDecl {
+            name: "depth".to_string(),
+            ty: RType::OBJECT,
+            default: None,
+            optional: false,
+        });
+        inner
     }
 
     #[test]
@@ -6519,7 +7532,9 @@ mod tests {
             base: None,
             inherited_init: false,
             generic: false,
+            declares_slots: false,
             constants: Vec::new(),
+            slot_aliases: Vec::new(),
             fields: vec![by_ir::function::FieldDecl {
                 name: "x".to_string(),
                 ty: RType::INT,
@@ -7059,7 +8074,9 @@ mod tests {
             base: None,
             inherited_init: false,
             generic: false,
+            declares_slots: false,
             constants: Vec::new(),
+            slot_aliases: Vec::new(),
             fields: vec![by_ir::function::FieldDecl {
                 name: "value".to_string(),
                 ty: RType::OBJECT,
@@ -7145,7 +8162,9 @@ mod tests {
             base: None,
             inherited_init: false,
             generic: false,
+            declares_slots: false,
             constants: Vec::new(),
+            slot_aliases: Vec::new(),
             fields: ["a", "rest", "extra"]
                 .into_iter()
                 .map(|name| by_ir::function::FieldDecl {
