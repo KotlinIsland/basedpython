@@ -9,20 +9,20 @@ python is a smaller problem for us than it is for mypyc, because basedpython has
 already ruled out most of what makes compilation observable. the table below is
 short for that reason:
 
-| behaviour                                   | interpreted                          | compiled                     | why                                                          |
-| ------------------------------------------- | ------------------------------------ | ---------------------------- | ------------------------------------------------------------ |
-| monkey-patching a module function           | works                                | tier 3: no                   | early binding, gated on `api.lock`                           |
-| adding an attribute not in the class body   | already rejected                     | rejected                     | `data class` is `slots=True` today                           |
-| `is` on a fixed-length tuple                | identity                             | unspecified                  | unboxed tuples have no identity                              |
-| `type(x)` where `x: int` held a `bool`      | `bool`                               | `int`                        | the tagged form has no room for it                           |
-| `is` on a small `int` or interned `str`     | identity                             | unspecified                  | unboxed and re-boxed values differ                           |
-| a wrong annotation on non-compiled code     | `TypeError` (soundness checks)       | `TypeError`                  | same mechanism, already shipped                              |
-| `__dict__` on an instance                   | absent under slots                   | absent                       | unchanged                                                    |
-| `if __name__ == "__main__"`                 | n/a                                  | n/a                          | the entry point is [`main`](../../features/main-function.md) |
-| stack depth on deep recursion               | python's limit                       | the C stack's                | native frames are not python frames                          |
-| `type(f)` for a compiled function           | `function`                           | `builtin_function_or_method` | a native function is a C function object                     |
-| `f.__code__`, `f.__defaults__`              | present                              | absent                       | there is no python code object behind it                     |
-| a `data class` constructor's argument types | unchecked (unless `--soundness all`) | checked                      | a compiled field is unboxed, so the check is mandatory       |
+| behaviour                                   | interpreted                          | compiled                          | why                                                               |
+| ------------------------------------------- | ------------------------------------ | --------------------------------- | ----------------------------------------------------------------- |
+| monkey-patching a module function           | works                                | tier 3: no                        | early binding, gated on `api.lock`                                |
+| adding an attribute not in the class body   | stored, unless `__slots__`           | the same, on 3.13 and above       | an instance dict beside the layout; below 3.13 it is refused      |
+| `is` on a fixed-length tuple                | identity                             | unspecified                       | unboxed tuples have no identity                                   |
+| `type(x)` where `x: int` held a `bool`      | `bool`                               | `int`                             | the tagged form has no room for it                                |
+| `is` on a small `int` or interned `str`     | identity                             | unspecified                       | unboxed and re-boxed values differ                                |
+| a wrong annotation on non-compiled code     | `TypeError` (soundness checks)       | `TypeError`                       | same mechanism, already shipped                                   |
+| `__dict__` on an instance                   | present unless `__slots__`           | absent where the class has fields | a mapping naming only the dict half would be a quiet wrong answer |
+| `if __name__ == "__main__"`                 | n/a                                  | n/a                               | the entry point is [`main`](../../features/main-function.md)      |
+| stack depth on deep recursion               | python's limit                       | the C stack's                     | native frames are not python frames                               |
+| `type(f)` for a compiled function           | `function`                           | `builtin_function_or_method`      | a native function is a C function object                          |
+| `f.__code__`, `f.__defaults__`              | present                              | absent                            | there is no python code object behind it                          |
+| a `data class` constructor's argument types | unchecked (unless `--soundness all`) | checked                           | a compiled field is unboxed, so the check is mandatory            |
 
 the three `is`-related rows are the only genuine losses, and they are the same
 ones mypyc takes. `is` on immutable value types is already a python anti-pattern;

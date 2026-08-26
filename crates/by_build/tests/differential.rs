@@ -35,6 +35,9 @@ mod common;
 
 /// a test whose *source* needs a newer interpreter than this one has nothing to
 /// say: neither leg can run it, so there is nothing to compare
+///
+/// only above `by_build::MINIMUM_PYTHON` — anything at or below the floor is already
+/// guaranteed, because a toolchain below it never gets built
 fn supports(toolchain: &Toolchain, least: (u8, u8)) -> bool {
     toolchain.version.is_none_or(|version| version >= least)
 }
@@ -61,7 +64,17 @@ fn environment() -> Option<(String, Toolchain)> {
             })?
             .to_string(),
     };
-    let toolchain = Toolchain::probe(&python).ok()?;
+    // an interpreter below `by_build::MINIMUM_PYTHON` is refused by the probe, so
+    // every test that goes through here skips on one rather than failing: below the
+    // floor there is no native leg to compare against, and the failure that used to
+    // stand in for that answer was a wall of C compiler errors
+    let toolchain = match Toolchain::probe(&python) {
+        Ok(toolchain) => toolchain,
+        Err(error) => {
+            eprintln!("skipping: {error}");
+            return None;
+        }
+    };
     Some((python, toolchain))
 }
 
@@ -174,6 +187,41 @@ async def _stepped(source):
 # is the same thing as `__anext__`
 async def _echoed(source):
     return [await source.__anext__(), await source.asend('x'), await source.asend(None)]
+
+# the same question `_renext` asks of a generator: a resumption that carries nothing
+# has to leave the `yield` evaluating to `None`, not to whatever the last `asend` put
+# there. it has to run one step *past* the value being echoed back, because that is
+# the first resumption whose `yield` reads the field again
+async def _reasend(source, first, steps):
+    out = [await source.__anext__(), await source.asend(first)]
+    for _ in range(steps):
+        try:
+            out.append(await source.asend(None))
+        except BaseException as e:
+            out.append(type(e).__name__)
+    return out
+
+# `athrow` and `aclose` against a machine with no suspension point: `steps` of zero
+# leaves it never started, and enough of them leaves it finished. the log says whether
+# any of the body ran, which is the half a wrong answer here would get wrong quietly
+async def _athrown(source, error, steps):
+    for _ in range(steps):
+        try:
+            await source.__anext__()
+        except StopAsyncIteration:
+            pass
+    try:
+        return ('returned', await source.athrow(error('boom')))
+    except BaseException as e:
+        return (type(e).__name__, str(e))
+
+async def _aclosed(source, steps):
+    for _ in range(steps):
+        try:
+            await source.__anext__()
+        except StopAsyncIteration:
+            pass
+    return await source.aclose()
 
 # a thrown exception resumes *at the suspension*, so the body's own handler sees it —
 # and one the body does not catch comes back out
@@ -345,6 +393,14 @@ def _capture(fn, *args):
         return e
     return None
 
+# raising an exception and catching it again, which is the only way an exception class
+# is asked for the traceback and the frames a `raise` hangs on the instance
+def _raised_and_caught(kind, *args):
+    try:
+        raise kind(*args)
+    except BaseException as e:
+        return e
+
 # step a generator, sending each value in and recording what comes back — an
 # exhaustion or a raise included, so a wrong answer after a suspension is visible
 # rather than fatal
@@ -356,6 +412,39 @@ def _sent(gen, values):
             out.append(gen.send(value))
     except BaseException as e:
         out.append((type(e).__name__, str(e), getattr(e, 'value', None)))
+    return out
+
+# what came out of a frame that raised, described down to the chaining
+#
+# pep 479 replaces a `StopIteration` leaving a generator with a `RuntimeError` and
+# hangs the original off it as both `__cause__` and `__context__`. a conversion that
+# built the new exception but dropped the chaining would still have the right class
+# and the right message, so the class and the message alone do not pin it
+def _escaped(fn, *args):
+    try:
+        fn(*args)
+    except BaseException as e:
+        return (
+            type(e).__name__,
+            str(e),
+            type(e.__cause__).__name__ if e.__cause__ is not None else None,
+            type(e.__context__).__name__ if e.__context__ is not None else None,
+            e.__suppress_context__,
+        )
+    return None
+
+# resume with no value at all, repeatedly
+#
+# `next(g)` is `g.send(None)`, so the `yield` it resumes has to evaluate to `None` —
+# including when an earlier `send` put something else there. a generator that read
+# the field without anything writing it would echo that earlier value back
+def _renext(gen, first, steps):
+    out = [next(gen), gen.send(first)]
+    for _ in range(steps):
+        try:
+            out.append(next(gen))
+        except BaseException as e:
+            out.append(type(e).__name__)
     return out
 
 # a `throw` the generator *handles* leaves it usable, so every later step has to go
@@ -487,6 +576,29 @@ def _counting(n):
         yield i
         i = i + 1
     return n * 100
+
+# the whole life of an attribute a method deletes: what it held, that a delete really
+# unbinds it, what a read and a second delete say once it is gone, and that a later
+# write brings it back. an emitted class stores its attributes in a fixed layout, so
+# every one of those is a different piece of machinery from the interpreted dict
+def _deleted(h):
+    out = [h.tag, h.kept, hasattr(h, 'tag')]
+    h.drop()
+    out.append(hasattr(h, 'tag'))
+    out.append(repr(_capture(getattr, h, 'tag')))
+    out.append(repr(_capture(h.drop)))
+    h.put('second')
+    out.append((h.tag, h.kept, hasattr(h, 'tag')))
+    del h.tag
+    out.append(hasattr(h, 'tag'))
+    out.append(repr(_capture(delattr, h, 'tag')))
+    # a private name is bound and deleted under the name python mangles it to, so a
+    # rule that read the written name would leave this field with no way to be absent
+    out.append(hasattr(h, '_Held__hidden'))
+    h.drop_hidden()
+    out.append(hasattr(h, '_Held__hidden'))
+    out.append(repr(_capture(h.drop_hidden)))
+    return out
 ";
 
 fn run(python: &str, dir: &Path, body: &str) -> String {
@@ -4072,10 +4184,6 @@ def grow(seed: str, n: int) -> str:
 
 #[test]
 fn native_classes_agree() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     agree(
         "classes",
         "\
@@ -4122,10 +4230,6 @@ fn a_native_constructor_checks_its_argument_types() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    if !supports(&toolchain, (3, 10)) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     let dir = std::env::temp_dir().join("by_diff_ctorcheck");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "data class Point:\n    x: int\n    y: int\n";
@@ -4157,10 +4261,6 @@ fn a_native_class_has_a_fixed_layout() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    if !supports(&toolchain, (3, 10)) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     let dir = std::env::temp_dir().join("by_diff_layout");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
@@ -4180,18 +4280,165 @@ data class Point:
         eprintln!("skipping: no working C toolchain");
         return;
     }
-    // no `__dict__`, and no attribute outside the declared set
+    // a declared field is the *layout*: a descriptor on the type, read at an offset,
+    // never an entry in an instance dict. and `__dict__` itself is refused however the
+    // instance is built — a mapping naming only what the layout has no room for would
+    // be an empty answer where the interpreted class gives a full one, which is quiet
+    // and wrong where the refusal is at least loud
     let out = run(
         &python,
         &dir,
         "import by_diff_layout as m\n\
          p = m.Point(1, 2)\n\
-         print(hasattr(p, '__dict__'))\n\
-         try:\n    p.extra = 1\n\
-         except AttributeError:\n    print('AttributeError')\n\
-         else:\n    print('accepted an undeclared attribute')\n",
+         print(type(vars(m.Point)['x']).__name__)\n\
+         print(hasattr(p, '__dict__'))\n",
     );
-    assert_eq!(out, "False\nAttributeError");
+    assert_eq!(out, "getset_descriptor\nFalse");
+}
+
+/// the source both of the instance-dict tests build
+///
+/// `bump` is here so that the compiled type can be told from the interpreted one: a class
+/// that fell back answers `function` where an emitted one answers `method_descriptor`,
+/// and without that a test about what an instance accepts passes just as well with the
+/// class never compiled at all
+const A_CLASS_WITH_A_FIELD: &str = "\
+class Counter:
+    def __init__(self):
+        self.count = 0
+
+    def bump(self):
+        self.count = self.count + 1
+        return self.count
+";
+
+#[test]
+fn a_class_takes_an_attribute_its_layout_never_had() {
+    // python gives an instance somewhere to put a name its class never mentioned, and an
+    // emitted class *is* its layout — so `o.brand_new = 7`, which the interpreted twin
+    // stores, raised in the middle of a working program. the declared field stays in the
+    // layout: only what the layout has no room for reaches the dict
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    if !supports(&toolchain, (3, 13)) {
+        eprintln!("skipping: an instance dict is a managed one, which 3.13 published");
+        return;
+    }
+    let dir = std::env::temp_dir().join("by_diff_instdict");
+    let _ = std::fs::remove_dir_all(&dir);
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(
+        A_CLASS_WITH_A_FIELD,
+        "by_diff_instdict",
+        &toolchain,
+        &dir,
+        &options,
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_instdict as m\n\
+         print(type(m.Counter.bump).__name__)\n\
+         o = m.Counter()\n\
+         o.brand_new = 7\n\
+         print(o.brand_new, o.bump(), type(vars(m.Counter)['count']).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor\n7 1 getset_descriptor");
+    agree_python(
+        "instdict2",
+        A_CLASS_WITH_A_FIELD,
+        &[
+            "(lambda o: (setattr(o, 'brand_new', 7), o.brand_new, o.bump()))(m.Counter())",
+            "(lambda o: (setattr(o, 'count', 5), o.bump()))(m.Counter())",
+        ],
+    );
+}
+
+#[test]
+fn a_class_declaring_slots_keeps_the_bare_layout() {
+    // `__slots__` is python's own way of saying an instance's attributes are exactly the
+    // declared ones, so a class writing it is asking for the layout an emitted class has
+    // anyway — and giving it a dict would be the opposite divergence: accepting what the
+    // interpreted twin refuses
+    agree_python(
+        "slotsnodict",
+        "\
+class Counted:
+    __slots__ = ('count',)
+
+    def __init__(self):
+        self.count = 0
+
+    def bump(self):
+        self.count = self.count + 1
+        return self.count
+
+
+def took(obj, name):
+    try:
+        setattr(obj, name, 7)
+    except AttributeError:
+        return 'AttributeError'
+    return getattr(obj, name)
+",
+        &[
+            "m.took(m.Counted(), 'brand_new')",
+            "m.took(m.Counted(), 'count')",
+            "m.Counted().bump()",
+        ],
+    );
+}
+
+#[test]
+fn a_slotted_class_over_a_base_that_declares_none_still_takes_a_dict() {
+    // python asks the whole chain: a `__slots__` on one class does not take the dict its
+    // base already gave the instance away again. so the declaration only settles the
+    // question where every class the layout comes from carries it
+    let Some((_, toolchain)) = environment() else {
+        return;
+    };
+    if !supports(&toolchain, (3, 13)) {
+        eprintln!("skipping: an instance dict is a managed one, which 3.13 published");
+        return;
+    }
+    agree_python(
+        "slotschain",
+        "\
+class Loose:
+    def __init__(self):
+        self.count = 0
+
+
+class Tight(Loose):
+    __slots__ = ()
+
+    def bump(self):
+        self.count = self.count + 1
+        return self.count
+
+
+def took(obj, name):
+    try:
+        setattr(obj, name, 7)
+    except AttributeError:
+        return 'AttributeError'
+    return getattr(obj, name)
+",
+        &[
+            "m.took(m.Tight(), 'brand_new')",
+            "m.took(m.Loose(), 'brand_new')",
+            "m.Tight().bump()",
+        ],
+    );
 }
 
 #[test]
@@ -4199,10 +4446,6 @@ fn a_native_class_instance_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    if !supports(&toolchain, (3, 10)) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     let dir = std::env::temp_dir().join("by_diff_classleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
@@ -4238,9 +4481,6 @@ data class Holder:
 
 #[test]
 fn a_declined_function_still_exists_and_behaves_the_same() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 11))) {
-        return;
-    }
     // the interpreted fallback is what makes coverage total: a construct with no
     // native lowering costs speed in that one place and nothing anywhere else
     agree_with_declines(
@@ -4541,10 +4781,6 @@ def slow(a: int) -> None:
 
 #[test]
 fn field_access_agrees() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     agree(
         "fields",
         "\
@@ -4600,10 +4836,6 @@ fn a_field_setter_checks_its_value() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    if !supports(&toolchain, (3, 10)) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     let dir = std::env::temp_dir().join("by_diff_setcheck");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
@@ -4649,10 +4881,6 @@ fn a_class_typed_argument_is_checked_at_the_boundary() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    if !supports(&toolchain, (3, 10)) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     let dir = std::env::temp_dir().join("by_diff_argcheck");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
@@ -4697,10 +4925,6 @@ fn a_field_read_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    if !supports(&toolchain, (3, 10)) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     let dir = std::env::temp_dir().join("by_diff_fieldleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
@@ -4750,10 +4974,6 @@ def inner_label(n: Nest) -> str:
 
 #[test]
 fn a_constructor_result_is_used_natively() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     agree(
         "ctornative",
         "\
@@ -4796,10 +5016,6 @@ def chained(a: int) -> int:
 fn a_declined_callee_does_not_break_the_build() {
     // the whole module used to fail to compile: the emitted call named a symbol
     // that was never defined
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     agree_with_declines(
         "declinechain",
         "\
@@ -4833,10 +5049,6 @@ def alone(a: int) -> int:
 
 #[test]
 fn direct_method_dispatch_agrees() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     agree(
         "direct",
         "\
@@ -4900,10 +5112,6 @@ fn a_direct_method_call_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    if !supports(&toolchain, (3, 10)) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     let dir = std::env::temp_dir().join("by_diff_methleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
@@ -4953,10 +5161,6 @@ fn a_borrowed_intermediate_does_not_leak_or_lose_a_reference() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    if !supports(&toolchain, (3, 10)) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     let dir = std::env::temp_dir().join("by_diff_borrow");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
@@ -5043,10 +5247,6 @@ fn a_borrow_survives_a_finalizer_that_runs_a_collection() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    if !supports(&toolchain, (3, 10)) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     let dir = std::env::temp_dir().join("by_diff_finalizer");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
@@ -5599,6 +5799,10 @@ def in_handler(times: int) -> object:
         except Boom:
             yield i
         i = i + 1
+
+def raising(label: str) -> object:
+    yield label
+    raise StopIteration(label)
 ";
     let options = Options {
         require_native: true,
@@ -5698,6 +5902,44 @@ fn ending_a_generator_releases_the_generator_exit() {
         ),
     );
     assert_eq!(out, "abandoned 0\nexhausted 0\nclosed 0\nin handler 0");
+}
+
+/// converting a raised `StopIteration` releases both exceptions
+///
+/// pep 479 replaces the exception leaving the frame and hangs the original off the
+/// replacement, so for the length of the conversion two exceptions, a traceback and
+/// a type are all live at once and all counted by hand. that is exactly the shape a
+/// missed release hides in — and the original is deliberately *kept*, as the new
+/// exception's `__cause__`, so a leak here looks like the chaining working
+#[test]
+fn converting_a_raised_stop_iteration_releases_both_exceptions() {
+    let Some((python, dir)) = leak_module("by_diff_genconvert") else {
+        return;
+    };
+    let out = run(
+        &python,
+        &dir,
+        &format!(
+            "{LEAK_INSTRUMENTS}\
+             import by_diff_genconvert as m\n\
+             label = 'x' * 40\n\
+             def convert():\n\
+            \x20   g = m.raising(label)\n\
+            \x20   next(g)\n\
+            \x20   try:\n\
+            \x20       next(g)\n\
+            \x20   except RuntimeError:\n\
+            \x20       pass\n\
+             print('runtime errors', leaked(RuntimeError, convert))\n\
+             print('stop iterations', leaked(StopIteration, convert))\n\
+             before = sys.getrefcount(label)\n\
+             for _ in range(20000):\n\
+            \x20   convert()\n\
+             gc.collect()\n\
+             print('label', 'stable' if sys.getrefcount(label) == before else 'leaked')\n"
+        ),
+    );
+    assert_eq!(out, "runtime errors 0\nstop iterations 0\nlabel stable");
 }
 
 /// a `throw` raises at the suspension point, and whether a handler catches it or
@@ -6157,17 +6399,24 @@ async def finishing(v: object) -> object:
     let emitted = std::fs::read_to_string(dir.join("by_diff_sendslot_pin.c"))
         .expect("the generated C is written beside the extension");
     // both surfaces publish the slot, and both report their `return` into the state
-    // object rather than by raising
+    // object rather than by raising. each frame finishes twice over: once where its
+    // `return` stands, and once in the block the state dispatch falls through to,
+    // which is both running off the end of the body and being resumed after the end
     assert_eq!(emitted.matches(".am_send =").count(), 2, "{emitted}");
     assert_eq!(emitted.matches("By_SendGenerator(").count(), 2, "{emitted}");
     assert_eq!(
         emitted.matches("->by_returned = by_t;").count(),
-        2,
+        4,
         "{emitted}"
     );
-    // and nothing is left raising a `StopIteration` with a value from inside a frame
+    // and no frame is left reporting its own end by raising, in either shape: with a
+    // value, or the bare one a frame that names none would have used
     assert!(
         !emitted.contains("By_RaiseWith(PyExc_StopIteration"),
+        "{emitted}"
+    );
+    assert!(
+        !emitted.contains("PyErr_SetNone(PyExc_StopIteration)"),
         "{emitted}"
     );
 
@@ -6185,6 +6434,362 @@ async def finishing(v: object) -> object:
         out, "builtin_function_or_method\ncounting$gen\n(1, 2)",
         "{out}"
     );
+}
+
+/// a `StopIteration` the body *raised* leaves the frame as a `RuntimeError`, and one
+/// the frame's own end produced does not
+///
+/// pep 479. the two are the same exception class and only the operation that made it
+/// tells them apart, which is why a finish is [`Op::FinishFrame`] and not a raise: a
+/// finish writes its value into the state object and builds nothing, so an exception
+/// standing at the frame's exit can only be one the body raised. converting on the
+/// class alone would turn every ordinary `return` into a `RuntimeError`
+#[test]
+fn a_raised_stop_iteration_leaves_a_generator_as_a_runtime_error() {
+    agree_python(
+        "pep479",
+        "\
+from typing import Any
+
+
+def raised() -> Any:
+    yield 1
+    raise StopIteration(7)
+
+
+# the accident pep 479 was written for: nothing here says `StopIteration`, and the
+# one an exhausted iterator raises inside the body would have read as this frame's
+# own end
+def passed_through(source: Any) -> Any:
+    yield 1
+    next(source)
+
+
+def relayed() -> Any:
+    got = yield from raised()
+    yield got
+
+
+async def awaited() -> Any:
+    raise StopIteration(7)
+
+
+async def async_raised() -> Any:
+    yield 1
+    raise StopIteration(7)
+
+
+# only an *async* generator converts this one, because `StopAsyncIteration` is what
+# its own protocol uses to mean `ended`
+async def async_stopped() -> Any:
+    yield 1
+    raise StopAsyncIteration
+
+
+# a plain generator raising it means nothing in particular, and is left alone
+def stopped_async() -> Any:
+    yield 1
+    raise StopAsyncIteration
+
+
+def raised_on_exit() -> Any:
+    try:
+        yield 1
+    except GeneratorExit:
+        raise StopIteration(9)
+
+
+def raised_in_handler() -> Any:
+    try:
+        yield 1
+    except ValueError:
+        raise StopIteration(4)
+
+
+def raised_subclass(error: Any) -> Any:
+    yield 1
+    raise error
+
+
+# the other half of the pin: every one of these *ends*, and an end is still a plain
+# `StopIteration` carrying the value the `return` named
+def ended(v: Any) -> Any:
+    yield 1
+    return v
+
+
+def ended_bare() -> Any:
+    yield 1
+    return
+
+
+def ended_falling_off() -> Any:
+    yield 1
+",
+        &[
+            // the raise, and the chaining that goes with the conversion
+            "_escaped(list, m.raised())",
+            "_escaped(list, m.passed_through(iter([])))",
+            "_escaped(list, m.relayed())",
+            "_escaped(_run, m.awaited())",
+            "_escaped(_run, _drain(m.async_raised()))",
+            "_escaped(_run, _drain(m.async_stopped()))",
+            // and the one surface that does not convert it
+            "_escaped(list, m.stopped_async())",
+            // a subclass carries its own class into the cause, and one that shadows
+            // `.value` still does — the conversion reads the exception, not a field
+            "_escaped(list, m.raised_subclass(_Sub(3)))",
+            "_escaped(list, m.raised_subclass(_Shadowed(7)))",
+            "_escaped(list, m.raised_subclass(StopIteration((1, 2))))",
+            // `close` and `throw` reach the frame the same way a resumption does, so
+            // the conversion has to happen for them too — and `close` must not go on
+            // reading the converted error as the clean exhaustion it accepts
+            "[(g := m.raised_on_exit(), next(g), _escaped(g.close))[2:]]",
+            "[(g := m.raised_in_handler(), next(g), _escaped(g.throw, ValueError()))[2:]]",
+            // an end is not a raise, on either face: the value comes back whole, the
+            // exception is a plain `StopIteration`, and nothing is chained onto it
+            "[_value(m.ended(v)) for v in ((1, 2), (), (1,), 5, None, 'ab', _Shadowed(7))]",
+            "[_escaped(list, m.ended(v)) for v in ((1, 2), (), (1,), 5, None)]",
+            "_escaped(list, m.ended_bare())",
+            "_escaped(list, m.ended_falling_off())",
+            // including the second time round, when the frame is already exhausted
+            "[(g := m.ended((1, 2)), list(g), _escaped(next, g))[2:]]",
+            "[(g := m.raised(), _escaped(list, g), _escaped(next, g))[1:]]",
+        ],
+    );
+}
+
+/// a resumption that carries no value leaves the `yield` evaluating to `None`
+///
+/// `next(g)` *is* `g.send(None)`. the value a `send` carries is parked in a field the
+/// resumed `yield` reads, and a resumption that skipped the store left the previous
+/// `send`'s value standing there to be read a second time. every way into the frame
+/// has to park it: `tp_iternext`, the send slot a `yield from` reaches, `throw`, and
+/// an async generator's `__anext__`
+#[test]
+fn a_resumption_carrying_nothing_sends_none() {
+    agree_python(
+        "sentnone",
+        "\
+from typing import Any
+
+
+def echoing(n: int) -> Any:
+    i = 0
+    while i < n:
+        got = yield i
+        yield got
+        i = i + 1
+
+
+# a `yield` whose value is discarded reads nothing, so the field it did not consume
+# is still there for the next one that does
+def discarding() -> Any:
+    yield 1
+    got = yield 2
+    yield got
+
+
+def relaying(n: int) -> Any:
+    yield from echoing(n)
+
+
+def recovering() -> Any:
+    got = yield 1
+    try:
+        yield ('a', got)
+        yield 'unreached'
+    except ValueError:
+        after = yield 'caught'
+        yield ('b', after)
+
+
+async def async_echoing(n: int) -> Any:
+    i = 0
+    while i < n:
+        got = yield i
+        yield got
+        i = i + 1
+",
+        &[
+            // the shape the divergence was found in: a `send`, then two plain
+            // resumptions. the second is the one that reads the field again
+            "_renext(m.echoing(4), 7, 2)",
+            "_renext(m.echoing(4), None, 2)",
+            "_renext(m.discarding(), 7, 1)",
+            // the send slot, which a `yield from` reaches instead of `tp_iternext`
+            "_renext(m.relaying(4), 7, 2)",
+            // `throw` carries no value in either, so a `yield` after a handled one
+            // must not read what the last `send` left
+            "[(g := m.recovering(), next(g), g.send(9), g.throw(ValueError()), next(g))[3:]]",
+            // and the async surface, whose `asend(None)` is its `__anext__`
+            "_run(_reasend(m.async_echoing(4), 7, 2))",
+            "_run(_reasend(m.async_echoing(4), None, 2))",
+            // a value that *is* sent still arrives, which is the half that already
+            // worked and the half a fix could break
+            "_sent(m.echoing(4), (7, 8, 9))",
+            "_sent(m.relaying(4), ('a', 'b'))",
+        ],
+    );
+}
+
+/// the frame's surface reaches the runtime, and every resumption parks a value
+///
+/// `agree` sees the conversion's *message*, which names the surface, so a generator
+/// answering as a coroutine is already caught. what it cannot see is the third
+/// constant: an async generator and a coroutine differ only in whether
+/// `StopAsyncIteration` converts, and a module with no async generator raising one
+/// would agree either way. this pins the mapping at the point it is emitted
+#[test]
+fn a_state_object_tells_the_runtime_which_surface_it_is() {
+    let Some((_python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_framekind_pin");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+from typing import Any
+
+
+def plain() -> Any:
+    yield 1
+
+
+async def awaited() -> Any:
+    return 1
+
+
+async def streamed() -> Any:
+    yield 1
+";
+    let options = Options {
+        require_native: true,
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(source, "by_diff_framekind_pin", &toolchain, &dir, &options).is_err() {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let emitted = std::fs::read_to_string(dir.join("by_diff_framekind_pin.c"))
+        .expect("the generated C is written beside the extension");
+    // each surface names itself, and none of them names another
+    for (function, kind) in [
+        ("plain", "BY_FRAME_GENERATOR"),
+        ("awaited", "BY_FRAME_COROUTINE"),
+        ("streamed", "BY_FRAME_ASYNC_GENERATOR"),
+    ] {
+        let symbol = format!("By_by_diff_framekind_pin_{function}_gen_Type_iternext");
+        let iternext = emitted_function(&emitted, &symbol);
+        assert!(iternext.contains(kind), "{function}: {iternext}");
+        for other in [
+            "BY_FRAME_GENERATOR",
+            "BY_FRAME_COROUTINE",
+            "BY_FRAME_ASYNC_GENERATOR",
+        ] {
+            assert_eq!(
+                iternext.contains(other),
+                other == kind,
+                "{function} named {other}: {iternext}"
+            );
+        }
+        // and it carries `None` in, because a resumption through this slot carries
+        // nothing — the store cannot be skipped or the last `send` survives it
+        assert!(iternext.contains("Py_None"), "{function}: {iternext}");
+    }
+}
+
+/// one emitted C function's body, from its definition to the closing brace
+///
+/// a whole-module `contains` is not an assertion about the function it was written
+/// for: every emitted function's text sits in the same file, so a claim about one
+/// passes on another's
+fn emitted_function<'a>(emitted: &'a str, symbol: &str) -> &'a str {
+    let start = emitted
+        .match_indices(&format!("{symbol}("))
+        // a longer symbol ending in this one is a different function, and the
+        // forward declaration is not the definition — only the definition's
+        // parameter list is followed by a body.
+        //
+        // `*` counts as a boundary as much as a space does: a function returning a
+        // pointer is emitted both ways, `PyObject * name` for a lowered body and
+        // `PyObject *name` for a slot, and only the second would be missed
+        .find(|(at, _)| {
+            emitted[..*at].ends_with([' ', '\n', '*'])
+                && emitted[*at..]
+                    .split_once(')')
+                    .is_some_and(|(_, rest)| rest.starts_with(" {"))
+        })
+        .map(|(at, _)| at)
+        .unwrap_or_else(|| panic!("{symbol} was not emitted:\n{emitted}"));
+    let end = emitted[start..]
+        .find("\n}\n")
+        .unwrap_or_else(|| panic!("{symbol} has no end:\n{emitted}"));
+    &emitted[start..start + end]
+}
+
+/// a frame *finishing* and a body raising `StopIteration` are emitted differently
+///
+/// they arrive at codegen as different operations, which is the point: a bare
+/// `return`, running off the end and being resumed after the end all mean the frame
+/// is done, while `raise StopIteration` is an exception the body chose to raise. only
+/// the first three may be reported through the state object.
+///
+/// the difference is now visible from python too, in
+/// [`a_raised_stop_iteration_leaves_a_generator_as_a_runtime_error`]: the raised one
+/// comes back as a `RuntimeError` and the three finishes do not. this test stays
+/// because that conversion *rests* on the split — it reads "an exception is standing
+/// at the frame's exit" as "the body raised", which is only true while a finish
+/// builds no exception at all. the emitted C is where that stops being true first
+#[test]
+fn a_finish_is_emitted_apart_from_a_written_stop_iteration() {
+    let Some((_, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_finish_pin");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def bare(n: int) -> object:
+    yield n
+    return
+
+def falling(n: int) -> object:
+    yield n
+
+def written(n: int) -> object:
+    yield n
+    raise StopIteration
+";
+    let options = Options {
+        require_native: true,
+        ..Options::default()
+    };
+    if build_source(source, "by_diff_finish_pin", &toolchain, &dir, &options).is_err() {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let emitted = std::fs::read_to_string(dir.join("by_diff_finish_pin.c"))
+        .expect("the generated C is written beside the extension");
+    let resume = |name: &str| {
+        emitted_function(
+            &emitted,
+            &format!("by_by_diff_finish_pin_{name}_gen__resume"),
+        )
+    };
+    let finishes = |body: &str| body.matches("->by_returned = by_t;").count();
+    let raises = |body: &str| body.matches("PyErr_SetNone(PyExc_StopIteration)").count();
+
+    // a bare `return` finishes, and so does the block the state dispatch falls
+    // through to — which is both the end of the body and a resume past the end
+    assert_eq!(finishes(resume("bare")), 2, "{}", resume("bare"));
+    assert_eq!(raises(resume("bare")), 0, "{}", resume("bare"));
+    // a body with no `return` at all has only the implicit end
+    assert_eq!(finishes(resume("falling")), 1, "{}", resume("falling"));
+    assert_eq!(raises(resume("falling")), 0, "{}", resume("falling"));
+    // and a written raise is a raise: the frame's own end beside it is still a
+    // finish, so this one function holds exactly one of each
+    assert_eq!(finishes(resume("written")), 1, "{}", resume("written"));
+    assert_eq!(raises(resume("written")), 1, "{}", resume("written"));
 }
 
 #[test]
@@ -6310,6 +6915,90 @@ def recovering(n: int) -> object:
         &[
             "_recovered(m.recovering(3), ValueError, 2)",
             "list(m.recovering(3))",
+        ],
+    );
+}
+
+/// a `throw` needs a suspension point to raise *at*, and two machines have none: one
+/// that never started has not reached its first `yield`, and one that has finished has
+/// left its frame for good. python raises the exception at the call site for both and
+/// runs no body at all — so the `try` around the first `yield` below does not catch a
+/// throw that arrives before the generator was ever stepped, and the `finally` does
+/// not run.
+///
+/// resuming instead gets both wrong, and wrong about *which exception the caller is
+/// holding*: a machine that never started runs its body from the top and answers with
+/// the first yielded value, and a finished one reports exhaustion — so `throw`
+/// answered `StopIteration` where python answers with the thing that was thrown.
+///
+/// `close()` asks the same question and answers `None`: there is nothing to unwind
+#[test]
+fn a_throw_into_a_frame_with_no_suspension_raises_at_the_call_site() {
+    agree_python(
+        "throwfinished",
+        "\
+from typing import Any
+
+
+def guarded(log: list[str]) -> Any:
+    try:
+        yield 1
+        yield 2
+    except ValueError:
+        log.append('caught')
+        yield 99
+    finally:
+        log.append('closed')
+",
+        &[
+            // never started
+            "[(log := [], g := m.guarded(log), (e := _capture(g.throw, ValueError('boom'))), (type(e).__name__, str(e)), log)[3:]]",
+            // and one thrown into that way is finished afterwards
+            "[(log := [], g := m.guarded(log), _capture(g.throw, ValueError('boom')), type(_capture(next, g)).__name__, log)[3:]]",
+            // finished
+            "[(log := [], g := m.guarded(log), list(g), (e := _capture(g.throw, ValueError('boom'))), (type(e).__name__, str(e)), log)[4:]]",
+            // `close()` on either runs nothing, and leaves it finished
+            "[(log := [], g := m.guarded(log), g.close(), log)[2:]]",
+            "[(log := [], g := m.guarded(log), g.close(), type(_capture(next, g)).__name__, log)[3:]]",
+            "[(log := [], g := m.guarded(log), list(g), g.close(), log)[3:]]",
+            // the argument is still checked, by the rule `throw` uses wherever it lands
+            "[(g := m.guarded([]), list(g), str(_capture(g.throw, 42)))[2:]]",
+            "[(g := m.guarded([]), str(_capture(g.throw, 'no')))[1:]]",
+            "[(g := m.guarded([]), list(g), repr(_capture(g.throw, ValueError)))[2:]]",
+            // and the case that *does* have a suspension still resumes into the body's
+            // own handler, which is what the whole `$thrown` field exists for
+            "[(log := [], g := m.guarded(log), next(g), g.throw(ValueError('boom')), log)[3:]]",
+        ],
+    );
+}
+
+/// the async half of the same question, and the two surfaces do *not* answer alike:
+/// an `athrow` into a finished async generator ends the await with `None` rather than
+/// re-raising, where one into a machine that never started raises at the call site
+#[test]
+fn an_athrow_into_a_frame_with_no_suspension_agrees() {
+    agree_python(
+        "athrowfinished",
+        "\
+from typing import Any
+
+
+async def guarded(log: list[str]) -> Any:
+    try:
+        yield 1
+    except ValueError:
+        log.append('caught')
+    finally:
+        log.append('closed')
+",
+        &[
+            "[(log := [], _run(_athrown(m.guarded(log), ValueError, 0)), log)[1:]]",
+            "[(log := [], _run(_athrown(m.guarded(log), ValueError, 3)), log)[1:]]",
+            // `aclose` runs no body for either, exactly as `close` does not
+            "[(log := [], _run(_aclosed(m.guarded(log), 0)), log)[1:]]",
+            "[(log := [], _run(_aclosed(m.guarded(log), 3)), log)[1:]]",
+            // and the suspended case still reaches the body's handler
+            "[(log := [], _run(_athrown(m.guarded(log), ValueError, 1)), log)[1:]]",
         ],
     );
 }
@@ -6720,10 +7409,6 @@ def padded(a: str, fill: str = \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\") -> 
 
 #[test]
 fn keyword_arguments_agree() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     agree_with_declines(
         "keywords",
         "\
@@ -6883,10 +7568,6 @@ def mapped(**named: object) -> int:
 
 #[test]
 fn a_decorated_method_agrees() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     agree_with_declines(
         "methoddeco",
         "\
@@ -7040,10 +7721,6 @@ def each(values: list[int]) -> list[object]:
 
 #[test]
 fn a_loop_over_native_instances_agrees() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     // narrowing the element to an emitted class is a checked unbox like any other —
     // asking the *free* narrowable rather than the one that knows this module's
     // layouts declined the whole loop
@@ -8324,6 +9001,329 @@ fn a_subclass_that_appends_nothing_is_the_compiled_type() {
     );
 }
 
+/// a class whose storage would sit past a **heap** base, beside classes whose base is one
+/// python allocates itself
+///
+/// `SubprocessError` is written in python, so it is a heap type, and no spec can build
+/// `Held` on it: python's own `tp_dealloc` picks the deallocator to chain to out of
+/// `Py_TYPE(self)`, finds the one this class supplies, and calls it straight back until
+/// the stack runs out. leaving `Held` as its interpreted definition is the only answer,
+/// and always was.
+///
+/// what that used to cost was the whole module. the refusal has to be a wide one wherever
+/// compiled code would read one of these instances as its own struct — the offset is one
+/// only the emitted type lays out, and the interpreted definition's instance stops where
+/// the base's does. nothing here does: `Held` is named by nothing, stood on by nothing,
+/// and built by nothing. so it alone falls back, and `Kept`, `Deeper` and `add` — every
+/// one of which used to be given up with it — go on standing.
+///
+/// this is `asyncio.unix_events`'s shape, where `_UnixSelectorEventLoop` stands on a heap
+/// base from another module and took `PidfdChildWatcher` and `_UnixSubprocessTransport`
+/// down with it
+const REFUSED_BESIDE_KEPT: &str = "\
+from subprocess import SubprocessError
+
+
+class Held(SubprocessError):
+    def __init__(self, tag):
+        super().__init__(tag)
+        self.tag = tag
+
+    def read(self):
+        return self.tag
+
+
+class Kept(Exception):
+    def __init__(self, tag):
+        super().__init__(tag)
+        self.tag = tag
+        self.seen = []
+
+    def note(self, value):
+        self.seen.append(value)
+        return len(self.seen)
+
+
+class Deeper(Kept):
+    def __init__(self, tag):
+        super().__init__(tag)
+        self.depth = 1
+
+    def down(self):
+        return self.depth + len(self.seen)
+
+
+def add(a, b):
+    return a + b
+";
+
+#[test]
+fn a_class_no_spec_can_build_agrees_beside_the_ones_that_stand() {
+    agree_python(
+        "perclassheld",
+        REFUSED_BESIDE_KEPT,
+        &[
+            "(m.Held('h').read(), m.Kept('k').note(1), m.Deeper('d').down(), m.add(2, 3))",
+            "[(type(e).__name__, e.args, str(e)) for e in\n\
+             \x20 (m.Held('h'), m.Kept('k'), m.Deeper('d'))]",
+            "[c.__name__ for c in m.Deeper.__mro__]",
+            "(isinstance(m.Deeper('d'), m.Kept), isinstance(m.Held('h'), Exception),\n\
+             \x20 issubclass(m.Deeper, m.Kept))",
+            // the classes that used to be lost with it, doing the thing their own
+            // appended storage is for
+            "[(k.note('a'), k.note('b'), k.seen) for k in [m.Kept('k')]]",
+            "[(d.note(d.depth), d.down(), d.seen) for d in [m.Deeper('d')]]",
+            // raised and caught, which is what an exception class is for. the refused one
+            // included: it is a working class either way, just not a compiled one
+            "[(type(e).__name__, e.args, str(e)) for e in\n\
+             \x20 (_raised_and_caught(m.Held, 'boom'), _raised_and_caught(m.Kept, 'bang'),\n\
+             \x20  _raised_and_caught(m.Deeper, 'crash'))]",
+            // every instance holds a cycle through its appended field, so the collector
+            // has to see it and the deallocation has to release what it finds
+            "(len([k for k in [m.Kept(str(i)) for i in range(200)]\n\
+             \x20     if k.note(k) == 1]), __import__('gc').collect() >= 0)",
+        ],
+    );
+}
+
+/// which build answered, which no comparison of the two legs can say: a class that fell
+/// back to its interpreted definition answers exactly what a compiled one does
+///
+/// `function` against `method_descriptor` is what pins it. `Held` has to be the one and
+/// only `function` — a change that refused nothing would make it `method_descriptor`, and
+/// one that went back to refusing the module would make `Kept` and `Deeper` `function`
+/// too and `add` an ordinary python function
+#[test]
+fn only_the_class_no_spec_can_build_is_left_interpreted() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_perclassheld_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        REFUSED_BESIDE_KEPT,
+        "by_diff_perclassheld_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_perclassheld_t as m\n\
+         print(type(m.Held.__dict__['read']).__name__,\n\
+         \x20     type(m.Kept.__dict__['note']).__name__,\n\
+         \x20     type(m.Deeper.__dict__['down']).__name__,\n\
+         \x20     type(m.add).__name__)\n\
+         # a spec has no code object to write one from, so its absence is the emitted type\n\
+         print('__firstlineno__' in vars(m.Held), '__firstlineno__' in vars(m.Kept))\n",
+    );
+    assert_eq!(
+        out,
+        "function method_descriptor method_descriptor builtin_function_or_method\n\
+         True False"
+    );
+}
+
+/// and the classes that stand beside the refused one still lay out, collect and free
+/// correctly
+///
+/// each rung of appended storage supplies a `tp_dealloc`, `tp_traverse` and `tp_clear` of
+/// its own that chains to the one below, and the sizes say the storage really is appended
+/// rather than shared. every instance here holds a cycle through its own appended field,
+/// so the collector has to be able to walk into it and the deallocation has to let go of
+/// what it finds — which is the failure that segfaulted 24 of the `encodings` modules
+#[test]
+fn the_classes_beside_a_refused_one_lay_out_and_deallocate() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_perclassheld_d");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        REFUSED_BESIDE_KEPT,
+        "by_diff_perclassheld_d",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import gc\n\
+         import by_diff_perclassheld_d as m\n\
+         # each rung's own storage is past the one below it, so the sizes strictly grow\n\
+         print(Exception.__basicsize__ < m.Kept.__basicsize__ < m.Deeper.__basicsize__)\n\
+         def live():\n\
+         \x20   gc.collect()\n\
+         \x20   return tuple(sum(1 for o in gc.get_objects() if type(o) is c)\n\
+         \x20                for c in (m.Held, m.Kept, m.Deeper))\n\
+         start = live()\n\
+         for _ in range(3000):\n\
+         \x20   d = m.Deeper('t')\n\
+         \x20   d.note(d)\n\
+         \x20   k = m.Kept('k')\n\
+         \x20   k.note(k)\n\
+         \x20   h = m.Held('h')\n\
+         del d, k, h\n\
+         print(start, live())\n",
+    );
+    assert_eq!(out, "True\n(0, 0, 0) (0, 0, 0)");
+}
+
+/// a chain where every rung keeps fields of its own past the one below, which is the
+/// stdlib's commonest exception family — `configparser` writes ten of them
+///
+/// each rung's storage is a region of its own past the base's instance, and reaching it
+/// takes a `tp_dealloc`, `tp_traverse` and `tp_clear` of that rung's own. those three
+/// read the base to chain to from the type that *declared* them, so the chain walks down
+/// to `Exception` and stops. `Silent` is the boundary in the other direction: it adds no
+/// field, so it appends nothing and is built the way any class with no storage is
+const APPENDED_CHAIN: &str = "\
+class Error(Exception):
+    def __init__(self, message):
+        Exception.__init__(self, message)
+        self.message = message
+
+    def label(self):
+        return 'error:' + self.message
+
+
+class SectionError(Error):
+    def __init__(self, message, section):
+        Error.__init__(self, message)
+        self.section = section
+
+    def label(self):
+        return 'section:' + self.section + ':' + self.message
+
+
+class OptionError(SectionError):
+    def __init__(self, message, section, option):
+        SectionError.__init__(self, message, section)
+        self.option = option
+
+
+class Silent(SectionError):
+    pass
+";
+
+#[test]
+fn a_chain_of_appended_storage_agrees() {
+    agree_python(
+        "appendchain",
+        APPENDED_CHAIN,
+        &[
+            "[(e.message, e.label(), e.args) for e in [m.Error('m')]]",
+            "[(e.message, e.section, e.label()) for e in [m.SectionError('m', 's')]]",
+            "[(e.message, e.section, e.option, e.label())\n\
+             \x20 for e in [m.OptionError('m', 's', 'o')]]",
+            "[(e.message, e.section, e.label()) for e in [m.Silent('m', 's')]]",
+            "[c.__name__ for c in m.OptionError.__mro__]",
+            // a field a base declared is written through the base's own storage, so a
+            // write on one rung has to be what the other rungs read back
+            "[(e.message, (setattr(e, 'message', 'w'), e.message)[1], e.label())\n\
+             \x20 for e in [m.OptionError('m', 's', 'o')]]",
+            "(isinstance(m.OptionError('m', 's', 'o'), m.Error),\n\
+             \x20isinstance(m.SectionError('m', 's'), Exception),\n\
+             \x20issubclass(m.OptionError, m.SectionError))",
+            // raising and catching one, which is what the family exists for
+            "[(type(e).__name__, e.section, e.option)\n\
+             \x20 for e in [_raised_and_caught(m.OptionError, 'm', 's', 'o')]]",
+            // python's own subclass of a rung, built by the class statement rather than
+            // here — its deallocation chains through every compiled rung below it
+            "[(s('m', 's', 'o').option, s('m', 's', 'o').label())\n\
+             \x20 for s in [type('Py', (m.OptionError,), {})]]",
+            // every instance holds a cycle through a field of the *innermost* rung, so
+            // the collector has to reach past two appended regions to see it
+            "(len([e for e in [m.OptionError('m', 's', str(i)) for i in range(200)]\n\
+             \x20     if setattr(e, 'option', e) is None]), __import__('gc').collect() >= 0)",
+        ],
+    );
+}
+
+/// the same chain, built and dropped in bulk. this is the shape whose deallocation goes
+/// wrong loudly: a rung that resolved the base to chain to from `Py_TYPE(self)` would
+/// find its own deallocator and call it back until the stack ran out, and one that
+/// released the wrong region would free somebody else's object
+#[test]
+fn a_chain_of_appended_storage_deallocates_without_growing() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_appendchain_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        APPENDED_CHAIN,
+        "by_diff_appendchain_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import gc, by_diff_appendchain_t as m\n\
+         # `method_descriptor` against `function` is what says the compiled type\n\
+         # answered — the interpreted definition answers every question below the same\n\
+         print(type(m.SectionError.__dict__['label']).__name__)\n\
+         # each rung keeps a region past the one below, so each instance is larger\n\
+         print(m.Error.__basicsize__ < m.SectionError.__basicsize__\n\
+         \x20     < m.OptionError.__basicsize__)\n\
+         # a method of one rung reading a field another rung's constructor wrote: two\n\
+         # copies of a field would leave one of them at whatever `tp_alloc` zeroed\n\
+         print(m.OptionError('m', 's', 'o').label())\n\
+         for _ in range(200): m.OptionError('m', 's', 'o')\n\
+         gc.collect(); before = len(gc.get_objects())\n\
+         for _ in range(20000):\n\
+         \x20   e = m.OptionError('m', 's', ['o'])\n\
+         \x20   e.option = e\n\
+         \x20   del e\n\
+         gc.collect(); after = len(gc.get_objects())\n\
+         print('stable' if after <= before + 200 else f'grew {before}->{after}')\n\
+         # and a deep chain of them raised and caught, which is the deallocation the\n\
+         # recursion would show up in\n\
+         for _ in range(20000):\n\
+         \x20   try: raise m.OptionError('m', 's', 'o')\n\
+         \x20   except m.Error: pass\n\
+         print('caught')\n",
+    );
+    assert_eq!(out, "method_descriptor\nTrue\nsection:s:m\nstable\ncaught");
+}
+
 #[test]
 fn a_subclass_with_no_storage_stands_on_a_base_that_declined_later() {
     // a base is settled as one of ours while the layouts settle, and only the body being
@@ -8889,7 +9889,7 @@ class Keyed(metaclass=ABCMeta):
         declined,
         vec![(
             "Fielded",
-            "a class with fields of its own needs a base whose metaclass is `type`"
+            "a class with fields of its own needs `type` for every base's metaclass, and `ABC` has `ABCMeta`"
         )]
     );
     let out = run(
@@ -8910,6 +9910,39 @@ class Keyed(metaclass=ABCMeta):
          ABCMeta ABCMeta ABCMeta\n\
          True True\n\
          function method_descriptor method_descriptor"
+    );
+
+    // and the abstract-base machinery the metaclass carries is all still there, on the
+    // class that declined and on the two beside it that compiled. a class built from a
+    // type spec would have `type` for its metaclass and none of this: `register` is the
+    // metaclass's method, `__abstractmethods__` is what it fills in, and `isinstance`
+    // against a registered class goes through the `__subclasshook__` it installs
+    let abc_surface = run(
+        &python,
+        &dir,
+        "import by_diff_metafields as m\n\
+         from abc import abstractmethod\n\
+         class Unrelated:\n\
+         \x20   pass\n\
+         m.Fieldless.register(Unrelated)\n\
+         m.Keyed.register(Unrelated)\n\
+         print(isinstance(Unrelated(), m.Fieldless), isinstance(Unrelated(), m.Keyed))\n\
+         print(m.Fielded.__abstractmethods__, m.Fieldless.__abstractmethods__)\n\
+         class Abstract(m.Fieldless):\n\
+         \x20   @abstractmethod\n\
+         \x20   def missing(self) -> int: ...\n\
+         print(sorted(Abstract.__abstractmethods__))\n\
+         try:\n\
+         \x20   Abstract()\n\
+         except TypeError as error:\n\
+         \x20   print('refused', 'missing' in str(error))\n",
+    );
+    assert_eq!(
+        abc_surface,
+        "True True\n\
+         frozenset() frozenset()\n\
+         ['missing']\n\
+         refused True"
     );
 }
 
@@ -9697,16 +10730,17 @@ Text.marker = 7
 
 #[test]
 fn a_late_gift_that_could_hand_the_interpreted_class_back_is_left_alone() {
-    // carrying an attribute across is only sound where the value provably cannot answer
-    // with the interpreted definition, which is about to stop being the class under its
-    // name. a value that *is* one is replaced by the type standing in for it; everything
-    // else is carried only in the shapes enumerated in `By_ReachesTwin`, and a shape not
-    // among them stays absent — the loud failure it already was, rather than a quiet
-    // wrong one.
+    // carrying an attribute across is only sound where the value cannot answer with the
+    // interpreted definition, which is about to stop being the class under its name. a
+    // value that *is* one is replaced by the type standing in for it, a container the
+    // module still owns is settled — every twin inside it moved onto its replacement — and
+    // only a shape with no route to its contents stays absent, which is the loud failure
+    // the attribute already gave rather than a quiet wrong answer.
     //
-    // so `SAMPLE` (an instance of the interpreted class), `ITEMS` (a list, which can be
-    // given one after the question is asked) and `HIDDEN` (a tuple holding one) do not
-    // come across, while `MARKER`, `PAIR` and `shout` do.
+    // so `MARKER`, `PAIR`, `shout`, `ITEMS` (a list of nothing that could be a class) and
+    // `HIDDEN` (a tuple whose one entry is a twin, rebuilt around the type that replaced
+    // it) all come across, while `SAMPLE` does not: it is an *instance* of the interpreted
+    // class, and its type is not something this can rewrite.
     //
     // a dunder never comes across either — a name in the type's dict does not fill a type
     // slot, so `__ge__` there would answer `a.__ge__(b)` while `a >= b` still went to the
@@ -9775,7 +10809,7 @@ Ordered.__ge__ = lambda self, right: True
         &dir,
         "import by_diff_twinshapes as m\n\
          print(m.Held.MARKER, m.Held.PAIR is m.Other, m.Held().shout())\n\
-         print(hasattr(m.Held, 'SAMPLE'), hasattr(m.Held, 'ITEMS'), hasattr(m.Held, 'HIDDEN'))\n\
+         print(hasattr(m.Held, 'SAMPLE'), m.Held.ITEMS, m.Held.HIDDEN[0] is m.Other)\n\
          print(m.Ordered() >= m.Ordered(), m.Ordered().tag())\n\
          print(type(m.Held.tag).__name__, type(m.Other.tag).__name__,\n\
          \x20     type(m.Ordered.tag).__name__)\n",
@@ -9783,9 +10817,446 @@ Ordered.__ge__ = lambda self, right: True
     assert_eq!(
         out,
         "3 True HELD\n\
-         False False False\n\
+         False [1, 2] True\n\
          True ordered\n\
          method_descriptor method_descriptor function"
+    );
+}
+
+/// a module-level *function* has an interpreted twin too, and it is deliberately left
+/// where it stands
+///
+/// the same staleness a class has: the module body runs against the interpreted
+/// definitions, so everything it captured holds the `def`'s own function object, while
+/// `PyModule_AddFunctions` puts the compiled `PyCFunction` under the name at the end of
+/// init. `ALIAS is fn` is then False where python says True.
+///
+/// the class fix does not transfer, and this pins that it has not been made to. a class
+/// twin is *incompatible* with the type that replaced it — `isinstance` denies it and a
+/// compiled method refuses its instances — so a reference still holding one is already
+/// broken, and moving it repairs damage. a function twin is **interchangeable** with the
+/// compiled function for every use except identity: it computes the same answer, and
+/// nothing rejects it. so moving one repairs nothing that was broken and breaks two
+/// things that were not:
+///
+/// * a `function` in a class dict binds `self` and a `PyCFunction` does not, so the
+///   moved reference stops being a method. `optparse` writes `class Option: __repr__ =
+///   _repr` and `multiprocessing.reduction` writes `class AbstractReducer: dump = dump`
+/// * `inspect.signature` works on a `function` and raises `ValueError` on a
+///   `PyCFunction`, so a captured callback stops being introspectable
+///
+/// both turn a *right* answer into a raise, and a wrong answer is better than a crash.
+/// over the stdlib corpus the captured references are overwhelmingly dispatch tables —
+/// `copy._deepcopy_dispatch`, `shutil._ARCHIVE_FORMATS`, `xml.etree.ElementTree._serialize`
+/// — whose entries are only ever *called*, so the divergence is unobservable there while
+/// the repair would be plainly observable.
+///
+/// the two questions a remap would also have had to answer turn out to be answered
+/// already, and neither needs runtime machinery: a function whose module-level name the
+/// body rebinds is not `exported`, so an accelerator import (`asyncio.events` keeping
+/// `_py_get_event_loop`, `operator`'s trailing `from _operator import *`) never produces
+/// a twin at all; and a *decorated* module-level definition the module reads already
+/// declines, because its decorator cannot run where the `def` stands and again over the
+/// compiled one
+#[test]
+fn a_class_attribute_naming_a_module_function_keeps_the_definition_that_binds() {
+    // `multiprocessing.reduction` writes `class AbstractReducer: dump = dump`, and this is
+    // that: a class body binding a name to a module-level function that goes on to
+    // compile. the value the emitted type carries is the *twin*, and it has to be — a
+    // `PyCFunction` in a class dict is not a descriptor, so `Reducer().dump()` would call
+    // `_dump` with no `self` at all.
+    //
+    // `function` against `builtin_function_or_method` is the whole assertion. the class
+    // answers the same *value* either way, so nothing but the type of what sits in the
+    // slot says which definition is standing there
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_fntwinbind");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def _dump(this: object) -> str:
+    return \"dumped\"
+
+
+class Reducer:
+    dump = _dump
+
+    def kind(self) -> str:
+        return \"reducer\"
+";
+    let built = match build_source(
+        source,
+        "by_diff_fntwinbind",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_fntwinbind as m\n\
+         print(m.Reducer().dump(), m.Reducer().kind())\n\
+         print(type(m._dump).__name__, type(m.Reducer.__dict__['dump']).__name__)\n\
+         print(type(m.Reducer.kind).__name__)\n",
+    );
+    // `method_descriptor` says the emitted type answered rather than a class that fell
+    // back to its interpreted definition — which would carry the slot for the other reason
+    assert_eq!(
+        out,
+        "dumped reducer\n\
+         builtin_function_or_method function\n\
+         method_descriptor"
+    );
+}
+
+/// the same, for the slot a *declined* class keeps and for a dunder
+///
+/// `optparse` writes `class Option: __repr__ = _repr`, and over the corpus that is a
+/// captured twin — the compiled `optparse` keeps `Option` interpreted and its `__repr__`
+/// holds the definition the module's own `_repr` no longer names. the alias remap walks
+/// exactly that dict, so it is the second route a function substitution would take into a
+/// descriptor position, and `repr()` is where it would show: python looks a dunder up on
+/// the type and calls what it finds, and what it finds has to bind
+#[test]
+fn a_declined_class_keeps_the_dunder_slot_a_module_function_filled() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_fntwindunder");
+    let _ = std::fs::remove_dir_all(&dir);
+    // the late gift is the decline lever, and a *dunder* one is what turns the class down
+    // rather than having its attributes adopted — see the twin-shapes test above. it is
+    // here to put `Option` on the interpreted leg, which is where `optparse` has it
+    let source = "\
+def _repr(this: object) -> str:
+    return \"<option>\"
+
+
+class Option:
+    __repr__ = _repr
+
+    def kind(self) -> str:
+        return \"option\"
+
+
+Option.__ge__ = lambda self, other: True
+";
+    let built = match build_source(
+        source,
+        "by_diff_fntwindunder",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert_eq!(
+        built
+            .declined
+            .iter()
+            .map(|declined| declined.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Option"]
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_fntwindunder as m\n\
+         print(repr(m.Option()), m.Option().kind())\n\
+         print(type(m._repr).__name__, type(m.Option.__dict__['__repr__']).__name__)\n\
+         print(type(m.Option.kind).__name__)\n",
+    );
+    // `function` on the last line is the class itself confirming it stayed interpreted,
+    // which is the only state in which this slot exists to be got wrong
+    assert_eq!(
+        out,
+        "<option> option\n\
+         builtin_function_or_method function\n\
+         function"
+    );
+}
+
+/// a module-level container's function entries reach a class dict one step later, so
+/// they are left where they stand too
+///
+/// `functools` is the case: `_convert` is a module-level dict of module-level functions
+/// and `total_ordering` `setattr`s them onto the class it decorates. over the corpus all
+/// twelve of its entries are captured twins. a remap that moved a container's entries
+/// would put a `PyCFunction` in `__gt__` on every `@total_ordering` class in the process,
+/// and the comparison would call it without the operands it binds
+#[test]
+fn a_container_entry_a_decorator_later_installs_on_a_class_keeps_binding() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_fntwinconvert");
+    let _ = std::fs::remove_dir_all(&dir);
+    // the late dunder gift turns `Ordered` down, which is the only state `total_ordering`
+    // can act on at all: an emitted type is a *static* type and refuses `setattr`
+    // outright with `cannot set '__gt__' attribute of immutable type`. so this is also
+    // the shape of the real thing — a `@total_ordering` class that reaches a compiled
+    // module is an interpreted one
+    let source = "\
+def _gt_from_lt(this: object, other: object) -> str:
+    return \"gt\"
+
+
+_convert = {\"__gt__\": _gt_from_lt}
+
+
+def total_ordering(cls: type) -> type:
+    setattr(cls, \"__gt__\", _convert[\"__gt__\"])
+    return cls
+
+
+class Ordered:
+    def kind(self) -> str:
+        return \"ordered\"
+
+
+Ordered.__le__ = lambda self, other: True
+";
+    let built = match build_source(
+        source,
+        "by_diff_fntwinconvert",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert_eq!(
+        built
+            .declined
+            .iter()
+            .map(|declined| declined.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Ordered"]
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_fntwinconvert as m\n\
+         m.total_ordering(m.Ordered)\n\
+         print(m.Ordered() > m.Ordered())\n\
+         print(type(m._gt_from_lt).__name__, type(m._convert['__gt__']).__name__)\n\
+         print(type(m.Ordered.__dict__['__gt__']).__name__)\n",
+    );
+    // the module's name answers the compiled function while the table keeps the twin,
+    // and it is the twin's being a descriptor that makes the installed comparison work
+    assert_eq!(
+        out,
+        "gt\n\
+         builtin_function_or_method function\n\
+         function"
+    );
+}
+
+/// and this is what leaving it costs, written down rather than left to be rediscovered
+///
+/// every module-level name the body bound to a compiled function keeps the interpreted
+/// definition, so an identity test against the function's own name answers False where
+/// python answers True. it is the whole observable surface of the decision above — a
+/// captured function is otherwise interchangeable with the one that replaced it, because
+/// calling either gives the same answer.
+///
+/// the test asserts the compiled answers directly rather than through `agree`, because
+/// the point is precisely that the two legs differ here. it fails if the divergence is
+/// ever closed, which is the reminder to come back and read why it was not
+#[test]
+fn identity_against_a_module_function_is_the_one_thing_a_captured_twin_gets_wrong() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_fntwinalias");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def proxy() -> int:
+    return 7
+
+
+ALIAS = proxy
+TABLE = {\"held\": proxy}
+
+
+def alias_is_proxy() -> bool:
+    return ALIAS is proxy
+
+
+def table_is_proxy() -> bool:
+    return TABLE[\"held\"] is proxy
+
+
+def alias_answers() -> int:
+    return ALIAS()
+";
+    let built = match build_source(
+        source,
+        "by_diff_fntwinalias",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_fntwinalias as m\n\
+         print(m.alias_is_proxy(), m.table_is_proxy())\n\
+         print(m.alias_answers(), m.ALIAS())\n\
+         print(type(m.proxy).__name__, type(m.ALIAS).__name__)\n",
+    );
+    // python answers `True True` on the first line. the second is why that is tolerable:
+    // the captured definition computes exactly what the compiled one computes, so the
+    // divergence never reaches an answer — only an `is`
+    assert_eq!(
+        out,
+        "False False\n\
+         7 7\n\
+         builtin_function_or_method function"
+    );
+}
+
+#[test]
+fn a_class_keeps_what_a_factory_installed_on_it_after_the_class_statement() {
+    // `multiprocessing.managers` is the case this is drawn from. it defines `SyncManager`
+    // and then the module body makes sixteen `SyncManager.register(...)` calls, each of
+    // which closes over the proxy type it was handed, `setattr`s the closure onto the
+    // class, and records the same in a `_registry` dict on it. all sixteen landed on the
+    // interpreted definition and none of them on the emitted type, which carried neither
+    // the methods nor the registry:
+    //
+    //     interpreted  Queue-on-class <function ...temp>   registry ['Array', ...]
+    //     compiled     Queue-on-class MISSING              registry []
+    //
+    // the mechanism is not the ordering it looks like. what the body installs *is* seen —
+    // a plain function with an empty closure comes across, which is why five earlier
+    // attempts to shrink this to a small module all came back green. the two shapes that
+    // did not come across are a function with a **non-empty closure** and a **dict**, and
+    // both were refused wholesale by a rule that could only ask "might this reach a twin?"
+    // and never move what it found. `installed` and `table` are those two shapes;
+    // `direct` is the third, which always worked and is here to keep the distinction.
+    //
+    // `pinned` is the same staleness one level down: the closure holds the interpreted
+    // `Other`, so carrying it verbatim would have handed back a class nothing else in the
+    // module can name. it has to answer the type standing under `Other` instead.
+    //
+    // `registry` is the `_registry` dict's own shape, and it is here for its *depth*: a
+    // dict of tuples, one entry of which is a function whose `incref=True` default sits
+    // five levels below where the walk starts. the bound on that walk is there to stop the
+    // recursion, and a value with nothing inside it is not a step into anything — so an
+    // atom has to be answered before the bound rather than after it, or a `True` that far
+    // down takes the whole dict with it. `len` is the other shape the entry needs: a
+    // function written in C reaches nothing python chose but its own module
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_late_factory");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Other:
+    def tag(self) -> str:
+        return \"other\"
+
+
+class Held:
+    def tag(self) -> str:
+        return \"held\"
+
+
+def install(cls, name, held):
+    def method(self):
+        return held
+
+    setattr(cls, name, method)
+    cls.table = {name: held}
+
+
+def direct(self):
+    return \"direct\"
+
+
+def proxy(token, incref=True):
+    return token
+
+
+install(Held, \"installed\", \"gift\")
+install(Held, \"pinned\", Other)
+Held.direct = direct
+Held.registry = {\"held\": (Other, (\"get\", \"put\"), None, proxy, len)}
+";
+    let built = match build_source(
+        source,
+        "by_diff_late_factory",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "{:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_late_factory as m\n\
+         print(m.Held().installed(), m.Held().direct())\n\
+         print(m.Held().pinned() is m.Other, m.Held.table['pinned'] is m.Other)\n\
+         entry = m.Held.registry['held']\n\
+         print(entry[0] is m.Other, entry[1], entry[3](7), entry[4] is len)\n\
+         print(type(m.Held.tag).__name__, type(m.Other.tag).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "gift direct\n\
+         True True\n\
+         True ('get', 'put') 7 True\n\
+         method_descriptor method_descriptor"
     );
 }
 
@@ -10573,7 +12044,7 @@ EARLY = make_held().kind
 }
 
 #[test]
-fn fields_past_a_python_base_leave_the_module_to_its_interpreted_definition() {
+fn fields_past_a_python_base_leave_that_class_to_its_interpreted_definition() {
     // `Wrapped` keeps its fields past a `codecs.IncrementalDecoder` instance, so it
     // supplies `tp_dealloc`, `tp_traverse` and `tp_clear` and each calls the base's.
     // that base is a class statement's type, whose three are python's own dispatchers:
@@ -10583,10 +12054,12 @@ fn fields_past_a_python_base_leave_the_module_to_its_interpreted_definition() {
     // collection, which 56 stdlib modules took.
     //
     // which type a base name stands for is the running interpreter's answer, so the
-    // refusal is one too: the module is left as the interpreted definition already built
-    // it, because its compiled functions read `Wrapped`'s fields at an offset only the
-    // spec-built type has. `stays` proves it — a compiled module answers
-    // `builtin_function_or_method` there
+    // refusal is one too, and `Wrapped` is left as the interpreted definition already
+    // built it. what that refusal costs is only `Wrapped`: nothing here reads one of its
+    // instances, so `Stored` and `stays` are compiled beside it, where the refusal used
+    // to be the whole module's. `type(m.Wrapped.get)` and `type(m.stays)` are what say
+    // which is which — `function` for the class left behind, and
+    // `builtin_function_or_method` for the module that went on being compiled
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -10652,7 +12125,7 @@ def stays() -> int:
         out,
         "7 7 True\n\
          True\n\
-         5 function function"
+         5 builtin_function_or_method function"
     );
 }
 
@@ -13563,9 +15036,6 @@ def nested(v: object) -> str:
 
 #[test]
 fn positional_class_patterns_agree() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        return;
-    }
     // a positional sub-pattern names its attribute through the class's
     // `__match_args__`, which only exists at runtime — and the builtins that have
     // none match the subject *whole*, so `case int(n):` binds the int itself.
@@ -13717,9 +15187,6 @@ def nested(v: object) -> str:
 
 #[test]
 fn a_match_statement_agrees() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        return;
-    }
     // a case is a test and a set of bindings, and the two are separate: python
     // binds before it evaluates a guard and leaves the binding behind when the
     // guard then fails. a singleton pattern is an *identity* test, so `0` does not
@@ -14052,6 +15519,14 @@ fn a_call_a_boundary_binds_nothing_from_is_rejected_in_pythons_wording() {
     // a boundary with no named parameters used to phrase its own refusal rather than
     // going through the binding, and one with only a `*args` did not refuse at all —
     // a keyword nothing could take was silently dropped
+    //
+    // the assertion is python's own wording, and python changed it: `By_Rephrase` renames
+    // the shape function it builds through `__qualname__`, which is what the message reads
+    // from 3.12 on, where 3.9 reads `__name__` and reports `_()` instead of the real name
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        eprintln!("skipping: the wording this asserts is python 3.12's");
+        return;
+    }
     agree_python(
         "emptybind",
         "\
@@ -15414,10 +16889,6 @@ def boolean(n: int) -> int:
 
 #[test]
 fn a_hoisted_immutable_read_still_agrees() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     // reading an immutable field of a parameter once at entry rather than every
     // iteration is invisible from outside — including when the loop runs zero times,
     // which is the case the hoist has to get right
@@ -15455,10 +16926,6 @@ data class Loose:
 
 #[test]
 fn a_frozen_field_is_read_once_across_a_call() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     // the optimization is invisible from outside, which is the point — this pins
     // that it stays invisible
     agree(
@@ -15490,10 +16957,6 @@ def loose_reads(v: Loose, note: object) -> float:
 
 #[test]
 fn a_final_receiver_still_agrees() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     // the direct call a `@final` place licenses must give the same answers as the
     // protocol would — including where the place is *not* final and an override wins
     agree(
@@ -15543,10 +17006,6 @@ def on_open(o: Open) -> int:
 
 #[test]
 fn inheritance_agrees() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     agree(
         "inheritance",
         "\
@@ -15893,10 +17352,6 @@ fn a_slots_declaration_is_storage_the_emitted_type_owns() {
 
 #[test]
 fn a_decorated_class_agrees() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     // a decorator may *mutate* the class, which a static type cannot allow — so a
     // decorated class is a heap type, and pays for it with the direct method call
     agree(
@@ -16142,6 +17597,10 @@ def through(d: Derived) -> int:
          print('collected' if len(gc.get_objects()) <= base + 10 else 'leaked')\n\
          print(gc.is_tracked(m.Held(1)), gc.is_tracked(m.Plain(1)))\n",
     );
+    // `Plain` is collected too: it declares no `__slots__`, so it keeps a dict of its own
+    // and a dict of arbitrary values has to be one the collector can reach. the class
+    // that does *not* pay for collection is the one declaring `__slots__`, which
+    // [`a_class_declaring_slots_keeps_the_bare_layout`] is about
     assert_eq!(
         out,
         "method_descriptor method_descriptor method_descriptor method_descriptor\n\
@@ -16149,16 +17608,12 @@ def through(d: Derived) -> int:
          {'x': 3} seen\n\
          6 2\n\
          collected\n\
-         True False"
+         True True"
     );
 }
 
 #[test]
 fn field_defaults_and_keyword_construction_agree() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     agree(
         "fielddefaults",
         "\
@@ -16203,10 +17658,6 @@ def defaults(n: int) -> str:
 
 #[test]
 fn a_class_with_no_fields_agrees() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     agree(
         "nofields",
         "\
@@ -16230,10 +17681,6 @@ def use(n: int) -> str:
 
 #[test]
 fn an_augmented_assignment_to_an_attribute_agrees() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     agree(
         "augtarget",
         "\
@@ -17165,10 +18612,6 @@ def counter() -> object:
 
 #[test]
 fn a_closure_inside_a_method_agrees() {
-    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 10))) {
-        eprintln!("skipping: `data class` needs python 3.10");
-        return;
-    }
     agree_with_declines(
         "methodclosure",
         "\
@@ -17718,5 +19161,988 @@ def live_negation(a: int) -> bool:
             "str(_capture(m.after_raise, 1))",
             "[m.live_negation(v) for v in (0, 1)]",
         ],
+    );
+}
+
+/// a class built by a typing special form is left to the definition that builds it
+///
+/// `class Point(NamedTuple)` does not derive from `NamedTuple` — the special form reads
+/// the annotations in the body and builds a `tuple` subclass with `_fields`, a generated
+/// `__new__` and a fixed arity. none of that is a layout, and what python ends up with is
+/// an ordinary `type` over `tuple`, so nothing downstream refused it the way a
+/// `TypedDict`'s own metaclass is refused: it was emitted as a class with **no fields at
+/// all**. that built, imported and constructed — and answered `Point(1, "x")` with a
+/// `TypeError` while `Point()` succeeded, which is the silent wrong answer this whole
+/// design ranks worst
+#[test]
+fn a_class_a_typing_special_form_builds_agrees() {
+    agree_python_with_declines(
+        "specialformbase",
+        "\
+from typing import NamedTuple, TypedDict
+
+
+class Point(NamedTuple):
+    a: int
+    b: str
+
+
+class Mapped(TypedDict):
+    a: int
+
+
+def make() -> object:
+    return Point(1, 'x')
+
+
+def fields() -> object:
+    return Point._fields
+
+
+def mapping() -> object:
+    return Mapped(a=2)
+",
+        &[
+            "m.make()",
+            "m.fields()",
+            "m.mapping()",
+            "m.Point(1, 'x').a",
+            "len(m.Point(1, 'x'))",
+            // the arity the generated `__new__` enforces, which an empty layout lost
+            "str(_capture(m.Point))",
+            "str(_capture(m.Point, 1, 'x', 2))",
+            "isinstance(m.Point(1, 'x'), tuple)",
+        ],
+    );
+}
+
+/// a default that names a class of this module means the class the name means now
+///
+/// a `def` evaluates its defaults where it stands, and every interpreted definition is
+/// evaluated while the fallback source runs — before any emitted type is installed. so a
+/// default naming a class of this module captured the **twin**, while every later read of
+/// that name answered the type that replaced it. a body comparing the two by identity then
+/// got the wrong answer, which is every sentinel-by-identity api at once: this is why a
+/// compiled `inspect` rendered `Signature()` as `() -> _empty`
+#[test]
+fn a_sentinel_default_is_the_class_its_name_now_means() {
+    agree_python_with_declines(
+        "sentineldefault",
+        "\
+class Empty:
+    pass
+
+
+def free(ann: object = Empty) -> str:
+    return 'empty' if ann is Empty else 'set'
+
+
+def keyword_only(*, ann: object = Empty) -> str:
+    return 'empty' if ann is Empty else 'set'
+
+
+class Held:
+    empty = Empty
+
+    def __init__(self, ann: object = Empty) -> None:
+        self._ann = ann
+
+    def kind(self) -> str:
+        return 'empty' if self._ann is Empty else 'set'
+
+    def sentinel_is_shared(self) -> bool:
+        return Held.empty is Empty
+
+
+class Declined:
+    # a body with a statement that is not a field or a method is left to the
+    # interpreted definition, so its methods are the twin's own — the one shape the
+    # emitted module keeps no handle to, and the only one the module-namespace walk
+    # is what reaches
+    for _seed in (1,):
+        pass
+
+    def __init__(self, ann: object = Empty) -> None:
+        self._ann = ann
+
+    def kind(self) -> str:
+        return 'empty' if self._ann is Empty else 'set'
+",
+        &[
+            "m.free()",
+            "m.free(1)",
+            "m.keyword_only()",
+            "m.keyword_only(ann=1)",
+            "m.Held().kind()",
+            "m.Held(1).kind()",
+            "m.Held().sentinel_is_shared()",
+            // the name and what the default captured have to be one object
+            "m.Held.empty is m.Empty",
+            // and a declined class's own methods, which no emitted handle reaches
+            "m.Declined().kind()",
+            "m.Declined(1).kind()",
+        ],
+    );
+}
+
+/// a dunder the class body *assigns* is left to the definition that can fill its slot
+///
+/// a class-level constant is copied into the emitted type's `tp_dict`, and a name written
+/// there does not fill a type slot — python reads `tp_repr` for `repr(x)` and never
+/// consults the name. so `__repr__ = _repr` left `repr(x)` going to the slot the type
+/// inherited while `x.__repr__()` answered the assignment: **two answers where the
+/// interpreted class has one**, and the one everybody reads was `object`'s.
+///
+/// a `def __repr__` does not have this problem — the emitter writes a real slot for the
+/// dunders it lists — but nothing reaches that path from an assignment. `optparse.Option`
+/// and `http.cookies.BaseCookie` are the shape, and both were silently answering
+/// `object.__repr__`
+#[test]
+fn a_dunder_the_body_assigns_agrees() {
+    agree_python_with_declines(
+        "assigneddunder",
+        "\
+def _repr(self) -> str:
+    return '<made by _repr>'
+
+
+def _text(self) -> str:
+    return 'made by _text'
+
+
+def _size(self) -> int:
+    return 7
+
+
+class Option:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    __repr__ = _repr
+    __str__ = _text
+    __len__ = _size
+
+
+class Plain:
+    # an ordinary class-level constant is still carried
+    tag = 'kept'
+
+    def __init__(self, n: int) -> None:
+        self.n = n
+",
+        &[
+            // the slot and the name have to give one answer, not two
+            "repr(m.Option(1))",
+            "str(m.Option(1))",
+            "len(m.Option(1))",
+            "m.Option(1).__repr__()",
+            "m.Option(1).__str__()",
+            "m.Option(1).n",
+            // and a constant that fills no slot is unaffected
+            "m.Plain(2).tag",
+            "m.Plain(2).n",
+        ],
+    );
+}
+
+/// every shape an attribute write can take, in one module
+///
+/// an emitted instance **is** its layout: there is no `__dict__` behind it, so an
+/// attribute the layout pass never heard about is not merely slower — the write falls
+/// through to `PyObject_SetAttr` and raises where the interpreted class stored a value.
+/// the pass used to read a plain `self.a = v` and nothing else, which left every other
+/// shape here silently wrong.
+///
+/// `Pipe` is `concurrent.futures.process._ThreadWakeup`, which assigns
+/// `self._reader, self._writer` from a pair
+const ATTRIBUTE_WRITE_SHAPES: &str = "\
+import contextlib
+
+
+class Pipe:
+    def __init__(self, values):
+        self.reader, self.writer = values
+
+    def ends(self):
+        return (self.reader, self.writer)
+
+
+class Tree:
+    def __init__(self, values):
+        (self.a, self.b), *self.rest = values
+
+    def parts(self):
+        return (self.a, self.b, self.rest)
+
+
+class Swapped:
+    def __init__(self, a, b):
+        self.a = a
+        self.b = b
+
+    def swap(self):
+        self.a, self.b = self.b, self.a
+        return (self.a, self.b)
+
+
+class Late:
+    def configure(self, n):
+        self.value = n
+        return self.value
+
+    def read(self):
+        return self.value
+
+
+class Counted:
+    def __init__(self):
+        self.total = 0
+
+    def bump(self, by):
+        self.total += by
+        return self.total
+
+
+class Bound:
+    def __init__(self, values):
+        for self.item in values:
+            pass
+
+    def read(self):
+        return self.item
+
+
+class Managed:
+    def __init__(self):
+        with contextlib.nullcontext(3) as self.held:
+            self.inside = self.held + 1
+
+    def read(self):
+        return (self.held, self.inside)
+
+
+class Chained:
+    def __init__(self):
+        self.a = self.b = 1
+
+    def both(self):
+        self.a = self.b = 2
+        return (self.a, self.b)
+
+
+class Renamed:
+    def __init__(this, n):
+        this.n = n
+
+    def more(me):
+        me.extra = me.n + 1
+        return me.extra
+";
+
+#[test]
+fn attribute_writes_of_every_shape_agree() {
+    agree_python(
+        "attrshapes",
+        ATTRIBUTE_WRITE_SHAPES,
+        &[
+            // the unpacking a pair of pipe ends arrives as
+            "m.Pipe((1, 2)).ends()",
+            "m.Pipe(('a', 'b')).ends()",
+            // a nested target and a starred one, in the same statement
+            "m.Tree(((1, 2), 3, 4)).parts()",
+            "m.Tree((('a', 'b'),)).parts()",
+            // a swap writes both attributes from one tuple, and both reads have to
+            // happen before either write
+            "m.Swapped(1, 2).swap()",
+            "[(s.swap(), s.swap(), (s.a, s.b)) for s in [m.Swapped('l', 'r')]]",
+            // a class that sets itself up somewhere other than `__init__`, and the
+            // `AttributeError` a read before that has to keep answering
+            "[(o.configure(5), o.read()) for o in [m.Late()]]",
+            "getattr(m.Late(), 'value', 'unset')",
+            // an augmented assignment reads the attribute and writes it back
+            "[(c.bump(2), c.bump(3), c.total) for c in [m.Counted()]]",
+            // a loop target is an attribute, and an empty iterable leaves it unwritten
+            "m.Bound([1, 2, 3]).read()",
+            "getattr(m.Bound([]), 'item', 'unset')",
+            // a `with` target is bound before its body, which reads it straight back
+            "m.Managed().read()",
+            // a chained assignment binds every target to the one value
+            "m.Chained().both()",
+            "[(c.a, c.b) for c in [m.Chained()]]",
+            // a method that calls its receiver something other than `self`
+            "[(r.more(), r.n, r.extra) for r in [m.Renamed(4)]]",
+            // the representations the layout chose have to be the ones python sees
+            "[type(v).__name__ for v in m.Pipe((1, 2)).ends()]",
+            "[type(v).__name__ for v in m.Tree((('a', 2), 3)).parts()]",
+        ],
+    );
+}
+
+/// which build answered, which no comparison of the two legs can say
+///
+/// every class here would agree with its interpreted twin by falling back, so the pin is
+/// what proves the layouts were fixed rather than the classes given up. `function` for any
+/// of them is a class that declined
+#[test]
+fn the_compiled_types_are_what_answer_for_every_write_shape() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_attrshapes_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        ATTRIBUTE_WRITE_SHAPES,
+        "by_diff_attrshapes_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_attrshapes_t as m\n\
+         print(' '.join(type(c.__dict__[n]).__name__ for c, n in (\n\
+         \x20   (m.Pipe, 'ends'), (m.Tree, 'parts'), (m.Swapped, 'swap'),\n\
+         \x20   (m.Late, 'read'), (m.Counted, 'bump'), (m.Bound, 'read'),\n\
+         \x20   (m.Managed, 'read'), (m.Chained, 'both'), (m.Renamed, 'more'))))\n\
+         # the fields are storage of the instance's own, with no namespace behind them\n\
+         print(hasattr(m.Pipe((1, 2)), '__dict__'))\n",
+    );
+    assert_eq!(
+        out,
+        "method_descriptor method_descriptor method_descriptor method_descriptor \
+         method_descriptor method_descriptor method_descriptor method_descriptor \
+         method_descriptor\nFalse"
+    );
+}
+
+/// `__dict__` is the one attribute no layout can be given, so the class that reaches for
+/// its own declines while everything beside it stands
+///
+/// there is nothing behind an emitted instance for `__dict__` to stand for, and a field of
+/// that name would be a different thing wearing the name. `multiprocessing.dummy.Namespace`
+/// writes through one and `tkinter.Event.__repr__` reads one; both used to compile and
+/// then raise at the read
+const READS_ITS_OWN_DICT: &str = "\
+class Namespace:
+    def __init__(self, n):
+        self.n = n
+
+    def show(self):
+        return sorted(self.__dict__)
+
+
+class Kept:
+    def __init__(self, n):
+        self.n = n
+
+    def show(self):
+        return self.n * 2
+";
+
+#[test]
+fn a_class_that_reads_its_own_dict_agrees_beside_the_one_that_stands() {
+    agree_python_with_declines(
+        "attrdict",
+        READS_ITS_OWN_DICT,
+        &[
+            "m.Namespace(3).show()",
+            "m.Namespace(3).n",
+            "m.Kept(3).show()",
+            "m.Kept(3).n",
+        ],
+    );
+}
+
+/// and it is the reaching class alone that falls back
+#[test]
+fn only_the_class_that_reads_its_own_dict_is_left_interpreted() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_attrdict_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        READS_ITS_OWN_DICT,
+        "by_diff_attrdict_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    let reasons: Vec<&str> = built
+        .declined
+        .iter()
+        .map(|declined| declined.reason.as_str())
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            "`__dict__` is read off a `Namespace`, and an emitted instance is its layout \
+             with nothing behind it"
+        ]
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_attrdict_t as m\n\
+         print(type(m.Namespace.__dict__['show']).__name__,\n\
+         \x20     type(m.Kept.__dict__['show']).__name__)\n",
+    );
+    assert_eq!(out, "function method_descriptor");
+}
+
+/// the source both attribute-deletion tests compile
+///
+/// `Held` deletes a refcounted attribute and `Branching` one no path may have written,
+/// which are the two states the presence byte beside a field distinguishes
+const DELETES_AN_ATTRIBUTE: &str = "\
+class Held:
+    def __init__(self) -> None:
+        self.tag: object = 'first'
+        self.kept: int = 2
+        self.__hidden: int = 3
+
+    def drop(self) -> None:
+        del self.tag
+
+    def drop_hidden(self) -> None:
+        del self.__hidden
+
+    def put(self, value: object) -> None:
+        self.tag = value
+
+
+class Branching:
+    def __init__(self, flag: bool) -> None:
+        self.kept: int = 1
+        if flag:
+            self.maybe: int = 2
+
+    def drop(self) -> None:
+        del self.maybe
+";
+
+/// `del self.tag` unbinds the attribute where it used to refuse
+///
+/// an emitted instance is its layout, so there is no dict entry to remove — the delete
+/// clears the presence byte beside the field, which is the same byte a read already
+/// consults and a write already sets. before that the emitted class answered
+/// `AttributeError: cannot delete an attribute` where the interpreted twin deleted
+#[test]
+fn deleting_an_attribute_agrees() {
+    agree_python(
+        "deleteattr",
+        DELETES_AN_ATTRIBUTE,
+        &[
+            "_deleted(m.Held())",
+            "repr(_capture(m.Branching(False).drop))",
+            "_capture(m.Branching(True).drop)",
+            "hasattr(m.Branching(True), 'maybe')",
+            "hasattr(m.Branching(False), 'maybe')",
+            "m.Branching(True).kept",
+        ],
+    );
+}
+
+/// and it is the *compiled* class doing it
+///
+/// [`agree_python`] cannot say which build answered: a class that fell back to its
+/// interpreted definition deletes the way python does and passes unchanged. the
+/// descriptor's type is what tells the two apart
+#[test]
+fn the_class_that_deletes_an_attribute_is_the_compiled_one() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_deleteattr_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        DELETES_AN_ATTRIBUTE,
+        "by_diff_deleteattr_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_deleteattr_t as m\n\
+         print(type(m.Held.__dict__['drop']).__name__,\n\
+         \x20     type(m.Branching.__dict__['drop']).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor method_descriptor");
+}
+
+/// and it releases what the field held exactly once
+///
+/// a delete that forgot to release leaks the value; one that cleared the byte without
+/// zeroing the member lets the deallocation release it a second time; and a second
+/// delete that did not check the byte would release it twice on its own. none of the
+/// three shows in a single cycle, so the observation is a held object's reference count
+/// across many — and a count driven negative would have freed a live object rather than
+/// reported anything
+#[test]
+fn deleting_an_attribute_releases_it_exactly_once() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_deleterefs_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        DELETES_AN_ATTRIBUTE,
+        "by_diff_deleterefs_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_deleterefs_t as m\n\
+         import gc, sys\n\
+         print(type(m.Held.__dict__['drop']).__name__)\n\
+         sentinel = ['sentinel']\n\
+         held = m.Held()\n\
+         gc.collect()\n\
+         start = sys.getrefcount(sentinel)\n\
+         objects = len(gc.get_objects())\n\
+         for _ in range(20000):\n\
+         \x20   held.put(sentinel)\n\
+         \x20   held.drop()\n\
+         \x20   try:\n\
+         \x20       held.drop()\n\
+         \x20   except AttributeError:\n\
+         \x20       pass\n\
+         gc.collect()\n\
+         print('after delete cycles', sys.getrefcount(sentinel) - start)\n\
+         for _ in range(20000):\n\
+         \x20   held.put(sentinel)\n\
+         gc.collect()\n\
+         print('while held', sys.getrefcount(sentinel) - start)\n\
+         held.drop()\n\
+         gc.collect()\n\
+         print('after the last delete', sys.getrefcount(sentinel) - start)\n\
+         for _ in range(20000):\n\
+         \x20   fresh = m.Held()\n\
+         \x20   fresh.put(sentinel)\n\
+         \x20   fresh.drop()\n\
+         \x20   fresh.put(sentinel)\n\
+         del fresh\n\
+         gc.collect()\n\
+         print('after dropping the instances', sys.getrefcount(sentinel) - start)\n\
+         # and an instance that dies while the field is still deleted. the\n\
+         # deallocation releases every field without asking the byte, relying on the\n\
+         # zero `tp_alloc` left, so a delete that cleared the byte and left the member\n\
+         # pointing at the value releases it here a second time\n\
+         for _ in range(20000):\n\
+         \x20   gone = m.Held()\n\
+         \x20   gone.put(sentinel)\n\
+         \x20   gone.drop()\n\
+         del gone\n\
+         gc.collect()\n\
+         print('after dropping deleted instances', sys.getrefcount(sentinel) - start)\n\
+         print('objects grew', len(gc.get_objects()) - objects < 100)\n",
+    );
+    assert_eq!(
+        out,
+        "method_descriptor\n\
+         after delete cycles 0\n\
+         while held 1\n\
+         after the last delete 0\n\
+         after dropping the instances 0\n\
+         after dropping deleted instances 0\n\
+         objects grew True"
+    );
+}
+
+/// a function nested in a method reaches the receiver of the frame around it
+///
+/// `self` is a parameter of the enclosing method like any other, so the nested function
+/// captures it — but the only mention of it in `self.held = 2` is inside an assignment
+/// *target*, and the capture pass read a statement's value and never its target. the
+/// nested function then had no capture named `self` at all and resolved it as a global,
+/// which raised `NameError` at the first call
+#[test]
+fn a_nested_function_writing_through_the_receiver_agrees() {
+    agree_python(
+        "nestedself",
+        "\
+class Held:
+    def __init__(self, values: list) -> None:
+        self.held: int = 1
+        self.tag: object = 'first'
+        self.item: int = 0
+        self.bucket: list = [0, 0]
+
+        def assign() -> None:
+            self.held = 2
+
+        def loop() -> None:
+            for self.item in values:
+                pass
+
+        def store() -> None:
+            self.bucket[0] = 9
+
+        def drop() -> None:
+            del self.tag
+
+        assign()
+        loop()
+        store()
+        drop()
+
+    def rows(self) -> list:
+        return [self.held, self.item, self.bucket, hasattr(self, 'tag')]
+",
+        &[
+            "m.Held([7, 8]).rows()",
+            "m.Held([]).rows()",
+            "m.Held([1]).item",
+        ],
+    );
+}
+
+/// and it is the compiled `__init__` reaching it
+#[test]
+fn the_nested_function_reaching_the_receiver_is_in_the_compiled_init() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_nestedself_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        "\
+class Held:
+    def __init__(self) -> None:
+        self.held: int = 1
+
+        def go() -> None:
+            self.held = 2
+
+        go()
+",
+        "by_diff_nestedself_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_nestedself_t as m\n\
+         print(type(m.Held.__dict__['__init__']).__name__, m.Held().held)\n",
+    );
+    // a real slot answered: `__init__` is a name python reaches through `tp_init`, and
+    // `PyType_Ready` gives it a wrapper that shadows any method table entry
+    assert_eq!(out, "wrapper_descriptor 2");
+}
+
+/// the source both `classmethod` write tests compile
+const WRITES_ON_THE_CLASS: &str = "\
+class Counter:
+    count: int = 0
+
+    @classmethod
+    def bump(cls) -> int:
+        cls.count = cls.count + 1
+        return cls.count
+
+
+class Plain:
+    def value(self) -> int:
+        return 7
+";
+
+/// a `classmethod` that binds an attribute on the class declines, and takes the class
+/// with it
+///
+/// slot zero holds the emitted type, and an emitted type is sealed — `cls.count = 1`
+/// raises `TypeError: cannot set attribute of immutable type` where python binds a class
+/// attribute. the decline is what makes the answer right: it reaches the whole class, so
+/// python is left with the interpreted one, which takes the write
+#[test]
+fn a_classmethod_writing_on_the_class_declines_and_still_agrees() {
+    agree_python_with_declines(
+        "clswrite",
+        WRITES_ON_THE_CLASS,
+        &[
+            "[m.Counter.bump(), m.Counter.bump(), m.Counter.count]",
+            "m.Plain().value()",
+        ],
+    );
+}
+
+/// and the decline is that one class, not the module
+///
+/// a method left interpreted on a class that still compiled would be handed the emitted
+/// type and raise exactly as the compiled method did, so the class is what has to
+/// decline. the sibling staying native is what says the decline stopped there
+#[test]
+fn the_class_a_classmethod_write_declines_is_the_interpreted_one() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_clswrite_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        WRITES_ON_THE_CLASS,
+        "by_diff_clswrite_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    let reasons: Vec<&str> = built
+        .declined
+        .iter()
+        .map(|declined| declined.reason.as_str())
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            "`cls.count` binds an attribute on the class, and the type this module emits \
+          for it is sealed"
+        ]
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_clswrite_t as m\n\
+         print(type(m.Counter.__dict__['bump']).__name__,\n\
+         \x20     type(m.Plain.__dict__['value']).__name__,\n\
+         \x20     m.Counter.bump())\n",
+    );
+    assert_eq!(out, "classmethod method_descriptor 1");
+}
+
+/// a class body that *assigns* its dunders rather than defining them
+///
+/// each of these fills a type slot, which a name in `tp_dict` cannot: python reads
+/// `tp_repr` for `repr(x)` and never consults the name. `kind` and `__match_args__` are
+/// the controls — neither fills a slot, and both still have to be carried. the dunder is
+/// the sharper of the two: an ordinary name is carried by the twin adoption as well,
+/// while a dunder is skipped there and the constant copy is its only route
+const ASSIGNED_DUNDERS: &str = "\
+def _describe(self):
+    return 'described ' + self.tag
+
+
+def _size(self):
+    return len(self.tag)
+
+
+def _at(self, index):
+    return self.tag[index]
+
+
+def _scale(self, factor):
+    return self.tag * factor
+
+
+def _same(self, other):
+    return self.tag == getattr(other, 'tag', other)
+
+
+def _shout(self, suffix='!', times=1):
+    return self.tag.upper() + suffix * times
+
+
+class Assigned:
+    kind = 'constant'
+    __match_args__ = ('tag',)
+    __repr__ = _describe
+    __str__ = __repr__
+    __len__ = _size
+    __getitem__ = _at
+    __rmul__ = _scale
+    __eq__ = _same
+    __call__ = _shout
+
+    def __init__(self, tag):
+        self.tag = tag
+
+
+class Unhashable:
+    __hash__ = None
+
+    def __init__(self, tag):
+        self.tag = tag
+";
+
+/// the slot and the name give one answer, and it is the assignment's
+///
+/// `__repr__ = _describe` used to leave `repr(x)` on the slot python inherited while
+/// `x.__repr__()` answered the assignment — two answers where the interpreted class has
+/// one. every pair below asks the same question through the slot and through the name.
+/// `__str__ = __repr__` is the shape that cost the most: `configparser.Error` writes it,
+/// and declining it took every other class in the module with it
+#[test]
+fn an_assigned_dunder_fills_its_type_slot() {
+    agree_python(
+        "assigneddunder",
+        ASSIGNED_DUNDERS,
+        &[
+            "repr(m.Assigned('a'))",
+            "m.Assigned('a').__repr__()",
+            "str(m.Assigned('b'))",
+            "m.Assigned('b').__str__()",
+            "len(m.Assigned('abc'))",
+            "m.Assigned('abc').__len__()",
+            "bool(m.Assigned(''))",
+            "m.Assigned('abc')[1]",
+            "m.Assigned('abc').__getitem__(1)",
+            "3 * m.Assigned('ab')",
+            "m.Assigned('ab').__rmul__(3)",
+            "m.Assigned('a') == m.Assigned('a')",
+            "m.Assigned('a') == m.Assigned('z')",
+            "m.Assigned('a').__eq__('a')",
+            "m.Assigned('hi')('?', times=2)",
+            "m.Assigned('hi').__call__('?', times=2)",
+            "m.Assigned('a').kind",
+            "m.Assigned.__match_args__",
+        ],
+    );
+}
+
+/// `__hash__ = None` names nothing to call: it says the type has no hash at all
+///
+/// python spells that in the slot as `PyObject_HashNotImplemented`. putting the `None`
+/// in the dict alone would leave `hash(x)` answering the slot python inherited — an
+/// address — where the interpreted class raises.
+///
+/// what the `TypeError` *says* is the observation rather than that there was one: a slot
+/// that called the `None` raises a `TypeError` too, about `NoneType` not being callable.
+/// only the leading words are compared, because the two builds name the type differently
+/// — a spec's `tp_name` carries the module and a class statement's does not
+#[test]
+fn a_hash_assigned_none_makes_the_type_unhashable() {
+    agree_python(
+        "assigneddunderhash",
+        ASSIGNED_DUNDERS,
+        &[
+            "m.Unhashable.__hash__",
+            "isinstance(m.Unhashable('a'), __import__('collections').abc.Hashable)",
+            "(lambda e: (type(e).__name__, str(e)[:18]))(_capture(hash, m.Unhashable('a')))",
+            "(lambda e: (type(e).__name__, str(e)[:18]))(\
+             _capture(lambda x: {x: 1}, m.Unhashable('a')))",
+        ],
+    );
+}
+
+/// and the class every answer above came from is the compiled one
+///
+/// a class that fell back to its interpreted definition answers all of it identically,
+/// so none of it can say which build answered. the descriptor types can: `PyType_Ready`
+/// writes a `wrapper_descriptor` over each name the type filled a slot with, which an
+/// interpreted class has for none of its own.
+///
+/// the two `__repr__` answers are the twin model rather than a fallback: the module's own
+/// `_describe` is compiled, and what the class dict holds is the interpreted definition's
+/// function — the same object the class body evaluated, because that is the only place
+/// evaluating once can leave it. `__str__` being that same object again is the alias
+/// following its target rather than being resolved twice
+#[test]
+fn the_class_an_assigned_dunder_fills_a_slot_on_is_compiled() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_assigneddunder_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        ASSIGNED_DUNDERS,
+        "by_diff_assigneddunder_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_assigneddunder_t as m\n\
+         print(type(m.Assigned.__dict__['__init__']).__name__,\n\
+         \x20     type(m.Unhashable.__dict__['__init__']).__name__)\n\
+         print(m.Assigned.__dict__['__repr__'] is m.Assigned.__dict__['__str__'],\n\
+         \x20     type(m.Assigned.__dict__['__repr__']).__name__,\n\
+         \x20     type(m._describe).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "wrapper_descriptor wrapper_descriptor\n\
+         True function builtin_function_or_method"
     );
 }

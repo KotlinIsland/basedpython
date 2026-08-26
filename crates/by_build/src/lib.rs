@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use by_ir::function::ModuleIr;
 use by_ir::verify::verify_module;
 
-pub use toolchain::Toolchain;
+pub use toolchain::{MINIMUM_PYTHON, Toolchain};
 
 pub mod annotate;
 

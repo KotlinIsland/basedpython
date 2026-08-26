@@ -164,26 +164,26 @@ always defined — it already infers that by dataflow where it can
 the difference is not that mypyc cannot work these facts out; it is that it has
 nowhere to read them from:
 
-| mypyc must infer or give up | basedpython declares it         |
-| --------------------------- | ------------------------------- |
-| integer ranges              | literal types, `Array[Dim + 1]` |
-| always-defined attributes   | `data class`, `init` modifiers  |
-| whether a value escapes     | `local`, `once`                 |
-| whether a call can raise    | `raises Never`                  |
-| the subclass set            | `sealed`                        |
-| the public surface          | `api.lock`                      |
-| a precise type for `x = 1`  | `analysis.sound-types`          |
-| that `float` is not `int`   | by default                      |
+| mypyc must infer or give up        | basedpython declares it                                   |
+| ---------------------------------- | --------------------------------------------------------- |
+| integer ranges                     | literal types, `Array[Dim + 1]`                           |
+| always-defined attributes          | `data class`, `init` modifiers                            |
+| whether a value escapes            | `local`, `once`                                           |
+| whether a call can raise           | `raises Never`                                            |
+| the subclass set                   | `sealed`                                                  |
+| the public surface                 | `api.lock`                                                |
+| a precise type for `x = 1`         | `analysis.sound-types`                                    |
+| that `float` is not `int`          | by default                                                |
+| the exact runtime class at a place | [`final T`](../../features/type-modifiers.md#final-t)     |
+| a compile-time constant argument   | [`literal T`](../../features/type-modifiers.md#literal-t) |
 
 the whole of [optimizations](optimizations.md) is that table, expanded
 
-three more rows are in flight and not yet on `main`. they get their own document,
-because two of them change this design rather than extend it:
+one more row is in flight. it gets its own document, because it changes this
+design rather than extends it:
 
 | mypyc must infer or give up          | basedpython would declare it |
 | ------------------------------------ | ---------------------------- |
-| the exact runtime class at a place   | `final T`                    |
-| a compile-time constant argument     | `literal T`                  |
 | that a generic decomposes on a union | `single T`                   |
 
 ## doc map

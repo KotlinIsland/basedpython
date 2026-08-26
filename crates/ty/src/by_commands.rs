@@ -211,12 +211,11 @@ pub(crate) fn cmd_run(
             language: by_irbuild::Language::default(),
             ..by_build::Options::default()
         };
-        let toolchain = by_build::Toolchain::probe(&python).with_context(|| {
-            format!(
-                "could not read `{python}`'s build configuration; \
-                 --compiled needs an interpreter with development headers"
-            )
-        })?;
+        // no added context: every way `probe` fails already names the interpreter and says
+        // what about it was refused, and a blanket "could not read its build configuration"
+        // on top of them told a user to go and install headers when the real answer was that
+        // their python was too old
+        let toolchain = by_build::Toolchain::probe(&python)?;
         let mut built = 0usize;
         for entry in &traceback_entries {
             // the text the transpile ran on, not a fresh read of the file: a
@@ -575,9 +574,9 @@ pub(crate) fn cmd_compile(
     }
 
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
-    let toolchain = by_build::Toolchain::probe(&python).with_context(|| {
-        format!("could not read `{python}`'s build configuration; set PYTHON to an interpreter with development headers")
-    })?;
+    // see the note on the other `probe` call: its own errors are self-describing, and the
+    // context that used to sit here misreported a version refusal as a missing header
+    let toolchain = by_build::Toolchain::probe(&python)?;
 
     let out_dir = cwd.join(output);
     let mut compiled = 0usize;

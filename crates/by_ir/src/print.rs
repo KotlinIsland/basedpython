@@ -431,6 +431,7 @@ fn print_op(function: &Function, op: &Op) -> String {
             error,
             value: payload,
         } => format!("raise {error:?}({})", value(payload)),
+        Op::FinishFrame { value: payload } => format!("finish {}", value(payload)),
         Op::LoadGlobal { dest, name: global } => {
             format!("{} = global {global}", name(*dest))
         }

@@ -268,7 +268,10 @@ pub(crate) fn written_names(body: &[Stmt]) -> Vec<&str> {
 fn read_names(body: &[Stmt]) -> Vec<&str> {
     let mut out = Vec::new();
     for stmt in crate::walk(body) {
-        for expr in statement_expressions(stmt) {
+        for expr in statement_expressions(stmt)
+            .into_iter()
+            .chain(target_reads(stmt))
+        {
             collect_reads(expr, &mut out);
         }
         // and a lambda's body, which is an expression the walk above does reach — but a
@@ -315,6 +318,70 @@ pub(crate) fn statement_expressions(stmt: &Stmt) -> Vec<&Expr> {
         }
         Stmt::With(node) => node.items.iter().map(|item| &item.context_expr).collect(),
         _ => Vec::new(),
+    }
+}
+
+/// the expressions a statement's assignment *targets* evaluate
+///
+/// binding `x` is not a read of `x`, but binding `x.a` or `x[i]` is: python works out
+/// which object to store into, and which key, before it stores anything. that is the
+/// half of a target [`statement_expressions`] leaves out, and leaving it out of the
+/// capture list is what made
+///
+/// ```python
+/// class C:
+///     def __init__(self):
+///         def go():
+///             self.a = 2
+///         go()
+/// ```
+///
+/// resolve `self` as a global and raise `NameError`: the nested function's only
+/// mention of `self` is inside a target, so nothing recorded that it reads the frame
+/// around it at all
+fn target_reads(stmt: &Stmt) -> Vec<&Expr> {
+    let mut out = Vec::new();
+    let targets: Vec<&Expr> = match stmt {
+        Stmt::Assign(node) => node.targets.iter().collect(),
+        Stmt::AnnAssign(node) => vec![node.target.as_ref()],
+        Stmt::For(node) => vec![node.target.as_ref()],
+        Stmt::With(node) => node
+            .items
+            .iter()
+            .filter_map(|item| item.optional_vars.as_deref())
+            .collect(),
+        Stmt::Delete(node) => node.targets.iter().collect(),
+        // an augmented target is read as well as written, and
+        // [`statement_expressions`] already reports the whole of it
+        _ => Vec::new(),
+    };
+    for target in targets {
+        collect_target_reads(target, &mut out);
+    }
+    out
+}
+
+/// the sub-expressions of one assignment target that are evaluated for their value
+fn collect_target_reads<'a>(target: &'a Expr, out: &mut Vec<&'a Expr>) {
+    match target {
+        Expr::Attribute(node) => out.push(node.value.as_ref()),
+        Expr::Subscript(node) => {
+            out.push(node.value.as_ref());
+            out.push(node.slice.as_ref());
+        }
+        Expr::Starred(node) => collect_target_reads(node.value.as_ref(), out),
+        Expr::Tuple(node) => {
+            for element in &node.elts {
+                collect_target_reads(element, out);
+            }
+        }
+        Expr::List(node) => {
+            for element in &node.elts {
+                collect_target_reads(element, out);
+            }
+        }
+        // a plain name is bound rather than read, and anything else is not a target
+        _ => {}
     }
 }
 

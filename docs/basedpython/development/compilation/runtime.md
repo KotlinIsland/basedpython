@@ -31,6 +31,84 @@ this is the same trade `__slots__` makes, and basedpython already emits
 `slots=True` for [`data class`](../../features/modifiers.md), so for the most
 common class form the semantics are unchanged
 
+#### what the layout is made of
+
+the fields are the attributes the class body is seen to give the receiver:
+
+- one every path through `__init__` assigns is a plain field
+- one only some paths assign, or that only a later method assigns, takes a
+    presence byte beside it, so a read that comes too early answers
+    `AttributeError` the way python does
+- a name `__slots__` declares that nothing assigns is that same optional field
+
+the shape of the *statement* does not come into it. `self.a, self.b = pair()`,
+`for self.item in xs`, `with open(p) as self.file`, `self.a = self.b = v` and
+`self.total += 1` each give the instance an attribute exactly as `self.a = v`
+does, and every one of them is a field. a write the pass could not read declines
+rather than falling back to `PyObject_SetAttr`: a field write is an offset and a
+dict write is not, and the compiler is not entitled to pick the second because it
+failed to read the first.
+
+two names can never be fields, because what they stand for is not storage of the
+instance's own: `__dict__` is the instance namespace and `__weakref__` is support
+a type spec does not add. a class that reads or writes either is left to its
+interpreted definition, and so is one whose attribute name is only known at
+runtime, which is what a `setattr` on the receiver is.
+
+#### the dict beside the layout
+
+the layout is not the whole instance. python lets a program give an object a name
+its class never mentioned — `o.brand_new = 7` — and an instance that was only its
+layout raised there, in the middle of a working program, where the interpreted
+twin stored the value. so an emitted class keeps an instance dict beside its
+layout, and the two divide the work: a declared field is read at its offset and
+never goes near the dict, and the dict holds only what the layout has no room
+for.
+
+`__slots__` decides which classes take one, because it is python's own way of
+saying an instance's attributes are exactly the declared ones — a class that
+writes it is asking for precisely the bare layout, and giving it a dict anyway
+would be the *opposite* divergence: accepting what the interpreted twin refuses.
+python asks the whole chain rather than one class, so a `__slots__` over a base
+that declares none still has the dict that base gave the instance.
+
+the dict is a **managed** one, which python keeps in the pre-header — so the
+struct, its base's prefix and every offset a compiled function reads are
+untouched. what it costs is allocation: the pre-header and the two words a
+collected type carries grow every instance, and a dict of arbitrary values has to
+be one the collector can reach. that is four extra words, which for a two-field
+class is a doubling — `alloc` went 7.38x → 5.62x against cpython and `objects`
+17.23x → 12.48x, both about a quarter. `fields`, `methods`, `inherit`, `dot` and
+`generic` do not move at all: a declared field is read and written at the offset
+it always was, and the interpreted side still reaches it through a data
+descriptor, which wins over the dict.
+
+it is only allocation, so `__slots__` gets all of it back — the same source built
+with the declaration times identically to the same source built before the dict
+existed. the cost is not the tracking either: untracking every instance the
+moment its constructor returns moved neither benchmark, which is what says the
+four words are the whole of it.
+
+nothing below python 3.13 publishes a way to walk or release a managed dict, so
+there the class is built exactly as it was before dicts existed and refuses the
+new attribute again. a class whose *generated* code cannot run without a dict
+is not left to that. `@dataclass` writes an `__init__` that assigns one attribute
+per annotation, and that is ordinary python assuming an ordinary instance, so on
+a bare layout every one of those assignments falls off and `E(3)` raises. the
+module holding such a class refuses to install anything at all below 3.13, so its
+dict is present whatever is running. that is also why a decline never rests on the
+widened dict: a refusal that held on 3.12 and not on 3.13 would be a wrong answer
+on one of them.
+
+`__dict__` itself stays unpublished on a class that has fields. a mapping naming
+only what the layout had no room for would be an empty answer where the
+interpreted class gives a full one, and that is quiet and wrong where the
+refusal is at least loud. `vars(o)` is the visible consequence.
+
+the invariant is checked once more where every attribute write passes, rather
+than only where the fields are worked out: a write of a name nothing in the
+receiver's layout chain holds declines instead of reaching for the dynamic form.
+
 method dispatch has three speeds, chosen statically:
 
 | receiver                                 | dispatch                                |
@@ -148,13 +226,27 @@ held behind any definition it names: `TABLE = f()` reads directly,
 only where python evaluates one, so a module with
 `from __future__ import annotations` may name a class in a signature freely
 
-a **method's** decorator still runs twice. it is not only a side effect that
-would move: the class construction itself reads what the decorator wrote, and
-`ABCMeta` is the case — it computes `__abstractmethods__` from the namespace the
-body left, so taking `@abstractmethod` out of the twin empties that set on every
-class whose construction falls back to the interpreted definition. the answer
-there is to carry the decorated method *across* from the twin rather than to
-re-apply the decorator, which is not built
+a **method's** decorator cannot be blanked the same way. it is not only a side
+effect that would move: the class construction itself reads what the decorator
+wrote, and `ABCMeta` is the case — it computes `__abstractmethods__` from the
+namespace the body left, so taking `@abstractmethod` out of the twin empties that
+set on every class whose construction falls back to the interpreted definition.
+
+so the decorated method is carried *across* from the twin instead of being
+decorated again. a method's decorators run **inside** the class body, which means
+the body already holds the decorator's answer, and taking it is what makes the
+single evaluation the only one. the rule is one rule rather than a branch: **take
+the body's answer where there is one, apply the decorators where there is not** —
+and the second case is not a second application, because the double is *caused* by
+a body having run them, and a class with no interpreted `class` statement never
+ran any
+
+the price is that such a method is the interpreted one: a decorator is handed
+whatever the body gave it, and there is no way to hand it the native method
+without calling it again. an undecorated method is untouched and stays native,
+which is where a compiled class's speed lives. `type(C.g)` then answers
+`function`, which is also what python answers — so the change removed a second
+divergence rather than adding one
 
 ### boxed classes and interpreted fallbacks
 
@@ -175,6 +267,49 @@ have: its static type object refuses to be a base at all, and the direct method
 call reads that refusal as proof no override exists. so a base an interpreted
 class extends is left interpreted too, and `by compile --verbose` names the
 subclass that caused it
+
+#### when one class's refusal is the whole module's
+
+a class that keeps its fields **past a base's instance** is the one shape with no
+second construction to try. the storage is appended by the type spec, and the only
+way to reach it is an offset into an instance that spec's type allocates — so
+every compiled read and write of a field is a read of a layout the interpreted
+definition does not have. its instances stop where the base's do, and the write
+lands past the end of the object.
+
+the spec can refuse. the base may be a heap type, whose deallocator picks what to
+chain to from `Py_TYPE(self)` and comes straight back to ours; or carry a
+metaclass, which a spec has no way to give the type it builds; or keep its
+`__dict__` at an offset the appended layout has no room for. module init builds
+these before it installs anything of its own precisely so that it can give up
+there — the interpreted definition has already built the whole module, and leaving
+it standing is a module that is merely slow rather than a mixture that is wrong.
+
+but that refusal is only *necessary* where some compiled function would have read
+one of these instances. where nothing does, the class alone falls back and every
+compiled function in the module goes on standing. what counts as reaching into it
+is deliberately wide, because missing one costs a wrong answer or a segfault where
+an extra one costs only the whole-module refusal that was already the answer:
+
+- any operation naming the class — a construction, a field read or write, a cell,
+    a closure, the class object itself, a direct call to one of its methods
+- any register, return or field **typed** as an instance of it
+- any class naming it as a **base**. that reference is read while the other class's
+    type is built, whether or not an instance of either is ever made, so it holds
+    however little else runs
+
+a generator method's state object and a nested function's closure environment are
+each a class of their own, and each captures the `self` it was made from — so each
+names the class exactly as any other reader would. counting those against it would
+leave the narrower refusal firing on nothing, because almost every such class has
+one. neither is in the namespace under any name and neither is built by anything
+but the methods of the class it belongs to, so where that class has no type they
+are never constructed: they go unbuilt with it rather than holding it.
+
+`asyncio.unix_events` is the shape this is for. `_UnixSelectorEventLoop` stands on
+a heap base from another module and can never be built, and it used to take
+`PidfdChildWatcher`, `_UnixSubprocessTransport` and every compiled function in the
+module down with it
 
 #### the twin arrives compiled
 
@@ -343,6 +478,43 @@ there is a wrong answer rather than a missing one. a definition whose name the
 module body binds again afterwards is declined and stays interpreted. a binding
 that comes *before* it is the ordinary forward declaration, which the definition
 itself overwrites
+
+### what else was holding the twin
+
+installing a type over the name its twin left behind fixes that one name. it does
+not fix anything *else* that captured the twin while the fallback body ran — and
+by then the body has run in full, so plenty has.
+
+the twin and its replacement are different objects, so every one of those holders
+is stale, and the failure is silent: the value still works, it is just not the
+object the name now means. an identity test is where it shows up.
+
+```python
+class Empty: pass
+
+def f(ann=Empty):
+    return ann is Empty       # python says True
+```
+
+the default was evaluated where the `def` stands — inside the fallback body,
+before the type existed — so it held the twin, while `Empty` in the body reads the
+name and gets the replacement. this is what made a compiled `inspect` render
+`Signature()` as `() -> _empty`.
+
+so the substitution is made everywhere a twin can still be held:
+
+| holder                                        | when it is moved                              |
+| --------------------------------------------- | --------------------------------------------- |
+| a module-level name bound to the twin         | `By_RemapTwinAliases`                         |
+| a class-level constant                        | `By_CopyClassConstant`, as the class is built |
+| an attribute carried across                   | `By_AdoptTwinAttributes`                      |
+| a retained interpreted definition's defaults  | `By_RemapTwinDefaults`, one call per handle   |
+| a declined class's own methods and attributes | the same walk, one step in                    |
+
+a value that merely **reaches** a twin — an instance whose type it is, a list
+holding one — is not moved and cannot be. those stay as the body left them, and
+that limit is the reason the rule is a substitution of *the twin itself* rather
+than a deep rewrite.
 
 ## interoperating with interpreted code
 

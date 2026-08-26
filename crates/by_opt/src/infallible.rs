@@ -211,8 +211,10 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         // an unpack drives an iterator, and both the arity and the iterator can fail
         Op::Unpack { .. } => true,
 
-        // a raise always leaves through the error path
-        Op::Reraise { .. } | Op::RaiseObject { .. } => true,
+        // a raise always leaves through the error path, and so does a finish — it
+        // hands back nothing, so it takes the same exit even though no exception
+        // is set
+        Op::Reraise { .. } | Op::RaiseObject { .. } | Op::FinishFrame { .. } => true,
 
         // the container protocol reaches `__contains__`, or iterates
         Op::Contains { .. } => true,

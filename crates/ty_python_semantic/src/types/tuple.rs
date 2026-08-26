@@ -179,7 +179,28 @@ impl<'db> TupleType<'db> {
     ) -> Option<Self> {
         // If a fixed-length (i.e., mandatory) element of the tuple is `Never`, then it's not
         // possible to instantiate the tuple as a whole.
-        if spec.fixed_elements().any(Type::is_never) {
+        //
+        // basedpython: a divergence marker does not count as `Never` here, even though it
+        // bottom-materializes to one. the marker is not a claim that no value exists — it stands
+        // for a type the fixed-point iteration has not finished computing, and answering `Never`
+        // for the tuple built around it throws the marker away. that is the one thing cycle
+        // recovery cannot lose: with no marker left there is nothing for
+        // `recursive_type_normalized` to fold on, and a recursion routed through a tuple element
+        //
+        // ```python
+        // def h(n: int):
+        //     if n:
+        //         return "a"
+        //     t = (h(n),)
+        //     return "b" + t[0]
+        // ```
+        //
+        // gains a string literal every round instead of settling on `str`, the way the same
+        // recursion written directly or through a `list` always has
+        if spec
+            .fixed_elements()
+            .any(|element| matches!(element, Type::Never))
+        {
             return None;
         }
 

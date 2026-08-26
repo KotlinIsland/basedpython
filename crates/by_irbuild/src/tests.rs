@@ -1094,6 +1094,162 @@ class Tagged:
     );
 }
 
+/// the type slots one emitted class fills from an assignment, and whether each is called
+fn class_slot_aliases(source: &str, class: &str) -> Vec<(String, bool)> {
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        module
+            .classes
+            .iter()
+            .find(|candidate| candidate.name == class)
+            .unwrap_or_else(|| panic!("{class} is emitted"))
+            .slot_aliases
+            .iter()
+            .map(|alias| (alias.name.clone(), alias.unsupported))
+            .collect()
+    })
+}
+
+#[test]
+fn a_dunder_the_body_assigns_is_a_constant_and_a_slot_at_once() {
+    // the copy alone gives two answers: `repr(x)` reads `tp_repr`, which the assignment
+    // never touched, while `x.__repr__()` reads the name it did
+    const SOURCE: &str = "\
+def _describe(self) -> str:
+    return \"described\"
+
+
+class Tagged:
+    KIND = \"tagged\"
+    __repr__ = _describe
+    __str__ = __repr__
+";
+    assert_eq!(
+        class_constants(SOURCE, "Tagged"),
+        ["KIND", "__repr__", "__str__"]
+    );
+    assert_eq!(
+        class_slot_aliases(SOURCE, "Tagged"),
+        [
+            ("__repr__".to_string(), false),
+            ("__str__".to_string(), false)
+        ]
+    );
+}
+
+#[test]
+fn a_hash_the_body_assigns_none_fills_its_slot_with_nothing_to_call() {
+    // `numbers.Number` is the corpus's example. python's slot for it is
+    // `PyObject_HashNotImplemented` rather than a call into the `None`
+    assert_eq!(
+        class_slot_aliases(
+            "\
+class Opaque:
+    __hash__ = None
+",
+            "Opaque"
+        ),
+        [("__hash__".to_string(), true)]
+    );
+}
+
+#[test]
+fn a_dunder_with_no_slot_adapter_declines_however_the_body_wrote_it() {
+    // the same question the `def` path asks. `collections`' namedtuple machinery writes
+    // `__new__ = eval(code, namespace)`, which is arbitrary and reaches a slot nothing
+    // here can fill — and a `__setattr__` that never runs would let a write through that
+    // the interpreted class intercepts
+    assert_eq!(
+        declines(
+            "\
+def _hook(self, name: str, value: int) -> None:
+    return None
+
+
+class Written:
+    __setattr__ = _hook
+"
+        ),
+        [(
+            "Written".to_string(),
+            "`__setattr__` fills a type slot with no adapter yet".to_string()
+        )]
+    );
+}
+
+#[test]
+fn a_slot_other_than_hash_assigned_none_declines() {
+    // python reads `__X__ = None` as "this type does not support that operation at all",
+    // and `tp_hash` is the only slot with a standing value saying so. turning any other
+    // one off would need the slot left empty *and* the inherited one kept out of it,
+    // which a spec cannot express
+    assert_eq!(
+        declines(
+            "\
+class Opaque:
+    __iter__ = None
+"
+        ),
+        [(
+            "Opaque".to_string(),
+            "`__iter__ = None` turns a type slot off, and only `__hash__` has a standing \
+             value for that"
+                .to_string()
+        )]
+    );
+}
+
+#[test]
+fn a_dunder_both_defined_and_assigned_declines() {
+    // the copy would put the assignment's value over the method's descriptor in the
+    // type's dict while the slot went on calling the method — two answers again, and
+    // this time from the two halves of one class
+    assert_eq!(
+        declines(
+            "\
+def _describe(self) -> str:
+    return \"assigned\"
+
+
+class Tagged:
+    def __repr__(self) -> str:
+        return \"defined\"
+
+    __repr__ = _describe
+"
+        ),
+        [(
+            "Tagged".to_string(),
+            "`__repr__` is both defined and assigned, and its type slot has room for one"
+                .to_string()
+        )]
+    );
+}
+
+#[test]
+fn an_annotated_assignment_to_a_slot_dunder_fills_the_slot_too() {
+    // the annotated path used to carry the constant without asking the question the
+    // plain one asks, which is the same two answers reached by a different statement
+    assert_eq!(
+        class_slot_aliases(
+            "\
+from typing import Callable
+
+
+def _describe(self) -> str:
+    return \"described\"
+
+
+class Tagged:
+    __repr__: Callable[[\"Tagged\"], str] = _describe
+",
+            "Tagged"
+        ),
+        [("__repr__".to_string(), false)]
+    );
+}
+
 #[test]
 fn an_annotated_attribute_of_a_data_class_is_a_field_rather_than_a_constant() {
     // in a `data class` the annotations *are* the layout, and each one already has a
@@ -1403,6 +1559,402 @@ class Held:
             "Held".to_string(),
             "a `setattr` on the receiver names its attribute at runtime".to_string()
         )]
+    );
+}
+
+/// the layout of one emitted class, as `(name, representation, may be unwritten)`
+///
+/// the presence flag is part of the answer rather than a detail: an attribute the
+/// constructor may have skipped has to read back as `AttributeError`, and one it always
+/// writes must not pay for a byte saying so
+fn layout(source: &str, class: &str) -> Vec<(String, RType, bool)> {
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        module
+            .classes
+            .iter()
+            .find(|candidate| candidate.name == class)
+            .map(|owner| {
+                owner
+                    .fields
+                    .iter()
+                    .map(|field| (field.name.clone(), field.ty.clone(), field.optional))
+                    .collect()
+            })
+            .unwrap_or_else(|| panic!("{class} was not emitted"))
+    })
+}
+
+/// an attribute bound by *unpacking* is an attribute like any other
+///
+/// the layout used to read only a plain `self.a = v`, so a tuple target reached it as
+/// nothing at all — the class was emitted without either field and the write fell through
+/// to `PyObject_SetAttr`, which an emitted instance has no `__dict__` to answer.
+/// `concurrent.futures.process._ThreadWakeup` is the shape, assigning
+/// `self._reader, self._writer` from a pair
+#[test]
+fn an_unpacking_target_gives_the_layout_its_fields() {
+    assert_eq!(
+        layout(
+            "\
+def pair() -> tuple[int, int]:
+    return (1, 2)
+
+
+class Wakeup:
+    def __init__(self) -> None:
+        self._reader, self._writer = pair()
+",
+            "Wakeup"
+        ),
+        [
+            ("_reader".to_string(), RType::INT, false),
+            ("_writer".to_string(), RType::INT, false),
+        ]
+    );
+}
+
+/// a target is a *tree*, so the walk has to reach every leaf of it
+///
+/// a starred leaf binds a list rather than an element, which is why its representation is
+/// the object one while the two beside it stay integers
+#[test]
+fn a_nested_and_starred_target_gives_the_layout_every_leaf() {
+    assert_eq!(
+        layout(
+            "\
+def shaped() -> tuple[tuple[int, int], int, int]:
+    return ((1, 2), 3, 4)
+
+
+class Tree:
+    def __init__(self) -> None:
+        (self.a, self.b), *self.rest = shaped()
+",
+            "Tree"
+        ),
+        [
+            ("a".to_string(), RType::INT, false),
+            ("b".to_string(), RType::INT, false),
+            ("rest".to_string(), RType::OBJECT, false),
+        ]
+    );
+}
+
+/// a class with no `__init__` still has attributes, and they are the ones its methods
+/// write
+///
+/// the field pass used to give up the moment it could not find an `__init__`, so a class
+/// that sets itself up in a `configure` instead was emitted with an empty layout and every
+/// one of those writes landed nowhere. nothing is written at construction, so each of them
+/// is the optional field a partly-assigning `__init__` already gets
+#[test]
+fn a_class_with_no_init_lays_out_what_its_methods_write() {
+    assert_eq!(
+        layout(
+            "\
+class Late:
+    def configure(self, n: int) -> None:
+        self.value = n
+
+    def read(self) -> int:
+        return self.value
+",
+            "Late"
+        ),
+        [("value".to_string(), RType::INT, true)]
+    );
+}
+
+/// a `for` target and a `with` target each bind an attribute, and only one of them is
+/// certain to have bound it
+///
+/// the loop body runs once per element and an empty iterable runs it never, so the field
+/// takes the presence byte that answers `AttributeError` for a read that comes too early.
+/// a `with` binds what `__enter__` handed back before its body starts, so it is as settled
+/// as a plain assignment
+#[test]
+fn a_loop_target_may_be_unwritten_where_a_with_target_is_not() {
+    assert_eq!(
+        layout(
+            "\
+import contextlib
+
+
+class Bound:
+    def __init__(self, values: list[int]) -> None:
+        with contextlib.nullcontext(1) as self.held:
+            pass
+        for self.item in values:
+            pass
+",
+            "Bound"
+        ),
+        [
+            ("held".to_string(), RType::INT, false),
+            ("item".to_string(), RType::INT, true),
+        ]
+    );
+}
+
+/// a field a `del` names takes the presence byte a delete needs, and its siblings do not
+///
+/// deleting is the only way an attribute `__init__` assigned on every path can go absent
+/// again, and the byte beside the field is the only place that can be recorded. a field
+/// nothing deletes keeps paying nothing for it
+#[test]
+fn a_field_a_del_names_takes_a_presence_byte() {
+    assert_eq!(
+        layout(
+            "\
+class Held:
+    def __init__(self) -> None:
+        self.dropped = 1
+        self.kept = 2
+
+    def drop(self) -> None:
+        del self.dropped
+",
+            "Held"
+        ),
+        [
+            ("dropped".to_string(), RType::INT, true),
+            ("kept".to_string(), RType::INT, false),
+        ]
+    );
+}
+
+/// the delete need not be written in a method, or on this class's own receiver
+///
+/// an emitted instance is reachable from anywhere the module can name it, so a plain
+/// function is as much a deleter as a method is. the names are taken module-wide for
+/// that reason — and because a base and a subclass share the base's fields, so a rule
+/// that read only one class's body could give them different layouts
+#[test]
+fn a_del_written_outside_the_class_still_gives_the_field_its_byte() {
+    assert_eq!(
+        layout(
+            "\
+class Held:
+    def __init__(self) -> None:
+        self.dropped = 1
+        self.kept = 2
+
+
+def drop(held: Held) -> None:
+    del held.dropped
+",
+            "Held"
+        ),
+        [
+            ("dropped".to_string(), RType::INT, true),
+            ("kept".to_string(), RType::INT, false),
+        ]
+    );
+}
+
+/// each method names its own receiver, and the layout has to read the one it wrote
+///
+/// the field pass took slot zero off `__init__` and then matched *that* name in every
+/// other method, so a class whose `__init__` says `self` while a later method says `this`
+/// lost every attribute the later method gave the instance
+#[test]
+fn a_method_that_names_its_receiver_otherwise_still_reaches_the_layout() {
+    assert_eq!(
+        layout(
+            "\
+class Renamed:
+    def __init__(self) -> None:
+        self.a = 1
+
+    def more(this) -> None:
+        this.b = 2
+",
+            "Renamed"
+        ),
+        [
+            ("a".to_string(), RType::INT, false),
+            ("b".to_string(), RType::INT, true),
+        ]
+    );
+}
+
+/// slot zero of a `classmethod` is the class, so what it *reads* through it is not
+/// instance storage
+///
+/// giving every instance a field for `cls.seen` would be storage the source never asked
+/// for, under a name the type already publishes. the write form of the same question no
+/// longer reaches a layout at all — see
+/// [`a_classmethod_that_writes_on_the_class_declines`]
+#[test]
+fn what_a_classmethod_reads_is_not_an_instance_field() {
+    assert_eq!(
+        layout(
+            "\
+class Counted:
+    seen = 0
+
+    def __init__(self) -> None:
+        self.a = 1
+
+    @classmethod
+    def note(cls) -> int:
+        return cls.seen
+",
+            "Counted"
+        ),
+        [("a".to_string(), RType::INT, false)]
+    );
+}
+
+/// an augmented assignment is a write, so the attribute it names is a field
+///
+/// it is the optional one: `+=` reads before it writes, and an attribute nothing else
+/// assigned is an `AttributeError` on that read rather than a value
+#[test]
+fn an_augmented_assignment_names_a_field_of_its_own() {
+    assert_eq!(
+        layout(
+            "\
+class Counter:
+    def bump(self) -> None:
+        self.total += 1
+",
+            "Counter"
+        ),
+        [("total".to_string(), RType::OBJECT, true)]
+    );
+}
+
+/// `__dict__` is the one attribute no layout can be given
+///
+/// an emitted instance **is** its layout and there is nothing behind it, so the namespace
+/// `__dict__` stands for does not exist to be read or written. a field of that name would
+/// be a different thing wearing the name. `multiprocessing.dummy.Namespace` writes through
+/// one and `tkinter.Event.__repr__` reads one, and both used to compile and then raise
+#[test]
+fn a_class_that_reaches_for_its_own_dict_declines() {
+    assert_eq!(
+        declines(
+            "\
+class Namespace:
+    def __init__(self) -> None:
+        self.a = 1
+
+    def show(self) -> str:
+        return repr(self.__dict__)
+",
+        ),
+        vec![(
+            "Namespace".to_string(),
+            "`__dict__` is read off a `Namespace`, and an emitted instance is its layout \
+             with nothing behind it"
+                .to_string()
+        )]
+    );
+}
+
+/// and a write of a name the layout does not hold declines rather than reaching for the
+/// dynamic form
+///
+/// the dynamic form is what a write takes when the compiler does not know the receiver's
+/// layout, and it is the wrong answer when it does: the emitted type publishes no
+/// `__dict__`, so `PyObject_SetAttr` raises where the interpreted class stored a value.
+/// this is the invariant the field passes are meant to keep, said once where every write
+/// goes past — so it holds for a write from anywhere, not only for the class body the
+/// field passes read
+#[test]
+fn an_attribute_the_layout_cannot_hold_declines_rather_than_writing_dynamically() {
+    assert_eq!(
+        declines(
+            "\
+class Held:
+    def __init__(self) -> None:
+        self.a = 1
+
+
+def poke(other: Held) -> None:
+    other.spare = 2
+",
+        ),
+        vec![(
+            "poke".to_string(),
+            "`spare` is written on a `Held`, whose layout has nowhere to keep it".to_string()
+        )]
+    );
+}
+
+/// but a name the *chain* holds is one the write really lands in, however little the
+/// receiver's own class declares
+///
+/// a class that adds no field of its own declares an empty layout: its instances carry
+/// every one of its base's, reached through the descriptors the base published. reading
+/// that emptiness as "nowhere to keep it" would turn the working write in `Restating` into
+/// a decline, and take `Wrapper` down with it
+#[test]
+fn an_attribute_a_base_holds_is_written_without_declining() {
+    assert_eq!(
+        declines(
+            "\
+class Wrapper(OSError):
+    def __init__(self, code: int) -> None:
+        self.code = code
+
+
+class Restating(Wrapper):
+    def __init__(self, code: int) -> None:
+        self.code = code + 1
+",
+        ),
+        Vec::new()
+    );
+}
+
+/// and `__dict__` cannot be given a field of its own either
+///
+/// a write of it is not an attribute assignment at all — it replaces the instance
+/// namespace — so a field wearing the name would be a different thing under it
+#[test]
+fn a_class_that_writes_its_own_dict_declines() {
+    assert_eq!(
+        declines(
+            "\
+class Namespace:
+    def __init__(self, values: dict[str, int]) -> None:
+        self.__dict__ = values
+",
+        ),
+        vec![(
+            "Namespace".to_string(),
+            "`__dict__` is written on the receiver, and an emitted instance is its layout \
+             with nothing behind it"
+                .to_string()
+        )]
+    );
+}
+
+/// a `case` body is a body like any other, and what it writes is a field
+///
+/// the statement walk did not descend into a `match` at all, so every write a `case` made
+/// was invisible to the layout — and the write then declined at the lowering rather than
+/// landing in storage of its own
+#[test]
+fn a_write_in_a_case_body_reaches_the_layout() {
+    assert_eq!(
+        layout(
+            "\
+class Matched:
+    def __init__(self, n: int) -> None:
+        match n:
+            case 0:
+                self.tag = \"zero\"
+            case _:
+                self.tag = \"other\"
+",
+            "Matched"
+        ),
+        [("tag".to_string(), RType::STR, true)]
     );
 }
 
@@ -1747,6 +2299,90 @@ class Storing(Fieldless, codecs.Codec):
 }
 
 #[test]
+fn the_metaclass_a_base_has_is_named_in_the_decline_it_causes() {
+    // the reason used to say only which metaclass a spec *wants*, so a reader had to go
+    // and find out what the base actually carried before knowing whether the class was
+    // recoverable at all. `ABCMeta` and a metaclass written here are worth telling apart:
+    // cpython refuses the first from 3.14 whatever else changes, while a plain one may
+    // simply be a construction nothing has lowered yet
+    let reasons = declines(
+        "\
+from abc import ABC
+
+
+class Storing(ABC):
+    def __init__(self, n: int) -> None:
+        self.n = n
+",
+    );
+    assert_eq!(
+        reasons,
+        vec![(
+            "Storing".to_string(),
+            "a class with fields of its own needs `type` for every base's metaclass, and `ABC` has `ABCMeta`"
+                .to_string()
+        )]
+    );
+}
+
+#[test]
+fn a_base_with_a_metaclass_of_this_projects_own_is_named_by_that_metaclass() {
+    // the companion of the test above, and what says the name is read off the base rather
+    // than written into the message: nothing here is `ABCMeta`, and the dotted path the
+    // base was written as is what the reason repeats back
+    let reasons = declines(
+        "\
+import enum
+
+
+class Storing(enum.Enum):
+    def __init__(self, n: int) -> None:
+        self.n = n
+",
+    );
+    assert_eq!(
+        reasons,
+        vec![(
+            "Storing".to_string(),
+            "a class with fields of its own needs `type` for every base's metaclass, and `enum.Enum` has `EnumMeta`"
+                .to_string()
+        )]
+    );
+}
+
+#[test]
+fn a_base_that_is_not_a_class_is_said_to_be_that_rather_than_to_have_a_metaclass() {
+    // a module that gives up on the platforms it does not serve leaves everything after
+    // the `raise` unreachable, and a base named there is not a class as far as the types
+    // are concerned — there is no metaclass on it to have found. five of the standard
+    // library's declining classes are this, all of them in `asyncio`'s windows modules,
+    // and telling a reader they "have" some metaclass would be an invention
+    let reasons = declines(
+        "\
+import sys
+
+if sys.version_info >= (3, 0):
+    raise ImportError(\"not this build\")
+
+import subprocess
+
+
+class Storing(subprocess.Popen):
+    def __init__(self, n: int) -> None:
+        self.n = n
+",
+    );
+    assert_eq!(
+        reasons,
+        vec![(
+            "Storing".to_string(),
+            "a class with fields of its own needs `type` for every base's metaclass, and `subprocess.Popen` is not a class the types settle on"
+                .to_string()
+        )]
+    );
+}
+
+#[test]
 fn a_finalizer_makes_every_field_of_its_layout_one_that_may_be_absent() {
     // `Held()` raises before `self.path` is written, and python releases the half-built
     // object — which runs `__del__` over fields that are still the zeroes `tp_alloc`
@@ -1960,11 +2596,12 @@ class Fine:
 
 #[test]
 fn fields_past_a_base_this_module_emits_decline() {
-    // `Held`'s fields would sit past a `Wrapper` instance, so it supplies the three type
-    // slots that reach them and each calls `Wrapper`'s. a class this module emits is a
-    // heap type, and a heap type's three are python's own — they resolve which base to
-    // chain to from the instance's type, find `Held`'s there, and call it back until the
-    // stack runs out.
+    // `Wrapper` lays nothing out of its own, so it is built by calling its metaclass and
+    // its type is a `class` statement's — `subtype_dealloc` and the rest. `Held`'s fields
+    // would sit past a `Wrapper` instance, so it supplies the three type slots that reach
+    // them and each calls `Wrapper`'s. python's own three resolve which base to chain to
+    // from the instance's type, find `Held`'s there, and call it back until the stack
+    // runs out.
     //
     // `Beside` is the boundary: its layout chain ends at `object` rather than outside, so
     // its struct *begins* with `Rooted`'s rather than sitting past an instance of it, and
@@ -1996,7 +2633,7 @@ class Beside(Rooted):
         vec![
             (
                 "Held".to_string(),
-                "a class whose fields sit past a base's instance needs a base python frees itself, and one this module writes is not"
+                "a class whose fields sit past a base's instance needs a base python frees itself, and one this module builds from a spec is the only one of ours that is"
                     .to_string()
             ),
             (
@@ -2005,6 +2642,97 @@ class Beside(Rooted):
                     .to_string()
             )
         ]
+    );
+}
+
+#[test]
+fn fields_past_a_base_built_from_a_spec_are_lowered() {
+    // the one base of ours a class can keep its storage past. `Wrapper` keeps fields of
+    // its own past an `OSError` instance, so this module builds it from a type spec and
+    // its `tp_dealloc`, `tp_traverse` and `tp_clear` are ones we emitted — each reading
+    // the base to chain to from the type that declared it, so `Held`'s three chain to
+    // `Wrapper`'s, `Wrapper`'s to `OSError`'s, and the walk stops there.
+    //
+    // the layout is the base's followed by what the subclass adds, which is what says
+    // where each rung's storage begins
+    let (declined, layouts) = with_source(
+        "\
+class Wrapper(OSError):
+    def __init__(self, code: int) -> None:
+        self.code = code
+
+
+class Held(Wrapper):
+    def __init__(self, code: int, note: str) -> None:
+        Wrapper.__init__(self, code)
+        self.note = note
+",
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
+            let declined: Vec<(String, String)> = module
+                .declined
+                .iter()
+                .map(|declined| (declined.name.clone(), declined.reason.clone()))
+                .collect();
+            let layouts: Vec<(String, Vec<String>)> = module
+                .classes
+                .iter()
+                .map(|class| {
+                    (
+                        class.name.clone(),
+                        class
+                            .fields
+                            .iter()
+                            .map(|field| field.name.clone())
+                            .collect(),
+                    )
+                })
+                .collect();
+            (declined, layouts)
+        },
+    );
+    assert_eq!(declined, Vec::new());
+    assert_eq!(
+        layouts,
+        vec![
+            ("Wrapper".to_string(), vec!["code".to_string()]),
+            (
+                "Held".to_string(),
+                vec!["code".to_string(), "note".to_string()]
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_class_keyword_on_a_class_appended_over_a_base_of_ours_declines() {
+    // a spec has nowhere to put a class keyword, and a class whose fields sit past a
+    // base's instance has no other construction — so the keyword is what it gives up.
+    // the refusal comes from resolving the base rather than from placing the fields,
+    // because a base of ours beside a keyword has none whatever the fields are
+    let reasons = declines(
+        "\
+class Meta(type):
+    pass
+
+
+class Wrapper(OSError):
+    def __init__(self, code: int) -> None:
+        self.code = code
+
+
+class Held(Wrapper, metaclass=Meta):
+    def __init__(self, code: int, note: str) -> None:
+        Wrapper.__init__(self, code)
+        self.note = note
+",
+    );
+    assert!(
+        reasons.contains(&(
+            "Held".to_string(),
+            "a class keyword on a base this module emits is not lowered yet".to_string()
+        )),
+        "{reasons:?}"
     );
 }
 
@@ -2843,7 +3571,15 @@ fn a_class_modifier_is_not_a_decorator() {
 #[test]
 fn a_class_with_a_hand_written_dunder_is_declined() {
     // `__init__` is generated from the fields, so a hand-written one would
-    // disagree with it about the layout
+    // disagree with it about the layout.
+    //
+    // the reason names the method rather than saying "a dunder method", for the reason
+    // the metaclass reason names the metaclass it found: which one it is decides whether
+    // there is anything to do about it, and a reader should not have to go back to the
+    // source to find out. `__repr__` is here beside `__init__` because the two are not
+    // the same case at all — one disagrees with a generated constructor and the other
+    // only fills a slot nothing has lowered — and the old wording said the same words
+    // about both
     let source = "\
 data class Point:
     x: int
@@ -2851,16 +3587,28 @@ data class Point:
     def __init__(self, x: int) -> None:
         pass
 ";
-    let reason = with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
-        module
-            .declined
-            .iter()
-            .find(|declined| declined.name == "Point")
-            .map(|declined| declined.reason.clone())
-            .unwrap_or_default()
-    });
-    assert!(reason.contains("dunder"), "{reason}");
+    assert_eq!(
+        declines(source),
+        vec![(
+            "Point".to_string(),
+            "`__init__` on a data class is not lowered yet".to_string()
+        )]
+    );
+    assert_eq!(
+        declines(
+            "\
+data class Tag:
+    x: int
+
+    def __repr__(self) -> str:
+        return \"tag\"
+"
+        ),
+        vec![(
+            "Tag".to_string(),
+            "`__repr__` on a data class is not lowered yet".to_string()
+        )]
+    );
 }
 
 #[test]
@@ -4962,10 +5710,11 @@ def counted(n: int) -> object:
             assert!(constructor.contains("new counted$gen("), "{constructor}");
             assert!(!constructor.contains("branch"), "{constructor}");
 
-            // the body dispatches on the state and returns at the yield
+            // the body dispatches on the state and returns at the yield, and the end
+            // of it is a finish rather than a raise
             let resume = print_function(&state.methods[0]);
             assert!(resume.contains("<counted$gen.$state>"), "{resume}");
-            assert!(resume.contains("raise StopIteration"), "{resume}");
+            assert!(resume.contains("finish "), "{resume}");
         },
     );
 }
@@ -6041,5 +6790,238 @@ table = [Held]
             .iter()
             .any(|(name, reason)| name == "Held" && reason.contains("this module reads")),
         "{reasons:?}"
+    );
+}
+
+/// a frame that finishes and a body that raises `StopIteration` are different
+/// operations, not one operation told apart by its error class
+///
+/// every way a resumable frame can end without naming a value — a bare `return`,
+/// running off the end, and being resumed once it already has — is a *finish*. a
+/// written `raise StopIteration` is an exception the body chose to raise, and python
+/// eventually turns it into a `RuntimeError` (pep 479). conflating the two is what
+/// would make that conversion impossible, so they lower apart and this says so
+#[test]
+fn a_finish_and_a_written_stop_iteration_lower_to_different_operations() {
+    let silent = method_ir(
+        "\
+def silent(n: int) -> object:
+    if n > 0:
+        yield n
+        return
+    yield 0
+",
+        "silent$gen",
+        "$resume",
+    );
+    assert!(silent.contains("finish "), "{silent}");
+    assert!(!silent.contains("raise StopIteration"), "{silent}");
+
+    // the *implicit* end — running off the body, and being resumed after the frame
+    // already finished, which share one block — is the same finish
+    let off_the_end = method_ir(
+        "\
+def counting(n: int) -> object:
+    i = 0
+    while i < n:
+        yield i
+        i = i + 1
+",
+        "counting$gen",
+        "$resume",
+    );
+    assert_eq!(off_the_end.matches("finish ").count(), 1, "{off_the_end}");
+    assert!(
+        !off_the_end.contains("raise StopIteration"),
+        "{off_the_end}"
+    );
+
+    // and a body that raises the exception itself still raises it: the implicit end
+    // beside it is a finish, so the frame holds one of each
+    let written = method_ir(
+        "\
+def written(n: int) -> object:
+    yield n
+    raise StopIteration
+",
+        "written$gen",
+        "$resume",
+    );
+    assert_eq!(written.matches("finish ").count(), 1, "{written}");
+    assert_eq!(
+        written.matches("raise StopIteration").count(),
+        1,
+        "{written}"
+    );
+}
+
+/// a `return <value>` finishes with the value, and nothing about it is a raise
+#[test]
+fn a_returned_value_rides_on_the_finish() {
+    let ir = method_ir(
+        "\
+def returning(n: int) -> object:
+    yield n
+    return 'end'
+",
+        "returning$gen",
+        "$resume",
+    );
+    // one for the `return`, one for the implicit end the dispatch falls through to
+    assert_eq!(ir.matches("finish ").count(), 2, "{ir}");
+    assert!(!ir.contains("raise StopIteration"), "{ir}");
+}
+
+/// a nested function reaches the enclosing method's receiver through the environment
+///
+/// the answer alone cannot say this: resolving `self` as a global raised `NameError`,
+/// but a lowering that reached it through `PyObject_GetAttr` on a captured object would
+/// give the same answer as the field write and be slower every time. the shape is what
+/// says it is a capture read at a compile-time offset followed by a field store
+#[test]
+fn a_nested_function_reads_the_receiver_out_of_its_environment() {
+    let ir = method_ir(
+        "\
+class Held:
+    def __init__(self) -> None:
+        self.held = 1
+
+        def go() -> None:
+            self.held = 2
+
+        go()
+",
+        "Held$__init__$env",
+        "go",
+    );
+    assert!(ir.contains("$env.<Held$__init__$env.self>"), "{ir}");
+    assert!(ir.contains(".<Held.held> = 2"), "{ir}");
+    assert!(!ir.contains("global self"), "{ir}");
+
+    // a `for` target, a subscript target and a `del` are the other three shapes whose
+    // only mention of the receiver is inside a target
+    for body in [
+        "for self.held in values:\n                pass",
+        "self.bucket[0] = 9",
+        "del self.held",
+    ] {
+        let ir = method_ir(
+            &format!(
+                "\
+class Held:
+    def __init__(self, values: list) -> None:
+        self.held = 1
+        self.bucket = [0]
+
+        def go() -> None:
+            {body}
+
+        go()
+"
+            ),
+            "Held$__init__$env",
+            "go",
+        );
+        assert!(ir.contains("$env.<Held$__init__$env.self>"), "{ir}");
+        assert!(!ir.contains("global self"), "{ir}");
+    }
+}
+
+/// a `classmethod` that binds an attribute on the class declines, and so does the class
+///
+/// the emitted type is sealed, so the write raises where python binds a class attribute.
+/// nothing narrower than the class would help: a method left interpreted is still handed
+/// the emitted type
+#[test]
+fn a_classmethod_that_writes_on_the_class_declines() {
+    assert_eq!(
+        declines(
+            "\
+class Counter:
+    count: int = 0
+
+    @classmethod
+    def bump(cls) -> int:
+        cls.count = cls.count + 1
+        return cls.count
+"
+        ),
+        vec![(
+            "Counter".to_string(),
+            "`cls.count` binds an attribute on the class, and the type this module emits \
+             for it is sealed"
+                .to_string()
+        )]
+    );
+}
+
+/// and `del cls.count` is the same write read backwards
+#[test]
+fn a_classmethod_that_deletes_on_the_class_declines() {
+    assert_eq!(
+        declines(
+            "\
+class Counter:
+    count: int = 0
+
+    @classmethod
+    def forget(cls) -> None:
+        del cls.count
+"
+        ),
+        vec![(
+            "Counter".to_string(),
+            "`cls.count` binds an attribute on the class, and the type this module emits \
+             for it is sealed"
+                .to_string()
+        )]
+    );
+}
+
+/// and a function nested in the `classmethod` reaches the same class object
+///
+/// the nested frame captures `cls` — that is what a closure is — so the write lands on
+/// the same sealed type. it is only reachable at all because a nested function reads the
+/// frame around it, which is the other half of this change
+#[test]
+fn a_function_nested_in_a_classmethod_that_writes_on_the_class_declines() {
+    assert_eq!(
+        declines(
+            "\
+class Counter:
+    count: int = 0
+
+    @classmethod
+    def bump(cls) -> None:
+        def go() -> None:
+            cls.count = 1
+
+        go()
+"
+        ),
+        vec![(
+            "Counter".to_string(),
+            "`cls.count` binds an attribute on the class, and the type this module emits \
+             for it is sealed"
+                .to_string()
+        )]
+    );
+}
+
+/// reading through the class object is not writing through it, and stays compiled
+#[test]
+fn a_classmethod_that_only_reads_the_class_is_still_lowered() {
+    assert_eq!(
+        declines(
+            "\
+class Counter:
+    count: int = 0
+
+    @classmethod
+    def read(cls) -> int:
+        return cls.count
+"
+        ),
+        vec![]
     );
 }

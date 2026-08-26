@@ -206,6 +206,7 @@ the ops that exist, beyond the arithmetic and control-flow ones above:
 | `DelegateIter` / `DelegateStep`                   | `yield from` and `await`, which are one mechanism            |
 | `RaiseWith`                                       | a raise carrying a value — `StopIteration(v)`                |
 | `RaiseObject`                                     | `raise <expr>`, optionally `from <cause>`                    |
+| `FinishFrame`                                     | a resumable frame ran to its end — deliberately not a raise  |
 | `Unpack`                                          | a target list, landing in a fixed-length tuple               |
 | `Extend` / `ToTuple`                              | a `*` or `**` in a display, and a starred tuple display      |
 | `CallUnpacked`                                    | `f(*args, **kwargs)`, bound at runtime                       |

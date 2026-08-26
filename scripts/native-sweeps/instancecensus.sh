@@ -20,11 +20,9 @@ SP="$1"; BY="$2"; PY="$3"; OUT="$4"; shift 4
 # shellcheck source=scripts/native-sweeps/sweeplib.sh
 . "$(dirname "$0")/sweeplib.sh"
 LIB=$(sweep_lib "$PY")
-root="$SP/instances.$$"; rm -rf "$root"; mkdir -p "$root"
-trap 'rm -rf "$root"' EXIT
-: > "$OUT"
+sweep_begin instances || exit 1
 
-cat > "$root/probe.py" <<'PYEOF'
+cat > "$SWEEP_ROOT/probe.py" <<'PYEOF'
 import importlib
 import os
 import signal
@@ -110,7 +108,7 @@ PYEOF
 for b in $(sweep_modules "$LIB" "$@"); do
   f="$LIB/$b"
   [ -f "$f" ] || continue
-  d="$root/w"; sweep_stage "$d" "$LIB" "$b"
+  d="$SWEEP_ROOT/w"; sweep_stage "$d" "$LIB" "$b"
   sweep_compile "$b" "$d" "$PY" "$BY"
   if ! sweep_built "$d"; then printf '%s\tno-artifact\n' "$b" >> "$OUT"; continue; fi
   # the swap this defect is about, read off the emitted C: every class whose name the
@@ -122,12 +120,16 @@ for b in $(sweep_modules "$LIB" "$@"); do
     "$(sweep_out_dir "$d")/m.c" \
     | sed -E 's/.*dict, "([^"]+)".*/\1/' | LC_ALL=C sort -u | paste -sd, -)
   sweep_place "$d"
-  cp "$root/probe.py" "$SWEEP_RUN_C/probe.py"
+  cp "$SWEEP_ROOT/probe.py" "$SWEEP_RUN_C/probe.py"
   # the comma list becomes one argument per class; an array says that, where a bare
   # command substitution only word-splits by accident
   names=()
   [ -n "$emitted" ] && IFS=',' read -r -a names <<< "$emitted"
-  out=$(cd "$SWEEP_RUN_C" && "$PY" probe.py "${names[@]}" 2>&1)
+  # through `sweep_capture` rather than a command substitution around the probe: the probe
+  # imports the module and builds its classes, so it starts — and leaks — whatever a
+  # constructor starts, and a pipe one of those still holds never reaches end of file. the
+  # reasons are with the helper, in `sweeplib.sh`
+  sweep_capture "$SWEEP_RUN_C" "$PY" probe.py "${names[@]}"; out=$SWEEP_CAPTURE_TEXT
   case "$out" in
     IMPORT-FAILED*) printf '%s\timport-failed\temitted=%s\n' "$b" "$emitted" >> "$OUT"; continue ;;
   esac
@@ -137,6 +139,12 @@ for b in $(sweep_modules "$LIB" "$@"); do
     "$(echo "$out" | sed -n 's/^FLIP-DEEP //p')" \
     "$(echo "$out" | sed -n 's/^FLIP-COUNTS //p')" >> "$OUT"
 done
+
+# the analysis below reports every figure as a fraction of a population it reads back out
+# of `$OUT`, so a walk that stopped early would come out as a smaller corpus rather than
+# as an unfinished one — `0 of 0 emitted` where the answer was `0 of 1`. so it does not
+# run at all until the run has been shown to be complete
+sweep_end || exit 1
 
 "$PY" - "$OUT" "$LIB" <<'PYEOF'
 """the defect, and what each candidate rule for declining it would cost

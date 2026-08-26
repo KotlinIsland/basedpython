@@ -42,6 +42,26 @@ To run a specific mdtest within a file, use a substring of the Markdown header t
 MDTEST_TEST_FILTER="<filter>" CARGO_PROFILE_DEV_OPT_LEVEL=1 CARGO_PROFILE_DEV_LTO=off INSTA_FORCE_PASS=1 INSTA_UPDATE=always CARGO_PROFILE_DEV_DEBUG="line-tables-only" MDTEST_UPDATE_SNAPSHOTS=1 cargo nextest run -p ty_python_semantic --test mdtest -- mdtest::<path/to/mdtest_file.md>
 ```
 
+### The interpreter the python-executing tests use
+
+`by_build`'s tests compile real extension modules against whatever interpreter they find,
+and they pick `python3` off the `PATH` unless `PYTHON` names one.
+
+A native build needs python 3.11 or later. The floor is stated once, as
+`by_build::MINIMUM_PYTHON`, and `Toolchain::probe` refuses anything below it by name, so
+on a host whose ambient `python3` is older the tests skip rather than fail. Above the
+floor there are still per-test gates, because a handful assert python's own wording,
+which changed in 3.12.
+
+So pin the interpreter when running anything that executes python — otherwise a run on an
+old ambient `python3` reports a green suite that compiled nothing:
+
+```sh
+PYTHON=$(which python3.13) CARGO_PROFILE_DEV_OPT_LEVEL=1 CARGO_PROFILE_DEV_LTO=off INSTA_FORCE_PASS=1 INSTA_UPDATE=always CARGO_PROFILE_DEV_DEBUG="line-tables-only" MDTEST_UPDATE_SNAPSHOTS=1 cargo nextest run -p by_build
+```
+
+CI pins it in a dedicated step, so it never sees this.
+
 ### Fallback without nextest
 
 If `cargo nextest` is not available, use `cargo test` with the same environment variables:

@@ -59,6 +59,11 @@ group = "memory"
 measures = "an object built and dropped every iteration"
 declines = 0
 
+[programs.alloc_slots]
+group = "memory"
+measures = "`alloc` with `__slots__`, so the instance dict is what the pair costs"
+declines = 0
+
 [programs.fields]
 group = "memory"
 measures = "attribute reads and writes on one long-lived object"
@@ -147,4 +152,9 @@ declines = 0
 [programs.coro]
 group = "frames"
 measures = "awaits that complete immediately, driven without an event loop"
+declines = 0
+
+[programs.coro_none]
+group = "frames"
+measures = "the same awaits over a coroutine that returns nothing — the commoner shape"
 declines = 0

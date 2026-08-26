@@ -607,9 +607,25 @@ pub enum Op {
     },
     /// raise a standard error carrying a value.
     ///
-    /// a generator's `return <value>` is `StopIteration(value)`, which is how the
-    /// value reaches whatever was driving the iteration
+    /// `assert cond, msg` is the shape that needs it: the message is a value rather
+    /// than a literal, so the instance has to be built from it
     RaiseWith { error: StandardError, value: Value },
+    /// a resumable frame has run to its end, handing back `value`.
+    ///
+    /// this is the *finish* of a generator or coroutine frame, and it is deliberately
+    /// not a raise. python reports a finish as `StopIteration(value)`, but building
+    /// that exception is only one of the two faces a finish has: the send slot
+    /// (`am_send`) answers `PYGEN_RETURN` with the value itself and no exception at
+    /// all. leaving the choice to codegen means the frame stores the value and the
+    /// consumer decides, instead of every finish paying for an exception that is
+    /// usually taken apart again immediately.
+    ///
+    /// keeping it apart from [`Self::RaiseStandard`] is the *correctness* half. a
+    /// body that writes `raise StopIteration` has raised an exception, which python
+    /// eventually converts to `RuntimeError` (pep 479) — it has not finished the
+    /// frame with a value. the two lower to different operations here so that no
+    /// later stage has to guess which was meant from the error class
+    FinishFrame { value: Value },
     /// read a shared closure cell: a field that starts unset.
     ///
     /// unlike [`Self::GetField`] this can fail — reading a cell before anything
@@ -844,6 +860,110 @@ pub enum Op {
 }
 
 impl Op {
+    /// every class of this module's own that the operation reaches into
+    ///
+    /// a class whose storage is appended past a base's instance can only be reached
+    /// through the type the emitter builds for it, at an offset no other type has —
+    /// so before a module may leave such a class unbuilt and keep the rest of itself
+    /// compiled, it has to know that nothing compiled would have read one. these are
+    /// the operations that would: the six that name a class outright, the direct call
+    /// to one of its methods, and the narrowing whose destination type is an instance.
+    ///
+    /// deliberately written without a catch-all arm. an operation added later with a
+    /// class in it is then a compile error here rather than an operation that quietly
+    /// answers "none" and lets a class be left out from under it
+    pub fn named_classes(&self) -> Vec<&str> {
+        match self {
+            Self::GetCell { class, .. }
+            | Self::NewInstance { class, .. }
+            | Self::MakeClosure { class, .. }
+            | Self::LoadClass { class, .. }
+            | Self::GetField { class, .. }
+            | Self::SetField { class, .. } => vec![class.as_str()],
+            // a method reached directly rather than through the type, which only a
+            // class the emitter laid out has
+            Self::CallNative { owner, .. } => owner.as_deref().into_iter().collect(),
+            Self::Unbox { to, .. } => to.instance_classes(),
+            Self::Assign { .. }
+            | Self::IntBinary { .. }
+            | Self::FloatBinary { .. }
+            | Self::IntCompare { .. }
+            | Self::ObjectBinary { .. }
+            | Self::ObjectCompare { .. }
+            | Self::StrCompare { .. }
+            | Self::Truthy { .. }
+            | Self::FloatCompare { .. }
+            | Self::Unary { .. }
+            | Self::Box { .. }
+            | Self::FloatObjectBinary { .. }
+            | Self::IsInstance { .. }
+            | Self::MatchAttr { .. }
+            | Self::IsMissing { .. }
+            | Self::MatchSlice { .. }
+            | Self::FloatObjectCompare { .. }
+            | Self::MatchKey { .. }
+            | Self::MatchRest { .. }
+            | Self::AsyncContext { .. }
+            | Self::AsyncIter { .. }
+            | Self::IsMapping { .. }
+            | Self::IsSequence { .. }
+            | Self::Contains { .. }
+            | Self::Identity { .. }
+            | Self::IntToFloat { .. }
+            | Self::TupleBuild { .. }
+            | Self::Unpack { .. }
+            | Self::CallUnpacked { .. }
+            | Self::Extend { .. }
+            | Self::ArrayNew { .. }
+            | Self::ArrayGet { .. }
+            | Self::ArraySet { .. }
+            | Self::ArrayLen { .. }
+            | Self::ArrayRead { .. }
+            | Self::ArrayPush { .. }
+            | Self::DeleteItem { .. }
+            | Self::DeleteAttr { .. }
+            | Self::ToTuple { .. }
+            | Self::TupleGet { .. }
+            | Self::CallPython { .. }
+            | Self::ImportModule { .. }
+            | Self::ImportFrom { .. }
+            | Self::Enter { .. }
+            | Self::ExitContext { .. }
+            | Self::DelegateIter { .. }
+            | Self::DelegateStep { .. }
+            | Self::RaiseWith { .. }
+            | Self::FinishFrame { .. }
+            | Self::LoadGlobal { .. }
+            | Self::StoreGlobal { .. }
+            | Self::DeleteGlobal { .. }
+            | Self::CallValue { .. }
+            | Self::CallMethod { .. }
+            | Self::GetAttr { .. }
+            | Self::SetAttr { .. }
+            | Self::BuildList { .. }
+            | Self::BuildSet { .. }
+            | Self::BuildTuple { .. }
+            | Self::BuildDict { .. }
+            | Self::GetItem { .. }
+            | Self::StrGetItem { .. }
+            | Self::StrItemCompare { .. }
+            | Self::SetItem { .. }
+            | Self::Format { .. }
+            | Self::FetchException { .. }
+            | Self::ExceptionMatches { .. }
+            | Self::PushHandled { .. }
+            | Self::PopHandled { .. }
+            | Self::RaiseObject { .. }
+            | Self::Reraise { .. }
+            | Self::GetIter { .. }
+            | Self::IterNext { .. }
+            | Self::IsNull { .. }
+            | Self::Len { .. }
+            | Self::StrConcat { .. }
+            | Self::RaiseStandard { .. } => Vec::new(),
+        }
+    }
+
     /// the register this operation writes, if any
     pub fn dest(&self) -> Option<RegisterId> {
         match self {
@@ -927,6 +1047,7 @@ impl Op {
             Self::CallNative { dest, .. } => *dest,
             Self::RaiseStandard { .. }
             | Self::RaiseWith { .. }
+            | Self::FinishFrame { .. }
             | Self::RaiseObject { .. }
             | Self::PopHandled { .. }
             | Self::Reraise { .. }
@@ -1021,6 +1142,7 @@ impl Op {
             Self::CallNative { dest, .. } => dest.as_mut(),
             Self::RaiseStandard { .. }
             | Self::RaiseWith { .. }
+            | Self::FinishFrame { .. }
             | Self::RaiseObject { .. }
             | Self::PopHandled { .. }
             | Self::Reraise { .. }
@@ -1187,6 +1309,7 @@ impl Op {
             Self::Reraise { value }
             | Self::PushHandled { value, .. }
             | Self::PopHandled { value }
+            | Self::FinishFrame { value }
             | Self::RaiseWith { value, .. } => vec![value],
         }
     }
@@ -1356,6 +1479,7 @@ impl Op {
             Self::Reraise { value }
             | Self::PushHandled { value, .. }
             | Self::PopHandled { value }
+            | Self::FinishFrame { value }
             | Self::RaiseWith { value, .. } => vec![value],
         }
     }
@@ -1459,6 +1583,90 @@ mod tests {
         };
         assert_eq!(op.dest(), None);
         assert!(op.operands().is_empty());
+    }
+
+    /// every shape that reaches into a class of this module's own, asked one at a time
+    ///
+    /// the six that carry a class name, the direct call to one of its methods, and the
+    /// narrowing whose destination is an instance. a shape missing from here is a class
+    /// that could be left unbuilt from under a live reader — see `declines_on_its_own`
+    /// in `by_codegen_c`
+    #[test]
+    fn every_shape_that_reaches_into_a_class_names_it() {
+        let held = Value::Register(RegisterId(0));
+        let reaching = [
+            Op::GetCell {
+                dest: RegisterId(1),
+                receiver: held.clone(),
+                class: "Held".to_string(),
+                field: "cell".to_string(),
+                free: false,
+            },
+            Op::NewInstance {
+                dest: RegisterId(1),
+                class: "Held".to_string(),
+                fields: Vec::new(),
+            },
+            Op::MakeClosure {
+                dest: RegisterId(1),
+                class: "Held".to_string(),
+                method: "step".to_string(),
+                env: held.clone(),
+            },
+            Op::LoadClass {
+                dest: RegisterId(1),
+                class: "Held".to_string(),
+            },
+            Op::GetField {
+                dest: RegisterId(1),
+                receiver: held.clone(),
+                class: "Held".to_string(),
+                field: "tag".to_string(),
+            },
+            Op::SetField {
+                receiver: held.clone(),
+                class: "Held".to_string(),
+                field: "tag".to_string(),
+                value: Value::Int(1),
+            },
+            Op::CallNative {
+                owner: Some("Held".to_string()),
+                dest: None,
+                callee: "step".to_string(),
+                args: Vec::new(),
+            },
+            Op::Unbox {
+                dest: RegisterId(1),
+                src: held,
+                to: RType::Instance {
+                    class: "Held".to_string(),
+                    exact: true,
+                },
+            },
+        ];
+        for op in reaching {
+            assert_eq!(op.named_classes(), vec!["Held"], "{op:?}");
+        }
+    }
+
+    /// and a shape that only ever reaches a class through a name the namespace resolves
+    /// names none of them. that is what lets a module go on calling a class it left
+    /// unbuilt: the lookup answers with the interpreted definition, which is what the
+    /// name means from then on
+    #[test]
+    fn a_name_resolved_through_the_namespace_reaches_into_no_class() {
+        let op = Op::LoadGlobal {
+            dest: RegisterId(1),
+            name: "Held".to_string(),
+        };
+        assert!(op.named_classes().is_empty());
+        let op = Op::CallMethod {
+            dest: RegisterId(1),
+            receiver: Value::Register(RegisterId(0)),
+            name: "step".to_string(),
+            args: Vec::new(),
+        };
+        assert!(op.named_classes().is_empty());
     }
 
     #[test]

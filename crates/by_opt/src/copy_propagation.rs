@@ -325,6 +325,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         Op::CallNative { dest, .. } => *dest = Some(new_dest),
         Op::RaiseStandard { .. }
         | Op::RaiseWith { .. }
+        | Op::FinishFrame { .. }
         | Op::RaiseObject { .. }
         | Op::PopHandled { .. }
         | Op::Reraise { .. }
