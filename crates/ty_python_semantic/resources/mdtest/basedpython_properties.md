@@ -476,13 +476,14 @@ class B:
         get() = 1
 ```
 
-## `class let` is not the spelling
+## `class let` is not the spelling for a property
 
-the modifier is `static`, matching `static def`.
+`class` declares a class *variable*; the class-level property modifier is `static`, matching
+`static def`.
 
 ```by
 class C:
-    # error: [invalid-syntax] "`class let` is not a declaration; write `static let`"
+    # error: [invalid-syntax] "`class let` is not a property declaration; write `static let`"
     class let size: int
         get() = 1
 ```

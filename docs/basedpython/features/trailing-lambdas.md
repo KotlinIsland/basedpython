@@ -106,12 +106,13 @@ appended as the last positional argument instead
 callable the last parameter is declared as. in the example above `a` is
 `(int) -> str`, so `it` is `int`.
 
-the block itself always returns `None` — in a `once` block a `return` targets
-the *enclosing* function, not the block (see [once blocks](#once-blocks)) — so
-the callee's callback must be declared to return a type that accepts `None`
-(`None`, `int | None`, `object`). a callback declared to return anything else is
-rejected with `trailing-lambda-return-type`; those return types are not yet
-supported
+the block itself returns `None` — in a `once` block a `return` targets the
+*enclosing* function, not the block (see [once blocks](#once-blocks)) — so the
+callee's callback must be declared to return a type that accepts `None` (`None`,
+`int | None`, `object`). a callback declared to return anything else is rejected
+with `trailing-lambda-return-type`; those return types are not yet supported. a
+block whose body awaits returns the coroutine calling it produces instead — see
+[async blocks](#async-blocks)
 
 the call is type-checked with the block counted as an argument: missing
 earlier arguments, an over-supplied last parameter, or a non-callable target
@@ -265,6 +266,37 @@ does not get:
 > `with`), and a callee that swallows the callback's control flow — or never
 > calls it — defeats the propagation. tightening `return` / `break` / `continue`
 > out of a `once` block into a guaranteed unwind is tracked as future work
+
+## async blocks
+
+a block whose body awaits is a coroutine function of its own, so it lowers to an
+`async def` and the callback it fills is declared to return an awaitable. that
+is what lets a scoped resource — a socket, a subprocess, a database handle — be
+written as a block:
+
+```by
+async def scope(name: str, once block: () -> Awaitable[None]):
+    try:
+        await block()
+    finally:
+        await close(name)
+
+async def main():
+    await scope("db"):
+        await query("select 1")
+```
+
+```python
+async def main():
+    async def _trailing_lambda_0(it=None):
+        await query("select 1")
+    await scope("db", block=_trailing_lambda_0)
+```
+
+`await` in the block is a statement about the *block*, not about the `def` it was
+written inside: the block is its own function. writing `await` in front of the
+call is what hands the coroutine the callee returns back to the event loop — the
+block hangs off the call, and the `await` stays where it was written
 
 ## borrowed `it`
 

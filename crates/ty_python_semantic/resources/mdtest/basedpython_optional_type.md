@@ -93,6 +93,26 @@ def bad[T](t: T) -> T?:
     return t  # error: [invalid-return-type]
 ```
 
+## `Self?` is a plain union
+
+`Self` stands for the enclosing class, which can never itself be an optional, so there is no inner
+layer for the wrapper to keep apart: a fallible constructor returns its instance as it built it.
+
+```by
+class Record:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    class def parse(cls, line: str) -> Self?:
+        if not line:
+            return None
+        return cls(line)
+
+def f() -> None:
+    record = Record.parse("a")
+    reveal_type(record)  # revealed: Record | None
+```
+
 ## wrapped optionals are covariant in their inner type
 
 a narrower wrapped optional is assignable to a wider one (`Literal[1]` wrapped, to `int??` — see `x`

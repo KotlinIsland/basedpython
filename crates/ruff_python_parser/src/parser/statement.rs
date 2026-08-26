@@ -448,7 +448,11 @@ fn property_decl_type(annotation: &Expr) -> Option<Expr> {
         && let Expr::Name(marker) = subscript.value.as_ref()
         && matches!(
             marker.id.as_str(),
-            "__let__" | "__modifier_annot__" | "__private_annot__" | "__final__"
+            "__let__"
+                | "__modifier_annot__"
+                | "__private_annot__"
+                | "__final__"
+                | "__classvar_annot__"
         )
     {
         return Some((*subscript.slice).clone());
@@ -577,28 +581,32 @@ impl<'src> Parser<'src> {
                     return self.parse_with_modifier(start, DecoratorList::new());
                 }
                 // `class a = 1` — class variable declaration
-                if self.peek() == TokenKind::Name && self.peek2().1 == TokenKind::Equal {
+                if declares_a_name(self.peek()) && self.peek2().1 == TokenKind::Equal {
                     return self.parse_class_var_decl(start);
                 }
-                // `class let x: T` / `class var x: T` — reads as a class-level
-                // declaration by analogy with `class def`, but the modifier for
-                // that is `static`. otherwise it parses as a nested class named
-                // `let`, whose cascade of errors says nothing about the real
-                // mistake. report it, then carry on from the binding keyword so
-                // the declaration it meant is what gets parsed
-                if self.peek() == TokenKind::Name && self.peek2().1 == TokenKind::Name {
+                // `class var x: T` / `class let x: T` — the annotated class
+                // variable, the declared-type counterpart of `class x = 1`.
+                // `class` is unambiguous here: a class definition always follows
+                // its name with `(`, `[` or `:`, so a binding keyword and a name
+                // is the declaration
+                if self.peek() == TokenKind::Name && declares_a_name(self.peek2().1) {
                     let keyword_range = self.peek_nth(0).1;
                     let keyword = self.src_text(keyword_range).to_owned();
                     if matches!(keyword.as_str(), "let" | "var") {
-                        self.add_error(
-                            ParseErrorType::OtherError(format!(
-                                "`class {keyword}` is not a declaration; write `static {keyword}`"
-                            )),
-                            TextRange::new(start, keyword_range.end()),
-                        );
-                        self.bump(TokenKind::Class);
-                        return self.parse_statement();
+                        return self.parse_class_var_annot_decl(start, &keyword);
                     }
+                    // a class definition always follows its name with `(`, `[` or
+                    // `:`, so two names is a declaration whose binding keyword is
+                    // not one. say so rather than read `class private var x` as a
+                    // class named `private` with a one-line body
+                    let name_end = self.peek_nth(1).1.end();
+                    self.add_error(
+                        ParseErrorType::OtherError(format!(
+                            "`{keyword}` is not a binding keyword — a class variable \
+                             is `class let` or `class var`"
+                        )),
+                        TextRange::new(start, name_end),
+                    );
                 }
                 Stmt::ClassDef(self.parse_class_definition(DecoratorList::new(), start))
             }
@@ -1127,6 +1135,21 @@ impl<'src> Parser<'src> {
                 if matches!(self.peek(), TokenKind::Def | TokenKind::Async) {
                     continue;
                 }
+                // `class var x: T` declares a class *variable*, which is not a
+                // definition a modifier chain can hang off — and it carries one
+                // marker, which its own keyword already fills. left alone it
+                // parses on as a nested class named by the binding keyword
+                let binding = self.peek_nth(0).1;
+                let (named, name_range) = self.peek_nth(1);
+                if matches!(self.src_text(binding), "let" | "var") && declares_a_name(named) {
+                    self.add_error(
+                        ParseErrorType::OtherError(
+                            "a `class` variable declaration takes no modifier — write it on its own"
+                                .to_string(),
+                        ),
+                        TextRange::new(start, name_range.end()),
+                    );
+                }
                 break;
             }
             // another modifier keyword follows — keep looping. an `enum class` /
@@ -1255,6 +1278,68 @@ impl<'src> Parser<'src> {
     fn parse_declaration_value(&mut self) -> Expr {
         let value = self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or());
         self.parse_trailing_lambda_value(value).expr
+    }
+
+    /// basedpython: parses `class var x: T [= v]` and `class let x: T [= v]` —
+    /// the class variable whose type is declared rather than inferred from a
+    /// value, which `class x = 1` cannot express.
+    ///
+    /// A `var` is an ordinary `ClassVar`; a `let` is read-only, which python
+    /// spells `Final` in a class body. A read-only one written without a value
+    /// has nowhere to be bound — `__init__` binds an instance — which is what
+    /// ty's `final-without-value` says, in the one place that knows a stub
+    /// declares types and never values.
+    fn parse_class_var_annot_decl(&mut self, start: TextSize, keyword: &str) -> Stmt {
+        self.error_if_not_basedpython(
+            "a `class` variable declaration is not valid in .py files".to_string(),
+        );
+        self.bump(TokenKind::Class);
+        // the declaration carries one marker, and `class var` already fills it.
+        // another modifier in the chain would take the slot and the declaration
+        // would silently stop being a class variable — reject it instead. the
+        // name is the only thing that may follow the binding keyword, so a token
+        // other than the `:` after it is a keyword that has nowhere to go
+        if self.peek2().1 != TokenKind::Colon {
+            let extra = self.peek_nth(0).1;
+            self.add_error(
+                ParseErrorType::OtherError(format!(
+                    "`class {keyword}` takes no other modifier — `{}` has nowhere to go",
+                    self.src_text(extra)
+                )),
+                TextRange::new(start, extra.end()),
+            );
+        }
+        let marker = if keyword == "let" {
+            "__final__"
+        } else {
+            "__classvar_annot__"
+        };
+        let stmt = self.parse_modifier_annot_decl(start, marker);
+
+        // an accessor block turns the declaration into a property, which is a
+        // member of the *instance* — `class` is the class-variable modifier, and
+        // the class-level property is `static`. carry on into the block anyway,
+        // so the accessors are parsed rather than cascading
+        if self.class_body_depth > 0 && self.at(TokenKind::Indent) && self.at_accessor_block_start()
+        {
+            self.add_error(
+                ParseErrorType::OtherError(format!(
+                    "`class {keyword}` is not a property declaration; write `static {keyword}`"
+                )),
+                stmt.range(),
+            );
+            return self.parse_property_accessors(stmt, start);
+        }
+
+        if self.class_body_depth == 0 {
+            self.add_error(
+                ParseErrorType::OtherError(format!(
+                    "`class {keyword}` declares a class variable, so it belongs in a class body"
+                )),
+                stmt.range(),
+            );
+        }
+        stmt
     }
 
     /// basedpython: consumes the `;` / newline that ends a declaration form.
@@ -1555,7 +1640,6 @@ impl<'src> Parser<'src> {
     /// position. The downstream transform deletes that prefix from the source
     /// text, leaving `name: T [= v]` behind.
     fn parse_modifier_annot_decl(&mut self, start: TextSize, synthetic_id: &'static str) -> Stmt {
-        let modifier_range = self.current_token_range();
         // consume modifier keywords until we reach the variable name (the Name
         // token immediately followed by `:`), so chains like `final override x: T`
         // strip in full — not just the first modifier. remember a `final` and a
@@ -1597,8 +1681,10 @@ impl<'src> Parser<'src> {
         // `override x: T = v` declare nothing and read as `x = v`.
         // `final` wins over `private`: a `Final` member is read-only, so it can
         // neither be written through a widened view nor lose its qualifier here
-        let marker_range = final_range
-            .unwrap_or_else(|| TextRange::new(modifier_range.start(), name.range.start()));
+        // the marker spans the whole keyword prefix from the statement's start,
+        // which for `class var x: T` is the `class` — the formatter re-emits the
+        // prefix from this range, so anything left out of it is dropped
+        let marker_range = final_range.unwrap_or_else(|| TextRange::new(start, name.range.start()));
         let marker = Expr::Name(ast::ExprName {
             id: Name::new_static(match (final_range.is_some(), is_private) {
                 (true, _) => "__final__",
@@ -2235,7 +2321,10 @@ impl<'src> Parser<'src> {
             let expr_ref: &Expr = statement.0;
             let in_tail = allowed.iter().any(|a| std::ptr::eq(*a, expr_ref));
             let is_root = tail.is_some_and(|tail| std::ptr::eq(tail, expr_ref));
-            let carries_suite = !matches!(&*statement.1.stmt, Stmt::Raise(_) | Stmt::Return(_));
+            let carries_suite = !matches!(
+                &*statement.1.stmt,
+                Stmt::Raise(_) | Stmt::Return(_) | Stmt::Break(_) | Stmt::Continue(_)
+            );
             let message = if carries_suite && !is_root {
                 "a statement expression with a suite must be the whole value of its statement"
             } else if carries_suite && !self.starts_its_line(stmt.range().start()) {
@@ -3192,6 +3281,10 @@ impl<'src> Parser<'src> {
             TokenKind::While => (Stmt::While(self.parse_while_statement()), true),
             TokenKind::Raise => (Stmt::Raise(self.parse_raise_statement()), false),
             TokenKind::Return => (Stmt::Return(self.parse_return_statement()), false),
+            // the loop escapes: `let first = next(it) ?? break` leaves the loop
+            // when the call has no value to bind
+            TokenKind::Break => (Stmt::Break(self.parse_break_statement()), false),
+            TokenKind::Continue => (Stmt::Continue(self.parse_continue_statement()), false),
             // `parse_atom` only enters here at one of the tokens above; `match` is
             // the only one that can turn out not to start a statement expression
             _ => return None,
@@ -5861,9 +5954,9 @@ impl<'src> Parser<'src> {
             },
             type_params: None,
             parameters: Box::new(parameters),
+            is_async: body_awaits(&body),
             body,
             decorator_list: vec![decorator].into(),
-            is_async: false,
             returns: None,
             raises: None,
             is_trailing_lambda: true,
@@ -8668,6 +8761,92 @@ enum AllowStarAnnotation {
     /// basedpython: `**kwargs: *Kwargs` unpacks a keyword-variadic pack into this parameter,
     /// mirroring how `*args: *Ts` unpacks a `TypeVarTuple`. Rejected in `.py` files
     KeywordPackOnly,
+}
+
+/// basedpython: whether `body` needs `await` to run — the block it belongs to is
+/// then an async one, and the callee it is handed to has to await the call.
+///
+/// A trailing lambda block is a function of its own, so `await` in it is a
+/// statement about *it* rather than about the `def` it was written inside. Only
+/// the block's own statements are looked at: a nested `def` or `lambda` is a
+/// separate function and its `await` is its own business.
+fn body_awaits(body: &[Stmt]) -> bool {
+    struct Finder {
+        found: bool,
+    }
+
+    impl<'a> ruff_python_ast::visitor::Visitor<'a> for Finder {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            match stmt {
+                // a nested definition's *body* is its own scope; its header runs
+                // here — decorators (a nested block's callee among them),
+                // parameter defaults and annotations, the return annotation, the
+                // type-parameter bounds, and a class's bases
+                Stmt::FunctionDef(function) => {
+                    for decorator in &function.decorator_list {
+                        self.visit_expr(&decorator.expression);
+                    }
+                    if let Some(type_params) = &function.type_params {
+                        self.visit_type_params(type_params);
+                    }
+                    self.visit_parameters(&function.parameters);
+                    if let Some(returns) = &function.returns {
+                        self.visit_annotation(returns);
+                    }
+                }
+                Stmt::ClassDef(class) => {
+                    for decorator in &class.decorator_list {
+                        self.visit_expr(&decorator.expression);
+                    }
+                    if let Some(type_params) = &class.type_params {
+                        self.visit_type_params(type_params);
+                    }
+                    if let Some(arguments) = &class.arguments {
+                        self.visit_arguments(arguments);
+                    }
+                }
+                Stmt::For(ast::StmtFor { is_async: true, .. })
+                | Stmt::With(ast::StmtWith { is_async: true, .. }) => self.found = true,
+                _ if !self.found => ruff_python_ast::visitor::walk_stmt(self, stmt),
+                _ => {}
+            }
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            match expr {
+                // a lambda's body is its own scope; its parameter defaults are
+                // evaluated where the lambda is written
+                Expr::Lambda(lambda) => {
+                    if let Some(parameters) = &lambda.parameters {
+                        self.visit_parameters(parameters);
+                    }
+                }
+                Expr::Await(_) => self.found = true,
+                // a comprehension's `async for` is an await of its own, and it
+                // has no statement to carry the flag
+                Expr::ListComp(ast::ExprListComp { generators, .. })
+                | Expr::SetComp(ast::ExprSetComp { generators, .. })
+                | Expr::Generator(ast::ExprGenerator { generators, .. })
+                    if generators.iter().any(|generator| generator.is_async) =>
+                {
+                    self.found = true;
+                }
+                Expr::DictComp(ast::ExprDictComp { generators, .. })
+                    if generators.iter().any(|generator| generator.is_async) =>
+                {
+                    self.found = true;
+                }
+                _ if !self.found => ruff_python_ast::visitor::walk_expr(self, expr),
+                _ => {}
+            }
+        }
+    }
+
+    let mut finder = Finder { found: false };
+    for stmt in body {
+        ruff_python_ast::visitor::Visitor::visit_stmt(&mut finder, stmt);
+    }
+    finder.found
 }
 
 /// basedpython: collects the expressions that hold the value of `expr` — `expr`

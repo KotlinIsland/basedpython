@@ -114,6 +114,24 @@ one — its single assignment fixes the outcome and a branch guarded by it is de
 subscript is read at its *declared* type, which for a `bool`-valued flag is `bool`, so the same
 constant written as a class attribute is not reported
 
+the declared type is what decides it because an attribute reaches into an object that any call in
+between may have written to. ty holds a narrowing across such a call — that is what makes attribute
+narrowing usable — so a constant read off one is the narrowing's doing rather than the program's:
+
+```by
+class Latch:
+    var on: bool
+
+    def flip(self):
+        self.on = True
+
+def f(latch: Latch):
+    latch.on = False
+    latch.flip()
+    if latch.on:  # ok — `flip` may have written it, and `on` is declared `bool`
+        ...
+```
+
 ```by
 DEBUG = False
 

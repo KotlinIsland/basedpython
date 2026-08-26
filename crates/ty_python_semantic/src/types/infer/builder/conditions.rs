@@ -175,13 +175,54 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             ConditionTruthiness::Ambiguous => {
                 self.check_overlapping_condition(test, root, polarity);
             }
-            ConditionTruthiness::AlwaysTrue | ConditionTruthiness::AlwaysFalse if is_place => {
+            ConditionTruthiness::AlwaysTrue | ConditionTruthiness::AlwaysFalse
+                if is_place && self.outcome_is_declared(root, polarity) =>
+            {
                 self.report_redundant_condition(test, root, truthiness);
             }
             // a constant that is not a value read, or one the build environment manufactured
             ConditionTruthiness::AlwaysTrue
             | ConditionTruthiness::AlwaysFalse
             | ConditionTruthiness::Artificial => {}
+        }
+    }
+
+    /// Whether `root`'s constant outcome is the program's doing rather than a
+    /// narrowing's.
+    ///
+    /// A name is only rebound by the code between the narrowing and the read,
+    /// and that code is in this scope, where ty can see it. An attribute reaches
+    /// into an object, and any call in between may have written to it — ty holds
+    /// the narrowed type across such a call, which is what makes attribute
+    /// narrowing usable at all, but it means a constant read off one is not a
+    /// fact about the program:
+    ///
+    /// ```py
+    /// latch.on = False        # `on: bool`
+    /// latch.flip()            # assigns `self.on = True`
+    /// assert latch.on         # not "always false" — `on` is a `bool`
+    /// ```
+    ///
+    /// So an attribute is asked what its class declares, which is a fact. A
+    /// subscript reaches into an object the same way and has no declaration to
+    /// fall back on — its element type comes out of a `__getitem__` call, which
+    /// this would have to redo — so it is never reported.
+    fn outcome_is_declared(&self, root: &ast::Expr, polarity: ConditionPolarity) -> bool {
+        let db = self.db();
+        let env = self.program_environment();
+        match root {
+            ast::Expr::Attribute(attribute) => self
+                .expression_type(&attribute.value)
+                .member(db, env, attribute.attr.as_str())
+                .place
+                .ignore_possibly_undefined()
+                .is_some_and(|declared| {
+                    ConditionTruthiness::classify(declared.bool(db, env), polarity, || false)
+                        .constant_outcome()
+                        .is_some()
+                }),
+            ast::Expr::Subscript(_) => false,
+            _ => true,
         }
     }
 

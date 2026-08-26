@@ -11,8 +11,8 @@ use ruff_text_size::Ranged;
 use crate::Violation;
 use crate::checkers::ast::Checker;
 use crate::rules::ruff::helpers::{
-    AttrsAutoAttribs, DataclassKind, dataclass_kind, is_class_var_annotation, is_dataclass_field,
-    is_descriptor_class, is_frozen_dataclass,
+    AttrsAutoAttribs, DataclassKind, dataclass_kind, is_basedpython_data_class,
+    is_class_var_annotation, is_dataclass_field, is_descriptor_class, is_frozen_dataclass,
 };
 
 /// ## What it does
@@ -84,6 +84,12 @@ pub(crate) fn function_call_in_dataclass_default(
     scope_id: ScopeId,
 ) {
     let semantic = checker.semantic();
+
+    // basedpython's `data class` lowers a re-evaluated default into a
+    // `field(default_factory=…)` itself, so there is nothing here to ask for
+    if is_basedpython_data_class(class_def) {
+        return;
+    }
 
     let Some((dataclass_kind, _)) = dataclass_kind(class_def, semantic) else {
         return;

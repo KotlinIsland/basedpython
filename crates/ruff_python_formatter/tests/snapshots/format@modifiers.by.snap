@@ -41,6 +41,15 @@ class F:
     let label: str = "x"
 
 
+# class-variable declarations: the inferred form, and the annotated `class var` /
+# `class let` whose keyword prefix has to survive the round trip
+class ClassVars:
+    class count = 0
+    class var total: int = 0
+    class var kind: str
+    class let ORIGIN: tuple[int, int] = (0, 0)
+
+
 # `final` annotations (Final in every scope), including a modifier chain where the
 # sibling modifier is stripped but `final` is kept
 final MODULE_CONST: int
@@ -124,6 +133,15 @@ let name: str = "alice"
 class F:
     let member: int
     let label: str = "x"
+
+
+# class-variable declarations: the inferred form, and the annotated `class var` /
+# `class let` whose keyword prefix has to survive the round trip
+class ClassVars:
+    class count          = 0
+    class var total: int = 0
+    class var kind: str
+    class let ORIGIN: tuple[int, int] = (0, 0)
 
 
 # `final` annotations (Final in every scope), including a modifier chain where the

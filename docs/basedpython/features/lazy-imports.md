@@ -77,6 +77,17 @@ and quietly answer `False` for equal values
 (via `__class__`), and `isinstance(x, C)` where `C` itself was lazily imported
 (via `__instancecheck__`)
 
+an **exception class is never proxied**. `except` is the one place cpython
+refuses a stand-in: it checks that what it catches is a real class inheriting
+`BaseException`, and never consults `__instancecheck__`. so
+`from errors import ParseError` stays an ordinary import, and the rest of the
+statement's names still don't:
+
+```py
+from errors import ParseError
+decode = _lazy_attr("errors", "decode")
+```
+
 two things a proxy cannot emulate, and which are therefore limitations of the
 polyfill only:
 

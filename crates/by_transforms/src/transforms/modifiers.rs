@@ -145,6 +145,23 @@ impl<'src> Modifiers<'src> {
         super::source_util::line_indent(self.source, pos)
     }
 
+    /// The range an assignment's value occupies, grouping parentheses included.
+    /// A modifier lowering replaces everything the statement said ahead of the
+    /// value, and an expression's range starts inside its parentheses, so
+    /// without this the `(` of a multi-line value is eaten and its `)` stranded
+    fn value_range(&self, stmt: &StmtAnnAssign, value: &Expr) -> TextRange {
+        // the scan stops at the annotation, which is the last thing written
+        // before the value — past it lies only `=`, whitespace, parentheses and
+        // comments, and a `#` there is unambiguously one
+        let written_before = stmt
+            .annotation
+            .range()
+            .end()
+            .max(stmt.target.range().end())
+            .max(stmt.range().start());
+        super::source_util::parenthesized_value_range(self.source, value.range(), written_before)
+    }
+
     fn is_synthetic(&self, dec: &ruff_python_ast::Decorator) -> bool {
         super::source_util::is_synthetic_decorator(self.source, dec)
     }
@@ -365,11 +382,11 @@ impl<'src> Modifiers<'src> {
         }
     }
 
-    /// Replace the identifier at `range` with an underscore-prefixed copy.
+    /// Replace the identifier at `range` with its module-private spelling.
     fn rename_with_underscore(&mut self, range: TextRange) {
         let original = self.src(range).to_owned();
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            format!("_{original}"),
+            module_private_name(&original),
             range,
         )));
     }
@@ -448,6 +465,21 @@ impl<'src> Modifiers<'src> {
             // valueless typed `let x: T` / `final x: T` → `x: Final[T]` — a
             // read-only declaration with no initializer, `Final` in every scope
             if let Expr::Subscript(s) = node.annotation.as_ref()
+                && matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__classvar_annot__")
+            {
+                // valueless `class var a: T` → `a: ClassVar[T]`
+                let slice = s.slice.as_ref();
+                let pre_range = TextRange::new(node.range().start(), slice.range().start());
+                self.needs_classvar = true;
+                self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                    format!("{name}: ClassVar["),
+                    pre_range,
+                )));
+                self.edits.push(Fix::safe_edit(Edit::insertion(
+                    "]".to_owned(),
+                    slice.range().end(),
+                )));
+            } else if let Expr::Subscript(s) = node.annotation.as_ref()
                 && matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__let__" | "__final__"))
             {
                 let slice = s.slice.as_ref();
@@ -479,7 +511,8 @@ impl<'src> Modifiers<'src> {
         match node.annotation.as_ref() {
             Expr::Name(ann) => {
                 // untyped: `let a = v`, `class a = v`, `newtype Foo = v`
-                let prefix_range = TextRange::new(node.range().start(), value.range().start());
+                let value_range = self.value_range(node, value);
+                let prefix_range = TextRange::new(node.range().start(), value_range.start());
                 match ann.id.as_str() {
                     "__let__" => {
                         self.needs_final_annotation = true;
@@ -502,15 +535,32 @@ impl<'src> Modifiers<'src> {
                         )));
                     }
                     "__newtype__" => {
-                        let value_src = self.src(value.range()).to_owned();
+                        let value_src = self.src(value_range).to_owned();
                         self.needs_newtype = true;
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
                             format!("{name} = NewType(\"{name}\", {value_src})"),
-                            node.range(),
+                            TextRange::new(node.range().start(), value_range.end()),
                         )));
                     }
                     _ => {}
                 }
+            }
+            Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__classvar_annot__") =>
+            {
+                // `class var a: T [= v]` → `a: ClassVar[T] [= v]`
+                let slice = s.slice.as_ref();
+                let pre_range = TextRange::new(node.range().start(), slice.range().start());
+                let post_range =
+                    TextRange::new(slice.range().end(), self.value_range(node, value).start());
+                self.needs_classvar = true;
+                self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                    format!("{name}: ClassVar["),
+                    pre_range,
+                )));
+                self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                    "] = ".to_owned(),
+                    post_range,
+                )));
             }
             Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__let__" | "__final__")) =>
             {
@@ -524,7 +574,8 @@ impl<'src> Modifiers<'src> {
                 // start at the statement, not the marker, so any modifier prefix
                 // ahead of `let` (e.g. `override let a: T = v`) is erased too
                 let pre_range = TextRange::new(node.range().start(), slice.range().start());
-                let post_range = TextRange::new(slice.range().end(), value.range().start());
+                let post_range =
+                    TextRange::new(slice.range().end(), self.value_range(node, value).start());
                 if self.class_depth > 0 && !is_final {
                     // inside class: `a: T = v` (no Final wrapper; keep the type)
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
@@ -614,6 +665,20 @@ impl<'ast> Visitor<'ast> for Modifiers<'_> {
 }
 
 /// renames all `Name` expression nodes that match a `private`-renamed symbol
+/// The name a module-level `private` symbol is emitted under: one leading
+/// underscore, which is python's own mark for "not part of the interface".
+///
+/// A name that already has one is left alone. Adding a second would make it a
+/// `__name`, and python name-mangles every `__name` it reads inside a class
+/// body — so `private def _has_room` would become `__has_room` at module level
+/// and be looked up as `_Diagnostics__has_room` from a method that calls it.
+fn module_private_name(name: &str) -> String {
+    if name.starts_with('_') {
+        return name.to_owned();
+    }
+    format!("_{name}")
+}
+
 pub(crate) struct NameRenamer {
     renames: HashMap<String, String>,
     pub(crate) edits: Vec<Fix>,
@@ -623,7 +688,7 @@ impl NameRenamer {
     pub(crate) fn new(private_names: &[String]) -> Self {
         let renames = private_names
             .iter()
-            .map(|n| (n.clone(), format!("_{n}")))
+            .map(|n| (n.clone(), module_private_name(n)))
             .collect();
         Self {
             renames,
@@ -1071,6 +1136,22 @@ mod tests {
     }
 
     #[test]
+    fn private_module_function_already_underscored() {
+        // a second underscore would make it a `__name`, which python mangles
+        // inside every class body that reads it
+        check(
+            indoc! {"
+                private def _has_room() -> bool:
+                    return True
+            "},
+            indoc! {"
+                def _has_room() -> bool:
+                    return True
+            "},
+        );
+    }
+
+    #[test]
     fn export_protocol() {
         check(
             "export protocol Foo: ...\n",
@@ -1089,6 +1170,116 @@ mod tests {
             indoc! {"
                 from typing import Final
                 MAX: Final = 100
+            "},
+        );
+    }
+
+    #[test]
+    fn class_var_annotated_decl() {
+        check(
+            indoc! {"
+                class A:
+                    class var count: int = 0
+                    class var kind: str
+            "},
+            indoc! {"
+                from typing import ClassVar
+                class A:
+                    count: ClassVar[int] = 0
+                    kind: ClassVar[str]
+            "},
+        );
+    }
+
+    #[test]
+    fn class_let_annotated_decl_is_final() {
+        // a read-only class attribute is python's `Final`, which in a class body
+        // can be reassigned neither through the class nor an instance
+        check(
+            indoc! {"
+                class A:
+                    class let ORIGIN: int = 0
+            "},
+            indoc! {"
+                from typing import Final
+                class A:
+                    ORIGIN: Final[int] = 0
+            "},
+        );
+    }
+
+    #[test]
+    fn let_decl_parenthesized_multiline_value() {
+        // an expression's range starts inside its parentheses, so the lowering
+        // has to reach back out for the `(` or its `)` is stranded below
+        check(
+            indoc! {"
+                let total = (
+                    1
+                    + 2
+                )
+            "},
+            indoc! {"
+                from typing import Final
+                total: Final = (
+                    1
+                    + 2
+                )
+            "},
+        );
+    }
+
+    #[test]
+    fn typed_let_decl_parenthesized_multiline_value() {
+        check(
+            indoc! {"
+                let total: int = (
+                    1
+                    + 2
+                )
+            "},
+            indoc! {"
+                from typing import Final
+                total: Final[int] = (
+                    1
+                    + 2
+                )
+            "},
+        );
+    }
+
+    #[test]
+    fn let_decl_parenthesized_value_with_comment() {
+        // the walk back to the `(` steps over a trailing comment on the way
+        check(
+            indoc! {"
+                let total = (  # the sum
+                    1 + 2
+                )
+            "},
+            indoc! {"
+                from typing import Final
+                total: Final = (  # the sum
+                    1 + 2
+                )
+            "},
+        );
+    }
+
+    #[test]
+    fn newtype_parenthesized_multiline_value() {
+        // `newtype` re-emits the value, so it needs the closing parenthesis too
+        check(
+            indoc! {"
+                newtype Id = (
+                    int
+                )
+            "},
+            indoc! {"
+                from typing import NewType
+                Id = NewType(\"Id\", (
+                    int
+                ))
             "},
         );
     }

@@ -24,3 +24,14 @@ def h(c: bool) -> int:
         1
     else:
         2
+
+
+# the loop escapes stand where a value is expected, like `raise` and `return`
+def escapes(rows: list[int | None]) -> int:
+    total = 0
+    for row in rows:
+        one = row ?? continue
+        two = row ?? break
+        three = row if row else break
+        total += one + two + three
+    return total

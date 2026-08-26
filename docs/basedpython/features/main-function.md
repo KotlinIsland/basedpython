@@ -87,10 +87,64 @@ tokens on the command line still line up with the remaining parameters. a
 `bool` without a default is required, meaning one of the two flags must be
 given.
 
+an [optional](wrapped-results.md) `T?` is spelled as its `T` — leaving the
+argument out is what the `None` stands for — and so is a `T | None`
+
+a union of literals becomes the set of values the argument accepts, written
+either way round. argparse rejects anything else before `main` runs:
+
+```by
+def main(mode: "fast" | "slow" = "fast"): ...
+```
+
+```by
+from typing import Literal
+
+def main(mode: Literal["fast", "slow"] = "fast"): ...
+```
+
+```sh
+> by run main --mode sideways
+main: error: argument --mode: invalid choice: 'sideways'
+```
+
+a union of a named type and a literal (`int | "auto"`) is not exposed: no
+argument could satisfy both halves, so there is nothing to offer
+
 a parameter with any other annotation is not exposed. if it has a default it
 simply keeps that default; if it is required, `main` cannot be called from the
 command line at all and is left alone — the module gets no entry-point guard.
-`*args` / `**kwargs` are never exposed, and never block the guard.
+`**kwargs` is never exposed, and never blocks the guard.
+
+### the arguments the interface does not claim
+
+a program launched by another one is handed flags it never declared. a `*rest`
+written *first* asks for them: everything after it is keyword-only, so the
+arguments the interface does not recognise are the only positional ones and
+they arrive in `rest`
+
+```by
+def main(*rest: str, games: int = 1):
+    print(games, rest)
+```
+
+```sh
+> by run main --games 3 --LadderServer 127.0.0.1
+3 ('--LadderServer', '127.0.0.1')
+```
+
+they arrive as the strings the command line carried, so the vararg's own
+annotation converts them the way a declared parameter's does — `*rest: int`
+hands `main` integers. an annotation with no command-line spelling has nothing
+to convert with, and the vararg goes back to being one nothing fills
+
+a `*rest` written after an ordinary parameter cannot mean that either — the
+parameter ahead of it would take the first unclaimed argument as its own — so
+there it stays what python makes it
+
+a flag the interface *does* declare is still matched, so `--games` reaches
+`games`; anything else reaches `rest`, a misspelling of a declared flag
+included
 
 positional-only and keyword-only parameters keep their calling convention: a
 positional-only parameter is still passed positionally to `main` even when the

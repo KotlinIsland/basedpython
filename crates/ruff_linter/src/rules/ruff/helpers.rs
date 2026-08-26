@@ -58,6 +58,16 @@ pub(super) fn is_dataclass_field(
 
 /// Returns `true` if the given [`Expr`] is a `typing.ClassVar` annotation.
 pub(super) fn is_class_var_annotation(annotation: &Expr, semantic: &SemanticModel) -> bool {
+    // basedpython: `class x = v` and `class var x: T = v` *are* class variables.
+    // The parser gives them a synthetic marker in annotation position, which is
+    // what the source wrote `ClassVar` with
+    if matches!(
+        map_subscript(annotation),
+        Expr::Name(name) if matches!(name.id.as_str(), "__classvar__" | "__classvar_annot__")
+    ) {
+        return true;
+    }
+
     if !semantic.seen_typing() {
         return false;
     }
@@ -69,6 +79,15 @@ pub(super) fn is_class_var_annotation(annotation: &Expr, semantic: &SemanticMode
 
 /// Returns `true` if the given [`Expr`] is a `typing.Final` annotation.
 pub(super) fn is_final_annotation(annotation: &Expr, semantic: &SemanticModel) -> bool {
+    // basedpython: `final x: T = v` and `class let x: T = v` lower to `Final`,
+    // and carry a synthetic marker in annotation position until they do
+    if matches!(
+        map_subscript(annotation),
+        Expr::Name(name) if name.id.as_str() == "__final__"
+    ) {
+        return true;
+    }
+
     if !semantic.seen_typing() {
         return false;
     }
@@ -109,6 +128,18 @@ pub(super) fn dataclass_kind<'a>(
     class_def: &'a ast::StmtClassDef,
     semantic: &SemanticModel,
 ) -> Option<(DataclassKind, &'a ast::Decorator)> {
+    // basedpython: `data class C:` and `frozen data class C:` carry the modifier
+    // as a synthetic decorator — a name the source never wrote, marked by
+    // `ExprContext::Invalid`. it lowers to `@dataclass`, so it is one for every
+    // rule's purposes, and the file need not import `dataclasses` to say so
+    if let Some(decorator) = class_def
+        .decorator_list
+        .iter()
+        .find(|decorator| is_synthetic_dataclass_modifier(decorator))
+    {
+        return Some((DataclassKind::Stdlib, decorator));
+    }
+
     if !(semantic.seen_module(Modules::DATACLASSES) || semantic.seen_module(Modules::ATTRS)) {
         return None;
     }
@@ -167,11 +198,46 @@ pub(super) fn dataclass_kind<'a>(
     None
 }
 
+/// basedpython: whether `class_def` is a `data class`, whose dataclass-ness
+/// comes from the modifier keyword rather than a decorator the source wrote.
+///
+/// The lowering moves every re-evaluated default into a
+/// `field(default_factory=…)` on its own, so the rules that ask a dataclass
+/// author to write that by hand have nothing to say about one.
+pub(super) fn is_basedpython_data_class(class_def: &ast::StmtClassDef) -> bool {
+    class_def
+        .decorator_list
+        .iter()
+        .any(is_synthetic_dataclass_modifier)
+}
+
+/// basedpython: whether `decorator` is the synthetic marker for a `data class`.
+///
+/// A modifier keyword parses as a decorator the source never wrote `@` for, and
+/// the expression it wraps carries [`ExprContext::Invalid`] to say the name is
+/// not a runtime reference. A real `@data_class` decorator is an ordinary one
+/// and must not be mistaken for the modifier.
+fn is_synthetic_dataclass_modifier(decorator: &ast::Decorator) -> bool {
+    matches!(
+        &decorator.expression,
+        Expr::Name(name)
+            if name.ctx.is_invalid()
+                && matches!(name.id.as_str(), "data_class" | "frozen_data_class")
+    )
+}
+
 /// Return true if dataclass (stdlib or `attrs`) is frozen
 pub(super) fn is_frozen_dataclass(
     dataclass_decorator: &ast::Decorator,
     semantic: &SemanticModel,
 ) -> bool {
+    if is_synthetic_dataclass_modifier(dataclass_decorator) {
+        return matches!(
+            &dataclass_decorator.expression,
+            Expr::Name(name) if name.id.as_str() == "frozen_data_class"
+        );
+    }
+
     let Some(qualified_name) =
         semantic.resolve_qualified_name(map_callable(&dataclass_decorator.expression))
     else {

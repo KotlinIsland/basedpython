@@ -88,6 +88,27 @@ impl<'db> SemanticModel<'db> {
         self.file().path(self.db)
     }
 
+    /// basedpython: the name a `private` method is reached by in the emitted
+    /// python, for an attribute access that resolves to one.
+    ///
+    /// The definition is lowered to `__helper`, which python name-mangles to
+    /// `_A__helper` in class `A`'s body. A call site must reach the same
+    /// attribute, and python's mangling is lexical — it would spell `__helper`
+    /// as `_B__helper` in a subclass's body, and leave it alone outside a class
+    /// altogether — so the mangled name is written out in full instead, which
+    /// reads the same from everywhere.
+    ///
+    /// `None` when the attribute is not a private method.
+    pub fn private_method_name(&self, attribute: &ast::ExprAttribute) -> Option<String> {
+        crate::types::visibility::private_method_name(
+            self.db,
+            &self.program_environment(),
+            attribute.value.inferred_type(self)?,
+            attribute.inferred_type(self)?,
+            attribute.attr.as_str(),
+        )
+    }
+
     /// basedpython: the source text of the specialization step the transpiler
     /// splices in after the callee of a bare reified-generic call (`f(1)` →
     /// `"[int]"`). `None` when the call is not a bare reified-generic call or
@@ -199,6 +220,43 @@ impl<'db> SemanticModel<'db> {
     pub fn eagerly_imported_modules(&self) -> Vec<String> {
         let db = self.db;
         crate::types::conformance::eagerly_imported_modules(self.db, self.file.file(db))
+    }
+
+    /// basedpython: the names this file imports that must be bound to the real
+    /// object rather than to a lazy proxy — the exception classes.
+    ///
+    /// `except` is the one place cpython refuses a stand-in: it checks that what
+    /// it catches is a class inheriting `BaseException`, and never consults
+    /// `__instancecheck__`. A proxy there raises `TypeError` from the handler —
+    /// the line least likely to be covered by a happy-path test — so an
+    /// exception class is imported eagerly and the proxy never stands where it
+    /// cannot work.
+    pub fn eagerly_imported_names(&self) -> Vec<String> {
+        let db = self.db;
+        let env = self.program_environment();
+        let module = parsed_module(db, self.file.python_file(db)).load(db);
+        let mut names = Vec::new();
+        let mut collect = |import: &ast::StmtImportFrom| {
+            for alias in &import.names {
+                let Some(Type::ClassLiteral(class)) = alias.inferred_type(self) else {
+                    continue;
+                };
+                if Type::instance(db, &env, class.default_specialization(db)).is_assignable_to(
+                    db,
+                    &env,
+                    crate::types::KnownClass::BaseException.to_instance(db, &env),
+                ) {
+                    let bound = alias.asname.as_ref().unwrap_or(&alias.name);
+                    names.push(bound.id.to_string());
+                }
+            }
+        };
+        for statement in module.suite() {
+            if let ast::Stmt::ImportFrom(import) = statement {
+                collect(import);
+            }
+        }
+        names
     }
 
     /// basedpython: when an attribute access reads a *requirement* off an

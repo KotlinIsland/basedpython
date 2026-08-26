@@ -26,8 +26,9 @@ use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Expr, Parameter, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-use super::ast_driver::{PassContext, TypeAwarePass};
+use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::callable::lower_type_expr_full;
+use super::mutable_defaults::{first_body_statement, parameter_guards};
 use crate::type_info::TypeInfo;
 
 pub(crate) struct InitMethod<'src> {
@@ -47,12 +48,18 @@ impl TypeAwarePass for InitMethod<'_> {
             types,
             symbolic_substitutions: ctx.symbolic_substitutions.clone(),
             edits: RefCell::new(Vec::new()),
+            templates: RefCell::new(Vec::new()),
             errors: RefCell::new(Vec::new()),
+            needs_missing: RefCell::new(false),
         };
         for stmt in stmts {
             state.visit_stmt(stmt);
         }
+        if state.needs_missing.into_inner() {
+            ctx.required_imports.push("_MISSING = object()".to_owned());
+        }
         ctx.text_edits.extend(state.edits.into_inner());
+        ctx.template_edits.extend(state.templates.into_inner());
         ctx.errors.extend(state.errors.into_inner());
     }
 }
@@ -85,7 +92,10 @@ struct State<'src> {
     /// unless it is spliced in here
     symbolic_substitutions: Vec<(TextRange, String)>,
     edits: RefCell<Vec<(TextRange, String)>>,
+    templates: RefCell<Vec<(TextRange, Vec<Fragment>)>>,
     errors: RefCell<Vec<String>>,
+    /// whether the `_MISSING` sentinel reached the output
+    needs_missing: RefCell<bool>,
 }
 
 impl State<'_> {
@@ -186,7 +196,6 @@ impl State<'_> {
         // 2. collect attribute-declaring parameters (`let` / `var`, optionally
         //    `private` / `public`) from every slot, strip the modifier prefix
         //    from the source, and validate the combination
-        let params_end = func.parameters.range.end();
         let mut let_assignments: Vec<String> = Vec::new();
         let mut handle = |param: &Parameter| {
             let Some((prefix_range, words)) = self.modifier_prefix(param) else {
@@ -258,8 +267,10 @@ impl State<'_> {
             handle(k);
         }
 
-        // 3. insert the self-assignments
-        let first_user_stmt = func.body.iter().find(|s| s.range().start() >= params_end);
+        // 3. insert the self-assignments. whether there is a body at all is the
+        // question `mutable_defaults` asks too, so the two never disagree about
+        // which of them writes the guards a default needs
+        let first_user_stmt = first_body_statement(func);
         if let Some(first) = first_user_stmt {
             if !let_assignments.is_empty() {
                 let stmt_indent = self.line_indent(first.range().start()).to_owned();
@@ -273,20 +284,44 @@ impl State<'_> {
                 self.push(TextRange::new(pos, pos), text);
             }
         } else {
+            // the whole body is written here, so the guards a defaulted or
+            // relaxed-order parameter needs are written here too — `mutable_
+            // defaults` has no source statement to anchor them before
+            let (sentinels, guards) = parameter_guards(func);
             let header_indent = self.line_indent(func.range.start()).to_owned();
             let body_indent = format!("{header_indent}    ");
-            let mut text = String::from(":");
-            if let_assignments.is_empty() {
-                text.push_str(" ...");
+            let mut frags = vec![Fragment::Lit(":".to_owned())];
+            if let_assignments.is_empty() && guards.is_empty() {
+                frags.push(Fragment::Lit(" ...".to_owned()));
             } else {
+                for guard in &guards {
+                    frags.push(Fragment::Lit(format!("\n{body_indent}")));
+                    guard.push(&mut frags, &body_indent);
+                }
                 for line in &let_assignments {
-                    text.push('\n');
-                    text.push_str(&body_indent);
-                    text.push_str(line);
+                    frags.push(Fragment::Lit(format!("\n{body_indent}{line}")));
                 }
             }
             let pos = func.range.end();
-            self.push(TextRange::new(pos, pos), text);
+            if guards.is_empty() {
+                // no passthrough to carry, so emit plain text: a template
+                // absorbs the zero-width insertions a sibling lowering left at
+                // this offset, and here they belong to the signature
+                let text = frags
+                    .iter()
+                    .map(|frag| match frag {
+                        Fragment::Lit(lit) => lit.as_str(),
+                        Fragment::Src(_) => "",
+                    })
+                    .collect::<String>();
+                self.push(TextRange::new(pos, pos), text);
+                return;
+            }
+            *self.needs_missing.borrow_mut() = true;
+            self.templates.borrow_mut().extend(sentinels);
+            self.templates
+                .borrow_mut()
+                .push((TextRange::new(pos, pos), frags));
         }
     }
 }
@@ -307,6 +342,28 @@ mod tests {
 
     fn check(input: &str, expected: &str) {
         assert_eq!(transpile(input, &Config::test_default()).unwrap(), expected);
+    }
+
+    #[test]
+    fn a_declaring_parameter_lowers_its_annotation_once() {
+        // the parser synthesizes `self.a: T = a` from the parameter, with the
+        // parameter's own ranges — so a type-position pass that walked it would
+        // land a second copy of its edit on the annotation in the header
+        let out = transpile(
+            indoc! {"
+                class L:
+                    init(let a: int?, var b: int?)
+            "},
+            &Config {
+                min_version: crate::PythonVersion::PY39,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("def __init__(self, a: Union[int, None], b: Union[int, None]):"),
+            "got:\n{out}"
+        );
     }
 
     /// a variadic parameter's span opens on its `*` / `**`, which is syntax and not a modifier

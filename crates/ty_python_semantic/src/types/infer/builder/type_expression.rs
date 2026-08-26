@@ -1178,7 +1178,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         env,
                         [inner, Type::none(self.db(), env)],
                     );
-                    if matches!(inner, Type::TypeVar(_)) {
+                    // `Self` is the one type variable that can never bind to an
+                    // optional: it stands for the enclosing class, so `Self?` has
+                    // no inner layer to keep apart and is the plain union
+                    if matches!(inner, Type::TypeVar(typevar)
+                        if !matches!(typevar.kind(self.db()), TypeVarKind::TypingSelf))
+                    {
                         return Type::KnownInstance(KnownInstanceType::WrappedOptional(
                             InternedType::new(self.db(), decomposition),
                         ));

@@ -1578,6 +1578,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return;
         };
         let expression = &decorator.expression;
+        // `await f(x):` hangs the block on the call — awaiting is what the caller
+        // does with what the call returns
+        let awaited = match expression {
+            ast::Expr::Await(await_expr) => Some(await_expr.value.as_ref()),
+            _ => None,
+        };
+        let called = awaited.unwrap_or(expression);
 
         // the callee is a standalone expression (see the semantic index
         // builder), so the lambda's `it` parameter inference shares this
@@ -1585,7 +1592,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let callee_ty = self.infer_standalone_expression(signature_callee, TypeContext::default());
 
         let mut items: Vec<(Argument<'_>, Option<Type<'db>>)> = Vec::new();
-        let marker_call = match expression {
+        let marker_call = match called {
             ast::Expr::Call(call) if std::ptr::eq(signature_callee, call.func.as_ref()) => {
                 Some(call)
             }
@@ -1639,8 +1646,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
         };
         if marker_call.is_some() {
-            self.store_expression_type(expression, return_ty);
+            self.store_expression_type(called, return_ty);
         }
+        // the `await` reads through the call's result, and it is the awaited type
+        // that the statement — and anything reading the block's value — sees
+        let return_ty = if awaited.is_some() {
+            let awaited_ty = return_ty.try_await(self.db(), env).unwrap_or_else(|err| {
+                err.report_diagnostic(&self.context, return_ty, called.into());
+                Type::unknown()
+            });
+            self.store_expression_type(expression, awaited_ty);
+            awaited_ty
+        } else {
+            return_ty
+        };
         // a block written as a statement's value takes this as its type; the bare
         // callee form has no call node of its own to read it back from
         self.trailing_lambda_return = Some(return_ty);
@@ -9933,9 +9952,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         self.infer_statement(&statement.stmt);
 
-        // `raise` and `return` never complete, so they have no value position to
-        // bind and are not subject to the exhaustiveness check
-        if matches!(&*statement.stmt, ast::Stmt::Raise(_) | ast::Stmt::Return(_)) {
+        // `raise`, `return`, `break` and `continue` never complete, so they have
+        // no value position to bind and are not subject to the exhaustiveness
+        // check
+        if matches!(
+            &*statement.stmt,
+            ast::Stmt::Raise(_)
+                | ast::Stmt::Return(_)
+                | ast::Stmt::Break(_)
+                | ast::Stmt::Continue(_)
+        ) {
             return Type::Never;
         }
 

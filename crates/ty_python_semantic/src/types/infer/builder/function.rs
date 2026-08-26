@@ -2067,9 +2067,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         else {
             return;
         };
-        // the block returns `None`; a declared return type that accepts `None`
-        // (`None`, `int | None`, `object`, …) is satisfiable, anything else is not
-        if Type::none(db, env).is_assignable_to(db, env, return_ty) {
+        // a block whose body awaits lowers to an `async def`, so what it returns
+        // is the coroutine that calling it produces
+        let block_return = if function.is_async {
+            KnownClass::CoroutineType.to_specialized_instance(
+                db,
+                env,
+                &[Type::any(), Type::any(), Type::none(db, env)],
+            )
+        } else {
+            Type::none(db, env)
+        };
+        // a declared return type that accepts what the block returns (`None`,
+        // `int | None`, `object`, …) is satisfiable, anything else is not
+        if block_return.is_assignable_to(db, env, return_ty) {
             return;
         }
         if let Some(builder) = self
@@ -2077,8 +2088,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .report_lint(&TRAILING_LAMBDA_RETURN_TYPE, callee)
         {
             builder.into_diagnostic(format_args!(
-                "a trailing-lambda callback must return `None`, not `{}` \
+                "a trailing-lambda callback must return `{}`, not `{}` \
                  (other return types are not yet supported)",
+                block_return.display(db, env),
                 return_ty.display(db, env)
             ));
         }

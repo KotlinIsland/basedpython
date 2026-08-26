@@ -15,7 +15,9 @@
 //! existing `__main__` guard or a bare top-level `main()` call — so the entry
 //! point never runs twice
 
-use ruff_python_ast::{CmpOp, Expr, ModModule, Parameters, Stmt, StmtFunctionDef};
+use std::fmt::Write as _;
+
+use ruff_python_ast::{self as ast, CmpOp, Expr, ModModule, Parameters, Stmt, StmtFunctionDef};
 
 use super::ast_driver::{AstPass, PassContext};
 use super::source_util::is_synthetic_decorator;
@@ -29,11 +31,16 @@ use super::source_util::is_synthetic_decorator;
 /// registered as two arguments over internal `p<i>` / `o<i>` destinations and
 /// merged afterwards. `bool` is a flag pair (`--name` / `--no-name`) and takes
 /// no positional slot
-const MAIN_ARGS_RUNTIME: &str = r#"def _by_main_args(_fn, _params):
+///
+/// `_extra` is the converter of `main`'s leading `*rest`, which asks for
+/// whatever the interface does not claim. everything declared after it is
+/// keyword-only, so the extras are the only positional arguments and bind to
+/// `*rest`. `None` means there is no such parameter
+const MAIN_ARGS_RUNTIME: &str = r#"def _by_main_args(_fn, _params, _extra=None):
     import argparse
 
     _parser = argparse.ArgumentParser(description=_fn.__doc__)
-    for _i, (_name, _type, _kind, _required) in enumerate(_params):
+    for _i, (_name, _type, _kind, _required, _choices) in enumerate(_params):
         _flags = [f"--{_name.replace('_', '-')}"]
         if "_" in _name:
             _flags.append(f"--{_name}")
@@ -47,15 +54,35 @@ const MAIN_ARGS_RUNTIME: &str = r#"def _by_main_args(_fn, _params):
             )
             continue
         if _kind != "keyword":
-            _parser.add_argument(f"p{_i}", metavar=_name, nargs="?", type=_type, default=None)
+            _parser.add_argument(
+                f"p{_i}",
+                metavar=_name,
+                nargs="?",
+                type=_type,
+                default=None,
+                choices=_choices,
+            )
         _parser.add_argument(
-            *_flags, dest=f"o{_i}", metavar=_name.upper(), type=_type, default=None
+            *_flags,
+            dest=f"o{_i}",
+            metavar=_name.upper(),
+            type=_type,
+            default=None,
+            choices=_choices,
         )
-    _parsed = vars(_parser.parse_args())
+    if _extra is None:
+        _parsed = vars(_parser.parse_args())
+        _rest = []
+    else:
+        _namespace, _rest = _parser.parse_known_args()
+        _parsed = vars(_namespace)
+        # `parse_known_args` hands back what it did not recognise as it was
+        # written, so the vararg's own annotation is what converts it
+        _rest = [_extra(_value) for _value in _rest]
     _args = []
     _kwargs = {}
     _omitted = None
-    for _i, (_name, _type, _kind, _required) in enumerate(_params):
+    for _i, (_name, _type, _kind, _required, _choices) in enumerate(_params):
         _value = _parsed.get(f"o{_i}")
         _positional = _parsed.get(f"p{_i}")
         if _value is not None and _positional is not None:
@@ -74,6 +101,10 @@ const MAIN_ARGS_RUNTIME: &str = r#"def _by_main_args(_fn, _params):
             _args.append(_value)
         else:
             _kwargs[_name] = _value
+    for _value in _rest:
+        if _omitted is not None:
+            _parser.error(f"argument {_value}: cannot be given without {_omitted}")
+        _args.append(_value)
     return _args, _kwargs
 "#;
 
@@ -119,7 +150,8 @@ impl AstPass for MainFunction<'_> {
         }
 
         ctx.epilogue.push("if __name__ == \"__main__\":".to_owned());
-        let call = if params.is_empty() {
+        let extra = extra_arguments_converter(&main.parameters);
+        let call = if params.is_empty() && extra.is_none() {
             "main()".to_owned()
         } else {
             ctx.required_imports.push(MAIN_ARGS_RUNTIME.to_owned());
@@ -129,7 +161,11 @@ impl AstPass for MainFunction<'_> {
                 ctx.epilogue
                     .push(format!("        {},", param.spec_entry()));
             }
-            ctx.epilogue.push("    ])".to_owned());
+            let close = match extra {
+                Some(converter) => format!("    ], {converter})"),
+                None => "    ])".to_owned(),
+            };
+            ctx.epilogue.push(close);
             "main(*_by_args, **_by_kwargs)".to_owned()
         };
         if main.is_async {
@@ -157,19 +193,27 @@ struct CliParam {
     /// (positional-only), `keyword` (keyword-only), or `any`
     kind: &'static str,
     required: bool,
+    /// the values the annotation admits, rendered as python literals, when it
+    /// is a literal union — argparse rejects anything else before `main` runs
+    choices: Option<Vec<String>>,
 }
 
 impl CliParam {
-    /// the `(name, converter, kind, required)` tuple `_by_main_args` consumes
+    /// the `(name, converter, kind, required, choices)` tuple `_by_main_args`
+    /// consumes
     fn spec_entry(&self) -> String {
-        let converter = match self.ty {
-            CliType::Value(callable) => callable,
-            CliType::Flag => "None",
+        let converter = match &self.ty {
+            CliType::Value(callable) => (*callable).to_owned(),
+            CliType::Flag => "None".to_owned(),
         };
         let required = if self.required { "True" } else { "False" };
         let name = &self.name;
         let kind = self.kind;
-        format!("(\"{name}\", {converter}, \"{kind}\", {required})")
+        let choices = match &self.choices {
+            Some(values) => format!("({},)", values.join(", ")),
+            None => "None".to_owned(),
+        };
+        format!("(\"{name}\", {converter}, \"{kind}\", {required}, {choices})")
     }
 }
 
@@ -191,11 +235,12 @@ fn cli_params(params: &Parameters) -> Option<Vec<CliParam>> {
         for param in group {
             let required = param.default.is_none();
             match param.parameter.annotation.as_deref().and_then(cli_type) {
-                Some(ty) => cli.push(CliParam {
+                Some((ty, choices)) => cli.push(CliParam {
                     name: param.parameter.name.to_string(),
                     ty,
                     kind,
                     required,
+                    choices,
                 }),
                 None if required => return None,
                 None => {}
@@ -205,24 +250,188 @@ fn cli_params(params: &Parameters) -> Option<Vec<CliParam>> {
     Some(cli)
 }
 
-/// The command-line spelling of an annotation, or `None` when it has none.
+/// The command-line spelling of an annotation — its converter and, for a
+/// literal union, the values it admits — or `None` when it has none.
 ///
 /// Matched on the annotation as written: the converter emitted into the spec
 /// is the same name the source used, so it resolves to whatever that name is
 /// bound to at runtime.
-fn cli_type(annotation: &Expr) -> Option<CliType> {
+fn cli_type(annotation: &Expr) -> Option<(CliType, Option<Vec<String>>)> {
     match annotation {
-        Expr::Name(name) => match name.id.as_str() {
-            "bool" => Some(CliType::Flag),
-            "str" => Some(CliType::Value("str")),
-            "int" => Some(CliType::Value("int")),
-            "float" => Some(CliType::Value("float")),
-            "Path" => Some(CliType::Value("Path")),
-            _ => None,
-        },
+        Expr::Name(name) => {
+            let ty = match name.id.as_str() {
+                "bool" => CliType::Flag,
+                "str" => CliType::Value("str"),
+                "int" => CliType::Value("int"),
+                "float" => CliType::Value("float"),
+                "Path" => CliType::Value("Path"),
+                _ => return None,
+            };
+            Some((ty, None))
+        }
         Expr::Attribute(attr) => (attr.attr.as_str() == "Path"
             && matches!(&*attr.value, Expr::Name(name) if name.id.as_str() == "pathlib"))
-        .then_some(CliType::Value("pathlib.Path")),
+        .then_some((CliType::Value("pathlib.Path"), None)),
+        // `T?` — an absent argument is what the `None` stands for, so the
+        // spelling is `T`'s
+        Expr::UnaryOp(unary) if matches!(unary.op, ast::UnaryOp::Optional) => {
+            cli_type(&unary.operand)
+        }
+        // a union: either `T | None`, which is `T?` written out, or a union of
+        // literals, which argparse expresses as `choices`
+        Expr::BinOp(bin_op) if matches!(bin_op.op, ast::Operator::BitOr) => {
+            let mut named: Option<(CliType, Option<Vec<String>>)> = None;
+            let mut literals = Vec::new();
+            let mut literal_converter: Option<&'static str> = None;
+            for operand in union_operands(annotation) {
+                if is_none_literal(operand) {
+                    continue;
+                }
+                if let Some((converter, rendered)) = literal_choice(operand) {
+                    if *literal_converter.get_or_insert(converter) != converter {
+                        return None;
+                    }
+                    literals.push(rendered);
+                    continue;
+                }
+                // a second named operand is a union with no single converter
+                if named.is_some() {
+                    return None;
+                }
+                named = Some(cli_type(operand)?);
+            }
+            match (named, literal_converter) {
+                // `T | None` — the `None` is what leaving the argument out means
+                (Some(spelling), None) => Some(spelling),
+                // every operand a literal of one kind: the values it admits
+                (None, Some(converter)) => Some((CliType::Value(converter), Some(literals))),
+                // a named type beside a literal (`int | "a"`) admits neither the
+                // type's values nor the literal's, so nothing on the command
+                // line could satisfy both. nothing but `None`s says nothing
+                _ => None,
+            }
+        }
+        // `Literal["a", "b"]` — the same set spelled the typing way, bare or
+        // through the module it comes from
+        Expr::Subscript(subscript) if trailing_name(&subscript.value) == Some("Literal") => {
+            let mut literals = Vec::new();
+            let mut converter: Option<&'static str> = None;
+            for element in slice_elements(&subscript.slice) {
+                let (ty, rendered) = literal_choice(element)?;
+                if *converter.get_or_insert(ty) != ty {
+                    return None;
+                }
+                literals.push(rendered);
+            }
+            Some((CliType::Value(converter?), Some(literals)))
+        }
+        _ => None,
+    }
+}
+
+/// The converter for the arguments `main`'s interface does not claim, when it
+/// asks for them.
+///
+/// A leading `*rest` is the ask: everything declared after it is keyword-only,
+/// so the unclaimed arguments are the only positional ones and bind to `rest`.
+/// A `*rest` written *after* an ordinary parameter cannot mean that — the
+/// parameter ahead of it would take the first unclaimed argument as its own —
+/// so there it stays what python makes it, a variadic nothing fills.
+///
+/// The arguments arrive as the strings the command line carried, so the
+/// vararg's annotation converts them, exactly as a declared parameter's does.
+/// An annotation with no command-line spelling has nothing to convert with, and
+/// the vararg goes back to being one nothing fills.
+fn extra_arguments_converter(params: &Parameters) -> Option<&'static str> {
+    let vararg = params.vararg.as_ref()?;
+    if !(params.posonlyargs.is_empty() && params.args.is_empty()) {
+        return None;
+    }
+    match vararg.annotation.as_deref() {
+        None => Some("str"),
+        Some(annotation) => match cli_type(annotation) {
+            Some((CliType::Value(converter), None)) => Some(converter),
+            // a flag is not a value, and a literal union's `choices` have no
+            // argparse slot to be checked against here
+            _ => None,
+        },
+    }
+}
+
+/// the name a reference ends in — `Literal` for both `Literal` and
+/// `typing.Literal`
+fn trailing_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Name(name) => Some(name.id.as_str()),
+        Expr::Attribute(attribute) => Some(attribute.attr.as_str()),
+        _ => None,
+    }
+}
+
+/// `value` as a python string literal.
+///
+/// Rust's own debug spelling is not python: it escapes a control character as
+/// `\u{7f}`, which python does not read. Everything printable is written as
+/// itself, non-ascii included — the emitted file is the utf-8 python reads by
+/// default.
+fn python_string_literal(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            control if control.is_control() => {
+                let _ = write!(out, "\\x{:02x}", control as u32);
+            }
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// the operands of a `|` union, flattened — `a | b | c` nests to the left
+fn union_operands(annotation: &Expr) -> Vec<&Expr> {
+    fn walk<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+        if let Expr::BinOp(bin_op) = expr
+            && matches!(bin_op.op, ast::Operator::BitOr)
+        {
+            walk(&bin_op.left, out);
+            walk(&bin_op.right, out);
+            return;
+        }
+        out.push(expr);
+    }
+    let mut out = Vec::new();
+    walk(annotation, &mut out);
+    out
+}
+
+/// the elements of a subscript slice, which is a tuple when there is more than
+/// one
+fn slice_elements(slice: &Expr) -> Vec<&Expr> {
+    match slice {
+        Expr::Tuple(tuple) => tuple.elts.iter().collect(),
+        single => vec![single],
+    }
+}
+
+fn is_none_literal(expr: &Expr) -> bool {
+    expr.is_none_literal_expr()
+}
+
+/// a literal the command line can carry, as `(converter, python literal)`
+fn literal_choice(expr: &Expr) -> Option<(&'static str, String)> {
+    match expr {
+        Expr::StringLiteral(string) => Some(("str", python_string_literal(string.value.to_str()))),
+        Expr::NumberLiteral(number) => match &number.value {
+            ast::Number::Int(int) => Some(("int", int.to_string())),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -435,7 +644,7 @@ mod tests {
             indoc! {"
                 if __name__ == \"__main__\":
                     _by_args, _by_kwargs = _by_main_args(main, [
-                        (\"name\", str, \"any\", True),
+                        (\"name\", str, \"any\", True, None),
                     ])
                     main(*_by_args, **_by_kwargs)
             "},
@@ -460,7 +669,7 @@ mod tests {
     fn defaulted_parameter_is_optional() {
         assert!(
             guard("def main(count: int = 1):\n    pass\n")
-                .contains("(\"count\", int, \"any\", False),"),
+                .contains("(\"count\", int, \"any\", False, None),"),
             "got:\n{}",
             guard("def main(count: int = 1):\n    pass\n")
         );
@@ -471,7 +680,7 @@ mod tests {
         // `None` as the converter is what marks a `--name` / `--no-name` pair
         assert!(
             guard("def main(verbose: bool = False):\n    pass\n")
-                .contains("(\"verbose\", None, \"any\", False),"),
+                .contains("(\"verbose\", None, \"any\", False, None),"),
             "got:\n{}",
             guard("def main(verbose: bool = False):\n    pass\n")
         );
@@ -482,13 +691,14 @@ mod tests {
         // the converter runs at runtime, so it must name whatever the module
         // actually imported
         assert!(
-            guard("def main(out: Path):\n    pass\n").contains("(\"out\", Path, \"any\", True),"),
+            guard("def main(out: Path):\n    pass\n")
+                .contains("(\"out\", Path, \"any\", True, None),"),
             "got:\n{}",
             guard("def main(out: Path):\n    pass\n")
         );
         assert!(
             guard("def main(out: pathlib.Path):\n    pass\n")
-                .contains("(\"out\", pathlib.Path, \"any\", True),"),
+                .contains("(\"out\", pathlib.Path, \"any\", True, None),"),
             "got:\n{}",
             guard("def main(out: pathlib.Path):\n    pass\n")
         );
@@ -498,7 +708,7 @@ mod tests {
     fn float_parameter_is_supported() {
         assert!(
             guard("def main(ratio: float):\n    pass\n")
-                .contains("(\"ratio\", float, \"any\", True),"),
+                .contains("(\"ratio\", float, \"any\", True, None),"),
             "got:\n{}",
             guard("def main(ratio: float):\n    pass\n")
         );
@@ -514,9 +724,9 @@ mod tests {
             indoc! {"
                 if __name__ == \"__main__\":
                     _by_args, _by_kwargs = _by_main_args(main, [
-                        (\"a\", str, \"positional\", True),
-                        (\"b\", int, \"any\", False),
-                        (\"c\", str, \"keyword\", False),
+                        (\"a\", str, \"positional\", True, None),
+                        (\"b\", int, \"any\", False, None),
+                        (\"c\", str, \"keyword\", False, None),
                     ])
                     main(*_by_args, **_by_kwargs)
             "},
@@ -529,7 +739,7 @@ mod tests {
         // keeps that default instead of blocking the entry point
         let out = guard("def main(name: str, argv: list[str] | None = None):\n    pass\n");
         assert!(
-            out.contains("(\"name\", str, \"any\", True),"),
+            out.contains("(\"name\", str, \"any\", True, None),"),
             "got:\n{out}"
         );
         assert!(!out.contains("argv"), "got:\n{out}");
@@ -539,11 +749,83 @@ mod tests {
     fn variadic_parameters_are_not_exposed() {
         let out = guard("def main(name: str, *extra: str, **rest: str):\n    pass\n");
         assert!(
-            out.contains("(\"name\", str, \"any\", True),"),
+            out.contains("(\"name\", str, \"any\", True, None),"),
             "got:\n{out}"
         );
         assert!(!out.contains("extra"), "got:\n{out}");
         assert!(!out.contains("rest"), "got:\n{out}");
+    }
+
+    #[test]
+    fn an_optional_parameter_takes_its_inner_spelling() {
+        // leaving the argument out is what the `None` stands for
+        let out = guard("def main(name: str? = None):\n    pass\n");
+        assert!(
+            out.contains("(\"name\", str, \"any\", False, None),"),
+            "got:\n{out}"
+        );
+
+        let out = guard("def main(name: str | None = None):\n    pass\n");
+        assert!(
+            out.contains("(\"name\", str, \"any\", False, None),"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_literal_union_becomes_the_values_it_admits() {
+        let out = guard("def main(mode: \"fast\" | \"slow\" = \"fast\"):\n    pass\n");
+        assert!(
+            out.contains("(\"mode\", str, \"any\", False, (\"fast\", \"slow\",)),"),
+            "got:\n{out}"
+        );
+
+        let out = guard(indoc! {"
+            from typing import Literal
+
+            def main(mode: Literal[\"fast\", \"slow\"] = \"fast\"):
+                pass
+        "});
+        assert!(
+            out.contains("(\"mode\", str, \"any\", False, (\"fast\", \"slow\",)),"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn an_optional_literal_union_keeps_its_values() {
+        let out = guard("def main(mode: (\"fast\" | \"slow\")? = None):\n    pass\n");
+        assert!(
+            out.contains("(\"mode\", str, \"any\", False, (\"fast\", \"slow\",)),"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_mixed_union_has_no_command_line_spelling() {
+        // the choices would not describe the type, so the parameter keeps its
+        // default instead of being exposed under a wrong one
+        let out = guard("def main(mode: \"fast\" | int = \"fast\"):\n    pass\n");
+        assert!(!out.contains("\"mode\""), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_leading_variadic_takes_the_unclaimed_arguments() {
+        let out = guard("def main(*rest: str, games: int = 1):\n    pass\n");
+        assert!(
+            out.contains("(\"games\", int, \"keyword\", False, None),"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("    ], str)"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_trailing_variadic_is_still_not_filled() {
+        // `games` would take the first unclaimed argument as its own, so `rest`
+        // cannot mean "the rest of the command line" here
+        let out = guard("def main(games: int = 1, *rest: str):\n    pass\n");
+        assert!(out.contains("    ])"), "got:\n{out}");
+        assert!(!out.contains("], True)"), "got:\n{out}");
     }
 
     #[test]
@@ -580,16 +862,21 @@ mod tests {
     }
 
     #[test]
-    fn variadic_main_gets_guard() {
-        check(
-            "def main(*args, **kwargs):\n    pass\n",
-            indoc! {"
-                def main(*args, **kwargs):
-                    pass
-                if __name__ == \"__main__\":
-                    main()
-            "},
-        );
+    fn variadic_main_takes_the_command_line() {
+        // a leading `*args` asks for the arguments the interface does not claim,
+        // and with no declared parameter that is all of them. `**kwargs` takes
+        // no positional slot, so it neither receives them nor blocks them
+        let out = guard("def main(*args, **kwargs):\n    pass\n");
+        assert!(out.contains("    ], str)"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_trailing_variadic_main_is_still_not_filled() {
+        // `name` would take the first unclaimed argument as its own, so `args`
+        // cannot mean the rest of the command line here
+        let out = guard("def main(name: str, *args):\n    pass\n");
+        assert!(out.contains("    ])"), "got:\n{out}");
+        assert!(!out.contains("], str)"), "got:\n{out}");
     }
 
     #[test]

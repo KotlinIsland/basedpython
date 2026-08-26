@@ -53,6 +53,7 @@ pub(crate) mod optional_type;
 pub(crate) mod overload;
 pub(crate) mod parametric_is;
 pub(crate) mod postfix_await;
+pub(crate) mod private_method;
 pub(crate) mod propagate;
 pub(crate) mod properties;
 pub(crate) mod protocol_type;

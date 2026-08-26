@@ -126,7 +126,13 @@ const END_SEQUENCE_SET: TokenSet = END_EXPR_SET.remove(TokenKind::Comma);
 pub(super) const fn starts_statement_expression(kind: TokenKind) -> bool {
     matches!(
         kind,
-        TokenKind::If | TokenKind::For | TokenKind::While | TokenKind::Raise | TokenKind::Return
+        TokenKind::If
+            | TokenKind::For
+            | TokenKind::While
+            | TokenKind::Raise
+            | TokenKind::Return
+            | TokenKind::Break
+            | TokenKind::Continue
     )
 }
 
@@ -1175,6 +1181,8 @@ impl<'src> Parser<'src> {
             | TokenKind::While
             | TokenKind::Raise
             | TokenKind::Return
+            | TokenKind::Break
+            | TokenKind::Continue
             | TokenKind::Match
                 if self.options.is_basedpython =>
             {

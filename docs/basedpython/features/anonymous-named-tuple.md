@@ -71,10 +71,12 @@ def f() -> (age: int, name: str):
 f().name  # works at runtime
 ```
 
-**annotated assignments** whose annotation is an anonymous named tuple:
+**annotated assignments** whose annotation is an anonymous named tuple, with or
+without a [declaration modifier](modifiers.md):
 
 ```by
 a: (name: str, age: int) = ("asdf", 1)
+let b: (name: str, age: int) = ("asdf", 1)
 # transpiled to: a: _AnonNamedTuple_xxx = _AnonNamedTuple_xxx("asdf", 1)
 ```
 

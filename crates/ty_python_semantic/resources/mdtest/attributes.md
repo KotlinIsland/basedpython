@@ -4610,6 +4610,61 @@ f = Foo()
 f.count = 1  # error: [invalid-attribute-access]
 ```
 
+### `class var` declares the type instead of inferring it
+
+`class a = v` reads its type off `v`, which a stub has no way to supply. `class var a: T` declares
+it, with or without a value.
+
+```by
+class Foo:
+    class var count: int = 0
+    class var kind: str
+
+reveal_type(Foo.count)  # revealed: int
+reveal_type(Foo.kind)  # revealed: str
+
+f = Foo()
+f.count = 1  # error: [invalid-attribute-access]
+```
+
+### `class let` is the read-only one
+
+Python spells a read-only class attribute `Final`, which can be reassigned neither through the class
+nor through an instance.
+
+```by
+class Origin:
+    pass
+
+class Foo:
+    class let ORIGIN: Origin = Origin()
+
+reveal_type(Foo.ORIGIN)  # revealed: Origin
+
+Foo.ORIGIN = Origin()  # error: [invalid-assignment]
+Foo().ORIGIN = Origin()  # error: [invalid-assignment]
+```
+
+### `class let` needs a value
+
+`__init__` binds an instance, so a read-only class attribute has no later place for a value to
+arrive. A stub is the exception — it states types and never values — and `final-without-value`
+already draws that line.
+
+```by
+class Foo:
+    # error: [final-without-value]
+    class let ORIGIN: int
+```
+
+### `class` is a class-body modifier
+
+```by
+# error: [invalid-syntax] "`class var` declares a class variable, so it belongs in a class body"
+# error: [invalid-type-form]
+class var top: int = 1
+```
+
 [descriptor protocol tests]: descriptor_protocol.md
 [pyright's documentation]: https://microsoft.github.io/pyright/#/type-concepts-advanced?id=class-and-instance-variables
 [typing spec on `classvar`]: https://typing.python.org/en/latest/spec/class-compat.html#classvar

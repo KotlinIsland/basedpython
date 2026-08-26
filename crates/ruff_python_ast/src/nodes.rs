@@ -41,7 +41,13 @@ impl StmtFunctionDef {
             return None;
         }
         let decorator = self.decorator_list.first()?;
-        Some(match &decorator.expression {
+        // `await f(x):` hangs the block on the call — awaiting is what the
+        // caller does with what the call returns, not part of the call
+        let expression = match &decorator.expression {
+            Expr::Await(await_expr) => await_expr.value.as_ref(),
+            expression => expression,
+        };
+        Some(match expression {
             Expr::Call(call) if call.cast_kind.is_none() && !call.is_string_tag => &call.func,
             expression => expression,
         })

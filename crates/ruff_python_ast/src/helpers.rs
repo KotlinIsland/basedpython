@@ -1344,13 +1344,14 @@ pub fn if_let_keyword_range(
 /// basedpython: the synthetic markers a declaration modifier (`let`, `var`,
 /// `final`, `private`, `abstract`, a visibility keyword) wraps its annotation in.
 /// The declared type rides in the subscript slice.
-const DECLARATION_ANNOTATION_MARKERS: [&str; 6] = [
+const DECLARATION_ANNOTATION_MARKERS: [&str; 7] = [
     "__let__",
     "__final__",
     "__modifier_annot__",
     "__private_annot__",
     "__visibility_annot__",
     "__abstract_annot__",
+    "__classvar_annot__",
 ];
 
 /// basedpython: the *declared type* inside a declaration marker, if `annotation`

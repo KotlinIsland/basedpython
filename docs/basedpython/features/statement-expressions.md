@@ -17,9 +17,9 @@ each branch's value is the expression it ends on — no `return`, no assignment
 repeated per arm. the type is the union of the branch values, so `direction`
 above is `Literal[1, -1, 0]`
 
-the forms that carry a suite are `if`, `match`, `for` and `while`. `raise` and
-`return` are also expressions; they never produce a value, so they type as
-`Never`
+the forms that carry a suite are `if`, `match`, `for` and `while`. `raise`,
+`return`, `break` and `continue` are also expressions; they never produce a
+value, so they type as `Never`
 
 ## `if`
 
@@ -82,9 +82,10 @@ a `break` may only carry a value where something reads it — in a loop that is
 not a statement expression there is nowhere for the value to go, and it is
 rejected
 
-## `raise` and `return`
+## the diverging forms
 
-both are `Never`, so they can stand in for a value that will never be produced:
+`raise`, `return`, `break` and `continue` are all `Never`, so each can stand in
+for a value that will never be produced:
 
 ```by
 def lookup(table: dict[str, int], key: str) -> int:
@@ -97,6 +98,18 @@ def parse_port(raw: str?) -> int:
 
 because they are `Never`, the surrounding expression's type is just the other
 branch's — `table.get(key) ?? raise ...` is `int`, not `int | None`
+
+`break` and `continue` bring that to a loop body, where the value that went
+missing is a reason to move on rather than to fail:
+
+```by
+def total(rows: list[str]) -> int:
+    sum = 0
+    for row in rows:
+        amount = parse(row) ?? continue
+        sum += amount
+    return sum
+```
 
 ## nesting
 
@@ -131,7 +144,7 @@ a = 1 + match x:       # error: must be the whole value of its statement
         1
 ```
 
-`raise` and `return` carry no suite, so they may also appear inside the
+the diverging forms carry no suite, so they may also appear inside the
 operators that *choose* between operands — `and`, `or`, `??`, the conditional
 expression, and the walrus:
 
@@ -140,6 +153,7 @@ value = maybe() ?? raise Missing()
 value = cached or raise Missing()
 value = x if x > 0 else raise ValueError(x)
 value = (found := lookup() ?? raise Missing())
+value = maybe() ?? continue
 ```
 
 anywhere else — as a call argument, inside a list, as an operand of `+` — the

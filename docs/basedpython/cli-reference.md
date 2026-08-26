@@ -52,10 +52,30 @@ the project is type-checked first, and a program with check *errors* is not
 run — the checker's verdict and the runtime must not diverge. warnings don't
 block; a rule can be downgraded in configuration where its error is unwanted
 
-the interpreter comes from `PYTHON` (default `python3`), and by default the
-emitted code targets that interpreter's version. an explicit `--min-version`
-wins, but must not exceed the interpreter — `by run` refuses rather than emit
-code the interpreter cannot parse
+the interpreter is the project's own: the environment `by check` resolves
+imports against — the `environment.python` the project configures, else an
+activated virtual environment, a conda environment, or a `.venv` beside the
+project's `pyproject.toml`. `--python` overrides it for one run, and `PYTHON`
+stands in only where the project has no environment of its own, above the bare
+`python3` discovery falls back to. a third-party package lives in that
+environment's `site-packages` and nowhere else, so running anywhere else fails
+on an import the checker had no complaint about. all of that resolves against
+the project root rather than the working directory, so `by run` in a
+subdirectory is still this project
+
+the emitted code targets that interpreter's version by default. an explicit
+`--min-version` wins, but must not exceed the interpreter — `by run` refuses
+rather than emit code the interpreter cannot parse. an interpreter *older* than
+the version the project declares is refused too: the source may use syntax that
+python has no lowering for, and the failure would land as a `SyntaxError` inside
+generated code. passing `--min-version` for the interpreter's own version builds
+for it instead
+
+the program runs in the directory `by run` was invoked from, the way `python -m`
+does. the transpiled tree lives in a temporary directory, which python puts at
+the head of `sys.path` — so a relative path on the command line, and anything
+the program reads or writes beside the project, resolve where they were written
+to
 
 hidden directories (`.claude`, `.git`, `.venv`, …) and build outputs are never
 treated as project source: they are neither checked nor transpiled, by `run`
@@ -80,6 +100,12 @@ so the checker and the emitter agree about which python this project targets
 a file that fails to parse fails the build, but only for itself: every other
 module is still written. a code generator and a test runner are exactly what you
 reach for when one file is mid-edit
+
+artifacts and exit status answer different questions. everything that could be
+emitted is emitted, sourcemap and package markers included; the exit status says
+whether anything was *reported*. so a build that prints an error exits 1 while
+still leaving a usable `out/`, and `by build && pytest out/tests` runs the tests
+only against a tree the checker had nothing to say about
 
 writes the transpiled python to `./out/` mirroring the *module* tree. a
 src-layout project's `src/package_name/main.by` is the module
@@ -158,8 +184,10 @@ compiled 1 module(s)
 1 function(s) left to the interpreted definition
 ```
 
-the C toolchain and the cpython headers come from the interpreter named by
-`PYTHON` (default `python3`), which must have development headers available
+the C toolchain and the cpython headers come from the same interpreter `by run`
+uses, chosen the same way, and it must have development headers available. it
+has to be the same one: an extension built against one abi is unimportable by
+another, and `by run --compiled` imports what this wrote
 
 ## `by generate-api-file`
 

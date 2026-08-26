@@ -498,9 +498,10 @@ no `Final`, no `cached_property` — neither is emitted by this feature
     → parse error
 - `static var`, or `static let` with `set` / `field` / an initialiser → parse
     error: a class-level property is read-only and purely computed
-- `class let` / `class var` → parse error naming `static` as the modifier. the
-    `class` keyword is a modifier for `class def` (a classmethod) and
-    `class x = 1` (a `ClassVar`), but not for a declaration with accessors
+- `class let` / `class var` with an accessor block → parse error naming `static`
+    as the modifier. the `class` keyword declares a
+    [class variable](modifiers.md) (`class x = 1`, `class var x: T`) and a
+    classmethod (`class def`), but not a property
 
 ## why
 
