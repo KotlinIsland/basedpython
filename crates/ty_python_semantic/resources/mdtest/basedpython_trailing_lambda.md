@@ -642,6 +642,38 @@ anything:
     print("a callable is an object")
 ```
 
+## a block whose body awaits is a coroutine function
+
+The block is a function of its own, so `await` in it is a statement about the block. The callback it
+fills is declared to return an awaitable, and the call the block hangs off is awaited by the caller.
+
+```by
+async def query(sql: str) -> int:
+    return 1
+
+async def scope(name: str, once block: () -> Awaitable[None]):
+    await block()
+
+async def main() -> None:
+    await scope("db"):
+        await query("select 1")
+```
+
+## a callback declared to return `None` cannot hold an async block
+
+```by
+def hold(once block: () -> None):
+    block()
+
+async def read() -> int:
+    return 1
+
+async def main() -> None:
+    # error: [trailing-lambda-return-type]
+    hold():
+        await read()
+```
+
 ## not valid in `.py` files
 
 The shape parses exactly as it does in upstream python — an annotated assignment missing its

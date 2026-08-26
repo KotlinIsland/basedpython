@@ -78,6 +78,17 @@ def returning():
 def returning_bare():
     return    f:  # end-of-line on the header
         print(it)
+
+
+# a block whose body awaits: the `await` on the header belongs to the call the
+# block hangs off, and the one in the suite belongs to the block itself
+async def scoped(name: str, once block: () -> Awaitable[None]): ...
+
+
+async def awaiting():
+    await scoped("db"):
+        await scoped("inner"):
+            pass
 ```
 
 ## Output
@@ -156,4 +167,15 @@ def returning():
 def returning_bare():
     return f:  # end-of-line on the header
         print(it)
+
+
+# a block whose body awaits: the `await` on the header belongs to the call the
+# block hangs off, and the one in the suite belongs to the block itself
+async def scoped(name: str, once block: () -> Awaitable[None]): ...
+
+
+async def awaiting():
+    await scoped("db"):
+        await scoped("inner"):
+            pass
 ```

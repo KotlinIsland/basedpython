@@ -209,6 +209,46 @@ def f(h: Holder, d: dict[str, bool | None]):
     if not d["k"]: ...
 ```
 
+## an attribute narrowed by an earlier test is not decided
+
+A call between the narrowing and the read may have written to the attribute, and holding the
+narrowed type across it is what makes attribute narrowing usable. What the class declares is the
+fact, so that is what decides the condition.
+
+```py
+class Latch:
+    on: bool
+
+    def flip(self) -> None:
+        self.on = True
+
+def f(latch: Latch) -> None:
+    latch.on = False
+    latch.flip()
+    if latch.on: ...
+```
+
+## an attribute a property reads is not decided either
+
+The property reads the attribute the call wrote, so the same reasoning reaches through it.
+
+```py
+class Machine:
+    running: bool
+
+    @property
+    def alive(self) -> bool:
+        return self.running
+
+    def tick(self) -> None:
+        self.running = False
+
+def f(machine: Machine) -> None:
+    while machine.alive:
+        machine.tick()
+        if not machine.alive: ...
+```
+
 ## a protocol instance is an instance
 
 ```toml

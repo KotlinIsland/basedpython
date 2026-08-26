@@ -73,6 +73,9 @@ impl<'src> OptionalLower<'src> {
 
 impl<'ast> Visitor<'ast> for OptionalLower<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        if crate::transforms::source_util::is_synthesized_init_declaration(stmt) {
+            return;
+        }
         let type_params = match stmt {
             Stmt::FunctionDef(f) => f.type_params.as_deref(),
             Stmt::ClassDef(c) => c.type_params.as_deref(),

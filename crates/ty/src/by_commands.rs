@@ -276,11 +276,16 @@ pub(crate) fn cmd_run(
         }
     }
 
+    // the program runs where the user invoked it, the way `python -m` does: a
+    // relative path on its command line, and anything it reads or writes beside
+    // the project, resolve against the directory they were written for. python
+    // puts the runner's own directory — the generated tree — at the head of
+    // `sys.path`, so the module is still found there
     let status = Command::new(&python)
-        .arg(BY_RUNNER_FILENAME)
+        .arg(tmp.path().join(BY_RUNNER_FILENAME))
         .arg(&module)
         .args(args)
-        .current_dir(tmp.path())
+        .current_dir(&cwd)
         .status()
         .with_context(|| {
             format!(
@@ -853,7 +858,7 @@ pub(crate) fn cmd_build(
     // is what the digests beside the map are for
     let mut entries: Vec<TracebackEntry> = Vec::new();
     let mut requirements = by_transforms::RuntimeRequirements::default();
-    if !render_check_and_transpile(
+    let ok = render_check_and_transpile(
         &db,
         &handles,
         &config,
@@ -871,10 +876,10 @@ pub(crate) fn cmd_build(
             entries.push(entry);
             Ok(())
         },
-    )? {
-        return Ok(ExitStatus::Failure);
-    }
-
+    );
+    // the sourcemap and the package markers describe the tree that was written,
+    // so they are staged whether or not something was reported — an `out/` a
+    // debugger cannot read is worse than one built from a partial check
     stage_verbatim(&db, &root, &roots, &mut staging)?;
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
     write_sourcemap_module(&mut staging, &entries)?;
@@ -883,6 +888,9 @@ pub(crate) fn cmd_build(
     }
     staging.finish()?;
 
+    if !ok? {
+        return Ok(ExitStatus::Failure);
+    }
     eprintln!("\nbuild complete ({file_count} files)");
     Ok(ExitStatus::Success)
 }
@@ -968,7 +976,11 @@ pub(crate) fn cmd_compile(
         return Ok(ExitStatus::Success);
     }
 
-    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
+    // the same interpreter `by run` picks, resolved the same way: an extension
+    // built against one abi is unimportable by another, and `by run --compiled`
+    // imports what this wrote
+    let project = ResolvedProject::discover(&cwd)?;
+    let python = discover_interpreter(None, &project)?.path;
     // see the note on the other `probe` call: its own errors are self-describing, and the
     // context that used to sit here misreported a version refusal as a missing header
     let toolchain = by_build::Toolchain::probe(&python)?;
@@ -2021,7 +2033,15 @@ fn render_check_and_transpile(
     if !all_diagnostics.is_empty() {
         render_diagnostics(db, &all_diagnostics)?;
     }
-    Ok(ok)
+    // artifacts and exit status answer different questions. the artifacts are
+    // emitted for everything that could be emitted, so a file mid-edit does not
+    // take the rest of the build down; the status says whether anything was
+    // reported, which is what a `&&` in a script reads. a command that prints
+    // `error[...]` and then succeeds is one nothing can be chained onto
+    let reported_an_error = all_diagnostics
+        .iter()
+        .any(|d| d.severity() >= Severity::Error);
+    Ok(ok && !reported_an_error)
 }
 
 /// Whether this diagnostic says the file has no source to transpile: it could

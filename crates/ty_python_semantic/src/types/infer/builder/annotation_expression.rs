@@ -182,7 +182,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         // `[modifiers] a = v`, `newtype X = T`, `abstract a: T`, `private a: T`,
         // `sentinel A` parse to AnnAssign with a synthetic Name/Subscript annotation
         // whose id is one of `__let__`, `__final__`, `__classvar__`, `__context__`,
-        // `__modifier_assign__`, `__modifier_annot__`, `__newtype__`,
+        // `__modifier_assign__`, `__modifier_annot__`, `__classvar_annot__`, `__newtype__`,
         // `__abstract_annot__`, `__private_annot__`, `__sentinel__`.
         // resolve them so ty applies the right qualifier without a transpile step
         // basedpython use-site type modifiers (`literal T`, `final T`) are type
@@ -492,6 +492,15 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     // modifiers ty places no meaning on (`override x: T`,
                     // `abstract x: T`, `private x: T`), and typed `context x: T = v`:
                     // the declaration is just `x: T`
+                    // `class var x: T` — a class variable whose type is
+                    // declared rather than read off a value
+                    "__classvar_annot__" => {
+                        return Some(TypeAndQualifiers::new(
+                            self.infer_type_expression(slice),
+                            TypeOrigin::Declared,
+                            TypeQualifiers::CLASS_VAR,
+                        ));
+                    }
                     "__modifier_annot__"
                     | "__abstract_annot__"
                     | "__visibility_annot__"

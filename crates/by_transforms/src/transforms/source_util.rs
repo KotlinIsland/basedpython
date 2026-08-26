@@ -102,6 +102,110 @@ pub(crate) fn value_separator_start(source: &str, prefix: TextRange) -> TextSize
     TextSize::try_from(at).expect("offset within the source fits u32")
 }
 
+/// The source range a value actually occupies, counting any grouping
+/// parentheses around it.
+///
+/// An expression's range starts *inside* its parentheses and ends inside them
+/// too, so the value of `let a = (\n    1\n    + 2\n)` is reported as spanning
+/// just `1\n    + 2`. A lowering that replaces everything ahead of the value —
+/// `let a = ` becomes `a: Final = ` — would then swallow the `(` and leave the
+/// `)` behind, three lines down and no longer opened. Walking out over the
+/// trivia on both sides recovers the parentheses so the whole group survives
+/// the rewrite.
+///
+/// `limit` is where the walk stops: the end of the last node written *before*
+/// the value — an assignment's annotation or target — or the statement's own
+/// start when nothing precedes it (a `return`'s operand). It has to be that
+/// tight: between a node's end and the value there is only `=`, whitespace,
+/// parentheses and comments, so a `#` found there really does open a comment.
+/// Starting from the statement instead would scan back across the annotation,
+/// where a `#` can sit inside a string.
+///
+/// Only call this where every parenthesis ahead of the value belongs to the
+/// value: an assignment's right-hand side, a `return`'s operand. A call
+/// argument's opening parenthesis belongs to the call, not to the argument.
+pub(crate) fn parenthesized_value_range(
+    source: &str,
+    value: TextRange,
+    limit: TextSize,
+) -> TextRange {
+    let bytes = source.as_bytes();
+    let lo = usize::from(limit);
+    let mut at = usize::from(value.start()).min(source.len());
+    let mut start = at;
+    let mut depth = 0usize;
+    while at > lo {
+        match bytes[at - 1] {
+            // stepping back over a line break lands at the end of the previous
+            // line, where a trailing comment may sit. Nothing between a
+            // statement's words and its value can quote a `#`, so the first one
+            // on the line starts the comment
+            b'\n' => {
+                at -= 1;
+                let line_start = source[lo..at].rfind('\n').map_or(lo, |i| lo + i + 1);
+                if let Some(hash) = source[line_start..at].find('#') {
+                    at = line_start + hash;
+                }
+            }
+            b'(' => {
+                at -= 1;
+                start = at;
+                depth += 1;
+            }
+            byte if byte == b'\\' || byte.is_ascii_whitespace() => at -= 1,
+            _ => break,
+        }
+    }
+
+    // consume exactly as many closing parentheses as were opened, so a
+    // parenthesis belonging to an enclosing construct is left where it is
+    let mut at = usize::from(value.end()).min(source.len());
+    let mut end = at;
+    while depth > 0 && at < source.len() {
+        match bytes[at] {
+            b')' => {
+                at += 1;
+                end = at;
+                depth -= 1;
+            }
+            b'#' => at += source[at..].find('\n').unwrap_or(source.len() - at),
+            byte if byte == b'\\' || byte.is_ascii_whitespace() => at += 1,
+            _ => break,
+        }
+    }
+
+    TextRange::new(
+        TextSize::try_from(start).expect("offset within the source fits u32"),
+        TextSize::try_from(end).expect("offset within the source fits u32"),
+    )
+}
+
+/// basedpython: whether `stmt` is one of the declarations the parser
+/// synthesized for an `init(…)` shorthand — the `self.<name>: __let__[T] =
+/// <name>` that a `let` / `var` parameter stands for.
+///
+/// These have no source of their own: their ranges point back at the parameter
+/// they were built from. A pass that walks type positions would therefore lower
+/// the same source twice, once for the parameter's own annotation and once for
+/// the synthesized declaration's — landing two copies of the same edit on one
+/// range. [`init_method`](super::init_method) writes the real line, so every
+/// other pass leaves them alone.
+///
+/// What identifies them is that the parser gave the statement and its target the
+/// *same* range — the parameter's. A statement the source wrote always extends
+/// past its target, because the `: T = value` follows it.
+pub(crate) fn is_synthesized_init_declaration(stmt: &Stmt) -> bool {
+    let (range, target) = match stmt {
+        Stmt::AnnAssign(assign) => (assign.range(), assign.target.range()),
+        Stmt::Assign(assign) => match assign.targets.first() {
+            Some(target) => (assign.range(), target.range()),
+            None => return false,
+        },
+        _ => return false,
+    };
+    range == target
+}
+
 /// Byte offset of the start of the line containing `pos`. Lines begin at
 /// either offset 0 or one byte past the previous `\n`
 pub(crate) fn line_start(source: &str, pos: TextSize) -> TextSize {

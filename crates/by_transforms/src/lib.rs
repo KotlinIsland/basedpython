@@ -208,8 +208,12 @@ pub fn transpile_with_report(
     // --- Phase 2: import-redirect, surface-syntax cleanup, lazy-import marking ---
     let (final_output, requirements) = run_import_redirect_phase(output, config);
     let final_output = run_anon_named_tuple_cleanup(final_output, config)?;
-    let final_output =
-        run_lazy_import_phase(final_output, config, &model.eagerly_imported_modules());
+    let final_output = run_lazy_import_phase(
+        final_output,
+        config,
+        &model.eagerly_imported_modules(),
+        &model.eagerly_imported_names(),
+    );
     let final_output = run_version_polyfill_phase(final_output, config);
 
     // --- Phase 3: syntax verification ---
@@ -378,8 +382,9 @@ pub fn transpile_typed_with_report(
     };
     // which imports must stay eager, computed against the *project* db: a
     // single-file db cannot resolve the modules that declare the conformances
-    let eager_imports = ty_python_semantic::SemanticModel::new(db, db.program_file(file))
-        .eagerly_imported_modules();
+    let eager_model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
+    let eager_imports = eager_model.eagerly_imported_modules();
+    let eager_names = eager_model.eagerly_imported_names();
     let (spliced, ast_errors, phase0_map) =
         transforms::ast_driver::run_against_source(working_source, config, project);
     if let Some(first) = ast_errors.first() {
@@ -434,7 +439,7 @@ pub fn transpile_typed_with_report(
 
     let (final_output, requirements) = run_import_redirect_phase(output, config);
     let final_output = run_anon_named_tuple_cleanup(final_output, config)?;
-    let final_output = run_lazy_import_phase(final_output, config, &eager_imports);
+    let final_output = run_lazy_import_phase(final_output, config, &eager_imports, &eager_names);
     let final_output = run_version_polyfill_phase(final_output, config);
 
     // phases 1-2c only prepend preambles at the top and edit within lines, so
@@ -607,7 +612,16 @@ fn run_import_redirect_phase(source: String, config: &Config) -> (String, Runtim
 /// `eager` names the modules that must not be deferred whatever the target: a
 /// module declaring a conformance exists at runtime only because its
 /// registration ran, so deferring it defers the conformance out of existence
-fn run_lazy_import_phase(source: String, config: &Config, eager: &[String]) -> String {
+///
+/// `eager_names` names the *bindings* that must be bound to the real object: a
+/// lazy proxy cannot stand where cpython checks for a real class, which is what
+/// `except` does
+fn run_lazy_import_phase(
+    source: String,
+    config: &Config,
+    eager: &[String],
+    eager_names: &[String],
+) -> String {
     if !config.lazy_imports {
         return source;
     }
@@ -622,7 +636,8 @@ fn run_lazy_import_phase(source: String, config: &Config, eager: &[String]) -> S
     .load(&db);
 
     let keyword_supported = config.min_version >= ruff_python_ast::PythonVersion::from((3, 15));
-    let mut lazy = transforms::lazy_import::LazyImport::new(src, keyword_supported, eager);
+    let mut lazy =
+        transforms::lazy_import::LazyImport::new(src, keyword_supported, eager, eager_names);
     for stmt in module.suite() {
         lazy.visit_stmt(stmt);
     }

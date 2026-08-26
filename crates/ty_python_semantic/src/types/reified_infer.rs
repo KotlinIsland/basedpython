@@ -28,6 +28,7 @@ use crate::place::{builtins_symbol, global_symbol};
 use crate::types::ProgramEnvironment;
 use crate::types::call::{Argument, CallArguments};
 use crate::types::class::{ClassLiteral, ClassType, GenericAlias};
+use crate::types::class_base::ClassBase;
 use crate::types::function::FunctionType;
 use crate::types::generics::{Specialization, combine_use_site_projections};
 use crate::types::instance::Protocol;
@@ -36,7 +37,7 @@ use crate::types::protocol_class::ReifiedMember;
 use crate::types::tuple::Tuple;
 use crate::types::typevar::{TypeVarBoundOrConstraints, TypeVarKind};
 use crate::types::variance::TypeVarVariance;
-use crate::types::{KnownClass, Type};
+use crate::types::{KnownClass, MemberLookupPolicy, Type};
 
 /// why a bare call of a reified generic cannot be accepted
 pub(crate) enum ReifiedInferenceError<'db> {
@@ -441,7 +442,69 @@ pub(crate) fn constructor_specialization_display<'db>(
     if origin != class_literal {
         return None;
     }
+    if !is_runtime_subscriptable(db, env, origin) {
+        return None;
+    }
     spell_specialization_arguments(db, env, file, origin, alias.specialization(db))
+}
+
+/// Whether `C[…]` evaluates at runtime, so a reified call may be spelled that
+/// way.
+///
+/// Almost every generic class is subscriptable, because being generic is what
+/// puts `Generic` — and so `__class_getitem__` — among its bases. The
+/// exceptions are all in one place: the C-implemented types of the standard
+/// library, which are generic only in typeshed's description of them.
+/// `zip[tuple[int, str]]` is a `TypeError` on every python version, and so are
+/// `filter`, `map`, `reversed`, most of `itertools`, and `io.TextIOWrapper`.
+///
+/// Typeshed's convention is what tells those apart: it spells out
+/// `__class_getitem__` on each C type that does accept a subscript, because
+/// those implement it themselves rather than inheriting it. A stdlib class that
+/// says neither that nor "I extend a generic class" — `zip` has no base at all
+/// — is the C type it looks like. Every other class, first-party or
+/// third-party, stub or source, is python, and python gives a generic class its
+/// `__class_getitem__`.
+///
+/// Reification is best-effort, so where the signal runs out the answer is no: a
+/// missed `__orig_class__` is a feature not applied, and a subscript the
+/// runtime rejects is a `TypeError`.
+fn is_runtime_subscriptable<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: ClassLiteral<'db>,
+) -> bool {
+    if !describes_the_standard_library(db, class) {
+        return true;
+    }
+    if class
+        .class_member(db, env, "__class_getitem__", MemberLookupPolicy::default())
+        .place
+        .ignore_possibly_undefined()
+        .is_some()
+    {
+        return true;
+    }
+    // the class itself heads its own MRO, and every class with a type-parameter
+    // list carries a `Generic` entry there whether or not its runtime accepts a
+    // subscript — so what is looked for is a *base* that is a specialized
+    // generic class, which for a python class is what drags `Generic` in
+    class
+        .iter_mro(db)
+        .skip(1)
+        .any(|base| matches!(base, ClassBase::Class(ClassType::Generic(_))))
+}
+
+/// Whether `class` is declared in a stub of the standard library, whose classes
+/// are cpython's C types rather than python of their own.
+fn describes_the_standard_library<'db>(db: &'db dyn Db, class: ClassLiteral<'db>) -> bool {
+    let file = class.file(db);
+    if !file.is_stub(db) {
+        return false;
+    }
+    ty_module_resolver::file_to_module(db, db.program_file(file).resolver_file(db))
+        .and_then(|module| module.search_path(db))
+        .is_some_and(ty_module_resolver::SearchPath::is_standard_library)
 }
 
 /// The full runtime spelling (`list[int]`, `tuple[int, str]`) with which the

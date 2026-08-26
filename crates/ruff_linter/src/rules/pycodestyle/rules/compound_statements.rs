@@ -1,7 +1,7 @@
 use ruff_macros::{ViolationMetadata, derive_message_formats};
 use ruff_notebook::CellOffsets;
 use ruff_python_ast::PySourceType;
-use ruff_python_ast::token::{TokenIterWithContext, TokenKind, Tokens};
+use ruff_python_ast::token::{Token, TokenIterWithContext, TokenKind, Tokens};
 use ruff_python_index::Indexer;
 use ruff_text_size::{Ranged, TextSize};
 
@@ -299,7 +299,13 @@ pub(crate) fn compound_statements(
                 else_ = Some(token.range());
             }
             TokenKind::Class => {
-                class = Some(token.range());
+                // basedpython: `class` is also a member modifier — `class def
+                // f(cls)`, `class x = 1`, `class var x: T`. None of those opens
+                // a suite, so a `:` after one belongs to the declaration's type
+                // rather than to a compound statement
+                if !(source_type.is_basedpython() && at_class_modifier(&token_iter)) {
+                    class = Some(token.range());
+                }
             }
             TokenKind::With => {
                 with = Some(token.range());
@@ -309,6 +315,30 @@ pub(crate) fn compound_statements(
             }
             _ => {}
         }
+    }
+}
+
+/// basedpython: whether the tokens after a `class` make it a member modifier
+/// rather than a class definition.
+///
+/// `class def f(cls)` is a classmethod, and `class x = 1` / `class var x: T`
+/// declare a class variable. A class *definition* always has its name followed
+/// by one of `(`, `[` or `:`, so two names in a row — or a `def` — is the
+/// modifier.
+fn at_class_modifier(token_iter: &TokenIterWithContext<'_>) -> bool {
+    let mut rest = token_iter.clone().filter(|token| {
+        !matches!(
+            token.kind(),
+            TokenKind::Comment | TokenKind::NonLogicalNewline
+        )
+    });
+    match rest.next().map(Token::kind) {
+        Some(TokenKind::Def) => true,
+        Some(TokenKind::Name) => matches!(
+            rest.next().map(Token::kind),
+            Some(TokenKind::Equal | TokenKind::Name)
+        ),
+        _ => false,
     }
 }
 

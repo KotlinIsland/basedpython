@@ -56,6 +56,83 @@ pub fn private_symbols(db: &dyn Db, file: File) -> FxHashSet<Name> {
     names
 }
 
+/// basedpython: the name a `private` method is reached by in the emitted
+/// python, for an attribute whose inferred type is `member_type`.
+///
+/// `None` when the attribute is not a private method.
+pub(crate) fn private_method_name<'db>(
+    db: &'db dyn Db,
+    env: &crate::types::ProgramEnvironment<'db>,
+    receiver: crate::types::Type<'db>,
+    member_type: crate::types::Type<'db>,
+    member: &str,
+) -> Option<String> {
+    // a method reaches the access site as the bound method it produced, so its
+    // own type answers. a property hands back whatever its getter returns
+    // instead — an `int` says nothing about the declaration — so the class is
+    // asked for the member it actually holds
+    let function = declared_function(db, member_type)
+        .or_else(|| declared_function(db, class_member(db, env, receiver, member)?))?;
+    if !function.has_known_decorator(db, super::function::FunctionDecorators::PRIVATE) {
+        return None;
+    }
+    let scope = function.definition(db).scope(db);
+    let index = crate::semantic_index(db, scope.program_file(db));
+    let class = super::infer::nearest_enclosing_class(db, index, scope)?;
+    Some(mangled_private_name(class.name(db).as_str(), member))
+}
+
+/// The function a member's type stands for — the member itself, or the getter
+/// of the property wrapping it.
+fn declared_function<'db>(
+    db: &'db dyn Db,
+    member_type: crate::types::Type<'db>,
+) -> Option<super::function::FunctionType<'db>> {
+    match member_type {
+        crate::types::Type::FunctionLiteral(function) => Some(function),
+        crate::types::Type::BoundMethod(method) => Some(method.function(db)),
+        crate::types::Type::PropertyInstance(property) => {
+            declared_function(db, property.getter(db)?)
+        }
+        _ => None,
+    }
+}
+
+/// The member a class holds under `name`, read off the class rather than
+/// through an instance, so a descriptor is not resolved on the way.
+fn class_member<'db>(
+    db: &'db dyn Db,
+    env: &crate::types::ProgramEnvironment<'db>,
+    receiver: crate::types::Type<'db>,
+    name: &str,
+) -> Option<crate::types::Type<'db>> {
+    receiver
+        .erase_restriction(db)
+        .nominal_class(db, env)?
+        .class_member(db, env, name, super::MemberLookupPolicy::default())
+        .place
+        .ignore_possibly_undefined()
+}
+
+/// basedpython: the attribute name a `private` class member is reached by in
+/// the emitted python — python's own name mangling, written out in full.
+///
+/// A member lowered to `__helper` is stored under `_A__helper` when `A`'s body
+/// is executed. Python applies that rewrite lexically, to every `__name` it
+/// reads inside a class body, so a reference from anywhere else — a subclass, a
+/// module-level function — would land on a different attribute or none at all.
+/// Spelling the mangled name out reaches the member from all of them.
+///
+/// The rule is python's: leading underscores are stripped from the class name,
+/// and a class named only with underscores mangles nothing.
+pub(crate) fn mangled_private_name(class: &str, member: &str) -> String {
+    let class = class.trim_start_matches('_');
+    if class.is_empty() {
+        return format!("__{member}");
+    }
+    format!("_{class}__{member}")
+}
+
 /// Whether a decorator list carries the synthetic `private` modifier.
 ///
 /// The parser models a modifier keyword as a decorator whose source range does

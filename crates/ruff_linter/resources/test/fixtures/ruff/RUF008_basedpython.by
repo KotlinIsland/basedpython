@@ -1,0 +1,23 @@
+# basedpython's `data class` lowers every re-evaluated default into a
+# `field(default_factory=...)` of its own, so neither a mutable default nor a
+# call in one is anything for the author to write by hand
+
+
+import uuid
+
+
+data class Fight:
+    var last_contact: int = 0
+    var seen: set[int] = set()
+    var tags: list[str] = []
+    var name: str = str(uuid.uuid4())
+
+
+frozen data class Frozen:
+    var seen: set[int] = set()
+
+
+# a plain class is not a dataclass, so neither rule looks at it — the shared
+# object it really does have is `RUF012`'s to report
+class Plain:
+    var seen: set[int] = set()

@@ -232,7 +232,12 @@ impl TrailingLambdaLower<'_, '_> {
         let [decorator] = function.decorator_list.as_slice() else {
             return;
         };
-        let callee = &decorator.expression;
+        // `await f(x):` hangs the block on the call. the `await` stays where it
+        // was written: it falls inside the statement span the rewrite re-emits
+        let callee = match &decorator.expression {
+            Expr::Await(await_expr) => await_expr.value.as_ref(),
+            expression => expression,
+        };
 
         // the header colon sits between the called expression and the suite,
         // with only whitespace before it
@@ -307,7 +312,12 @@ impl TrailingLambdaLower<'_, '_> {
         for preinit in &preinits {
             fragments.push(Fragment::Lit(format!("{preinit} = None\n{indent}")));
         }
-        fragments.push(Fragment::Lit(format!("def {name}({parameters}):")));
+        // a block whose body awaits is a coroutine function; the callee it is
+        // handed to awaits the call, the way it would any other async callback
+        let async_prefix = if function.is_async { "async " } else { "" };
+        fragments.push(Fragment::Lit(format!(
+            "{async_prefix}def {name}({parameters}):"
+        )));
         // write-through declarations so block assignments update enclosing
         // bindings; spliced ahead of the suite so they precede every use
         if let Some(declarations) = declarations {
@@ -509,6 +519,48 @@ mod tests {
 
     fn check(input: &str) -> String {
         transpile(input, &Config::test_default()).unwrap()
+    }
+
+    #[test]
+    fn a_block_that_awaits_lowers_to_an_async_def() {
+        // the block is a function of its own, so `await` in it makes *it* a
+        // coroutine function; the `await` on the call stays where it was written
+        let out = check(indoc! {"
+            from collections.abc import Awaitable
+
+            async def scope(name: str, once block: () -> Awaitable[None]):
+                await block()
+
+            async def main():
+                await scope(\"db\"):
+                    await scope(\"inner\"):
+                        pass
+        "});
+        assert!(
+            out.contains("async def _trailing_lambda_0(it=None):"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("await scope(\"db\", block=_trailing_lambda_0)"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_block_that_does_not_await_stays_a_plain_def() {
+        let out = check(indoc! {"
+            def f(a: (int) -> None):
+                a(1)
+
+            async def main():
+                f:
+                    print(it)
+        "});
+        assert!(
+            out.contains("def _trailing_lambda_0(it=None):"),
+            "got:\n{out}"
+        );
+        assert!(!out.contains("async def _trailing_lambda_0"), "got:\n{out}");
     }
 
     #[test]

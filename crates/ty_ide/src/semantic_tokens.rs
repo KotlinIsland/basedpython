@@ -6946,6 +6946,70 @@ final c: str = \"x\"
     }
 
     #[test]
+    fn semantic_tokens_class_variable_keywords() {
+        // `class var x: T` / `class let x: T` declare through the same marker,
+        // whose range spans the whole keyword prefix — the `class` included
+        let test = SemanticTokenTest::new_by(
+            "
+class A:
+    class count = 0
+    class var total: int = 0
+    class let ORIGIN: int = 0
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "A" @ 7..8: Class [definition]
+        "class" @ 14..19: Keyword
+        "count" @ 20..25: Variable [definition]
+        "0" @ 28..29: Number
+        "class var" @ 34..43: Keyword
+        "total" @ 44..49: Variable [definition]
+        "int" @ 51..54: Class
+        "0" @ 57..58: Number
+        "class let" @ 63..72: Keyword
+        "ORIGIN" @ 73..79: Variable [definition, readonly]
+        "int" @ 81..84: Class
+        "0" @ 87..88: Number
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_loop_escape_statement_expression() {
+        // `break` and `continue` stand where a value is expected, and highlight
+        // as the keywords they are
+        let test = SemanticTokenTest::new_by(
+            "
+def f(rows: list[int]) -> None:
+    for row in rows:
+        one = row ?? continue
+        two = row ?? break
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        // the escapes are hard keywords, which the editor's own grammar colours;
+        // what matters here is that standing in a value position does not make
+        // the visitor read one as a name
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 5..6: Function [definition]
+        "rows" @ 7..11: Parameter [definition]
+        "list" @ 13..17: Class
+        "int" @ 18..21: Class
+        "None" @ 27..31: BuiltinConstant
+        "row" @ 41..44: Variable [definition]
+        "rows" @ 48..52: Parameter
+        "one" @ 62..65: Variable [definition]
+        "row" @ 68..71: Variable
+        "two" @ 92..95: Variable [definition]
+        "row" @ 98..101: Variable
+        "#);
+    }
+
+    #[test]
     fn semantic_tokens_var_keyword() {
         // `var` declares through the modifier markers — untyped through the bare
         // one, typed through the subscripted one — so both forms highlight

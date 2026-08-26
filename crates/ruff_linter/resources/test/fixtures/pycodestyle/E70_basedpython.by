@@ -1,0 +1,16 @@
+"""`class` is also a member modifier, and the `:` after one belongs to the
+declaration's type rather than to a suite"""
+
+
+class Members:
+    class count = 0
+    class var total: int = 0
+    class var kind: str
+    class let ORIGIN: int = 0
+
+    class def make(cls) -> int:
+        return 0
+
+
+# a class definition written on one line is still reported
+class OneLiner: x = 1

@@ -54,7 +54,9 @@ use ruff_text_size::{Ranged, TextRange};
 use std::collections::HashSet;
 
 use super::ast_driver::{AstPass, Fragment, PassContext};
-use super::source_util::{line_indent, line_start, temporary_name, value_separator_start};
+use super::source_util::{
+    line_indent, line_start, parenthesized_value_range, temporary_name, value_separator_start,
+};
 
 pub(crate) struct StatementExpressionPass<'src> {
     source: &'src str,
@@ -264,7 +266,14 @@ impl Lower<'_> {
         indent: &str,
         out: &mut Vec<Fragment>,
     ) {
-        let prefix = TextRange::new(stmt.range().start(), tail.range().start());
+        // the span stops at the value's *written* start, parentheses included:
+        // a group around the value is replaced by what is emitted above, so
+        // re-emitting its `(` would leave it open — the matching `)` is inside
+        // the replaced statement and does not reach the output
+        let value_start =
+            parenthesized_value_range(self.source, tail.range(), written_before_value(stmt))
+                .start();
+        let prefix = TextRange::new(stmt.range().start(), value_start);
         let separator = TextRange::new(value_separator_start(self.source, prefix), prefix.end());
         self.text_edits.push((separator, " ".to_owned()));
         out.push(Fragment::Lit(format!("\n{indent}")));
@@ -325,6 +334,21 @@ impl Lower<'_> {
             }
         }
     }
+}
+
+/// Where the scan for a value's own parentheses may start: the end of the last
+/// node the statement wrote before its value, or the statement's start when it
+/// wrote none. See [`parenthesized_value_range`].
+fn written_before_value(stmt: &Stmt) -> ruff_text_size::TextSize {
+    let written = match stmt {
+        Stmt::Assign(assign) => assign.targets.last().map(Ranged::end),
+        Stmt::AnnAssign(assign) => Some(assign.annotation.range().end()),
+        Stmt::AugAssign(assign) => Some(assign.target.range().end()),
+        // `return <value>` and a bare expression statement write nothing ahead
+        // of the value but the keyword, which no string can hide in
+        _ => None,
+    };
+    written.unwrap_or_else(|| stmt.range().start())
 }
 
 /// The expression whose value the statement takes on, if it has one.
@@ -538,6 +562,54 @@ mod tests {
                     if __by_stmt_expr_0__ is None:
                         raise KeyError(k)
                     v = __by_stmt_expr_0__
+            "}),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn coalesce_with_continue() {
+        let out = check(indoc! {r#"
+            def f(items: list[int | None]) -> int:
+                total = 0
+                for item in items:
+                    one = item ?? continue
+                    total += one
+                return total
+        "#});
+        assert!(
+            out.contains(indoc! {"
+                def f(items: list[int | None]) -> int:
+                    total = 0
+                    for item in items:
+                        __by_stmt_expr_0__ = item
+                        if __by_stmt_expr_0__ is None:
+                            continue
+                        one = __by_stmt_expr_0__
+            "}),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn coalesce_with_break() {
+        let out = check(indoc! {r#"
+            def f(items: list[int | None]) -> int:
+                total = 0
+                for item in items:
+                    one = item ?? break
+                    total += one
+                return total
+        "#});
+        assert!(
+            out.contains(indoc! {"
+                def f(items: list[int | None]) -> int:
+                    total = 0
+                    for item in items:
+                        __by_stmt_expr_0__ = item
+                        if __by_stmt_expr_0__ is None:
+                            break
+                        one = __by_stmt_expr_0__
             "}),
             "got:\n{out}"
         );

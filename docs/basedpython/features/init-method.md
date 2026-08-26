@@ -44,6 +44,31 @@ a bodyless `init(...)` is filled in with `: ...` when no `let` parameter
 produces a body line. body-bearing `init(...)` keeps the user's statements;
 `let` self-assignments are prepended ahead of them
 
+## defaults
+
+a parameter default is lowered exactly as it is on a `def`. a default that is
+constructed rather than a constant is re-evaluated per call rather than shared
+between every instance, and a required parameter may follow a defaulted one:
+
+```by
+class Fight:
+    init(
+        let seen: set[int] = set(),
+        let last: int,
+    )
+```
+
+```python
+class Fight:
+    def __init__(self, seen: set[int] = _MISSING, last: int = _MISSING):
+        if seen is _MISSING:
+            seen = set()
+        if last is _MISSING:
+            raise TypeError("__init__() missing required argument: 'last'")
+        self.seen: set[int] = seen
+        self.last: int = last
+```
+
 ## `let` parameter modifier
 
 `let` may appear on any positional, positional-only, keyword-only, `*args`,

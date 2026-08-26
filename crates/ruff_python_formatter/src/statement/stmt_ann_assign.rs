@@ -116,7 +116,11 @@ fn synthetic_modifier_annot<'ast, 'src>(
     };
     if !matches!(
         name.id.as_str(),
-        "__abstract_annot__" | "__visibility_annot__" | "__private_annot__" | "__modifier_annot__"
+        "__abstract_annot__"
+            | "__visibility_annot__"
+            | "__private_annot__"
+            | "__modifier_annot__"
+            | "__classvar_annot__"
     ) {
         return None;
     }

@@ -263,6 +263,45 @@ def f(x: int | None) -> int:
     return a
 ```
 
+## `continue` is an expression of type `Never`
+
+A loop escape written where a value is expected leaves the loop when the value is missing, so what
+the binding takes on is the type that survives the escape.
+
+```by
+def f(items: list[int | None]) -> int:
+    total = 0
+    for item in items:
+        one = item ?? continue
+        reveal_type(one)  # revealed: int
+        total += one
+    return total
+```
+
+## `break` is an expression of type `Never`
+
+```by
+def f(items: list[int | None]) -> int:
+    total = 0
+    for item in items:
+        one = item ?? break
+        reveal_type(one)  # revealed: int
+        total += one
+    return total
+```
+
+## a loop escape is diverging, so it needs no `else` to be exhaustive
+
+`break` and `continue` produce no value, so a statement expression whose every branch is one of them
+is `Never` rather than a value that went missing.
+
+```by
+def f(items: list[int]) -> None:
+    for item in items:
+        a = continue if item > 0 else break
+        reveal_type(a)  # revealed: Never
+```
+
 ## a statement expression is not a type expression
 
 ```by

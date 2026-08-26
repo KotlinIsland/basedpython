@@ -234,6 +234,10 @@ pub(crate) trait TypeInfo {
     /// rather than a member of `x`. lowered to `fn(x)`
     fn is_implicit_receiver_attribute(&self, attribute: &ruff_python_ast::ExprAttribute) -> bool;
 
+    /// basedpython: the mangled name a `private` method is reached by in the
+    /// emitted python, for an attribute access that resolves to one
+    fn private_method_name(&self, attribute: &ruff_python_ast::ExprAttribute) -> Option<String>;
+
     /// how `name` resolves through the enclosing trailing lambda block's
     /// receiver: `self` is the receiver itself, any other name is a member of
     /// it used unqualified. both lower to the block's receiver parameter
@@ -610,6 +614,10 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn constructor_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String> {
         self.reified_constructor_type_arguments(call)
+    }
+
+    fn private_method_name(&self, attribute: &ruff_python_ast::ExprAttribute) -> Option<String> {
+        SemanticModel::private_method_name(self, attribute)
     }
 
     fn erased_union(&self, annotation: &Expr) -> Option<ty_python_semantic::ErasedUnion> {

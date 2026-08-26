@@ -7,7 +7,9 @@ use ruff_text_size::Ranged;
 use crate::Violation;
 use crate::checkers::ast::Checker;
 use crate::preview::is_mutable_default_in_dataclass_field_enabled;
-use crate::rules::ruff::helpers::{dataclass_kind, is_class_var_annotation, is_dataclass_field};
+use crate::rules::ruff::helpers::{
+    dataclass_kind, is_basedpython_data_class, is_class_var_annotation, is_dataclass_field,
+};
 
 /// ## What it does
 /// Checks for mutable default values in dataclass attributes.
@@ -73,6 +75,12 @@ impl Violation for MutableDataclassDefault {
 /// RUF008
 pub(crate) fn mutable_dataclass_default(checker: &Checker, class_def: &ast::StmtClassDef) {
     let semantic = checker.semantic();
+
+    // basedpython's `data class` lowers a re-evaluated default into a
+    // `field(default_factory=…)` itself, so there is nothing here to ask for
+    if is_basedpython_data_class(class_def) {
+        return;
+    }
 
     let Some((dataclass_kind, _)) = dataclass_kind(class_def, semantic) else {
         return;

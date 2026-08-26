@@ -26,7 +26,7 @@
 //! (`??`, `?.`, `int?` annotations, …) anywhere in the function still apply.
 
 use ruff_python_ast::helpers::is_immutable_scalar_default;
-use ruff_python_ast::visitor::{Visitor, walk_stmt};
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
@@ -35,7 +35,7 @@ use super::source_util::{line_indent, line_start};
 use crate::type_info::TypeInfo;
 
 /// what a `_MISSING`-sentinel guard does when the argument was not supplied
-enum Guard {
+pub(crate) enum Guard {
     /// re-evaluate the written default per call (mutable defaults). the default
     /// is carried as its source *range*, not its text: the guard re-emits it
     /// through a [`Fragment::Src`] passthrough so the lowerings written inside
@@ -48,7 +48,7 @@ enum Guard {
 }
 
 impl Guard {
-    fn push(&self, frags: &mut Vec<Fragment>, base: &str) {
+    pub(crate) fn push(&self, frags: &mut Vec<Fragment>, base: &str) {
         match self {
             Guard::Reevaluate { name, default } => {
                 frags.push(Fragment::Lit(format!(
@@ -85,73 +85,184 @@ fn body_range(stmt: &Stmt, header_end: TextSize) -> Option<TextRange> {
     (!range.is_empty() && range.start() >= header_end).then_some(range)
 }
 
-impl MutableDefaults<'_> {
-    /// replace a default with the sentinel. a template rather than plain text so
-    /// it *absorbs* the zero-width insertions a lowering anchored to the
-    /// default's first token left behind (`_force_unwrap(`), which a plain-text
-    /// replacement leaves stranded in the signature. the guard re-emits them
-    fn push_sentinel(&mut self, default: TextRange) {
-        self.edits
-            .push((default, vec![Fragment::Lit("_MISSING".to_owned())]));
-    }
+/// replace a default with the sentinel. a template rather than plain text so
+/// it *absorbs* the zero-width insertions a lowering anchored to the default's
+/// first token left behind (`_force_unwrap(`), which a plain-text replacement
+/// leaves stranded in the signature. the guard re-emits them
+fn sentinel_edit(default: TextRange) -> (TextRange, Vec<Fragment>) {
+    (default, vec![Fragment::Lit("_MISSING".to_owned())])
+}
 
-    fn process_function(&mut self, f: &StmtFunctionDef) {
-        let mut guards: Vec<Guard> = Vec::new();
-        let params = f.parameters.as_ref();
-        // positional parameters: swap non-scalar defaults for the sentinel,
-        // and give basedpython's required-after-defaulted parameters a
-        // sentinel default plus a raising guard (keyword-only parameters may
-        // follow a default without one in python already)
-        let mut seen_default = false;
-        for pw in params.posonlyargs.iter().chain(params.args.iter()) {
-            match pw.default.as_deref() {
-                Some(d) => {
-                    seen_default = true;
-                    if !is_immutable_scalar_default(d) {
-                        self.push_sentinel(d.range());
-                        guards.push(Guard::Reevaluate {
-                            name: pw.parameter.name.id.to_string(),
-                            default: d.range(),
-                        });
-                    }
-                }
-                None if seen_default => {
-                    // `=` spacing mirrors python style: spaced when annotated
-                    let sentinel = if pw.parameter.annotation.is_some() {
-                        " = _MISSING"
-                    } else {
-                        "=_MISSING"
-                    };
-                    self.edits.push((
-                        TextRange::empty(pw.parameter.range().end()),
-                        vec![Fragment::Lit(sentinel.to_owned())],
-                    ));
-                    guards.push(Guard::Required {
+/// The signature edits and body guards `f`'s parameter list calls for: a
+/// `_MISSING` sentinel wherever a default would otherwise be shared between
+/// calls, and one wherever python's own parameter order is relaxed.
+pub(crate) fn parameter_guards(
+    f: &StmtFunctionDef,
+) -> (Vec<(TextRange, Vec<Fragment>)>, Vec<Guard>) {
+    let mut sentinels = Vec::new();
+    let mut guards = Vec::new();
+    let params = f.parameters.as_ref();
+    // positional parameters: swap non-scalar defaults for the sentinel, and give
+    // basedpython's required-after-defaulted parameters a sentinel default plus
+    // a raising guard (keyword-only parameters may follow a default without one
+    // in python already)
+    let mut seen_default = false;
+    for pw in params.posonlyargs.iter().chain(params.args.iter()) {
+        match pw.default.as_deref() {
+            Some(d) => {
+                seen_default = true;
+                if !is_immutable_scalar_default(d) && !body_cannot_evaluate(d) {
+                    sentinels.push(sentinel_edit(d.range()));
+                    guards.push(Guard::Reevaluate {
                         name: pw.parameter.name.id.to_string(),
-                        function: f.name.id.to_string(),
+                        default: d.range(),
                     });
                 }
-                None => {}
             }
-        }
-        for pw in &params.kwonlyargs {
-            if let Some(d) = pw.default.as_deref()
-                && !is_immutable_scalar_default(d)
-            {
-                self.push_sentinel(d.range());
-                guards.push(Guard::Reevaluate {
+            None if seen_default => {
+                // `=` spacing mirrors python style: spaced when annotated
+                let sentinel = if pw.parameter.annotation.is_some() {
+                    " = _MISSING"
+                } else {
+                    "=_MISSING"
+                };
+                sentinels.push((
+                    TextRange::empty(pw.parameter.range().end()),
+                    vec![Fragment::Lit(sentinel.to_owned())],
+                ));
+                guards.push(Guard::Required {
                     name: pw.parameter.name.id.to_string(),
-                    default: d.range(),
+                    function: f.name.id.to_string(),
                 });
             }
+            None => {}
         }
+    }
+    for pw in &params.kwonlyargs {
+        if let Some(d) = pw.default.as_deref()
+            && !is_immutable_scalar_default(d)
+            && !body_cannot_evaluate(d)
+        {
+            sentinels.push(sentinel_edit(d.range()));
+            guards.push(Guard::Reevaluate {
+                name: pw.parameter.name.id.to_string(),
+                default: d.range(),
+            });
+        }
+    }
+    (sentinels, guards)
+}
+
+/// Whether the *callee's* body could evaluate `default` at all.
+///
+/// Re-evaluating a default there is the point of the guard, and it is what lets
+/// a later parameter default from an earlier one. But an `await` belongs to the
+/// suspension of the function the `def` was written in, and a callee that is
+/// not itself async cannot host one — cpython rejects the result outright:
+///
+/// ```text
+/// async def outer():
+///     def g(a=await value()): ...
+/// ```
+///
+/// So that default is left exactly as written, which is what python does with
+/// it. A mutable one left shared is `mutable-argument-default`'s to report.
+fn body_cannot_evaluate(default: &Expr) -> bool {
+    struct Finder {
+        found: bool,
+    }
+
+    impl<'a> Visitor<'a> for Finder {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            match expr {
+                Expr::Await(_) | Expr::Yield(_) | Expr::YieldFrom(_) => self.found = true,
+                // a nested function's own suspension is its own
+                Expr::Lambda(_) => {}
+                _ if !self.found => walk_expr(self, expr),
+                _ => {}
+            }
+        }
+    }
+
+    let mut finder = Finder { found: false };
+    finder.visit_expr(default);
+    finder.found
+}
+
+/// Whether `f` is an `init(…)` shorthand whose whole body the parser
+/// synthesized — the source wrote none of it, so there is nothing to anchor to.
+pub(crate) fn is_bodyless_init_shorthand(f: &StmtFunctionDef) -> bool {
+    f.decorator_list
+        .iter()
+        .any(|d| matches!(&d.expression, Expr::Name(n) if n.id.as_str() == "__init_method__"))
+        && first_body_statement(f).is_none()
+}
+
+/// The first statement in `f`'s body that came from the source, docstring
+/// included — that is, whether the source wrote a body at all.
+///
+/// [`init_method`] hangs the body it generates off this, and it is what
+/// [`is_bodyless_init_shorthand`] means by bodyless. A docstring *is* a body:
+/// generating another one around it would leave two.
+///
+/// [`init_method`]: super::init_method
+pub(crate) fn first_body_statement(f: &StmtFunctionDef) -> Option<&Stmt> {
+    let header_end = header_end(f);
+    f.body
+        .iter()
+        .find(|stmt| body_range(stmt, header_end).is_some())
+}
+
+/// The offset past everything a `def`'s header can span, so a statement before
+/// it is one the parser synthesized from a parameter rather than a body.
+fn header_end(f: &StmtFunctionDef) -> TextSize {
+    f.parameters.range().end().max(
+        f.returns
+            .as_ref()
+            .map_or(TextSize::new(0), |r| r.range().end()),
+    )
+}
+
+/// The first statement in `f`'s body that came from the source, skipping a
+/// docstring and any statement the parser synthesized.
+///
+/// This is the anchor a body insertion hangs off, and [`init_method`] reads the
+/// same one: a body the two disagree about is a body where one of them emits a
+/// `_MISSING` sentinel and the other emits no guard for it.
+///
+/// [`init_method`]: super::init_method
+pub(crate) fn first_source_statement(f: &StmtFunctionDef) -> Option<&Stmt> {
+    let header_end = header_end(f);
+    let docstring_count = if let Some(Stmt::Expr(e)) = f.body.first() {
+        usize::from(matches!(e.value.as_ref(), Expr::StringLiteral(_)))
+    } else {
+        0
+    };
+    f.body
+        .iter()
+        .skip(docstring_count)
+        .find(|s| body_range(s, header_end).is_some())
+}
+
+impl MutableDefaults<'_> {
+    fn process_function(&mut self, f: &StmtFunctionDef) {
+        // the `init(…)` shorthand with no body of its own has no source
+        // statement to splice a guard before, so [`init_method`] — which writes
+        // that body — emits both the sentinels and the guards for it
+        //
+        // [`init_method`]: super::init_method
+        if is_bodyless_init_shorthand(f) {
+            return;
+        }
+        let (sentinels, guards) = parameter_guards(f);
+        self.edits.extend(sentinels);
         if guards.is_empty() {
             return;
         }
         self.used = true;
 
-        // insert the guards at the start of the first non-docstring body
-        // statement
+        // insert the guards at the start of the first body statement the source
+        // actually wrote
         let docstring_count = if let Some(Stmt::Expr(e)) = f.body.first() {
             usize::from(matches!(e.value.as_ref(), Expr::StringLiteral(_)))
         } else {
@@ -164,11 +275,7 @@ impl MutableDefaults<'_> {
                 .map_or(TextSize::new(0), |r| r.range().end()),
         );
         let mut frags: Vec<Fragment> = Vec::new();
-        if let Some(range) = f
-            .body
-            .get(docstring_count)
-            .and_then(|s| body_range(s, header_end))
-        {
+        if let Some(range) = first_source_statement(f).and_then(|s| body_range(s, header_end)) {
             let insert_at = range.start();
             let prefix = &self.source
                 [usize::from(line_start(self.source, insert_at))..usize::from(insert_at)];
@@ -244,8 +351,13 @@ impl TypeAwarePass for MutableDefaultsPass<'_> {
             inner.visit_stmt(stmt);
         }
         if let Some(name) = inner.unanchored.first() {
+            // the `init(…)` shorthand is the one construct that generates its
+            // own body, and it emits its own guards; anything else reaching here
+            // means a pass grew a synthesized body without saying where a
+            // statement goes in it. refuse rather than splice one into the
+            // signature
             ctx.errors.push(format!(
-                "a re-evaluated default in `{name}` has no body position to lower into — write it as a `def` with a body"
+                "`{name}` has a body nothing in the source anchors, so a parameter guard has nowhere to go"
             ));
             return;
         }
@@ -307,50 +419,81 @@ mod tests {
         );
     }
 
-    fn check_err(input: &str, needle: &str) {
-        let err = transpile(input, &crate::Config::test_default()).unwrap_err();
-        assert!(err.contains(needle), "got: {err}");
-    }
-
-    /// an `init(…)` shorthand generates its own body, so a guard has no source
-    /// position to anchor to. each of these used to splice the guard into the
-    /// middle of the parameter list — and the bodyless plain form panicked with
-    /// an arithmetic overflow reaching for `body[-1]`
+    /// an `init(…)` shorthand generates its own body, so the guards go in it —
+    /// there is no source statement to splice them before
     #[test]
-    fn a_generated_constructor_body_is_not_an_anchor() {
-        const NEEDLE: &str = "has no body position to lower into";
-
-        // no parameter modifier and no body at all: the body is empty
-        check_err(
+    fn a_generated_constructor_body_takes_the_guard() {
+        // the `init(…)` shorthand has no source statement to splice a guard
+        // before, so the body it generates carries one
+        check(
             indoc! {"
                 class S:
                     init(items: list[int] = [])
             "},
-            NEEDLE,
+            indoc! {"
+                _MISSING = object()
+                class S:
+                    def __init__(self, items: list[int] = _MISSING):
+                        if items is _MISSING:
+                            items = []
+            "},
         );
-        // `let` generates a field assignment that reuses the parameter's range
-        check_err(
+        check(
             indoc! {"
                 class S:
                     init(let items: list[int] = [])
             "},
-            NEEDLE,
+            indoc! {"
+                _MISSING = object()
+                class S:
+                    def __init__(self, items: list[int] = _MISSING):
+                        if items is _MISSING:
+                            items = []
+                        self.items: list[int] = items
+            "},
         );
-        check_err(
+    }
+
+    #[test]
+    fn a_generated_constructor_takes_a_required_after_default_guard() {
+        // python rejects a required parameter after a defaulted one, so the
+        // shorthand's relaxed order lowers to a sentinel and a raising guard
+        check(
             indoc! {"
                 class S:
-                    init(var items: list[int] = [])
+                    init(let first: int = 1, let second: str)
             "},
-            NEEDLE,
+            indoc! {"
+                _MISSING = object()
+                class S:
+                    def __init__(self, first: int = 1, second: str = _MISSING):
+                        if second is _MISSING:
+                            raise TypeError(\"__init__() missing required argument: 'second'\")
+                        self.first: int = first
+                        self.second: str = second
+            "},
         );
-        // and it still leads the body when the shorthand has one of its own
-        check_err(
+    }
+
+    #[test]
+    fn a_shorthand_with_a_body_anchors_before_its_own_first_statement() {
+        // the generated field assignments sit ahead of the written body, and
+        // the guard has to precede both
+        check(
             indoc! {"
                 class S:
                     init(let items: list[int] = []):
-                        pass
+                        print(items)
             "},
-            NEEDLE,
+            indoc! {"
+                _MISSING = object()
+                class S:
+                    def __init__(self, items: list[int] = _MISSING):
+                        if items is _MISSING:
+                            items = []
+                        self.items: list[int] = items
+                        print(items)
+            "},
         );
     }
 

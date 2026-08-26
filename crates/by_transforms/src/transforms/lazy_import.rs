@@ -41,6 +41,11 @@ pub(crate) struct LazyImport<'src> {
     /// registers it at import, so deferring the import defers the conformance
     /// out of existence
     eager: Vec<String>,
+    /// bindings that must be bound to the real object rather than to a proxy.
+    /// cpython's `except` checks that what it catches is a class inheriting
+    /// `BaseException` and never consults `__instancecheck__`, so an exception
+    /// class reached through the proxy raises `TypeError` from the handler
+    eager_names: Vec<String>,
     /// True when the target Python version supports PEP 810 (3.15+). When
     /// false, the transform uses the runtime polyfill instead
     keyword_supported: bool,
@@ -63,11 +68,17 @@ pub(crate) struct LazyImport<'src> {
 }
 
 impl<'src> LazyImport<'src> {
-    pub(crate) fn new(source: &'src str, keyword_supported: bool, eager: &[String]) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        keyword_supported: bool,
+        eager: &[String],
+        eager_names: &[String],
+    ) -> Self {
         Self {
             source,
             at_module_level: true,
             eager: eager.to_vec(),
+            eager_names: eager_names.to_vec(),
             keyword_supported,
             edits: Vec::new(),
             needs_module_helper: false,
@@ -309,7 +320,18 @@ impl<'src> LazyImport<'src> {
                 }
                 continue;
             }
-            if is_relative && module_part.is_empty() {
+            if self.eager_names.iter().any(|eager| eager == bind) {
+                // the proxy cannot stand here, so re-emit the import as written.
+                // ahead of the relative branches: a relative import is the
+                // common shape inside a package, and its exceptions are caught
+                // just the same
+                let spelling = if bind == name {
+                    name.to_owned()
+                } else {
+                    format!("{name} as {bind}")
+                };
+                lines.push(format!("from {dots}{module_part} import {spelling}"));
+            } else if is_relative && module_part.is_empty() {
                 // `from . import x` — `x` is a submodule of the current
                 // package. Resolve the relative target at runtime
                 self.needs_module_helper = true;
@@ -934,6 +956,45 @@ mod tests {
                 import sys as system
                 json = _lazy_module(\"json\")
             "},
+        );
+    }
+
+    #[test]
+    fn polyfill_exception_class_stays_eager() {
+        // cpython's `except` refuses anything that is not a real class
+        // inheriting `BaseException`, so the proxy cannot stand for one
+        let source = indoc! {"
+            from json import JSONDecodeError
+
+            def f() -> None:
+                try:
+                    pass
+                except JSONDecodeError:
+                    pass
+        "};
+        // nothing was deferred, so the proxy runtime is not emitted at all
+        assert_eq!(transpile_polyfill(source), source);
+    }
+
+    #[test]
+    fn polyfill_exception_class_beside_a_lazy_name() {
+        // the statement is split: only the exception has to be bound for real
+        let out = transpile_polyfill("from json import JSONDecodeError, dumps\n");
+        assert!(
+            out.ends_with(indoc! {"
+                from json import JSONDecodeError
+                dumps = _lazy_attr(\"json\", \"dumps\")
+            "}),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn polyfill_aliased_exception_class_stays_eager() {
+        let out = transpile_polyfill("from json import JSONDecodeError as JDE\n");
+        assert!(
+            out.ends_with("from json import JSONDecodeError as JDE\n"),
+            "got:\n{out}"
         );
     }
 

@@ -28,7 +28,9 @@
 //! reification is best-effort: it fires only when ty solved the
 //! specialization to types with a runtime spelling (see ty's `reified_infer`
 //! module) — dynamic, unsolved or scope-local arguments leave the call as
-//! written. type positions never reify (annotations, type parameter lists,
+//! written. it also fires only where the class accepts a subscript at runtime:
+//! `zip` and `map` are generic in the stub but unsubscriptable in cpython, so
+//! `zip(a, b)` reaches the output as it was written. type positions never reify (annotations, type parameter lists,
 //! `type X = …` values, type-context subscript slices such as legacy
 //! `Callable[[int], str]` parameter lists), and dunders that static readers
 //! require to stay literal displays (`__all__`, `__slots__`, `__match_args__`)
@@ -265,6 +267,53 @@ mod tests {
             PythonVersion::PY312,
         );
         assert!(out.contains("a = A()"), "unsolved ctor stays bare: {out}");
+    }
+
+    #[test]
+    fn a_builtin_that_rejects_a_subscript_stays_bare() {
+        // `zip`, `map` and `filter` are generic in the stub and unsubscriptable
+        // at runtime — `zip[tuple[int, bool]]` is a `TypeError`, so the call has
+        // to reach the output as it was written
+        for (src, expected) in [
+            ("xs = zip([1], [True])\n", "xs = zip([1], [True])"),
+            ("xs = map(str, [1])\n", "map(str, [1])"),
+            ("xs = filter(None, [1])\n", "filter(None, [1])"),
+        ] {
+            let out = out_at(src, PythonVersion::PY312);
+            assert!(out.contains(expected), "{src:?} should stay bare: {out}");
+        }
+    }
+
+    #[test]
+    fn a_builtin_that_accepts_a_subscript_is_reified() {
+        // `enumerate` declares its own `__class_getitem__`, and `deque`
+        // inherits one; both accept the subscript at runtime
+        let out = out_at("xs = enumerate([\"a\"])\n", PythonVersion::PY312);
+        assert!(out.contains("enumerate[str]([\"a\"])"), "got: {out}");
+
+        let out = out_at(
+            indoc! {"
+                from collections import deque
+                xs = deque([1])
+            "},
+            PythonVersion::PY312,
+        );
+        assert!(out.contains("deque[int]([1])"), "got: {out}");
+    }
+
+    #[test]
+    fn a_stub_generic_inheriting_a_generic_base_is_reified() {
+        // `ChainMap` declares no `__class_getitem__`, but it inherits
+        // `MutableMapping[Key, Value]`, which puts `Generic` in its runtime
+        // bases — so the subscript evaluates
+        let out = out_at(
+            indoc! {"
+                from collections import ChainMap
+                m = ChainMap({\"a\": 1})
+            "},
+            PythonVersion::PY312,
+        );
+        assert!(out.contains("ChainMap[str, int]("), "got: {out}");
     }
 
     #[test]

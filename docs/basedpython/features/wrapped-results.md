@@ -76,6 +76,18 @@ consumers unwrap as with any wrapped optional — `!`, `^`, `??`, and `?.` all
 read the wrapper's present value. compound operands are unaffected (`list[T]?`
 stays the plain union — substitution cannot introduce a top-level `None` there)
 
+`Self` is the exception: it stands for the enclosing class, which can never
+itself be an optional, so `Self?` is the plain union. that is what a fallible
+constructor returns:
+
+```by
+class Record:
+    class def parse(cls, line: str) -> Self?:
+        if not line:
+            return None
+        return cls(line)
+```
+
 ## auto-wrap
 
 > **not yet implemented** (see the status banner). a bare `return` is currently

@@ -17,3 +17,11 @@ class Accessors:
 class Plain:
     var items: list[int] = []  # RUF012
     let names: list[str] = []  # RUF012
+
+
+# a `class` declaration *is* a `ClassVar`, which is what the rule asks for, and a
+# `class let` is the read-only one — neither is reported
+class ClassScoped:
+    class items = []
+    class var tags: list[str] = []
+    class let names: list[str] = []

@@ -50,6 +50,10 @@ mod tests {
     #[test_case(Rule::ModuleImportNotAtTopOfFile, Path::new("E402.ipynb"))]
     #[test_case(Rule::MultipleImportsOnOneLine, Path::new("E40.py"))]
     #[test_case(Rule::MultipleStatementsOnOneLineColon, Path::new("E70.py"))]
+    #[test_case(
+        Rule::MultipleStatementsOnOneLineColon,
+        Path::new("E70_basedpython.by")
+    )]
     #[test_case(Rule::MultipleStatementsOnOneLineSemicolon, Path::new("E70.py"))]
     #[test_case(Rule::MissingNewlineAtEndOfFile, Path::new("W292_0.py"))]
     #[test_case(Rule::MissingNewlineAtEndOfFile, Path::new("W292_1.py"))]

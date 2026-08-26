@@ -543,6 +543,12 @@ impl<'src> AnonNamedTuple<'src> {
     /// whether to wrap the value directly or to wrap each element of an
     /// outer collection literal.
     fn coercion_target(&mut self, annotation: &Expr) -> Option<CoercionTarget> {
+        // a declaration modifier keeps the declared type in a marker subscript
+        // (`let x: T` parses as `x: __let__[T]`), and the annotation this reads
+        // is the one the source wrote
+        if let Some(declared) = ruff_python_ast::helpers::declaration_annotation_type(annotation) {
+            return self.coercion_target(declared);
+        }
         // Direct: `x: (name: T, ...)` or `x: Alias`
         if let Some(shape) = self.annotated_shape(annotation) {
             return Some(CoercionTarget {
@@ -1289,6 +1295,34 @@ mod tests {
         assert!(out.contains("class _AnonNamedTuple_"));
         assert!(out.contains("-> _AnonNamedTuple_"));
         assert!(out.contains("| None"));
+    }
+
+    #[test]
+    fn declaration_modifier_annotation_coerces() {
+        // `let x: T = v` parses as `x: __let__[T] = v`, and the annotation the
+        // coercion reads is the one under the marker
+        check(
+            "let a: (name: str, age: int) = (\"asdf\", 1)\n",
+            indoc! {"
+                from typing import Final, NamedTuple
+                class _AnonNamedTuple_7bfb4772(NamedTuple):
+                    name: str
+                    age: int
+
+                a: Final[_AnonNamedTuple_7bfb4772] = _AnonNamedTuple_7bfb4772(\"asdf\", 1)
+            "},
+        );
+        check(
+            "var a: (name: str, age: int) = (\"asdf\", 1)\n",
+            indoc! {"
+                from typing import NamedTuple
+                class _AnonNamedTuple_7bfb4772(NamedTuple):
+                    name: str
+                    age: int
+
+                a: _AnonNamedTuple_7bfb4772 = _AnonNamedTuple_7bfb4772(\"asdf\", 1)
+            "},
+        );
     }
 
     #[test]

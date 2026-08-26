@@ -43,11 +43,12 @@ use super::{
     generic_call, generics, grapheme_string, identity_swap, if_let, implicit_receiver,
     implicit_typing, inferred_annotation, init_method, just_float, kw_subscript, literal_string,
     literal_types, local_once, main_function, match_type, modifiers, mutable_defaults, none_chain,
-    optional_type, overload, parametric_is, postfix_await, propagate, properties, protocol_type,
-    raises_clause, reified_generic, repeated_underscore, runtime_union, sentinel, some_ctor,
-    soundness, statement_expression, string_tag, super_keyword, symbolic_type_op, template_type,
-    top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification, typed_dict_literal,
-    typed_lambda, typeof_keyword, unique_loop_bindings, unpack, use_site_variance,
+    optional_type, overload, parametric_is, postfix_await, private_method, propagate, properties,
+    protocol_type, raises_clause, reified_generic, repeated_underscore, runtime_union, sentinel,
+    some_ctor, soundness, statement_expression, string_tag, super_keyword, symbolic_type_op,
+    template_type, top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification,
+    typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings, unpack,
+    use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -552,6 +553,7 @@ pub(crate) fn run_against_source<'a>(
         reified_generic::ReifiedGenericPass::new(source_ref, config.min_version);
     let type_reification_pass =
         type_reification::TypeReificationPass::new(config.min_version, config.is_stub);
+    let private_method_pass = private_method::PrivateMethodPass;
     let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref);
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
     let inferred_annotation_pass = inferred_annotation::InferredAnnotationPass::new();
@@ -688,6 +690,10 @@ pub(crate) fn run_against_source<'a>(
         // later pass (e.g. coalesce on a wrapped iterable) is claimed and
         // materialized inside the check rather than dropping it
         &soundness_pass,
+        // a `private` method is reached by its mangled name; the edit replaces
+        // the attribute identifier alone, so it composes with any rewrite of the
+        // receiver it is read from
+        &private_method_pass,
         // checked cast wraps `<value> cast? <type>` in `_checked_cast(...)`; its
         // template passes value + type through as `Src`, so lowerings inside
         // them (a `??` value, a `T?` type) still compose

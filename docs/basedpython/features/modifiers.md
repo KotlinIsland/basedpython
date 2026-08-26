@@ -88,22 +88,32 @@ instead of the usual `: ...`
 
 ## let / var / class-var / newtype
 
-| basedpython            | Python output                          |
-| ---------------------- | -------------------------------------- |
-| `let MAX = 100`        | `MAX: Final = 100`                     |
-| `let x: int`           | `x: Final[int]`                        |
-| `let x`                | `x: Final`                             |
-| `var x = 1`            | `x = 1`                                |
-| `var x: int = 1`       | `x: int = 1`                           |
-| `var x: int`           | `x: int`                               |
-| `class count = 0`      | `count: ClassVar = 0` (inside a class) |
-| `newtype UserId = int` | `UserId = NewType("UserId", int)`      |
+| basedpython                 | Python output                          |
+| --------------------------- | -------------------------------------- |
+| `let MAX = 100`             | `MAX: Final = 100`                     |
+| `let x: int`                | `x: Final[int]`                        |
+| `let x`                     | `x: Final`                             |
+| `var x = 1`                 | `x = 1`                                |
+| `var x: int = 1`            | `x: int = 1`                           |
+| `var x: int`                | `x: int`                               |
+| `class count = 0`           | `count: ClassVar = 0` (inside a class) |
+| `class var count: int`      | `count: ClassVar[int]`                 |
+| `class let ORIGIN: P = P()` | `ORIGIN: Final[P] = P()`               |
+| `newtype UserId = int`      | `UserId = NewType("UserId", int)`      |
 
 `let` works at module and class scope. inside a class, `class x = ...` is the
 class-variable form (distinct from the regular `let x = ...` which is `Final`).
 the initializer may be omitted: `let x: int` declares a read-only attribute and
 a bare `let x` an uninitialized `Final`, both bound by a single later assignment.
 `newtype` introduces a distinct `typing.NewType`-backed type at module scope
+
+`class var x: T` is the same class variable with its type *declared* rather than
+read off a value, which is the only form a stub can write. `class let x: T = v`
+is the read-only one — python spells that `Final`, which in a class body cannot
+be reassigned through the class or an instance. a `class let` needs a value:
+`__init__` binds an instance, so there is no later place for one to arrive.
+`class` is a class-body modifier — at module scope there is no class for the
+variable to belong to, and it is an error there
 
 ## var
 
@@ -170,15 +180,22 @@ def _helper(): ...
 
 - `export` and `public` are aliases. each marked symbol is added to a synthesized
     `__all__` list at module level
-- `private` strips the keyword and renames the symbol with a leading underscore
-    at the definition site *and* every same-module call site. it is excluded from
-    `__all__` even when no `export`/`public` declarations exist
+- `private` strips the keyword and gives the symbol a leading underscore at the
+    definition site *and* every same-module call site. a name that already has
+    one keeps it — a second would make it a `__name`, which python name-mangles
+    wherever a class body reads it. it is excluded from `__all__` even when no
+    `export`/`public` declarations exist
 - inside a class body only `private` means anything — `export`/`public` are
     stripped. what `private` renames depends on the member: a `private def` is
     name-mangled (`__helper`), a `private` [property](properties.md) becomes `_x`
     with `__x` storage, and a `private` attribute keeps its name. either way the
     member is private to the type checker, which is what
     [safe variance](safe-variance.md) rests on
+- a call to a `private def` is written with the mangled name spelled out —
+    `self.helper()` becomes `self._A__helper()`. python mangles lexically, so a
+    bare `self.__helper` would name a different attribute in a subclass's body
+    and none at all outside a class; the full spelling reaches the method from
+    all of them
 
 ## inlay hints
 
