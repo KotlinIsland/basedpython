@@ -81,6 +81,16 @@ f: (*: int) -> int             # anonymous
 g: (*args: int) -> int         # named
 ```
 
+a variadic's type may itself be an unpack, which types the positional
+parameters as the tuple it names rather than typing each one:
+
+```by
+type Args = (int, str)
+
+f: (*: *Args) -> None          # anonymous
+g: (*args: *Args) -> None      # named
+```
+
 ### kwargs `**kwargs`
 
 ```by

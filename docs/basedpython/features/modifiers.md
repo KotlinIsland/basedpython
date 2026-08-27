@@ -86,6 +86,18 @@ individual pydantic fields marked `Field(frozen=True)`
 `abstract def` with no body is filled in with `: raise NotImplementedError`
 instead of the usual `: ...`
 
+`override`, `static` and `class` are *method* modifiers: they say how a class
+dispatches one of its members, or that the member replaces one it inherits. a
+`def` that no class body owns is not a member of anything, so writing one on it
+is an error:
+
+```by
+static def helper()   # error: `static` is only a modifier on a method
+```
+
+`final`, `abstract` and the visibility keywords read on a function wherever it
+is written
+
 ## let / var / class-var / newtype
 
 | basedpython                 | Python output                          |

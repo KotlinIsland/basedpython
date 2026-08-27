@@ -943,8 +943,9 @@ impl<'src> Parser<'src> {
                 parameter_borrow: ParameterBorrow::None,
             };
         }
+        // a variadic's annotation may itself be starred (`*: *Ts`), just as in a `def`
         self.parse_conditional_expression_or_higher_impl(
-            ExpressionContext::default().with_in_type_expression(),
+            ExpressionContext::starred_bitwise_or().with_in_type_expression(),
         )
     }
 
@@ -4275,15 +4276,45 @@ impl<'src> Parser<'src> {
             else if self.at(TokenKind::Star) && self.peek() == TokenKind::Colon {
                 let starred_start = self.node_start();
                 self.bump(TokenKind::Star);
+                let star_range = self.node_range(starred_start);
                 self.expect(TokenKind::Colon);
                 let inner = self.parse_parameter_field_annotation();
                 let range = self.node_range(starred_start);
-                elts.push(Expr::Starred(ast::ExprStarred {
-                    value: Box::new(inner.expr),
-                    ctx: ExprContext::Load,
-                    range,
-                    node_index: AtomicNodeIndex::NONE,
-                }));
+                // `*: *Ts` — an anonymous variadic whose annotation is itself an
+                // unpack, exactly as `*args: *Ts` is in a `def`. wrapping the
+                // annotation in one more `Starred` would spell the same shape the
+                // kwargs catch-all `**: T` uses, so this takes the `*name: T`
+                // shape instead, with the empty name that marks an anonymous
+                // field everywhere else in a parameter shape. the bare `*` type is
+                // a marker rather than an unpack, so `*: *` keeps its own encoding
+                if matches!(&inner.expr, Expr::Starred(_))
+                    && !ruff_python_ast::helpers::is_top_star_marker(&inner.expr)
+                {
+                    let anonymous = Expr::Name(ast::ExprName {
+                        range: TextRange::empty(star_range.end()),
+                        id: Name::empty(),
+                        ctx: ExprContext::Invalid,
+                        node_index: AtomicNodeIndex::NONE,
+                    });
+                    elts.push(Expr::Named(ast::ExprNamed {
+                        target: Box::new(Expr::Starred(ast::ExprStarred {
+                            value: Box::new(anonymous),
+                            ctx: ExprContext::Load,
+                            range: star_range,
+                            node_index: AtomicNodeIndex::NONE,
+                        })),
+                        value: Box::new(inner.expr),
+                        range,
+                        node_index: AtomicNodeIndex::NONE,
+                    }));
+                } else {
+                    elts.push(Expr::Starred(ast::ExprStarred {
+                        value: Box::new(inner.expr),
+                        ctx: ExprContext::Load,
+                        range,
+                        node_index: AtomicNodeIndex::NONE,
+                    }));
+                }
             }
             // `*name: T` — named variadic
             else if self.at(TokenKind::Star)

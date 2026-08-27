@@ -380,10 +380,13 @@ impl<'src> CallableSyntax<'src> {
                                 format!("**{n}")
                             }
                             _ => {
+                                // the anonymous `*: *Ts` carries the empty name
+                                // marker, and needs a name of its own in python
                                 let n = s
                                     .value
                                     .as_name_expr()
                                     .map(|n| n.id.as_str())
+                                    .filter(|n| !n.is_empty())
                                     .unwrap_or("args");
                                 star_emitted = true;
                                 format!("*{n}")

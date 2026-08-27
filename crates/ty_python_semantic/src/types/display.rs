@@ -4625,7 +4625,13 @@ impl<'db> FmtDetailed<'db> for DisplayKnownInstanceRepr<'_, 'db> {
             // it as an instance of `typing.TypeVar`. Inside of a generic class or function, we'll
             // have a `Type::TypeVar(_)`, which is rendered as the typevar's name.
             KnownInstanceType::TypeVar(typevar_instance) => {
-                if typevar_instance.kind(self.db).is_parameter_pack() {
+                // basedpython spells a keyword-variadic pack the way python spells a
+                // `ParamSpec`, and python builds a real `ParamSpec` object for it — but
+                // it is specialized by keyword and forwards no parameter list, so naming
+                // it after the runtime object would describe none of what it does
+                if typevar_instance.kind(self.db).is_keyword_variadic() {
+                    f.with_type(ty).write_str("KeywordPack")
+                } else if typevar_instance.kind(self.db).is_parameter_pack() {
                     f.with_type(ty).write_str("ParamSpec")
                 } else if typevar_instance.kind(db).is_typevartuple() {
                     f.with_type(ty).write_str("TypeVarTuple")

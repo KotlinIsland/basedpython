@@ -880,6 +880,17 @@ mod tests {
     }
 
     #[test]
+    fn a_literal_union_admits_the_empty_string() {
+        // `\"\"` is a value like any other: it is a choice the command line can
+        // carry, and the default the parameter falls back to
+        let out = guard("def main(a: \"a\" | \"b\" | \"\" = \"\"):\n    pass\n");
+        assert!(
+            out.contains("(\"a\", str, \"any\", False, (\"a\", \"b\", \"\",)),"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
     fn last_main_definition_decides() {
         // the trailing `def main` (with a required arg) is the live binding,
         // so the zero-arg earlier definition does not make it an entry point

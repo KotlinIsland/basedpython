@@ -812,6 +812,7 @@ impl SemanticSyntaxContext for Checker<'_> {
             | SemanticSyntaxErrorKind::ReboundComprehensionVariable
             | SemanticSyntaxErrorKind::LazyImportNotAllowed { .. }
             | SemanticSyntaxErrorKind::LazyImportStar
+            | SemanticSyntaxErrorKind::MethodModifierOutsideClass(_)
             | SemanticSyntaxErrorKind::DiscardedBreakValue
             | SemanticSyntaxErrorKind::LazyFutureImport
             | SemanticSyntaxErrorKind::DuplicateTypeParameter
@@ -923,6 +924,10 @@ impl SemanticSyntaxContext for Checker<'_> {
     fn in_function_scope(&self) -> bool {
         let kind = &self.semantic.current_scope().kind;
         matches!(kind, ScopeKind::Function(_) | ScopeKind::Lambda(_))
+    }
+
+    fn in_class_scope(&self) -> bool {
+        matches!(self.semantic.current_scope().kind, ScopeKind::Class(_))
     }
 
     fn in_notebook(&self) -> bool {

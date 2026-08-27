@@ -11,7 +11,7 @@ use ruff_python_ast::{
     helpers,
     visitor::{Visitor, walk_expr, walk_stmt},
 };
-use ruff_text_size::{Ranged, TextRange, TextSize};
+use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 use rustc_hash::{FxBuildHasher, FxHashSet};
 use std::cell::RefCell;
 use std::fmt::Display;
@@ -222,16 +222,13 @@ impl SemanticSyntaxChecker {
                     Self::check_pattern_bindings(pattern, ctx);
                 }
             }
-            Stmt::FunctionDef(ast::StmtFunctionDef {
-                type_params,
-                parameters,
-                ..
-            }) => {
-                if let Some(type_params) = type_params {
+            Stmt::FunctionDef(function) => {
+                if let Some(type_params) = &function.type_params {
                     Self::duplicate_type_parameter_name(type_params, ctx);
                     Self::type_parameter_default_order(type_params, ctx);
                 }
-                Self::duplicate_parameter_name(parameters, ctx);
+                Self::duplicate_parameter_name(&function.parameters, ctx);
+                Self::method_modifier_outside_class(function, ctx);
             }
             Stmt::Global(ast::StmtGlobal { names, .. }) => {
                 for name in names {
@@ -770,6 +767,50 @@ impl SemanticSyntaxChecker {
             if has_default {
                 seen_default = true;
             }
+        }
+    }
+
+    /// basedpython: `class def`, `static def` and `override def` say how a class
+    /// dispatches one of its members, or that the member replaces one it
+    /// inherits. a `def` no class owns is not a member of anything, so there is
+    /// nothing for them to say about it
+    ///
+    /// the parser carries every modifier keyword as a synthetic decorator named
+    /// after what it lowers to, over the keyword's own text — an
+    /// [`Invalid`](ExprContext::Invalid) context is what marks a decorator as one
+    /// of those rather than a real `@classmethod` the user wrote
+    fn method_modifier_outside_class<Ctx: SemanticSyntaxContext>(
+        function: &StmtFunctionDef,
+        ctx: &Ctx,
+    ) {
+        if !ctx.is_basedpython() || ctx.in_class_scope() {
+            return;
+        }
+
+        for decorator in &function.decorator_list {
+            let Expr::Name(marker) = &decorator.expression else {
+                continue;
+            };
+            if marker.ctx != ExprContext::Invalid
+                || !matches!(marker.id.as_str(), "classmethod" | "static" | "override")
+            {
+                continue;
+            }
+
+            // the decorator spans the keyword plus the whitespace up to the
+            // `def`, which is not part of what the user wrote
+            let Some(text) = ctx
+                .source()
+                .get(marker.range().start().to_usize()..marker.range().end().to_usize())
+            else {
+                continue;
+            };
+            let keyword = text.trim_end();
+            Self::add_error(
+                ctx,
+                SemanticSyntaxErrorKind::MethodModifierOutsideClass(keyword.to_string()),
+                TextRange::at(marker.range().start(), keyword.text_len()),
+            );
         }
     }
 
@@ -1504,6 +1545,9 @@ impl Display for SemanticSyntaxError {
             SemanticSyntaxErrorKind::LazyImportStar => {
                 f.write_str("lazy from ... import * is not allowed")
             }
+            SemanticSyntaxErrorKind::MethodModifierOutsideClass(keyword) => {
+                write!(f, "`{keyword}` is only a modifier on a method")
+            }
             SemanticSyntaxErrorKind::LazyFutureImport => {
                 f.write_str("lazy from __future__ import is not allowed")
             }
@@ -1547,6 +1591,16 @@ pub enum SemanticSyntaxErrorKind {
 
     /// Represents the use of `lazy from ... import *`.
     LazyImportStar,
+
+    /// basedpython: represents a *method* modifier — `class def`, `static def`,
+    /// `override def` — on a function that no class body owns.
+    ///
+    /// ## Examples
+    ///
+    /// ```by
+    /// static def f(): ...  # nothing to be static on
+    /// ```
+    MethodModifierOutsideClass(String),
 
     /// basedpython: represents a `break <value>` whose value nothing reads,
     /// because the loop it leaves is not used as a
@@ -2813,6 +2867,10 @@ pub trait SemanticSyntaxContext {
     /// Returns `true` if the visitor is in a function scope.
     fn in_function_scope(&self) -> bool;
 
+    /// Returns `true` if the visitor is in a class scope — that is, a `def`
+    /// visited now is a method of that class.
+    fn in_class_scope(&self) -> bool;
+
     /// Returns `true` if the visitor is within a generator scope.
     ///
     /// Note that this refers to an `Expr::Generator` precisely, not to comprehensions more
@@ -2894,6 +2952,9 @@ impl SemanticSyntaxContext for CollectMatchErrors {
         false
     }
     fn in_function_scope(&self) -> bool {
+        false
+    }
+    fn in_class_scope(&self) -> bool {
         false
     }
     fn in_generator_context(&self) -> bool {

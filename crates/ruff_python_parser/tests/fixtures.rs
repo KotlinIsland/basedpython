@@ -681,6 +681,10 @@ impl SemanticSyntaxContext for SemanticSyntaxCheckerVisitor<'_> {
         true
     }
 
+    fn in_class_scope(&self) -> bool {
+        false
+    }
+
     fn in_notebook(&self) -> bool {
         false
     }

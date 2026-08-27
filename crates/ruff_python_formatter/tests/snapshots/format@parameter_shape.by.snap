@@ -26,6 +26,12 @@ type Named = (*args: int, **kwargs: str)
 # a named variadic whose annotation is itself starred — it unpacks a pack
 type UnpackedVariadic = (*args: *Ts)
 
+# and the anonymous spelling of the same thing. wrapping the annotation in one
+# more star would spell the kwargs catch-all, so it takes the named shape with
+# the empty name instead
+type UnpackedAnonymousVariadic = (*: *Ts)
+type UnpackedInCallable = (*: *Ts) -> None
+
 # a bare `*A` splices `A` in rather than annotating each field, so it needs no
 # `:`. the lone-element form drops python's disambiguating comma — the star has
 # already said this is a tuple
@@ -70,6 +76,12 @@ type Named = (*args: int, **kwargs: str)
 
 # a named variadic whose annotation is itself starred — it unpacks a pack
 type UnpackedVariadic = (*args: *Ts)
+
+# and the anonymous spelling of the same thing. wrapping the annotation in one
+# more star would spell the kwargs catch-all, so it takes the named shape with
+# the empty name instead
+type UnpackedAnonymousVariadic = (*: *Ts)
+type UnpackedInCallable = (*: *Ts) -> None
 
 # a bare `*A` splices `A` in rather than annotating each field, so it needs no
 # `:`. the lone-element form drops python's disambiguating comma — the star has

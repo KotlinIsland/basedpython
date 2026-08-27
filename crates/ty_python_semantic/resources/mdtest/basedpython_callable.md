@@ -214,6 +214,20 @@ def f[*Args](fn: (*args: *Args) -> object): ...
 f[int, str](lambda a, b: reveal_type((a, b)))  # revealed: (int, str)
 ```
 
+## unpacked `TypeVarTuple` as an anonymous variadic's annotation
+
+`*: *Args` is the anonymous spelling of `*args: *Args`, and means the same thing. wrapping the
+annotation in one more star would spell the kwargs catch-all `**: T`, so the two are kept apart by
+the shape the parser gives them, not by the star count alone
+
+```by
+def f[*Args](fn: (*: *Args) -> object): ...
+
+f[int, str](lambda a, b: reveal_type((a, b)))  # revealed: (int, str)
+
+reveal_type(f)  # revealed: def f[*Args](fn: (*Args) -> object)
+```
+
 ## `Unpack` in a callable parameter list
 
 ```by

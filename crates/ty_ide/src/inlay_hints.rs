@@ -1086,12 +1086,14 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        // only look the owner up once, and only when something could be hinted
+        // only look the owner up once, and only when something could be hinted.
+        // a variadic or keyword-variadic pack has no variance syntax of its own,
+        // so its variance is always inferred and always worth showing
         let undeclared = || {
-            type_params
-                .iter()
-                .filter_map(ast::TypeParam::as_type_var)
-                .filter(|type_var| type_var.variance.is_none())
+            type_params.iter().filter(|type_param| match type_param {
+                ast::TypeParam::TypeVar(type_var) => type_var.variance.is_none(),
+                ast::TypeParam::TypeVarTuple(_) | ast::TypeParam::ParamSpec(_) => true,
+            })
         };
 
         if undeclared().next().is_none() {
@@ -1102,15 +1104,15 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        for type_var in undeclared() {
+        for type_param in undeclared() {
             let Some(variance) =
-                inferred_type_param_variance(self.db, owner, type_var.name.as_str())
+                inferred_type_param_variance(self.db, owner, type_param.name().as_str())
             else {
                 continue;
             };
 
             self.hints.push(InlayHint::inferred_variance(
-                type_var.range().start(),
+                type_param.range().start(),
                 variance,
             ));
         }
@@ -1602,6 +1604,20 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
 
                 return;
             }
+            // basedpython: a declaration that names no type is hinted like the
+            // assignment it is — the type goes where the declaration would
+            // write it, after the name
+            Stmt::AnnAssign(assign) if let Some(value) = untyped_declaration_value(assign) => {
+                if !type_hint_is_excessive_for_expr(value) {
+                    self.assignment_rhs = Some(value);
+                }
+                self.visit_expr(&assign.target);
+                self.assignment_rhs = None;
+
+                self.visit_expr(value);
+
+                return;
+            }
             Stmt::Expr(expr) => {
                 self.visit_expr(&expr.value);
                 return;
@@ -1976,6 +1992,29 @@ fn type_hint_is_excessive_for_expr(expr: &Expr) -> bool {
 
 fn should_skip_import(db: &dyn Db, module: ty_module_resolver::Module, ty: Type) -> bool {
     module.is_known(db, ty_module_resolver::KnownModule::Builtins) || ty.is_none(db)
+}
+
+/// basedpython: the initializer of a declaration that names no type — `let a = v`,
+/// `var a = v`, `context a = v` and the modifier chains that lower like `var`
+///
+/// the parser models a declaration as an annotated assignment whose annotation is
+/// a synthetic marker spanning the keyword text. a declaration that *does* name a
+/// type keeps it under the marker — `let a: T = v` parses as `a: __let__[T] = v`
+/// — so a bare marker is exactly what says the type is unwritten, and the name is
+/// where writing it would go
+fn untyped_declaration_value(assign: &ast::StmtAnnAssign) -> Option<&Expr> {
+    let Expr::Name(marker) = assign.annotation.as_ref() else {
+        return None;
+    };
+    if !marker.ctx.is_invalid() {
+        return None;
+    }
+    matches!(
+        marker.id.as_str(),
+        "__let__" | "__modifier_assign__" | "__context__"
+    )
+    .then(|| assign.value.as_deref())
+    .flatten()
 }
 
 fn annotations_are_valid_syntax(stmt_assign: &ruff_python_ast::StmtAssign) -> bool {
@@ -9930,6 +9969,52 @@ Source with applied edits:
 
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
             inferred_variance: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// a pack declares no variance of its own — there is no `out *Ts` to write —
+    /// so the variance it is inferred to have is always worth showing
+    #[test]
+    fn basedpython_inferred_variance_of_a_pack() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class Source[*Ts]:
+                def get(self) -> (*Ts,): ...
+
+            class Sink[**Kwargs]:
+                def put(self) -> (**Kwargs) -> None: ...
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_variance: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// a declaration that names no type is where the type would be written, so it
+    /// is hinted like the assignment it is. a declaration that already names one
+    /// has nothing to add
+    #[test]
+    fn basedpython_declaration_variable_types() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def foo() -> int:
+                return 1
+
+            let a = foo()
+            var b = foo()
+            context c = foo()
+            final d = foo()
+            let e: int = foo()
+            var f: int = foo()
+            let g
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            variable_types: true,
             ..InlayHintSettings::none()
         }));
     }

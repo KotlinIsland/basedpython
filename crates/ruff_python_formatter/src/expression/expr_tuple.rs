@@ -349,13 +349,22 @@ impl Format<PyFormatContext<'_>> for ParameterShapeFields<'_> {
                                 }),
                             );
                         }
-                        // `*name: T`
+                        // `*name: T`, and the anonymous `*: *Ts` — whose name is
+                        // the empty marker, so there is nothing to write between
+                        // the star and the colon
                         _ => {
+                            let anonymous = matches!(
+                                starred.value.as_ref(),
+                                Expr::Name(name)
+                                    if name.id.is_empty() && name.ctx.is_invalid()
+                            );
                             joiner.entry(
                                 elt,
                                 &format_with(|f| {
                                     token("*").fmt(f)?;
-                                    starred.value.format().fmt(f)?;
+                                    if !anonymous {
+                                        starred.value.format().fmt(f)?;
+                                    }
                                     token(":").fmt(f)?;
                                     space().fmt(f)?;
                                     named.value.format().fmt(f)
