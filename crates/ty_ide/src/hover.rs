@@ -7153,6 +7153,38 @@ def function():
         ");
     }
 
+    /// `**Name` declares a keyword-variadic pack in a basedpython file, not a
+    /// `ParamSpec` — python builds a `ParamSpec` object for it at runtime, but
+    /// naming the hover after that describes none of what the pack does
+    #[test]
+    fn hover_basedpython_keyword_pack_declaration() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                r#"
+                type Alias[**Kwarg<CURSOR>s] = int
+                "#,
+            )
+            .build();
+
+        assert_snapshot!(test.hover(), @"
+        KeywordPack
+        ---------------------------------------------
+        ```python
+        KeywordPack
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.by:2:14
+          |
+        2 | type Alias[**Kwargs] = int
+          |              ^^^^^-
+          |              |    |
+          |              |    Cursor offset
+          |              source
+        ");
+    }
+
     #[test]
     fn hover_dunder_file() {
         let test = hover_test(

@@ -4359,10 +4359,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                             .unwrap_or("kwargs")
                                             .to_owned()
                                     }
+                                    // the anonymous `*: *Ts` carries the empty
+                                    // name marker, and reads as the `*: T` it is
+                                    // the starred spelling of
                                     _ => starred
                                         .value
                                         .as_name_expr()
                                         .map(|n| n.id.as_str())
+                                        .filter(|name| !name.is_empty())
                                         .unwrap_or("args")
                                         .to_owned(),
                                 };

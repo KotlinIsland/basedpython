@@ -6348,6 +6348,10 @@ impl SemanticSyntaxContext for SemanticIndexBuilder<'_, '_> {
         matches!(kind, ScopeKind::Function | ScopeKind::Lambda)
     }
 
+    fn in_class_scope(&self) -> bool {
+        self.scopes[self.current_scope()].kind() == ScopeKind::Class
+    }
+
     fn in_generator_context(&self) -> bool {
         for scope_info in &self.scope_stack {
             let scope = &self.scopes[scope_info.file_scope_id];

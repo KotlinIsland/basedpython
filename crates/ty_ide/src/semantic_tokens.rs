@@ -363,12 +363,13 @@ fn accessor_content(statement: &Stmt) -> Vec<AccessorContent<'_>> {
 /// how a format spec clause is coloured: the counts read as numbers, the fill
 /// as the character it is, and the flags and presentation type as the operators
 /// of the mini-language
+///
+/// the `0` of `{x:06}` is a fill, not a count — it is the shorthand that writes
+/// `0=` before the width — so it is coloured as the character it pads with
 fn format_spec_token_type(component: FormatSpecComponent) -> SemanticTokenType {
     match component {
-        FormatSpecComponent::Fill => SemanticTokenType::String,
-        FormatSpecComponent::Zero | FormatSpecComponent::Width | FormatSpecComponent::Precision => {
-            SemanticTokenType::Number
-        }
+        FormatSpecComponent::Fill | FormatSpecComponent::Zero => SemanticTokenType::String,
+        FormatSpecComponent::Width | FormatSpecComponent::Precision => SemanticTokenType::Number,
         FormatSpecComponent::Conversion
         | FormatSpecComponent::Align
         | FormatSpecComponent::Sign
@@ -1369,7 +1370,20 @@ impl<'db> SemanticTokenVisitor<'db> {
             return;
         }
 
-        self.add_token(label.range(), label_type, SemanticTokenModifier::DEFINITION);
+        // the anonymous `*: *Ts` labels itself with the empty name marker, so its
+        // label spans the bare star and there is no name under it to colour —
+        // just as there is none in the `*: T` it is the starred spelling of
+        let anonymous = matches!(
+            label,
+            Expr::Starred(starred)
+                if starred
+                    .value
+                    .as_name_expr()
+                    .is_some_and(|name| name.id.is_empty())
+        );
+        if !anonymous {
+            self.add_token(label.range(), label_type, SemanticTokenModifier::DEFINITION);
+        }
         if let Some(ty) = ty {
             self.visit_annotation(ty);
         }
@@ -5281,6 +5295,8 @@ def route(path: f"/{str}", version: f"v{int}") -> f"{str}-ok":
         "#);
     }
 
+    /// each clause of the spec is coloured for what it is — the `0` among them is
+    /// the fill the padding is written with, not one of the counts
     #[test]
     fn fstring_format_spec_clauses() {
         let test = SemanticTokenTest::new(
@@ -5300,7 +5316,7 @@ f"{value:*^+#08_.3f}"
         "^" @ 22..23: Keyword
         "+" @ 23..24: Keyword
         "#" @ 24..25: Keyword
-        "0" @ 25..26: Number
+        "0" @ 25..26: String
         "8" @ 26..27: Number
         "_" @ 27..28: Keyword
         ".3" @ 28..30: Number
@@ -6046,6 +6062,23 @@ class A:
         "P" @ 32..33: TypeParameter
         "kwargs" @ 37..43: Parameter [definition]
         "P" @ 47..48: TypeParameter
+        "#);
+    }
+
+    /// the anonymous spelling of the same thing has no name under its star, so
+    /// the star itself is not coloured as a parameter
+    #[test]
+    fn semantic_tokens_anonymous_forwarded_pack() {
+        let test = SemanticTokenTest::new_by("def f[*Ts](fn: (*: *Ts) -> None): ...\n");
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 4..5: Function [definition]
+        "Ts" @ 7..9: TypeParameter [definition]
+        "fn" @ 11..13: Parameter [definition]
+        "Ts" @ 20..22: TypeParameter
+        "None" @ 27..31: BuiltinConstant
         "#);
     }
 
