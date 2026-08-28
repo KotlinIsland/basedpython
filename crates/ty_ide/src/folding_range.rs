@@ -494,6 +494,60 @@ impl<'a> FoldingRangeVisitor<'a> {
         self.add_distinct_block_ranges(parent, full_range, body_range);
     }
 
+    /// Adds a function or class body's folding ranges, stopping before a trailing docstring.
+    ///
+    /// The same ranges [`Self::add_block_ranges`] would give, except that they end before the
+    /// docstring rather than at it, leaving the docstring to the range
+    /// [`Self::add_docstring_range`] gives it.
+    ///
+    /// This is not cosmetic. A range that starts before the docstring and ends exactly where it
+    /// ends is the one overlap an editor cannot draw a rendered docstring inside: `IntelliJ`'s
+    /// `FoldRegionsTree.checkIfValidToCreate` allows an identical range, and allows containment
+    /// only when the renderer is the container. So `def f(): """docs"""` would silently refuse to
+    /// render, while the same docstring above a line of code rendered fine.
+    ///
+    /// It reads better on its own terms too. Folding a `def` with a long signature now collapses
+    /// the signature and leaves the documentation visible, which is what folding a documented
+    /// declaration does in every other language; and a body that is nothing but its docstring
+    /// gets no range of its own, because there is nothing left in it to fold.
+    fn add_documented_block_ranges(&mut self, parent: AnyNodeRef<'a>, body: &[Stmt]) {
+        let Some(end) = self.documented_block_end(body) else {
+            return;
+        };
+        let (block_start, body_header_start) = self.block_range_starts(parent);
+
+        let full_start = self.source.line_end(block_start);
+        let full_range = (full_start < end).then(|| TextRange::new(full_start, end));
+
+        let body_range = body
+            .first()
+            .and_then(|first| {
+                self.find_token_start(
+                    TokenKind::Newline,
+                    TextRange::new(body_header_start, first.start()),
+                )
+            })
+            .and_then(|start| (start < end).then(|| TextRange::new(start, end)));
+
+        self.add_distinct_block_ranges(parent, full_range, body_range);
+    }
+
+    /// Where a documented block's folding ranges stop.
+    ///
+    /// The last statement's end, unless the block is nothing but its docstring — then the end of
+    /// the line before it, so a multi-line signature still folds and the docstring does not. A
+    /// block whose docstring begins on the first line of the file has nothing before it to keep,
+    /// and gets no range at all.
+    fn documented_block_end(&self, body: &[Stmt]) -> Option<TextSize> {
+        let last = body.last()?;
+        let only_docstring = body.len() == 1 && is_docstring_statement(last);
+        if !only_docstring {
+            return Some(last.end());
+        }
+        let line_start = self.source.line_start(last.start());
+        (line_start > TextSize::new(0)).then(|| line_start - TextSize::new(1))
+    }
+
     /// Adds the full range if present, and also adds the body range if both present and distinct
     /// from the full range.
     fn add_distinct_block_ranges(
@@ -592,6 +646,19 @@ impl<'a> FoldingRangeVisitor<'a> {
     }
 }
 
+/// Whether `stmt` is a bare string expression, which is what a docstring is.
+///
+/// Handles string literals, f-strings and t-strings, but not bytes literals — the same set
+/// [`FoldingRangeVisitor::add_docstring_range`] recognises.
+fn is_docstring_statement(stmt: &Stmt) -> bool {
+    let Stmt::Expr(expr_stmt) = stmt else {
+        return false;
+    };
+    expr_stmt.value.is_string_literal_expr()
+        || expr_stmt.value.is_f_string_expr()
+        || expr_stmt.value.is_t_string_expr()
+}
+
 impl<'a> SourceOrderVisitor<'a> for FoldingRangeVisitor<'a> {
     fn enter_node(&mut self, node: AnyNodeRef<'a>) -> TraversalSignal {
         if !self.intersects_range_filter(node.range()) {
@@ -604,7 +671,7 @@ impl<'a> SourceOrderVisitor<'a> for FoldingRangeVisitor<'a> {
             }
             // Compound statements that create folding regions
             AnyNodeRef::StmtFunctionDef(func) => {
-                self.add_block_ranges(node, &func.body);
+                self.add_documented_block_ranges(node, &func.body);
                 // Note that this may be duplicative with folding
                 // ranges added for string literals. But I don't think
                 // the LSP protocol specifies that this is a problem.
@@ -615,7 +682,7 @@ impl<'a> SourceOrderVisitor<'a> for FoldingRangeVisitor<'a> {
                 self.add_docstring_range(&func.body);
             }
             AnyNodeRef::StmtClassDef(class) => {
-                self.add_block_ranges(node, &class.body);
+                self.add_documented_block_ranges(node, &class.body);
                 // See comment above for class docstrings about this
                 // being duplicative with adding folding ranges for
                 // string literals.
@@ -2566,6 +2633,77 @@ with open("file.txt") as f:
             .source("main.py", "class MyClass: pass  # comment\n<CURSOR>")
             .build();
         assert_snapshot!(test.folding_ranges(), @"No folding ranges found");
+    }
+
+    /// A body that is nothing but its docstring leaves the docstring its own range and takes
+    /// none for itself — there is nothing else in it to fold.
+    #[test]
+    fn test_folding_range_docstring_only_body() {
+        let test = CursorTest::builder()
+            .source(
+                "main.py",
+                "def f():\n    \"\"\"Docs.\n\n    More.\n    \"\"\"\n<CURSOR>",
+            )
+            .build();
+        assert_snapshot!(test.folding_ranges(), @r#"
+        info[folding-range]: Folding Range (comment)
+         --> main.py:2:5
+          |
+        2 | /     """Docs.
+        3 | |
+        4 | |     More.
+        5 | |     """
+          | |_______^
+
+        info[folding-range]: Folding Range
+         --> main.py:2:5
+          |
+        2 | /     """Docs.
+        3 | |
+        4 | |     More.
+        5 | |     """
+          | |_______^
+        "#);
+    }
+
+    /// ...but a signature worth folding is still worth folding: the range stops before the
+    /// docstring rather than disappearing.
+    #[test]
+    fn test_folding_range_multiline_signature_with_docstring_only_body() {
+        let test = CursorTest::builder()
+            .source(
+                "main.py",
+                "def f(\n    a: int\n):\n    \"\"\"Docs.\n\n    More.\n    \"\"\"\n<CURSOR>",
+            )
+            .build();
+        assert_snapshot!(test.folding_ranges(), @r#"
+        info[folding-range]: Folding Range
+         --> main.py:1:7
+          |
+        1 |   def f(
+          |  _______^
+        2 | |     a: int
+        3 | | ):
+          | |__^
+
+        info[folding-range]: Folding Range (comment)
+         --> main.py:4:5
+          |
+        4 | /     """Docs.
+        5 | |
+        6 | |     More.
+        7 | |     """
+          | |_______^
+
+        info[folding-range]: Folding Range
+         --> main.py:4:5
+          |
+        4 | /     """Docs.
+        5 | |
+        6 | |     More.
+        7 | |     """
+          | |_______^
+        "#);
     }
 
     #[test]
