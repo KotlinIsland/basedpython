@@ -62,6 +62,19 @@ reveal_type(A.make())  # revealed: A
 reveal_type(A.helper(1))  # revealed: int
 ```
 
+## a method's own type parameters leave it a method
+
+a generic method opens a scope for its type parameters, which sits between the method and the class
+body that owns it
+
+```by
+class A:
+    class def of[T](cls, x: T) -> T:
+        return x
+
+reveal_type(A.of(1))  # revealed: 1
+```
+
 ## an extension body owns its members too
 
 an `extension` declares members of the type it extends, so it is a class body like any other

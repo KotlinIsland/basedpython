@@ -681,8 +681,10 @@ impl SemanticSyntaxContext for SemanticSyntaxCheckerVisitor<'_> {
         true
     }
 
-    fn in_class_scope(&self) -> bool {
-        false
+    fn def_is_method(&self) -> bool {
+        // this visitor checks a statement before pushing any scope the statement
+        // opens, so a class body on top of the stack owns the `def` being checked
+        matches!(self.scopes.last(), Some(Scope::Class))
     }
 
     fn in_notebook(&self) -> bool {
