@@ -1034,6 +1034,7 @@ mod tests {
     #[test_case(Path::new("global_parameter.py"), PythonVersion::PY310)]
     #[test_case(Path::new("annotated_global.py"), PythonVersion::PY314)]
     #[test_case(Path::new("lazy_future_import.py"), PythonVersion::PY315)]
+    #[test_case(Path::new("method_modifier_outside_class.by"), PythonVersion::PY312)]
     fn test_semantic_errors(path: &Path, python_version: PythonVersion) -> Result<()> {
         let snapshot = format!(
             "semantic_syntax_error_{}_{}",
@@ -1042,10 +1043,11 @@ mod tests {
         );
         let path = Path::new("resources/test/fixtures/semantic_errors").join(path);
         let contents = std::fs::read_to_string(&path)?;
+        let source_type = PySourceType::from(&path);
         let source_kind = SourceKind::Python {
             code: contents,
-            is_stub: false,
-            is_basedpython: false,
+            is_stub: source_type.is_stub(),
+            is_basedpython: source_type.is_basedpython(),
         };
 
         let diagnostics = test_contents_syntax_errors(

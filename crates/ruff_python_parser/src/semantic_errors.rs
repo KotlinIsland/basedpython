@@ -783,7 +783,7 @@ impl SemanticSyntaxChecker {
         function: &StmtFunctionDef,
         ctx: &Ctx,
     ) {
-        if !ctx.is_basedpython() || ctx.in_class_scope() {
+        if !ctx.is_basedpython() || ctx.def_is_method() {
             return;
         }
 
@@ -2867,9 +2867,17 @@ pub trait SemanticSyntaxContext {
     /// Returns `true` if the visitor is in a function scope.
     fn in_function_scope(&self) -> bool;
 
-    /// Returns `true` if the visitor is in a class scope — that is, a `def`
-    /// visited now is a method of that class.
-    fn in_class_scope(&self) -> bool;
+    /// Returns `true` if the `def` statement being checked is a method — that is,
+    /// it is written directly in a class body.
+    ///
+    /// Each host checks a function definition at a different point of its own
+    /// traversal: ty and the parser's test visitor check the statement where it
+    /// is written, with the class body still the current scope, while ruff's
+    /// linter holds a function's semantic-syntax check back until it walks the
+    /// body, by which point the function has a scope of its own. So an
+    /// implementation answers for wherever that host runs the check, rather than
+    /// for one fixed scope.
+    fn def_is_method(&self) -> bool;
 
     /// Returns `true` if the visitor is within a generator scope.
     ///
@@ -2954,8 +2962,8 @@ impl SemanticSyntaxContext for CollectMatchErrors {
     fn in_function_scope(&self) -> bool {
         false
     }
-    fn in_class_scope(&self) -> bool {
-        false
+    fn def_is_method(&self) -> bool {
+        true
     }
     fn in_generator_context(&self) -> bool {
         false

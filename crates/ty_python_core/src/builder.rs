@@ -6348,7 +6348,9 @@ impl SemanticSyntaxContext for SemanticIndexBuilder<'_, '_> {
         matches!(kind, ScopeKind::Function | ScopeKind::Lambda)
     }
 
-    fn in_class_scope(&self) -> bool {
+    fn def_is_method(&self) -> bool {
+        // a function definition is checked as the statement is visited, so a class
+        // body being the current scope is what makes the `def` a method of it
         self.scopes[self.current_scope()].kind() == ScopeKind::Class
     }
 

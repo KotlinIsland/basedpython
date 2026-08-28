@@ -1,0 +1,45 @@
+---
+source: crates/ruff_linter/src/linter.rs
+---
+invalid-syntax: `static` is only a modifier on a method
+  --> resources/test/fixtures/semantic_errors/method_modifier_outside_class.by:8:9
+   |
+ 7 |     def run(self):
+ 8 |         static def inner(): ...
+   |         ^^^^^^
+ 9 |
+10 |     class Inner:
+   |
+
+invalid-syntax: `class` is only a modifier on a method
+  --> resources/test/fixtures/semantic_errors/method_modifier_outside_class.by:14:1
+   |
+14 | class def make(): ...
+   | ^^^^^
+15 | static def helper(): ...
+16 | override def described(): ...
+   |
+
+invalid-syntax: `static` is only a modifier on a method
+  --> resources/test/fixtures/semantic_errors/method_modifier_outside_class.by:15:1
+   |
+14 | class def make(): ...
+15 | static def helper(): ...
+   | ^^^^^^
+16 | override def described(): ...
+   |
+
+invalid-syntax: `override` is only a modifier on a method
+  --> resources/test/fixtures/semantic_errors/method_modifier_outside_class.by:16:1
+   |
+14 | class def make(): ...
+15 | static def helper(): ...
+16 | override def described(): ...
+   | ^^^^^^^^
+
+invalid-syntax: `class` is only a modifier on a method
+  --> resources/test/fixtures/semantic_errors/method_modifier_outside_class.by:20:5
+   |
+19 | def run():
+20 |     class def inner(): ...
+   |     ^^^^^

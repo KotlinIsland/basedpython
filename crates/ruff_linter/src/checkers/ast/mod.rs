@@ -926,8 +926,15 @@ impl SemanticSyntaxContext for Checker<'_> {
         matches!(kind, ScopeKind::Function(_) | ScopeKind::Lambda(_))
     }
 
-    fn in_class_scope(&self) -> bool {
-        matches!(self.semantic.current_scope().kind, ScopeKind::Class(_))
+    fn def_is_method(&self) -> bool {
+        // a function's semantic syntax errors are deferred until its body is
+        // walked, so the function's own scope is the current one by then and the
+        // class body that owns it, if there is one, is the scope above. a
+        // type-parameter scope can sit between the two
+        let scope = self.semantic.current_scope();
+        self.semantic
+            .first_non_type_parent_scope(scope)
+            .is_some_and(|parent| matches!(parent.kind, ScopeKind::Class(_)))
     }
 
     fn in_notebook(&self) -> bool {
