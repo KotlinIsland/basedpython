@@ -66,6 +66,16 @@ the value's static type decides the strategy:
     deliberately no "check the first element" heuristic, since an empty
     collection has no element and a builtin's element type is erased
 
+- **undecidable, target the runtime cannot subscript → error**. both runtime
+    residues name the target as written, and a c type is generic to the checker
+    well before cpython lets you subscript it — `array.array` gained a
+    `__class_getitem__` in 3.12, `memoryview` in 3.14. below those versions
+    evaluating `array.array[int]` raises `TypeError` instead of answering the
+    test, so it is an [`erased-type-check`](#the-erased-type-check-error) too.
+    a target is rejected only when the version being targeted is *known* to
+    lack the method, so an ordinary abc target (`x is Sequence[int]`) is
+    unaffected
+
 so of the two undecidable cases, only the *target* distinguishes them:
 
 ```by
@@ -156,6 +166,20 @@ def f[T](x: T) -> bool:
 class A[T]: ...
 def g(x) -> bool:
     return x is A[int]      # ok — probes `x.__orig_class__`
+```
+
+the same rule reports a target the target runtime cannot subscript, since the
+runtime residue has to name it:
+
+```by
+import array
+
+# on a target below python 3.12
+def f(x):
+    return x is array.array[int]  # error: not subscriptable at runtime
+
+def g(x):
+    return x is array.array       # ok — an ordinary isinstance
 ```
 
 ## `===` is unaffected

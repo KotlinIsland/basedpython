@@ -126,7 +126,7 @@ use crate::types::narrow::{pattern_subject_type, pattern_success_types};
 use crate::types::newtype::NewType;
 use crate::types::receivers;
 use crate::types::regex;
-use crate::types::reified_infer::{self, ReifiedInferenceError};
+use crate::types::reified_infer::{self, ErasedTargetReason, ReifiedInferenceError};
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{CallableSignature, NarrowingGuard, ReturnCallableTypeVarScope};
 use crate::types::soundness::{
@@ -14863,7 +14863,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // disjointness, and the test holds as soon as *any* arm does, so
                 // one such arm puts the whole disjunction out of the lint's reach
                 decision = IsTestDecision::Undecided;
-                if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(_) =
+                if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) =
                     crate::types::reified_infer::classify_parametric_is(
                         self.db(),
                         env,
@@ -14873,7 +14873,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         arm,
                     )
                 {
-                    self.report_erased_type_check(arm.range(), &source[arm.range()]);
+                    self.report_erased_type_check(arm.range(), &source[arm.range()], reason);
                 }
             }
             return Some((bool_ty, decision));
@@ -14906,10 +14906,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // only a probe against a runtime-erased target is an error; every
         // other plan (fold, reified-cell equality, witness, or a probe of a
         // user generic that carries `__orig_class__`) is a valid test
-        if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(_) = plan {
+        if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) = plan {
             self.report_erased_type_check(
                 TextRange::new(left.start(), right.end()),
                 &source[right.range()],
+                reason,
             );
         }
         let decision = if plan == crate::types::reified_infer::ParametricIsPlan::Fold(false) {
@@ -14921,26 +14922,60 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     }
 
     /// report an `erased-type-check` for a parametric `is`-target (or one arm
-    /// of a union target) whose specialization cannot be probed at runtime.
-    /// only a protocol target reaches this: a concrete class — builtin or user
-    /// — records its specialization on the instance or across its mro, so the
-    /// runtime probe unwinds it instead
-    fn report_erased_type_check(&self, primary: TextRange, target: &str) {
+    /// of a union target) that has no runtime residue — either because the
+    /// target records no specialization to probe, or because the target cannot
+    /// be spelled at runtime at all. every other concrete class records its
+    /// specialization on the instance or across its mro, so the runtime probe
+    /// unwinds it instead
+    fn report_erased_type_check(
+        &self,
+        primary: TextRange,
+        target: &str,
+        reason: ErasedTargetReason,
+    ) {
         let Some(builder) = self.context.report_lint(&ERASED_TYPE_CHECK, primary) else {
             return;
         };
-        let mut diagnostic = builder.into_diagnostic(format_args!(
-            "`is {target}` cannot be checked at runtime: a protocol's instances don't record which \
-             specialization they satisfy"
-        ));
-        diagnostic.info(format_args!(
-            "an instance's `__orig_class__` names its concrete class, never the protocol, and a \
-             structural `isinstance` check can't see type arguments"
-        ));
-        diagnostic.info(format_args!(
-            "reify the type parameter (`def f[T](x: T)`), or test against a concrete class that \
-             records the specialization on its instances or across its mro"
-        ));
+        match reason {
+            ErasedTargetReason::Protocol => {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`is {target}` cannot be checked at runtime: a protocol's instances don't \
+                     record which specialization they satisfy"
+                ));
+                diagnostic.info(format_args!(
+                    "an instance's `__orig_class__` names its concrete class, never the protocol, \
+                     and a structural `isinstance` check can't see type arguments"
+                ));
+                diagnostic.info(format_args!(
+                    "reify the type parameter (`def f[T](x: T)`), or test against a concrete class \
+                     that records the specialization on its instances or across its mro"
+                ));
+            }
+            ErasedTargetReason::NotSubscriptable => {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`is {target}` cannot be checked at runtime: the target class cannot be \
+                     subscripted"
+                ));
+                diagnostic.info(format_args!(
+                    "the class has no `__class_getitem__` on this python version, so the test's \
+                     runtime check would raise `TypeError` evaluating `{target}`"
+                ));
+                diagnostic.info(format_args!(
+                    "drop the type arguments and test against the bare class, which is all the \
+                     runtime records anyway"
+                ));
+            }
+            ErasedTargetReason::BuiltinCollection => {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`is {target}` cannot be checked at runtime: a builtin collection's instances \
+                     don't record their type arguments"
+                ));
+                diagnostic.info(format_args!(
+                    "test against a subclass that fixes the arguments (`class B(list[int])`), \
+                     whose `__orig_bases__` the probe can unwind"
+                ));
+            }
+        }
     }
 
     /// `reification` names the owner of this list, which decides whether a

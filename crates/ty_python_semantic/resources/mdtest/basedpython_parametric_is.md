@@ -270,6 +270,56 @@ def f(x: object) -> bool:
     return x is list[int]
 ```
 
+## a target the runtime cannot subscript is rejected
+
+The probe has to name the target specialization when the program runs, and some classes are generic
+to the type checker but not subscriptable at runtime. `array.array` only grew a `__class_getitem__`
+in 3.12, so on 3.11 evaluating `array.array[int]` raises `TypeError`.
+
+```toml
+[environment]
+python-version = "3.11"
+```
+
+```by
+import array
+
+def f(x) -> bool:
+    return x is array.array[int]  # error: [erased-type-check]
+```
+
+## a bare target the runtime cannot subscript is an ordinary instance test
+
+Dropping the type arguments leaves a plain `isinstance`, which needs no subscript.
+
+```toml
+[environment]
+python-version = "3.11"
+```
+
+```by
+import array
+
+def f(x) -> bool:
+    return x is array.array
+```
+
+## a target subscriptable on the target version probes
+
+The same test on 3.12, where `array.array` does support subscription, is a legitimate probe.
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```by
+import array
+
+def f(x) -> bool:
+    return x is array.array[int]
+```
+
 ## a user-defined generic target is valid
 
 `A`'s instances carry `__orig_class__` (stamped by `A[int](…)`), so the runtime probe is a

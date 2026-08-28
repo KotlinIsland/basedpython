@@ -379,6 +379,130 @@ fn spell_class<'db>(
     }
 }
 
+/// what is known about whether `origin[…]` *evaluates* at runtime rather than
+/// raising `TypeError`
+///
+/// cpython makes a class subscriptable through pep 560's `__class_getitem__`.
+/// a class written in python gets one by inheriting `typing.Generic`, which
+/// every `class A[T]` does, so being generic and being subscriptable are the
+/// same thing for it. a c type has to define the method by hand, and many never
+/// did — `zip`, `map`, `filter`, `reversed` and `itertools.count` are all
+/// generic to a type checker and all raise when subscripted — while others
+/// gained one years later: `list` in 3.9, `array.array` in 3.12, `memoryview`
+/// in 3.14
+///
+/// two things in a stub carry the fact. an explicit `__class_getitem__`, which
+/// typeshed writes — behind a `sys.version_info` gate where it matters — for
+/// each class whose runtime has one without inheriting `Generic`. and a base
+/// the class spells out, which brings the base's own `__class_getitem__` with
+/// it. neither is airtight on its own: a stub's bases are a typing fiction by
+/// design, so they have to be read *after* the gate, or `memoryview` (spelled
+/// as a `Sequence` subclass it does not inherit at runtime) would come out
+/// subscriptable on a version where it is not
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RuntimeSubscript {
+    /// the class object has a `__class_getitem__` at the target version; or it
+    /// declares a specialized base, which supplies one; or its real definition
+    /// is in view and it is generic, which at runtime is the same thing
+    Supported,
+    /// a `__class_getitem__` is written for this class, but not for the version
+    /// being targeted — the runtime gained it in a later release
+    Unsupported,
+    /// nothing in view settles it: a stub class with no `__class_getitem__`
+    /// anywhere in its mro *and* no base of its own to inherit one from. after
+    /// the pep 695 conversion that is an empty base list and a parameter list,
+    /// which is what `zip`, `map`, `filter`, `reversed` and nearly all of
+    /// `itertools` look like — and also what `typing.IO` looks like, though it
+    /// subscripts perfectly well
+    ///
+    /// TODO: settle this bucket from [`KnownClass`] rather than from the stub.
+    /// the fact is not in the stub to be read: the conversion drops the
+    /// `Generic[…]` base upstream typeshed wrote, so `zip` and `typing.IO` come
+    /// out identical with opposite runtime answers. a `KnownClass` arm keyed on
+    /// the target version is the natural place for it — the same table that
+    /// already knows `list` from `dict` would answer "does cpython let you
+    /// subscript this, and since when"
+    ///
+    /// the table is small. of the 140 generic classes in the vendored stdlib
+    /// stubs, 44 declare the method and most of the rest inherit a base that
+    /// does; the bucket left over is about 40, of which `typing.IO` is the only
+    /// one that subscripts at runtime. everything else in it really does raise
+    ///
+    /// the same table would close the residual on the other side. a stub class
+    /// *does* reach [`Supported`](RuntimeSubscript::Supported) through a
+    /// declared base that the runtime turns out not to have —
+    /// `email.message.MIMEPart` is spelled as a `Message[…]` subclass and
+    /// raises when subscripted — so a specialization of one would be injected
+    /// and would not run. no such class is reachable through a constructor call
+    /// that solves a specialization today, which is why it is a residual rather
+    /// than a bug
+    ///
+    /// once the fact comes from a table this enum collapses to two arms, and
+    /// the two thresholds at the call sites below become one question
+    Unknown,
+}
+
+fn runtime_subscript<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    origin: ClassLiteral<'db>,
+) -> RuntimeSubscript {
+    // a class whose real definition is in view needs no attestation: there a
+    // type-parameter list or a `Generic` base is the runtime's own
+    if !origin.file(db).source_type(db).is_stub() {
+        return RuntimeSubscript::Supported;
+    }
+    // a member only *some* branch declares is no attestation: the emitted
+    // subscript has to evaluate on every run
+    if matches!(
+        origin
+            .class_member(db, env, "__class_getitem__", MemberLookupPolicy::default())
+            .place,
+        crate::place::Place::Defined(defined) if defined.is_definitely_defined()
+    ) {
+        return RuntimeSubscript::Supported;
+    }
+    if mro_mentions_class_getitem(db, origin) {
+        return RuntimeSubscript::Unsupported;
+    }
+    // a stub class that reaches `Generic` through a base it *spells out* is one
+    // whose stub author claimed it really is that base's subclass, and a real
+    // base brings the real `__class_getitem__` with it — `collections.ChainMap`
+    // declares none of its own but inherits `MutableMapping[Key, Value]`, and
+    // `ChainMap[str, int]` evaluates. the c types that raise are the ones with
+    // no such claim to make: `zip`, `map`, `filter` and nearly all of
+    // `itertools` come out of the pep 695 conversion with an empty base list
+    //
+    // the claim is not always true — typeshed's `memoryview` is spelled as a
+    // `Sequence` subclass it does not inherit at runtime — which is why this
+    // comes *after* the version-gated arm above, the one that catches it
+    if origin.explicit_bases(db).iter().any(Type::is_generic_alias) {
+        return RuntimeSubscript::Supported;
+    }
+    RuntimeSubscript::Unknown
+}
+
+/// whether any class in `origin`'s mro writes a `__class_getitem__` in its body
+/// — even in a `sys.version_info` branch this target version does not take
+///
+/// a version gate around the declaration is how typeshed records *when* the
+/// runtime gained the method. reading the class body's symbols rather than
+/// resolving the member is deliberate: resolution answers for the target
+/// version, and this question is about every version
+fn mro_mentions_class_getitem<'db>(db: &'db dyn Db, origin: ClassLiteral<'db>) -> bool {
+    origin.iter_mro(db).any(|base| {
+        let ClassBase::Class(class) = base else {
+            return false;
+        };
+        let ClassLiteral::Static(literal) = class.class_literal(db) else {
+            return false;
+        };
+        ty_python_core::place_table(db, literal.body_scope(db))
+            .symbol_by_name("__class_getitem__")
+            .is_some()
+    })
+}
+
 /// the comma-joined runtime spellings of a specialization's type arguments —
 /// what goes inside a class's `[...]`. tuples carry their precise element
 /// shape out-of-band; spell it rather than the class's single typevar
@@ -389,6 +513,12 @@ fn spell_specialization_arguments<'db>(
     origin: ClassLiteral<'db>,
     specialization: Specialization<'db>,
 ) -> Option<String> {
+    // the caller is about to *invent* an `origin[…]` the source never wrote, so
+    // it fires only on positive evidence. a wrong yes kills the program at
+    // import; a wrong no costs the specialization nothing else can observe
+    if runtime_subscript(db, env, origin) != RuntimeSubscript::Supported {
+        return None;
+    }
     if origin.is_known(db, KnownClass::Tuple) {
         return match specialization.tuple(db)? {
             Tuple::Fixed(fixed) => {
@@ -610,6 +740,10 @@ pub enum ErasedTargetReason {
     /// and a structural `isinstance` check sees no type arguments (and raises
     /// outright unless the protocol is `@runtime_checkable`)
     Protocol,
+    /// the target class cannot be subscripted at runtime (`memoryview[int]`),
+    /// so the runtime residue — which writes the target as spelled — has no
+    /// expression to evaluate
+    NotSubscriptable,
 }
 
 /// a type whose arms are specializations of one *erased* origin, differing in
@@ -861,6 +995,22 @@ pub(crate) fn classify_parametric_is<'db>(
         return protocol_structural_members(db, env, file, ClassType::Generic(rhs_alias))
             .map(|checks| ParametricIsPlan::ProtocolStructural(checks.into_boxed_slice()))
             .unwrap_or(ParametricIsPlan::ErasedTarget(ErasedTargetReason::Protocol));
+    }
+    // both remaining runtime residues write the target *as spelled* into the
+    // emitted python — `_parametric_is(x, list[int], …)` and `T == list[int]` —
+    // so a target the runtime refuses to subscript leaves nothing to evaluate.
+    // a static fold emits a constant instead and is unaffected
+    //
+    // here the target is the source's own type expression rather than something
+    // invented, so the threshold is the opposite one: reject only on positive
+    // evidence *against*. rejecting an unsettled target would turn
+    // `x is Sequence[int]` — which runs perfectly well — into an error
+    if matches!(
+        plan,
+        ParametricIsPlan::Probe(_) | ParametricIsPlan::TokenEq(_)
+    ) && runtime_subscript(db, env, target_origin) == RuntimeSubscript::Unsupported
+    {
+        return ParametricIsPlan::ErasedTarget(ErasedTargetReason::NotSubscriptable);
     }
     plan
 }
