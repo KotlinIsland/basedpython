@@ -2167,8 +2167,9 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
-    /// Checks for parametric type tests (`x is P[int]`) against a protocol,
-    /// which has no sound runtime residue.
+    /// Checks for parametric type tests (`x is P[int]`) that have no sound
+    /// runtime residue — against a protocol, or against a class the runtime
+    /// refuses to subscript.
     ///
     /// ## Why is this bad?
     /// A parametric `is` test is answered from static types wherever possible
@@ -2180,6 +2181,12 @@ declare_lint! {
     /// type arguments (and raises outright unless the protocol is
     /// `@runtime_checkable`). So the test can never confirm the specialization.
     ///
+    /// The probe also has to name the target specialization at runtime, and a
+    /// class can be generic to a type checker well before the runtime lets you
+    /// subscript it: `array.array` only grew a `__class_getitem__` in 3.12, and
+    /// `memoryview` in 3.14. Below those versions, evaluating the probe's target
+    /// raises `TypeError` instead of answering the test.
+    ///
     /// ## Example
     ///
     /// ```by
@@ -2189,6 +2196,14 @@ declare_lint! {
     ///
     /// def f(x):
     ///     return x is P[int]  # error: a protocol records no specialization
+    /// ```
+    ///
+    /// ```by
+    /// # on a target below python 3.12
+    /// import array
+    ///
+    /// def g(x):
+    ///     return x is array.array[int]  # error: not subscriptable at runtime
     /// ```
     ///
     /// Reify the type parameter (so the test compares the reified cell), or test
@@ -2203,8 +2218,17 @@ declare_lint! {
     /// def g(x):
     ///     return x is A[int]     # ok — unwinds `x`'s mro
     /// ```
+    ///
+    /// A target that isn't subscriptable at runtime still has a bare-class test:
+    ///
+    /// ```by
+    /// import array
+    ///
+    /// def h(x):
+    ///     return x is array.array  # ok — an ordinary `isinstance`
+    /// ```
     pub(crate) static ERASED_TYPE_CHECK = {
-        summary: "detects parametric type tests against a protocol with no runtime residue",
+        summary: "detects parametric type tests with no runtime residue",
         status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
     }

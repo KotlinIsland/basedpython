@@ -30,13 +30,48 @@
 //! module) — dynamic, unsolved or scope-local arguments leave the call as
 //! written. it also fires only where the class accepts a subscript at runtime:
 //! `zip` and `map` are generic in the stub but unsubscriptable in cpython, so
-//! `zip(a, b)` reaches the output as it was written. type positions never reify (annotations, type parameter lists,
+//! `zip(a, b)` reaches the output as it was written
+//!
+//! type positions never reify (annotations, type parameter lists,
 //! `type X = …` values, type-context subscript slices such as legacy
 //! `Callable[[int], str]` parameter lists), and dunders that static readers
 //! require to stay literal displays (`__all__`, `__slots__`, `__match_args__`)
 //! are skipped. pep 585 makes the builtins subscriptable at runtime in 3.9, so
 //! the pass is inert below that target, and stubs have no runtime to observe,
 //! so stub sources are left alone
+//!
+//! # TODO: a subscript the *source* wrote on an unsubscriptable class
+//!
+//! this pass only declines to *invent* a subscript. one the source writes
+//! itself is copied through, and for a class the runtime won't subscript that
+//! is python which raises on the line it appears:
+//!
+//! ```text
+//! a = zip[int]                # a = zip[int]
+//! type a = zip[int]           # TypeAliasType("a", zip[int]) — the polyfill
+//!                             #   evaluates its value, unlike native pep 695
+//! def f(x: zip[int]): ...     # crashes on a 3.10–3.13 target, where no
+//!                             #   `from __future__ import annotations` is emitted
+//! ```
+//!
+//! this is faithful — the same three lines raise in plain python — so it is a
+//! missing diagnostic rather than a bad lowering. but a lowering is available
+//! and is probably the better answer: emit a generic *alias* object instead of
+//! subscripting the class, the way `typing.List` stood in for a `list` nobody
+//! could subscript before 3.9. the alias carries the same `__origin__` and
+//! `__args__` a real `zip[int]` would have, so every static reader and the
+//! `_parametric_is` probe keep working, and nothing evaluates a subscript the
+//! class does not support
+//!
+//! two things to settle first. which spelling — a `typing` alias where one
+//! exists, else a constructed `types.GenericAlias(zip, (int,))`, which is
+//! exactly the object the subscript would have produced. and which positions
+//! are worth rewriting, since an annotation is already inert wherever the
+//! `from __future__ import annotations` preamble is emitted, and pep 649 makes
+//! it inert on 3.14+ regardless
+//!
+//! either way it needs to know *which* classes the runtime refuses, which is
+//! the open question on `RuntimeSubscript::Unknown` in ty's `reified_infer`
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, Expr, PythonVersion, Stmt};
@@ -171,12 +206,40 @@ impl TypeAwarePass for TypeReificationPass {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Config, transpile};
+    use crate::{Config, transpile, transpile_typed};
     use indoc::indoc;
+    use ruff_db::files::system_path_to_file;
+    use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
     use ruff_python_ast::PythonVersion;
+    use ty_project::{ProjectMetadata, TestDb};
 
     fn out(input: &str) -> String {
         transpile(input, &Config::test_default()).unwrap()
+    }
+
+    /// transpile against a typeshed resolved at `version`, so a member that
+    /// typeshed gates on `sys.version_info` — such as the `__class_getitem__`
+    /// that makes a class subscriptable at runtime — answers for that target
+    fn out_checked_at(input: &str, version: PythonVersion) -> String {
+        let mut db = TestDb::new(ProjectMetadata::new(
+            ruff_python_ast::name::Name::new_static(""),
+            SystemPathBuf::from("/"),
+        ));
+        db.write_file("/input.by", input)
+            .expect("write file failed");
+        db.init_program_with_python_version(version)
+            .expect("program init failed");
+        let file = system_path_to_file(&db, "/input.by").expect("file not in db");
+        transpile_typed(
+            &db,
+            file,
+            &Config {
+                min_version: version,
+                ..Config::test_default()
+            },
+            None,
+        )
+        .expect("transpile failed")
     }
 
     fn out_at(input: &str, version: PythonVersion) -> String {
@@ -243,6 +306,69 @@ mod tests {
         assert!(
             out.contains("a = A[int, str](1, \"x\")"),
             "both arguments should reify: {out}"
+        );
+    }
+
+    #[test]
+    fn generic_builtin_the_runtime_never_subscripts_stays_bare() {
+        // a `zip` object is generic to the type checker, but no release of
+        // cpython gives `zip` a `__class_getitem__` — `zip[…](…)` raises
+        // `TypeError`, and ordinary python is full of `zip` calls
+        let out = out(indoc! {"
+            pairs = zip([1, 2], [True, False])
+            names = map(str, [1])
+            kept = filter(None, [1])
+            backwards = reversed([1])
+        "});
+        for expected in [
+            "pairs = zip([1, 2], [True, False])",
+            "names = map(str, [1])",
+            "kept = filter(None, [1])",
+            "backwards = reversed([1])",
+        ] {
+            assert!(
+                out.contains(expected),
+                "{expected:?} should stay bare: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_builtin_the_runtime_does_subscript_reifies() {
+        // `enumerate` is the same shape as `zip` to the checker, but cpython
+        // does give it a `__class_getitem__`, which typeshed writes down
+        let out = out("labelled = enumerate([\"a\"])\n");
+        assert!(
+            out.contains("labelled = enumerate[str]([\"a\"])"),
+            "a subscriptable builtin reifies: {out}"
+        );
+    }
+
+    #[test]
+    fn class_not_subscriptable_at_runtime_stays_bare() {
+        // `array.array` is generic to the type checker on every version, but the
+        // runtime only grew a `__class_getitem__` in 3.12 — below that,
+        // `array.array[int](…)` raises `TypeError` when the emitted python runs
+        let out = out_checked_at(
+            "import array\nxs = array.array(\"i\", [1, 2])\n",
+            PythonVersion::PY311,
+        );
+        assert!(
+            out.contains("xs = array.array(\"i\", [1, 2])"),
+            "an unsubscriptable class stays bare: {out}"
+        );
+    }
+
+    #[test]
+    fn class_subscriptable_at_runtime_reifies() {
+        // the same class on the version that gave it a `__class_getitem__`
+        let out = out_checked_at(
+            "import array\nxs = array.array(\"i\", [1, 2])\n",
+            PythonVersion::PY312,
+        );
+        assert!(
+            out.contains("xs = array.array[int](\"i\", [1, 2])"),
+            "a subscriptable class reifies: {out}"
         );
     }
 
