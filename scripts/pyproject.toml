@@ -15,6 +15,11 @@ dependencies = [
 ]
 requires-python = ">=3.12"
 
+[dependency-groups]
+# pytest runs `test_build_backend.py`; it is not what the file is written
+# against, but the checker types its fixtures from pytest's own package
+dev = ["pytest"]
+
 [tool.black]
 line-length = 88
 
@@ -29,7 +34,10 @@ root = [".", "../python"]
 
 [tool.ty.src]
 # `ty_benchmark` is a standalone project with its own pyproject.toml files, search paths, etc.
-exclude = ["./ty_benchmark"]
+# `native-bench/programs` are the benchmark's inputs rather than its tooling: each one is written
+# to measure a particular shape, so what the checker would ask for — an `@override`, a narrower
+# annotation — would change the program being measured
+exclude = ["./ty_benchmark", "./native-bench/programs"]
 
 [tool.uv.sources]
 mypy-primer = { git = "https://github.com/hauntsaninja/mypy_primer" }

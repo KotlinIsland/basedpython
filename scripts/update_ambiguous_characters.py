@@ -22,7 +22,7 @@ pub(crate) fn confusable(c: u32) -> Option<char> {
 postlude = """_ => return None, }; Some(result)}"""
 
 
-def get_mapping_data() -> dict:
+def get_mapping_data() -> dict[str, list[int]]:
     """
     Get the ambiguous character mapping data from the vscode-unicode-data repository.
 

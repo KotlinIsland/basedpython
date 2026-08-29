@@ -42,7 +42,7 @@ from enum import StrEnum, auto
 from itertools import chain, groupby
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, Literal, Self, assert_never
+from typing import Any, Literal, Self, assert_never, override
 
 # The conformance tests include 4 types of errors:
 # 1. Required errors (E): The type checker must raise an error on this line
@@ -184,6 +184,7 @@ class TyDiagnostic:
         # Remove check name prefix from description
         self.description = self.description.replace(f"{self.check_name}: ", "")
 
+    @override
     def __str__(self) -> str:
         return (
             f"{self.location.path}:{self.location.positions.begin.line}:"
@@ -250,7 +251,7 @@ class ExpectedError:
 def diagnostics_are_equivalent(a: list[TyDiagnostic], b: list[TyDiagnostic]) -> bool:
     """Compare two diagnostic lists for equality, ignoring the ``source`` field."""
 
-    def fingerprint(d: TyDiagnostic) -> tuple:
+    def fingerprint(d: TyDiagnostic) -> tuple[str, str, str, str, int, int]:
         return (
             d.check_name,
             d.description,

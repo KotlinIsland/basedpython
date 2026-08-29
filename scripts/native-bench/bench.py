@@ -47,6 +47,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -141,11 +142,11 @@ class Ratio:
     def render(self, places: int = 2) -> str:
         return f"{self.median:.{places}f}x ±{self.spread * 100:.1f}%"
 
-    def as_json(self) -> dict:
+    def as_json(self) -> dict[str, float]:
         return {"median": self.median, "low": self.low, "high": self.high}
 
 
-def ratio_json(result: Result, leg: str) -> dict | None:
+def ratio_json(result: Result, leg: str) -> dict[str, float] | None:
     """a leg's paired ratio as json, or `None` where there was no pairing
 
     the three json rows all read a ratio that may not exist — a leg the run did not
@@ -236,7 +237,7 @@ class Leg:
     log: Path | None = None
     declines: list[str] = field(default_factory=list)
 
-    def spec(self) -> dict:
+    def spec(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "module": self.module,
@@ -355,7 +356,7 @@ def build_mypyc(directory: Path, module: str, python: str) -> tuple[bool, str | 
 # ── driving the timer ────────────────────────────────────────────────────────
 
 
-def drive(python: str, spec: dict, work: Path, tag: str) -> dict:
+def drive(python: str, spec: dict[str, Any], work: Path, tag: str) -> dict[str, Any]:
     path = work / f"spec-{tag}.json"
     path.write_text(json.dumps(spec))
     result = subprocess.run(
@@ -548,7 +549,9 @@ def run_program(
 # ── reporting ────────────────────────────────────────────────────────────────
 
 
-def render(results: list[Result], metadata: dict, show_declines: bool, limit: float):
+def render(
+    results: list[Result], metadata: dict[str, Any], show_declines: bool, limit: float
+):
     header = (
         f"{'benchmark':<15}{'group':<10}{'cpython':>10}{'by':>10}{'mypyc':>10}"
         f"  {'vs cpython':>15}{'vs mypyc':>16}{'noise':>10}{'dec':>5}"
@@ -650,7 +653,7 @@ def render_verification(results: list[Result]):
 
 
 def compare(
-    results: list[Result], baseline: dict, threshold: float, limit: float
+    results: list[Result], baseline: dict[str, Any], threshold: float, limit: float
 ) -> bool:
     """a regression is detected rather than eyeballed
 
@@ -711,7 +714,7 @@ def compare(
     return regressed
 
 
-CURRENT: dict = {}
+CURRENT: dict[str, Any] = {}
 
 
 # ── the harness's check on itself ────────────────────────────────────────────
@@ -737,7 +740,7 @@ def self_check(by: Path, python: str, python_version: str) -> int:
         else:
             print(f"  refused {what}: {refusal}")
 
-    def refusal_for(leg: dict, built_after: float = 0.0) -> str | None:
+    def refusal_for(leg: dict[str, Any], built_after: float = 0.0) -> str | None:
         answer = drive(
             python,
             {

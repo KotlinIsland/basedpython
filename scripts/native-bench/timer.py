@@ -28,6 +28,7 @@ import math
 import pathlib
 import sys
 import time
+from typing import Any, Protocol, cast
 
 # the interpreter puts *this script's* directory first, and a benchmark that
 # shared a name with anything beside it would be shadowed. nothing is imported
@@ -39,7 +40,17 @@ class Refused(Exception):
     """a build that cannot be proved to be the one that was just made"""
 
 
-def load(leg: dict, root: str, built_after: float):
+class Bench(Protocol):
+    """what this harness needs of a benchmark module
+
+    `load` refuses anything without it, so the modules that reach `sample` and
+    the timing loops have it by construction — which `ModuleType` cannot say
+    """
+
+    def bench(self) -> object: ...
+
+
+def load(leg: dict[str, Any], root: str, built_after: float) -> tuple[Bench, str]:
     """import one build, or refuse to"""
     sys.path.insert(0, leg["dir"])
     try:
@@ -66,7 +77,7 @@ def load(leg: dict, root: str, built_after: float):
 
     if not hasattr(module, "bench"):
         raise Refused("the module has no bench()")
-    return module, str(path)
+    return cast(Bench, module), str(path)
 
 
 def sample(module, count: int) -> float:
@@ -88,7 +99,10 @@ def main() -> int:
     spec = json.loads(pathlib.Path(sys.argv[1]).read_text())
     root, built_after = spec["root"], spec["built_after"]
 
-    loaded, refused, answers, origins = [], {}, {}, {}
+    loaded: list[tuple[str, Bench]] = []
+    refused: dict[str, str] = {}
+    answers: dict[str, str] = {}
+    origins: dict[str, str] = {}
     for leg in spec["legs"]:
         try:
             module, origin = load(leg, root, built_after)

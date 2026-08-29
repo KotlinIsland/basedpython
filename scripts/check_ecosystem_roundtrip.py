@@ -74,7 +74,7 @@ from asyncio.subprocess import PIPE, create_subprocess_exec
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from signal import SIGINT, SIGTERM
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -718,7 +718,7 @@ def render_diff_report(
     return _assemble(lines, sections), not broken
 
 
-def _project_diff_to_dict(p: ProjectDiff) -> dict:
+def _project_diff_to_dict(p: ProjectDiff) -> dict[str, Any]:
     return {
         "name": p.name,
         "files_checked": p.files_checked,
@@ -729,7 +729,7 @@ def _project_diff_to_dict(p: ProjectDiff) -> dict:
     }
 
 
-def _project_diff_from_dict(d: dict) -> ProjectDiff:
+def _project_diff_from_dict(d: dict[str, Any]) -> ProjectDiff:
     return ProjectDiff(
         d["name"],
         d["files_checked"],
