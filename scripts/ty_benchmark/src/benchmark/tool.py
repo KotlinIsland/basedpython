@@ -216,6 +216,7 @@ class Pyright(Tool):
             ),
         )
 
+    @override
     def command(self, project: Project, venv: Venv, single_threaded: bool) -> Command:
         command = [str(self.path), "--skipunannotated"]
 

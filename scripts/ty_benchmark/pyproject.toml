@@ -32,6 +32,10 @@ ignore = [
 ]
 
 [tool.ty.rules]
+# the `benchmark` fixture comes from pytest-benchmark through a `pytest11` entry
+# point, and plugin fixtures are not discovered yet — which is why this rule is
+# off by default. the strict preset turns it on, so it is turned back off here
+unknown-fixture = "ignore"
 possibly-unresolved-reference = "error"
 division-by-zero = "error"
 unused-ignore-comment = "error"
