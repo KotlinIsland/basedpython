@@ -20,6 +20,7 @@ import sys
 import tomllib
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 # the backend is not part of this project — it ships in the `basedpython` wheel —
 # so it is reached the way a test reaches it, and `[tool.ty.environment] root`
@@ -58,7 +59,7 @@ def reports(pattern: str) -> Iterator[None]:
         raise AssertionError(f"expected a failure matching {pattern!r}")
 
 
-def render_and_parse(document: dict) -> dict:
+def render_and_parse(document: dict[str, Any]) -> dict[str, Any]:
     """A document, through the writer and back."""
     return tomllib.loads(_toml(document))
 
@@ -251,7 +252,7 @@ def test_other_dynamic_metadata_is_reported_rather_than_dropped(tmp_path: Path):
 # ── describing the staged tree to the backend that packages it ───────────────
 
 
-def staged_pyproject(tmp_path: Path, pyproject: str, built: Staged) -> dict:
+def staged_pyproject(tmp_path: Path, pyproject: str, built: Staged) -> dict[str, Any]:
     """The document written into the staging directory for a project."""
     root = write_project(tmp_path / "project", pyproject)
     staging = tmp_path / "staging"

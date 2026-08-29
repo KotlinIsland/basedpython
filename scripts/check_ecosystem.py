@@ -26,7 +26,7 @@ from collections.abc import Awaitable
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from signal import SIGINT, SIGTERM
-from typing import TYPE_CHECKING, NamedTuple, Self, TypeVar
+from typing import TYPE_CHECKING, NamedTuple, Self, TypeVar, override
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator, Sequence
@@ -232,6 +232,7 @@ class Diff(NamedTuple):
         """Return true if this diff is non-empty."""
         return bool(self.removed or self.added)
 
+    @override
     def __iter__(self: Self) -> Iterator[str]:
         """Iterate through the changed lines in diff format."""
         for line in heapq.merge(sorted(self.removed), sorted(self.added)):
