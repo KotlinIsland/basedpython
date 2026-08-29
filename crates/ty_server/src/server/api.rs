@@ -86,6 +86,16 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::LatencySensitive
         ),
+        // Sent when a user presses reload on a running debug session, so it is
+        // latency sensitive for the same reason: somebody is watching a spinner.
+        // It reads the project db and writes nothing, which is what lets it run
+        // on a worker at all
+        requests::TranspileForBuildRequestHandler::METHOD => {
+            background_document_request_task::<requests::TranspileForBuildRequestHandler>(
+                req,
+                BackgroundSchedule::LatencySensitive,
+            )
+        }
         // A table lookup with no document behind it: a reader can ask about a code they typed
         // into a prompt, with no file open at all.
         requests::ExplainRuleHandler::METHOD => {

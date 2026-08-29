@@ -30,6 +30,7 @@ ruff_diagnostics = { workspace = true }
 by_build = { workspace = true }
 by_ir = { workspace = true }
 by_irbuild = { workspace = true }
+by_stage = { workspace = true }
 by_transforms = { workspace = true }
 ruff_ranged_value = { workspace = true }
 ty_combine = { workspace = true }
@@ -55,7 +56,6 @@ rayon = { workspace = true }
 salsa = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 tempfile = { workspace = true }
 tracing = { workspace = true, features = ["release_max_level_debug"] }
 tracing-flame = { workspace = true }

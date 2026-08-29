@@ -12,10 +12,8 @@ use ruff_db::diagnostic::{
     Severity, Span, SubDiagnostic, SubDiagnosticSeverity,
 };
 use ruff_db::files::system_path_to_file;
-use ruff_db::source::source_text;
-use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
+use ruff_db::system::{OsSystem, SystemPath};
 use ruff_text_size::TextRange;
-use sha2::{Digest, Sha256};
 use ty_project::{Db, ProjectDatabase, ProjectMetadata};
 use ty_site_packages::{PythonEnvironment, SysPrefixPathOrigin};
 use ty_static::EnvVars;
@@ -23,7 +21,15 @@ use walkdir::WalkDir;
 
 use crate::ExitStatus;
 use crate::args::LoweringArgs;
-use crate::by_staging::{Staging, relative_destination, transpiled_destination};
+use by_stage::emit::{CheckGate, Transpiled, is_unusable_source, transpile_bug_diagnostic};
+use by_stage::project::{
+    BY_SOURCES, COMPILABLE_SOURCES, Rebuilder, build_project_db, may_contain_sources, module_roots,
+    source_files,
+};
+use by_stage::record::{BuildRecord, parse_soundness, stage_build_record};
+use by_stage::sourcemap::{TracebackEntry, stage_module, write_sourcemap_module};
+use by_stage::staging::{Staging, transpiled_destination};
+use by_stage::verbatim::stage_verbatim;
 
 /// The transpile config for a command whose `--min-version` is optional.
 ///
@@ -52,43 +58,6 @@ pub(crate) fn parse_version(s: &str) -> anyhow::Result<Config> {
         min_version: version,
         ..Config::default()
     })
-}
-
-/// Parse a `--soundness` spec: `default` (the inference-gap checks), `all`
-/// (those plus the opt-in `parameters` entry checks), `none`, or a
-/// comma-separated subset of the position names. Unknown names are a hard
-/// error so a typo doesn't silently disable a check the user expected.
-pub(crate) fn parse_soundness(spec: &str) -> anyhow::Result<by_transforms::SoundnessPositions> {
-    use by_transforms::SoundnessPositions;
-
-    match spec.trim() {
-        "default" => return Ok(SoundnessPositions::defaults()),
-        "all" => return Ok(SoundnessPositions::all()),
-        "none" => return Ok(SoundnessPositions::none()),
-        _ => {}
-    }
-    let mut positions = SoundnessPositions::none();
-    for name in spec.split(',') {
-        let name = name.trim();
-        if name.is_empty() {
-            continue;
-        }
-        match name {
-            "generic-calls" => positions.generic_calls = true,
-            "projections" => positions.projections = true,
-            "iterations" => positions.iterations = true,
-            "assignments" => positions.assignments = true,
-            "returns" => positions.returns = true,
-            "arguments" => positions.arguments = true,
-            "parameters" => positions.parameters = true,
-            other => anyhow::bail!(
-                "unknown soundness position {other:?} — use `default`, `all`, `none`, or a \
-                 comma-separated subset of: generic-calls, projections, iterations, assignments, \
-                 returns, arguments, parameters"
-            ),
-        }
-    }
-    Ok(positions)
 }
 
 impl LoweringArgs {
@@ -213,6 +182,16 @@ pub(crate) fn cmd_run(
     stage_verbatim(&db, &root, &roots, &mut staging)?;
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
     write_traceback_runtime(&mut staging, &traceback_entries)?;
+    // what this build *was*, written into the build itself. a tree that is going
+    // to be staged again one file at a time — which is what a debugger's reload
+    // does — has to be able to say which transpiler and which configuration wrote
+    // it: `run` takes its target version from the interpreter it probed while
+    // `build` takes it from the project, so a later re-stage that re-derived the
+    // configuration would emit different code in exactly the case that matters
+    stage_build_record(
+        &mut staging,
+        &BuildRecord::new(&root, &roots, Some(module.clone()), compiled, &config),
+    )?;
     staging.finish()?;
 
     if compiled {
@@ -301,24 +280,6 @@ pub(crate) fn cmd_run(
     std::process::exit(code);
 }
 
-/// The project's first-party module roots, longest first, as absolute paths.
-///
-/// These are the directories a module name is resolved against — for a
-/// src-layout project, `src/` before the project root. Only roots inside the
-/// project are kept: an emitted tree can only mirror what is being built.
-fn module_roots(db: &ProjectDatabase, cwd: &Path) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = ty_module_resolver::system_module_search_paths(
-        db,
-        db.project().program(db).resolver_environment(db),
-    )
-    .map(|path| PathBuf::from(path.as_str()))
-    .filter(|path| path.starts_with(cwd))
-    .collect();
-    // a nested root shadows the one containing it, so the deepest match wins
-    roots.sort_by_key(|root| std::cmp::Reverse(root.components().count()));
-    roots
-}
-
 /// The source roots a distribution's packages come from.
 ///
 /// The project root is always a module root — it is what lets `tests/` and a
@@ -367,63 +328,6 @@ fn staged_packages(staging: &Staging, roots: &[PathBuf], root: &Path) -> Vec<Str
     packages.sort();
     packages.dedup();
     packages
-}
-
-/// Carry every file the transpiler did not produce into the output tree.
-///
-/// This is what makes the output a project rather than a heap of transpiled
-/// modules: a hand-written `.py` sibling, a `py.typed`, a template, a fixture —
-/// all of it lands in the same relative place, so the output imports and reads
-/// data exactly the way the source tree does.
-fn stage_verbatim(
-    db: &ProjectDatabase,
-    root: &Path,
-    roots: &[PathBuf],
-    staging: &mut Staging,
-) -> anyhow::Result<()> {
-    let settings = db.project().settings(db);
-    let build = settings.build();
-    // a file the project excludes from itself is not part of what it ships, so
-    // `src.exclude` bounds the build and `build.exclude` narrows it further
-    let src = settings.src();
-    let out = staging.out().to_path_buf();
-
-    for entry in WalkDir::new(root)
-        .into_iter()
-        .filter_entry(|entry| {
-            // the output tree is not an input to itself, wherever `--out` put it
-            if entry.path() == out {
-                return false;
-            }
-            if !may_hold_build_content(entry) {
-                return false;
-            }
-            !entry.file_type().is_dir()
-                || SystemPath::from_std_path(entry.path()).is_none_or(|path| {
-                    build.is_directory_included(path) && src.is_directory_included(path)
-                })
-        })
-        .filter_map(Result::ok)
-    {
-        let path = entry.path();
-        if entry.path_is_symlink() || !entry.file_type().is_file() {
-            continue;
-        }
-        let extension = path.extension().and_then(OsStr::to_str);
-        // a `.by` is an input, and it is carried over only to be read by a
-        // downstream basedpython project — never for python to import
-        if matches!(extension, Some("by" | "byi")) && !build.sources() {
-            continue;
-        }
-        let Some(system_path) = SystemPath::from_std_path(path) else {
-            continue;
-        };
-        if !build.is_file_included(system_path) || !src.is_file_included(system_path) {
-            continue;
-        }
-        staging.copy(&relative_destination(roots, root, path), path)?;
-    }
-    Ok(())
 }
 
 /// Write the `by.typed` marker into every package the build ships.
@@ -825,6 +729,41 @@ fn detect_python_version(python: &str) -> Option<PythonVersion> {
 // ── build ────────────────────────────────────────────────────────────────────
 
 #[allow(clippy::print_stderr)]
+/// Recompute one file's slot in a build tree that already exists, and print it.
+///
+/// The command-line half of `by/transpileForBuild`, over the same implementation:
+/// the language server answers this out of a database that is already warm,
+/// which is what makes it fast enough for an editor, and this builds one first.
+/// Two front ends, one operation — the bytes either produces have to be the bytes
+/// the build itself would have written, and two implementations could not
+/// promise that.
+///
+/// Prints JSON on stdout and writes nothing. A refusal is JSON too, and exits
+/// non-zero: a caller in a script should be able to read `$?` rather than parse
+/// to find out whether it got bytes.
+#[allow(clippy::print_stdout)]
+pub(crate) fn cmd_restage(build_directory: &Path, file: &Path) -> anyhow::Result<ExitStatus> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let file = if file.is_absolute() {
+        file.to_path_buf()
+    } else {
+        cwd.join(file)
+    };
+    let (db, _, _, _) = build_project_db(&cwd, BY_SOURCES, Some(build_directory))?;
+
+    let restaged = by_stage::restage::restage_one(&db, build_directory, &file)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&restaged)
+            .context("could not render what the re-stage produced")?
+    );
+    Ok(match restaged {
+        by_stage::restage::Restage::Ready(_) => ExitStatus::Success,
+        by_stage::restage::Restage::Refused(_) => ExitStatus::Failure,
+    })
+}
+
+#[allow(clippy::print_stderr)]
 pub(crate) fn cmd_build(
     min_version: Option<&str>,
     lowering: &LoweringArgs,
@@ -883,6 +822,13 @@ pub(crate) fn cmd_build(
     stage_verbatim(&db, &root, &roots, &mut staging)?;
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
     write_sourcemap_module(&mut staging, &entries)?;
+    // `out/` outlives the build that wrote it and is what a debugger, a test
+    // runner or an editor plugin later reads, so it carries the same record a
+    // `run` tree does. no entry module: a build is not pointed at one
+    stage_build_record(
+        &mut staging,
+        &BuildRecord::new(&root, &roots, None, false, &config),
+    )?;
     if print_manifest {
         print_build_manifest(&staging, &roots, &root, requirements)?;
     }
@@ -1234,11 +1180,11 @@ pub(crate) fn cmd_transpile(
         let system = OsSystem::new(project_root);
         let project_metadata = ProjectMetadata::discover(project_root, &system)
             .with_context(|| format!("failed to discover project at {project_root}"))?;
-        let rebuilder = Rebuilder {
-            metadata: project_metadata.clone(),
-            root: project_root.to_path_buf(),
-            included: vec![sys_path.to_path_buf()],
-        };
+        let rebuilder = Rebuilder::for_sources(
+            project_metadata.clone(),
+            project_root.to_path_buf(),
+            vec![sys_path.to_path_buf()],
+        );
         let mut db = ProjectDatabase::use_defaults(project_metadata, system);
         let file = system_path_to_file(&db, sys_path)
             .with_context(|| format!("file not found in db: {sys_path}"))?;
@@ -1282,32 +1228,6 @@ pub(crate) fn cmd_transpile(
 }
 
 // ── directory transpile ───────────────────────────────────────────────────────
-
-/// non-hidden directories skipped when walking a project (see
-/// [`may_contain_sources`]): virtual envs, caches, and build outputs — none
-/// are first-party source. hidden directories are skipped wholesale
-const NON_SOURCE_DIRS: &[&str] = &[
-    ".venv",
-    "venv",
-    "env",
-    ".env",
-    "site-packages",
-    "__pycache__",
-    ".git",
-    ".tox",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".pytest_cache",
-    "build",
-    "dist",
-    "node_modules",
-    "out",
-    // rust's build directory, which a basedpython project has whenever it also
-    // has an extension crate — and which the build would otherwise copy in full.
-    // a project that really does have a package called `target` can take it back
-    // with `exclude = ["!target"]`
-    "target",
-];
 
 fn cmd_transpile_dir(dir: &Path, reverse: bool, config: &Config) -> anyhow::Result<ExitStatus> {
     if reverse {
@@ -1462,147 +1382,10 @@ fn py_source_files(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Whether the build walk may descend into this entry.
-///
-/// Narrower than [`may_contain_sources`] on purpose, for the same reason
-/// [`is_hidden_within`] is: this walk applies the project's own `src` and `build`
-/// filters as it goes, so everything ty's `src.exclude` defaults already drop is
-/// covered — and re-dropping it here would take back a file that a negated
-/// exclude deliberately re-included. Only the directories ty's defaults *leave*
-/// (and hidden ones) still have to be turned away.
-fn may_hold_build_content(entry: &walkdir::DirEntry) -> bool {
-    if entry.depth() == 0 || !entry.file_type().is_dir() {
-        return true;
-    }
-    entry
-        .file_name()
-        .to_str()
-        .is_some_and(|name| !name.starts_with('.') && !NON_SOURCE_DIRS_TY_ALLOWS.contains(&name))
-}
-
-/// Whether a project walk may descend into this entry: hidden directories
-/// (`.claude`, `.git`, `.venv`, …) and [`NON_SOURCE_DIRS`] never hold
-/// first-party source. The walk root itself is always entered, even when the
-/// project directory happens to be hidden.
-fn may_contain_sources(entry: &walkdir::DirEntry) -> bool {
-    if entry.depth() == 0 || !entry.file_type().is_dir() {
-        return true;
-    }
-    entry
-        .file_name()
-        .to_str()
-        .is_some_and(|name| !name.starts_with('.') && !NON_SOURCE_DIRS.contains(&name))
-}
-
 // ── traceback rewriting ────────────────────────────────────────────────────────
 
 /// filename of the python entry-point shim `by run` writes into the build dir
 const BY_RUNNER_FILENAME: &str = "_by_runner.py";
-
-/// python module the shim imports to translate generated frames back to `.by`
-const BY_SOURCEMAP_FILENAME: &str = "_by_sourcemap.py";
-
-/// a generated `.py` file paired with the `.by` it came from and the line table
-/// mapping generated lines (0-indexed) back to `.by` lines
-struct TracebackEntry {
-    py_path: PathBuf,
-    by_path: PathBuf,
-    line_map: Vec<Option<u32>>,
-    /// the `.by` text the transpile ran on, kept so nothing downstream has to
-    /// read the file a second time and risk reading a different one
-    by_source: String,
-    /// digest of the `.by` bytes the transpiler read
-    by_digest: String,
-    /// digest of the generated python bytes it wrote
-    py_digest: String,
-}
-
-/// stage one emitted module and describe it, in that order: the digests are over
-/// the bytes that just landed on disk
-///
-/// it goes through the staging rather than straight to the path, so that a module
-/// two sources both claim is reported, and so that the file is one the manifest
-/// knows about and a later build can clean up
-fn stage_module(
-    staging: &mut Staging,
-    relative: &Path,
-    emitted: &Transpiled<'_>,
-) -> anyhow::Result<TracebackEntry> {
-    staging.write(relative, Some(emitted.by_path), emitted.python)?;
-    Ok(TracebackEntry {
-        py_path: staging.out().join(relative),
-        by_path: fs::canonicalize(emitted.by_path)
-            .unwrap_or_else(|_| emitted.by_path.to_path_buf()),
-        line_map: emitted.line_map.to_vec(),
-        by_source: emitted.by_source.to_owned(),
-        by_digest: content_digest(emitted.by_source.as_bytes()),
-        py_digest: content_digest(emitted.python.as_bytes()),
-    })
-}
-
-/// a content digest as `_by_sourcemap.py` spells it: `sha256:` then lowercase
-/// hex
-///
-/// the algorithm is named in the value so it can be changed later without
-/// breaking readers — a reader that meets an algorithm it does not know refuses
-/// the entry, instead of comparing a hex it could never have produced
-fn content_digest(bytes: &[u8]) -> String {
-    format!("sha256:{:x}", Sha256::digest(bytes))
-}
-
-/// write the sourcemap module beside the generated python it describes
-///
-/// both tables are keyed by the generated path exactly as written here. a
-/// consumer that normalises those keys — the runner shim resolves symlinks, for
-/// one — has to keep the original key to reach the entry's digests
-fn write_sourcemap_module(staging: &mut Staging, entries: &[TracebackEntry]) -> anyhow::Result<()> {
-    use std::fmt::Write as _;
-
-    let mut map_src = String::from(
-        "# generated by basedpython — maps transpiled python frames to .by source\n\
-         # the two tables share their keys: the generated path, spelled as it is here\n\
-         SOURCEMAP = {\n",
-    );
-    for e in entries {
-        let elems: Vec<String> = e
-            .line_map
-            .iter()
-            .map(|m| m.map_or_else(|| "None".to_owned(), |n| n.to_string()))
-            .collect();
-        let _ = writeln!(
-            map_src,
-            "    {}: ({}, [{}]),",
-            py_str_literal(&e.py_path.to_string_lossy()),
-            py_str_literal(&e.by_path.to_string_lossy()),
-            elems.join(", "),
-        );
-    }
-    map_src.push_str("}\n\n");
-
-    // `SOURCEMAP` alone cannot be checked: a `.by` edited since the transpile
-    // leaves it describing a pair of files that no longer exists, and every line
-    // it then reports is wrong with total confidence. the digests are what a
-    // consumer recomputes from disk before trusting a mapped line. a separate
-    // table rather than a wider tuple, so a reader that predates it is unaffected
-    map_src.push_str(
-        "# sha-256 of the two files each SOURCEMAP entry describes, over the bytes\n\
-         # the transpiler read and wrote. recompute both from disk before trusting a\n\
-         # mapped line: a mismatch means the file is no longer the one mapped\n\
-         DIGESTS = {\n",
-    );
-    for e in entries {
-        let _ = writeln!(
-            map_src,
-            "    {}: {{\"by\": {}, \"py\": {}}},",
-            py_str_literal(&e.py_path.to_string_lossy()),
-            py_str_literal(&e.by_digest),
-            py_str_literal(&e.py_digest),
-        );
-    }
-    map_src.push_str("}\n");
-
-    staging.write(Path::new(BY_SOURCEMAP_FILENAME), None, &map_src)
-}
 
 /// write the sourcemap module + runner shim into the run dir. the shim runs the
 /// target module and, on an uncaught exception, rewrites traceback frames in
@@ -1616,23 +1399,6 @@ fn write_traceback_runtime(
     // reported as the collision it is rather than silently overwritten by a shim
     // it knows nothing about
     staging.write(Path::new(BY_RUNNER_FILENAME), None, BY_RUNNER_SRC)
-}
-
-/// Render a string as a python string literal (double-quoted, minimal escaping).
-fn py_str_literal(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
 }
 
 const BY_RUNNER_SRC: &str = r#"# generated by `by run` — runs the target module with .by-aware tracebacks
@@ -1744,19 +1510,6 @@ main()
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/// Everything needed to build a project db a second time.
-///
-/// The transpiler asks for one when a pre-pass rewrites the source it hands to
-/// phase 0: it then serves the rewritten file out of that db, keeping the
-/// project's metadata, search paths and sibling files. The rebuilt db must be
-/// independent of the one this command uses — see
-/// [`by_transforms::RebuildProject`].
-struct Rebuilder {
-    metadata: ProjectMetadata,
-    root: SystemPathBuf,
-    included: Vec<SystemPathBuf>,
-}
-
 /// every source under `root` the compiler can lower
 ///
 /// it lowers the `.by` *and* the `.py` ast — one lowering, told apart by
@@ -1767,204 +1520,18 @@ fn compilable_files(root: &Path) -> Vec<PathBuf> {
     source_files(root, &["by", "py"])
 }
 
-fn source_files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
-    WalkDir::new(root)
-        .into_iter()
-        .filter_entry(may_contain_sources)
-        .filter_map(Result::ok)
-        .filter(|e| {
-            !e.path_is_symlink()
-                && e.path()
-                    .extension()
-                    .and_then(OsStr::to_str)
-                    .is_some_and(|x| extensions.contains(&x))
-        })
-        .map(walkdir::DirEntry::into_path)
-        .collect()
-}
-
-impl Rebuilder {
-    fn rebuild(&self) -> Box<dyn ty_python_semantic::Db> {
-        let mut db =
-            ProjectDatabase::use_defaults(self.metadata.clone(), OsSystem::new(&self.root));
-        db.project()
-            .set_included_paths(&mut db, self.included.clone());
-        Box::new(db)
-    }
-}
-
-/// A project db, the `(source_path, File)` pairs for the `.by` files it was
-/// built for, the canonical project root every one of those paths is rooted at,
-/// and the means to build the same project again.
-///
-/// The root is handed back rather than re-derived by each caller: `canonicalize`
-/// and `current_dir` do not agree on every platform — on windows the first
-/// returns the `\\?\` verbatim form and the second does not — so a caller that
-/// re-derived it would find none of the db's paths under it.
-type ProjectBuild = (
-    ProjectDatabase,
-    Vec<(PathBuf, ruff_db::files::File)>,
-    Rebuilder,
-    PathBuf,
-);
-
-/// the sources `build`, `run` and `transpile` claim: a `.py` beside a `.by`
-/// is that file's own output, so writing beside it again would be circular
-const BY_SOURCES: &[&str] = &["by", "byi"];
-
-/// what `compile` claims. it lowers the `.by` *and* the `.py` ast — one
-/// lowering, told apart by [`by_irbuild::Language`] — and emits into an
-/// output directory rather than beside the source, so a `.py` is an input
-const COMPILABLE_SOURCES: &[&str] = &["by", "byi", "py"];
-
-/// The [`NON_SOURCE_DIRS`] entries that ty's own `src.exclude` defaults don't already drop.
-///
-/// [`is_hidden_within`] runs over files that have *already* passed the project's file filter,
-/// so for a name ty excludes by default — `venv`, `dist`, `node_modules`, `.tox`, … — a file
-/// can only have reached it because the configuration deliberately re-included the directory
-/// with a negated pattern, which `src.exclude` documents as the way to override a default.
-/// Re-dropping such a file here would quietly undo that, and it's why a project could not
-/// compile a module of its own that happens to live in a directory named `venv`.
-///
-/// What's left are the names ty has no default opinion about, where this walk is the only
-/// thing keeping a dependency tree or a build output out of the emitted set. The unfiltered
-/// [`NON_SOURCE_DIRS`] still applies to [`may_contain_sources`], which walks the file system
-/// directly and never sees the project configuration at all.
-const NON_SOURCE_DIRS_TY_ALLOWS: &[&str] = &[
-    "env",
-    ".env",
-    "site-packages",
-    "__pycache__",
-    ".pytest_cache",
-    "build",
-    "out",
-    "target",
-];
-
-/// Whether `path` sits inside a hidden or build-output directory under `root`.
-fn is_hidden_within(path: &Path, root: &Path) -> bool {
-    let Ok(relative) = path.strip_prefix(root) else {
-        return false;
-    };
-    relative
-        .parent()
-        .into_iter()
-        .flat_map(Path::components)
-        .filter_map(|component| component.as_os_str().to_str())
-        .any(|name| name.starts_with('.') || NON_SOURCE_DIRS_TY_ALLOWS.contains(&name))
-}
-
-/// Build a project db rooted at `cwd`, returning it alongside the
-/// `(source_path, File)` pair for every source the *project* claims whose
-/// extension is in `extensions`
-/// — the same set `by check` walks, so `src.exclude` and the ignore files it
-/// honours apply here too — and the means to build the same project again.
-fn build_project_db(
-    cwd: &Path,
-    extensions: &[&str],
-    output: Option<&Path>,
-) -> anyhow::Result<ProjectBuild> {
-    // the project root must be canonicalized the same way the included files
-    // are (below) so it stays a path *prefix* of them: otherwise a file's
-    // search path isn't recognized as first-party and boundary diagnostics
-    // (e.g. `subclass-of-sealed-class`) misfire. this bites on windows, where
-    // `canonicalize` rewrites files to the `\\?\` long-path form while an
-    // un-canonicalized root keeps its short (`RUNNER~1`) components
-    let canonical_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
-    let sys_cwd = SystemPath::from_std_path(&canonical_cwd)
-        .with_context(|| format!("non-utf8 path: {}", canonical_cwd.display()))?;
-    let system = OsSystem::new(sys_cwd);
-    let project_metadata = ProjectMetadata::discover(sys_cwd, &system)
-        .with_context(|| format!("failed to discover project at {sys_cwd}"))?;
-
-    // the project is the project wherever the command was run from. rooting this
-    // at the working directory instead means `by run` inside `tests/` transpiles
-    // `tests/` and nothing else, and then cannot find the module it was asked to
-    // run — the same mistake as looking for `.venv` beside the caller rather than
-    // beside the project
-    let canonical_root = std::fs::canonicalize(project_metadata.root().as_std_path())
-        .unwrap_or_else(|_| PathBuf::from(project_metadata.root().as_str()));
-    let sys_root = SystemPath::from_std_path(&canonical_root)
-        .with_context(|| format!("non-utf8 path: {}", canonical_root.display()))?;
-
-    let metadata = project_metadata.clone();
-    let db = ProjectDatabase::use_defaults(project_metadata, system);
-
-    // the project's own file set — the one `by check` walks, so `src.exclude`
-    // and the ignore files it honours apply here too. a build that disagreed
-    // with the check about which files are in the project reports errors for
-    // files the project deliberately excludes, and (before this) wrote nothing
-    let mut sources: Vec<(PathBuf, ruff_db::files::File)> = db
-        .project()
-        .files(&db)
-        .into_iter()
-        .filter(|file| {
-            file.path(&db)
-                .extension()
-                .is_some_and(|x| extensions.contains(&x))
-        })
-        .filter_map(|file| {
-            let path = file.path(&db).as_system_path()?;
-            Some((path.as_std_path().to_path_buf(), file))
-        })
-        // a hidden directory (`.claude/worktrees`, `.venv`, …) holds copies and
-        // dependencies, not this project's sources — emitting them would write
-        // a parallel tree nobody asked for
-        .filter(|(path, _)| !is_hidden_within(path, &canonical_root))
-        // nor is the last build's output. it holds a copy of every `.by` source
-        // this build is about to read, and reading those instead would build the
-        // project into itself, one directory deeper each time
-        .filter(|(path, _)| output.is_none_or(|output| !path.starts_with(output)))
-        .collect();
-    // the walk is over a hash set, so order is arbitrary; emit deterministically
-    sources.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-    let included: Vec<SystemPathBuf> = sources
-        .iter()
-        .filter_map(|(path, _)| SystemPath::from_std_path(path).map(SystemPath::to_path_buf))
-        .collect();
-    let rebuilder = Rebuilder {
-        metadata,
-        root: sys_root.to_path_buf(),
-        included,
-    };
-    Ok((db, sources, rebuilder, canonical_root))
-}
-
-/// How much of the check outcome blocks emitting output.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CheckGate {
-    /// only parse errors block — type diagnostics are advisory. right for
-    /// artifact-producing commands (`build`, `transpile`), where partially
-    /// ill-typed code is still worth emitting
-    ParseErrorsOnly,
-    /// any error-severity diagnostic blocks. right for `run`: a program that
-    /// fails `by check` must not execute — the checker's verdict and the
-    /// runtime behaviour would otherwise diverge
-    AllErrors,
-}
-
-/// one transpiled module, as [`render_check_and_transpile`] hands it over
-///
-/// the two texts are named rather than positional because a caller that mixes
-/// them up — hashing the python as if it were the `.by`, say — would still
-/// compile
-struct Transpiled<'a> {
-    by_path: &'a Path,
-    /// the `.by` text this transpile ran on. it is the same read, not a fresh
-    /// one: [`source_text()`] is memoized, so a digest taken here is over the
-    /// bytes that actually produced `python`
-    by_source: &'a str,
-    /// the generated python, exactly as the caller is expected to write it out
-    python: &'a str,
-    /// generated line (0-indexed) → the `.by` line it came from
-    line_map: &'a [Option<u32>],
-}
-
 /// Check every file, render diagnostics, then for each non-blocked file call
 /// `consume` with the transpiled Python. Returns `Ok(false)` if the check
 /// outcome blocks per `gate`, or a transpiler bug occurred (caller should
 /// propagate failure).
+///
+/// The deciding is [`by_stage::emit::check_and_transpile`], and only the
+/// **rendering** is here. That is the whole difference between the two callers
+/// of it: a command prints diagnostics for a person to read, and the language
+/// server hands them back as data for an editor to draw. Two copies of the
+/// deciding would be two answers to "what does this project transpile to", and
+/// the one thing a re-stage has to promise is that its bytes are the bytes the
+/// build wrote.
 fn render_check_and_transpile(
     db: &ProjectDatabase,
     handles: &[(PathBuf, ruff_db::files::File)],
@@ -1972,85 +1539,21 @@ fn render_check_and_transpile(
     gate: CheckGate,
     rebuilder: &Rebuilder,
     requirements: &mut by_transforms::RuntimeRequirements,
-    mut consume: impl FnMut(&Transpiled<'_>) -> anyhow::Result<()>,
+    consume: impl FnMut(&Transpiled<'_>) -> anyhow::Result<()>,
 ) -> anyhow::Result<bool> {
-    let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
-    let mut unusable: Vec<ruff_db::files::File> = Vec::new();
-
-    for (_, file) in handles {
-        let diags = db.check_file(*file);
-        if diags.iter().any(is_unusable_source) {
-            unusable.push(*file);
-        }
-        all_diagnostics.extend(diags);
+    let emitted = by_stage::emit::check_and_transpile(
+        db,
+        handles,
+        config,
+        gate,
+        rebuilder,
+        requirements,
+        consume,
+    )?;
+    if !emitted.diagnostics.is_empty() {
+        render_diagnostics(db, &emitted.diagnostics)?;
     }
-    // running a program is all-or-nothing: a module that does not check would
-    // be imported by one that does. producing artifacts is not — a file mid-edit
-    // must not take down the build of every unrelated module, which is exactly
-    // when a code generator or a test runner is reached for
-    let blocked = match gate {
-        CheckGate::AllErrors => {
-            !unusable.is_empty()
-                || all_diagnostics
-                    .iter()
-                    .any(|d| d.severity() >= Severity::Error)
-        }
-        CheckGate::ParseErrorsOnly => false,
-    };
-
-    if blocked {
-        render_diagnostics(db, &all_diagnostics)?;
-        return Ok(false);
-    }
-
-    let mut ok = unusable.is_empty();
-    let rebuild = || Some(rebuilder.rebuild());
-    for (bpy, file) in handles {
-        if unusable.contains(file) {
-            continue;
-        }
-        match by_transforms::transpile_typed_with_report(db, *file, config, Some(&rebuild)) {
-            Ok((out, line_map, needed)) => {
-                requirements.merge(needed);
-                let by_source = source_text(db, *file);
-                consume(&Transpiled {
-                    by_path: bpy,
-                    by_source: by_source.as_str(),
-                    python: &out,
-                    line_map: &line_map,
-                })?;
-            }
-            Err(e) => {
-                all_diagnostics.push(transpile_bug_diagnostic(*file, &e));
-                ok = false;
-                if gate == CheckGate::AllErrors {
-                    break;
-                }
-            }
-        }
-    }
-
-    if !all_diagnostics.is_empty() {
-        render_diagnostics(db, &all_diagnostics)?;
-    }
-    // artifacts and exit status answer different questions. the artifacts are
-    // emitted for everything that could be emitted, so a file mid-edit does not
-    // take the rest of the build down; the status says whether anything was
-    // reported, which is what a `&&` in a script reads. a command that prints
-    // `error[...]` and then succeeds is one nothing can be chained onto
-    let reported_an_error = all_diagnostics
-        .iter()
-        .any(|d| d.severity() >= Severity::Error);
-    Ok(ok && !reported_an_error)
-}
-
-/// Whether this diagnostic says the file has no source to transpile: it could
-/// not be parsed, or it could not be read at all (an encoding ty does not speak,
-/// a permission error). Either way the transpiler sees an empty module, so
-/// emitting for it would write an empty file over the real one.
-fn is_unusable_source(d: &Diagnostic) -> bool {
-    matches!(d.id(), DiagnosticId::InvalidSyntax | DiagnosticId::Io)
-        && d.severity() >= Severity::Error
+    Ok(emitted.ok)
 }
 
 /// Render diagnostics to stderr in the same format as `by check`. The
@@ -2108,21 +1611,6 @@ fn declined_diagnostic(
     diagnostic
 }
 
-fn transpile_bug_diagnostic(
-    file: ruff_db::files::File,
-    err: &by_transforms::TranspileError,
-) -> Diagnostic {
-    let mut diag = Diagnostic::new(
-        DiagnosticId::InvalidSyntax,
-        Severity::Error,
-        err.message.clone(),
-    );
-    if let Some(range) = err.by_range {
-        diag.annotate(Annotation::primary(Span::from(file).with_range(range)));
-    }
-    diag
-}
-
 // ── version ──────────────────────────────────────────────────────────────────
 
 #[allow(clippy::print_stdout)]
@@ -2137,10 +1625,10 @@ pub(crate) fn cmd_version_by(output_format: crate::args::HelpFormat) -> ExitStat
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BY_SOURCEMAP_FILENAME, TracebackEntry, content_digest, dotted_module_name,
-        is_hidden_within, reverse_dir, reverse_dir_converting, write_sourcemap_module,
-    };
+    use super::{dotted_module_name, reverse_dir, reverse_dir_converting};
+    // the staging half of what these used to exercise lives in `by_stage` now,
+    // because the language server needs the same answers and cannot depend on this
+    // crate — and so do the tests for it
     use crate::ExitStatus;
     use by_transforms::config::Config;
     use std::path::{Path, PathBuf};
@@ -2174,23 +1662,6 @@ mod tests {
         );
         // and at the root there is no package for it to be, so there is no name
         assert_eq!(dotted_module_name(Path::new("__init__.py")), None);
-    }
-
-    #[test]
-    fn a_hidden_directory_is_not_project_source() {
-        let root = Path::new("/p");
-        assert!(is_hidden_within(
-            Path::new("/p/.claude/worktrees/x/junk.by"),
-            root
-        ));
-        assert!(is_hidden_within(Path::new("/p/out/main.by"), root));
-        assert!(!is_hidden_within(Path::new("/p/src/pkg/main.by"), root));
-        // the file's own name is not a directory component
-        assert!(!is_hidden_within(Path::new("/p/.hidden.by"), root));
-        // a name ty excludes by default is left to the project filter, so that a
-        // negated `src.exclude` pattern re-including it isn't quietly undone here
-        assert!(!is_hidden_within(Path::new("/p/venv/__init__.by"), root));
-        assert!(!is_hidden_within(Path::new("/p/dist/main.by"), root));
     }
 
     /// a source that declares its own encoding converts like any other, and the
@@ -2287,50 +1758,6 @@ mod tests {
         // left exactly as it was found: neither converted nor deleted
         assert!(exploding.is_file());
         assert!(!dir.path().join("exploding.by").exists());
-        Ok(())
-    }
-
-    /// the digest carries the algorithm that produced it, so a reader that does
-    /// not know one can refuse the entry rather than compare hex it could never
-    /// have produced
-    #[test]
-    fn a_digest_names_the_algorithm_before_the_hex() {
-        assert_eq!(
-            content_digest(b"abc"),
-            "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
-    }
-
-    /// `DIGESTS` is a second table keyed exactly as `SOURCEMAP` is — additive,
-    /// so a consumer that only knows the tuple reads the same file unchanged
-    #[test]
-    fn the_sourcemap_module_digests_both_files_of_every_entry() -> anyhow::Result<()> {
-        let dir = tempfile::TempDir::new()?;
-        let entries = vec![TracebackEntry {
-            py_path: PathBuf::from("/build/demo.py"),
-            by_path: PathBuf::from("/src/demo.by"),
-            line_map: vec![None, Some(0)],
-            by_source: "the .by source".to_owned(),
-            by_digest: content_digest(b"the .by source"),
-            py_digest: content_digest(b"the generated python"),
-        }];
-
-        let mut staging = crate::by_staging::Staging::new(dir.path());
-        write_sourcemap_module(&mut staging, &entries)?;
-        let emitted = std::fs::read_to_string(dir.path().join(BY_SOURCEMAP_FILENAME))?;
-
-        assert!(
-            emitted.contains(r#"    "/build/demo.py": ("/src/demo.by", [None, 0]),"#),
-            "the existing entry shape is unchanged:\n{emitted}"
-        );
-        assert!(
-            emitted.contains(&format!(
-                r#"    "/build/demo.py": {{"by": "{}", "py": "{}"}},"#,
-                content_digest(b"the .by source"),
-                content_digest(b"the generated python"),
-            )),
-            "both digests are keyed by the generated path:\n{emitted}"
-        );
         Ok(())
     }
 }

@@ -402,6 +402,23 @@ name = "by_rt"
 version = "0.0.0"
 
 [[package]]
+name = "by_stage"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "by_transforms",
+ "ruff_db",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "ty_module_resolver",
+ "ty_project",
+ "ty_python_semantic",
+ "walkdir",
+]
+
+[[package]]
 name = "by_transforms"
 version = "0.0.0"
 dependencies = [
@@ -4697,6 +4714,7 @@ dependencies = [
  "by_build",
  "by_ir",
  "by_irbuild",
+ "by_stage",
  "by_transforms",
  "clap",
  "clap_complete_command",
@@ -4721,7 +4739,6 @@ dependencies = [
  "salsa",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "tikv-jemallocator",
  "toml 1.1.4+spec-1.1.0",
@@ -4999,6 +5016,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bitflags 2.13.1",
+ "by_stage",
  "by_transforms",
  "crossbeam",
  "dunce",

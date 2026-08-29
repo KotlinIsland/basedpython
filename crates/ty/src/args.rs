@@ -160,6 +160,31 @@ pub(crate) enum Command {
         lowering: LoweringArgs,
     },
 
+    /// Recompute one file's slot in a build tree that already exists.
+    ///
+    /// What a debugger needs to give a running program an edit. `by run`
+    /// transpiles the project into a directory and runs the program out of
+    /// there, so nothing the user edits is the file the interpreter compiled: a
+    /// `.by` because it was transpiled, a hand-written `.py` because it was
+    /// copied. This produces what that file's slot in the tree should now hold.
+    ///
+    /// It **writes nothing** and prints JSON. The caller writes the bytes,
+    /// because the caller is the only one that can take the write back when the
+    /// replacement it was for is refused.
+    ///
+    /// Editors should send `by/transpileForBuild` to the language server
+    /// instead, which answers the same question out of a project database that
+    /// is already warm. This is the same operation for everything that is not an
+    /// editor — `bpd`, a script, a test.
+    Restage {
+        /// The build tree the program is running out of.
+        #[arg(value_name = "BUILD_DIR")]
+        build_directory: PathBuf,
+        /// The file in the project that was edited.
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+    },
+
     /// Compile .by and .py files to native CPython extension modules.
     ///
     /// A function the compiler cannot lower natively is left to its interpreted
