@@ -235,6 +235,51 @@ b: Bag = [1, 2, compute()]
 reveal_type(b)  # revealed: Bag
 ```
 
+## an empty display converts through a dunder that asks for populated elements
+
+An empty display has nothing in it to disagree with an element type, so `__of__` takes it whatever
+that element type is.
+
+```toml
+[analysis]
+sound-types = false
+```
+
+```by
+class Bag:
+    init(count: int)
+
+    @classmethod
+    def __of__(cls, value: dict[str, int]) -> Self:
+        return cls(len(value))
+
+b: Bag = {}
+reveal_type(b)  # revealed: Bag
+```
+
+## an empty display converts the same way under `sound-types`
+
+`sound-types` types `{}` as `dict[Never, Never]` rather than widening it to
+`dict[Unknown, Unknown]`. Both are the empty display, so the conversion has to read the same either
+way.
+
+```toml
+[analysis]
+sound-types = true
+```
+
+```by
+class Bag:
+    init(count: int)
+
+    @classmethod
+    def __of__(cls, value: dict[str, int]) -> Self:
+        return cls(len(value))
+
+b: Bag = {}
+reveal_type(b)  # revealed: Bag
+```
+
 ## a comprehension is not a literal
 
 Its contents come from another collection, which is the line element-wise conversion is drawn on.
