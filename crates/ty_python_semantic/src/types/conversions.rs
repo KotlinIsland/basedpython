@@ -198,7 +198,8 @@ fn dunder_routes<'db>(
             let sources = std::iter::once(source).chain(
                 value
                     .filter(|_| dunder == OF)
-                    .and_then(|value| empty_display_type(db, env, value)),
+                    .into_iter()
+                    .flat_map(|value| empty_display_types(db, env, value)),
             );
             let route = |dunder_source| {
                 if dunder == FROM {
@@ -379,28 +380,31 @@ fn extension_classmethods<'db>(
         .collect()
 }
 
-/// the exact type of an empty display.
+/// both types an empty display can present at a conversion site.
 ///
-/// Ordinary inference widens `{}` to `dict[Unknown, Unknown]` so that a later
-/// `d["k"] = 1` is not an error, which leaves it indistinguishable from a
-/// populated display whose keys and values happen to be `Unknown`. `__of__` must
-/// not confuse the two — one taking `dict[Never, Never]` is asking for the empty
-/// display and nothing else — and unlike ordinary inference it has the syntax in
-/// hand. Offered *beside* the widened type rather than replacing it, so a dunder
-/// that accepts `dict[str, int]` still takes `{}` the way it always has
-fn empty_display_type<'db>(
+/// A dunder may be asking for either. One taking `dict[Never, Never]` is asking
+/// for the empty display and nothing else; one taking `dict[str, int]` takes `{}`
+/// the way any dict-shaped parameter does, because there is nothing in it to
+/// disagree. Ordinary inference only ever produces one of the two — the exact
+/// type under [`sound-types`](crate::AnalysisSettings::sound_types), the widened
+/// `dict[Unknown, Unknown]` otherwise — so offering both here is what keeps the
+/// route from turning on that setting. `__of__` can, because it has the syntax in
+/// hand and an empty display is every element type at once.
+fn empty_display_types<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     value: &ast::Expr,
-) -> Option<Type<'db>> {
+) -> Vec<Type<'db>> {
     match value {
-        ast::Expr::Dict(_) if is_empty_display(value) => {
-            Some(KnownClass::Dict.to_specialized_instance(db, env, &[Type::Never, Type::Never]))
-        }
-        ast::Expr::List(_) if is_empty_display(value) => {
-            Some(KnownClass::List.to_specialized_instance(db, env, &[Type::Never]))
-        }
-        _ => None,
+        ast::Expr::Dict(_) if is_empty_display(value) => vec![
+            KnownClass::Dict.to_specialized_instance(db, env, &[Type::Never, Type::Never]),
+            KnownClass::Dict.to_specialized_instance(db, env, &[Type::unknown(), Type::unknown()]),
+        ],
+        ast::Expr::List(_) if is_empty_display(value) => vec![
+            KnownClass::List.to_specialized_instance(db, env, &[Type::Never]),
+            KnownClass::List.to_specialized_instance(db, env, &[Type::unknown()]),
+        ],
+        _ => Vec::new(),
     }
 }
 
