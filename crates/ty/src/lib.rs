@@ -2,7 +2,6 @@ mod args;
 mod by_commands;
 mod by_init;
 mod by_source_encoding;
-mod by_staging;
 mod by_wheels;
 mod logging;
 mod printer;
@@ -138,6 +137,10 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
                 .unwrap_or_else(|| by_commands::default_project_python_version().to_string());
             by_init::cmd_init(path.as_deref(), name.as_deref(), kind, &version)
         }
+        Command::Restage {
+            build_directory,
+            file,
+        } => by_commands::cmd_restage(&build_directory, &file),
         Command::Build {
             min_version,
             wheels,

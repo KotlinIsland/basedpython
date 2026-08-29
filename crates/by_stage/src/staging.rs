@@ -1,19 +1,10 @@
-//! Writing a project out as python.
+//! The output tree itself: what lands where, and what a rebuild takes back.
 //!
-//! `by build` and `by run` both need the same thing: the project, rendered as a
-//! directory python can import. That is more than the transpiled `.by` files. A
-//! project is also its hand-written `.py` modules, its `py.typed` marker, its
-//! templates and json and fixture data — and a tree holding only the transpiled
-//! half is not a project at all. A module that imports a `.py` sibling fails to
-//! import, and anything that opens a data file relative to the working directory
-//! fails to open it.
-//!
-//! So the output tree mirrors the project: every file is carried over to the same
-//! relative place, `.by` sources being the ones that change on the way (they are
-//! transpiled, and, when `build.sources` is on, carried over as well so a
-//! downstream basedpython project can read them). The one rearrangement is the
-//! module roots: a src-layout project's `src/pkg/a.by` is the module `pkg.a`, so
-//! it lands at `pkg/a.py`, not `src/pkg/a.py`.
+//! Every file is carried over to the same relative place, `.by` sources being the
+//! ones that change on the way (they are transpiled, and, when `build.sources` is
+//! on, carried over as well so a downstream basedpython project can read them).
+//! The one rearrangement is the module roots: a src-layout project's `src/pkg/a.by`
+//! is the module `pkg.a`, so it lands at `pkg/a.py`, not `src/pkg/a.py`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -29,24 +20,24 @@ use anyhow::Context;
 /// until one shadows a module that moved. The manifest is what makes the output a
 /// mirror rather than a pile: what the previous build wrote and this one did not
 /// is deleted.
-pub(crate) const MANIFEST_FILENAME: &str = ".by-manifest";
+pub const MANIFEST_FILENAME: &str = ".by-manifest";
 
 /// An output tree being written.
-pub(crate) struct Staging {
+pub struct Staging {
     out: PathBuf,
     /// relative destination -> the source it came from, for collision reporting
     written: BTreeMap<PathBuf, Option<PathBuf>>,
 }
 
 impl Staging {
-    pub(crate) fn new(out: &Path) -> Self {
+    pub fn new(out: &Path) -> Self {
         Self {
             out: out.to_path_buf(),
             written: BTreeMap::new(),
         }
     }
 
-    pub(crate) fn out(&self) -> &Path {
+    pub fn out(&self) -> &Path {
         &self.out
     }
 
@@ -54,7 +45,7 @@ impl Staging {
     ///
     /// A `.by` appears once even though it produced two outputs — the python it
     /// was transpiled into and the copy of itself carried alongside.
-    pub(crate) fn inputs(&self) -> BTreeSet<&Path> {
+    pub fn inputs(&self) -> BTreeSet<&Path> {
         self.written
             .values()
             .filter_map(|source| source.as_deref())
@@ -62,7 +53,7 @@ impl Staging {
     }
 
     /// Every written path paired with the file it came from.
-    pub(crate) fn entries(&self) -> impl Iterator<Item = (&Path, Option<&Path>)> {
+    pub fn entries(&self) -> impl Iterator<Item = (&Path, Option<&Path>)> {
         self.written
             .iter()
             .map(|(destination, source)| (destination.as_path(), source.as_deref()))
@@ -74,7 +65,7 @@ impl Staging {
     /// last-writer-wins overwrite: `a.by` and a hand-written `a.py` are both the
     /// module `a`, and quietly picking one means the build disagrees with what
     /// python will import.
-    pub(crate) fn write(
+    pub fn write(
         &mut self,
         relative: &Path,
         source: Option<&Path>,
@@ -88,7 +79,7 @@ impl Staging {
     }
 
     /// Copy `source` to `relative` verbatim.
-    pub(crate) fn copy(&mut self, relative: &Path, source: &Path) -> anyhow::Result<()> {
+    pub fn copy(&mut self, relative: &Path, source: &Path) -> anyhow::Result<()> {
         self.claim(relative, Some(source))?;
         let destination = self.out.join(relative);
         create_parent(&destination)?;
@@ -124,7 +115,7 @@ impl Staging {
 
     /// Delete what the previous build wrote and this one did not, then record
     /// what this one wrote.
-    pub(crate) fn finish(self) -> anyhow::Result<()> {
+    pub fn finish(self) -> anyhow::Result<()> {
         let manifest = self.out.join(MANIFEST_FILENAME);
         let previous = read_manifest(&manifest);
         let current: BTreeSet<&Path> = self.written.keys().map(PathBuf::as_path).collect();
@@ -204,7 +195,7 @@ fn portable(path: &Path) -> String {
 /// module is `src.pkg.main` — a name nothing imports, and one `run.main` cannot
 /// sensibly be set to. A file outside every module root keeps its place relative
 /// to the project.
-pub(crate) fn relative_destination(roots: &[PathBuf], root: &Path, source: &Path) -> PathBuf {
+pub fn relative_destination(roots: &[PathBuf], root: &Path, source: &Path) -> PathBuf {
     let relative = roots
         .iter()
         .find_map(|candidate| source.strip_prefix(candidate).ok())
@@ -228,7 +219,7 @@ pub(crate) fn relative_destination(roots: &[PathBuf], root: &Path, source: &Path
 /// A stub stays a stub: `.byi` transpiles to `.pyi`, not to `.py`. Emitting a
 /// stub as a module would put a body-less definition where python expects the
 /// implementation, and it would shadow the real module at runtime.
-pub(crate) fn transpiled_destination(roots: &[PathBuf], root: &Path, source: &Path) -> PathBuf {
+pub fn transpiled_destination(roots: &[PathBuf], root: &Path, source: &Path) -> PathBuf {
     let extension = match source.extension().and_then(std::ffi::OsStr::to_str) {
         Some("byi") => "pyi",
         _ => "py",
