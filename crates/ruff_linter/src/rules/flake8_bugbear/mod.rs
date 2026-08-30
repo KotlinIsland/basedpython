@@ -60,6 +60,7 @@ mod tests {
     #[test_case(Rule::MutableArgumentDefault, Path::new("B006_B008.py"))]
     #[test_case(Rule::MutableArgumentDefault, Path::new("B006_1.pyi"))]
     #[test_case(Rule::MutableArgumentDefault, Path::new("B006_basedpython.by"))]
+    #[test_case(Rule::FunctionCallInDefaultArgument, Path::new("B008_basedpython.by"))]
     #[test_case(Rule::UselessExpression, Path::new("B018_basedpython.by"))]
     #[test_case(Rule::NoExplicitStacklevel, Path::new("B028.py"))]
     #[test_case(Rule::RaiseLiteral, Path::new("B016.py"))]

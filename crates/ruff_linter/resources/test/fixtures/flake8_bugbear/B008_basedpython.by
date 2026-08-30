@@ -1,0 +1,12 @@
+# basedpython re-evaluates a non-scalar default on every call, so a call in a
+# default position is already per-call and needs no rewriting
+class Units:
+    init(let items: list[int])
+
+
+def collect(seen: Units = Units([])) -> Units:
+    return seen
+
+
+def timed(started: object = object()) -> object:
+    return started
