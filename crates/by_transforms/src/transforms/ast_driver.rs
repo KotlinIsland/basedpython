@@ -425,6 +425,11 @@ pub(crate) fn run_against_source<'a>(
         let table = crate::source_map::line_table(cow.as_ref(), &[]);
         return (cow, Vec::new(), table);
     }
+    // the parentheses grouping an expression are visible in the tokens and
+    // nowhere in the AST, so anything that needs them has to measure now — the
+    // tokens go when the syntax tree is taken out of the parse
+    let accessor_value_ranges =
+        properties::collect_value_ranges(&parsed.syntax().body, parsed.tokens());
     let mut module = parsed.into_syntax();
     // capture each top-level statement's original source range before any
     // pass mutates the AST. AST mutations replace nodes with synthesised
@@ -531,7 +536,7 @@ pub(crate) fn run_against_source<'a>(
         config.inject_future_annotations,
     );
     let init_method_pass = init_method::InitMethod::new(source_ref);
-    let properties_pass = properties::PropertiesPass::new(source_ref);
+    let properties_pass = properties::PropertiesPass::new(source_ref, accessor_value_ranges);
     let local_once_pass = local_once::LocalOncePass::new(source_ref);
     let raises_strip_pass = raises_clause::RaisesStripPass::new(source_ref);
     let raises_guard_pass =
