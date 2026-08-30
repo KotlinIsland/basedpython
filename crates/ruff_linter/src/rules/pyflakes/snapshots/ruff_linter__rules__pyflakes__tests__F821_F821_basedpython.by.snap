@@ -221,3 +221,13 @@ F821 Undefined name `no_lookup_for_ne`
 224 | Book.objects.filter(data[undefined_index] == 1)  # F821
 225 | Book.objects.filter(no_lookup_for_ne != 1)  # F821
     |                     ^^^^^^^^^^^^^^^^
+
+F821 Undefined name `UndefinedRaised`
+   --> F821_basedpython.by:230:31
+    |
+228 | # a `raises` clause is an ordinary type expression, so an undefined name written
+229 | # there is a real reference and is reported
+230 | def raises_undefined() raises UndefinedRaised:  # F821
+    |                               ^^^^^^^^^^^^^^^
+231 |     raise ValueError
+    |

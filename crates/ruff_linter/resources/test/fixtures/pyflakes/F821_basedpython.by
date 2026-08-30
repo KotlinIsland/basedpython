@@ -223,3 +223,9 @@ Book.objects.filter(bare_name)  # F821
 Book.objects.annotate(not_a_lookup_method.x == 1)  # F821
 Book.objects.filter(data[undefined_index] == 1)  # F821
 Book.objects.filter(no_lookup_for_ne != 1)  # F821
+
+
+# a `raises` clause is an ordinary type expression, so an undefined name written
+# there is a real reference and is reported
+def raises_undefined() raises UndefinedRaised:  # F821
+    raise ValueError
