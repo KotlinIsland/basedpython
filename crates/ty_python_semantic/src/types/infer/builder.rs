@@ -80,9 +80,10 @@ use crate::types::diagnostic::{
     INVALID_TYPE_VARIABLE_CONSTRAINTS, INVALID_TYPE_VARIABLE_DEFAULT, INVALID_VARIANCE_DECLARATION,
     NARROWING_GUARD_AS_VALUE, NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST,
     NON_OVERLAPPING_TYPE_TEST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
-    POSSIBLY_MISSING_SUBMODULE, REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING, TypeCheckDiagnostics,
-    UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL,
-    UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_CAST, UNSOUND_YIELD,
+    POSSIBLY_MISSING_SUBMODULE, REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING,
+    SHARED_MUTABLE_DEFAULT, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
+    UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
+    UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_CAST, UNSOUND_YIELD,
     UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, YieldKind,
     display_required_elements, hint_if_stdlib_attribute_exists_on_other_versions,
     refutable_unpacking_applies, report_attempted_protocol_instantiation,
@@ -5075,6 +5076,66 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     }
 
     /// Infer the types in an annotated assignment definition.
+    /// The basedpython declaration marker an annotation carries, if any.
+    ///
+    /// The parser wraps a modified declaration's written type in a marker
+    /// (`let a: T` parses as `a: __let__[T]`), and a modified declaration with no
+    /// written type carries the bare marker name. Both spellings are matched, so a
+    /// caller only has to name the markers it cares about.
+    fn declaration_marker(annotation: &ast::Expr) -> Option<&str> {
+        let head = match annotation {
+            ast::Expr::Subscript(subscript) => subscript.value.as_ref(),
+            other => other,
+        };
+        match head {
+            ast::Expr::Name(name) => Some(name.id.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Whether a value of this type cannot be changed through the reference that
+    /// holds it, so sharing one between instances is indistinguishable from giving
+    /// each its own.
+    ///
+    /// The immutable builtins, and a tuple of them. A user class is assumed mutable —
+    /// even a frozen one, whose fields can still hold a list — so a shared instance
+    /// of one is reported and `class let` is how the sharing is declared.
+    fn is_immutable_value_type(&self, ty: Type<'db>) -> bool {
+        let db = self.db();
+        let env = self.program_environment();
+        // a tuple cannot be written to, but it holds whatever it holds: a
+        // `tuple[list[int], ...]` is one list, shared, behind an immutable front
+        if let Some(spec) = ty.tuple_instance_spec(db, env) {
+            // only a fixed-length tuple can be read through: a `tuple[list[int], ...]`
+            // says nothing about how many lists there are, so nothing here can rule
+            // out that the shared one is reachable
+            return spec.as_fixed_length().is_some_and(|fixed| {
+                fixed
+                    .all_elements()
+                    .iter()
+                    .all(|element| self.is_immutable_value_type(*element))
+            });
+        }
+        let immutable = UnionType::from_elements(
+            db,
+            env,
+            [
+                KnownClass::Int,
+                KnownClass::Float,
+                KnownClass::Complex,
+                KnownClass::Str,
+                KnownClass::Bytes,
+                KnownClass::Bool,
+                KnownClass::NoneType,
+                KnownClass::FrozenSet,
+                KnownClass::Range,
+            ]
+            .into_iter()
+            .map(|class| class.to_instance(db, env)),
+        );
+        ty.is_assignable_to(db, env, immutable)
+    }
+
     fn infer_annotated_assignment_definition(
         &mut self,
         assignment: &'db AnnotatedAssignmentDefinitionKind,
@@ -5535,6 +5596,43 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             } else {
                 inferred_ty
             };
+
+            // basedpython: a class-body `let`/`var` declaration reads as a field every
+            // instance gets its own copy of, and python builds its value exactly once.
+            // for an immutable value that distinction never shows — the only way to
+            // change one is to rebind it, and `self.x = 1` binds on the instance — but a
+            // mutable value is reached through rather than rebound, so `self.seen.add(1)`
+            // changes the one object the class body made and every instance sees it.
+            //
+            // what is shared is the value, so the value's own type is what decides. the
+            // *declared* type would be wrong in both directions: `var where: Point2? =
+            // None` shares a `None` and is fine, while a declaration widened to `object`
+            // would hide a list. `class var` / `class let` are the spellings that mean
+            // class-level, and they carry their own markers rather than these two, so
+            // saying the sharing is intended silences this
+            if matches!(
+                Self::declaration_marker(annotation),
+                Some("__let__" | "__modifier_annot__")
+            ) && self
+                .index
+                .scope(self.scope().file_scope_id(self.db()))
+                .kind()
+                == ScopeKind::Class
+                && let ast::Expr::Name(target_name) = target
+                && !self.is_immutable_value_type(inferred_ty)
+                && let Some(builder) = self.context.report_lint(&SHARED_MUTABLE_DEFAULT, value)
+            {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "every instance shares one `{name}`",
+                    name = target_name.id
+                ));
+                diagnostic.info(
+                    "a class body runs once, so this value is built once and reached through by all of them",
+                );
+                diagnostic.info(
+                    "assign it in `init` for a value per instance, or declare it `class var` to share it on purpose",
+                );
+            }
 
             if is_pep_613_type_alias {
                 let inferred_ty =
