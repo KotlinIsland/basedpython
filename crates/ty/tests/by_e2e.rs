@@ -329,6 +329,85 @@ fn run_executes_module() {
     );
 }
 
+/// the program runs out of a directory of transpiled copies that is deleted when
+/// the run ends, so every path python derives from a module's origin named a
+/// temporary file — leaving a tool started anywhere but the project root with
+/// nothing but the cwd to walk up from
+#[test]
+fn run_names_the_by_source_for_file_and_argv() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("helper.by"),
+        "def where() -> str:\n    return __file__\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "import sys\nimport helper\n\nprint(__file__)\nprint(sys.argv[0])\nprint(helper.where())\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 3, "unexpected output:\n{stdout}");
+    // the entry module, `sys.argv[0]`, and a module the entry imported
+    assert!(lines[0].ends_with("main.by"), "__file__ was {}", lines[0]);
+    assert!(lines[1].ends_with("main.by"), "argv[0] was {}", lines[1]);
+    assert!(
+        lines[2].ends_with("helper.by"),
+        "an imported module's __file__ was {}",
+        lines[2]
+    );
+}
+
+/// a frame is still keyed by the staged `.py` the code object came from, so
+/// moving `__file__` must not stop the sourcemap finding it
+#[test]
+fn run_still_rewrites_traceback_frames_to_by_lines() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("lib.by"),
+        "def boom(items: list[int]) -> int:\n    return items[9]\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "import lib\n\ndef main():\n    print(lib.boom([1, 2]))\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("main.by\", line 4"),
+        "no mapped entry frame:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("lib.by\", line 2"),
+        "no mapped library frame:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("IndexError"),
+        "the exception itself is missing:\n{stderr}"
+    );
+}
+
 /// inference recurses with the shape of the expression it is checking, and `run`
 /// checks on the thread it was dispatched to rather than through the rayon pool.
 /// on the stack a process starts with — 1 MiB on windows — a file like this one

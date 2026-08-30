@@ -21,6 +21,7 @@ by <COMMAND>
 <dt><a href="#by-run"><code>by run</code></a></dt><dd><p>Transpile and run a module with <code>python -m &lt;module&gt;</code></p></dd>
 <dt><a href="#by-init"><code>by init</code></a></dt><dd><p>Start a new project</p></dd>
 <dt><a href="#by-build"><code>by build</code></a></dt><dd><p>Build the project as python</p></dd>
+<dt><a href="#by-restage"><code>by restage</code></a></dt><dd><p>Recompute one file's slot in a build tree that already exists</p></dd>
 <dt><a href="#by-compile"><code>by compile</code></a></dt><dd><p>Compile .by and .py files to native CPython extension modules</p></dd>
 <dt><a href="#by-generate-api-file"><code>by generate-api-file</code></a></dt><dd><p>Generate an api lockfile (<code>api.lock</code>) summarising the public type-level surface of the project</p></dd>
 <dt><a href="#by-transpile"><code>by transpile</code></a></dt><dd><p>Transpile a file to stdout, or a whole directory in place (reads stdin if no path given)</p></dd>
@@ -310,6 +311,33 @@ by build [OPTIONS]
 </dd><dt id="by-build--soundness"><a href="#by-build--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
 <p>[default: default]</p></dd><dt id="by-build--wheels"><a href="#by-build--wheels"><code>--wheels</code></a></dt><dd><p>Build one publishable wheel per python version, and a source distribution, into <code>dist/</code>.</p>
 <p>Each wheel is lowered to the version it is tagged for, so an installer hands every interpreter the best wheel it can use rather than one lowered to the oldest python the project supports. Needs <code>uv</code>, which does the packaging.</p>
+</dd></dl>
+
+## by restage
+
+Recompute one file's slot in a build tree that already exists.
+
+What a debugger needs to give a running program an edit. `by run` transpiles the project into a directory and runs the program out of there, so nothing the user edits is the file the interpreter compiled: a `.by` because it was transpiled, a hand-written `.py` because it was copied. This produces what that file's slot in the tree should now hold.
+
+It **writes nothing** and prints JSON. The caller writes the bytes, because the caller is the only one that can take the write back when the replacement it was for is refused.
+
+Editors should send `by/transpileForBuild` to the language server instead, which answers the same question out of a project database that is already warm. This is the same operation for everything that is not an editor — `bpd`, a script, a test.
+
+<h3 class="cli-reference">Usage</h3>
+
+```
+by restage <BUILD_DIR> <FILE>
+```
+
+<h3 class="cli-reference">Arguments</h3>
+
+<dl class="cli-reference"><dt id="by-restage--build_directory"><a href="#by-restage--build_directory"><code>BUILD_DIRECTORY</code></a></dt><dd><p>The build tree the program is running out of</p>
+</dd><dt id="by-restage--file"><a href="#by-restage--file"><code>FILE</code></a></dt><dd><p>The file in the project that was edited</p>
+</dd></dl>
+
+<h3 class="cli-reference">Options</h3>
+
+<dl class="cli-reference"><dt id="by-restage--help"><a href="#by-restage--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help (see a summary with '-h')</p>
 </dd></dl>
 
 ## by compile
