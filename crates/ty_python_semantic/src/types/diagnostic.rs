@@ -174,6 +174,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&NON_OVERLAPPING_TYPE_TEST);
     registry.register_lint(&OPTIONAL_OBJECT_CONVERSION);
     registry.register_lint(&BOOL_AS_INT);
+    registry.register_lint(&SHARED_MUTABLE_DEFAULT);
     registry.register_lint(&MISSING_CONTEXT_ARGUMENT);
     registry.register_lint(&AMBIGUOUS_CONTEXT_ARGUMENT);
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
@@ -1987,6 +1988,56 @@ declare_lint! {
     pub(crate) static OPTIONAL_OBJECT_CONVERSION = {
         summary: "detects an optional value implicitly widened to `object`",
         status: LintStatus::stable("0.0.61"),
+        default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a class-body `let` or `var` declaration whose value is mutable —
+    /// a list, a dict, a set, or an instance of a class.
+    ///
+    /// ## Why is this bad?
+    /// A class-body declaration reads as a field every instance gets its own copy
+    /// of, and for a scalar it behaves that way: `fight.last_contact = 5` rebinds
+    /// on the instance and leaves every other one alone. A mutable value does not.
+    /// `fight.seen.add(1)` reaches through to the single object the class body
+    /// built, so every instance that ever existed sees the change — and the two
+    /// declarations look identical at the site, so a class can carry a row of them
+    /// where all but one are right.
+    ///
+    /// Everywhere else a written initialiser means "per instance", basedpython
+    /// already makes it so: a parameter default is re-evaluated per call, a
+    /// dataclass field default becomes a `default_factory`, and a property's
+    /// backing field is initialised in `__init__`. A plain class-body declaration
+    /// is the one place the value is built once, so it is reported rather than
+    /// quietly given either meaning.
+    ///
+    /// The value's own type is what decides, not the declaration's: an optional
+    /// field initialised to `None` shares a `None` whatever it will later hold.
+    ///
+    /// Assign it in `init` to get a value per instance, or declare it
+    /// `class var` / `class let` to say the sharing is intended.
+    ///
+    /// ## Examples
+    /// ```by
+    /// class Fight:
+    ///     var last_contact: int = 0     # ok — rebinding a scalar is per instance
+    ///     var seen: set[int] = set()    # warning: one set, shared by every `Fight`
+    ///
+    /// class Fixed:
+    ///     var seen: set[int]            # ok — declared here, built per instance
+    ///
+    ///     init():
+    ///         self.seen = set()
+    ///
+    /// class Shared:
+    ///     class var registry: set[int] = set()   # ok — shared on purpose
+    /// ```
+    pub(crate) static SHARED_MUTABLE_DEFAULT = {
+        summary: "detects a class-body declaration whose value every instance shares",
+        status: LintStatus::stable("0.0.72"),
         default_level: Level::Warn,
         ty_compat: TyCompat::BasedPython,
     }
