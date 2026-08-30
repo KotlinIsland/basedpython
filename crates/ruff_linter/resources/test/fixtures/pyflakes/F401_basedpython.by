@@ -23,3 +23,10 @@ extension extended_type:
 extension implemented_type(interface_type):
     def m(self) -> int:
         return 1
+
+# a `raises` clause names exception types, so the import that supplies them is
+# used — deleting it would leave a name the type checker cannot resolve
+from f import RaisedError
+
+def may_fail() raises RaisedError:
+    raise RaisedError
