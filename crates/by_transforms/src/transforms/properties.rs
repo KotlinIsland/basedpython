@@ -40,23 +40,108 @@
 //! `_items: list[int] = []` would be one list shared by every instance. See
 //! [`InitPlacement`] for the shapes that are not injected into yet.
 
+use std::collections::HashMap;
 use std::fmt::Write;
 
+use ruff_python_ast::token::{Tokens, parenthesized_range};
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
-use ruff_python_ast::{Expr, Stmt, StmtClassDef, StmtFunctionDef};
+use ruff_python_ast::{AnyNodeRef, Expr, ExprRef, Stmt, StmtClassDef, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass, render_stmt};
 use super::source_util::{line_indent, line_start};
 use crate::type_info::TypeInfo;
 
+/// The source range of each single-expression accessor's value, keyed by the
+/// range the statement holding it reports.
+///
+/// An expression's range stops *inside* its grouping parentheses, and the parser
+/// gives the synthesized `return` the expression's own range, so a value written
+/// across lines —
+///
+/// ```text
+///     let total: float
+///         get() = (
+///             self.a + self.b
+///         )
+/// ```
+///
+/// — reports a range beginning on the line below the accessor and ending before
+/// the `)`. Passing that range through drops both parentheses, and with them the
+/// only thing holding the value on one logical line. The parentheses are visible
+/// in the parse's tokens and nowhere in the tree, so they are measured here and
+/// looked up later by the statement's range.
+pub(crate) type ValueRanges = HashMap<TextRange, TextRange>;
+
+/// Measures every single-expression function body in `suite`, at any depth.
+///
+/// The accessor itself is the node the measurement is taken against: its range
+/// runs from the `get` keyword to the closing parenthesis, so the `(` opening the
+/// value falls between it and the expression, which is where the parentheses can
+/// be seen. Measuring against the statement holding the value would find nothing,
+/// because that statement reports the expression's range exactly.
+pub(crate) fn collect_value_ranges(suite: &[Stmt], tokens: &Tokens) -> ValueRanges {
+    let mut collector = ValueRangeCollector {
+        tokens,
+        ranges: HashMap::new(),
+    };
+    for stmt in suite {
+        collector.visit_stmt(stmt);
+    }
+    collector.ranges
+}
+
+struct ValueRangeCollector<'a> {
+    tokens: &'a Tokens,
+    ranges: ValueRanges,
+}
+
+/// The value of a body that is one expression, and the statement holding it.
+fn single_value(func: &StmtFunctionDef) -> Option<(&Stmt, &Expr)> {
+    let [only] = func.body.as_slice() else {
+        return None;
+    };
+    let value = match only {
+        Stmt::Return(ret) => ret.value.as_deref()?,
+        Stmt::Expr(expr) => &expr.value,
+        _ => return None,
+    };
+    Some((only, value))
+}
+
+impl<'ast> Visitor<'ast> for ValueRangeCollector<'_> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        if let Stmt::FunctionDef(func) = stmt
+            && let Some((holder, value)) = single_value(func)
+            && let Some(range) =
+                parenthesized_range(ExprRef::from(value), AnyNodeRef::from(func), self.tokens)
+        {
+            self.ranges.insert(holder.range(), range);
+        }
+        walk_stmt(self, stmt);
+    }
+}
+
 pub(crate) struct PropertiesPass<'src> {
     source: &'src str,
+    value_ranges: ValueRanges,
 }
 
 impl<'src> PropertiesPass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, value_ranges: ValueRanges) -> Self {
+        Self {
+            source,
+            value_ranges,
+        }
+    }
+
+    /// `stmt`'s source range, widened to take in the grouping parentheses around
+    /// it when it is a parenthesized expression.
+    fn value_range(&self, stmt: &Stmt) -> TextRange {
+        self.value_ranges
+            .get(&stmt.range())
+            .copied()
+            .unwrap_or_else(|| stmt.range())
     }
 }
 
@@ -310,15 +395,23 @@ impl PropertiesPass<'_> {
 
         // a single-expression accessor (`get() = <expr>`) sits on the accessor's own
         // line; a block accessor's statements start on lines of their own, and
-        // passing those through keeps their relative indentation intact
-        let inline = line_start(self.source, first.range().start())
-            == line_start(self.source, func.range().start());
+        // passing those through keeps their relative indentation intact.
+        //
+        // the value is measured with its grouping parentheses, so a value written
+        // across several lines is still recognised as the accessor's own — the `(`
+        // is on the accessor's line even when the expression inside it is not. it
+        // is also passed through whole, parentheses included, which is what lets
+        // the continuation lines keep their source column: inside parentheses they
+        // are continuations rather than a block, so their depth means nothing
+        let value = self.value_range(first);
+        let inline =
+            line_start(self.source, value.start()) == line_start(self.source, func.range().start());
         if inline {
             let mut frags = vec![Fragment::Lit(body_indent.to_owned())];
             if is_getter {
                 frags.push(Fragment::Lit("return ".to_owned()));
             }
-            frags.push(Fragment::Src(first.range()));
+            frags.push(Fragment::Src(value));
             frags
         } else {
             // the source body sits at the accessor suite's indent; the emitted
@@ -758,6 +851,57 @@ mod tests {
 
     fn check(input: &str, expected: &str) {
         assert_eq!(transpile(input, &Config::test_default()).unwrap(), expected);
+    }
+
+    /// a value written across lines is held together by its grouping parentheses,
+    /// and an expression's range stops inside them. passing that range through
+    /// dropped both — which threw the `return` away with them for a value that is
+    /// not a conditional, so the getter silently answered `None`, and produced a
+    /// bare `if` line for one that is
+    #[test]
+    fn a_parenthesized_accessor_value_keeps_its_parentheses() {
+        check(
+            indoc! {"
+                class Reading:
+                    var total: float
+                    let tripled: float
+                        get() = (
+                            self.total
+                            + self.total
+                        )
+                    let each: float
+                        get() = (
+                            self.total
+                            if self.total > 0
+                            else 0.0
+                        )
+                    let sameline: float
+                        get() = (self.total
+                                 + self.total)
+            "},
+            indoc! {"
+                from ty_extensions import JustFloat
+                class Reading:
+                    total: JustFloat
+                    @property
+                    def tripled(self) -> JustFloat:
+                        return (
+                            self.total
+                            + self.total
+                        )
+                    @property
+                    def each(self) -> JustFloat:
+                        return (
+                            self.total
+                            if self.total > 0
+                            else 0.0
+                        )
+                    @property
+                    def sameline(self) -> JustFloat:
+                        return (self.total
+                                 + self.total)
+            "},
+        );
     }
 
     /// an accessor body's statements sit at the suite's indent, which is deeper
