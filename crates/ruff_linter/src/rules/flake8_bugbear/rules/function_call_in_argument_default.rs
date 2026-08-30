@@ -136,6 +136,13 @@ impl Visitor<'_> for ArgumentDefaultVisitor<'_, '_> {
 
 /// B008
 pub(crate) fn function_call_in_argument_default(checker: &Checker, parameters: &Parameters) {
+    // basedpython compiles a non-scalar default into a placeholder and re-evaluates
+    // the written expression on each call, so a call in a default is already what
+    // this rule asks the author to write by hand
+    if checker.source_type.is_basedpython() {
+        return;
+    }
+
     // Map immutable calls to (module, member) format.
     let extend_immutable_calls: Vec<QualifiedName> = checker
         .settings()
