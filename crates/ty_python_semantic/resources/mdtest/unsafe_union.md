@@ -142,6 +142,41 @@ static_assert(is_equivalent_to(UnsafeUnion[int, Any], Any))
 static_assert(is_equivalent_to(UnsafeUnion[int, Never], int))
 ```
 
+### A nested unsafe union inside a union entry is widened
+
+An entry that is itself a union carrying an unsafe union has a menu of its own, and nothing
+flattened it: only an unsafe union at the *top* of an entry was ever unwrapped. So the type grew.
+Operator inference distributes over an unsafe union on both operands and unions the results, which
+made every operator applied embed the whole previous type in a new entry — doubling its size each
+time, and never converging at all inside a loop, where each fixpoint round adds another level.
+
+The entry is widened to its top materialization instead. Everything the entry admitted is still
+assignable to it; what is given up is the intersection face of that one arm.
+
+```py
+from ty_extensions import UnsafeUnion, static_assert
+from ty_extensions._internal import is_equivalent_to
+
+static_assert(
+    is_equivalent_to(UnsafeUnion[int, str | UnsafeUnion[bytes, memoryview]], UnsafeUnion[int, str | bytes | memoryview])
+)
+```
+
+### Repeated operators do not grow the menu
+
+The regression this protects against: `t + s + s + …` where both operands are unsafe unions used to
+double in size per operator. The menu is the same however many are applied.
+
+```py
+from ty_extensions import UnsafeUnion
+
+def f(t: UnsafeUnion[int, str], s: UnsafeUnion[int, str]):
+    one = t + s
+    four = t + s + s + s + s
+    reveal_type(one)  # revealed: UnsafeUnion[int, str]
+    reveal_type(four)  # revealed: UnsafeUnion[int, str]
+```
+
 ## Gradual properties
 
 ### Subtyping and assignability

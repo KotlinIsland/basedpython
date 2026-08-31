@@ -3471,7 +3471,7 @@ impl<'db> Type<'db> {
                 .map(Type::Intersection),
             // Like unions and intersections, an unsafe union is "flat" from the perspective
             // of recursive types, so `nested` is passed through unchanged.
-            Type::UnsafeUnion(unsafe_union) => unsafe_union.try_map_elements(db, |element| {
+            Type::UnsafeUnion(unsafe_union) => unsafe_union.try_map_elements(db, env, |element| {
                 element.recursive_type_normalized_impl(db, env, div, nested)
             }),
             Type::EnumComplement(complement) => complement
@@ -3823,11 +3823,13 @@ impl<'db> Type<'db> {
             }
 
             Type::UnsafeUnion(unsafe_union) => {
-                Some(unsafe_union.map_with_boundness_and_qualifiers(db, |elem| {
-                    elem.find_name_in_mro_with_policy(db, env, name, policy)
-                        // Fall back to Unbound, similar to the union case (see above).
-                        .unwrap_or_default()
-                }))
+                Some(
+                    unsafe_union.map_with_boundness_and_qualifiers(db, env, |elem| {
+                        elem.find_name_in_mro_with_policy(db, env, name, policy)
+                            // Fall back to Unbound, similar to the union case (see above).
+                            .unwrap_or_default()
+                    }),
+                )
             }
 
             Type::Dynamic(_) if policy.require_concrete() => Some(Place::Undefined.into()),
@@ -4408,8 +4410,11 @@ impl<'db> Type<'db> {
                 enums::instance_member_for_enum_complement(db, env, *complement, name)
             }
 
-            Type::UnsafeUnion(unsafe_union) => unsafe_union
-                .map_with_boundness_and_qualifiers(db, |elem| elem.instance_member(db, env, name)),
+            Type::UnsafeUnion(unsafe_union) => {
+                unsafe_union.map_with_boundness_and_qualifiers(db, env, |elem| {
+                    elem.instance_member(db, env, name)
+                })
+            }
 
             Type::Dynamic(_) | Type::Divergent(_) | Type::Never => Place::bound(self).into(),
 
@@ -5492,12 +5497,14 @@ impl<'db> Type<'db> {
                 // answers both `.imag` and `.upper`.
                 Type::UnsafeUnion(unsafe_union) => {
                     let receiver = Some(receiver.unwrap_or(this));
-                    Ok(unsafe_union.map_with_boundness_and_qualifiers(db, |elem| {
-                        elem.member_lookup_with_policy_and_receiver(
-                            db, env, name_str, policy, receiver,
-                        )
-                        .unwrap_or_else(|error| error.fallback_member(db))
-                    }))
+                    Ok(
+                        unsafe_union.map_with_boundness_and_qualifiers(db, env, |elem| {
+                            elem.member_lookup_with_policy_and_receiver(
+                                db, env, name_str, policy, receiver,
+                            )
+                            .unwrap_or_else(|error| error.fallback_member(db))
+                        }),
+                    )
                 }
 
                 Type::Dynamic(..) | Type::Divergent(_) | Type::Never => Place::bound(this).into(),
@@ -8332,7 +8339,7 @@ impl<'db> Type<'db> {
 
             Type::UnsafeUnion(unsafe_union) => {
                 let mut invalid_expressions = smallvec::SmallVec::default();
-                let ty = unsafe_union.map_elements(db, |element| {
+                let ty = unsafe_union.map_elements(db, env, |element| {
                     match element.in_type_expression(
                         db,
                         scope_id,
@@ -8453,7 +8460,7 @@ impl<'db> Type<'db> {
             }
             Type::Union(union) => union.map(db, env, |ty| ty.to_meta_type(db, env)),
             Type::UnsafeUnion(unsafe_union) => {
-                unsafe_union.map_elements(db, |element| element.to_meta_type(db, env))
+                unsafe_union.map_elements(db, env, |element| element.to_meta_type(db, env))
             }
             Type::TypeIs(_) | Type::TypeGuard(_) => KnownClass::Bool.to_class_literal(db, env),
             Type::TypeForm(_) => Type::object().to_meta_type(db, env),
@@ -8547,7 +8554,7 @@ impl<'db> Type<'db> {
         match self {
             Type::Union(union) => union.map(db, env, |element| element.dunder_class(db, env)),
             Type::UnsafeUnion(unsafe_union) => {
-                unsafe_union.map_elements(db, |element| element.dunder_class(db, env))
+                unsafe_union.map_elements(db, env, |element| element.dunder_class(db, env))
             }
             Type::Intersection(intersection) => intersection
                 .try_dunder_class(db, env)
@@ -8965,7 +8972,7 @@ impl<'db> Type<'db> {
                         ))
                     })
                     .build(),
-                _ => unsafe_union.map_elements(db, |element| {
+                _ => unsafe_union.map_elements(db, env, |element| {
                     element.apply_type_mapping_impl(db, env, type_mapping, tcx, visitor)
                 }),
             },

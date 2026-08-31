@@ -489,7 +489,7 @@ impl ItemCombination {
     {
         match self {
             ItemCombination::Intersection => IntersectionType::from_elements(db, env, types),
-            ItemCombination::UnsafeUnion => UnsafeUnionType::from_elements(db, types),
+            ItemCombination::UnsafeUnion => UnsafeUnionType::from_elements(db, env, types),
         }
     }
 }
@@ -4624,7 +4624,7 @@ impl<'db> CallableBinding<'db> {
                 .find(Type::is_divergent);
             let return_type = match divergent_result {
                 Some(divergent_result) => divergent_result,
-                None => match UnsafeUnionType::from_elements(db, possible_return_types) {
+                None => match UnsafeUnionType::from_elements(db, env, possible_return_types) {
                     // A dynamic return type admits every materialization, so the menu is no longer
                     // finite. Keep the marker type instead, which records that this `Unknown` came
                     // from a degraded overload match.
