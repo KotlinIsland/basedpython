@@ -133,18 +133,21 @@ pub(crate) fn lower(source: &str, min_version: PythonVersion) -> EnumLowering<'_
         cursor = enum_def.range().end();
     }
     out.push_verbatim(source, TextRange::new(cursor, source.text_len()));
+    // closes out a last line the source left unterminated, so the map has an
+    // entry per line of the body and not per `\n` in it
+    let (body, body_map) = out.finish();
 
     // prologue: the `__future__` import (always first) then the deduplicated
     // imports the lowered classes need, prepended ahead of the rewritten body
     let prologue = format!("from __future__ import annotations\n{}", imports.render());
-    let mut text = String::with_capacity(prologue.len() + out.text.len());
-    let mut line_map = Vec::with_capacity(out.line_map.len());
+    let mut text = String::with_capacity(prologue.len() + body.len());
+    let mut line_map = Vec::with_capacity(body_map.len());
     for _ in prologue.bytes().filter(|&b| b == b'\n') {
         line_map.push(None);
     }
     text.push_str(&prologue);
-    text.push_str(&out.text);
-    line_map.extend(out.line_map);
+    text.push_str(&body);
+    line_map.extend(body_map);
 
     EnumLowering {
         output: Cow::Owned(text),
@@ -549,11 +552,24 @@ fn line_of(source: &str, offset: TextSize) -> u32 {
 }
 
 /// Accumulates the rewritten output text alongside its per-line origin map.
+///
+/// Entries land as lines are *completed*, because that is the only moment the
+/// accumulator knows a line is over: text arrives in fragments, and a fragment
+/// boundary is not a line boundary. So the last line of a text nothing
+/// terminated has no entry until [`Out::finish`] adds it — and it needs one,
+/// because that line exists and the map is indexed by line, not by `\n`.
+///
+/// Whether a line is open is not tracked, because the text already says so: one
+/// is open exactly when the text is non-empty and does not end in a `\n`. Only
+/// which `.by` line is behind it has to be remembered.
 #[derive(Default)]
 struct Out {
     text: String,
-    /// one entry per *completed* output line (i.e. per `\n` emitted)
+    /// one entry per *completed* output line (i.e. per `\n` emitted); the last
+    /// line of an unterminated output is added by [`Out::finish`]
     line_map: Vec<Option<u32>>,
+    /// `.by` line behind the open line, if there is one and it has an origin
+    open_origin: Option<u32>,
 }
 
 impl Out {
@@ -565,13 +581,17 @@ impl Out {
                 self.line_map.push(None);
             }
         }
+        // anything left open by generated text is generated too
+        self.open_origin = None;
     }
 
     /// Drop a single trailing newline (and its map entry) if present.
     fn pop_trailing_newline(&mut self) {
         if self.text.ends_with('\n') {
             self.text.pop();
-            self.line_map.pop();
+            // the line is not gone, only unterminated again: its entry goes back
+            // to being the open line's, for whatever closes the line to push
+            self.open_origin = self.line_map.pop().flatten();
         }
     }
 
@@ -589,6 +609,16 @@ impl Out {
                 src_line += 1;
             }
         }
+        self.open_origin = Some(src_line);
+    }
+
+    /// The finished text and a map with one entry per line of it, the last line
+    /// included whether or not anything terminated it.
+    fn finish(mut self) -> (String, Vec<Option<u32>>) {
+        if !self.text.is_empty() && !self.text.ends_with('\n') {
+            self.line_map.push(self.open_origin);
+        }
+        (self.text, self.line_map)
     }
 }
 

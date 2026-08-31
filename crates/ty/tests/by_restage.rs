@@ -120,6 +120,55 @@ fn an_edited_source_comes_back_changed_with_a_rewritten_map() {
     assert!(map.contains("DIGESTS"), "{map}");
 }
 
+/// An editor saves what the user typed, and what the user typed may not end in a newline — which is
+/// exactly the file a re-stage exists to serve, since the debugger is about to be handed this map
+/// and asked which generated line the caret's `.by` line became.
+///
+/// The line table used to be built one entry per `\n`, so the last line of such a file had no entry
+/// and the lookup answered with its neighbour's, or with nothing. Here the two spellings of one
+/// program must produce the same table, differing only in the bytes of the source.
+#[test]
+fn a_source_saved_without_a_trailing_newline_re_stages_a_whole_line_table() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project(dir.path());
+    build(dir.path());
+
+    let body = "def go() -> int:\n    return 42\nprint(go())";
+    let table_of = |source: &str| {
+        std::fs::write(dir.path().join("main.by"), source).unwrap();
+        let (ok, answer) = restage(dir.path(), "main.by");
+        assert!(ok, "an edited file that checks should re-stage: {answer}");
+        let map = answer["sourcemap"]
+            .as_str()
+            .expect("a transpiled file's re-stage rewrites the map")
+            .to_owned();
+        let content = answer["content"]
+            .as_str()
+            .expect("bytes to write")
+            .to_owned();
+        let (_, rest) = map
+            .split_once('[')
+            .unwrap_or_else(|| panic!("no line table:\n{map}"));
+        let (list, _) = rest
+            .split_once(']')
+            .unwrap_or_else(|| panic!("no line table:\n{map}"));
+        (list.to_owned(), content)
+    };
+
+    let (without, content) = table_of(body);
+    let (with_newline, _) = table_of(&format!("{body}\n"));
+
+    assert_eq!(
+        without, with_newline,
+        "the terminator closes the last line, it does not add one"
+    );
+    assert_eq!(
+        without.split(", ").count(),
+        content.lines().count(),
+        "one entry per generated line:\n[{without}]\n{content}"
+    );
+}
+
 /// A hand-written `.py` is in the tree because it was **copied**, not transpiled — so its slot is
 /// its own bytes and the map says nothing about it. Answering with a map entry for one would be
 /// inventing a file the transpiler never produced.
