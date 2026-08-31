@@ -3630,6 +3630,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
                 let ty = UnsafeUnionType::from_elements(
                     db,
+                    env,
                     elements
                         .map(|element| self.infer_type_expression(element))
                         .collect::<Vec<_>>(),

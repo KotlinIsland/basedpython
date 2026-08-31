@@ -808,7 +808,7 @@ impl<'db> BoundSuperType<'db> {
                         typevar_context: None,
                     });
                 }
-                return Ok(UnsafeUnionType::from_elements(db, elements));
+                return Ok(UnsafeUnionType::from_elements(db, env, elements));
             }
             Type::EnumComplement(complement) => {
                 return delegate_to(complement.to_intersection(db, env));

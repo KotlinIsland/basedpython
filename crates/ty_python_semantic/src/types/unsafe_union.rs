@@ -54,10 +54,53 @@ pub(super) fn walk_unsafe_union<'db, V: visitor::TypeVisitor<'db> + ?Sized>(
 // the salsa heap is tracked separately
 impl get_size2::GetSize for UnsafeUnionType<'_> {}
 
+/// Widens any unsafe union nested inside a *union* to its top materialization, so the
+/// result can go on a menu without carrying a menu of its own.
+///
+/// An entry of `Unknown | UnsafeUnion[int, str]` offers the materializations
+/// `Unknown | int` and `Unknown | str`; widening it to `Unknown | int | str` keeps every
+/// one of them assignable to the entry, and gives up only the intersection face of that
+/// one arm — which is the price of the menu staying finite. Anything else is returned
+/// unchanged: a union is the shape operator inference builds, and the only one that was
+/// observed to grow.
+fn flatten_nested<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> Type<'db> {
+    let Type::Union(union) = ty else {
+        return ty;
+    };
+    if !union
+        .elements(db)
+        .iter()
+        .any(|element| matches!(element, Type::UnsafeUnion(_)))
+    {
+        return ty;
+    }
+    UnionType::from_elements(
+        db,
+        env,
+        union.elements(db).iter().map(|element| match element {
+            Type::UnsafeUnion(nested) => nested.to_union(db, env),
+            other => *other,
+        }),
+    )
+}
+
 impl<'db> UnsafeUnionType<'db> {
     /// Build the unsafe union of `elements`, simplifying it into a different variant of
     /// [`Type`] where the menu of materializations collapses.
-    pub(crate) fn from_elements<I, T>(db: &'db dyn Db, elements: I) -> Type<'db>
+    ///
+    /// The menu is normalized so that no entry on it has an unsafe union nested inside
+    /// it. Without that, the type grows without bound: binary-operator inference
+    /// distributes over an unsafe union on *both* operands and unions the results, so
+    /// `t + s` where both are unsafe unions produces a menu entry of the form
+    /// `Unknown | UnsafeUnion[…]` that embeds the whole previous type. The flattening
+    /// below only reaches a nested unsafe union at the top of an entry, so each
+    /// operator applied doubled the type's size — and inside a loop, where each
+    /// fixpoint round adds another level, it never converged at all.
+    pub(crate) fn from_elements<I, T>(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        elements: I,
+    ) -> Type<'db>
     where
         I: IntoIterator<Item = T>,
         T: Into<Type<'db>>,
@@ -65,7 +108,7 @@ impl<'db> UnsafeUnionType<'db> {
         let mut collected: Vec<Type<'db>> = Vec::new();
 
         for element in elements {
-            match element.into() {
+            match flatten_nested(db, env, element.into()) {
                 // a dynamic element admits every materialization, which swallows the whole
                 // menu: `UnsafeUnion[int, Any]` can materialize to anything, so it *is* `Any`
                 dynamic @ Type::Dynamic(_) => return dynamic,
@@ -107,19 +150,21 @@ impl<'db> UnsafeUnionType<'db> {
     pub(crate) fn map_elements(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         transform: impl FnMut(Type<'db>) -> Type<'db>,
     ) -> Type<'db> {
-        Self::from_elements(db, self.elements(db).iter().copied().map(transform))
+        Self::from_elements(db, env, self.elements(db).iter().copied().map(transform))
     }
 
     /// A fallible version of [`UnsafeUnionType::map_elements`].
     pub(crate) fn try_map_elements(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         transform: impl FnMut(Type<'db>) -> Option<Type<'db>>,
     ) -> Option<Type<'db>> {
         let elements: Option<Vec<_>> = self.elements(db).iter().copied().map(transform).collect();
-        Some(Self::from_elements(db, elements?))
+        Some(Self::from_elements(db, env, elements?))
     }
 
     /// Project every element from a class-object type into its instance type.
@@ -129,7 +174,7 @@ impl<'db> UnsafeUnionType<'db> {
         env: &ProgramEnvironment<'db>,
     ) -> Option<InstanceProjection<Type<'db>>> {
         let mut is_exact = true;
-        let instance = self.try_map_elements(db, |element| {
+        let instance = self.try_map_elements(db, env, |element| {
             let projection = element.to_instance(db, env)?;
             is_exact &= projection.is_exact();
             Some(projection.into_inner())
@@ -146,6 +191,7 @@ impl<'db> UnsafeUnionType<'db> {
     pub(crate) fn map_with_boundness_and_qualifiers(
         self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         mut transform_fn: impl FnMut(&Type<'db>) -> PlaceAndQualifiers<'db>,
     ) -> PlaceAndQualifiers<'db> {
         let mut member_types = Vec::new();
@@ -185,7 +231,7 @@ impl<'db> UnsafeUnionType<'db> {
                 Place::Undefined
             } else {
                 Place::Defined(DefinedPlace {
-                    ty: Self::from_elements(db, member_types),
+                    ty: Self::from_elements(db, env, member_types),
                     origin,
                     definedness: if any_definitely_bound {
                         Definedness::AlwaysDefined

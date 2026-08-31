@@ -508,6 +508,7 @@ where
 
 fn map_unsafe_union_subscript<'db, F>(
     db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
     unsafe_union: UnsafeUnionType<'db>,
     map_fn: F,
 ) -> Result<Type<'db>, SubscriptError<'db>>
@@ -518,7 +519,7 @@ where
         db,
         unsafe_union.elements(db).iter().copied(),
         Type::UnsafeUnion(unsafe_union),
-        UnsafeUnionType::from_elements,
+        |db, elements| UnsafeUnionType::from_elements(db, env, elements),
         map_fn,
     )
 }
@@ -747,17 +748,19 @@ impl<'db> Type<'db> {
                 |element| value_ty.subscript(db, env, element, expr_context, tcx),
             )),
 
-            (Type::UnsafeUnion(unsafe_union), _) => {
-                Some(map_unsafe_union_subscript(db, unsafe_union, |element| {
-                    element.subscript(db, env, slice_ty, expr_context, tcx)
-                }))
-            }
+            (Type::UnsafeUnion(unsafe_union), _) => Some(map_unsafe_union_subscript(
+                db,
+                env,
+                unsafe_union,
+                |element| element.subscript(db, env, slice_ty, expr_context, tcx),
+            )),
 
-            (_, Type::UnsafeUnion(unsafe_union)) => {
-                Some(map_unsafe_union_subscript(db, unsafe_union, |element| {
-                    value_ty.subscript(db, env, element, expr_context, tcx)
-                }))
-            }
+            (_, Type::UnsafeUnion(unsafe_union)) => Some(map_unsafe_union_subscript(
+                db,
+                env,
+                unsafe_union,
+                |element| value_ty.subscript(db, env, element, expr_context, tcx),
+            )),
 
             (Type::TypeVar(typevar), _)
                 if let Some(TypeVarBoundOrConstraints::Constraints(constraints)) =
