@@ -13,9 +13,11 @@
 use std::path::{Path, PathBuf};
 
 use by_transforms::config::Config;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use ruff_db::diagnostic::{Annotation, Diagnostic, DiagnosticId, Severity, Span};
 use ruff_db::source::source_text;
 use ty_project::ProjectDatabase;
+use ty_project::parallel::ParallelIteratorExt;
 
 use crate::project::Rebuilder;
 
@@ -80,8 +82,15 @@ pub fn check_and_transpile(
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
     let mut unusable: Vec<ruff_db::files::File> = Vec::new();
 
-    for (_, file) in handles {
-        let diags = db.check_file(*file);
+    // the same fan-out `by check` uses. checking is the one part of a build that
+    // is already known to parallelise — it is the same work over the same file
+    // set — and running it one file at a time here was the build re-doing
+    // serially what the checker does across every core
+    let checked: Vec<Vec<Diagnostic>> = handles
+        .par_iter()
+        .map_with_db(db, |db, (_, file)| db.check_file(*file))
+        .collect();
+    for ((_, file), diags) in handles.iter().zip(checked) {
         if diags.iter().any(is_unusable_source) {
             unusable.push(*file);
         }
@@ -110,6 +119,12 @@ pub fn check_and_transpile(
     }
 
     let mut ok = unusable.is_empty();
+    // the transpile stays serial. it is the expensive half and the files are
+    // independent, so it looks like it should fan out — but a type-aware pass
+    // builds databases of its own (a single-file db for the rewritten source,
+    // and the project rebuilt over it), and salsa refuses to attach one while a
+    // query on another is running. parallelising this needs the transpiler to
+    // stop making databases mid-query first
     let rebuild = || Some(rebuilder.rebuild());
     for (bpy, file) in handles {
         if unusable.contains(file) {

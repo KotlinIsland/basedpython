@@ -407,6 +407,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "by_transforms",
+ "rayon",
  "ruff_db",
  "serde",
  "serde_json",
