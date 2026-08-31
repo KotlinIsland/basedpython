@@ -107,7 +107,41 @@ impl BackgroundDocumentRequestHandler for TranspileForBuildRequestHandler {
             return Ok(None);
         };
 
-        match restage_one(db, &params.build_directory, path.as_std_path()) {
+        // **On a thread of its own, and that is not an optimisation.** Every request handler runs
+        // inside `salsa::attach(&db, ...)`, and the transpiler builds a *second* database when a
+        // pre-pass rewrites the source it is about to lower — so it can resolve the file's imports
+        // against the real project with the rewritten text overlaid. Attaching that one while this
+        // one is attached is "Cannot change database mid-query", which salsa panics on, and a
+        // panicking handler is what the user sees as "ty encountered a problem".
+        //
+        // Attachment is per thread, so a thread that has attached nothing is a thread the nested
+        // build is legal on — which is exactly the state the `by` command line runs this in, and
+        // why it works there. Scoped so the borrow of `db` is the same one this function has.
+        // A clone rather than a borrow, because a salsa database is not `Sync`: it is cheap to
+        // clone and a clone is how every one of this server's worker threads already holds one.
+        let owned = db.clone();
+        let directory = params.build_directory.clone();
+        let file = path.as_std_path().to_path_buf();
+        let restaged = std::thread::scope(|scope| {
+            scope
+                .spawn(move || restage_one(&owned, &directory, &file))
+                .join()
+        });
+
+        let restaged = match restaged {
+            Ok(restaged) => restaged,
+            // The transpile panicked rather than failed. Reported as a refusal for the reason an
+            // error is: a client has one shape to read, and a debugger that got no answer at all
+            // would leave the tree it is about to write into in an unknown state.
+            Err(_) => {
+                return Ok(Some(Restage::Refused(by_stage::restage::Refusal {
+                    refused: "the transpiler panicked while re-staging this file".to_owned(),
+                    diagnostics: Vec::new(),
+                })));
+            }
+        };
+
+        match restaged {
             Ok(restage) => Ok(Some(restage)),
             // an error here is the operation failing rather than refusing — the tree could not be
             // read, the file could not be written out. it is reported as a refusal so that a client
