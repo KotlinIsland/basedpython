@@ -18,8 +18,6 @@ use ruff_text_size::{Ranged, TextSize};
 use salsa::Setter as _;
 use ty_project::{ProjectMetadata, TestDb};
 
-use type_info::TypeInfo;
-
 /// Creates a single-file in-memory database for transpilation.
 ///
 /// The source is registered at `/input.by`.
@@ -200,7 +198,7 @@ pub fn transpile_with_report(
     if let Some(err) = module.errors().iter().find(|e| e.is_basedpython_only()) {
         return Err(err.to_string());
     }
-    let LoweringResult { output, errors } = run_lowering_phase(src, module.suite(), config, &model);
+    let LoweringResult { output, errors } = run_lowering_phase(src, module.suite(), config);
     if let Some(first) = errors.first() {
         return Err(first.clone());
     }
@@ -400,12 +398,7 @@ pub fn transpile_typed_with_report(
             ty_python_semantic::Db::program_file(&local_db, local_file).python_file(&local_db),
         )
         .load(&local_db);
-        let model = ty_python_semantic::SemanticModel::new(
-            &local_db,
-            ty_python_semantic::Db::program_file(&local_db, local_file),
-        );
-        let LoweringResult { output, errors } =
-            run_lowering_phase(src, module.suite(), config, &model);
+        let LoweringResult { output, errors } = run_lowering_phase(src, module.suite(), config);
         (output, errors)
     } else if source_changed {
         // ast_driver made no further changes, but the working source differs
@@ -418,19 +411,13 @@ pub fn transpile_typed_with_report(
             ty_python_semantic::Db::program_file(&local_db, local_file).python_file(&local_db),
         )
         .load(&local_db);
-        let model = ty_python_semantic::SemanticModel::new(
-            &local_db,
-            ty_python_semantic::Db::program_file(&local_db, local_file),
-        );
-        let LoweringResult { output, errors } =
-            run_lowering_phase(src, module.suite(), config, &model);
+        let LoweringResult { output, errors } = run_lowering_phase(src, module.suite(), config);
         (output, errors)
     } else {
         let module =
             ruff_db::parsed::parsed_module(db, db.program_file(file).python_file(db)).load(db);
-        let model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
         let LoweringResult { output, errors } =
-            run_lowering_phase(original_source, module.suite(), config, &model);
+            run_lowering_phase(original_source, module.suite(), config);
         (output, errors)
     };
     if let Some(first) = errors.first() {
@@ -940,12 +927,7 @@ pub(crate) struct LoweringResult {
 /// prepends the opt-in `from __future__ import annotations` preamble when
 /// `inject_future_annotations` is set (off by default — forward references
 /// are quoted surgically by `auto_quote` instead)
-fn run_lowering_phase(
-    source: &str,
-    stmts: &[Stmt],
-    config: &Config,
-    _types: &dyn TypeInfo,
-) -> LoweringResult {
+fn run_lowering_phase(source: &str, stmts: &[Stmt], config: &Config) -> LoweringResult {
     let mut output = String::new();
     // a BOM stays at offset 0 — moved off it by the preamble it is no longer a
     // BOM, just a character python refuses to tokenize
