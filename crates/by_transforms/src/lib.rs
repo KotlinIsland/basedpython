@@ -388,7 +388,7 @@ pub fn transpile_typed_with_report(
     if let Some(first) = ast_errors.first() {
         return Err(first.clone().into());
     }
-    let spliced_lines = newline_count(spliced.as_ref());
+    let spliced_lines = line_count(spliced.as_ref());
     let (output, errors) = if let std::borrow::Cow::Owned(modified) = spliced {
         let (local_db, local_file) = make_in_memory_db(&modified);
         let local_source_ref = ruff_db::source::source_text(&local_db, local_file);
@@ -432,8 +432,13 @@ pub fn transpile_typed_with_report(
     // phases 1-2c only prepend preambles at the top and edit within lines, so
     // the spliced body keeps its line correspondence: prepend one `None` per
     // generated leading line to lift `phase0_map` into final-output coordinates.
-    // when the enum phase fired, also compose `working → original .by` lines
-    let prepended = newline_count(&final_output).saturating_sub(spliced_lines);
+    // when the enum phase fired, also compose `working → original .by` lines.
+    //
+    // both sides are counted in lines rather than `\n`s, and deliberately: a
+    // phase between the two that only supplied a missing final terminator has
+    // added no line, and counting terminators would read that as one more
+    // prepended line and shift every entry after the preamble by one
+    let prepended = line_count(&final_output).saturating_sub(spliced_lines);
     let composed: Vec<Option<u32>> = if enum_changed {
         phase0_map
             .into_iter()
@@ -475,6 +480,15 @@ pub fn transpile_typed_with_report(
 
 fn newline_count(s: &str) -> usize {
     s.bytes().filter(|&b| b == b'\n').count()
+}
+
+/// How many lines `s` has, which is how many entries a line table for it holds.
+///
+/// One more than [`newline_count`] when the last line has no terminator, because
+/// that line exists all the same — python numbers it and a traceback names it.
+/// Empty text has no lines at all, as distinct from one blank one.
+fn line_count(s: &str) -> usize {
+    newline_count(s) + usize::from(!(s.is_empty() || s.ends_with('\n')))
 }
 
 /// Re-runs the anon-named-tuple lowering on post-transform output to catch
@@ -2123,5 +2137,95 @@ mod cross_file {
             "line map should point at the originating .by line, got line {by_line}: {:?}",
             by_src.get(by_line)
         );
+    }
+
+    /// The map for one source, spelled with and without a final newline.
+    fn map_both_ways(body: &str) -> (Vec<Option<u32>>, Vec<Option<u32>>) {
+        let mut maps = Vec::new();
+        for src in [body.to_owned(), format!("{body}\n")] {
+            let project = project_db(&[("/m.by", &src)]);
+            let file = system_path_to_file(project.db(), "/m.by").expect("file not in db");
+            let (_, map) =
+                transpile_typed_with_map(project.db(), file, &Config::test_default(), None)
+                    .expect("transpile failed");
+            maps.push(map);
+        }
+        let with_newline = maps.pop().expect("two maps");
+        let without = maps.pop().expect("two maps");
+        (without, with_newline)
+    }
+
+    /// A trailing newline terminates the last line; it does not add one. So the
+    /// two spellings of the same program are the same program, and the debugger
+    /// must be told the same thing about both.
+    ///
+    /// It was not: the table was built per `\n`, so a file that ended without one
+    /// lost the entry for its own last line and every entry the entry-point
+    /// epilogue appended slid up over it. A breakpoint on that line was then
+    /// refused as generated prelude — a claim about a line the user wrote
+    /// themselves.
+    #[test]
+    fn a_missing_final_newline_does_not_cost_the_last_line_its_mapping() {
+        let body = "def g():\n    print(2)\n\ndef main():\n    g()";
+        let (without, with_newline) = map_both_ways(body);
+
+        assert_eq!(
+            without, with_newline,
+            "the two spellings of one program must map alike"
+        );
+        // the last line the user wrote is the last line that maps to source, and
+        // it maps to itself: `    g()` is `.by` line 4
+        let last_mapped = without
+            .iter()
+            .rposition(Option::is_some)
+            .expect("some line maps to source");
+        assert_eq!(without[last_mapped], Some(4), "map:\n{without:?}");
+    }
+
+    /// the same, through the enum lowering — a second table producer, which
+    /// counted completed lines the same way and dropped the last one alike
+    #[test]
+    fn a_missing_final_newline_maps_the_last_line_through_the_enum_lowering() {
+        let body = "enum class Colour:\n    case Red\n    case Green\n\ndef main():\n    print(Colour.Red)";
+        let (without, with_newline) = map_both_ways(body);
+
+        assert_eq!(
+            without, with_newline,
+            "the two spellings of one program must map alike"
+        );
+        let last_mapped = without
+            .iter()
+            .rposition(Option::is_some)
+            .expect("some line maps to source");
+        assert_eq!(
+            without[last_mapped],
+            Some(5),
+            "`    print(Colour.Red)` is .by line 5, map:\n{without:?}"
+        );
+    }
+
+    /// the map is indexed by generated line, so it has to be exactly as long as
+    /// the generated python has lines — an entry short and every lookup past the
+    /// gap answers for its neighbour
+    #[test]
+    fn the_map_has_one_entry_per_generated_line() {
+        for body in [
+            "print(1)",
+            "print(1)\n",
+            "def main():\n    print(1)",
+            "x: int & str\nprint(1)",
+            "enum class E:\n    case A\nprint(E.A)",
+        ] {
+            let project = project_db(&[("/m.by", body)]);
+            let file = system_path_to_file(project.db(), "/m.by").expect("file not in db");
+            let (out, map) =
+                transpile_typed_with_map(project.db(), file, &Config::test_default(), None)
+                    .expect("transpile failed");
+            assert_eq!(
+                map.len(),
+                super::line_count(&out),
+                "one entry per generated line for {body:?}"
+            );
+        }
     }
 }

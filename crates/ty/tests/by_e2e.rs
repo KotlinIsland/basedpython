@@ -2023,6 +2023,103 @@ fn build_writes_a_sourcemap_beside_the_generated_python() {
     );
 }
 
+/// Build `source` on its own and return its one `SOURCEMAP` line table, plus the
+/// generated python it describes.
+fn sourcemap_table_for(source: &str) -> (Vec<Option<u32>>, String) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), source).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        output.status.success(),
+        "by build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let out = dir.path().join("out");
+    let map = fs::read_to_string(out.join("_by_sourcemap.py")).expect("sourcemap module");
+    let generated = fs::read_to_string(out.join("main.py")).expect("generated module");
+
+    // the one entry's list, read out of the rendered table rather than rebuilt:
+    // this is the text a debugger imports, so it is the text worth asserting on
+    let (_, body) = map
+        .split_once("SOURCEMAP = {\n")
+        .expect("a SOURCEMAP table");
+    let entry = body.lines().next().expect("an entry");
+    let list = entry
+        .split_once('[')
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .unwrap_or_else(|| panic!("no line table in {entry}:\n{map}"))
+        .0;
+    let table = list
+        .split(", ")
+        .map(|item| match item {
+            "None" => None,
+            n => Some(n.parse::<u32>().unwrap_or_else(|e| panic!("{n}: {e}"))),
+        })
+        .collect();
+    (table, generated)
+}
+
+/// **The last line of a file that ends without a newline is still a line.**
+///
+/// A debugger binds a `.by` breakpoint by looking the line up in this table, and
+/// `None` there means "prelude, no `.by` line is behind this". The table used to
+/// be built one entry per `\n`, so a file whose last line had no terminator lost
+/// that line's entry and the entry-point epilogue's `None`s slid up over it — the
+/// user's own last line reported as generated prelude, and a breakpoint on it
+/// refused and silently never hit.
+///
+/// Asserted against the rendered `_by_sourcemap.py` rather than the library that
+/// wrote it, because what a debugger reads is the file.
+#[test]
+fn a_source_without_a_trailing_newline_still_maps_its_last_line() {
+    let body = "def helper() -> int:\n    return 1\n\ndef main():\n    print(helper())";
+    let (without, generated) = sourcemap_table_for(body);
+    let (with_newline, _) = sourcemap_table_for(&format!("{body}\n"));
+
+    assert_eq!(
+        without, with_newline,
+        "the terminator closes the last line, it does not add one"
+    );
+    assert_eq!(
+        without.len(),
+        generated.lines().count(),
+        "one entry per generated line:\n{generated}"
+    );
+
+    // `    print(helper())` is `.by` line 4, and it is the last line that has a
+    // `.by` line behind it at all
+    let printed = generated
+        .lines()
+        .position(|line| line.contains("print(helper())"))
+        .expect("the statement is in the output");
+    assert_eq!(
+        without[printed],
+        Some(4),
+        "the user's last line maps to itself:\n{without:?}\n{generated}"
+    );
+
+    // and the entry-point guard `by` appended is prelude, which is what `None`
+    // is for — the fix must not buy the last line back by mapping those
+    let epilogue = generated
+        .lines()
+        .position(|line| line.starts_with("if __name__ =="))
+        .expect("the entry-point guard is appended");
+    assert!(
+        without[epilogue..].iter().all(Option::is_none),
+        "the appended guard has no `.by` line behind it:\n{without:?}\n{generated}"
+    );
+    assert!(
+        epilogue > printed,
+        "the guard comes after the user's code:\n{generated}"
+    );
+}
+
 /// the counterpart at run time: `run.main` names the module, and the temporary
 /// tree `by run` executes has to be rooted the same way
 #[test]
