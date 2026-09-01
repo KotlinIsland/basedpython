@@ -138,8 +138,13 @@ impl Visitor<'_> for ArgumentDefaultVisitor<'_, '_> {
 pub(crate) fn function_call_in_argument_default(checker: &Checker, parameters: &Parameters) {
     // basedpython compiles a non-scalar default into a placeholder and re-evaluates
     // the written expression on each call, so a call in a default is already what
-    // this rule asks the author to write by hand
-    if checker.source_type.is_basedpython() {
+    // this rule asks the author to write by hand.
+    //
+    // a lambda is the exception, and this rule sees them: the rewrite is driven off
+    // `StmtFunctionDef`, so a lambda's default gets no placeholder and really is
+    // evaluated once — exactly the hazard the rule is about
+    if checker.source_type.is_basedpython() && !checker.semantic().current_scope().kind.is_lambda()
+    {
         return;
     }
 

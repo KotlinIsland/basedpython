@@ -1,4 +1,18 @@
 ---
 source: crates/ruff_linter/src/rules/flake8_bugbear/mod.rs
 ---
+B008 Do not perform function call `datetime.datetime.now` in argument defaults; instead, perform the call within the function, or read the default from a module-level singleton variable
+  --> B008_basedpython.by:19:22
+   |
+17 | import datetime
+18 |
+19 | made_once = lambda a=datetime.datetime.now(), b=Units([]): (a, b)
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^
 
+B008 Do not perform function call `Units` in argument defaults; instead, perform the call within the function, or read the default from a module-level singleton variable
+  --> B008_basedpython.by:19:49
+   |
+17 | import datetime
+18 |
+19 | made_once = lambda a=datetime.datetime.now(), b=Units([]): (a, b)
+   |                                                 ^^^^^^^^^

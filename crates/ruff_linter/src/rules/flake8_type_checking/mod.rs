@@ -43,6 +43,10 @@ mod tests {
     #[test_case(Rule::RuntimeStringUnion, Path::new("TC010_2.py"))]
     #[test_case(Rule::TypingOnlyFirstPartyImport, Path::new("TC001.py"))]
     #[test_case(Rule::TypingOnlyStandardLibraryImport, Path::new("TC003.py"))]
+    #[test_case(
+        Rule::TypingOnlyStandardLibraryImport,
+        Path::new("TC003_basedpython.by")
+    )]
     #[test_case(Rule::TypingOnlyStandardLibraryImport, Path::new("init_var.py"))]
     #[test_case(Rule::TypingOnlyStandardLibraryImport, Path::new("kw_only.py"))]
     #[test_case(Rule::TypingOnlyStandardLibraryImport, Path::new("snapshot.py"))]

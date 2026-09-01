@@ -371,6 +371,73 @@ fn run_names_the_by_source_for_file_and_argv() {
     );
 }
 
+/// `multiprocessing`'s spawn start method — the default on macos and windows —
+/// reads `__main__.__spec__.name` to tell the child what to re-import, and falls
+/// back to running `__file__` as a *path* when there is none. `__file__` is a
+/// `.by`, which python cannot compile, so a missing spec broke every child
+#[test]
+fn run_leaves_a_spawned_child_able_to_start() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // a basedpython-only construct, so a child that tried to compile the `.by`
+    // as python would fail rather than accidentally succeed
+    fs::write(
+        dir.path().join("main.by"),
+        r#"import multiprocessing as mp
+
+class Pair:
+    init(let a: int, let b: int)
+
+def main():
+    ctx = mp.get_context("spawn")
+    p = ctx.Process(target=print, args=("child ran",))
+    p.start()
+    p.join()
+    print("exitcode", p.exitcode)
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("child ran") && stdout.contains("exitcode 0"),
+        "the spawned child did not run:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+/// `by run <package>` runs the package's `__main__`, the way `python -m` does.
+/// Running the package's own `__init__` instead executes the wrong file and
+/// never reaches the program
+#[test]
+fn run_enters_a_package_through_its_main_module() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::create_dir(dir.path().join("app")).unwrap();
+    fs::write(dir.path().join("app/__init__.by"), "print('init ran')\n").unwrap();
+    fs::write(
+        dir.path().join("app/__main__.by"),
+        "print('package main ran')\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "app"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("package main ran"),
+        "the package's `__main__` did not run:\n{stdout}"
+    );
+}
+
 /// a frame is still keyed by the staged `.py` the code object came from, so
 /// moving `__file__` must not stop the sourcemap finding it
 #[test]

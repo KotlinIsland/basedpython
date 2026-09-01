@@ -1414,16 +1414,18 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 }
 
                 // basedpython: a `raises` clause names exception types
-                // (`def f() raises Sc2Error`). Nothing else visits it, so without this
+                // (`def f() raises ValueError`). nothing here visits it, so without this
                 // the names reach no rule at all — the import that supplies them looks
                 // unused to `F401`, whose autofix then deletes it, and an undefined name
-                // written there is never reported by `F821`.
+                // written there is never reported by `F821`
                 //
-                // Treated as runtime-required rather than typing-only because the
+                // treated as runtime-required rather than typing-only because the
                 // transpiler's `runtime_raises_checks` option emits these types into an
-                // `isinstance` test on a decorator. Ruff cannot see that setting, so
+                // `isinstance` test on a decorator. ruff cannot see that setting, so
                 // assuming the names are erased would let a rule move the import into an
                 // `if TYPE_CHECKING:` block that a guarded build then needs at runtime.
+                // the cost is that `TC001`-`TC003` never offer to move a raises-only
+                // import, which is the safe direction to be wrong in
                 if let Some(raises) = raises {
                     self.visit_runtime_required_annotation(raises);
                 }

@@ -1,0 +1,12 @@
+# a `raises` clause is visited as a runtime-required annotation, because the
+# transpiler can be asked to emit its types into an `isinstance` test. so an
+# import a `raises` clause needs is never moved into an `if TYPE_CHECKING:`
+# block, even though the return annotation beside it may be
+from datetime import date
+from decimal import DecimalException
+
+
+def moved(when: date) -> None: ...
+
+
+def kept(when: date) raises DecimalException: ...

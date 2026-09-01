@@ -82,10 +82,18 @@ pub fn check_and_transpile(
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
     let mut unusable: Vec<ruff_db::files::File> = Vec::new();
 
-    // the same fan-out `by check` uses. checking is the one part of a build that
-    // is already known to parallelise — it is the same work over the same file
-    // set — and running it one file at a time here was the build re-doing
-    // serially what the checker does across every core
+    // the same fan-out `by check` uses. two separate wins, and it took measuring
+    // three variants to tell them apart: the fan-out is worth about half the wall
+    // time, and the rest — a 10x drop in *total* cpu — comes from `map_with_db`
+    // handing each rayon job its own `Db` clone, because a salsa clone starts with
+    // a fresh `ZalsaLocal`. a serial loop that only recreates the handle per file
+    // gets that second win too (37.5s wall / 16.6s cpu against this version's
+    // 17.8s / 23.1s), so something accumulates in a long-lived handle and is
+    // costing every caller that holds one, this build and `by check` alike.
+    //
+    // deliberately without `with_min_len`, which the neighbouring `map_with_db`
+    // callers use to cut database-cloning overhead: here the cloning *is* the win,
+    // and batching files into fewer jobs measured 4.5x slower
     let checked: Vec<Vec<Diagnostic>> = handles
         .par_iter()
         .map_with_db(db, |db, (_, file)| db.check_file(*file))
