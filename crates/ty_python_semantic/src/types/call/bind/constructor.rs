@@ -619,7 +619,7 @@ impl<'db> ConstructorBinding<'db> {
                         sole_instance_return.unwrap_or_else(|| self.instance_return_type(db, env)),
                     );
                 }
-                Some(UnsafeUnionType::from_elements(
+                Some(UnsafeUnionType::from_inferred_elements(
                     db,
                     env,
                     non_instance_returns,

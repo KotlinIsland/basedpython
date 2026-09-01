@@ -90,6 +90,44 @@ fn flatten_nested<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<
     )
 }
 
+/// The largest an *inferred* menu may get before it stops being treated as a menu.
+///
+/// A threshold, and the only one in this file — everything else here is decided by
+/// what a type means rather than by how big it is. It buys termination, and there
+/// is no size-free way to get it: the menu grows because each round produces types
+/// the previous round did not contain, so no amount of deduplication makes the
+/// fixpoint repeat.
+///
+/// **The number matters**, which is worth saying because the obvious assumption is
+/// that any large-enough value does. Checking `sympy/polys/rings.py` costs 0.22s of
+/// cpu at this value and 22s at 256, for the same 33 diagnostics. The menu doubles
+/// per operator applied, so a larger budget does not buy a little more precision —
+/// it buys several more doublings, and every one of those intermediate types is
+/// unioned into the enclosing loop's fixpoint and walked from then on.
+///
+/// 64 rather than something smaller because a menu that carries real information is
+/// tiny: an ambiguous overload over two candidates is three nodes. This leaves an
+/// order of magnitude of headroom above anything useful, and the cliff is above it
+/// — 32 and 64 measure the same, 256 does not.
+const MAX_INFERRED_MENU_SIZE: usize = 64;
+
+/// Whether `ty` has at least `budget` nodes in it.
+///
+/// Stops as soon as the budget is reached, so a runaway type costs the budget to
+/// measure rather than its own size.
+fn exceeds_size<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+    budget: usize,
+) -> bool {
+    let seen = std::cell::Cell::new(0usize);
+    visitor::any_over_type(db, env, ty, false, |_| {
+        seen.set(seen.get() + 1);
+        seen.get() >= budget
+    })
+}
+
 impl<'db> UnsafeUnionType<'db> {
     /// Build the unsafe union of `elements`, simplifying it into a different variant of
     /// [`Type`] where the menu of materializations collapses.
@@ -142,6 +180,41 @@ impl<'db> UnsafeUnionType<'db> {
             [single] => *single,
             _ => Type::UnsafeUnion(Self::new(db, collected.into_boxed_slice())),
         }
+    }
+
+    /// Build the unsafe union of elements an *inference* produced, giving up on the
+    /// menu when it grows past what a menu can usefully be.
+    ///
+    /// An overload whose returns nest one inside the other — `__mul__` answering
+    /// `Poly[T]` or `Poly[Poly[T]]` — combined with a gradual argument keeps every
+    /// overload viable, so a menu is produced. Apply the operator again and the new
+    /// menu is built from the old one, wrapping each entry a level deeper; in a loop
+    /// the fixpoint never repeats a type and never converges. Written as
+    /// `r *= obj` four times over, the menu is already five entries of `Poly` nested
+    /// five deep, and it doubles from there.
+    ///
+    /// Past [`MAX_INFERRED_MENU_SIZE`] the answer becomes `AmbiguousOverload` — the
+    /// unrefined step-5 result that an unsafe union is a *refinement* of. So this
+    /// gives up the refinement and keeps the answer, rather than inventing one.
+    ///
+    /// Only for menus inference derived. A menu the author wrote goes through
+    /// [`UnsafeUnionType::from_elements`] and is never bounded: it is finite because
+    /// they finished typing it, and collapsing what someone wrote down would be a
+    /// worse trade than any amount of the growth this prevents.
+    pub(crate) fn from_inferred_elements<I, T>(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        elements: I,
+    ) -> Type<'db>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<Type<'db>>,
+    {
+        let ty = Self::from_elements(db, env, elements);
+        if matches!(ty, Type::UnsafeUnion(_)) && exceeds_size(db, env, ty, MAX_INFERRED_MENU_SIZE) {
+            return Type::Dynamic(crate::types::DynamicType::AmbiguousOverload);
+        }
+        ty
     }
 
     /// The top materialization: the union of every type this could materialize to.

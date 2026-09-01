@@ -525,7 +525,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         )
                     })
                     .collect();
-                (!results.is_empty()).then(|| UnsafeUnionType::from_elements(db, env, results))
+                (!results.is_empty())
+                    .then(|| UnsafeUnionType::from_inferred_elements(db, env, results))
             }
             (lhs, Type::UnsafeUnion(rhs_unsafe_union), _) => {
                 let results: Vec<_> = rhs_unsafe_union
@@ -543,7 +544,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         )
                     })
                     .collect();
-                (!results.is_empty()).then(|| UnsafeUnionType::from_elements(db, env, results))
+                (!results.is_empty())
+                    .then(|| UnsafeUnionType::from_inferred_elements(db, env, results))
             }
 
             (Type::TypeAlias(alias), rhs, _) => visitor.visit(db, (left_ty, op, right_ty), || {

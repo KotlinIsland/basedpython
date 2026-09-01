@@ -519,7 +519,7 @@ where
         db,
         unsafe_union.elements(db).iter().copied(),
         Type::UnsafeUnion(unsafe_union),
-        |db, elements| UnsafeUnionType::from_elements(db, env, elements),
+        |db, elements| UnsafeUnionType::from_inferred_elements(db, env, elements),
         map_fn,
     )
 }
