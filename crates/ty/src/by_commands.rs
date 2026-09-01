@@ -1551,6 +1551,33 @@ class _ByFinder:
         return None
 
 
+def _entry_spec(module):
+    """The spec whose code `by run <module>` should execute.
+
+    A package is run through its `__main__` submodule, the way `python -m` does:
+    the package's own `__init__` is what an *import* of it runs, and running that
+    instead would execute the wrong file and never reach the program.
+    """
+    spec = importlib.util.find_spec(module)
+    if spec is None:
+        raise ImportError("No module named " + repr(module), name=module)
+    if spec.submodule_search_locations is not None:
+        module = module + ".__main__"
+        try:
+            spec = importlib.util.find_spec(module)
+        except ImportError as exc:
+            raise ImportError(
+                repr(module) + " is a package and cannot be directly executed", name=module
+            ) from exc
+        if spec is None:
+            raise ImportError(
+                repr(module) + " is a package and cannot be directly executed", name=module
+            )
+    if spec.loader is None:
+        raise ImportError("module " + repr(module) + " has no loader", name=module)
+    return module, spec
+
+
 def _run_as_main(module):
     """Run `module` as `__main__`, with `.by` paths for `__file__` and `argv[0]`.
 
@@ -1560,9 +1587,7 @@ def _run_as_main(module):
     instead, which is also the only place `sys.argv[0]` can be set: `alter_sys`
     would otherwise overwrite it with the staged path on the way in.
     """
-    spec = importlib.util.find_spec(module)
-    if spec is None or spec.loader is None:
-        raise ImportError("No module named " + repr(module), name=module)
+    module, spec = _entry_spec(module)
     code = spec.loader.get_code(module)
     if code is None:
         raise ImportError("module " + repr(module) + " has no code to run", name=module)
@@ -1572,9 +1597,13 @@ def _run_as_main(module):
     main_module.__file__ = by_path
     main_module.__loader__ = spec.loader
     main_module.__package__ = spec.parent
-    # left unset the way `runpy` leaves it: a `__spec__` naming this module would
-    # make a re-import of it under its own name run the body a second time
-    main_module.__spec__ = None
+    # the real spec, which is what `runpy` puts here too. it has to name the
+    # module rather than be left unset: `multiprocessing`'s spawn start method —
+    # the default on macos and windows — reads `__spec__.name` to tell the child
+    # what to re-import, and falls back to running `__file__` as a *path* when
+    # there is none. that path is now the `.by`, which python cannot compile, so
+    # leaving this unset broke every spawned child
+    main_module.__spec__ = spec
     sys.modules["__main__"] = main_module
     exec(code, main_module.__dict__)
 

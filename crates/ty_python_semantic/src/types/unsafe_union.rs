@@ -54,15 +54,21 @@ pub(super) fn walk_unsafe_union<'db, V: visitor::TypeVisitor<'db> + ?Sized>(
 // the salsa heap is tracked separately
 impl get_size2::GetSize for UnsafeUnionType<'_> {}
 
-/// Widens any unsafe union nested inside a *union* to its top materialization, so the
-/// result can go on a menu without carrying a menu of its own.
+/// Widens an unsafe union nested inside a *union* entry to its top materialization,
+/// so that entry can go on a menu without carrying a menu of its own.
 ///
-/// An entry of `Unknown | UnsafeUnion[int, str]` offers the materializations
-/// `Unknown | int` and `Unknown | str`; widening it to `Unknown | int | str` keeps every
-/// one of them assignable to the entry, and gives up only the intersection face of that
-/// one arm — which is the price of the menu staying finite. Anything else is returned
-/// unchanged: a union is the shape operator inference builds, and the only one that was
-/// observed to grow.
+/// `Unknown | UnsafeUnion[int, str]` offers the materializations `Unknown | int`
+/// and `Unknown | str`, and `Unknown | int | str` keeps both assignable to it. What
+/// is given up is the intersection face of that one arm — which is a real loss of
+/// precision, and can turn code that checked clean into a reported error. It buys
+/// termination: this is the entry shape operator inference builds, and left nested
+/// it embeds the whole previous type, so each operator applied doubles the size.
+///
+/// Deliberately only this shape. A nesting somewhere else — inside a generic
+/// argument, a tuple, an intersection — is left exactly as written, because
+/// nothing *produces* those by repeated inference; they are reached by writing
+/// them down, where the nested menu is the meaning and collapsing it would be a
+/// far worse trade than the growth it avoided.
 fn flatten_nested<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> Type<'db> {
     let Type::Union(union) = ty else {
         return ty;
@@ -88,8 +94,8 @@ impl<'db> UnsafeUnionType<'db> {
     /// Build the unsafe union of `elements`, simplifying it into a different variant of
     /// [`Type`] where the menu of materializations collapses.
     ///
-    /// The menu is normalized so that no entry on it has an unsafe union nested inside
-    /// it. Without that, the type grows without bound: binary-operator inference
+    /// A menu entry that is a union carrying an unsafe union is widened, so that one
+    /// shape cannot nest. Without that, the type grows without bound: binary-operator inference
     /// distributes over an unsafe union on *both* operands and unions the results, so
     /// `t + s` where both are unsafe unions produces a menu entry of the form
     /// `Unknown | UnsafeUnion[…]` that embeds the whole previous type. The flattening

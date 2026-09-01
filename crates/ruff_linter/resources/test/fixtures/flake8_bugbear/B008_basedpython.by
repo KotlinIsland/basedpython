@@ -10,3 +10,10 @@ def collect(seen: Units = Units([])) -> Units:
 
 def timed(started: object = object()) -> object:
     return started
+
+
+# a lambda is the exception: the rewrite is driven off `def`, so a lambda's
+# default is evaluated once and the hazard is real
+import datetime
+
+made_once = lambda a=datetime.datetime.now(), b=Units([]): (a, b)

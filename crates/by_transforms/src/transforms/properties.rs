@@ -404,8 +404,20 @@ impl PropertiesPass<'_> {
         // the continuation lines keep their source column: inside parentheses they
         // are continuations rather than a block, so their depth means nothing
         let value = self.value_range(first);
-        let inline =
-            line_start(self.source, value.start()) == line_start(self.source, func.range().start());
+        // a `get() = <expr>` accessor's `return` exists only in the AST, so the
+        // parser gives it the expression's own range; a `return` the author wrote
+        // starts at the keyword, several characters earlier. that is an exact fact
+        // about which shape this is, where the line position is only a proxy for it
+        // — and the proxy is wrong for a value held off the accessor's line by a
+        // backslash, which came out as a body with no `return` at all
+        let synthesized_return = matches!(
+            first,
+            Stmt::Return(ret)
+                if ret.value.as_ref().is_some_and(|v| v.range() == first.range())
+        );
+        let inline = synthesized_return
+            || line_start(self.source, value.start())
+                == line_start(self.source, func.range().start());
         if inline {
             let mut frags = vec![Fragment::Lit(body_indent.to_owned())];
             if is_getter {
@@ -878,6 +890,11 @@ mod tests {
                     let sameline: float
                         get() = (self.total
                                  + self.total)
+                    let continued: float
+                        get() = \\
+                            (
+                                self.total
+                            )
             "},
             indoc! {"
                 from ty_extensions import JustFloat
@@ -900,6 +917,11 @@ mod tests {
                     def sameline(self) -> JustFloat:
                         return (self.total
                                  + self.total)
+                    @property
+                    def continued(self) -> JustFloat:
+                        return (
+                                self.total
+                            )
             "},
         );
     }

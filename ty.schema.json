@@ -2027,16 +2027,6 @@
             }
           ]
         },
-        "shared-mutable-default": {
-          "title": "detects a class-body declaration whose value every instance shares",
-          "description": "## What it does\nChecks for a class-body `let` or `var` declaration whose value is mutable —\na list, a dict, a set, or an instance of a class.\n\n## Why is this bad?\nA class-body declaration reads as a field every instance gets its own copy\nof, and for a scalar it behaves that way: `fight.last_contact = 5` rebinds\non the instance and leaves every other one alone. A mutable value does not.\n`fight.seen.add(1)` reaches through to the single object the class body\nbuilt, so every instance that ever existed sees the change — and the two\ndeclarations look identical at the site, so a class can carry a row of them\nwhere all but one are right.\n\nEverywhere else a written initialiser means \"per instance\", basedpython\nalready makes it so: a parameter default is re-evaluated per call, a\ndataclass field default becomes a `default_factory`, and a property's\nbacking field is initialised in `__init__`. A plain class-body declaration\nis the one place the value is built once, so it is reported rather than\nquietly given either meaning.\n\nThe value's own type is what decides, not the declaration's: an optional\nfield initialised to `None` shares a `None` whatever it will later hold.\n\nAssign it in `init` to get a value per instance, or declare it\n`class var` / `class let` to say the sharing is intended.\n\n## Examples\n```by\nclass Fight:\n    var last_contact: int = 0     # ok — rebinding a scalar is per instance\n    var seen: set[int] = set()    # warning: one set, shared by every `Fight`\n\nclass Fixed:\n    var seen: set[int]            # ok — declared here, built per instance\n\n    init():\n        self.seen = set()\n\nclass Shared:\n    class var registry: set[int] = set()   # ok — shared on purpose\n```",
-          "default": "warn",
-          "oneOf": [
-            {
-              "$ref": "#/definitions/Level"
-            }
-          ]
-        },
         "static-assert-error": {
           "title": "Failed static assertion",
           "description": "## What it does\n\nMakes sure that the argument of `static_assert` is statically known to be true.\n\n## Why is this bad?\n\nA `static_assert` call represents an explicit request from the user\nfor the type checker to emit an error if the argument cannot be verified\nto evaluate to `True` in a boolean context.\n\n## Examples\n\n```python\nfrom ty_extensions import static_assert\n\n# evaluates to `False`\nstatic_assert(1 + 1 == 3)  # error\n\n# does not have a statically known truthiness\nstatic_assert(int(2.0 * 3.0) == 6)  # error\n```",

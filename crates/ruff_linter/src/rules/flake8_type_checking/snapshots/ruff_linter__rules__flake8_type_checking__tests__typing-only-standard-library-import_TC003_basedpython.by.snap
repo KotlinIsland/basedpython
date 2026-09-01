@@ -1,0 +1,24 @@
+---
+source: crates/ruff_linter/src/rules/flake8_type_checking/mod.rs
+---
+TC003 [*] Move standard library import `datetime.date` into a type-checking block
+ --> TC003_basedpython.by:5:22
+  |
+3 | # import a `raises` clause needs is never moved into an `if TYPE_CHECKING:`
+4 | # block, even though the return annotation beside it may be
+5 | from datetime import date
+  |                      ^^^^
+6 | from decimal import DecimalException
+  |
+help: Move into type-checking block
+   |
+4  | # block, even though the return annotation beside it may be
+   - from datetime import date
+5  | from decimal import DecimalException
+6  + from typing import TYPE_CHECKING
+7  +
+8  + if TYPE_CHECKING:
+9  +     from datetime import date
+10 |
+   |
+note: This is an unsafe fix and may change runtime behavior

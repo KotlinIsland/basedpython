@@ -164,17 +164,29 @@ static_assert(
 
 ### Repeated operators do not grow the menu
 
-The regression this protects against: `t + s + s + …` where both operands are unsafe unions used to
-double in size per operator. The menu is the same however many are applied.
+The regression this protects against. `sum()` over a gradual argument is an ambiguous overload, so
+it answers an unsafe union; adding two of those together used to build an entry embedding the whole
+previous type, doubling the size per operator and never converging at all inside a loop.
+
+```py
+def f(times):
+    t = sum(times)
+    one = t + sum(times)
+    six = t + sum(times) + sum(times) + sum(times) + sum(times) + sum(times) + sum(times)
+    reveal_type(one)  # revealed: UnsafeUnion[int, Unknown | int]
+    reveal_type(six)  # revealed: UnsafeUnion[int, Unknown | int]
+```
+
+### A nesting the widening cannot take apart is left alone
+
+Only a union entry is widened. A nested menu written inside a generic argument is the meaning of
+what was written, and nothing produces one by repeated inference, so it stays as it is.
 
 ```py
 from ty_extensions import UnsafeUnion
 
-def f(t: UnsafeUnion[int, str], s: UnsafeUnion[int, str]):
-    one = t + s
-    four = t + s + s + s + s
-    reveal_type(one)  # revealed: UnsafeUnion[int, str]
-    reveal_type(four)  # revealed: UnsafeUnion[int, str]
+def f(a: UnsafeUnion[int, list[UnsafeUnion[bytes, str]]]):
+    reveal_type(a)  # revealed: UnsafeUnion[int, list[UnsafeUnion[bytes, str]]]
 ```
 
 ## Gradual properties
