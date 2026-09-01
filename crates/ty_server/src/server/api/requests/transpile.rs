@@ -16,6 +16,7 @@ use by_transforms::Config;
 use lsp_types::{LspRequestMethod, MessageDirection, Request, TextDocumentIdentifier, Uri};
 use ty_project::{Db as _, ProjectDatabase};
 
+use super::detached_transpile::transpile_detached;
 use crate::server::api::traits::{
     BackgroundDocumentRequestHandler, RequestHandler, RetriableRequestHandler,
 };
@@ -116,20 +117,33 @@ impl BackgroundDocumentRequestHandler for TranspileRequestHandler {
         // document that was asked about — that is the reason for answering here, since cross-module
         // types resolve — and the single-file path for a fragment, which has no module to resolve
         // against however it is transpiled.
+        // Both forward paths run on a thread that has attached no database — see
+        // [`super::detached_transpile`]. Every forward transpile builds a database of its
+        // own, and doing that under this handler's attached one panics; the reverse
+        // direction is purely syntactic and needs no database at all, so it stays here.
+        let owned = db.dyn_clone();
         let response = if params.reverse {
             match by_transforms::reverse_transpile(source, &config) {
                 Ok(out) => TranspileResponse::generated(out),
                 Err(error) => TranspileResponse::failed(error),
             }
-        } else if params.source.is_some() {
-            match by_transforms::transpile(source, &config) {
-                Ok(out) => TranspileResponse::generated(out),
-                Err(error) => TranspileResponse::failed(error),
-            }
         } else {
-            match by_transforms::transpile_typed(db, file, &config, None) {
-                Ok(out) => TranspileResponse::generated(out),
-                Err(error) => TranspileResponse::failed(error.to_string()),
+            let fragment = params.source.is_some();
+            let transpiled = transpile_detached(move || {
+                if fragment {
+                    by_transforms::transpile(source, &config)
+                } else {
+                    by_transforms::transpile_typed(&*owned, file, &config, None)
+                        .map_err(|error| error.to_string())
+                }
+            });
+            match transpiled {
+                Ok(Ok(out)) => TranspileResponse::generated(out),
+                Ok(Err(error)) => TranspileResponse::failed(error),
+                // A panic is an answer here for the same reason a failure is: source that
+                // does not lower is an ordinary state for a file being edited, and a client
+                // renders an error response as a fault in the server.
+                Err(()) => TranspileResponse::failed("the transpiler panicked".to_owned()),
             }
         };
 

@@ -46,6 +46,7 @@ mod pull_diagnostics;
 mod rename;
 mod semantic_tokens;
 mod signature_help;
+mod transpile;
 mod type_hierarchy;
 mod will_rename_files;
 mod workspace_folders;
