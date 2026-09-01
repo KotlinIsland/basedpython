@@ -83,17 +83,27 @@ pub fn check_and_transpile(
     let mut unusable: Vec<ruff_db::files::File> = Vec::new();
 
     // the same fan-out `by check` uses. two separate wins, and it took measuring
-    // three variants to tell them apart: the fan-out is worth about half the wall
-    // time, and the rest — a 10x drop in *total* cpu — comes from `map_with_db`
-    // handing each rayon job its own `Db` clone, because a salsa clone starts with
-    // a fresh `ZalsaLocal`. a serial loop that only recreates the handle per file
-    // gets that second win too (37.5s wall / 16.6s cpu against this version's
-    // 17.8s / 23.1s), so something accumulates in a long-lived handle and is
-    // costing every caller that holds one, this build and `by check` alike.
+    // several variants to tell them apart: the fan-out is worth about half the
+    // wall time, and the rest — a 10x drop in *total* cpu — comes from
+    // `map_with_db` handing each rayon job its own `Db` clone. a serial loop that
+    // only recreates the handle per file gets that second win too (37.5s wall /
+    // 16.6s cpu, against this version's 17.8s / 23.1s), so the saving is the fresh
+    // handle rather than the parallelism.
+    //
+    // *why* a fresh handle is cheaper is not established. a salsa clone shares its
+    // memo tables, so the only per-handle state is `ZalsaLocal`; the cost that
+    // disappears is real re-inference rather than bookkeeping, and one file in the
+    // project accounts for nearly all of it. what is ruled out: this is not a
+    // general tax on holding a handle. `by check` over the same project on a single
+    // serial handle is 9.7s of cpu for every file, with no sign of the effect, so
+    // whatever this is belongs to what a *build* does — checking and transpiling
+    // through the same handle while type-aware passes build databases of their own.
     //
     // deliberately without `with_min_len`, which the neighbouring `map_with_db`
-    // callers use to cut database-cloning overhead: here the cloning *is* the win,
-    // and batching files into fewer jobs measured 4.5x slower
+    // callers use to cut database-cloning overhead: here the cloning *is* the win.
+    // batching files into fewer jobs measured 4.5x slower, and cloning only every
+    // 32 files gives the saving up entirely — so anything that reduces the number
+    // of clones silently undoes this
     let checked: Vec<Vec<Diagnostic>> = handles
         .par_iter()
         .map_with_db(db, |db, (_, file)| db.check_file(*file))
