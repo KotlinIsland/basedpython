@@ -18,6 +18,7 @@ mod code_action;
 mod code_lens;
 mod completion;
 mod data_flow;
+mod detached_transpile;
 mod diagnostic;
 mod doc_highlights;
 mod document_symbols;
