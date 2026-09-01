@@ -177,10 +177,54 @@ def f(times):
     reveal_type(six)  # revealed: UnsafeUnion[int, Unknown | int]
 ```
 
-### A nesting the widening cannot take apart is left alone
+### A menu inference keeps growing stops being a menu
 
-Only a union entry is widened. A nested menu written inside a generic argument is the meaning of
-what was written, and nothing produces one by repeated inference, so it stays as it is.
+An overload whose returns nest one inside the other, reached with a gradual argument that keeps
+every candidate viable, produces a menu built from the previous menu — so each operator applied
+wraps every entry a level deeper. In a loop the fixpoint never repeats a type and never converges.
+
+A few rounds of that are still informative and are reported exactly:
+
+```py
+from typing import Any, Generic, TypeVar, overload
+
+T = TypeVar("T")
+
+class Poly(Generic[T]):
+    @overload
+    def __mul__(self, other: "Poly[T] | int", /) -> "Poly[T]": ...
+    @overload
+    def __mul__(self, other: "Poly[Poly[T]]", /) -> "Poly[Poly[T]]": ...
+    def __mul__(self, other: Any) -> Any: ...
+
+def one() -> Poly[int]:
+    raise NotImplementedError
+
+def twice(objs: list[Poly[Any]]):
+    r = one()
+    r *= objs[0]
+    r *= objs[1]
+    reveal_type(r)  # revealed: UnsafeUnion[Poly[int], Poly[Poly[int]], Poly[Poly[Poly[int]]]]
+```
+
+Applied in a straight line the menu only grows by an entry each time, so it stays readable. A loop
+is what makes it double: each round's menu is built from the last round's, so the fixpoint keeps
+producing types it has not seen and never repeats.
+
+What this asserts is that it finishes. Without the bound the check below does not terminate at all —
+this file hangs, and so does the suite.
+
+```py
+def looped(objs: list[Poly[Any]]):
+    r = one()
+    for obj in objs:
+        r *= obj
+```
+
+### A menu the author wrote is never bounded
+
+Only what inference derived is given up on. A written annotation is finite because someone finished
+typing it, and is reported as written however deeply it nests.
 
 ```py
 from ty_extensions import UnsafeUnion
