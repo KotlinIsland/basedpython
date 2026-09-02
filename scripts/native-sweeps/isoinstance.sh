@@ -391,8 +391,15 @@ for b in $(sweep_modules "$LIB" "$@"); do
     i3=""; c3=""
   fi
   # a leg killed by an alarm has not answered, and an empty answer must never be read as
-  # agreement — so this is decided before any verdict is written
-  if printf '%s%s%s%s%s%s' "$i1" "$i2" "$c1" "$c2" "$i3" "$c3" | grep -q '_Slow timed out'; then
+  # agreement — so this is decided before any verdict is written.
+  #
+  # a *death* is decided before even that. the restart loop steps past one and carries on,
+  # so a leg that crashed can still reach a probe that outruns its bound, and this test
+  # would then be the one that matched — writing a `timed-out` row and calling no
+  # `sweep_note_death`, which leaves `sweep_end`'s cross-check nothing to disagree with.
+  # the death branch further down does both, so reaching it is the whole fix
+  if ! sweep_pair_died "$i1$i2$i3" "$c1$c2$c3" \
+     && printf '%s%s%s%s%s%s' "$i1" "$i2" "$c1" "$c2" "$i3" "$c3" | grep -q '_Slow timed out'; then
     printf '%s\ttimed-out\n' "$b" >> "$OUT"; continue
   fi
   # a compiled leg that cannot be imported at all has no probes to compare, and its one

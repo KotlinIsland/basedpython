@@ -17,6 +17,18 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use by_build::{Options, Toolchain, build_module, build_source};
+
+/// a temp directory of this process's own
+///
+/// the same reason `differential.rs` has one: every test here builds into a fixed path
+/// under the system temp directory, and nextest isolates each *test* but not two *runs*.
+/// a 3.13 sweep beside a 3.14 one picks the same directory and the two overwrite each
+/// other between the build and the read, which fails at full length and reads exactly
+/// like a real difference
+fn e2e_root() -> PathBuf {
+    std::env::temp_dir().join(format!("by_e2e_p{}", std::process::id()))
+}
+
 use by_ir::builder::FunctionBuilder;
 use by_ir::function::{CallConvention, FallbackCode, ModuleIr, ModuleName};
 use by_ir::ops::{BinOp, CmpOp, Op, Terminator, Value};
@@ -65,7 +77,7 @@ fn environment() -> Option<(String, Toolchain)> {
 /// build `module` into a fresh directory, or `None` when there is no working C
 /// compiler on this machine
 fn built(module: &ModuleIr, toolchain: &Toolchain, tag: &str) -> Option<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("by_e2e_{tag}"));
+    let dir = e2e_root().join(format!("by_e2e_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     match build_module(module, toolchain, &dir) {
         Ok(artifact) => {
@@ -528,7 +540,7 @@ fn annotate_writes_a_report_beside_the_generated_c() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_e2e_annotate");
+    let dir = e2e_root().join("by_e2e_annotate");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def scale(x: float) -> float:
@@ -569,7 +581,7 @@ fn an_accumulated_string_is_grown_rather_than_copied() {
     // `agree` cannot say which build answered, and both builds answer the same
     // string either way — so the only way to know the accumulator is being grown in
     // place is to read what was emitted
-    let dir = std::env::temp_dir().join("by_e2e_append");
+    let dir = e2e_root().join("by_e2e_append");
     let _ = std::fs::remove_dir_all(&dir);
     let built = by_build::emit_source(
         "\
@@ -608,7 +620,7 @@ fn no_annotation_is_written_unless_it_is_asked_for() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_e2e_noannotate");
+    let dir = e2e_root().join("by_e2e_noannotate");
     let _ = std::fs::remove_dir_all(&dir);
     let Ok(built) = build_source(
         "def f(a: int) -> int:\n    return a\n",
@@ -631,7 +643,7 @@ fn the_fallback_honours_a_supplied_transpiler_config() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_e2e_fallbackconfig");
+    let dir = e2e_root().join("by_e2e_fallbackconfig");
     let _ = std::fs::remove_dir_all(&dir);
     // `except*` has no lowering, so this declines and *runs* from the fallback —
     // which is exactly the code the checks have to reach
@@ -668,7 +680,7 @@ def total(a: list[int]) -> int:
     );
 
     // and the default does not, so the flag is what made the difference
-    let plain = std::env::temp_dir().join("by_e2e_fallbackplain");
+    let plain = e2e_root().join("by_e2e_fallbackplain");
     let _ = std::fs::remove_dir_all(&plain);
     let built = build_source(
         source,
@@ -711,7 +723,7 @@ fn a_stdlib_module_compiles_without_a_hard_failure(name: &str) {
         "by_corpus_{}",
         name.trim_end_matches(".py").replace('/', "_")
     );
-    let dir = std::env::temp_dir().join(format!("by_e2e_corpus_{module}"));
+    let dir = e2e_root().join(format!("by_e2e_corpus_{module}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -793,7 +805,7 @@ fn a_caller_supplied_lowering_is_compiled_the_same_way() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_e2e_lowered");
+    let dir = e2e_root().join("by_e2e_lowered");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def double(a: int) -> int:
@@ -828,7 +840,7 @@ fn require_native_still_bites_on_a_caller_supplied_lowering() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_e2e_loweredstrict");
+    let dir = e2e_root().join("by_e2e_loweredstrict");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "def slow(a: int) -> None:\n    try:\n        pass\n    except* ValueError:\n        pass\n";
     let lowered = by_irbuild::module_from_source(
@@ -857,7 +869,7 @@ fn an_unchanged_module_is_not_recompiled() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_e2e_rebuild");
+    let dir = e2e_root().join("by_e2e_rebuild");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "def double(a: int) -> int:\n    return a * 2\n";
     let Ok(first) = build_source(
@@ -911,7 +923,7 @@ fn a_stale_extension_is_rebuilt_even_when_the_c_is_unchanged() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_e2e_rebuild_stale");
+    let dir = e2e_root().join("by_e2e_rebuild_stale");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "def double(a: int) -> int:\n    return a * 2\n";
     let Ok(built) = build_source(
@@ -957,7 +969,7 @@ fn built_from_source(
     toolchain: &Toolchain,
     tag: &str,
 ) -> Option<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("by_e2e_{tag}"));
+    let dir = e2e_root().join(format!("by_e2e_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     match build_source(source, module, toolchain, &dir, &Options::default()) {
         Ok(built) => {
@@ -1111,7 +1123,7 @@ fn the_emitted_c_names_no_pointer_type_it_does_not_mean() {
     if !supports(&toolchain, (3, 12)) {
         return;
     }
-    let dir = std::env::temp_dir().join("by_e2e_pointers");
+    let dir = e2e_root().join("by_e2e_pointers");
     let _ = std::fs::remove_dir_all(&dir);
     let built = by_build::emit_source(
         POINTER_SOURCE,
@@ -1168,7 +1180,7 @@ fn a_package_is_built_as_a_tree_and_imports_under_its_dotted_names() {
     if !supports(&toolchain, (3, 12)) {
         return;
     }
-    let dir = std::env::temp_dir().join("by_e2e_package_tree");
+    let dir = e2e_root().join("by_e2e_package_tree");
     let _ = std::fs::remove_dir_all(&dir);
 
     let options = Options {
@@ -1402,7 +1414,7 @@ fn running_the_interpreter_with_o_still_means_o_for_the_twin() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_e2e_twinoptrun");
+    let dir = e2e_root().join("by_e2e_twinoptrun");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 try:
@@ -1477,7 +1489,7 @@ fn the_running_version_is_read_off_the_banner() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_e2e_version");
+    let dir = e2e_root().join("by_e2e_version");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("the build directory is made");
     std::fs::write(dir.join(by_rt::BY_H_NAME), by_rt::BY_H).expect("the header is written");

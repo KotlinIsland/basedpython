@@ -158,6 +158,16 @@ fn print_op(function: &Function, op: &Op) -> String {
             name(*dest),
             value(src)
         ),
+        Op::DictShadows {
+            dest,
+            src,
+            class,
+            method,
+        } => format!(
+            "{} = dict-shadows {} {class}.{method}",
+            name(*dest),
+            value(src)
+        ),
         Op::IsMissing { dest, src } => {
             format!("{} = is-missing {}", name(*dest), value(src))
         }

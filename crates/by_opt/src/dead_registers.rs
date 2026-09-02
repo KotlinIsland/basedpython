@@ -244,6 +244,7 @@ fn rewrite_op(
         }
         | Op::IsMissing { dest, src }
         | Op::MethodStands { dest, src, .. }
+        | Op::DictShadows { dest, src, .. }
         | Op::MatchAttr {
             dest, subject: src, ..
         }

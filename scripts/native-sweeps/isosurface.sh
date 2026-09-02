@@ -187,6 +187,18 @@ for b in $(sweep_modules "$LIB" "$@"); do
            printf '%s\tsame\t%s\n' "$b" "$(echo "$i" | wc -l | tr -d ' ')"
          fi ;;
     esac >> "$OUT"
+  elif [ "$istat" -ne 0 ] || [ "$cstat" -ne 0 ]; then
+    # a death outranks a lost bound, and is asked about first for that reason. a leg that
+    # was killed can still have printed a timeout line before it went, and the test below
+    # would then be the one that matched — writing a `timed-out` row and calling no
+    # `sweep_note_death`, which leaves `sweep_end`'s cross-check nothing to disagree with.
+    # this rung reads the *status* rather than the text, which is the only thing that says
+    # whether a leg reached the end
+    sweep_note_death "$b"
+    { printf '%s\tCRASHED\t%s\tinterpreted[%s]\tcompiled[%s]\n' \
+        "$b" "$(echo "$i" | wc -l | tr -d ' ')" "$istat" "$cstat"
+      diff <(printf '%s' "$i") <(printf '%s' "$c") | awk -v b="$b" '{print b "\t| " $0}'
+    } >> "$OUT"
   elif printf '%s%s' "$i" "$c" | grep -q '_Slow timed out'; then
     # the import bound is 30 seconds and a loaded machine loses it on one leg and not
     # the other. that says nothing about the compiler, so it is kept out of `differing`

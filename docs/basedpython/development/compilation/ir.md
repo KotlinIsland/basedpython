@@ -214,7 +214,7 @@ the ops that exist, beyond the arithmetic and control-flow ones above:
 | `CallNative`                                      | a call to a function or method in this unit, owner-qualified |
 | `CallValue`                                       | a call to a callable held in a register                      |
 | `CallPython` / `CallMethod`                       | a call resolved by name, or on a receiver                    |
-| `LoadGlobal`                                      | the module namespace then builtins, resolved per read        |
+| `LoadGlobal`                                      | the module namespace then its builtins, resolved per read    |
 | `ImportModule` / `ImportFrom`                     | `from x import y` — the module with a fromlist, then a name  |
 | `NewInstance` / `MakeClosure`                     | allocate an emitted class; bind a method to it               |
 | `GetAttr` / `SetAttr`                             | the attribute protocol, for a receiver with no layout        |

@@ -158,6 +158,16 @@ for b in $(sweep_modules "$LIB" "$@"); do
            printf '%s\tsame\t%s\n' "$b" "$(printf '%s' "$i" | grep -c '')"
          fi ;;
     esac >> "$OUT"
+  elif sweep_pair_died "$i" "$c"; then
+    # a death outranks a slow class, and is asked about first for that reason: the
+    # restart loop steps past one and carries on, so a leg that crashed can still reach a
+    # class that outruns its bound, and the timeout test below would then match and write
+    # a row with no death in it for `crashed:` to count. see the same fix in
+    # `isoconstruct`, where it hid `smtplib` segfaulting on every construction
+    sweep_note_death "$b"
+    { printf '%s\tCRASHED\t%s\tDIED signal in one leg\n' "$b" "$(printf '%s' "$i" | grep -c '')"
+      diff <(printf '%s' "$i") <(printf '%s' "$c") | awk -v b="$b" '{print b "\t| " $0}'
+    } >> "$OUT"
   elif printf '%s%s' "$i" "$c" | grep -q '_Slow timed out'; then
     # a class the metaclass took more than two seconds over, or an import that outran
     # its thirty — a loaded machine loses either bound on one leg and not the other,

@@ -985,7 +985,65 @@ static inline PyObject *By_InternedStr(const char *data, Py_ssize_t size) {
     return text;
 }
 
-/* resolve a name the frame does not bind: the module namespace, then builtins
+/* the builtins namespace this module's compiled code falls back to
+ *
+ * one per emitted module, because each is its own translation unit — which is the
+ * whole point: python gives a function the builtins of the module it was *defined*
+ * in, and never the caller's. NULL until `By_BindBuiltins` has run, which `by_exec`
+ * does before anything can read a global */
+static PyObject *by_module_builtins = NULL;
+
+/* bind that namespace, the way python binds one for an interpreted module
+ *
+ * python reaches a function's builtins through `__globals__['__builtins__']`, fixed
+ * when the `def` ran. an extension module's namespace is not built by `exec`, so
+ * nothing has put that entry there — and reading `PyEval_GetBuiltins` instead, which
+ * answers about the frame currently running, would hand whichever frame happens to
+ * call a compiled function the say over what `str` means. a compiled function pushes
+ * no frame of its own, so that caller could be anyone.
+ *
+ * the entry is read once and not again, because python reads it once too: rebinding
+ * `m.__dict__['__builtins__']` after the module has run leaves the functions it
+ * already defined resolving through the namespace they were made with. mutating that
+ * namespace is a different thing and is still seen, here as in python.
+ *
+ * the reference is kept for the life of the process rather than released with the
+ * module: what reads it is compiled code, and a memo below borrows values out of it.
+ *
+ * an entry already standing in the namespace is deferred to rather than replaced,
+ * which is python's rule and not an observed case: `by_exec` runs against a namespace
+ * cpython has just built, so the read below always misses, and `importlib.reload` does
+ * not run an extension's exec slot a second time. nothing reaches the two branches
+ * that read it, so nothing tests them either — they are here because what a module's
+ * builtins are is not this runtime's to decide */
+static int By_BindBuiltins(PyObject *dict) {
+    PyObject *stood;
+    if (dict == NULL) return -1;
+    stood = PyDict_GetItemString(dict, "__builtins__");
+    if (stood == NULL) {
+        /* what python's own `exec` fills in for a namespace that carries no entry,
+         * and so what a module imported the ordinary way ends up holding */
+        stood = PyEval_GetBuiltins();
+        if (stood == NULL || PyDict_SetItemString(dict, "__builtins__", stood) < 0) {
+            if (!PyErr_Occurred()) {
+                PyErr_SetString(PyExc_ImportError,
+                                "no builtins namespace to resolve this module's globals in");
+            }
+            return -1;
+        }
+    }
+    /* python accepts the entry as either the `builtins` module or its dict */
+    if (PyModule_Check(stood)) stood = PyModule_GetDict(stood);
+    if (stood == NULL || !PyDict_Check(stood)) {
+        PyErr_SetString(PyExc_ImportError,
+                        "this module's `__builtins__` is neither a module nor a dict");
+        return -1;
+    }
+    by_module_builtins = Py_NewRef(stood);
+    return 0;
+}
+
+/* the two namespaces a global can be answered by, in order, reporting which one did
  *
  * the name arrives already interned, because this is on the path of every read of
  * a global. `PyDict_GetItemString` builds a fresh `str` and hashes it on each
@@ -994,19 +1052,35 @@ static inline PyObject *By_InternedStr(const char *data, Py_ssize_t size) {
  * unicode-keyed dict on a pointer compare.
  *
  * both lookups are made every time, and that is not the slow half: a module that
- * rebinds a builtin name means it, and python would see it */
-static inline PyObject *By_LookupGlobal(PyObject *dict, PyObject *name) {
+ * rebinds a builtin name means it, and python would see it.
+ *
+ * the answer is borrowed, and `answered` is left NULL where the name is bound in
+ * neither namespace. this is the single place either lookup path decides what
+ * builtins are, so a build with the memo below and a build without it — an
+ * interpreter too old for dict watchers — cannot drift apart on the question */
+static inline PyObject *By_ProbeGlobal(PyObject *dict, PyObject *name,
+                                       PyObject **answered) {
     PyObject *value;
+    *answered = NULL;
     if (name == NULL) return NULL;
     value = dict == NULL ? NULL : PyDict_GetItemWithError(dict, name);
-    if (value == NULL) {
-        PyObject *builtins;
-        if (PyErr_Occurred()) return NULL;
-        builtins = PyEval_GetBuiltins();
-        if (builtins != NULL) value = PyDict_GetItemWithError(builtins, name);
+    if (value != NULL) {
+        *answered = dict;
+        return value;
     }
+    if (PyErr_Occurred() || by_module_builtins == NULL) return NULL;
+    value = PyDict_GetItemWithError(by_module_builtins, name);
+    if (value != NULL) *answered = by_module_builtins;
+    return value;
+}
+
+/* resolve a name the frame does not bind, in full */
+static inline PyObject *By_LookupGlobal(PyObject *dict, PyObject *name) {
+    PyObject *answered;
+    PyObject *value = By_ProbeGlobal(dict, name, &answered);
     if (value == NULL) {
         if (PyErr_Occurred()) return NULL;
+        if (name == NULL) return NULL;
         PyErr_Format(PyExc_NameError, "name '%U' is not defined", name);
         return NULL;
     }
@@ -1097,12 +1171,12 @@ static inline char By_DeleteGlobal(PyObject *dict, PyObject *name) {
 
 /* a global read that remembers what the name resolved to last time
  *
- * `By_LookupGlobal` is two dict probes and a `PyEval_GetBuiltins` on every trip, and
- * for a name that resolves to a builtin — `str`, `len`, an exception class — the
- * module namespace has to miss before the second probe is even reached. that is a
- * quarter of `keybuild` and of `excs`, and a twelfth of `words`, against a ±1% floor
- * two identical builds measured for themselves; nothing else in the suite resolves a
- * global often enough to notice either way.
+ * `By_LookupGlobal` is two dict probes on every trip, and for a name that resolves to
+ * a builtin — `str`, `len`, an exception class — the module namespace has to miss
+ * before the second one is even reached. that is a quarter of `keybuild` and of
+ * `excs`, and a twelfth of `words`, against a ±1% floor two identical builds measured
+ * for themselves; nothing else in the suite resolves a global often enough to notice
+ * either way.
  *
  * the memo below is a cache with a validity test, not an assumption: a name that is
  * rebound is seen at once, which is what separates this from the early binding that
@@ -1115,26 +1189,25 @@ static inline char By_DeleteGlobal(PyObject *dict, PyObject *name) {
  * the process, which is far more invalidation than is needed — but a memo can never
  * be left holding an answer from a dict that has since moved on, and the cost of
  * over-invalidating is one lookup, where the cost of under-invalidating is a silent
- * wrong answer */
+ * wrong answer.
+ *
+ * the counter is also the *whole* of the test, which it can only be because there are
+ * exactly two dicts a site's answer can come from and both are fixed for the life of
+ * the module: `by_module_dict`, and the `by_module_builtins` bound beside it. neither
+ * can be swapped underneath a call — a compiled function reads them out of statics
+ * rather than out of a frame — so every way an answer can go stale is a write to one
+ * of those two dicts, and a write is exactly what the counter reports. an arm that
+ * cannot get a namespace watched leaves the site cold rather than trusting it */
 typedef struct {
     /* the counter's value when this was armed. zero is "cold": the counter starts
      * at one and only ever rises, so a cold site can never match it */
     uint64_t generation;
-    /* the builtins the answer came from, or NULL when the module namespace answered
-     *
-     * this is not covered by the counter. `By_LookupGlobal` reads builtins out of
-     * `PyEval_GetBuiltins`, which answers about the *calling* frame — and a compiled
-     * function pushes none — so the very same site can be reached with two different
-     * builtins dicts without either of them being written to. a site the module
-     * namespace answered skips the comparison entirely, because builtins were never
-     * consulted to produce that answer and cannot change it */
-    PyObject *builtins;
     /* borrowed from whichever dict answered: the dict holds the reference, and the
      * only way the value can leave that dict is an event that bumps the counter */
     PyObject *value;
 } ByGlobalSite;
 
-#define BY_GLOBAL_SITE_INIT { 0u, NULL, NULL }
+#define BY_GLOBAL_SITE_INIT { 0u, NULL }
 
 /* dict watchers arrived in 3.12, and there is no other way to be told that a
  * namespace was written to that does not read a field deprecated for exactly this
@@ -1270,26 +1343,13 @@ static void By_WatchModule(PyObject *dict) {
 static PyObject *By_ArmGlobalSite(ByGlobalSite *site, PyObject *dict, PyObject *name) {
     uint64_t generation;
     PyObject *value;
-    PyObject *builtins;
+    PyObject *answered;
     site->generation = 0u;
     if (by_globals == NULL || dict == NULL || name == NULL) {
         return By_LookupGlobal(dict, name);
     }
     generation = by_globals->generation;
-    value = PyDict_GetItemWithError(dict, name);
-    if (value != NULL) {
-        site->builtins = NULL;
-        site->value = value;
-        site->generation = generation;
-        return Py_NewRef(value);
-    }
-    if (PyErr_Occurred()) return NULL;
-    builtins = PyEval_GetBuiltins();
-    if (builtins == NULL) {
-        PyErr_Format(PyExc_NameError, "name '%U' is not defined", name);
-        return NULL;
-    }
-    value = PyDict_GetItemWithError(builtins, name);
+    value = By_ProbeGlobal(dict, name, &answered);
     if (value == NULL) {
         if (PyErr_Occurred()) return NULL;
         /* a name bound nowhere is pointedly *not* remembered: a refusal has no dict
@@ -1298,8 +1358,9 @@ static PyObject *By_ArmGlobalSite(ByGlobalSite *site, PyObject *dict, PyObject *
         PyErr_Format(PyExc_NameError, "name '%U' is not defined", name);
         return NULL;
     }
-    if (By_WatchGlobals(builtins)) {
-        site->builtins = builtins;
+    /* whichever namespace answered has to be one this build hears about being written
+     * to, or the answer is handed back without being kept */
+    if (By_WatchGlobals(answered)) {
         site->value = value;
         site->generation = generation;
     }
@@ -1321,8 +1382,7 @@ static void By_WatchModule(PyObject *dict) { (void)dict; }
 static inline PyObject *By_LookupGlobalSite(ByGlobalSite *site, PyObject *dict,
                                             PyObject *name) {
 #ifdef BY_GLOBAL_SITES
-    if (BY_LIKELY(by_globals != NULL && site->generation == by_globals->generation
-                  && (site->builtins == NULL || site->builtins == PyEval_GetBuiltins()))) {
+    if (BY_LIKELY(by_globals != NULL && site->generation == by_globals->generation)) {
         return Py_NewRef(site->value);
     }
     return By_ArmGlobalSite(site, dict, name);

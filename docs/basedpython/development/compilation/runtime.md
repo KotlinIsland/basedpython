@@ -467,6 +467,10 @@ which a dict watcher on those namespaces is what says. so the binding is still
 looked up rather than assumed, and looking it up again is what a rebinding costs
 rather than what every read costs
 
+the builtins a compiled function falls back to are the ones the module it was
+defined in was imported with, which is where python looks too — a caller standing
+in a builtins namespace of its own does not redirect it
+
 installing a native definition writes over the name the fallback left behind,
 which is that definition only while nothing rebound it. the singleton idiom
 rebinds it:

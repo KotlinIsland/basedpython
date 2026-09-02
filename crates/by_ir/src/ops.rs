@@ -378,6 +378,23 @@ pub enum Op {
         class: String,
         method: String,
     },
+    /// whether `src`'s own dict holds `method`, so that the body this module emitted
+    /// for `class` is *not* what an attribute lookup would answer with
+    ///
+    /// a method is a non-data descriptor, so a value stored on the instance under the
+    /// same name wins over the class's entry: `a.double = f` makes `a.double()` call
+    /// `f`. that is the one thing a call on a class python can neither subclass nor
+    /// rebind still has to ask, and the answer cannot be settled at import — nothing
+    /// about a class says whether one of its instances has been written to
+    ///
+    /// where `class`'s instances keep no dict of their own there is nowhere to write
+    /// such a value, and the question is answered `false` when the C is written
+    DictShadows {
+        dest: RegisterId,
+        src: Value,
+        class: String,
+        method: String,
+    },
     /// whether a class pattern's lookup found nothing
     IsMissing { dest: RegisterId, src: Value },
     /// an element or a slice of a sequence a `match` case is taking apart
@@ -976,6 +993,7 @@ impl Op {
             | Self::IsInstance { .. }
             | Self::MatchAttr { .. }
             | Self::MethodStands { .. }
+            | Self::DictShadows { .. }
             | Self::IsMissing { .. }
             | Self::MatchSlice { .. }
             | Self::FloatObjectCompare { .. }
@@ -1074,6 +1092,7 @@ impl Op {
             | Self::IsMapping { dest, .. }
             | Self::MatchAttr { dest, .. }
             | Self::MethodStands { dest, .. }
+            | Self::DictShadows { dest, .. }
             | Self::IsMissing { dest, .. }
             | Self::MatchSlice { dest, .. }
             | Self::IsInstance { dest, .. }
@@ -1174,6 +1193,7 @@ impl Op {
             | Self::IsMapping { dest, .. }
             | Self::MatchAttr { dest, .. }
             | Self::MethodStands { dest, .. }
+            | Self::DictShadows { dest, .. }
             | Self::IsMissing { dest, .. }
             | Self::MatchSlice { dest, .. }
             | Self::IsInstance { dest, .. }
@@ -1268,6 +1288,7 @@ impl Op {
             Self::Assign { src, .. }
             | Self::Box { src, .. }
             | Self::MethodStands { src, .. }
+            | Self::DictShadows { src, .. }
             | Self::IsMissing { src, .. }
             | Self::IsMapping { src, .. }
             | Self::AsyncIter { src, .. }
@@ -1445,6 +1466,7 @@ impl Op {
             Self::Assign { src, .. }
             | Self::Box { src, .. }
             | Self::MethodStands { src, .. }
+            | Self::DictShadows { src, .. }
             | Self::IsMissing { src, .. }
             | Self::IsMapping { src, .. }
             | Self::AsyncIter { src, .. }

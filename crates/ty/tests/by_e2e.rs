@@ -3,6 +3,15 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// a temp directory of this process's own
+///
+/// the same reason the `by_build` suites have one: a fixed path under the system temp
+/// directory is shared by two concurrent runs, which then overwrite each other between
+/// the build and the read
+fn cli_root() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("by_cli_p{}", std::process::id()))
+}
+
 fn transpile(source: &str) -> String {
     let raw = run_transpile(source, &[]);
     // the future import is opt-in, so it's normally absent. a few inputs
@@ -61,7 +70,7 @@ fn compile_emits_only_the_files_it_was_given_and_still_resolves_the_others() {
     // the database still holds the whole project, because a type imported from a
     // sibling has to resolve. that is what `lib.py` is here to prove: it is never
     // compiled, and `wanted.py` still lowers `Point` rather than declining
-    let dir = std::env::temp_dir().join("by_cli_only_named");
+    let dir = cli_root().join("by_cli_only_named");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
@@ -145,7 +154,7 @@ fn compile_writes_each_package_member_at_its_own_place_in_the_output_tree() {
     // then wrote the same file and the second silently won — and *no* package
     // member's artefact was importable under the name it had been compiled as,
     // because a flat `dup.so` can only ever be imported as `dup`
-    let dir = std::env::temp_dir().join("by_cli_package_tree");
+    let dir = cli_root().join("by_cli_package_tree");
     write_package_project(&dir);
 
     let out = dir.join("o");
@@ -192,7 +201,7 @@ fn compile_refuses_two_sources_that_would_write_the_same_artifact() {
     // stem. one artefact would be written twice and only the second kept, which is
     // the silent loss the tree was meant to end — so it is refused before anything
     // is written rather than half-performed
-    let dir = std::env::temp_dir().join("by_cli_artifact_clash");
+    let dir = cli_root().join("by_cli_artifact_clash");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("a-one")).unwrap();
     std::fs::create_dir_all(dir.join("b-two")).unwrap();
@@ -231,7 +240,7 @@ fn compile_declines_a_package_body_whose_package_has_no_importable_name() {
     // no package to be relative to and its submodules are bound to nothing. a
     // sibling that *is* nameable from its own directory still compiles, because
     // its stem really is the only name it could be imported under
-    let dir = std::env::temp_dir().join("by_cli_unnameable_package");
+    let dir = cli_root().join("by_cli_unnameable_package");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("a-one")).unwrap();
     std::fs::write(
@@ -272,7 +281,7 @@ fn compile_transpiles_the_fallback_with_the_lowering_options_it_was_given() {
 async def total(s: str, n: int) -> int:
     return len(s) + n
 ";
-    let dir = std::env::temp_dir().join("by_cli_soundness");
+    let dir = cli_root().join("by_cli_soundness");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("sound.by");

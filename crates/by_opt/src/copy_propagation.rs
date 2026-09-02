@@ -271,6 +271,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::AsyncContext { dest, .. }
         | Op::IsMissing { dest, .. }
         | Op::MethodStands { dest, .. }
+        | Op::DictShadows { dest, .. }
         | Op::MatchSlice { dest, .. }
         | Op::IntCompare { dest, .. }
         | Op::FloatCompare { dest, .. }
