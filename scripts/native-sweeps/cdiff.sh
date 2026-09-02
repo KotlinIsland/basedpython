@@ -56,5 +56,9 @@ done
   for kind in same differs a-only b-only neither; do
     printf '%s: %s\n' "$kind" "$(grep -c "	$kind" "$OUT")"
   done
-} >> "$OUT"
+}
+# the summary goes to stdout, not into `$OUT`: `sweep_end` counts distinct first columns
+# there against `$OUT.walked`, so six summary lines read as six extra modules and a
+# 550-module walk reported 556 — no `.complete` marker was ever written and the rung
+# always exited 1. every other rung echoes its summary for the same reason
 sweep_end || exit 1

@@ -174,6 +174,18 @@ fn rewrite_op(
         | Op::ImportModule { dest, .. } => {
             rewrite_dest(dest);
         }
+        Op::Warn {
+            dest,
+            message,
+            category,
+            ..
+        } => {
+            rewrite_dest(dest);
+            rewrite_value(message, remap);
+            if let Some(category) = category {
+                rewrite_value(category, remap);
+            }
+        }
         Op::StoreGlobal { dest, value, .. } => {
             rewrite_dest(dest);
             rewrite_value(value, remap);

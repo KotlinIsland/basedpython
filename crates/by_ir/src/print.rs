@@ -471,6 +471,20 @@ fn print_op(function: &Function, op: &Op) -> String {
             format!("{} = global {global}", name(*dest))
         }
         Op::ModuleDict { dest } => format!("{} = globals", name(*dest)),
+        Op::Warn {
+            dest,
+            message,
+            category,
+            offset,
+        } => format!(
+            "{} = warn {}{} at {offset}",
+            name(*dest),
+            value(message),
+            category
+                .as_ref()
+                .map(|category| format!(" as {}", value(category)))
+                .unwrap_or_default()
+        ),
         Op::StoreGlobal {
             dest,
             name: global,

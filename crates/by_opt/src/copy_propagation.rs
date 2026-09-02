@@ -285,6 +285,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::CallValue { dest, .. }
         | Op::LoadGlobal { dest, .. }
         | Op::ModuleDict { dest }
+        | Op::Warn { dest, .. }
         | Op::StoreGlobal { dest, .. }
         | Op::DeleteGlobal { dest, .. }
         | Op::LoadClass { dest, .. }

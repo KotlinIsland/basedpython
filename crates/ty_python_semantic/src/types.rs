@@ -2288,6 +2288,12 @@ impl<'db> Type<'db> {
     /// every assignability test about it consults. The common one is the hole
     /// `infer-unannotated-signatures` opens for an unannotated parameter: nothing in the
     /// body bounded it, so it is `Unknown` wearing a name and it proves exactly as little.
+    ///
+    /// basedpython: a type alias is answered by what it stands for, which is the same
+    /// type under another spelling. `_socket` writes `type _RetAddress = dynamic`, so
+    /// `socket.getsockname()` is a gradual type wearing a name — and a consumer that
+    /// took the name for a proof gave `self._address = sock.getsockname()` the `None`
+    /// representation, `None` being the first thing a gradual type is assignable to.
     pub fn has_gradual_member(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
         self.has_gradual_member_impl(db, env, true)
     }
@@ -2314,6 +2320,7 @@ impl<'db> Type<'db> {
                 .is_some_and(|bound| {
                     bound.is_dynamic() || bound.has_gradual_member_impl(db, env, false)
                 }),
+            Type::TypeAlias(alias) => gradual(alias.value_type(db)),
             _ => false,
         }
     }
@@ -8407,6 +8414,27 @@ impl<'db> Type<'db> {
     ) -> Option<&'db str> {
         match self {
             Type::NominalInstance(instance) => Some(instance.class(db, env).name(db).as_str()),
+            _ => None,
+        }
+    }
+
+    /// basedpython: the file the class [`Type::nominal_class_name`] names is written
+    /// in.
+    ///
+    /// The name alone is not an identity, and the native compiler keys the layouts it
+    /// emitted by name. `csv` declares a `Dialect` of its own and imports
+    /// `_csv.Dialect` beside it, so the name matched a class from another module
+    /// entirely and a value of it was narrowed to a struct it is not. This is what
+    /// settles which of the two a type is.
+    pub fn nominal_class_file(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<File> {
+        match self {
+            Type::NominalInstance(instance) => {
+                Some(instance.class(db, env).class_literal(db).file(db))
+            }
             _ => None,
         }
     }

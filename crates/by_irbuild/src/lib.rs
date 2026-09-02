@@ -150,13 +150,13 @@ pub fn build_module(
     // typed as another emitted class — including one declared later, or the
     // declaring class itself. mapping a field type only asks whether the class
     // has a layout, never what is in it, so knowing the names is enough
-    let mut layouts: Layouts = suite
-        .iter()
-        .filter_map(|stmt| match stmt {
-            Stmt::ClassDef(class) => Some((class.name.to_string(), Vec::new())),
+    let mut layouts = Layouts::of(
+        model.file(),
+        suite.iter().filter_map(|stmt| match stmt {
+            Stmt::ClassDef(class) => Some(class.name.to_string()),
             _ => None,
-        })
-        .collect();
+        }),
+    );
     // a class that declines has no layout, and dropping it can only ever shrink
     // the set — so re-deriving until nothing more drops out terminates, and
     // leaves no field typed as a class that will not be emitted
@@ -164,7 +164,7 @@ pub fn build_module(
     // disappearing. one round per class is enough for any chain; a base cycle would
     // never settle, and is not a class this can compile
     let mut settling = true;
-    for _ in 0..=layouts.len() {
+    for _ in 0..=layouts.count() {
         if !settling {
             break;
         }
@@ -578,8 +578,16 @@ pub fn build_module(
     // resolves to in the module namespace when the `class` statement runs, which
     // is this module's compiled type wherever it emitted one. a name the module
     // aliases stands for the class it was bound to, the same as in a base
-    let extends: Vec<(String, Vec<String>)> = suite
-        .iter()
+    //
+    // the whole module body and not only its top level: a `class` under a
+    // module-level `if` is written by the same body, in the same namespace, at the
+    // same time — nothing about standing in a block makes it a different statement.
+    // `smtplib` writes `class SMTP_SSL(SMTP)` under `if _have_ssl:`, and reading only
+    // the top level meant `SMTP` was emitted with nothing recorded as extending it.
+    // [`walk_with_cases`] stops at a nested `def` or `class`, which is the boundary
+    // that matters: what those write is bound somewhere other than the module namespace
+    let extends: Vec<(String, Vec<String>)> = walk_with_cases(suite)
+        .into_iter()
         .filter_map(|stmt| match stmt {
             Stmt::ClassDef(class) => Some((
                 class.name.to_string(),
@@ -2356,6 +2364,49 @@ fn class_level_defaults(class: &ast::StmtClassDef, is_data: bool) -> HashSet<Str
     names
 }
 
+/// whether the attribute this write targets holds more than the write itself does
+///
+/// one assignment says what the attribute holds at that point, and nothing about what is
+/// written into it afterwards. the *attribute's* type is the union over every assignment
+/// the checker can see, and where it cannot see them all it says so: an implicit
+/// attribute whose only assignment is `None` is a partial inference rather than a settled
+/// answer, so ty gives it `None | Unknown` and the mapper turns anything gradual into the
+/// widest representation.
+///
+/// ```python
+/// class Node:
+///     def __init__(self) -> None:
+///         self.parent = None
+///
+///
+/// def link(child: Node, parent: Node) -> None:
+///     child.parent = parent
+/// ```
+///
+/// sized for the write alone, `parent` is a zero-width slot that only ever holds `None`,
+/// and the module's own write into it is refused — `link` cannot be lowered and the
+/// interpreted `link` python is left with raises against the field's setter. so the
+/// attribute's type is folded in beside the write's, and a slot has to hold both
+fn attribute_outgrows(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    model: &SemanticModel<'_>,
+    class: &ast::StmtClassDef,
+    target: &Expr,
+    written: &RType,
+    layouts: &Layouts,
+) -> bool {
+    let Expr::Attribute(access) = target else {
+        return false;
+    };
+    let Some(ty) = model.instance_attribute_type(class, access.attr.as_str()) else {
+        // an attribute the lookup cannot find is one the write is the only word on,
+        // which is what the write already said
+        return false;
+    };
+    !map_type_with(db, env, ty, layouts).is_ok_and(|held| held == *written)
+}
+
 /// the fields of a plain class: the attributes its body gives the instance
 ///
 /// a fixed layout needs every field to exist by the time anything can read one,
@@ -2406,7 +2457,10 @@ fn init_fields(
                 let ty = target
                     .inferred_type(model)
                     .ok_or_else(|| Decline::new("an attribute assignment has no inferred type"))?;
-                let rtype = map_type_with(db, env, ty, layouts)?;
+                let mut rtype = map_type_with(db, env, ty, layouts)?;
+                if attribute_outgrows(db, env, model, class, target, &rtype, layouts) {
+                    rtype = RType::OBJECT;
+                }
                 match widths.iter_mut().find(|(written, _)| *written == name) {
                     Some((_, existing)) => {
                         if *existing != rtype {
@@ -3698,7 +3752,7 @@ fn base_class(
         // resolved rather than matched by name, because a module may bind `object`
         // to something else entirely
         ([base], _) if !keyed && is_builtin_object(db, env, model, base, layouts) => Ok(None),
-        ([Expr::Name(_)], [Some(name)]) if layouts.contains_key(*name) => {
+        ([Expr::Name(_)], [Some(name)]) if layouts.contains_key(name) => {
             if keyed {
                 // the layout would have to be ours, which only the type spec lays out,
                 // and a spec has nowhere to put a keyword
@@ -3717,7 +3771,7 @@ fn base_class(
             let mut paths = Vec::with_capacity(bases.len());
             for (base, name) in bases.iter().zip(named) {
                 if let Some(name) = name
-                    && layouts.get(*name).is_some_and(|fields| !fields.is_empty())
+                    && layouts.get(name).is_some_and(|fields| !fields.is_empty())
                 {
                     return Err(Decline::new(
                         "a base this module lays out cannot stand beside one it does not",
@@ -3991,6 +4045,24 @@ fn builtins_file(
     Some(
         KnownClass::Object
             .to_instance(db, env)
+            .definition(db, env)?
+            .focus_range(db)?
+            .file(),
+    )
+}
+
+/// the file `warnings.warn` is written in
+///
+/// asked for through the `warnings` namespace rather than by path, for the reason
+/// [`builtins_file`] gives — and the answer is *not* the file `warnings` itself is,
+/// because `warnings` re-exports `warn` from `_warnings`, the C accelerator. what a
+/// call site resolves to is that definition, so that is what has to be compared
+fn warnings_warn_file(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+) -> Option<ruff_db::files::File> {
+    Some(
+        ty_python_semantic::basedpython_warnings_symbol(db, env, "warn")?
             .definition(db, env)?
             .focus_range(db)?
             .file(),
@@ -7403,7 +7475,7 @@ impl Lowering<'_, '_> {
             return false;
         }
         self.layouts
-            .keys()
+            .names()
             .any(|candidate| declares(candidate) && self.descends_from(candidate, class))
     }
 
@@ -9035,7 +9107,7 @@ impl Lowering<'_, '_> {
         // which needs a second loop shape
         let step_value = match step {
             None => Some(1),
-            Some(expr) => match literal_step(expr) {
+            Some(expr) => match literal_int(expr) {
                 // a step of zero is a `ValueError` `range` itself raises
                 Some(0) | None => None,
                 found => found,
@@ -11587,7 +11659,7 @@ impl Lowering<'_, '_> {
         // over one source have to write the same C
         let mut under: Vec<&String> = self
             .layouts
-            .keys()
+            .names()
             .filter(|other| other.as_str() != class && self.descends_from(other, class))
             .collect();
         under.sort();
@@ -11639,17 +11711,45 @@ impl Lowering<'_, '_> {
         } = dispatch;
         let produced = produced.clone();
         let ret = site.clone();
+        // `shapes[i].area()` narrows the element to its declared `Shape` before the
+        // dispatch ever sees it, and that narrowing is the one thing here that walks
+        // an mro: `PyObject_TypeCheck` against a *base* is `PyType_IsSubtype`, paid on
+        // every trip the element is a `Square`. no arm needs it — each one proves its
+        // own candidate exactly — so the dispatch runs on the object instead and the
+        // narrowing moves down to the arm no candidate matched, which is the only
+        // place a receiver can still reach that needs to be told it is not a `Shape`.
+        //
+        // taking it back is only offered while it is still the last op emitted, and
+        // only for a call with no arguments, so that moving it cannot reorder it
+        // against anything: an argument with a side effect must not start running
+        // because a check that used to precede it now follows it
+        let deferred_narrowing = match receiver {
+            Value::Register(id) if node.arguments.args.is_empty() => {
+                self.builder.take_last_narrowing(*id)
+            }
+            _ => None,
+        };
         // once, before any test, where the ordinary call would have evaluated them
         let mut args = Vec::with_capacity(params.len());
         for (argument, param) in node.arguments.args.iter().zip(params) {
             let (value, ty) = self.expression(argument)?;
             args.push(self.coerce(value, &ty, param)?);
         }
-        let held = match receiver {
-            Value::Register(id) => self.builder.register_type(*id).cloned(),
-            other => other.immediate_type(),
+        let (held, object) = match &deferred_narrowing {
+            // an `Unbox` leaves source and destination holding the same pointer, so
+            // the source *is* the widened receiver, with no reference of its own —
+            // and the receiver's own register holds nothing until the arm below
+            // re-narrows into it, so no arm may reuse it and every one narrows for
+            // itself
+            Some((_, source)) => (None, source.clone()),
+            None => {
+                let held = match receiver {
+                    Value::Register(id) => self.builder.register_type(*id).cloned(),
+                    other => other.immediate_type(),
+                };
+                (held, self.widen_to_object(receiver.clone(), receiver_ty))
+            }
         };
-        let object = self.widen_to_object(receiver.clone(), receiver_ty);
         let dest = self.builder.temp(ret.clone());
         let join = self.builder.new_block();
         for candidate in candidates {
@@ -11716,6 +11816,14 @@ impl Lowering<'_, '_> {
             }
             self.builder.terminate(Terminator::Goto(join));
             self.builder.switch_to(next);
+        }
+        // no candidate matched, so this is where a receiver that is not of its
+        // declared class arrives — and the check taken back above is emitted here,
+        // unchanged, so that it raises exactly what it would have raised before. a
+        // receiver that *did* match an arm never reaches this block and never needed
+        // it: its type was proved exactly
+        if let Some((narrowing, _)) = deferred_narrowing {
+            self.builder.push(narrowing);
         }
         let mut boxed = Vec::with_capacity(args.len());
         for (value, ty) in args.iter().zip(params) {
@@ -12821,28 +12929,158 @@ impl Lowering<'_, '_> {
     /// caller's — and `sys._getframe().f_globals` then reads another module's
     /// namespace while looking exactly like it read this one's.
     ///
-    /// only the call written here. a stdlib function that walks frames *itself* —
-    /// `inspect.stack`, `warnings.warn`'s `stacklevel`, `namedtuple` reading
-    /// `__module__` off its caller — lands one frame short in the same way, and no
-    /// predicate over this function's own body can see that
-    fn refuse_a_frame_walk(&self, node: &ast::ExprCall) -> Lowered<()> {
+    /// and `warnings.warn`, which walks frames on this one's behalf. the frame it
+    /// blames is counted back from its own caller, so the count starts one frame
+    /// further out than the source meant and lands somewhere else entirely: what a
+    /// warning names as its origin decides both the `file:line` it prints and, through
+    /// that frame's `__name__`, whether the filters show it at all.
+    /// `urllib.request.URLopener.__init__` warns with `stacklevel=3` and the compiled
+    /// leg printed nothing, because the frame three back was no longer python's.
+    ///
+    /// at the default stack level of one there is no walk to get wrong, and the call
+    /// is lowered rather than refused — see [`Self::a_warning`].
+    ///
+    /// a stdlib function that walks frames for some *other* purpose —
+    /// `inspect.stack`, `namedtuple` reading `__module__` off its caller — lands one
+    /// frame short in the same way, and no predicate over this function's own body can
+    /// see that
+    ///
+    /// `Ok(None)` where the call is an ordinary one after all, and the lowering below
+    /// carries on with it
+    fn a_frame_walk(&mut self, node: &ast::ExprCall) -> Lowered<Option<(Value, RType)>> {
         let written = match node.func.as_ref() {
             Expr::Attribute(attribute) => attribute.attr.as_str(),
             Expr::Name(name) => name.id.as_str(),
-            _ => return Ok(()),
+            _ => return Ok(None),
         };
         // a syntactic filter first: resolving a definition parses the module it is in,
         // and that is not worth doing for every call in the unit
-        if written != "_getframe" {
-            return Ok(());
+        if !matches!(written, "_getframe" | "warn") {
+            return Ok(None);
         }
         let env = &self.model.program_environment();
-        if defined_as(self.db, env, self.model, &node.func, "_getframe").is_none() {
-            return Ok(());
+        let Some(defined) = defined_as(self.db, env, self.model, &node.func, written) else {
+            return Ok(None);
+        };
+        if written == "_getframe" {
+            return Err(Decline::new(
+                "`_getframe()` answers with the calling frame, and a compiled function pushes none",
+            ));
         }
-        Err(Decline::new(
-            "`_getframe()` answers with the calling frame, and a compiled function pushes none",
-        ))
+        // `warn` is a name a great many modules bind to something of their own, so the
+        // one that walks frames is told apart by where it is written rather than by how
+        // the call spells it
+        if Some(defined) != warnings_warn_file(self.db, env) {
+            return Ok(None);
+        }
+        self.a_warning(node).map(Some)
+    }
+
+    /// `warnings.warn(...)` at the default stack level, lowered into the call it would
+    /// have made once it had counted the frames
+    ///
+    /// `warn`'s whole use for a frame is to fill in four things: the file and line the
+    /// warning is reported at, the `__name__` of the module to blame, and that module's
+    /// `__warningregistry__`. at a stack level of one the frame in question is this
+    /// very function's, so all four are known — the first two when the module is built,
+    /// the other two from the module namespace at the call — and `warn_explicit` takes
+    /// exactly them. see `By_Warn` in the runtime for the argument handling that has to
+    /// match `warn`'s own.
+    ///
+    /// everything else is refused, and refused for its own reason:
+    ///
+    ///   - a stack level above one blames the *caller's* frame, and how many frames are
+    ///     missing under a compiled function is not a static question. a compiled
+    ///     function calling another compiled one loses both, so nothing at this call
+    ///     site can say how far out the real caller is
+    ///   - `skip_file_prefixes` forces the level to at least two, so it is the same
+    ///     question by another name
+    ///   - `source` is what `warn` hands `warn_explicit` for `tracemalloc` to hang a
+    ///     traceback off, and the public `warn_explicit` entry point takes none
+    ///   - a `*` or `**` in the call, or an argument this does not know the name of,
+    ///     leaves which value is which unsettled
+    fn a_warning(&mut self, node: &ast::ExprCall) -> Lowered<(Value, RType)> {
+        const A_WALK: &str = "`warnings.warn` above `stacklevel=1` blames a frame counted back from its caller, and a compiled function pushes none";
+
+        // a `*` or a `**` moves every argument after it, so which one fills which
+        // parameter is not knowable here
+        if node.arguments.args.iter().any(Expr::is_starred_expr)
+            || node.arguments.keywords.iter().any(|kw| kw.arg.is_none())
+        {
+            return Err(Decline::new(
+                "`warnings.warn` with a spread argument does not say which value is its `stacklevel`",
+            ));
+        }
+        // `warn` takes four positionally and `skip_file_prefixes` by keyword only. a
+        // call outside that shape is one python raises for, which its interpreted
+        // definition does with python's own wording
+        if node.arguments.args.len() > 4 {
+            return Err(Decline::new(
+                "`warnings.warn` takes at most four positional arguments",
+            ));
+        }
+        for keyword in &node.arguments.keywords {
+            let named = keyword.arg.as_ref().map(ast::Identifier::as_str);
+            if !matches!(
+                named,
+                Some("message" | "category" | "stacklevel" | "source" | "skip_file_prefixes")
+            ) {
+                return Err(Decline::new(
+                    "`warnings.warn` was given an argument it does not take",
+                ));
+            }
+        }
+        // a level at or below one is this frame's own, which is the whole of what makes
+        // the lowering possible. zero and negatives land there too: `warn` walks
+        // `stacklevel - 1` frames and never fewer than none
+        if let Some(written) = node.arguments.find_argument_value("stacklevel", 2) {
+            match literal_int(written) {
+                Some(level) if level <= 1 => {}
+                Some(_) => return Err(Decline::new(A_WALK)),
+                None => {
+                    return Err(Decline::new(
+                        "`warnings.warn` with a computed `stacklevel` cannot be told from a frame walk",
+                    ));
+                }
+            }
+        }
+        // even an *empty* one, and even though an empty one changes nothing about the
+        // walk: the keyword was added in 3.12, so on 3.11 writing it at all is a
+        // `TypeError` — and a lowering that quietly accepted it would answer where
+        // python raised
+        if node.arguments.find_keyword("skip_file_prefixes").is_some() {
+            return Err(Decline::new(
+                "`warnings.warn` with `skip_file_prefixes` walks frames to skip them, and a compiled function pushes none",
+            ));
+        }
+        if let Some(source) = node.arguments.find_argument_value("source", 3)
+            && !source.is_none_literal_expr()
+        {
+            return Err(Decline::new(
+                "`warnings.warn` with a `source` needs the private `warn_explicit`, which takes one",
+            ));
+        }
+        let Some(message) = node.arguments.find_argument_value("message", 0) else {
+            return Err(Decline::new("`warnings.warn` was given no message"));
+        };
+
+        let (message, message_ty) = self.expression(message)?;
+        let message = self.widen_to_object(message, &message_ty);
+        let category = match node.arguments.find_argument_value("category", 1) {
+            Some(written) => {
+                let (value, ty) = self.expression(written)?;
+                Some(self.widen_to_object(value, &ty))
+            }
+            None => None,
+        };
+        let dest = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::Warn {
+            dest,
+            message,
+            category,
+            offset: node.range().start().to_u32(),
+        });
+        Ok((Value::Register(dest), RType::OBJECT))
     }
 
     fn call(&mut self, node: &ast::ExprCall) -> Lowered<(Value, RType)> {
@@ -12866,7 +13104,9 @@ impl Lowering<'_, '_> {
         {
             return Ok(handled);
         }
-        self.refuse_a_frame_walk(node)?;
+        if let Some(handled) = self.a_frame_walk(node)? {
+            return Ok(handled);
+        }
         // a `*` or a `**` in the arguments means the binding happens at runtime, so
         // the arguments become a tuple and a dict and python does the binding
         if node.arguments.args.iter().any(Expr::is_starred_expr)
@@ -13285,12 +13525,13 @@ enum Comprehension<'a> {
 /// exactly the set `Op::Unbox` has a checked conversion for. `list` and friends
 /// are boxed too, but nothing yet reads their elements, so narrowing to them
 /// would buy nothing
-/// a `range` step written as a literal, which is what settles the comparison
-/// direction at compile time
+/// an integer written as a literal, negative ones included
 ///
-/// `None` for anything computed, too large to inline, or not an integer — the
-/// caller takes the protocol path, where `range` decides all three itself
-fn literal_step(expr: &Expr) -> Option<i64> {
+/// `None` for anything computed, too large to inline, or not an integer. two
+/// lowerings turn on one: a `range` step, which settles the comparison direction
+/// at compile time, and a `stacklevel`, which settles whether a warning's context
+/// is this frame's or a caller's
+fn literal_int(expr: &Expr) -> Option<i64> {
     match expr {
         Expr::NumberLiteral(literal) => match &literal.value {
             ast::Number::Int(value) => value.as_i64(),

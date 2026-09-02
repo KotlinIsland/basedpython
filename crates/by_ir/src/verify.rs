@@ -953,6 +953,19 @@ impl Verifier<'_> {
             Op::ModuleDict { dest } => {
                 self.expect_dest(block, *dest, &RType::OBJECT, "the module namespace");
             }
+            Op::Warn {
+                dest,
+                message,
+                category,
+                ..
+            } => {
+                self.expect(block, message, &RType::OBJECT, "a warning's message");
+                if let Some(category) = category {
+                    self.expect(block, category, &RType::OBJECT, "a warning's category");
+                }
+                // `warn` answers with `None`, which is an object like any other
+                self.expect_dest(block, *dest, &RType::OBJECT, "a warning");
+            }
             Op::StoreGlobal { dest, value, .. } => {
                 // the namespace holds objects, so a write to one has to arrive boxed
                 self.expect(block, value, &RType::OBJECT, "a global write");

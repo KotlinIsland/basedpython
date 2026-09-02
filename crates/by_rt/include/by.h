@@ -1152,6 +1152,130 @@ static inline char By_DeleteGlobal(PyObject *dict, PyObject *name) {
     return 0;
 }
 
+/* `warnings.warn(message, category)` written out with the context supplied
+ *
+ * `warn` decides which module a warning is blamed on by counting frames back from its
+ * own caller, and a compiled function pushes none — so the frame it lands on belongs
+ * to the caller, in another module. that decides the `file:line` the message prints
+ * and, through the blamed module's `__name__`, whether the filters show the warning at
+ * all: `urllib.request.URLopener.__init__` warned and the compiled leg printed nothing
+ * where python printed a `DeprecationWarning`.
+ *
+ * for the default stack level of one there is nothing to count: the frame `warn` would
+ * have blamed is the compiled function's own, and every field it would have read off
+ * that frame is either known when the module is built — the file and the line — or
+ * sitting in the module namespace at the moment of the call: `__name__`, and the
+ * `__warningregistry__` that records what has already been shown. so the call is made
+ * to `warn_explicit`, which takes all of them, and no frame is involved.
+ *
+ * what follows is `warn`'s own preamble, which has to be reproduced exactly or the
+ * lowering is distinguishable. every branch was read off cpython 3.11 through 3.14
+ * rather than off `warnings.py`, because the module that actually answers is the C
+ * accelerator `_warnings` and the two differ:
+ *
+ *   - a `Warning` *instance* supplies the category, overriding whatever was written.
+ *     the test is `PyObject_IsInstance`, which honours a `__class__` property, but the
+ *     category taken is `Py_TYPE(message)` — the real type. an object that lies about
+ *     its class therefore reaches the subclass test as its true type and is refused
+ *   - a failure inside that instance test propagates, where a failure inside the
+ *     subclass test below is swallowed and reworded
+ *   - the subclass test is `PyObject_IsSubclass` rather than a type check, so a
+ *     non-type with a `__bases__` naming `Warning` passes it and fails later at the
+ *     call, exactly as it does in python
+ *   - `module_globals` is left out. `warnings.py` passes the namespace there, but the
+ *     C `warn` passes nothing, and the difference is visible: the namespace reaches
+ *     `linecache`, which warns about a module without a `__spec__.loader`
+ *
+ * `PyErr_WarnExplicitObject` is the public spelling of `warn_explicit` and takes no
+ * `source`, so a call that writes one is left to its interpreted definition */
+static inline PyObject *By_Warn(PyObject *message, PyObject *category,
+                                PyObject *module_dict, const char *filename,
+                                int lineno) {
+    PyObject *chosen = category;
+    PyObject *key;
+    PyObject *name;
+    PyObject *module;
+    PyObject *registry;
+    PyObject *path;
+    int rc;
+
+    rc = PyObject_IsInstance(message, PyExc_Warning);
+    if (rc < 0) return NULL;
+    if (rc > 0) {
+        chosen = (PyObject *)Py_TYPE(message);
+    } else if (chosen == NULL || chosen == Py_None) {
+        chosen = PyExc_UserWarning;
+    }
+    rc = PyObject_IsSubclass(chosen, PyExc_Warning);
+    if (rc < 0) {
+        PyErr_Clear();
+        rc = 0;
+    }
+    if (rc == 0) {
+        PyErr_Format(PyExc_TypeError,
+                     "category must be a Warning subclass, not '%s'",
+                     Py_TYPE(chosen)->tp_name);
+        return NULL;
+    }
+
+    /* the module the warning is blamed on, exactly as `warn` reads it off the frame's
+     * globals: `__name__` when it is a string or `None`, and `"<string>"` for anything
+     * else, a missing name included. `None` is deliberately passed through rather than
+     * replaced — a `module` filter matches neither, but leaving it out of the call
+     * entirely would make `warn_explicit` derive one from the file name instead */
+    if (module_dict == NULL) {
+        PyErr_SetString(PyExc_SystemError, "a warning has no module namespace");
+        return NULL;
+    }
+    key = By_InternedStr("__name__", 8);
+    if (key == NULL) return NULL;
+    name = PyDict_GetItemWithError(module_dict, key);
+    Py_DECREF(key);
+    if (name == NULL && PyErr_Occurred()) return NULL;
+    if (name == Py_None || (name != NULL && PyUnicode_Check(name))) {
+        module = Py_NewRef(name);
+    } else {
+        module = PyUnicode_FromString("<string>");
+        if (module == NULL) return NULL;
+    }
+
+    /* the registry is the module's own, created on first use the way `warn` creates
+     * it. whatever is already bound is passed on untouched, non-dicts included, so a
+     * module that has bound something else there raises what python raises */
+    key = By_InternedStr("__warningregistry__", 19);
+    if (key == NULL) {
+        Py_DECREF(module);
+        return NULL;
+    }
+    registry = PyDict_GetItemWithError(module_dict, key);
+    if (registry == NULL && !PyErr_Occurred()) {
+        registry = PyDict_New();
+        if (registry != NULL && PyDict_SetItem(module_dict, key, registry) < 0) {
+            Py_CLEAR(registry);
+        }
+    } else {
+        Py_XINCREF(registry);
+    }
+    Py_DECREF(key);
+    if (registry == NULL) {
+        Py_DECREF(module);
+        return NULL;
+    }
+
+    path = PyUnicode_DecodeUTF8(filename, (Py_ssize_t)strlen(filename), "replace");
+    if (path == NULL) {
+        Py_DECREF(registry);
+        Py_DECREF(module);
+        return NULL;
+    }
+    rc = PyErr_WarnExplicitObject(chosen, message, path, lineno, module, registry);
+    Py_DECREF(path);
+    Py_DECREF(registry);
+    Py_DECREF(module);
+    if (rc < 0) return NULL;
+    return Py_NewRef(Py_None);
+}
+
 /* a global read that remembers what the name resolved to last time
  *
  * `By_LookupGlobal` is two dict probes on every trip, and for a name that resolves to

@@ -794,6 +794,25 @@ pub fn basedpython_warnings_added_in(name: &str) -> Option<PythonVersion> {
     }
 }
 
+/// basedpython: the type of `name` in the `warnings` module namespace.
+///
+/// The native backend has to recognise `warnings.warn` by identity rather than by
+/// spelling, because `warn` is a name plenty of other modules bind to something of
+/// their own and `from warnings import warn as _warn` reaches the real one under a
+/// name that is not its own. Resolved through the namespace rather than matched by
+/// path for the reason `builtins` is: a path would have to know which extension the
+/// stub carries and which typeshed it came from — and `warnings` re-exports `warn`
+/// from `_warnings`, so the path the definition sits at is not the module's own.
+pub fn basedpython_warnings_symbol<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    name: &str,
+) -> Option<Type<'db>> {
+    known_module_symbol(db, env, KnownModule::Warnings, name)
+        .place
+        .ignore_possibly_undefined()
+}
+
 /// Lookup the type of `symbol` in the `typing_extensions` module namespace.
 ///
 /// Returns `Place::Undefined` if the `typing_extensions` module isn't available for some reason.

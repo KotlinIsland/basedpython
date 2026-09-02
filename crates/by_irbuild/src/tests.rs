@@ -1840,6 +1840,155 @@ def drop(held: Held) -> None:
     );
 }
 
+/// a field whose only assignment is `None` is laid out as an object
+///
+/// sized for the assignment alone it would be a zero-width slot that holds nothing but
+/// `None`, and every later write from elsewhere in the module is then refused — the
+/// function doing the writing cannot be lowered, and the interpreted one python is left
+/// with raises against the field's setter. `self.x = None` in `__init__` is one of the
+/// commonest shapes there is, and the checker says so directly: an implicit attribute
+/// with no assignment but `None` is inferred as `None | Unknown`, gradual on purpose
+#[test]
+fn a_field_only_ever_assigned_none_is_laid_out_as_an_object() {
+    assert_eq!(
+        layout(
+            "\
+class Node:
+    def __init__(self) -> None:
+        self.parent = None
+",
+            "Node"
+        ),
+        [("parent".to_string(), RType::OBJECT, false)]
+    );
+}
+
+/// a field the checker has a settled type for keeps that type's representation
+///
+/// the widening above is the checker's answer rather than a rule of the layout's own, so
+/// an attribute every assignment agrees about is unaffected — which is where a compiled
+/// class's speed lives
+#[test]
+fn a_field_the_checker_has_a_settled_type_for_keeps_its_representation() {
+    assert_eq!(
+        layout(
+            "\
+class Counter:
+    def __init__(self) -> None:
+        self.n = 0
+        self.label = \"start\"
+",
+            "Counter"
+        ),
+        [
+            ("n".to_string(), RType::INT, false),
+            ("label".to_string(), RType::STR, false),
+        ]
+    );
+}
+
+/// a private field is looked up under the name the body writes, not the mangled one
+///
+/// the layout holds `_Held__hidden`, because that is the attribute python binds. the
+/// checker does not model the mangling at all — asking it about `_Held__hidden` finds
+/// nothing — so the widening has to ask under `__hidden`, and a rule that reused the
+/// layout's name would have left every private field at whatever one write said
+#[test]
+fn a_private_field_only_ever_assigned_none_is_widened_too() {
+    assert_eq!(
+        layout(
+            "\
+class Held:
+    def __init__(self) -> None:
+        self.__hidden = None
+        self.__count = 0
+",
+            "Held"
+        ),
+        [
+            ("_Held__hidden".to_string(), RType::OBJECT, false),
+            ("_Held__count".to_string(), RType::INT, false),
+        ]
+    );
+}
+
+/// a declaration wider than the assignment is what the slot has to hold
+///
+/// `value: object` says the module may store anything there, whatever `__init__` happens
+/// to put in it first. sized for the assignment the field would be an integer, and the
+/// declaration's own promise — that a `str` may be written — would be refused
+#[test]
+fn a_field_declared_wider_than_its_assignment_holds_the_declaration() {
+    assert_eq!(
+        layout(
+            "\
+class Slot:
+    value: object
+
+    def __init__(self) -> None:
+        self.value = 1
+",
+            "Slot"
+        ),
+        [("value".to_string(), RType::OBJECT, false)]
+    );
+}
+
+/// widening a field says nothing about whether the instance has one
+///
+/// the representation and the presence byte are separate answers: an attribute only some
+/// paths through `__init__` assign still reads back as `AttributeError` on the paths that
+/// skipped it, and widening what it holds does not fill it in
+#[test]
+fn a_widened_field_assigned_on_one_path_keeps_its_presence_byte() {
+    assert_eq!(
+        layout(
+            "\
+class Late:
+    def __init__(self, ready: bool) -> None:
+        if ready:
+            self.held = None
+",
+            "Late"
+        ),
+        [("held".to_string(), RType::OBJECT, true)]
+    );
+}
+
+/// a subclass inherits the widened field at the width its base gave it
+///
+/// a subclass's struct *begins* with its base's, so the two cannot disagree about what a
+/// field holds any more than about where it starts. the widening happens in the class
+/// that declares the field, and the subclass copies it across as it does every other
+#[test]
+fn a_subclass_inherits_a_widened_field_unchanged() {
+    let source = "\
+class Base:
+    def __init__(self) -> None:
+        self.parent = None
+
+
+class Derived(Base):
+    def __init__(self) -> None:
+        super().__init__()
+        self.depth = 0
+
+    def root(self) -> None:
+        self.parent = Base()
+";
+    assert_eq!(
+        layout(source, "Base"),
+        [("parent".to_string(), RType::OBJECT, false)]
+    );
+    assert_eq!(
+        layout(source, "Derived"),
+        [
+            ("parent".to_string(), RType::OBJECT, false),
+            ("depth".to_string(), RType::INT, false),
+        ]
+    );
+}
+
 /// each method names its own receiver, and the layout has to read the one it wrote
 ///
 /// the field pass took slot zero off `__init__` and then matched *that* name in every
@@ -2722,6 +2871,63 @@ class Beside(Rooted):
 }
 
 #[test]
+fn a_base_extended_from_inside_a_module_level_block_declines() {
+    // a `class` under a module-level `if` is written by the same module body, in the
+    // same namespace, at the same time — and the body runs to completion before any
+    // emitted type replaces what it bound. so `Guarded`'s base is the interpreted
+    // `Base` the body built and nothing can reach again, while the module's own name
+    // now holds the emitted one: `Base.__init__(self)` inside it is then a slot
+    // wrapper asked for a receiver its argument is not. `smtplib` writes
+    // `class SMTP_SSL(SMTP)` under `if _have_ssl:` and answered exactly that
+    let reasons = declines(
+        "\
+class Base:
+    def __init__(self) -> None:
+        self.code = 1
+
+
+if len('x') == 1:
+
+    class Guarded(Base):
+        pass
+",
+    );
+    assert_eq!(
+        reasons,
+        vec![(
+            "Base".to_string(),
+            "`Guarded` declined, so it extends the interpreted definition rather than this type"
+                .to_string()
+        )]
+    );
+}
+
+#[test]
+fn a_class_a_nested_frame_writes_is_not_one_the_module_body_extends_with() {
+    // the boundary is the *frame*: what a `def` or a `class` body writes is bound in a
+    // namespace of its own, so a class in one is not a class the module body built and
+    // says nothing about what the module's own names hold. `make` gives up its own
+    // definition over the nested `class`, which is a separate matter — `Base` keeps its
+    // layout either way
+    let reasons = declines(
+        "\
+class Base:
+    def __init__(self) -> None:
+        self.code = 1
+
+
+def make() -> None:
+    class Inner(Base):
+        pass
+",
+    );
+    assert!(
+        !reasons.iter().any(|(name, _)| name == "Base"),
+        "{reasons:?}"
+    );
+}
+
+#[test]
 fn fields_past_a_hollow_base_beside_a_class_this_module_writes_decline() {
     // `Hollow` reads as standing on a base from outside, but the list also names `Mixin`
     // — a class this module writes and then turns down. what stands under that name at
@@ -2889,6 +3095,60 @@ class Held(Wrapper, metaclass=Meta):
             "a class keyword on a base this module emits is not lowered yet".to_string()
         )),
         "{reasons:?}"
+    );
+}
+
+/// the field representations of one emitted class, rendered
+fn field_types(source: &str, class: &str) -> Vec<(String, String)> {
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        module
+            .classes
+            .iter()
+            .find(|candidate| candidate.name == class)
+            .map(|owner| {
+                owner
+                    .fields
+                    .iter()
+                    .map(|field| (field.name.clone(), field.ty.to_string()))
+                    .collect()
+            })
+            .unwrap_or_else(|| panic!("{class} was not emitted"))
+    })
+}
+
+#[test]
+fn a_class_from_another_module_is_not_the_one_we_emitted_under_that_name() {
+    // the emitted layouts are keyed by bare class name, and a bare name is not an
+    // identity: `csv` declares a `Dialect` of its own and imports `_csv.Dialect`
+    // beside it under another name. asking only the name gave the *imported* class
+    // this module's layout, so `_Dialect(self)` was narrowed to a struct its answer is
+    // not and `csv.excel()` raised a `TypeError` where python built a dialect
+    assert_eq!(
+        field_types(
+            "\
+from decimal import Decimal as _Decimal
+
+
+class Decimal:
+    def __init__(self) -> None:
+        self.other = _Decimal(1)
+",
+            "Decimal",
+        ),
+        vec![("other".to_string(), "object".to_string())]
+    );
+    // and the class this module *does* write under the name still gets its layout
+    assert_eq!(
+        field_types(
+            "\
+class Decimal:
+    def __init__(self) -> None:
+        self.other = Decimal.__new__(Decimal)
+",
+            "Decimal",
+        ),
+        vec![("other".to_string(), "Decimal".to_string())]
     );
 }
 
@@ -8122,6 +8382,140 @@ fn the_frame_reading_builtins_are_declined() {
     ] {
         let reason = decline(&format!("def f() -> object:\n    return {call}\n"));
         assert!(reason.contains("calling frame"), "{call} gave `{reason}`");
+    }
+}
+
+/// `warnings.warn` blames a frame counted back from its own caller, and the count
+/// starts one frame further out when the caller is compiled. at the default stack
+/// level there is no count to get wrong, so the call is lowered instead
+#[test]
+fn a_warning_at_the_default_level_is_lowered_however_it_is_reached() {
+    for source in [
+        "\
+import warnings
+
+
+def f() -> None:
+    warnings.warn('gone', DeprecationWarning)
+",
+        "\
+from warnings import warn
+
+
+def f() -> None:
+    warn('gone')
+",
+        "\
+import warnings
+
+
+def f() -> None:
+    warnings.warn('gone', DeprecationWarning, stacklevel=1)
+",
+        // zero and negative levels mean the same frame: `warn` walks `stacklevel - 1`
+        // frames and never fewer than none
+        "\
+import warnings
+
+
+def f() -> None:
+    warnings.warn('gone', DeprecationWarning, stacklevel=0)
+",
+        "\
+import warnings
+
+
+def f() -> None:
+    warnings.warn('gone', DeprecationWarning, stacklevel=-2)
+",
+        // `source=None` is the default written out, not a source to carry
+        "\
+import warnings
+
+
+def f() -> None:
+    warnings.warn('gone', DeprecationWarning, 1, None)
+",
+    ] {
+        assert_eq!(declines(source), vec![], "{source}");
+    }
+    // and a `warn` the module writes itself is a different function entirely — which
+    // is why the definition is resolved rather than the spelling matched
+    assert_eq!(
+        declines(
+            "\
+def warn(message: str) -> None:
+    return None
+
+
+def f() -> None:
+    warn('gone')
+"
+        ),
+        vec![]
+    );
+}
+
+/// each guard around that lowering, broken one at a time
+///
+/// every one of these is a shape whose answer the compiler cannot supply, and every
+/// one of them would otherwise reach `warn_explicit` with a context that is not the
+/// one `warn` would have computed
+#[test]
+fn a_warning_the_compiler_cannot_place_is_declined_for_its_own_reason() {
+    for (call, expected) in [
+        // the caller's frame, which may belong to another compiled function that
+        // pushed none either
+        (
+            "warnings.warn('m', UserWarning, stacklevel=2)",
+            "above `stacklevel=1`",
+        ),
+        ("warnings.warn('m', UserWarning, 3)", "above `stacklevel=1`"),
+        (
+            "warnings.warn('m', UserWarning, stacklevel=level)",
+            "computed `stacklevel`",
+        ),
+        // the keyword forces the level to at least two, and does not exist at all
+        // before 3.12 — so accepting even an empty one would answer where python raised
+        (
+            "warnings.warn('m', UserWarning, skip_file_prefixes=())",
+            "`skip_file_prefixes`",
+        ),
+        (
+            "warnings.warn('m', UserWarning, skip_file_prefixes=('/a/',))",
+            "`skip_file_prefixes`",
+        ),
+        // the public `warn_explicit` entry point takes no `source`
+        ("warnings.warn('m', UserWarning, 1, [1])", "a `source`"),
+        ("warnings.warn('m', UserWarning, source=[1])", "a `source`"),
+        // a spread leaves which value fills which parameter unsettled
+        ("warnings.warn('m', *rest)", "a spread argument"),
+        ("warnings.warn('m', **rest)", "a spread argument"),
+        // shapes python itself refuses, left to its own wording
+        (
+            "warnings.warn('m', UserWarning, 1, None, ())",
+            "at most four positional",
+        ),
+        ("warnings.warn(stacklevel=1)", "no message"),
+        (
+            "warnings.warn('m', nonsense=1)",
+            "an argument it does not take",
+        ),
+    ] {
+        let source = format!(
+            "\
+import warnings
+
+
+def f(level: int, rest: tuple) -> None:
+    {call}
+"
+        );
+        let reason = decline(&source);
+        assert!(
+            reason.contains(expected),
+            "{call} gave `{reason}`, which does not mention {expected}"
+        );
     }
 }
 

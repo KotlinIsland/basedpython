@@ -101,6 +101,134 @@ fn environment() -> Option<(String, Toolchain)> {
 /// rather than only by the fact that it raised
 const CAPTURE_HELPER: &str = "\
 import gc
+import warnings
+
+# which module a warning was reported *against*, asked without naming a file
+#
+# `warn` counts frames back from its own caller to pick that module, and records what
+# it showed in that module's `__warningregistry__`. so whether the module under test
+# grew one is the whole of the question a `stacklevel` decides — and unlike the file
+# name in the message, it is spelled the same in both legs. the compiled leg's
+# fallback source runs through `PyRun_String` and names its frames `<string>`
+def _warned_into(module, fn, *args):
+    module.__dict__.pop('__warningregistry__', None)
+    with warnings.catch_warnings():
+        warnings.simplefilter('default')
+        fn(*args)
+    registry = module.__dict__.get('__warningregistry__', {})
+    return sorted(key[0] for key in registry if isinstance(key, tuple))
+
+# every warning a call emitted, in full
+#
+# `_warned_into` answers which module was blamed and nothing else, and a lowering that
+# fills a warning's context in rather than counting it off frames has to be checked on
+# all of that context. only the *base name* of the file, because the two legs are built
+# in directories of their own — the compiled leg carries the absolute path of the
+# source it was built from, exactly as a `.pyc` carries the path it was compiled from.
+# a raise is part of the answer too: the filters turn some warnings into exceptions,
+# and `warn` refuses several argument shapes outright
+import os as _os
+import types as _types
+
+def _warnings_from(fn, *args):
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.resetwarnings()
+        warnings.simplefilter('always')
+        raised = None
+        try:
+            fn(*args)
+        except BaseException as e:
+            raised = type(e).__name__ + ': ' + str(e)
+    return (raised, [(str(w.message), w.category.__name__,
+                      _os.path.basename(w.filename), w.lineno) for w in seen])
+
+# how many times the same warning is actually shown under the default filters. the
+# module's own `__warningregistry__` is what suppresses the repeats, so this says the
+# registry being written is the one python would have written
+def _repeated_warning(module, times=4):
+    module.__dict__.pop('__warningregistry__', None)
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.resetwarnings()
+        warnings.simplefilter('default')
+        for _ in range(times):
+            module.once()
+    return len(seen)
+
+# as `_warned_into`, for a call that python may refuse outright
+#
+# `skip_file_prefixes` is both: before 3.12 writing it at all is a `TypeError`, and from
+# 3.12 it forces the stack level to at least two. so the answer has to carry the raise
+# as well as the module, or one version's half of the question goes unasked
+def _warned_into_safely(module, fn, *args):
+    module.__dict__.pop('__warningregistry__', None)
+    raised = None
+    with warnings.catch_warnings():
+        warnings.resetwarnings()
+        warnings.simplefilter('default')
+        try:
+            fn(*args)
+        except BaseException as e:
+            raised = type(e).__name__ + ': ' + str(e)
+    registry = module.__dict__.get('__warningregistry__', {})
+    return (raised, sorted(key[0] for key in registry if isinstance(key, tuple)))
+
+# what a warning carried as its `source`, which is the object `tracemalloc` hangs an
+# allocation traceback off. it reaches the record and nothing else, so it is asked for
+# separately — and without the file name, since a declined function's frames are named
+# `<string>` in the compiled leg
+def _warned_source(fn, *args):
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.resetwarnings()
+        warnings.simplefilter('always')
+        fn(*args)
+    return [(str(w.message), w.category.__name__, repr(w.source)) for w in seen]
+
+# the module a warning is blamed on, read back through a `module=` filter
+#
+# nothing on the record carries it, and the filters are the only place it shows — which
+# is also the only place it *matters*: a warning blamed on the wrong module is shown
+# when python would hide it, or hidden when python would show it. `warn` reads it out
+# of the frame's globals, so the name is moved about here to reach the branches python
+# takes for one that is missing or is not a string
+_no_name = object()
+
+def _blamed_module(module, fn, name=_no_name):
+    saved = module.__dict__.get('__name__')
+    if name is _no_name:
+        del module.__dict__['__name__']
+    else:
+        module.__dict__['__name__'] = name
+    try:
+        out = []
+        for pattern in (saved, 'nothing', '<string>', 'renamed'):
+            module.__dict__.pop('__warningregistry__', None)
+            with warnings.catch_warnings(record=True) as seen:
+                warnings.resetwarnings()
+                warnings.simplefilter('always')
+                warnings.filterwarnings('ignore', module='^' + pattern + '$')
+                fn()
+            out.append((pattern, len(seen)))
+        return out
+    finally:
+        module.__dict__['__name__'] = saved
+
+# the registry carries a version, and changing the filters invalidates it: a warning
+# already shown is shown again rather than stayed silent about
+def _registry_after_a_filter_change(module):
+    module.__dict__.pop('__warningregistry__', None)
+    out = []
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.resetwarnings()
+        warnings.simplefilter('default')
+        module.once()
+        module.once()
+        out.append(len(seen))
+        warnings.simplefilter('default')
+        module.once()
+        out.append(len(seen))
+    registry = module.__dict__.get('__warningregistry__', {})
+    out.append(sorted(str(key) for key in registry))
+    return out
 
 class _Track:
     def __init__(self, log):
@@ -5670,6 +5798,51 @@ class Rebound(Failed):
             "(m.Rebound(False).tag, m.Rebound(True).tag)",
             "(lambda h: (delattr(h, 'tag'), h.tag))(m.Failed(True))",
             "repr(_capture(delattr, m.Failed(False), 'tag'))",
+        ],
+    );
+}
+
+#[test]
+fn a_defaulted_field_answers_from_under_a_slotted_base() {
+    // a class keeping a dict keeps it in a word at the *front* of its struct, so every
+    // field after it sits eight bytes further along — and the word is reserved for a
+    // whole chain wherever any rung of it keeps one, because a base and a subclass
+    // cannot disagree about where the fields start. `Held` declares `__slots__` and so
+    // wants no dict of its own; `Tagged` under it wants one, which puts the reserved
+    // word into `Held`'s struct as well and moves `Tagged`'s presence byte twice over.
+    //
+    // the byte is reached by a predicate emitted beside the getter rather than by an
+    // offset carried on the descriptor, which is what makes both shapes the same
+    // question. a defaulted field cannot itself be slotted — python refuses a `__slots__`
+    // entry that a class variable also names — so a slotted base is the only way the two
+    // layouts meet
+    agree_python(
+        "clsdefaultslotted",
+        "\
+class Held:
+    __slots__ = ('n',)
+
+    def __init__(self):
+        self.n = 1
+
+
+class Tagged(Held):
+    tag = 'base'
+
+    def __init__(self, own):
+        Held.__init__(self)
+        if own:
+            self.tag = 'own'
+",
+        &[
+            "m.Tagged.tag",
+            "(m.Tagged(False).tag, m.Tagged(True).tag)",
+            "(m.Tagged(False).n, m.Tagged(True).n)",
+            "(lambda h: (delattr(h, 'tag'), h.tag, h.n))(m.Tagged(True))",
+            "repr(_capture(delattr, m.Tagged(False), 'tag'))",
+            // the dict the subclass keeps is what takes a name neither class declares,
+            // and it must not be the place the defaulted field answered from
+            "(lambda h: (setattr(h, 'extra', 9), h.extra, h.tag))(m.Tagged(False))",
         ],
     );
 }
@@ -16140,6 +16313,98 @@ def through_base(b: Base) -> bool:
 }
 
 #[test]
+fn a_field_a_constructor_only_ever_nulls_takes_what_the_module_writes_into_it() {
+    // `self.parent = None` in `__init__` and nothing else in the class is how a linked
+    // structure is written, and the value that matters is the one put there later from
+    // outside. sized for the constructor's assignment alone the field is a slot that
+    // holds nothing but `None`: `link` could not be lowered at all, and the interpreted
+    // `link` python was then left with raised `TypeError: expected None` against the
+    // field's setter. `agree` is what says both halves are fixed — it refuses a decline,
+    // so `link` reaching this point means the write compiled
+    agree_python(
+        "nullfield",
+        "\
+class Node:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.parent = None
+        self.tag = None
+
+    def path(self) -> str:
+        if self.parent is None:
+            return self.name
+        return str(self.parent.name) + '/' + self.name
+
+
+def link(child: Node, parent: Node) -> None:
+    child.parent = parent
+
+
+def label(node: Node, tag: int) -> None:
+    node.tag = tag
+
+
+def build() -> Node:
+    root = Node('root')
+    leaf = Node('leaf')
+    link(leaf, root)
+    label(leaf, 7)
+    return leaf
+",
+        &[
+            "m.build().path()",
+            "m.build().tag",
+            // the field takes whatever the module puts in it, and reads back the same
+            // object rather than a copy of one
+            "[(m.link(a, b), a.parent is b)[1] for a, b in [(m.Node('a'), m.Node('b'))]]",
+            // and it still holds the `None` the constructor wrote, for an instance
+            // nothing linked
+            "(m.Node('x').parent, m.Node('x').tag)",
+            // the write itself: `None` on both legs, and the compiled leg's `TypeError`
+            // where the slot was too narrow for it
+            "_capture(m.link, m.Node('a'), m.Node('b'))",
+            "_capture(m.label, m.Node('a'), 3)",
+        ],
+    );
+}
+
+#[test]
+fn a_field_a_base_only_ever_nulls_takes_a_subclass_write_too() {
+    // a subclass's struct begins with its base's, so the two cannot disagree about what
+    // a field holds. the base is where the widening happens and the subclass copies the
+    // field across, which is what lets a write through a subclass-typed receiver reach a
+    // field the base declared
+    agree_python(
+        "nullfieldbase",
+        "\
+class Base:
+    def __init__(self) -> None:
+        self.owner = None
+
+
+class Sub(Base):
+    def __init__(self) -> None:
+        super().__init__()
+        self.depth = 0
+
+
+def adopt(child: Sub, owner: Base) -> None:
+    child.owner = owner
+
+
+def owner_of(node: Base) -> object:
+    return node.owner
+",
+        &[
+            "[(m.adopt(c, o), m.owner_of(c) is o)[1] for c, o in [(m.Sub(), m.Base())]]",
+            "_capture(m.adopt, m.Sub(), m.Base())",
+            "(m.Sub().owner, m.Sub().depth, m.Base().owner)",
+            "isinstance(m.Sub(), m.Base)",
+        ],
+    );
+}
+
+#[test]
 fn two_definitions_of_one_name_agree() {
     // a `try` / `except` pair each defining the same nested function is real python and
     // appears in the stdlib. the name binds whichever one ran, so a *direct* call cannot
@@ -20292,6 +20557,199 @@ def label_of(shape: Shape) -> str:
 }
 
 #[test]
+fn an_override_reached_through_a_subscript_agrees() {
+    // the receiver is an element of a `list[Shape]` rather than a name, so it is
+    // narrowed to `Shape` on its way out of the subscript — and the dispatch runs on
+    // the object from before that narrowing, because narrowing to a *base* is the one
+    // thing here that walks an mro. everything the dispatch cannot see still has to
+    // reach what the protocol would have found
+    agree_python(
+        "dispatchitem",
+        "\
+class Shape:
+    def __init__(self, size: int):
+        self.size = size
+
+    def area(self) -> int:
+        return self.size
+
+
+class Square(Shape):
+    def area(self) -> int:
+        return self.size * self.size
+
+
+class Wide(Shape):
+    pass
+
+
+def first_area(shapes: list[Shape]) -> int:
+    return shapes[0].area()
+
+
+def total(shapes: list[Shape]) -> int:
+    running = 0
+    i = 0
+    while i < len(shapes):
+        running = running + shapes[i].area()
+        i = i + 1
+    return running
+",
+        &[
+            "m.first_area([m.Shape(5)])",
+            "m.first_area([m.Square(5)])",
+            // inherits the method rather than writing one, so no test matches it
+            "m.first_area([m.Wide(5)])",
+            "m.total([m.Shape(2), m.Square(3), m.Wide(4)])",
+            // a subclass the interpreter writes has a type of its own
+            "m.first_area([type('Tri', (m.Shape,), {'area': lambda self: 100})(5)])",
+            // rebound after import, which no type test can see
+            "(setattr(m.Shape, 'area', lambda self: 99), m.total([m.Shape(5), m.Square(5)]))",
+            // a value on the instance shadows the class's method, and the shadow
+            // guard on the devirtualised path is what has to notice
+            "m.first_area([m.Wide(5)])",
+        ],
+    );
+}
+
+#[test]
+fn a_subscripted_receiver_of_the_wrong_class_still_raises() {
+    // the narrowing to the element's declared class is emitted in the arm no
+    // candidate matched rather than before the dispatch, so that the mro walk it
+    // costs is not paid on every trip. moving it must not lose it: a receiver that is
+    // not a `Shape` at all reaches that arm, and has to meet exactly the `TypeError`
+    // it met when the check came first — not the `AttributeError` the protocol call
+    // beyond it would raise
+    //
+    // this is compiled-only on purpose. the check is the compiler's own, so the
+    // interpreted twin does not raise it and the two legs cannot be compared here
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_dispatchcheck");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Shape:
+    def __init__(self, size: int):
+        self.size = size
+
+    def area(self) -> int:
+        return self.size
+
+
+class Square(Shape):
+    def area(self) -> int:
+        return self.size * self.size
+
+
+def first_area(shapes: list[Shape]) -> int:
+    return shapes[0].area()
+";
+    if build_source(
+        source,
+        "by_diff_dispatchcheck",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_dispatchcheck as m\n\
+         print(m.first_area([m.Shape(5)]), m.first_area([m.Square(5)]))\n\
+         class Duck:\n\
+        \x20   def area(self):\n        return 7\n\
+         for bad in (object(), 1, None, Duck()):\n\
+        \x20   try:\n        print(m.first_area([bad]))\n\
+        \x20   except TypeError as e:\n        print('TypeError:', e)\n",
+    );
+    // the duck is caught too: it is not a `Shape`, and the check does not care that
+    // it happens to answer the name
+    assert_eq!(
+        out,
+        "5 25\n\
+         TypeError: expected by_diff_dispatchcheck.Shape, got object\n\
+         TypeError: expected by_diff_dispatchcheck.Shape, got int\n\
+         TypeError: expected by_diff_dispatchcheck.Shape, got NoneType\n\
+         TypeError: expected by_diff_dispatchcheck.Shape, got Duck"
+    );
+}
+
+#[test]
+fn a_dispatched_call_does_not_run_an_argument_before_checking_its_receiver() {
+    // moving the receiver's narrowing down to the dispatch's last arm moves it past
+    // wherever the arguments are evaluated, so it is only offered for a call that has
+    // none. this is what that restriction is for: with an argument in hand, a
+    // receiver of the wrong class has to be caught before the argument's side effect
+    // runs, exactly as it was when the check came first
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_dispatchorder");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+LOG = []
+
+
+def noisy() -> int:
+    LOG.append(1)
+    return 2
+
+
+class Shape:
+    def __init__(self, size: int):
+        self.size = size
+
+    def scaled(self, by: int) -> int:
+        return self.size * by
+
+
+class Square(Shape):
+    def scaled(self, by: int) -> int:
+        return self.size * self.size * by
+
+
+def scale_first(shapes: list[Shape]) -> int:
+    return shapes[0].scaled(noisy())
+";
+    if build_source(
+        source,
+        "by_diff_dispatchorder",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_dispatchorder as m\n\
+         print(m.scale_first([m.Shape(5)]), m.scale_first([m.Square(5)]))\n\
+         m.LOG.clear()\n\
+         try:\n\
+        \x20   m.scale_first([object()])\n\
+         except TypeError as e:\n\
+        \x20   print('TypeError:', e)\n\
+         print('argument ran:', len(m.LOG))\n",
+    );
+    assert_eq!(
+        out,
+        "10 50\n\
+         TypeError: expected by_diff_dispatchorder.Shape, got object\n\
+         argument ran: 0"
+    );
+}
+
+#[test]
 fn a_subclass_that_writes_no_init_runs_the_base_one() {
     // a subclass's fields *are* its base's, so reading "has fields" as "has something
     // to initialize" synthesized a constructor taking one argument per inherited
@@ -23813,6 +24271,286 @@ def owner() -> object:
     return sys._getframe().f_globals.get('marker')
 ",
         &["m.owner()"],
+    );
+}
+
+#[test]
+fn a_warning_at_the_default_level_carries_its_own_context() {
+    // `warnings.warn` picks the module to report against by counting frames back from
+    // its own caller, so a compiled caller — which pushes no frame — moves the count
+    // one module outwards. that decides the `file:line` the message prints and, through
+    // the blamed module's `__name__`, whether the filters show it at all:
+    // `urllib.request.URLopener.__init__` warns with `stacklevel=3` and the compiled leg
+    // printed nothing where python printed a `DeprecationWarning`.
+    //
+    // at the default stack level there is nothing to count — the frame `warn` would
+    // have read is the warning function's own — so the call is lowered into
+    // `warn_explicit` with that context written in, and every one of these compiles
+    agree_python(
+        "warnhere",
+        "\
+import warnings
+
+
+def plain() -> None:
+    warnings.warn('plain')
+
+
+def deprecated() -> None:
+    warnings.warn('gone', DeprecationWarning)
+
+
+def written_level() -> None:
+    warnings.warn('one', DeprecationWarning, stacklevel=1)
+
+
+def zero_level() -> None:
+    warnings.warn('nought', DeprecationWarning, stacklevel=0)
+
+
+def negative_level() -> None:
+    warnings.warn('under', DeprecationWarning, stacklevel=-4)
+
+
+def by_keyword() -> None:
+    warnings.warn(message='kw', category=DeprecationWarning, stacklevel=1)
+
+
+def no_source() -> None:
+    warnings.warn('unsourced', DeprecationWarning, source=None)
+
+
+def computed(text: str) -> None:
+    warnings.warn('made ' + text, DeprecationWarning)
+",
+        &[
+            "_warnings_from(m.plain)",
+            "_warnings_from(m.deprecated)",
+            "_warnings_from(m.written_level)",
+            "_warnings_from(m.zero_level)",
+            "_warnings_from(m.negative_level)",
+            "_warnings_from(m.by_keyword)",
+            "_warnings_from(m.no_source)",
+            "_warnings_from(m.computed, 'up')",
+            "_warned_into(m, m.plain)",
+            "_warned_into(m, m.deprecated)",
+        ],
+    );
+}
+
+#[test]
+fn a_warning_repeated_is_shown_as_often_as_python_shows_it() {
+    // the module's `__warningregistry__` is what stops the same warning being printed
+    // twice, and it is the *blamed* module's — so a lowering that wrote its own
+    // registry somewhere else, or made a fresh one each call, would keep printing.
+    // the version key is the other half: mutating the filters clears the registry, and
+    // a warning already shown is then shown again
+    agree_python(
+        "warnrepeat",
+        "\
+import warnings
+
+
+def once() -> None:
+    warnings.warn('again', DeprecationWarning)
+",
+        &[
+            "[m.once() for _ in range(3)] and None",
+            "_warned_into(m, m.once)",
+            "_repeated_warning(m)",
+            "_registry_after_a_filter_change(m)",
+        ],
+    );
+}
+
+#[test]
+fn a_warning_is_blamed_on_the_module_python_blames_it_on() {
+    // the whole defect this lowering fixes is a warning blamed on the wrong module, so
+    // this asks the question directly rather than through the file name. `warn` takes
+    // the blamed module from the frame's `__name__`, keeping a string or `None` and
+    // standing in `<string>` for anything else — a missing name included, which is a
+    // branch of the C accelerator that `warnings.py` does not have
+    agree_python(
+        "warnblame",
+        "\
+import warnings
+
+
+def f() -> None:
+    warnings.warn('blame', DeprecationWarning)
+",
+        &[
+            "_blamed_module(m, m.f, m.__name__)",
+            "_blamed_module(m, m.f, 'renamed')",
+            "_blamed_module(m, m.f, None)",
+            "_blamed_module(m, m.f, 5)",
+            "_blamed_module(m, m.f)",
+        ],
+    );
+}
+
+#[test]
+fn a_warning_takes_its_category_from_the_shapes_python_takes_it_from() {
+    // `warn`'s preamble decides the category before any of the context does, and the
+    // rules are not the obvious ones: a `Warning` *instance* supplies it whatever was
+    // written, the instance test honours a `__class__` property while the category
+    // taken is the real type, and a category that is not a `Warning` subclass raises
+    // with a wording of python's own. the runtime helper reproduces all of it, and
+    // this is where that is checked rather than asserted.
+    //
+    // the refusals name the offending *type*, and python builds that name out of
+    // `tp_name` — which an emitted class carries dotted, where its interpreted twin's
+    // is bare. that difference belongs to how classes are emitted rather than to
+    // warnings: `'t.Marker' object is not callable` against `'Marker' object is not
+    // callable` is the same gap with no warning in sight. so the refusals here are
+    // asked with categories whose type is the same object in both legs
+    agree_python(
+        "warncategory",
+        "\
+import warnings
+
+
+class Mine(UserWarning):
+    pass
+
+
+class Deeper(Mine):
+    pass
+
+
+class NotAWarning:
+    pass
+
+
+class Liar:
+    @property
+    def __class__(self) -> type:
+        return Mine
+
+
+def instance() -> None:
+    warnings.warn(Mine('inst'))
+
+
+def instance_overrides(category: type) -> None:
+    warnings.warn(Mine('override'), category)
+
+
+def deep_instance() -> None:
+    warnings.warn(Deeper('deep'))
+
+
+def category_none() -> None:
+    warnings.warn('none', None)
+
+
+def given(category: object) -> None:
+    warnings.warn('given', category)
+
+
+def message(value: object) -> None:
+    warnings.warn(value, Mine)
+
+
+def liar() -> None:
+    warnings.warn(Liar())
+",
+        &[
+            "_warnings_from(m.instance)",
+            "_warnings_from(m.instance_overrides, DeprecationWarning)",
+            "_warnings_from(m.deep_instance)",
+            "_warnings_from(m.category_none)",
+            "_warnings_from(m.given, m.Mine)",
+            "_warnings_from(m.given, m.NotAWarning)",
+            "_warnings_from(m.given, int)",
+            "_warnings_from(m.given, 3)",
+            "_warnings_from(m.given, 'Mine')",
+            "_warnings_from(m.given, UserWarning('x'))",
+            "_warnings_from(m.given, None)",
+            // a non-type that names `Warning` among its bases: `issubclass` says yes
+            // where a type check says no, and python's own test is `issubclass` — so
+            // this reaches the *call* and fails there instead. built out of
+            // `SimpleNamespace` rather than a class of the module's own, because the
+            // refusal names a type through `tp_name`
+            "_warnings_from(m.given, _types.SimpleNamespace(__bases__=(Warning,)))",
+            "_warnings_from(m.message, 5)",
+            "_warnings_from(m.message, None)",
+            "_warnings_from(m.liar)",
+        ],
+    );
+}
+
+#[test]
+fn a_warning_that_walks_frames_answers_from_the_interpreted_definition() {
+    // above the default stack level the frame to blame is the *caller's*, and how many
+    // frames are missing under a compiled function is not a static question: a compiled
+    // function calling another compiled one loses both, so nothing at the call site can
+    // say how far out the real caller is. each of these is left to its interpreted
+    // definition, which is why the answers still match.
+    //
+    // asked through `_warned_into` rather than `_warnings_from`, because a declined
+    // function's frames are named `<string>`: the compiled leg reaches its interpreted
+    // definition through `PyRun_String`, which has no file to name
+    agree_python_with_declines(
+        "warnstack",
+        "\
+import warnings
+
+
+def far() -> None:
+    warnings.warn('far', DeprecationWarning, stacklevel=2)
+
+
+def further() -> None:
+    warnings.warn('further', DeprecationWarning, stacklevel=3)
+
+
+def computed(level: int) -> None:
+    warnings.warn('computed', DeprecationWarning, stacklevel=level)
+
+
+def spread(rest: tuple) -> None:
+    warnings.warn('spread', *rest)
+
+
+def sourced() -> None:
+    warnings.warn('sourced', ResourceWarning, source=[1, 2])
+
+
+def skipped() -> None:
+    warnings.warn('skipped', DeprecationWarning, skip_file_prefixes=('/nowhere/',))
+
+
+def skipped_over_nothing() -> None:
+    warnings.warn('nothing', DeprecationWarning, skip_file_prefixes=())
+
+
+def too_many() -> None:
+    warnings.warn('crowded', DeprecationWarning, 1, None, ())
+
+
+def unknown_keyword() -> None:
+    warnings.warn('odd', DeprecationWarning, nonsense=1)
+",
+        &[
+            "_warned_into(m, m.far)",
+            "_warned_into(m, m.further)",
+            "_warned_into(m, m.computed, 1)",
+            "_warned_into(m, m.computed, 2)",
+            "_warned_into(m, m.spread, (DeprecationWarning, 2))",
+            // the `source` is on the record and nowhere else, so a lowering that
+            // dropped it would be invisible to every other assertion here
+            "_warned_source(m.sourced)",
+            // a non-empty prefix list forces the level to at least two, and the
+            // keyword does not exist at all before 3.12 — where python raises for
+            // both of these and the compiled leg has to raise with it
+            "_warned_into_safely(m, m.skipped)",
+            "_warned_into_safely(m, m.skipped_over_nothing)",
+            // shapes python refuses outright: a lowering that read the arguments it
+            // knows and ignored the rest would answer where python raised
+            "_warned_into_safely(m, m.too_many)",
+            "_warned_into_safely(m, m.unknown_keyword)",
+        ],
     );
 }
 
