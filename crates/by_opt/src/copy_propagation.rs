@@ -330,6 +330,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::Extend { dest, .. }
         | Op::CallUnpacked { dest, .. }
         | Op::StrConcat { dest, .. }
+        | Op::StrConcatInt { dest, .. }
         | Op::Unary { dest, .. }
         | Op::Box { dest, .. }
         | Op::IntToFloat { dest, .. }

@@ -907,38 +907,14 @@ static inline char By_Truthy(PyObject *o) {
 #define By_TypeData(obj, cls) ((void *)(obj))
 #endif
 
-/* whether an emitted class may keep an instance dict beside its layout
- *
- * a managed dict lives in the pre-header, so it is the one form that leaves the struct,
- * its base's prefix and every field offset alone — but walking and releasing it is
- * `PyObject_VisitManagedDict` and `PyObject_ClearManagedDict`, which 3.13 published and
- * nothing below it offers outside the internal headers. so a module holding such a class
- * is left to its interpreted definitions on an older interpreter, decided at import
- * rather than when the C is written */
-#if PY_VERSION_HEX >= 0x030D0000
-#define BY_HAS_MANAGED_DICT 1
-#define BY_MANAGED_DICT_FLAG Py_TPFLAGS_MANAGED_DICT
-#define By_VisitManagedDict(obj, visit, arg) PyObject_VisitManagedDict((obj), (visit), (arg))
-#define By_ClearManagedDict(obj) PyObject_ClearManagedDict(obj)
-#else
-#define BY_HAS_MANAGED_DICT 0
-/* the flag is spelled in a static initializer, which is written whatever the interpreter
- * — and below 3.11 there is no such flag to name at all. these three are never reached:
- * the module falls back before any instance of such a class exists */
-#define BY_MANAGED_DICT_FLAG 0
-#define By_VisitManagedDict(obj, visit, arg) ((void)(obj), (void)(visit), (void)(arg))
-#define By_ClearManagedDict(obj) ((void)(obj))
-#endif
-
 /* the flag naming a type whose instances keep their attributes *inline*, where reading
  * the dict is what builds it
  *
- * [`By_DictShadows`] rests on being able to look at an instance's dict without creating
- * one, and `_PyObject_GetDictPtr` gives that for every storage but this: for an inline
- * type it materialises a dict from the values first, so a read there would be an
- * allocation per instance rather than a load. 3.13 is where the two became separate
- * flags — before it every managed dict was an inline one, so naming the managed flag
- * there names exactly the same set of types */
+ * such a type is refused a licence outright: an inline type's dict does not exist until
+ * something asks for it, so there is no word to read and asking is an allocation per
+ * instance. 3.13 is where the two became separate flags — before it every managed dict
+ * was an inline one, so naming the managed flag there names exactly the same set of
+ * types */
 #if PY_VERSION_HEX >= 0x030D0000
 #define BY_INLINE_VALUES_FLAG Py_TPFLAGS_INLINE_VALUES
 #elif PY_VERSION_HEX >= 0x030B0000
@@ -947,21 +923,28 @@ static inline char By_Truthy(PyObject *o) {
 #define BY_INLINE_VALUES_FLAG 0
 #endif
 
-/* the flags a class asking for an instance dict declares, or nothing where the running
- * interpreter has no managed dict to give it
+/* the member type naming a `Py_ssize_t`, which is how a spec says where its dict is
  *
- * a dict of arbitrary values has to be one the collector walks, so the two flags go
- * together and are named together — a type carrying only one of them is either a dict the
- * collector cannot reach or a collected type with nothing extra to reach. below 3.13
- * there is neither, and the class is built exactly as every emitted class was before
- * dicts existed: its layout is the whole of it. a class whose *generated* code cannot run
- * without a dict is not left to that — the module holding one refuses to install anything
- * at all down there */
-#if BY_HAS_MANAGED_DICT
-#define BY_INSTANCE_DICT_FLAGS (Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_MANAGED_DICT)
+ * `PyType_Spec` has no field for `tp_dictoffset` and no slot id for it either. the one
+ * way to set it on a type built from a spec is a member called `__dictoffset__`, which
+ * `PyType_FromSpec` lifts out of the table rather than binding as an attribute. 3.12
+ * renamed every member type and left the old spellings in `structmember.h` */
+#if PY_VERSION_HEX >= 0x030C0000
+#define BY_DICT_OFFSET_MEMBER Py_T_PYSSIZET
+#define BY_DICT_OFFSET_FLAGS Py_READONLY
 #else
-#define BY_INSTANCE_DICT_FLAGS 0
+#include <structmember.h>
+#define BY_DICT_OFFSET_MEMBER T_PYSSIZET
+#define BY_DICT_OFFSET_FLAGS READONLY
 #endif
+
+/* the flags a class asking for an instance dict declares
+ *
+ * the dict holds whatever was put in it, so the collector has to be able to walk it, and
+ * the class hands over a traverse and a clear that reach it. where the dict itself sits
+ * is not a flag: it is a word in the class's own struct, named to the type through
+ * [`BY_DICT_OFFSET_MEMBER`], so that a call site can read it with one load */
+#define BY_INSTANCE_DICT_FLAGS Py_TPFLAGS_HAVE_GC
 
 /* reading a local on a path that never assigned it. the phrasing is the running
  * python's, not the compiler's — 3.11 rewrote it, and since 3.11 is the floor there is
@@ -1427,14 +1410,27 @@ static inline int By_SpecTakesBases(PyObject *bases) {
  * a class statement works the shape out from every base at once, so where the offsets
  * disagree with the layout base the interpreted definition is what answers.
  *
- * a spec that *asked* for a managed dict is the one exception, and the spec is passed in
- * so that asking can be told from inheriting: python keeps a managed dict in a pre-header
- * it allocates itself, so the room is there and the offset — the sentinel `-1` — is the
- * answer that was wanted. without this a decorated class silently kept its interpreted
- * definition while every compiled function went on reading that definition's instances as
- * its own struct */
+ * a spec that *asked* for a dict of its own is the one exception, and the spec is passed
+ * in so that asking can be told from inheriting: the class declared a word for it in its
+ * own struct, so the room is there and the offset naming that word is the answer that was
+ * wanted. without this a decorated class silently kept its interpreted definition while
+ * every compiled function went on reading that definition's instances as its own struct */
+static inline Py_ssize_t By_SpecDictOffset(PyType_Spec *spec) {
+    PyType_Slot *slot;
+    if (spec == NULL || spec->slots == NULL) return 0;
+    for (slot = spec->slots; slot->slot != 0; slot++) {
+        PyMemberDef *member;
+        if (slot->slot != Py_tp_members || slot->pfunc == NULL) continue;
+        for (member = (PyMemberDef *)slot->pfunc; member->name != NULL; member++) {
+            if (strcmp(member->name, "__dictoffset__") == 0) return member->offset;
+        }
+    }
+    return 0;
+}
+
 static inline int By_OffsetsHoldUp(PyTypeObject *type, PyType_Spec *spec) {
     PyTypeObject *base = type->tp_base;
+    Py_ssize_t asked;
     if (base == NULL) {
         return 1;
     }
@@ -1444,8 +1440,8 @@ static inline int By_OffsetsHoldUp(PyTypeObject *type, PyType_Spec *spec) {
     if (type->tp_dictoffset == base->tp_dictoffset) {
         return 1;
     }
-    return spec != NULL && (spec->flags & BY_MANAGED_DICT_FLAG) != 0
-           && type->tp_dictoffset == -1;
+    asked = By_SpecDictOffset(spec);
+    return asked != 0 && type->tp_dictoffset == asked;
 }
 
 /* the type for a class whose fields sit past a base's instance, or nothing at all
@@ -1712,11 +1708,41 @@ static inline int By_SetInNamespace(PyObject *ns, const char *key, PyObject *val
     return failed;
 }
 
+/* one attribute an emitted type keeps in its instance layout
+ *
+ * `optional` is the field python's own class only writes on some paths. `tp_alloc` zeroes
+ * the presence byte beside such a field, so leaving one out is exactly the state an
+ * `__init__` that skipped it produces — while a field the layout treats as always defined
+ * has no presence byte and no check at any read, so leaving *that* one out reads back as
+ * whatever zero means for its representation. an unwritten `PyObject *` raises, but an
+ * unwritten tagged integer answers `0` and an unwritten `char` answers `False`, quietly.
+ * that is the whole reason the names are published rather than guessed at from the getset
+ * table, which cannot tell a field from a property */
+typedef struct {
+    const char *name;
+    int optional;
+} By_Field;
+
+/* every interpreted definition this module replaced, and what stands where each did
+ *
+ * `twins[i]` is the class a `class` statement left and `types[i]` the emitted type that
+ * took its name — NULL until that type is built, which is what makes a constant naming a
+ * class further down the module a refusal rather than a stale copy. `layouts[i]` is the
+ * instance layout of `types[i]`, or NULL for a class whose instances cannot be moved onto
+ * it; see `By_MovedInstance`. `moved` is the mapping from a twin's *instance* to the
+ * instance that replaced it, and it is what keeps two holders of one object agreeing */
+typedef struct {
+    PyObject *const *twins;
+    PyObject *const *types;
+    const By_Field *const *layouts;
+    Py_ssize_t count;
+    PyObject *moved;
+} By_Twins;
+
 /* what a value carried onto an emitted type becomes, as a new reference — defined with the
  * rest of the twin machinery, and named here because a class namespace is written before
  * that */
-static PyObject *By_TwinReplacement(PyObject *value, PyObject *const *twins,
-                                    PyObject *const *types, Py_ssize_t count);
+static PyObject *By_TwinReplacement(PyObject *value, const By_Twins *twins);
 
 /* the class-level constants a class body wrote, and where their values come from
  *
@@ -1724,16 +1750,14 @@ static PyObject *By_TwinReplacement(PyObject *value, PyObject *const *twins,
  * is the only place the same object can come from — so the body that definition wrote is
  * what they are read off, under the substitution every carried attribute takes. that body
  * is captured while the fallback source runs and before any of the class's own decorators
- * are handed it; `By_RunModuleBody` says why the finished class will not do. `twins` and
- * `types` are the module's arrays and `classes` how many entries they hold; `body` is NULL
- * for a class no interpreted `class` statement wrote, and then there is nothing to carry */
+ * are handed it; `By_RunModuleBody` says why the finished class will not do. `twins` is the
+ * module's map of replaced definitions; `body` is NULL for a class no interpreted `class`
+ * statement wrote, and then there is nothing to carry */
 typedef struct {
     PyObject *body;
     const char *const *names;
     Py_ssize_t count;
-    PyObject *const *twins;
-    PyObject *const *types;
-    Py_ssize_t classes;
+    const By_Twins *twins;
 } By_ClassConstants;
 
 /* the value one of them takes, as a new reference
@@ -1751,7 +1775,7 @@ static inline PyObject *By_ConstantValue(const By_ClassConstants *constants, Py_
     if (value == NULL) return NULL;
     /* a value that only *reaches* a twin keeps what the body gave it, exactly as
      * `By_CopyClassConstant` leaves it — this is the value half of that copy */
-    stands = By_TwinReplacement(value, constants->twins, constants->types, constants->classes);
+    stands = By_TwinReplacement(value, constants->twins);
     return stands != NULL ? stands : By_NewRef(value);
 }
 
@@ -2181,15 +2205,23 @@ static inline PyObject *By_CallMethod(PyObject *receiver, PyObject *name, PyObje
  * exists only so that `obj.extra = 3` works the way the interpreted twin does — so the
  * dict is very nearly always absent, and absent is a load and a comparison to establish.
  *
- * a type whose instances keep their attributes inline is never asked, because asking is
- * what would build the dict; [`BY_INLINE_VALUES_FLAG`] names those and they are refused
- * where a licence is taken instead. anything the question cannot be answered for is
- * answered `1`, which is the refusal */
-static inline int By_DictShadows(PyObject *o, PyObject *name) {
-    if (Py_TYPE(o)->tp_dictoffset == 0) return 0;
-    PyObject **dict = _PyObject_GetDictPtr(o);
-    if (dict == NULL || *dict == NULL) return 0;
-    int found = PyDict_Contains(*dict, name);
+ * `offset` is where the dict pointer sits in the instance, which is `tp_dictoffset` and
+ * so is settled long before the call: zero for a class whose instances have no dict at
+ * all. it is passed rather than read here because the one thing this must not do is
+ * *call* — `_PyObject_GetDictPtr` is what a question about a managed dict has to go
+ * through, it lives in libpython so it cannot be inlined, and on a loop calling one
+ * method it was **89 per cent** of the running time: the call is a barrier the C
+ * compiler cannot keep the loop's values in registers across.
+ *
+ * every offset that reaches here is therefore non-negative. a negative one is the managed
+ * dict this cannot read, and recording the offset is where such a type is refused — the
+ * refusal leaves the licence's version zero and the site's method NULL, both of which are
+ * tested before this is, so a refused type never reaches the load at all */
+static inline int By_DictShadowsAt(PyObject *o, Py_ssize_t offset, PyObject *name) {
+    if (offset == 0) return 0;
+    PyObject *dict = *(PyObject **)((char *)o + offset);
+    if (dict == NULL) return 0;
+    int found = PyDict_Contains(dict, name);
     if (found < 0) {
         PyErr_Clear();
         return 1;
@@ -2214,29 +2246,40 @@ static inline int By_DictShadows(PyObject *o, PyObject *name) {
  * its own attribute caches watch — so the version that held when the answer was
  * checked is enough for every later call to test with one comparison.
  *
- * a value on the *instance* under the same name is caught by [`By_DictShadows`], which
- * is why the name is kept here rather than only being read at import. nothing about the
- * class says whether one instance of it has been written to.
+ * a value on the *instance* under the same name is caught by [`By_DictShadowsAt`], which
+ * is why the name and the offset its dict sits at are kept here rather than only being
+ * read at import. nothing about the class says whether one instance of it has been
+ * written to.
  *
  * a zero version means the licence was refused: the name answers something this module
- * did not compile, the type will not carry a version, or its instances keep attributes
- * inline and so cannot be asked the third question. no version tag is ever zero, so a
- * call site armed with zero takes the ordinary call for the life of the process, which
- * is what it did before any of this */
+ * did not compile, the type will not carry a version, or its instances keep their
+ * attributes somewhere the third question cannot be asked of. no version tag is ever
+ * zero, so a call site armed with zero takes the ordinary call for the life of the
+ * process, which is what it did before any of this */
 typedef struct {
     unsigned int version;
     PyObject *name;
+    /* `tp_dictoffset`, which for every type that gets this far is a word in the
+     * instance — see [`By_DictShadowsAt`] */
+    Py_ssize_t dict_offset;
 } ByMethodLicence;
 
-#define BY_METHOD_LICENCE_INIT { 0u, NULL }
+#define BY_METHOD_LICENCE_INIT { 0u, NULL, 0 }
 
 static inline void By_ArmMethod(ByMethodLicence *licence, PyObject *type, const char *name,
                                 PyCFunction body) {
     licence->version = 0u;
     licence->name = NULL;
+    licence->dict_offset = 0;
     if (type == NULL || !PyType_Check(type)) return;
     PyTypeObject *owner = (PyTypeObject *)type;
     if (owner->tp_flags & BY_INLINE_VALUES_FLAG) return;
+    /* a negative offset is a *managed* dict, which lives outside the instance and can
+     * only be reached through a call. refusing one keeps the test at the call site down
+     * to loads — and no emitted class has one, because a class asking for a dict is
+     * given a word of its own for it */
+    if (owner->tp_dictoffset < 0) return;
+    licence->dict_offset = owner->tp_dictoffset;
     /* the lookup is also what makes the interpreter assign a version tag: a type
      * nothing has been read from yet has none at all */
     PyObject *found = PyObject_GetAttrString(type, name);
@@ -2272,7 +2315,7 @@ static inline char By_MethodStands(PyObject *o, PyObject *type,
                                    const ByMethodLicence *licence) {
     return (char)(licence->version != 0u && o != NULL && (PyObject *)Py_TYPE(o) == type
                   && ((PyTypeObject *)type)->tp_version_tag == licence->version
-                  && !By_DictShadows(o, licence->name));
+                  && !By_DictShadowsAt(o, licence->dict_offset, licence->name));
 }
 
 /* what one call site remembers about the method name it keeps calling
@@ -2305,7 +2348,7 @@ static inline char By_MethodStands(PyObject *o, PyObject *type,
  * pays nothing for it, and a site whose one class is written to a handful of times
  * still gets to re-settle.
  *
- * four fields cannot be written as one, so what keeps a *reader* from seeing half of
+ * the fields cannot be written as one, so what keeps a *reader* from seeing half of
  * one arming and half of another is that only one thread runs at a time. a site is
  * therefore only used where that holds: an emitted module says `Py_MOD_GIL_NOT_USED`,
  * and on a free-threaded build every call takes the ordinary path instead. two threads
@@ -2316,9 +2359,12 @@ typedef struct {
     unsigned int version;
     PyMethodDef *method;
     unsigned int misses;
+    /* where this type keeps an instance's dict, for the shadow test the answer is used
+     * under — see [`By_DictShadowsAt`] */
+    Py_ssize_t dict_offset;
 } ByMethodSite;
 
-#define BY_METHOD_SITE_INIT { NULL, 0u, NULL, 0u }
+#define BY_METHOD_SITE_INIT { NULL, 0u, NULL, 0u, 0 }
 
 /* how many times a site re-derives its answer before it settles for the ordinary call
  *
@@ -2340,11 +2386,11 @@ typedef PyObject *(*ByFastKwCall)(PyObject *, PyObject *const *, Py_ssize_t, PyO
  *
  * - a metaclass, or a `tp_getattro` of the type's own, can answer the name with
  *   something other than what is on the type
- * - a type whose instances keep their attributes inline: an instance's own value
- *   shadows the type's entry, so the answer only stands where the receiver can be
- *   asked, and asking an inline type is what builds the dict it was asked about.
- *   every other storage is a load, made at the call rather than here — nothing about
- *   the class says whether one instance of it has been written to
+ * - a type whose instances keep their attributes inline, or in a managed dict: an
+ *   instance's own value shadows the type's entry, so the answer only stands where the
+ *   receiver can be asked, and neither of those two can be asked with a load. every
+ *   other storage is one, made at the call rather than here — nothing about the class
+ *   says whether one instance of it has been written to
  * - anything but a builtin method descriptor has a `__get__` of its own to run
  * - a calling convention the site cannot lay the arguments out for, which is every
  *   convention that wants a tuple, and every one that wants an argument this does not
@@ -2374,9 +2420,12 @@ static void By_ArmMethodSite(ByMethodSite *site, PyTypeObject *tp, PyObject *nam
     site->type = (PyObject *)tp;
     site->version = tp->tp_version_tag;
     site->method = NULL;
+    site->dict_offset = 0;
     if (!Py_IS_TYPE(tp, &PyType_Type)) return;
     if (tp->tp_getattro != PyObject_GenericGetAttr) return;
     if (tp->tp_flags & BY_INLINE_VALUES_FLAG) return;
+    if (tp->tp_dictoffset < 0) return;
+    site->dict_offset = tp->tp_dictoffset;
     PyObject *found = PyObject_GetAttr((PyObject *)tp, name);
     if (found == NULL) {
         PyErr_Clear();
@@ -2440,7 +2489,8 @@ static inline PyObject *By_CallMethodSite(ByMethodSite *site, PyObject *receiver
             By_ArmMethodSite(site, tp, name, nargs);
         }
         PyMethodDef *method = site->method;
-        if (BY_LIKELY(method != NULL) && BY_LIKELY(!By_DictShadows(receiver, name))) {
+        if (BY_LIKELY(method != NULL)
+            && BY_LIKELY(!By_DictShadowsAt(receiver, site->dict_offset, name))) {
             switch (method->ml_flags
                     & (METH_VARARGS | METH_KEYWORDS | METH_NOARGS | METH_O | METH_FASTCALL)) {
             case METH_NOARGS:
@@ -2620,11 +2670,10 @@ static PyTypeObject *By_UnionType(void) {
  * filled one class at a time and a constant is copied as each type is made, so a body
  * naming a class further down the module is asking about a replacement that does not exist
  * yet. it is not safe as itself either — it is about to stop being what its name means */
-static PyObject *By_TwinFor(PyObject *value, PyObject *const *twins,
-                            PyObject *const *types, Py_ssize_t count) {
+static PyObject *By_TwinFor(PyObject *value, const By_Twins *twins) {
     Py_ssize_t index;
-    for (index = 0; index < count; index++) {
-        if (value == twins[index] && types[index] != NULL) return types[index];
+    for (index = 0; index < twins->count; index++) {
+        if (value == twins->twins[index] && twins->types[index] != NULL) return twins->types[index];
     }
     return NULL;
 }
@@ -2658,17 +2707,15 @@ static PyObject *By_TwinFor(PyObject *value, PyObject *const *twins,
  * a container keeps settling its remaining members after one of them has been refused.
  * that matters for exactly that caller: a dict with one unreachable value still has every
  * other entry moved, and only the *answer* records that it cannot be carried */
-static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
-                                 PyObject *const *types, Py_ssize_t count, int depth);
+static PyObject *By_SettledValue(PyObject *value, const By_Twins *twins, int depth);
 
 /* whether settling `value` left it as the very object it was
  *
  * the question a place that cannot be written asks — a set's member, a dict's key, what a
  * property holds. anything it captured is settled where it stands, and a value that would
  * have had to be *replaced* is a refusal rather than a move */
-static int By_SettlesInPlace(PyObject *value, PyObject *const *twins,
-                             PyObject *const *types, Py_ssize_t count, int depth) {
-    PyObject *stands = By_SettledValue(value, twins, types, count, depth);
+static int By_SettlesInPlace(PyObject *value, const By_Twins *twins, int depth) {
+    PyObject *stands = By_SettledValue(value, twins, depth);
     int same = stands == value;
     Py_XDECREF(stands);
     return same;
@@ -2679,8 +2726,7 @@ static int By_SettlesInPlace(PyObject *value, PyObject *const *twins,
  * a twin used as a *key* is refused rather than moved: a dict is keyed on the object a
  * class hashes as, so replacing one is a removal and an insertion, and doing that to a
  * mapping somebody else is holding is a bigger claim than this has evidence for */
-static int By_SettleDictValues(PyObject *dict, PyObject *const *twins,
-                               PyObject *const *types, Py_ssize_t count, int depth) {
+static int By_SettleDictValues(PyObject *dict, const By_Twins *twins, int depth) {
     /* the keys first: a value is settled one at a time and anything at all may run while
      * that happens, so nothing may be walking the dict itself */
     PyObject *keys = PyDict_Keys(dict);
@@ -2697,12 +2743,12 @@ static int By_SettleDictValues(PyObject *dict, PyObject *const *twins,
         PyObject *value = By_NewRef(PyDict_GetItem(dict, key));
         PyObject *stands;
         if (value == NULL) continue;
-        if (!By_SettlesInPlace(key, twins, types, count, depth)) {
+        if (!By_SettlesInPlace(key, twins, depth)) {
             Py_DECREF(value);
             settled = 0;
             continue;
         }
-        stands = By_SettledValue(value, twins, types, count, depth);
+        stands = By_SettledValue(value, twins, depth);
         if (stands == NULL) {
             Py_DECREF(value);
             settled = 0;
@@ -2720,8 +2766,7 @@ static int By_SettleDictValues(PyObject *dict, PyObject *const *twins,
 }
 
 /* settle every item of a list, in place, and say whether the list now holds no twin */
-static int By_SettleListItems(PyObject *list, PyObject *const *twins,
-                              PyObject *const *types, Py_ssize_t count, int depth) {
+static int By_SettleListItems(PyObject *list, const By_Twins *twins, int depth) {
     Py_ssize_t at;
     int settled = 1;
     /* the size is read afresh each time round: settling an item can run arbitrary code,
@@ -2734,7 +2779,7 @@ static int By_SettleListItems(PyObject *list, PyObject *const *twins,
             settled = 0;
             continue;
         }
-        stands = By_SettledValue(value, twins, types, count, depth);
+        stands = By_SettledValue(value, twins, depth);
         if (stands == NULL) {
             Py_DECREF(value);
             settled = 0;
@@ -2771,8 +2816,7 @@ static int By_SettleListItems(PyObject *list, PyObject *const *twins,
  *
  * a definition with nothing to move is left exactly as it was — the defaults tuple is
  * rebuilt only when some entry really is stale, so the common case allocates nothing */
-static int By_SettleFunction(PyObject *fn, PyObject *const *twins, PyObject *const *types,
-                             Py_ssize_t count, int depth) {
+static int By_SettleFunction(PyObject *fn, const By_Twins *twins, int depth) {
     PyObject *closure = PyFunction_GetClosure(fn); /* borrowed, NULL when there is none */
     PyObject *defaults, *kwdefaults;
     Py_ssize_t at;
@@ -2791,7 +2835,7 @@ static int By_SettleFunction(PyObject *fn, PyObject *const *twins, PyObject *con
                 PyErr_Clear();
                 continue;
             }
-            stands = By_SettledValue(held, twins, types, count, depth);
+            stands = By_SettledValue(held, twins, depth);
             if (stands == NULL) {
                 settled = 0;
             } else {
@@ -2809,7 +2853,7 @@ static int By_SettleFunction(PyObject *fn, PyObject *const *twins, PyObject *con
      * what this is about to write back must be what the function holds now */
     defaults = By_NewRef(PyFunction_GetDefaults(fn));
     if (defaults != NULL && PyTuple_Check(defaults)) {
-        PyObject *moved = By_SettledValue(defaults, twins, types, count, depth);
+        PyObject *moved = By_SettledValue(defaults, twins, depth);
         if (moved == NULL) {
             settled = 0;
         } else {
@@ -2824,22 +2868,234 @@ static int By_SettleFunction(PyObject *fn, PyObject *const *twins, PyObject *con
 
     kwdefaults = By_NewRef(PyFunction_GetKwDefaults(fn));
     if (kwdefaults != NULL && PyDict_Check(kwdefaults)
-        && !By_SettleDictValues(kwdefaults, twins, types, count, depth)) {
+        && !By_SettleDictValues(kwdefaults, twins, depth)) {
         settled = 0;
     }
     Py_XDECREF(kwdefaults);
     return settled;
 }
 
-static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
-                                 PyObject *const *types, Py_ssize_t count, int depth) {
+/* the mapping a moved instance is remembered in is keyed on the twin's *address*
+ *
+ * the twin cannot be the key itself: a dict lookup hashes and then compares, and both of
+ * those are arbitrary python on an object the module body wrote — a `__hash__` that raises
+ * would turn a lookup into a failure, and an `__eq__` that answers True for a different
+ * instance would hand back the wrong replacement. an address is none of those things.
+ *
+ * what keeps the address honest is the entry itself: the value is `(twin, replacement)`,
+ * so the twin outlives the mapping and no second object can be allocated where it stands */
+static PyObject *By_MovedFor(PyObject *value, PyObject *moved) {
+    PyObject *key = PyLong_FromVoidPtr(value);
+    PyObject *pair;
+    if (key == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+    pair = PyDict_GetItem(moved, key);
+    Py_DECREF(key);
+    if (pair == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+    return pair;
+}
+
+/* record that `value` has been moved onto `stands`, or that it never can be
+ *
+ * `stands` is `Py_None` for the refusal, and the refusal is recorded rather than left out
+ * so that a second reading of the same instance refuses the same way. leaving it out would
+ * let the next reading try the move again and succeed, and then two holders of one object
+ * would disagree about what it is */
+static int By_RememberMove(PyObject *value, PyObject *stands, PyObject *moved) {
+    PyObject *key = PyLong_FromVoidPtr(value);
+    PyObject *pair;
+    int failed;
+    if (key == NULL) {
+        PyErr_Clear();
+        return -1;
+    }
+    pair = PyTuple_Pack(2, value, stands);
+    if (pair == NULL) {
+        PyErr_Clear();
+        Py_DECREF(key);
+        return -1;
+    }
+    failed = PyDict_SetItem(moved, key, pair) < 0;
+    Py_DECREF(pair);
+    Py_DECREF(key);
+    if (failed) PyErr_Clear();
+    return failed ? -1 : 0;
+}
+
+/* an instance the module body built, standing on the type that replaced its class
+ *
+ * this is the value shape `By_SettledValue` could not answer for, and it is the one the
+ * module body produces most: `logging` writes `Logger.root = root` and
+ * `Logger.manager = Manager(Logger.root)`, `_pydatetime` writes `timedelta.min`,
+ * `timedelta.max`, `timezone.utc`. every one of those is an object built by the
+ * *interpreted* class, so its type is the twin — a class nothing else in the process can
+ * reach — and leaving it where it stands makes `isinstance(Logger.root, Logger)` False and
+ * hands a compiled method an object it refuses outright.
+ *
+ * it cannot be re-`__class__`'d onto the emitted type, because the twin built it with the
+ * twin's layout, and it cannot be built again, because that means running a constructor
+ * whose side effects have already happened once. so its *state* is moved instead: an
+ * instance of the emitted type is allocated without any constructor running, and each
+ * attribute the layout keeps is read off the twin and written through the type's own
+ * setter, which is the same conversion an assignment from python goes through.
+ *
+ * two things make that sound rather than merely plausible.
+ *
+ * the first is that the move is decided before it is begun. a field the layout treats as
+ * always defined has no presence byte and no check at any read, so leaving one unwritten
+ * does not raise — an unwritten tagged integer reads back as `0`. so every such field must
+ * be found on the twin *first*, and an instance carrying state the layout has no room for
+ * is refused outright rather than moved with the remainder dropped.
+ *
+ * the second is that the move is remembered. `Manager(Logger.root)` captures the very
+ * object `Logger.root` holds, so a move that produced a fresh instance per reading would
+ * leave the module with two roots and `Logger.manager.root is Logger.root` False — a new
+ * silent wrong answer in place of the old loud one. the mapping is written *before* the
+ * fields are filled, so a graph that leads back to this instance finds it rather than
+ * starting a second move of it.
+ *
+ * what is left where it stands is a field whose own value cannot be settled — the same
+ * rule `By_ConstantValue` applies to a class-level constant, and for the same reason: the
+ * alternative is dropping an attribute that was right about everything else.
+ *
+ * `layouts[i]` is NULL for a class this cannot be done for at all, and the emitting side
+ * decides that: a class whose instance is not wholly its own field run — one standing on a
+ * base python allocates — keeps state in a place nothing here can read */
+static PyObject *By_MovedInstance(PyObject *value, const By_Twins *twins, int depth) {
+    PyObject *type = NULL;
+    const By_Field *layout = NULL;
+    const By_Field *field;
+    PyObject *already, *dict, *fresh;
+    PyTypeObject *target;
+    Py_ssize_t index;
+
+    if (twins->moved == NULL) return NULL;
+    for (index = 0; index < twins->count; index++) {
+        if ((PyObject *)Py_TYPE(value) != twins->twins[index]) continue;
+        type = twins->types[index];
+        layout = twins->layouts[index];
+        break;
+    }
+    /* a type not built yet is not a refusal to remember: the class arrays are filled one
+     * class at a time, so this is "not yet" rather than "never". it is unreachable from a
+     * class body, which can only name a class already defined above it */
+    if (type == NULL || layout == NULL || !PyType_Check(type)) return NULL;
+
+    already = By_MovedFor(value, twins->moved);
+    if (already != NULL) {
+        PyObject *stands = PyTuple_GET_ITEM(already, 1);
+        /* a reading is a lookup and costs nothing, so it is answered at any depth — the
+         * bound is on starting a *new* move, which walks the instance's own fields */
+        return stands == Py_None ? NULL : By_NewRef(stands);
+    }
+    if (depth <= 0) return NULL;
+
+    /* state the layout has no room for. a class that keeps `__slots__` throughout has no
+     * mapping at all and there is nothing to check; one that has a mapping must not be
+     * carrying anything outside the fields, because the emitted instance is its layout and
+     * an attribute the body set from outside `__init__` would simply disappear */
+    dict = PyObject_GetAttrString(value, "__dict__");
+    if (dict == NULL) {
+        PyErr_Clear();
+    } else {
+        PyObject *names = PyDict_CheckExact(dict) ? PyDict_Keys(dict) : NULL;
+        int roomy = names != NULL;
+        Py_ssize_t at;
+        for (at = 0; roomy && at < PyList_GET_SIZE(names); at++) {
+            PyObject *name = PyList_GET_ITEM(names, at);
+            roomy = 0;
+            for (field = layout; field->name != NULL; field++) {
+                if (PyUnicode_CompareWithASCIIString(name, field->name) == 0) {
+                    roomy = 1;
+                    break;
+                }
+            }
+        }
+        Py_XDECREF(names);
+        Py_DECREF(dict);
+        if (!roomy) {
+            PyErr_Clear();
+            By_RememberMove(value, Py_None, twins->moved);
+            return NULL;
+        }
+    }
+
+    /* a field the twin never wrote, which only a layout with a presence byte for it can
+     * reproduce. read through the attribute rather than out of the mapping, so a class
+     * keeping its state in `__slots__` is reached the same way — and so that a name the
+     * body left to a class-level default is carried as the default, which is what the
+     * emitted instance's own read would have answered */
+    for (field = layout; field->name != NULL; field++) {
+        PyObject *probe = PyObject_GetAttrString(value, field->name);
+        if (probe != NULL) {
+            Py_DECREF(probe);
+            continue;
+        }
+        PyErr_Clear();
+        if (field->optional) continue;
+        By_RememberMove(value, Py_None, twins->moved);
+        return NULL;
+    }
+
+    target = (PyTypeObject *)type;
+    if (target->tp_alloc == NULL) return NULL;
+    /* allocated rather than constructed: `tp_new` may be a written `__new__` and `tp_init`
+     * is the constructor whose side effects have already happened once. what `tp_alloc`
+     * leaves is a zeroed layout, which is exactly the state a field nothing writes is in */
+    fresh = target->tp_alloc(target, 0);
+    if (fresh == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+    if (By_RememberMove(value, fresh, twins->moved) < 0) {
+        Py_DECREF(fresh);
+        return NULL;
+    }
+
+    for (field = layout; field->name != NULL; field++) {
+        PyObject *stands;
+        PyObject *held = PyObject_GetAttrString(value, field->name);
+        int failed;
+        if (held == NULL) {
+            /* absent, and the pass above established that only an optional field can be */
+            PyErr_Clear();
+            continue;
+        }
+        stands = By_SettledValue(held, twins, depth - 1);
+        /* the setter is the type's own, so the value goes through the same conversion an
+         * assignment from python does — and a value that could not be settled keeps what
+         * the twin gave it rather than costing the instance the whole attribute */
+        failed = PyObject_SetAttrString(fresh, field->name,
+                                        stands != NULL ? stands : held)
+                 < 0;
+        Py_XDECREF(stands);
+        Py_DECREF(held);
+        if (failed) {
+            /* the layout disagrees with what the class actually holds, which is a wrong
+             * inference rather than a value this may keep. the refusal is recorded so that
+             * every later reading refuses too, and the half-written instance is dropped */
+            PyErr_Clear();
+            By_RememberMove(value, Py_None, twins->moved);
+            Py_DECREF(fresh);
+            return NULL;
+        }
+    }
+    return fresh;
+}
+
+static PyObject *By_SettledValue(PyObject *value, const By_Twins *twins, int depth) {
     PyObject *replacement;
     Py_ssize_t index;
     if (value == NULL) return NULL;
-    replacement = By_TwinFor(value, twins, types, count);
+    replacement = By_TwinFor(value, twins);
     if (replacement != NULL) return By_NewRef(replacement);
-    for (index = 0; index < count; index++) {
-        if (value == twins[index]) return NULL;
+    for (index = 0; index < twins->count; index++) {
+        if (value == twins->twins[index]) return NULL;
     }
     /* the atoms are answered before the bound, not after it. `depth` is there to stop the
      * recursion, and a value with nothing inside it is not a step into anything — reading
@@ -2850,6 +3106,12 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
         || PyFloat_Check(value) || PyComplex_Check(value) || PyUnicode_Check(value)
         || PyBytes_Check(value)) {
         return By_NewRef(value);
+    }
+    /* an instance one of this module's twins built, which has its own bound to keep and
+     * answers a reading of an instance already moved at any depth — see `By_MovedInstance` */
+    if (twins->moved != NULL) {
+        PyObject *moved = By_MovedInstance(value, twins, depth);
+        if (moved != NULL) return moved;
     }
     if (depth <= 0) return NULL;
     /* a class is safe as itself: every class this module's body wrote with a `class`
@@ -2862,8 +3124,8 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
         Py_ssize_t at;
         if (mro == NULL || !PyTuple_Check(mro)) return NULL;
         for (at = 0; at < PyTuple_GET_SIZE(mro); at++) {
-            for (index = 0; index < count; index++) {
-                if (PyTuple_GET_ITEM(mro, at) == twins[index]) return NULL;
+            for (index = 0; index < twins->count; index++) {
+                if (PyTuple_GET_ITEM(mro, at) == twins->twins[index]) return NULL;
             }
         }
         return By_NewRef(value);
@@ -2882,7 +3144,7 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
                 PyErr_Clear();
                 continue;
             }
-            if (!By_SettlesInPlace(part, twins, types, count, depth - 1)) settled = 0;
+            if (!By_SettlesInPlace(part, twins, depth - 1)) settled = 0;
             Py_DECREF(part);
         }
         return settled ? By_NewRef(value) : NULL;
@@ -2895,7 +3157,7 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
         int settled = 1;
         for (index = 0; index < size; index++) {
             PyObject *item = PyTuple_GET_ITEM(value, index);
-            PyObject *stands = By_SettledValue(item, twins, types, count, depth - 1);
+            PyObject *stands = By_SettledValue(item, twins, depth - 1);
             if (stands == NULL) {
                 settled = 0;
                 continue;
@@ -2925,11 +3187,11 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
         return moved != NULL ? moved : By_NewRef(value);
     }
     if (PyList_Check(value)) {
-        return By_SettleListItems(value, twins, types, count, depth - 1) ? By_NewRef(value)
+        return By_SettleListItems(value, twins, depth - 1) ? By_NewRef(value)
                                                                         : NULL;
     }
     if (PyDict_Check(value)) {
-        return By_SettleDictValues(value, twins, types, count, depth - 1) ? By_NewRef(value)
+        return By_SettleDictValues(value, twins, depth - 1) ? By_NewRef(value)
                                                                          : NULL;
     }
     /* a set's members are what it is hashed on, so one holding a twin is refused rather
@@ -2943,8 +3205,7 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
             return NULL;
         }
         for (at = 0; settled && at < PyList_GET_SIZE(members); at++) {
-            if (!By_SettlesInPlace(PyList_GET_ITEM(members, at), twins, types, count,
-                                   depth - 1)) {
+            if (!By_SettlesInPlace(PyList_GET_ITEM(members, at), twins, depth - 1)) {
                 settled = 0;
             }
         }
@@ -2952,7 +3213,7 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
         return settled ? By_NewRef(value) : NULL;
     }
     if (PyFunction_Check(value)) {
-        return By_SettleFunction(value, twins, types, count, depth - 1) ? By_NewRef(value)
+        return By_SettleFunction(value, twins, depth - 1) ? By_NewRef(value)
                                                                        : NULL;
     }
     /* a function written in C. the only thing it can hand back that python chose is
@@ -2971,7 +3232,7 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
             return By_NewRef(value);
         }
         if (PyModule_Check(receiver)) return By_NewRef(value);
-        return By_SettlesInPlace(receiver, twins, types, count, depth - 1) ? By_NewRef(value)
+        return By_SettlesInPlace(receiver, twins, depth - 1) ? By_NewRef(value)
                                                                           : NULL;
     }
     /* a descriptor read off a type, which is every method an emitted type publishes and
@@ -2990,7 +3251,7 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
             PyErr_Clear();
             return NULL;
         }
-        settled = By_SettlesInPlace(owner, twins, types, count, depth - 1);
+        settled = By_SettlesInPlace(owner, twins, depth - 1);
         Py_DECREF(owner);
         return settled ? By_NewRef(value) : NULL;
     }
@@ -3002,8 +3263,8 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
         PyObject *function = PyMethod_Function(value); /* borrowed */
         PyObject *receiver = PyMethod_Self(value);     /* borrowed */
         int settled = function != NULL
-                      && By_SettlesInPlace(function, twins, types, count, depth - 1);
-        if (receiver != NULL && !By_SettlesInPlace(receiver, twins, types, count, depth - 1)) {
+                      && By_SettlesInPlace(function, twins, depth - 1);
+        if (receiver != NULL && !By_SettlesInPlace(receiver, twins, depth - 1)) {
             settled = 0;
         }
         return settled ? By_NewRef(value) : NULL;
@@ -3020,7 +3281,7 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
                 PyErr_Clear();
                 continue;
             }
-            if (!By_SettlesInPlace(part, twins, types, count, depth - 1)) settled = 0;
+            if (!By_SettlesInPlace(part, twins, depth - 1)) settled = 0;
             Py_DECREF(part);
         }
         return settled ? By_NewRef(value) : NULL;
@@ -3036,11 +3297,10 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
  * is not the question there, because it stays where it is either way; only the moves
  * matter, so a settled copy of something that could not be written is thrown away rather
  * than put in the original's place */
-static inline void By_SettleTwins(PyObject *value, PyObject *const *twins,
-                                  PyObject *const *types, Py_ssize_t count) {
+static inline void By_SettleTwins(PyObject *value, const By_Twins *twins) {
     PyObject *settled;
     if (value == NULL) return;
-    settled = By_SettledValue(value, twins, types, count, BY_SETTLE_DEPTH);
+    settled = By_SettledValue(value, twins, BY_SETTLE_DEPTH);
     Py_XDECREF(settled);
 }
 
@@ -3059,9 +3319,8 @@ static inline int By_IsDunder(PyObject *name) {
  * attribute agree with the namespace, and everything else goes through `By_SettledValue`.
  * the answer is a new reference: settling can have to *build* the value that stands, and a
  * borrowed answer would have nobody holding that one */
-static PyObject *By_TwinReplacement(PyObject *value, PyObject *const *twins,
-                                    PyObject *const *types, Py_ssize_t count) {
-    return By_SettledValue(value, twins, types, count, BY_SETTLE_DEPTH);
+static PyObject *By_TwinReplacement(PyObject *value, const By_Twins *twins) {
+    return By_SettledValue(value, twins, BY_SETTLE_DEPTH);
 }
 
 /* the annotations a class body wrote, carried onto the type that takes its place
@@ -3084,8 +3343,7 @@ static PyObject *By_TwinReplacement(PyObject *value, PyObject *const *twins,
  * `By_TwinReplacement` — and where one of them fails it, the whole mapping is replaced by
  * the refusal rather than by a mapping missing an entry */
 static inline int By_CarryAnnotations(PyObject *source, PyObject *target,
-                                      PyObject *const *twins, PyObject *const *types,
-                                      Py_ssize_t count) {
+                                      const By_Twins *twins) {
     PyObject *written = PyDict_GetItemString(source, BY_ANNOTATIONS);
     PyObject *carried;
     int failed;
@@ -3105,7 +3363,7 @@ static inline int By_CarryAnnotations(PyObject *source, PyObject *target,
             PyObject *value = PyDict_GetItem(written, key);
             PyObject *stands = value == NULL
                                    ? NULL
-                                   : By_TwinReplacement(value, twins, types, count);
+                                   : By_TwinReplacement(value, twins);
             int failed_here;
             if (stands == NULL) {
                 Py_DECREF(carried);
@@ -3123,7 +3381,7 @@ static inline int By_CarryAnnotations(PyObject *source, PyObject *target,
         Py_DECREF(names);
     } else {
         /* a body that assigned `__annotations__` itself, which python leaves alone */
-        PyObject *stands = By_TwinReplacement(written, twins, types, count);
+        PyObject *stands = By_TwinReplacement(written, twins);
         carried = stands == NULL ? By_LostAnnotations() : stands;
     }
     if (carried == NULL) return -1;
@@ -3156,12 +3414,11 @@ static inline int By_CarryAnnotations(PyObject *source, PyObject *target,
  * slot — two answers where the interpreted class has one. `__annotations__` is the one
  * exception, and `By_CarryAnnotations` says why: it fills no slot, so there is nothing
  * for it to disagree with */
-static inline int By_AdoptTwinAttributes(PyObject *const *twins, PyObject *const *types,
-                                         Py_ssize_t count) {
+static inline int By_AdoptTwinAttributes(const By_Twins *twins) {
     Py_ssize_t index;
-    for (index = 0; index < count; index++) {
-        PyObject *twin = twins[index];
-        PyObject *type = types[index];
+    for (index = 0; index < twins->count; index++) {
+        PyObject *twin = twins->twins[index];
+        PyObject *type = twins->types[index];
         PyObject *source, *target, *names;
         Py_ssize_t at;
         if (twin == NULL || type == NULL || twin == type) continue;
@@ -3169,7 +3426,7 @@ static inline int By_AdoptTwinAttributes(PyObject *const *twins, PyObject *const
         source = ((PyTypeObject *)twin)->tp_dict;
         target = ((PyTypeObject *)type)->tp_dict;
         if (source == NULL || target == NULL) continue;
-        if (By_CarryAnnotations(source, target, twins, types, count) < 0) return -1;
+        if (By_CarryAnnotations(source, target, twins) < 0) return -1;
         /* the keys are taken as a list first: the values are read back out of the
          * source one at a time, and nothing here may run while a dict is being walked */
         names = PyDict_Keys(source);
@@ -3189,7 +3446,7 @@ static inline int By_AdoptTwinAttributes(PyObject *const *twins, PyObject *const
             }
             value = PyDict_GetItem(source, key);
             if (value == NULL) continue;
-            carried = By_TwinReplacement(value, twins, types, count);
+            carried = By_TwinReplacement(value, twins);
             if (carried == NULL) continue;
             failed = PyDict_SetItem(target, key, carried) < 0;
             Py_DECREF(carried);
@@ -3239,17 +3496,21 @@ static inline int By_AdoptTwinAttributes(PyObject *const *twins, PyObject *const
  *
  * the class pairs are carried along in the same arrays, so a twin class sitting in one of
  * these tables moves onto its type at the same time */
-static int By_RemapTwinMethods(PyObject *const *twins, PyObject *const *types,
-                               Py_ssize_t count) {
+static int By_RemapTwinMethods(const By_Twins *twins) {
     PyObject **from;
     PyObject **to;
-    Py_ssize_t room = count;
-    Py_ssize_t total = count;
+    /* the layouts run alongside the pairs and are read at the same index, so the wider
+     * arrays need one too. a method pair is not a class, so every entry past the class
+     * pairs is NULL — no instance is ever moved onto a function */
+    const By_Field **layouts;
+    By_Twins wider;
+    Py_ssize_t room = twins->count;
+    Py_ssize_t total = twins->count;
     Py_ssize_t index;
     Py_ssize_t at;
 
-    for (index = 0; index < count; index++) {
-        PyObject *twin = twins[index];
+    for (index = 0; index < twins->count; index++) {
+        PyObject *twin = twins->twins[index];
         if (twin == NULL || !PyType_Check(twin)) continue;
         if (((PyTypeObject *)twin)->tp_dict == NULL) continue;
         room += PyDict_GET_SIZE(((PyTypeObject *)twin)->tp_dict);
@@ -3257,23 +3518,28 @@ static int By_RemapTwinMethods(PyObject *const *twins, PyObject *const *types,
     if (room <= 0) return 0;
     from = PyMem_New(PyObject *, (size_t)room);
     to = PyMem_New(PyObject *, (size_t)room);
-    if (from == NULL || to == NULL) {
+    layouts = PyMem_New(const By_Field *, (size_t)room);
+    if (from == NULL || to == NULL || layouts == NULL) {
         PyMem_Free(from);
         PyMem_Free(to);
+        PyMem_Free(layouts);
         PyErr_NoMemory();
         return -1;
+    }
+    for (index = 0; index < room; index++) {
+        layouts[index] = index < twins->count ? twins->layouts[index] : NULL;
     }
     /* held rather than borrowed for the whole walk below: settling one value can run
      * arbitrary code, and a pair this is still to substitute must not go away underneath
      * it */
-    for (index = 0; index < count; index++) {
-        from[index] = By_NewRef(twins[index]);
-        to[index] = By_NewRef(types[index]);
+    for (index = 0; index < twins->count; index++) {
+        from[index] = By_NewRef(twins->twins[index]);
+        to[index] = By_NewRef(twins->types[index]);
     }
 
-    for (index = 0; index < count; index++) {
-        PyObject *twin = twins[index];
-        PyObject *type = types[index];
+    for (index = 0; index < twins->count; index++) {
+        PyObject *twin = twins->twins[index];
+        PyObject *type = twins->types[index];
         PyObject *source, *target, *names;
         if (twin == NULL || type == NULL || twin == type) continue;
         if (!PyType_Check(twin) || !PyType_Check(type)) continue;
@@ -3304,7 +3570,7 @@ static int By_RemapTwinMethods(PyObject *const *twins, PyObject *const *types,
     /* the ambiguous pairs, dropped before any of them is used. a slot with nothing in it
      * matches no value, so the function it stood for is left exactly where the body put
      * it */
-    for (index = count; index < total; index++) {
+    for (index = twins->count; index < total; index++) {
         PyObject *paired = from[index];
         Py_ssize_t other;
         int ambiguous = 0;
@@ -3323,9 +3589,14 @@ static int By_RemapTwinMethods(PyObject *const *twins, PyObject *const *types,
         }
     }
 
-    if (total > count) {
-        for (index = 0; index < count; index++) {
-            PyObject *type = types[index];
+    if (total > twins->count) {
+        wider.twins = from;
+        wider.types = to;
+        wider.layouts = layouts;
+        wider.count = total;
+        wider.moved = twins->moved;
+        for (index = 0; index < twins->count; index++) {
+            PyObject *type = twins->types[index];
             PyObject *values;
             if (type == NULL || !PyType_Check(type)) continue;
             if (((PyTypeObject *)type)->tp_dict == NULL) continue;
@@ -3337,7 +3608,7 @@ static int By_RemapTwinMethods(PyObject *const *twins, PyObject *const *types,
                 continue;
             }
             for (at = 0; at < PyList_GET_SIZE(values); at++) {
-                By_SettleTwins(PyList_GET_ITEM(values, at), from, to, total);
+                By_SettleTwins(PyList_GET_ITEM(values, at), &wider);
             }
             Py_DECREF(values);
         }
@@ -3347,6 +3618,7 @@ static int By_RemapTwinMethods(PyObject *const *twins, PyObject *const *types,
         Py_XDECREF(from[index]);
         Py_XDECREF(to[index]);
     }
+    PyMem_Free(layouts);
     PyMem_Free(from);
     PyMem_Free(to);
     return 0;
@@ -3370,10 +3642,9 @@ static int By_RemapTwinMethods(PyObject *const *twins, PyObject *const *types,
  * rather than one to settle as a side effect of the identity
  */
 static inline int By_CopyClassConstant(PyObject *body, PyTypeObject *type, const char *name,
-                                       PyObject *const *twins, PyObject *const *types,
-                                       Py_ssize_t count) {
+                                       const By_Twins *twins) {
     const char *const names[] = {name};
-    By_ClassConstants constants = {body, names, 1, twins, types, count};
+    By_ClassConstants constants = {body, names, 1, twins};
     /* the same value a class built through its metaclass is handed before the call, so the
      * two constructions cannot drift apart about what a constant is */
     PyObject *stands = By_ConstantValue(&constants, 0);
@@ -3400,9 +3671,30 @@ static inline int By_CopyClassConstant(PyObject *body, PyTypeObject *type, const
  * so a decorated class hands its aliases the decorator's answer — which is what the body
  * bound them to — instead of the type the decorator was given.
  *
- * a value that merely *reaches* a twin is not moved and cannot be: an instance the body
- * built has the twin for its type, and a list holding one is the same object the body
- * kept. those stay as the body left them */
+ * an instance one of the twins built is moved the same way, onto the instance that took
+ * its place — `logging` binds `root` at module level to the very object it also writes
+ * into `Logger.root`, and the two must go on being one object. a value that merely
+ * *reaches* a twin is not moved and cannot be: a list holding one is the same object the
+ * body kept, and it is settled in place instead */
+
+/* what should stand under a name still bound to `value`, borrowed, or NULL for a name that
+ * is to be left alone
+ *
+ * only a value that *is* something replaced is rebound. settling a value the module could
+ * not write in place hands back a copy, and putting a copy where the original stood would
+ * break every other holder's `is` against it — so the two shapes answered here are the two
+ * with a replacement of their own: a twin class, and an instance already moved onto one */
+static PyObject *By_StandsFor(PyObject *value, const By_Twins *twins) {
+    PyObject *held;
+    PyObject *stands = By_TwinFor(value, twins);
+    if (stands != NULL) return stands;
+    if (twins->moved == NULL) return NULL;
+    held = By_MovedFor(value, twins->moved);
+    if (held == NULL) return NULL;
+    stands = PyTuple_GET_ITEM(held, 1);
+    return stands == Py_None ? NULL : stands;
+}
+
 /* everything a declined class still holds, given the same treatment as a module-level name
  *
  * a class this module left to its interpreted definition keeps its own methods, and those
@@ -3415,8 +3707,7 @@ static inline int By_CopyClassConstant(PyObject *body, PyTypeObject *type, const
  * only a heap type is walked, and only its own dict. a type this module emitted is not one
  * of these — its attributes come from `By_AdoptTwinAttributes` and `By_CopyClassConstant`,
  * which make the same substitution at the point they copy */
-static inline int By_RemapTwinsInClass(PyObject *cls, PyObject *const *twins,
-                                       PyObject *const *types, Py_ssize_t count) {
+static inline int By_RemapTwinsInClass(PyObject *cls, const By_Twins *twins) {
     PyObject *dict;
     PyObject *keys;
     Py_ssize_t at;
@@ -3442,13 +3733,11 @@ static inline int By_RemapTwinsInClass(PyObject *cls, PyObject *const *twins,
             PyErr_Clear();
             continue;
         }
-        By_SettleTwins(value, twins, types, count);
+        By_SettleTwins(value, twins);
         /* a class attribute holding a twin — `Signature.empty = _empty` — is the same
-         * staleness one step along, and rebinding the name answers it. only a name that
-         * *is* a twin is rebound: settling a value it could not write in place hands back
-         * a copy, and putting a copy where the original stood would break every other
-         * holder's `is` against it */
-        stands = By_TwinFor(value, twins, types, count);
+         * staleness one step along, and rebinding the name answers it. `By_StandsFor` says
+         * which values that is */
+        stands = By_StandsFor(value, twins);
         if (stands != NULL && stands != value && PyObject_SetAttr(cls, key, stands) < 0) {
             PyErr_Clear();
         }
@@ -3458,9 +3747,8 @@ static inline int By_RemapTwinsInClass(PyObject *cls, PyObject *const *twins,
     return 0;
 }
 
-static inline int By_RemapTwinAliases(PyObject *module_dict, PyObject *const *twins,
-                                      PyObject *const *types,
-                                      const char *const *names, Py_ssize_t count) {
+static inline int By_RemapTwinAliases(PyObject *module_dict, const By_Twins *twins,
+                                      const char *const *names) {
     /* the keys first: the dict is written while this walks, and only for keys it
      * already holds, but nothing may run against it mid-walk either way */
     PyObject *keys = PyDict_Keys(module_dict);
@@ -3469,17 +3757,19 @@ static inline int By_RemapTwinAliases(PyObject *module_dict, PyObject *const *tw
     for (at = 0; at < PyList_GET_SIZE(keys); at++) {
         PyObject *key = PyList_GET_ITEM(keys, at);
         PyObject *value = PyDict_GetItem(module_dict, key);
+        PyObject *moved;
         Py_ssize_t index;
         if (value == NULL) continue;
-        /* whatever else becomes of this name, what it holds may have captured a twin */
-        By_SettleTwins(value, twins, types, count);
-        if (By_RemapTwinsInClass(value, twins, types, count) < 0) {
+        /* whatever else becomes of this name, what it holds may have captured a twin —
+         * and where it holds an instance one of them built, this is what moves it */
+        By_SettleTwins(value, twins);
+        if (By_RemapTwinsInClass(value, twins) < 0) {
             Py_DECREF(keys);
             return -1;
         }
-        for (index = 0; index < count; index++) {
+        for (index = 0; index < twins->count; index++) {
             PyObject *stands;
-            if (twins[index] == NULL || value != twins[index]) continue;
+            if (twins->twins[index] == NULL || value != twins->twins[index]) continue;
             stands = PyDict_GetItemString(module_dict, names[index]);
             /* the class's own name already holds it, and one whose type was never
              * installed still holds the twin — neither is a move */
@@ -3489,6 +3779,17 @@ static inline int By_RemapTwinAliases(PyObject *module_dict, PyObject *const *tw
                 return -1;
             }
             break;
+        }
+        /* a moved instance has no name of its own to be read back through the way a class
+         * does — nothing decorates it — so it is rebound against the move directly */
+        if (twins->moved == NULL) continue;
+        moved = By_MovedFor(value, twins->moved);
+        if (moved == NULL) continue;
+        moved = PyTuple_GET_ITEM(moved, 1);
+        if (moved == Py_None || moved == value) continue;
+        if (PyDict_SetItem(module_dict, key, moved) < 0) {
+            Py_DECREF(keys);
+            return -1;
         }
     }
     Py_DECREF(keys);
@@ -4043,6 +4344,132 @@ static inline int By_HoldSlotAlias(PyTypeObject *type, const char *name, PyObjec
     return 0;
 }
 
+/* the one attribute a field with a class-level value publishes
+ *
+ * `tag = None` standing beside a `self.tag = tag` is two answers under one name, and
+ * python keeps them in two places: the class's own dict holds the class-level one, and an
+ * instance that assigned holds its own in its dict, where it shadows the other. an emitted
+ * instance has no dict — it is its layout — so both answers have to come out of the single
+ * entry in the type's dict, and a plain `PyGetSetDef` cannot give them: `getset_get`
+ * answers a read off the class with the *descriptor*, which is the convention for one and
+ * exactly the wrong answer here.
+ *
+ * so the entry is a descriptor of our own. it holds neither answer. the class-level value
+ * is the module's, in a cell beside the type; the instance's is in the layout, behind the
+ * field's own getter. what this holds is how to choose — a question put to the presence
+ * byte, which is what says whether the instance has an answer at all. `del` needs no case
+ * here: the field's setter clears that same byte, so the instance goes back to reading the
+ * class's value exactly as python's does when the entry leaves its dict */
+typedef int (*By_FieldPresent)(PyObject *);
+
+typedef struct {
+    PyObject_HEAD
+    getter by_get;
+    /* NULL where the class publishes no setters at all, as a frozen one does */
+    setter by_set;
+    /* the module's cell for the class-level value. borrowed: the cell outlives every
+     * type in the module, and a strong reference here would be a second owner of a value
+     * nothing ever takes back */
+    PyObject **by_value;
+    /* emitted beside the getter, and reaching the byte the same way it does. a class
+     * appending its storage past an outside base keeps that storage in a region the
+     * instance pointer does not begin at, so an offset from the object would be reading
+     * the base's own fields */
+    By_FieldPresent by_present;
+    const char *by_name;
+    /* strongly held, and visited, for the reason every descriptor holds its type: the
+     * type's own dict is what holds this, so the two are a cycle and only the collector
+     * can take them apart */
+    PyTypeObject *by_owner;
+} By_FieldDefaultObject;
+
+static PyObject *By_FieldDefault_get(PyObject *self, PyObject *object, PyObject *type) {
+    By_FieldDefaultObject *field = (By_FieldDefaultObject *)self;
+    (void)type;
+    /* python's own convention: no object means the read was off the class */
+    if (object == NULL) return By_NewRef(*field->by_value);
+    if (!PyObject_TypeCheck(object, field->by_owner)) {
+        PyErr_Format(PyExc_TypeError,
+                     "descriptor '%s' for '%s' objects doesn't apply to a '%s' object",
+                     field->by_name, field->by_owner->tp_name, Py_TYPE(object)->tp_name);
+        return NULL;
+    }
+    if (!field->by_present(object)) return By_NewRef(*field->by_value);
+    return field->by_get(object, NULL);
+}
+
+static int By_FieldDefault_set(PyObject *self, PyObject *object, PyObject *value) {
+    By_FieldDefaultObject *field = (By_FieldDefaultObject *)self;
+    if (field->by_set == NULL) {
+        PyErr_Format(PyExc_AttributeError, "attribute '%s' of '%s' objects is not writable",
+                     field->by_name, field->by_owner->tp_name);
+        return -1;
+    }
+    return field->by_set(object, value, NULL);
+}
+
+static int By_FieldDefault_traverse(PyObject *self, visitproc visit, void *arg) {
+    Py_VISIT((PyObject *)((By_FieldDefaultObject *)self)->by_owner);
+    return 0;
+}
+
+static void By_FieldDefault_dealloc(PyObject *self) {
+    PyObject_GC_UnTrack(self);
+    Py_CLEAR(((By_FieldDefaultObject *)self)->by_owner);
+    PyObject_GC_Del(self);
+}
+
+static PyTypeObject By_FieldDefaultType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "by.field_default",
+    .tp_basicsize = sizeof(By_FieldDefaultObject),
+    .tp_itemsize = 0,
+    .tp_dealloc = By_FieldDefault_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    .tp_traverse = By_FieldDefault_traverse,
+    .tp_descr_get = By_FieldDefault_get,
+    .tp_descr_set = By_FieldDefault_set,
+};
+
+/* publish the attribute a defaulted field answers through, replacing the plain copy
+ *
+ * `hold` is set for the class whose body wrote the value: `By_CopyClassConstant` has put
+ * it in the type's dict already, and this takes it into the module's cell before the
+ * descriptor goes over the top of it. a subclass that inherits the field passes zero and
+ * shares the cell, which is what makes the base's value the one a subclass with nothing of
+ * its own answers with */
+static inline int By_HoldFieldDefault(PyTypeObject *type, const char *name, PyObject **cell,
+                                      int hold, getter get, setter set,
+                                      By_FieldPresent present) {
+    By_FieldDefaultObject *field;
+    if (hold) {
+        PyObject *value = PyDict_GetItemString(type->tp_dict, name); /* borrowed */
+        if (value == NULL) {
+            PyErr_Format(PyExc_SystemError, "`%s.%s` has a class-level value and was never bound",
+                         type->tp_name, name);
+            return -1;
+        }
+        Py_XSETREF(*cell, By_NewRef(value));
+    }
+    if (PyType_Ready(&By_FieldDefaultType) < 0) return -1;
+    field = PyObject_GC_New(By_FieldDefaultObject, &By_FieldDefaultType);
+    if (field == NULL) return -1;
+    field->by_get = get;
+    field->by_set = set;
+    field->by_value = cell;
+    field->by_present = present;
+    field->by_name = name;
+    field->by_owner = (PyTypeObject *)By_NewRef((PyObject *)type);
+    PyObject_GC_Track(field);
+    if (PyDict_SetItemString(type->tp_dict, name, (PyObject *)field) < 0) {
+        Py_DECREF(field);
+        return -1;
+    }
+    Py_DECREF(field);
+    PyType_Modified(type);
+    return 0;
+}
+
 /* the `Py_hash_t` python makes of what a written `__hash__` answered
  *
  * `slot_tp_hash`'s own conversion, and pointedly not `PyObject_Hash`. a value that fits a
@@ -4091,6 +4518,78 @@ static inline int By_PublishNew(PyObject *type, PyMethodDef *def) {
     if (published == NULL) return -1;
     int stored = PyObject_SetAttrString(type, "__new__", published);
     Py_DECREF(published);
+    return stored;
+}
+
+/* publish a `@property` as the object python builds out of its halves
+ *
+ * not as a `tp_getset` entry, which this was. a getset is two function pointers, and what
+ * python hands back for one is a `getset_descriptor` — so `C.value.fget` raises where the
+ * interpreted class answers with the getter, and so do `.fset`, `.getter(...)`,
+ * `.setter(...)` and `isinstance(C.value, property)`. everything that treats a property
+ * as an attribute agreed already; everything that treats it as an *object* did not. the
+ * price of the real object is one more call per access, because the property dispatches
+ * to the half rather than the getset going straight to C.
+ *
+ * each half is a `PyDescr_NewMethod`, which is exactly what every other method of this
+ * class already is: it carries the same `__name__` and `__qualname__` a sibling method
+ * carries, and takes the receiver as its first argument the same way. a half the class
+ * has no body for arrives NULL, and `property` reads that as the half being absent —
+ * which is what raises python's own wording for a missing setter or deleter.
+ *
+ * no fourth argument, deliberately: `property` takes its `__doc__` off the getter exactly
+ * when it is passed none, which is what a class body gets.
+ *
+ * `__set_name__` is called because `type.__new__` calls it on every value a class body
+ * leaves behind, and nothing here has run that. it is not decoration: it is the only
+ * thing that tells a property its own name before 3.13, which added a fallback to the
+ * getter's. without the call, 3.11 and 3.12 report a missing half as "property of 'C'
+ * object has no setter" — the name dropped out of the middle of python's own message.
+ *
+ * the property goes straight into `tp_dict` rather than through `setattr`, because a
+ * class nothing mutates is sealed against `setattr` and this is the class's own
+ * definition being written rather than an outside change to it. `PyType_Modified` is what
+ * stops the attribute cache going on serving what the type held before */
+static inline int By_PublishProperty(PyObject *type, const char *name, PyMethodDef *get,
+                                     PyMethodDef *set, PyMethodDef *del) {
+    PyMethodDef *defs[3];
+    PyObject *halves[3];
+    PyObject *published, *named, *dict;
+    int at, stored;
+    defs[0] = get;
+    defs[1] = set;
+    defs[2] = del;
+    for (at = 0; at < 3; at++) {
+        if (defs[at] == NULL) {
+            halves[at] = Py_NewRef(Py_None);
+            continue;
+        }
+        halves[at] = PyDescr_NewMethod((PyTypeObject *)type, defs[at]);
+        if (halves[at] == NULL) {
+            while (at-- > 0) Py_DECREF(halves[at]);
+            return -1;
+        }
+    }
+    published = PyObject_CallFunctionObjArgs((PyObject *)&PyProperty_Type, halves[0], halves[1],
+                                             halves[2], NULL);
+    for (at = 0; at < 3; at++) Py_DECREF(halves[at]);
+    if (published == NULL) return -1;
+    named = PyObject_CallMethod(published, "__set_name__", "Os", type, name);
+    if (named == NULL) {
+        Py_DECREF(published);
+        return -1;
+    }
+    Py_DECREF(named);
+    dict = ((PyTypeObject *)type)->tp_dict;
+    if (dict == NULL) {
+        PyErr_Format(PyExc_SystemError, "type '%s' has no dict to publish '%s' into",
+                     ((PyTypeObject *)type)->tp_name, name);
+        Py_DECREF(published);
+        return -1;
+    }
+    stored = PyDict_SetItemString(dict, name, published);
+    Py_DECREF(published);
+    PyType_Modified((PyTypeObject *)type);
     return stored;
 }
 
@@ -4961,12 +5460,11 @@ static inline int By_ApplyMethodDecorators(PyTypeObject *type, PyObject *dict,
 static inline int By_DecoratedMethod(PyObject *body, PyTypeObject *type, PyObject *dict,
                                      const char *owner, const char *name,
                                      const char *const *decorators, Py_ssize_t count,
-                                     PyObject *const *twins, PyObject *const *types,
-                                     Py_ssize_t classes) {
+                                     const By_Twins *twins) {
     if (count <= 0) return 0;
     if ((PyObject *)type == PyDict_GetItemString(dict, owner)) return 0;
     if (body != NULL && PyDict_GetItemString(body, name) != NULL) {
-        return By_CopyClassConstant(body, type, name, twins, types, classes);
+        return By_CopyClassConstant(body, type, name, twins);
     }
     return By_ApplyMethodDecorators(type, dict, owner, name, decorators, count);
 }
@@ -5074,6 +5572,77 @@ static inline PyObject *By_StrOfInt(PyObject *fn, ByTagged n) {
         argv[0] = boxed;
         result = By_CallPython(fn, argv, 1);
         Py_DECREF(boxed);
+        return result;
+    }
+}
+
+/* `left` followed by the decimal digits of a machine integer, in one allocation
+ *
+ * the digits are all ascii, so the answer needs no wider a storage than `left`
+ * already has — and `left`'s is the narrowest its own characters fit in, which
+ * makes it the narrowest the answer's fit in too. an empty string is stored as
+ * ascii, so a kind wider than one byte says `left` holds a character that needs it
+ * and the answer holds that character as well.
+ *
+ * this is what `PyUnicode_Concat` would work out for itself, from the same
+ * `PyUnicode_MAX_CHAR_VALUE`; what is saved is the string the digits would have
+ * been built into first, and the second pass that copied them back out of it */
+static inline PyObject *By_ConcatShortToStr(PyObject *left, Py_ssize_t value) {
+    char digits[BY_INT_DIGITS];
+    int taken = By_DecimalDigits(digits, value);
+    Py_ssize_t length = PyUnicode_GET_LENGTH(left);
+    int kind = PyUnicode_KIND(left);
+    PyObject *text = PyUnicode_New(length + taken, PyUnicode_MAX_CHAR_VALUE(left));
+    void *data;
+    int at;
+    if (text == NULL) return NULL;
+    data = PyUnicode_DATA(text);
+    memcpy(data, PyUnicode_DATA(left), (size_t)(length * kind));
+    if (BY_LIKELY(kind == PyUnicode_1BYTE_KIND)) {
+        memcpy((Py_UCS1 *)data + length, digits, (size_t)taken);
+    } else if (kind == PyUnicode_2BYTE_KIND) {
+        for (at = 0; at < taken; at++)
+            ((Py_UCS2 *)data)[length + at] = (Py_UCS2)digits[at];
+    } else {
+        for (at = 0; at < taken; at++)
+            ((Py_UCS4 *)data)[length + at] = (Py_UCS4)digits[at];
+    }
+    return text;
+}
+
+/* `left + str(n)` for a tagged integer, given whatever the name `str` resolved to
+ *
+ * the two guards are `By_StrOfInt`'s own and mean the same things: the resolution
+ * is compared rather than assumed, so a module that rebinds `str` is obeyed, and a
+ * tagged value that is not short holds an object whose `__str__` has to be asked.
+ *
+ * the slow path checks what came back before concatenating it, because a rebound
+ * `str` may return anything at all — that is the check the unfused shape made
+ * between the two operations, in the same place and with the same message. the fast
+ * path needs none for the digits: it built them itself.
+ *
+ * it does test `left`, which the ir says is a `str` and every path into here should
+ * have made one. reading a header that is not a string's would decide how long the
+ * answer is from whatever the field happens to overlap, and getting *that* wrong is
+ * memory written past the end rather than a wrong answer — so the invariant is
+ * tested rather than trusted, and a left operand that fails goes the long way and is
+ * refused by `PyUnicode_Concat` exactly as it was before */
+static inline PyObject *By_StrConcatInt(PyObject *left, PyObject *fn, ByTagged n) {
+    if (BY_LIKELY(fn == (PyObject *)&PyUnicode_Type && By_IsShort(n)
+                  && PyUnicode_Check(left))) {
+        return By_ConcatShortToStr(left, By_ShortValue(n));
+    }
+    {
+        PyObject *right = By_StrOfInt(fn, n);
+        PyObject *result;
+        if (right == NULL) return NULL;
+        if (BY_UNLIKELY(!PyUnicode_Check(right))) {
+            By_TypeError("str", right);
+            Py_DECREF(right);
+            return NULL;
+        }
+        result = PyUnicode_Concat(left, right);
+        Py_DECREF(right);
         return result;
     }
 }
@@ -6220,37 +6789,63 @@ static inline PyObject *By_MakeClosure(PyMethodDef *def, PyObject *env) {
     return PyCFunction_NewEx(def, env, NULL);
 }
 
-/* a value arriving where a native class is expected: check, then take a
-   reference. without the check a python caller could store any object in a
-   field and every later field read would follow a wild pointer */
-static inline PyObject *By_UnboxInstance(PyObject *o, PyTypeObject *type) {
+/* narrowing an object to a refcounted type is a test rather than a change of
+ * representation: the answer *is* the argument. so each of these comes in two
+ * forms — a `By_Check…` that hands the same object back without a reference, and
+ * a `By_Unbox…` that takes one — and the second is written in terms of the first
+ * so the test cannot drift between them. which form a register gets is the borrow
+ * pass's answer: where it proved the source goes on holding the value across
+ * every use, the check is the whole cost and the reference pair is waste */
+
+/* a value arriving where a native class is expected. without the check a python
+   caller could store any object in a field and every later field read would
+   follow a wild pointer */
+static inline PyObject *By_CheckInstance(PyObject *o, PyTypeObject *type) {
     if (!PyObject_TypeCheck(o, type)) {
         PyErr_Format(PyExc_TypeError, "expected %s, got %s", type->tp_name,
                      Py_TYPE(o)->tp_name);
         return NULL;
     }
-    return By_NewRef(o);
+    return o;
+}
+
+static inline PyObject *By_UnboxInstance(PyObject *o, PyTypeObject *type) {
+    PyObject *checked = By_CheckInstance(o, type);
+    if (checked == NULL) return NULL;
+    return By_NewRef(checked);
 }
 
 /* a `list` is a `PyObject *` like every other container, so narrowing to one is a
  * type check rather than a change of representation — but it is still a check,
  * because the value came from somewhere that only promised an object */
-static inline PyObject *By_UnboxList(PyObject *o) {
+static inline PyObject *By_CheckList(PyObject *o) {
     if (o == NULL || !PyList_Check(o)) {
         By_TypeError("list", o);
         return NULL;
     }
-    Py_INCREF(o);
     return o;
 }
 
-static inline PyObject *By_UnboxStr(PyObject *o) {
+static inline PyObject *By_UnboxList(PyObject *o) {
+    PyObject *checked = By_CheckList(o);
+    if (checked == NULL) return NULL;
+    Py_INCREF(checked);
+    return checked;
+}
+
+static inline PyObject *By_CheckStr(PyObject *o) {
     if (o == NULL || !PyUnicode_Check(o)) {
         By_TypeError("str", o);
         return NULL;
     }
-    Py_INCREF(o);
     return o;
+}
+
+static inline PyObject *By_UnboxStr(PyObject *o) {
+    PyObject *checked = By_CheckStr(o);
+    if (checked == NULL) return NULL;
+    Py_INCREF(checked);
+    return checked;
 }
 
 static inline PyObject *By_StrItemTagged(PyObject *s, ByTagged index) {

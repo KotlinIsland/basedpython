@@ -388,6 +388,18 @@ fn print_op(function: &Function, op: &Op) -> String {
         Op::StrOfInt { dest, value: src } => {
             format!("{} = str-of-int {}", name(*dest), value(src))
         }
+        Op::StrConcatInt {
+            dest,
+            lhs,
+            value: src,
+        } => {
+            format!(
+                "{} = str-concat-int {}, {}",
+                name(*dest),
+                value(lhs),
+                value(src)
+            )
+        }
         Op::NewInstance {
             dest,
             class,

@@ -874,6 +874,7 @@ fn lower_generator(
         .into_iter()
         .map(|name| by_ir::function::FieldDecl {
             optional: false,
+            defaulted_by: None,
             // the state number is never unset — the constructor writes 0 — so it is
             // an unboxed int, and the dispatch reads it without a narrowing
             ty: if name == generators::STATE_FIELD || name == generators::KIND_FIELD {
@@ -1824,11 +1825,17 @@ fn lower_class<'a>(
     let keywords = class_keywords(class)?;
     // a constant is copied into the type's dict, and a field's descriptor is already
     // sitting there under its own name — so a name that is both would answer with the
-    // class-level value for an instance that has one of its own
-    if let Some(clash) = constants
-        .iter()
-        .find(|name| fields.iter().any(|field| field.name == **name))
-    {
+    // class-level value for an instance that has one of its own.
+    //
+    // where the value is plainly not a descriptor the field carries it as its own
+    // fallback instead, and the one descriptor published under the name answers both
+    // questions. every other value is turned down here: a `property` assigned beside a
+    // `self.x = ...` is not a field at all
+    if let Some(clash) = constants.iter().find(|name| {
+        fields
+            .iter()
+            .any(|field| field.name == **name && field.defaulted_by.is_none())
+    }) {
         return Err(Decline::new(format!(
             "`{clash}` is both a class-level constant and a field"
         )));
@@ -1849,8 +1856,8 @@ fn lower_class<'a>(
             clash.name
         )));
     }
-    // a property publishes its attribute through `tp_getset`, and a field's descriptor is
-    // already sitting under its own name there — the same collision a class-level
+    // a property is written into the type's dict under its name, and a field's descriptor
+    // is already sitting under its own name there — the same collision a class-level
     // constant has with one, and the same answer
     if let Some(clash) = published.iter().find(|property| {
         fields.iter().any(|field| field.name == property.name)
@@ -2271,6 +2278,84 @@ fn certain_writes<'a>(
     receiver_writes(statement, receiver, owner)
 }
 
+/// whether an expression a class body binds a name to is one python could not have
+/// turned into a descriptor
+///
+/// it decides whether a name the body binds *and* `__init__` assigns is a field with a
+/// class-level fallback or something else entirely. the two are written the same way and
+/// behave nothing alike: a `property` sitting in the class dict takes
+/// `self.firstweekday = 0` into its own setter and the instance keeps nothing of its own,
+/// where a plain value leaves the assignment to land on the instance and shadow it.
+/// `calendar.Calendar` is written the first way and `xml.etree.ElementTree.Element` the
+/// second.
+///
+/// telling them apart in general would mean knowing what an arbitrary expression
+/// evaluates to. a literal is the case that needs no knowing: none of the types a literal
+/// can produce carries `__get__` or `__set__`, whatever it was built out of
+fn plainly_not_a_descriptor(value: &Expr) -> bool {
+    match value {
+        Expr::NoneLiteral(_)
+        | Expr::BooleanLiteral(_)
+        | Expr::NumberLiteral(_)
+        | Expr::StringLiteral(_)
+        | Expr::BytesLiteral(_)
+        | Expr::FString(_)
+        | Expr::EllipsisLiteral(_)
+        // the brackets fix a display's own type whatever it holds — `x = []` is a list
+        // and `x = (a, b)` a tuple, and neither answers `__get__`
+        | Expr::List(_)
+        | Expr::Set(_)
+        | Expr::Dict(_)
+        | Expr::Tuple(_) => true,
+        // `-1` is one of these, and so is `not x`. what makes it safe is the operand
+        // being a literal too: a `-` over anything else runs that object's `__neg__`,
+        // which may answer whatever it likes
+        Expr::UnaryOp(node) => plainly_not_a_descriptor(&node.operand),
+        _ => false,
+    }
+}
+
+/// the names a class body binds to a class-level value that a field of the same name
+/// falls back to
+///
+/// a dunder is left out as a family. python reaches those through type slots and the type
+/// machinery rather than as an instance attribute with a class-level fallback, and each
+/// carries its own way of being taken out of the type's dict — a slot's filler is read
+/// back out under its own name, so a descriptor there would be held as the filler. none of
+/// them is a name a class keeps a fallback for, and the stdlib has no such pair at all, so
+/// the whole shape stays where it was rather than each dunder being reasoned about
+fn class_level_defaults(class: &ast::StmtClassDef, is_data: bool) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let mut take = |target: &Expr, value: &Expr| {
+        let Expr::Name(name) = target else { return };
+        if !plainly_not_a_descriptor(value) {
+            return;
+        }
+        let name = mangled(Some(&class.name), name.id.as_str());
+        if !(name.starts_with("__") && name.ends_with("__")) {
+            names.insert(name);
+        }
+    };
+    for statement in &class.body {
+        match statement {
+            Stmt::Assign(node) => {
+                for target in &node.targets {
+                    take(target, &node.value);
+                }
+            }
+            // in a `data class` an annotated assignment declares the field and gives it
+            // the constructor's default, which is a different thing entirely
+            Stmt::AnnAssign(node) if !is_data => {
+                if let Some(value) = node.value.as_deref() {
+                    take(&node.target, value);
+                }
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
 /// the fields of a plain class: the attributes its body gives the instance
 ///
 /// a fixed layout needs every field to exist by the time anything can read one,
@@ -2288,6 +2373,7 @@ fn init_fields(
     model: &SemanticModel<'_>,
     class: &ast::StmtClassDef,
     layouts: &Layouts,
+    defaults: &HashSet<String>,
     mut fields: Vec<by_ir::function::FieldDecl>,
 ) -> Lowered<Vec<by_ir::function::FieldDecl>> {
     let methods = instance_methods(class);
@@ -2332,6 +2418,17 @@ fn init_fields(
             }
         }
     }
+    // a name the class body binds is another value the field has to be able to hold: a
+    // method reading it on an instance with nothing of its own gets the class's value,
+    // which is `xml.etree.ElementTree.Element` reading a `tag` of `None` where every
+    // assignment writes a `str`. the class-level value is only ever held boxed — it is one
+    // object the module keeps, shared by every instance reading through to it — so the
+    // field it stands behind has to be able to hold a `PyObject *` too
+    for (name, width) in &mut widths {
+        if defaults.contains(name) {
+            *width = RType::OBJECT;
+        }
+    }
 
     // a class with no `__init__` gives the instance nothing at construction, so every
     // attribute it has is one some later method wrote — which is the optional field the
@@ -2350,6 +2447,7 @@ fn init_fields(
                 ty: ty.clone(),
                 default: None,
                 optional: true,
+                defaulted_by: None,
             });
         }
         return Ok(fields);
@@ -2373,6 +2471,7 @@ fn init_fields(
                 ty,
                 default: None,
                 optional: false,
+                defaulted_by: None,
             });
         }
     }
@@ -2388,6 +2487,7 @@ fn init_fields(
             ty: ty.clone(),
             default: None,
             optional: false,
+            defaulted_by: None,
         });
     }
 
@@ -2403,6 +2503,7 @@ fn init_fields(
             ty: ty.clone(),
             default: None,
             optional: true,
+            defaulted_by: None,
         });
     }
     Ok(fields)
@@ -2493,6 +2594,7 @@ fn slot_fields(
             ty: RType::OBJECT,
             default: None,
             optional: true,
+            defaulted_by: None,
         });
     }
     Ok(fields)
@@ -3068,8 +3170,10 @@ fn property_groups<'a>(
         }
         let written = definitions(name);
         // a lone `@property` getter is left alone: module init copies the `property` the
-        // interpreted body already built, which keeps `fget` and `fset` answering, and
-        // taking it over here would trade that for a getset and recover no decline
+        // interpreted body already built, so the name already answers with a real one and
+        // taking it over here recovers no decline. what it *would* recover is the getter's
+        // body — the carried property holds the interpreted function, so a lone getter
+        // runs interpreted where a pair does not
         if written.len() < 2
             || !written[1..]
                 .iter()
@@ -3109,12 +3213,13 @@ fn property_groups<'a>(
             }
             *slot = Some(accessor);
         }
-        // a dunder is read out of the *slot* rather than off the name, and a getset entry
-        // fills no slot — so `@property def __len__` would answer `x.__len__` and leave
-        // `len(x)` going wherever the base's slot went, which is two answers
+        // a dunder is read out of the *slot* rather than off the name. the property is
+        // written straight into the type's dict, which runs none of the slot fixup a
+        // `class` statement does — so `@property def __len__` would answer `x.__len__`
+        // and leave `len(x)` going wherever the base's slot went, which is two answers
         if fills_a_type_slot(name) {
             return Err(Decline::new(format!(
-                "`{name}` is a property and fills a type slot, which a getset entry does not"
+                "`{name}` is a property and fills a type slot, which a published property does not"
             )));
         }
         for (half, accessor) in group.halves() {
@@ -3178,12 +3283,12 @@ fn accessor_half(
     }
 }
 
-/// whether a half is the plain accessor a getset entry can stand for
+/// whether a half is the plain accessor a `property` reaches
 ///
-/// `tp_getset` calls a getter with the receiver and nothing else, and a setter with the
-/// receiver and the one value. a half that takes anything more can still be *called* as
-/// python calls it — through the `property` the interpreted body built — but not through
-/// the two function pointers this lowers it to
+/// `property` calls a getter with the receiver and nothing else, and a setter with the
+/// receiver and the one value. a half that takes anything more is turned down here even
+/// where a default would have covered the difference — widening this is its own change,
+/// and one that has to be re-costed against what the sample declines next
 fn accessor_is_plain(function: &ast::StmtFunctionDef, half: Half) -> Lowered<()> {
     let parameters = &function.parameters;
     let arity = parameters.posonlyargs.len() + parameters.args.len();
@@ -3196,7 +3301,7 @@ fn accessor_is_plain(function: &ast::StmtFunctionDef, half: Half) -> Lowered<()>
             .any(|parameter| parameter.default.is_some())
     {
         return Err(Decline::new(format!(
-            "a property `{}` reached through a getset takes exactly {} argument(s), and `{}` does not",
+            "a property `{}` is called with exactly {} argument(s), and `{}` does not take that many",
             half.written_as(),
             half.arity(),
             function.name
@@ -3217,7 +3322,7 @@ fn accessor_is_plain(function: &ast::StmtFunctionDef, half: Half) -> Lowered<()>
 ///
 /// the decorator that made it *is* the construct, so it comes off: applying it at init
 /// would build a second `property` out of the native function and put it exactly where
-/// the getset entry has to be
+/// the one built from both halves has to go
 fn lower_accessor<'a>(
     unit: Unit<'a>,
     accessor: &'a ast::StmtFunctionDef,
@@ -4070,7 +4175,8 @@ fn class_fields(
     // the inherited ones come first and nothing after that removes or reorders one, so
     // what this class adds of its own is whatever the field passes left past them
     let taken = inherited.len();
-    let fields = if is_data {
+    let defaults = class_level_defaults(class, is_data);
+    let mut fields = if is_data {
         data_fields(db, env, model, class, layouts, inherited)?
     } else {
         // a plain class *is* its `__init__`: the fields are the attributes it gives
@@ -4078,15 +4184,47 @@ fn class_fields(
         // ones no assignment reached
         slot_fields(
             class,
-            init_fields(db, env, model, class, layouts, inherited)?,
+            init_fields(db, env, model, class, layouts, &defaults, inherited)?,
         )?
     };
+    // a name the body binds *and* `__init__` assigns is a field whose class-level value
+    // is what a read answers with until the instance has one of its own. the presence
+    // byte is what tells those apart, so such a field is always optional — and a `del`
+    // then means the instance goes back to answering the class's value, which is what
+    // python does with the entry it removes from the instance's own dict
+    for (at, field) in fields.iter_mut().enumerate() {
+        if !defaults.contains(&field.name) {
+            continue;
+        }
+        // an inherited field is laid out by the class that declared it, and a subclass
+        // cannot add a byte to a struct its base already fixed. so a body giving an
+        // inherited field a class-level value is lowered only where the base laid that
+        // byte down already — otherwise the base's own constructor would write the field
+        // without ever recording that it had, and every such instance would read as
+        // having nothing of its own
+        if at < taken && !field.optional {
+            return Err(Decline::new(format!(
+                "`{}` is a class-level value for a field its base laid out with no absent state",
+                field.name
+            )));
+        }
+        field.optional = true;
+        field.defaulted_by = Some(class.name.to_string());
+    }
     // a class that adds no field of its own keeps what its base keeps, at the offsets
     // the base laid them out, reached through the descriptors the base published — so
     // there is no region past the base's instance for it to own, and none of the three
     // slots that would reach one. it is built the way any other class with no storage of
-    // its own is, and what it declares here is the same nothing
+    // its own is, and what it declares here is the same nothing.
+    //
+    // a body that rebinds an inherited field's class-level value is the exception: the
+    // value is published by whichever class declares the field, so a class overriding one
+    // has to declare it too or the base's value would be the only one there is
+    let rebinds_a_default = fields
+        .iter()
+        .any(|field| field.defaulted_by.as_deref() == Some(class.name.as_str()));
     let fields = if fields.len() == taken
+        && !rebinds_a_default
         && appends_past_a_base_of_ours(db, env, model, suite, base.as_ref(), layouts)
     {
         Vec::new()
@@ -4211,6 +4349,7 @@ fn data_fields(
                     ty: map_type_with(db, env, ty, layouts)?,
                     default,
                     optional: false,
+                    defaulted_by: None,
                 });
             }
             Stmt::FunctionDef(method) if method.name.starts_with("__") => {

@@ -946,6 +946,31 @@ pub enum Op {
     ///
     /// only `by_opt`'s `str_of_int` pass produces this
     StrOfInt { dest: RegisterId, value: Value },
+    /// `lhs + str(n)` where `n` is a tagged integer
+    ///
+    /// this is a [`Self::StrOfInt`] and the [`Self::StrConcat`] that reads it, done
+    /// as one thing. separately they allocate twice — the digits get a string of
+    /// their own, and then the concatenation allocates the answer and copies both
+    /// halves into it — when the length of the answer was settled before either
+    /// allocation happened. so the digits are written where they end up.
+    ///
+    /// the name `str` is still resolved through the module namespace on every trip
+    /// and the resolution is still compared rather than assumed, exactly as
+    /// [`Self::StrOfInt`] describes; and when it does not answer with the builtin,
+    /// what the digits become is still checked to be a `str` before it is
+    /// concatenated, because the module's own `str` may return anything at all.
+    ///
+    /// there is no `consumes_lhs` here because the pass that produces this runs
+    /// after `str_append`, and declines any concatenation that pass has already
+    /// claimed. an accumulation keeps its in-place append, which is the cheaper
+    /// shape of the two.
+    ///
+    /// only `by_opt`'s `str_concat_int` pass produces this
+    StrConcatInt {
+        dest: RegisterId,
+        lhs: Value,
+        value: Value,
+    },
     /// raise a standard error with a fixed message
     RaiseStandard {
         error: StandardError,
@@ -1060,6 +1085,7 @@ impl Op {
             | Self::Len { .. }
             | Self::StrConcat { .. }
             | Self::StrOfInt { .. }
+            | Self::StrConcatInt { .. }
             | Self::RaiseStandard { .. } => Vec::new(),
         }
     }
@@ -1114,6 +1140,7 @@ impl Op {
             | Self::TupleBuild { dest, .. }
             | Self::Len { dest, .. }
             | Self::StrOfInt { dest, .. }
+            | Self::StrConcatInt { dest, .. }
             | Self::CallPython { dest, .. }
             | Self::ImportModule { dest, .. }
             | Self::ImportFrom { dest, .. }
@@ -1215,6 +1242,7 @@ impl Op {
             | Self::TupleBuild { dest, .. }
             | Self::Len { dest, .. }
             | Self::StrOfInt { dest, .. }
+            | Self::StrConcatInt { dest, .. }
             | Self::CallPython { dest, .. }
             | Self::ImportModule { dest, .. }
             | Self::ImportFrom { dest, .. }
@@ -1347,6 +1375,9 @@ impl Op {
             | Self::ObjectCompare { lhs, rhs, .. }
             | Self::StrCompare { lhs, rhs, .. }
             | Self::StrConcat { lhs, rhs, .. }
+            | Self::StrConcatInt {
+                lhs, value: rhs, ..
+            }
             | Self::FloatCompare { lhs, rhs, .. } => vec![lhs, rhs],
             Self::Unary { operand, .. } => vec![operand],
             Self::CallNative { args, .. } | Self::CallPython { args, .. } => args.iter().collect(),
@@ -1525,6 +1556,9 @@ impl Op {
             | Self::ObjectCompare { lhs, rhs, .. }
             | Self::StrCompare { lhs, rhs, .. }
             | Self::StrConcat { lhs, rhs, .. }
+            | Self::StrConcatInt {
+                lhs, value: rhs, ..
+            }
             | Self::FloatCompare { lhs, rhs, .. } => vec![lhs, rhs],
             Self::Unary { operand, .. } => vec![operand],
             Self::CallNative { args, .. } | Self::CallPython { args, .. } => {

@@ -373,6 +373,7 @@ pub(crate) fn park_live_registers(
                     ty: decl.ty.clone(),
                     default: None,
                     optional: false,
+                    defaulted_by: None,
                 });
             }
         }

@@ -1235,6 +1235,14 @@ impl Verifier<'_> {
                     );
                 }
             }
+            Op::StrConcatInt { dest, lhs, value } => {
+                self.expect(block, lhs, &RType::STR, "concatenating the str of an int");
+                self.expect(block, value, &RType::INT, "concatenating the str of an int");
+                // unlike `str-of-int` on its own this *is* a `str`: what the name
+                // resolved to may hand back anything, and the operation checks it
+                // before it concatenates
+                self.expect_dest(block, *dest, &RType::STR, "concatenating the str of an int");
+            }
             Op::RaiseStandard { .. } => {}
             Op::Enter { dest, manager } => {
                 self.expect(block, manager, &RType::OBJECT, "a context manager");

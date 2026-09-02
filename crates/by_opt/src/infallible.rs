@@ -149,6 +149,7 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::StrConcat { .. }
         // the fast path allocates and the slow one calls whatever `str` resolved to
         | Op::StrOfInt { .. }
+        | Op::StrConcatInt { .. }
         | Op::CallPython { .. }
         | Op::CallValue { .. }
         | Op::LoadGlobal { .. }

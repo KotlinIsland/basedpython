@@ -48,7 +48,15 @@
 //! until something writes it, so the argument is the copy's argument with the source
 //! being a *place* the register owns rather than the register itself.
 //!
-//! ## why neither asks for a temporary written once
+//! ## a narrowing check is a copy that also asks a question
+//!
+//! `for part in line.split(" ")` hands each element over as an object and narrows it
+//! to a `str`. that narrowing is a type test and then a retain of the very object it
+//! was given — so once the test is separated from the retain, what is left is the
+//! copy above, with the iterator's own register as the source. the test still has to
+//! run, because a borrow says nothing about what type the value is.
+//!
+//! ## why none of them asks for a temporary written once
 //!
 //! the obvious way to say "this copy is the register's whole life" is to ask that the
 //! register be written exactly once over the function and carry no name from the
@@ -70,11 +78,32 @@
 //! the source between the write and the last read. the first three together are what
 //! make each write's window its own block, which is the window the last one is stated
 //! against.
+//!
+//! ## a chain of lends is one borrow each, not one borrow between them
+//!
+//! `key = unbox e` and then `r = key` is two lending writes, and only the first has a
+//! source that plainly owns. the tempting reading is that the second cannot borrow —
+//! nothing would be owning at the end of the chain — but that mistakes which register
+//! it has to outlive. `r` holds what `key` holds, which is what `e` holds, and `e` is
+//! the one that owns it; so the window to ask about is `e`'s, not `key`'s.
+//!
+//! this matters because cutting the chain at the first link costs every link after it.
+//! a `key` read three times in a loop body is one lending write and three copies, and
+//! borrowing only the `key` turns three free copies into three retained ones — a
+//! change that saves one pair and pays for three.
+//!
+//! so a candidate whose source is another candidate waits for that one's answer, and
+//! then borrows from whatever the source ended up resting on: the source's own owner
+//! where the source borrows, and the source itself where it does not. the wait is what
+//! keeps this honest — a source that ends up *owning* is the register the value is
+//! held by, and reaching past it to something further back would be an argument about
+//! a register that is no longer in the chain.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use by_ir::function::{BasicBlock, Function, ModuleIr};
 use by_ir::ops::{Op, RegisterId, Value};
+use by_ir::rtype::{Primitive, RType};
 
 pub fn run(module: &mut ModuleIr) {
     for function in module.all_functions_mut() {
@@ -89,21 +118,74 @@ fn borrow(function: &mut Function) {
     // and the field reads before the copies, for the same reason
     mark(function, field_reads(function));
 
-    // the copies and the element reads both rest on their source going on owning, so
-    // neither may lend to the other: a chain of two borrows has nothing owning at the
-    // end of it. settling them together and dropping any candidate whose source is
-    // also one keeps the answer from depending on which kind is looked at first
-    let mut lending = copies(function);
-    lending.extend(tuple_elements(function));
-    let borrowing: HashSet<RegisterId> = lending.iter().map(|(register, _)| *register).collect();
-    mark(
-        function,
-        lending
-            .iter()
-            .filter(|(_, source)| !borrowing.contains(source))
-            .map(|(register, _)| *register)
-            .collect(),
-    );
+    // the copies, the element reads and the narrowing checks all rest on their source
+    // still holding the value, so they are settled together against one another
+    // ordered, so that which candidate a round reaches first is a property of the
+    // function rather than of a hash seed. the answer does not depend on the order —
+    // a candidate waits for its source either way — but a compiler that emits
+    // different C on two runs of the same input is not something to leave to luck
+    let mut lending: BTreeMap<RegisterId, RegisterId> = BTreeMap::new();
+    for (register, source) in copies(function)
+        .into_iter()
+        .chain(tuple_elements(function))
+        .chain(narrowings(function))
+    {
+        lending.insert(register, source);
+    }
+    mark(function, settle(function, &lending));
+}
+
+/// which of the candidates may borrow, and from which register
+///
+/// a candidate whose source is another candidate cannot be answered until that one is,
+/// because which register it has to outlive depends on the answer: a source that ends
+/// up owning is the register to check against, and one that ends up borrowing is not —
+/// the value is then held by whatever is behind *it*. so this settles what it can and
+/// goes round again, and stops when a round decides nothing.
+///
+/// what is left undecided at that point is a cycle of candidates lending to each
+/// other, which reaches no owner at all. those own, which is the answer that costs
+/// nothing but a retain
+fn settle(function: &Function, lending: &BTreeMap<RegisterId, RegisterId>) -> Vec<RegisterId> {
+    // the register each settled borrow has to outlive, which for a chain is the one at
+    // the end of it rather than the immediate source
+    let mut owners: BTreeMap<RegisterId, RegisterId> = BTreeMap::new();
+    let mut decided: HashSet<RegisterId> = HashSet::new();
+
+    loop {
+        let mut settled_one = false;
+        for (register, source) in lending {
+            if decided.contains(register) {
+                continue;
+            }
+            let owner = match owners.get(source) {
+                // the source borrows, so the value is held by what is behind it. the
+                // source's own window ran to its last read, and this register's write
+                // *is* one of those reads, so the owner still holds at that point
+                Some(owner) => Some(*owner),
+                // a source this pass has not settled either is not an answer yet
+                None if lending.contains_key(source) && !decided.contains(source) => continue,
+                // and one it has settled as owning — or never had a say in — is the
+                // register to check against, so long as it has something to lend. a
+                // parameter does: the caller owns its argument for the length of the
+                // call
+                None => function
+                    .register(*source)
+                    .filter(|decl| !decl.borrowed && decl.ty.is_refcounted())
+                    .map(|_| *source),
+            };
+            decided.insert(*register);
+            settled_one = true;
+            if let Some(owner) = owner
+                && window_holds(function, *register, owner)
+            {
+                owners.insert(*register, owner);
+            }
+        }
+        if !settled_one {
+            return owners.into_keys().collect();
+        }
+    }
 }
 
 fn mark(function: &mut Function, registers: Vec<RegisterId>) {
@@ -222,6 +304,32 @@ fn copies(function: &Function) -> Vec<(RegisterId, RegisterId)> {
     })
 }
 
+/// every register filled only by narrowing checks over one other register, paired
+/// with the register it would borrow from
+///
+/// narrowing an object to a `str`, a `list` or a native class is a *test*: the value
+/// that comes out is the value that went in, and the reference the unbox takes is the
+/// only thing separating it from a plain copy. so it lends on exactly the copy's
+/// terms, and `part` in `for part in line.split(" ")` — which is a narrowing of what
+/// the iterator handed over — stops paying a retain and a release per word
+///
+/// the narrowings that *build* a value rather than test one are not here: an `int` or
+/// a `float` comes out of its object as a machine value, so there is no source still
+/// holding what the destination holds. those destinations are not refcounted either,
+/// so [`lending_writes`] would drop them anyway — but saying which narrowings lend is
+/// the property this rests on, and leaving it to the destination's type would make a
+/// future converting unbox into a use-after-free without anyone having to decide it
+fn narrowings(function: &Function) -> Vec<(RegisterId, RegisterId)> {
+    lending_writes(function, |op| match op {
+        Op::Unbox {
+            src: Value::Register(source),
+            to: RType::Primitive(Primitive::Str | Primitive::List) | RType::Instance { .. },
+            ..
+        } => Some(*source),
+        _ => None,
+    })
+}
+
 /// every register filled only by element reads off a fixed-length tuple that goes on
 /// owning what it holds, paired with the tuple register it would borrow from
 fn tuple_elements(function: &Function) -> Vec<(RegisterId, RegisterId)> {
@@ -261,11 +369,17 @@ fn lending_writes(
     candidates
 }
 
-/// the register every write of `register` lends from, where the borrow holds
+/// the register every write of `register` lends from
 ///
-/// `None` where any write is something else, where a read reaches the register from
-/// outside the block that wrote it, or where the source stops holding the value
-/// before the last read of it
+/// this is the shape of the register's life and nothing about whether the value
+/// survives it: every write lends, each from the same source, and every read sits in a
+/// block that wrote it first, which is what makes each write's window its own block.
+/// whether the value is still there across that window is [`window_holds`], asked
+/// separately because the register a borrow has to outlive is the one that *owns* the
+/// value, and that can be further back than the immediate source
+///
+/// `None` where any write is something else, or where a read reaches the register from
+/// outside the block that wrote it
 fn lender(
     function: &Function,
     register: RegisterId,
@@ -307,19 +421,17 @@ fn lender(
             return None;
         }
         let source = lends(&block.ops[write_at])?;
-        // the whole argument is that the source goes on holding the value, so one
-        // that owns nothing itself has nothing to lend. a parameter does qualify: the
-        // caller owns its argument for the length of the call
+        // a register cannot hold a value on loan from itself
         if source == register
             || function
                 .register(source)
-                .is_none_or(|decl| decl.borrowed || !decl.ty.is_refcounted())
+                .is_none_or(|decl| !decl.ty.is_refcounted())
         {
             return None;
         }
         // one register is one discipline for its whole life, so two writes lending
-        // from different sources would still need one answer — and the window below
-        // is stated against a single source
+        // from different sources would still need one answer — and the window is
+        // stated against a single source
         if held.is_some_and(|already| already != source) {
             return None;
         }
@@ -332,16 +444,34 @@ fn lender(
             return None;
         }
         read_somewhere = true;
-        // and the source has to still hold the value, all the way to the last read
-        if block.ops[write_at + 1..=last_read]
-            .iter()
-            .any(|op| op.dest() == Some(source) || op.unbinds() == Some(source))
-        {
-            return None;
-        }
     }
     // a register with no use at all is dead, and the dead-register pass owns that
     read_somewhere.then_some(held).flatten()
+}
+
+/// whether `owner` still holds the value everywhere `register` is read
+///
+/// [`lender`] has already established that each of the register's writes is followed
+/// by that block's reads of it, so the window to ask about is the one write and the
+/// last read in each block. anything writing over `owner` or unbinding it inside that
+/// window drops the last reference the borrow was resting on
+fn window_holds(function: &Function, register: RegisterId, owner: RegisterId) -> bool {
+    let uses = |op: &Op| op.operands().iter().any(|operand| reads(operand, register));
+    for block in &function.blocks {
+        let Some(write_at) = block.ops.iter().position(|op| op.dest() == Some(register)) else {
+            continue;
+        };
+        let Some(last_read) = block.ops.iter().rposition(uses) else {
+            continue;
+        };
+        if block.ops[write_at + 1..=last_read]
+            .iter()
+            .any(|op| op.dest() == Some(owner) || op.unbinds() == Some(owner))
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// whether every use of `register` sits inside a window nothing can invalidate
@@ -892,8 +1022,12 @@ mod tests {
         let mut function = builder.finish();
         assert_eq!(copies(&function), vec![(widened, inner)]);
 
+        // the chain reaches its owner through registers *this* pass settled, and a
+        // register already marked by another one is not on that chain: nothing here
+        // says what its own borrow rests on, or for how long
         function.registers[inner.index()].borrowed = true;
-        assert!(copies(&function).is_empty());
+        borrow(&mut function);
+        assert!(!function.registers[widened.index()].borrowed);
     }
 
     #[test]
@@ -1467,13 +1601,15 @@ mod tests {
         assert_eq!(tuple_elements(&function), vec![(head, pair)]);
 
         function.registers[pair.index()].borrowed = true;
-        assert!(tuple_elements(&function).is_empty());
+        borrow(&mut function);
+        assert!(!function.registers[head.index()].borrowed);
     }
 
     #[test]
-    fn a_copy_of_an_element_that_is_itself_borrowing_does_not_borrow() {
-        // the two kinds are settled together for this: the element's own window ends
-        // at a write to the tuple, and the copy's uses may come after that
+    fn a_copy_of_an_element_borrows_from_the_tuple_behind_it() {
+        // the copy holds what the element holds, which is what the *tuple* owns — so
+        // the tuple is the register it has to outlive, and asking the element instead
+        // would have refused a borrow that plainly holds
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(pair_type());
@@ -1495,8 +1631,175 @@ mod tests {
         let mut m = module(builder.finish());
         run(&mut m);
         assert!(m.functions[0].registers[head.index()].borrowed);
-        assert!(!m.functions[0].registers[widened.index()].borrowed);
+        assert!(m.functions[0].registers[widened.index()].borrowed);
         assert_eq!(verify(&m.functions[0]), Ok(()));
+    }
+
+    #[test]
+    fn a_copy_does_not_borrow_past_a_write_to_the_tuple_behind_it() {
+        // the same chain, with the tuple rebuilt between the copy and its use. the
+        // element's own window closed before that write, so only the copy's window —
+        // stated against the tuple rather than against the element — can see it.
+        //
+        // the copy is declared *before* the element it is a copy of, which is what
+        // makes this a test of the waiting as well as of the window: settling walks
+        // the candidates in register order, so the copy is reached while the element
+        // is still unanswered. taking the element for an owner at that point would
+        // check this window against a register that owns nothing
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let text = builder.param("s", RType::STR);
+        let widened = builder.temp(RType::OBJECT);
+        let pair = builder.temp(pair_type());
+        let head = builder.local("head", RType::STR);
+        let length = builder.temp(RType::INT);
+        assert!(widened < head, "the copy has to be settled first");
+        call_pair(&mut builder, pair, text);
+        builder.push(Op::TupleGet {
+            dest: head,
+            src: Value::Register(pair),
+            index: 0,
+        });
+        builder.assign(widened, Value::Register(head));
+        // the tuple gives up the last reference to the element the copy is holding
+        call_pair(&mut builder, pair, text);
+        builder.push(Op::Len {
+            dest: length,
+            src: Value::Register(widened),
+        });
+        builder.terminate(Terminator::Return(Value::Register(length)));
+        let mut m = module(builder.finish());
+        run(&mut m);
+        assert!(!m.functions[0].registers[widened.index()].borrowed);
+    }
+
+    #[test]
+    fn a_copy_borrows_from_a_source_that_ended_up_owning() {
+        // the element cannot borrow here — the tuple is rebuilt before its last read —
+        // so it owns, and that makes *it* the register the copy has to outlive. this
+        // is the case that must not reach past the source to the tuple
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let text = builder.param("s", RType::STR);
+        let pair = builder.temp(pair_type());
+        let head = builder.local("head", RType::STR);
+        let widened = builder.temp(RType::OBJECT);
+        let length = builder.temp(RType::INT);
+        call_pair(&mut builder, pair, text);
+        builder.push(Op::TupleGet {
+            dest: head,
+            src: Value::Register(pair),
+            index: 0,
+        });
+        call_pair(&mut builder, pair, text);
+        builder.assign(widened, Value::Register(head));
+        builder.push(Op::Len {
+            dest: length,
+            src: Value::Register(widened),
+        });
+        builder.terminate(Terminator::Return(Value::Register(length)));
+        let mut m = module(builder.finish());
+        run(&mut m);
+        assert!(!m.functions[0].registers[head.index()].borrowed);
+        assert!(m.functions[0].registers[widened.index()].borrowed);
+        assert_eq!(verify(&m.functions[0]), Ok(()));
+    }
+
+    /// `part = <object>` narrowed to a `str`, which is a type test and a retain
+    fn narrowed(to: RType) -> (Function, RegisterId, RegisterId) {
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let text = builder.param("s", RType::STR);
+        let held = builder.temp(RType::OBJECT);
+        let part = builder.local("part", to.clone());
+        let length = builder.temp(RType::INT);
+        builder.push(Op::CallNative {
+            owner: None,
+            dest: Some(held),
+            callee: "first".to_string(),
+            args: vec![Value::Register(text)],
+        });
+        builder.push(Op::Unbox {
+            dest: part,
+            src: Value::Register(held),
+            to,
+        });
+        builder.push(Op::Len {
+            dest: length,
+            src: Value::Register(part),
+        });
+        builder.terminate(Terminator::Return(Value::Register(length)));
+        (builder.finish(), held, part)
+    }
+
+    #[test]
+    fn a_narrowing_check_borrows_from_what_it_narrows() {
+        let (function, _, part) = narrowed(RType::STR);
+        let mut m = module(function);
+        run(&mut m);
+        assert!(m.functions[0].registers[part.index()].borrowed);
+        assert_eq!(verify(&m.functions[0]), Ok(()));
+    }
+
+    #[test]
+    fn a_narrowing_that_builds_a_value_does_not_borrow() {
+        // an `int` comes out of its object as a machine value rather than as the very
+        // object that went in, so there is no source still holding what the
+        // destination holds
+        let (function, _, part) = narrowed(RType::INT);
+        let mut m = module(function);
+        run(&mut m);
+        assert!(!m.functions[0].registers[part.index()].borrowed);
+    }
+
+    #[test]
+    fn a_narrowing_does_not_borrow_past_a_write_to_what_it_narrowed() {
+        let (mut function, held, part) = narrowed(RType::STR);
+        // rebind the object between the narrowing and its use, which drops the last
+        // reference the borrow was resting on
+        let Some(block) = function.blocks.first_mut() else {
+            return;
+        };
+        block.ops.insert(
+            2,
+            Op::CallNative {
+                owner: None,
+                dest: Some(held),
+                callee: "again".to_string(),
+                args: Vec::new(),
+            },
+        );
+        let mut m = module(function);
+        run(&mut m);
+        assert!(!m.functions[0].registers[part.index()].borrowed);
+    }
+
+    #[test]
+    fn a_circle_of_lends_borrows_nothing() {
+        // two registers each filled from the other reach no owner at all, and settling
+        // has to answer rather than wait for an answer that never comes
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let text = builder.param("s", RType::STR);
+        let left = builder.temp(RType::OBJECT);
+        let right = builder.temp(RType::OBJECT);
+        let length = builder.temp(RType::INT);
+        let entry = builder.current_block();
+        let loop_block = builder.new_block();
+        builder.assign(left, Value::Register(right));
+        builder.push(Op::Len {
+            dest: length,
+            src: Value::Register(left),
+        });
+        builder.terminate(Terminator::Goto(loop_block));
+        builder.switch_to(loop_block);
+        builder.assign(right, Value::Register(left));
+        builder.push(Op::Len {
+            dest: length,
+            src: Value::Register(right),
+        });
+        builder.terminate(Terminator::Goto(entry));
+        let mut m = module(builder.finish());
+        run(&mut m);
+        assert!(!m.functions[0].registers[left.index()].borrowed);
+        assert!(!m.functions[0].registers[right.index()].borrowed);
+        let _ = text;
     }
 
     #[test]

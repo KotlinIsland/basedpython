@@ -422,6 +422,18 @@ pub struct FieldDecl {
     /// `AttributeError` on the paths that skipped it. the field is still laid out — it
     /// costs a byte beside it saying whether it was ever written
     pub optional: bool,
+    /// the class whose body binds this name to a value of its own, where one does.
+    ///
+    /// `tag = None` standing beside a `self.tag = tag` in `__init__` — python answers
+    /// such a read off the class where the instance has nothing of its own and off the
+    /// instance where it has, and the byte [`optional`](Self::optional) costs is exactly
+    /// what tells the two apart. so a defaulted field is always optional.
+    ///
+    /// it names the class rather than being a flag because that is what a subclass needs:
+    /// the layout it inherits carries the name across, and the value itself stays in the
+    /// one place the body that wrote it put it — so a subclass that binds nothing reads
+    /// the base's value, and one that binds its own overrides it with its own
+    pub defaulted_by: Option<String>,
 }
 
 impl FieldDecl {
@@ -452,14 +464,14 @@ impl FieldDecl {
 /// lowered as one attribute
 ///
 /// python builds one `property` object out of the pair and puts it in the class dict
-/// under the name all of them were written as. an emitted type publishes the same
-/// attribute through `tp_getset`, whose two function pointers are exactly the halves a
-/// `property` holds — so the pair stays one construct rather than becoming two entries
-/// in a method table that would both answer to the one name.
+/// under the name all of them were written as. an emitted type does the same, at module
+/// init — so the pair stays one construct rather than becoming two entries in a method
+/// table that would both answer to the one name, and everything that treats a property as
+/// an object rather than as an attribute finds the object it is asking for.
 ///
 /// each half names a [`Function`] in the class's own `methods`, which is where the
-/// bodies live. they are kept out of the method table: a name reached through
-/// `tp_getset` and the same name reached through `tp_methods` would be two answers
+/// bodies live. they are kept out of the method table: the property is what the class
+/// publishes under this name, and a table entry would put a second descriptor there
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PropertyIr {
     /// the attribute python sees, already private-mangled
@@ -709,9 +721,9 @@ impl ClassIr {
 
     /// the methods python reaches by name, through the method table
     ///
-    /// a property's accessors are reached through its getset entry instead. a table
+    /// a property's accessors are reached through the `property` object instead. a table
     /// entry for one would put a `method_descriptor` in the type's dict under the
-    /// property's own name, which is the one place the getset entry has to be.
+    /// property's own name, which is the one place the property itself has to be.
     ///
     /// `__new__` is left out for the same reason: it is published by *assigning* it onto
     /// the finished type, because that is the only thing that reaches the slot fixup a
