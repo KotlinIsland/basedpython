@@ -148,6 +148,16 @@ fn print_op(function: &Function, op: &Op) -> String {
             value(subject),
             attribute.as_deref().unwrap_or("<positional>")
         ),
+        Op::MethodStands {
+            dest,
+            src,
+            class,
+            method,
+        } => format!(
+            "{} = method-stands {} {class}.{method}",
+            name(*dest),
+            value(src)
+        ),
         Op::IsMissing { dest, src } => {
             format!("{} = is-missing {}", name(*dest), value(src))
         }
@@ -365,6 +375,9 @@ fn print_op(function: &Function, op: &Op) -> String {
             format!("{} = {}[{}]", name(*dest), value(src), index)
         }
         Op::Len { dest, src } => format!("{} = len {}", name(*dest), value(src)),
+        Op::StrOfInt { dest, value: src } => {
+            format!("{} = str-of-int {}", name(*dest), value(src))
+        }
         Op::NewInstance {
             dest,
             class,
@@ -435,6 +448,7 @@ fn print_op(function: &Function, op: &Op) -> String {
         Op::LoadGlobal { dest, name: global } => {
             format!("{} = global {global}", name(*dest))
         }
+        Op::ModuleDict { dest } => format!("{} = globals", name(*dest)),
         Op::StoreGlobal {
             dest,
             name: global,
@@ -443,6 +457,7 @@ fn print_op(function: &Function, op: &Op) -> String {
         Op::DeleteGlobal { dest, name: global } => {
             format!("{} = del global {global}", name(*dest))
         }
+        Op::DeleteLocal { dest } => format!("del {}", name(*dest)),
         Op::LoadClass { dest, class } => {
             format!("{} = class {class}", name(*dest))
         }
@@ -533,6 +548,16 @@ fn print_op(function: &Function, op: &Op) -> String {
             container,
             index,
         } => format!("{} = {}[{}]", name(*dest), value(container), value(index)),
+        Op::DictFind {
+            dest,
+            container,
+            key,
+        } => format!(
+            "{} = find {}[{}]",
+            name(*dest),
+            value(container),
+            value(key)
+        ),
         Op::StrItemCompare {
             dest,
             op,
@@ -709,6 +734,7 @@ mod tests {
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
             binding: crate::function::Binding::Instance,
+            coroutine_body: None,
         }
     }
 
@@ -776,6 +802,7 @@ b2:
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
             binding: crate::function::Binding::Instance,
+            coroutine_body: None,
         };
         assert!(print_function(&function).contains("return 1.0"));
     }

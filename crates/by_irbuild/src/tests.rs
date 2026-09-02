@@ -2815,8 +2815,8 @@ fn a_subclass_with_no_storage_is_rebuilt_on_a_base_that_declines_later() {
     // storage would have nowhere to go, and it cascades behind the base instead
     const SOURCE: &str = "\
 class Base:
-    def __new__(cls) -> \"Base\":
-        return object.__new__(cls)
+    def __setattr__(self, name: str, value: object) -> None:
+        pass
 
     def label(self) -> str:
         return \"base\"
@@ -2836,7 +2836,7 @@ class Storing(Base):
         vec![
             (
                 "Base".to_string(),
-                "`__new__` fills a type slot with no adapter yet".to_string()
+                "`__setattr__` fills a type slot with no adapter yet".to_string()
             ),
             (
                 "Storing".to_string(),
@@ -2872,8 +2872,8 @@ fn a_class_a_subclass_stores_inside_is_not_rebuilt_on_its_declining_base() {
     // `Aside` is the boundary: nothing stores anything under it, so it is rebuilt
     const SOURCE: &str = "\
 class Base:
-    def __new__(cls) -> \"Base\":
-        return object.__new__(cls)
+    def __setattr__(self, name: str, value: object) -> None:
+        pass
 
     def label(self) -> str:
         return \"base\"
@@ -2898,7 +2898,7 @@ class Aside(Base):
         vec![
             (
                 "Base".to_string(),
-                "`__new__` fills a type slot with no adapter yet".to_string()
+                "`__setattr__` fills a type slot with no adapter yet".to_string()
             ),
             (
                 "Middle".to_string(),
@@ -3294,9 +3294,11 @@ class Timed(Exception):
 }
 
 #[test]
-fn a_class_in_an_inheritance_chain_gives_up_its_direct_call() {
-    // it is a mutable heap type: python can rebind a method on it, or override it
-    // in a subclass, and a direct call would see neither
+fn a_class_in_an_inheritance_chain_guards_its_direct_call() {
+    // it is a mutable heap type: python can rebind a method on it, or override it in a
+    // subclass, and an unguarded direct call would see neither. so the call tests the
+    // receiver against each class that could answer and falls through to the protocol,
+    // where a class outside the module's reckoning is still found
     with_source(
         "\
 data class Shape:
@@ -3331,11 +3333,21 @@ def plain(p: Plain) -> int:
                         .unwrap_or_else(|| panic!("{name} is compiled")),
                 )
             };
+            // the direct call is there, but only behind a test of the receiver's exact
+            // type and of the class not having been written to since import — and the
+            // protocol call it falls through to is what a receiver neither test
+            // describes still takes
             assert!(
-                !ops("through").contains("call Shape.describe"),
+                ops("through").contains("method-stands r1 Shape.describe"),
                 "{}",
                 ops("through")
             );
+            assert!(
+                ops("through").contains("call Shape.describe"),
+                "{}",
+                ops("through")
+            );
+            assert!(ops("through").contains(".describe()"), "{}", ops("through"));
             assert!(
                 ops("plain").contains("call Plain.doubled"),
                 "{}",
@@ -3401,10 +3413,17 @@ def on_open(o: Open) -> int:
                 "{}",
                 ops("on_final_inherited")
             );
+            // an open receiver reaches the same body, but only through the test — and
+            // an exact one needs no test at all
             assert!(
-                !ops("on_open").contains("call Open.doubled"),
+                ops("on_open").contains("method-stands r1 Open.doubled"),
                 "{}",
                 ops("on_open")
+            );
+            assert!(
+                !ops("on_final").contains("method-stands"),
+                "{}",
+                ops("on_final")
             );
         },
     );
@@ -3440,7 +3459,17 @@ def through(s: Shape) -> str:
                     .find(|function| function.name == "through")
                     .expect("through is compiled"),
             );
-            assert!(!through.contains("call Shape.describe"), "{through}");
+            // the direct call stands only behind a test of the receiver's exact type,
+            // since `Circle` overrides and a `Circle` is a `Shape`
+            assert!(
+                through.contains("method-stands r1 Shape.describe"),
+                "{through}"
+            );
+            assert!(
+                through.contains("method-stands r1 Circle.describe"),
+                "{through}"
+            );
+            assert!(through.contains(".describe()"), "{through}");
         },
     );
 }
@@ -3923,9 +3952,12 @@ fn a_second_decorator_over_a_static_method_keeps_the_decline() {
 fn a_convention_python_gives_a_method_itself_is_not_carried_twice() {
     // python already makes each of these implicitly static or class, and an emitted
     // generic class publishes a `__class_getitem__` of its own — so a table entry here
-    // would either duplicate the convention or collide with that entry
+    // would either duplicate the convention or collide with that entry.
+    //
+    // `__new__` is not among them: it is published by an assignment onto the finished
+    // type rather than through the table, so a `@staticmethod` over it says only what
+    // python already says and is dropped
     for source in [
-        "class Box:\n    @staticmethod\n    def __new__(cls) -> object:\n        return 7\n",
         "class Box:\n    @classmethod\n    def __init_subclass__(cls) -> None:\n        return None\n",
         "class Box:\n    @classmethod\n    def __class_getitem__(cls, item: object) -> object:\n        return item\n",
     ] {
@@ -4689,8 +4721,8 @@ class Container:
 
 
 class Parser(Container):
-    def __new__(cls, tag: str) -> Parser:
-        return object.__new__(cls)
+    def __setattr__(self, name: str, value: object) -> None:
+        object.__setattr__(self, name, value)
 
     def __init__(self, tag: str) -> None:
         Container.__init__(self, tag)
@@ -5819,7 +5851,7 @@ fn a_parked_value_that_may_be_unassigned_declines() {
     .expect_err("a maybe-unassigned local must be declined");
     assert!(error.reason.contains("`maybe`"), "{error:?}");
     assert!(
-        error.reason.contains("not assigned on every path"),
+        error.reason.contains("may be unbound where it is read"),
         "{error:?}"
     );
 }
@@ -5831,16 +5863,21 @@ fn a_parked_temporary_keeps_its_own_representation() {
     // is written on the only path that reaches its read, so the value survives the
     // suspension in the representation it had — `total` here stays a tagged int, and
     // the resumed addition is not the object protocol
+    //
+    // `stepped` awaits on its own behalf so that awaiting it really does suspend: a
+    // coroutine that never suspends is called rather than driven, and there would be
+    // nothing to park across
     with_source(
         "\
-async def stepped(i: int) -> int:
+async def stepped(i: int, held: object) -> int:
+    await held
     return i * 7
 
-async def summed(n: int) -> int:
+async def summed(n: int, held: object) -> int:
     total = 0
     i = 0
     while i < n:
-        total = total + await stepped(i)
+        total = total + await stepped(i, held)
         i = i + 1
     return total
 ",
@@ -5974,11 +6011,8 @@ fn an_await_uses_the_awaitable_protocol_not_iteration() {
     // way they obtain the iterator
     with_source(
         "\
-async def plain(n: int) -> int:
-    return n * 2
-
-async def chained(n: int) -> int:
-    return await plain(n)
+async def chained(awaitable: object) -> object:
+    return await awaitable
 ",
         |db, env, model, suite| {
             let module = crate::build_module(db, env, model, suite, "app", true);
@@ -6004,6 +6038,145 @@ async def chained(n: int) -> int:
             assert!(!text.contains("delegiter"), "{text}");
         },
     );
+}
+
+/// what the resume method of `chained` lowers to, for the direct-await tests below
+fn awaiting_frame(source: &str) -> (String, Vec<String>) {
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let chained = module
+            .classes
+            .iter()
+            .find(|class| class.name == "chained$gen")
+            .expect("chained is a coroutine");
+        let emitted = module
+            .all_functions()
+            .map(by_ir::Function::qualified_name)
+            .collect();
+        (print_function(&chained.methods[0]), emitted)
+    })
+}
+
+#[test]
+fn an_await_of_a_coroutine_that_never_suspends_is_the_call() {
+    // the coroutine `step(i)` would build is made here, awaited once and dropped, and
+    // one `send` runs the whole body — so there is nothing between the call and the
+    // value but an object nobody can see
+    let (text, emitted) = awaiting_frame(
+        "\
+async def step(n: int) -> int:
+    return n * 2
+
+async def chained(n: int) -> int:
+    return await step(n)
+",
+    );
+    assert!(text.contains("call step$direct(r"), "{text}");
+    assert!(!text.contains("awaititer"), "{text}");
+    assert!(
+        emitted.iter().any(|name| name == "step$direct"),
+        "{emitted:?}"
+    );
+    // and `step` itself is still a coroutine: calling it without awaiting has to hand
+    // back an object `asyncio` can drive like any other
+    assert!(emitted.iter().any(|name| name == "step"), "{emitted:?}");
+}
+
+#[test]
+fn an_await_of_a_coroutine_that_suspends_keeps_the_awaitable_protocol() {
+    // `step` has a resumption point of its own, so the object really does carry state
+    // between two sends and the await has to drive it
+    let (text, emitted) = awaiting_frame(
+        "\
+async def step(awaitable: object) -> object:
+    return await awaitable
+
+async def chained(awaitable: object) -> object:
+    return await step(awaitable)
+",
+    );
+    assert!(text.contains("awaititer"), "{text}");
+    assert!(!text.contains("$direct"), "{text}");
+    assert!(
+        !emitted.iter().any(|name| name.contains("$direct")),
+        "{emitted:?}"
+    );
+}
+
+#[test]
+fn a_coroutine_awaited_through_a_name_keeps_the_awaitable_protocol() {
+    // the object has been given a name, and what a name can be made to do — awaited
+    // twice, closed, handed to `asyncio`, or dropped so the `RuntimeWarning` fires —
+    // is not what this can answer from the shape of the `await` alone
+    let (text, emitted) = awaiting_frame(
+        "\
+async def step(n: int) -> int:
+    return n * 2
+
+async def chained(n: int) -> int:
+    held = step(n)
+    return await held
+",
+    );
+    assert!(text.contains("awaititer"), "{text}");
+    assert!(!text.contains("call step$direct"), "{text}");
+    // and with no `await` in the module reaching it, the edition is not emitted at
+    // all: it would be a second copy of a body under a name the namespace never binds
+    assert!(
+        !emitted.iter().any(|name| name == "step$direct"),
+        "{emitted:?}"
+    );
+}
+
+#[test]
+fn an_async_generator_is_given_no_direct_edition() {
+    // an `async def` that yields is an async *generator*: `step(n)` is an asynchronous
+    // iterator and is never awaited at all, so there is no call for one to stand for
+    let (_, emitted) = awaiting_frame(
+        "\
+async def step(n: int) -> object:
+    yield n
+
+async def chained(awaitable: object) -> object:
+    return await awaitable
+",
+    );
+    assert!(
+        !emitted.iter().any(|name| name.contains("$direct")),
+        "{emitted:?}"
+    );
+}
+
+#[test]
+fn a_coroutine_whose_body_awaits_on_its_own_behalf_is_given_no_direct_edition() {
+    // an `async with` and an `async for` await without the body saying so, and the
+    // property has to be about the machine rather than about the word `await`
+    for body in [
+        "    async with held:\n        return 1\n",
+        "    async for item in held:\n        return 1\n    return 0\n",
+        "    return len([x async for x in held])\n",
+    ] {
+        let source = format!(
+            "\
+async def step(held: object) -> int:
+{body}
+async def chained(awaitable: object) -> object:
+    return await awaitable
+"
+        );
+        let emitted = with_source(&source, |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
+            module
+                .all_functions()
+                .map(by_ir::Function::qualified_name)
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            !emitted.iter().any(|name| name.contains("$direct")),
+            "{body}\n{emitted:?}"
+        );
+    }
 }
 
 #[test]
@@ -6326,6 +6499,334 @@ def picked(flag: bool, n: int) -> int:
     assert_eq!(named, Some(vec!["value".to_string()]));
 }
 
+#[test]
+fn a_deleted_local_is_flagged_even_where_every_path_assigns_it() {
+    // the fixpoint that finds a read-before-write cannot see this one: `x` is assigned
+    // on the only path that reaches the `del`, so a forward analysis calls it
+    // definitely written. the byte is what the deletion unbinds *into*, so the
+    // deletion is what asks for it
+    let named = with_source(
+        "\
+def drop(n: int) -> int:
+    x = n
+    del x
+    return n
+",
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
+            assert!(module.declined.is_empty(), "{:?}", module.declined);
+            module
+                .functions
+                .iter()
+                .find(|function| function.name == "drop")
+                .map(|function| {
+                    let text = print_function(function);
+                    assert!(text.contains("del "), "{text}");
+                    function
+                        .registers
+                        .iter()
+                        .filter(|decl| decl.may_be_unassigned)
+                        .filter_map(|decl| decl.name.clone())
+                        .collect::<Vec<_>>()
+                })
+        },
+    );
+    assert_eq!(named, Some(vec!["x".to_string()]));
+}
+
+#[test]
+fn deleting_a_name_nothing_else_binds_declines() {
+    // python makes a name local for the whole function as soon as any statement in it
+    // binds *or deletes* the name, so `count` here is local and every read of it in
+    // the body raises. this lowering decides what is local from the writes, so it
+    // would resolve those reads out of the module namespace instead
+    let reasons = declines(
+        "\
+count = 1
+
+
+def drop() -> int:
+    del count
+    return 0
+",
+    );
+    assert_eq!(
+        reasons
+            .iter()
+            .map(|(name, reason)| (name.as_str(), reason.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(
+            "drop",
+            "`del count` is the only statement binding `count` in this function, and a \
+             name deleted but never assigned is local for the whole of it"
+        )]
+    );
+}
+
+#[test]
+fn deleting_a_name_a_nested_function_shares_declines() {
+    // `held` is one cell between the two frames, and its unbound state is the field
+    // being NULL rather than a byte beside a register — which is not what the
+    // deletion clears
+    let reasons = declines(
+        "\
+def outer(n: int) -> int:
+    held = n
+
+    def inner() -> int:
+        return held
+
+    del held
+    return inner()
+",
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "outer"
+            && reason
+                == "`del held` unbinds a name another frame shares, which is a \
+                          cell rather than a register"),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_class_body_filling_a_table_with_its_own_methods_is_lowered() {
+    // the shape `pickle.Unpickler` is 68 of and `pprint.PrettyPrinter` 18 of. the
+    // subscript binds no name in the class namespace: it writes into an object the body
+    // already built, which module init copies across already finished
+    let reasons = declines(
+        "\
+class Table:
+    dispatch = {}
+
+    def load_int(self, v: int) -> int:
+        return v
+    dispatch[int] = load_int
+",
+    );
+    assert!(reasons.is_empty(), "{reasons:?}");
+}
+
+#[test]
+fn a_class_body_writing_one_value_under_two_names_is_lowered() {
+    let reasons = declines(
+        "\
+class Bounds:
+    low = high = 3
+
+    def span(self) -> int:
+        return self.high - self.low
+",
+    );
+    assert!(reasons.is_empty(), "{reasons:?}");
+}
+
+#[test]
+fn a_table_a_class_body_fills_conditionally_is_lowered() {
+    // `pickle._Pickler`'s shape: the write stands under an `if`, and the interpreted
+    // definition made it into the table before init copies the table across
+    let reasons = declines(
+        "\
+available: bool = True
+
+
+class Table:
+    dispatch = {}
+
+    def load_int(self, v: int) -> int:
+        return v
+    if available:
+        dispatch[int] = load_int
+",
+    );
+    assert!(reasons.is_empty(), "{reasons:?}");
+}
+
+#[test]
+fn a_method_a_class_body_defines_conditionally_is_lowered() {
+    let reasons = declines(
+        "\
+available: bool = True
+
+
+class Table:
+    def load_int(self, v: int) -> int:
+        return v
+    if available:
+        def load_str(self, v: str) -> str:
+            return v
+",
+    );
+    assert!(reasons.is_empty(), "{reasons:?}");
+}
+
+#[test]
+fn a_conditional_binding_beside_a_definition_of_the_same_name_declines() {
+    // the `def` is lowered into the method table and the conditional binding is copied
+    // off the interpreted definition, so the type would carry two answers for one name
+    let reasons = declines(
+        "\
+available: bool = True
+
+
+class Table:
+    def load(self, v: int) -> int:
+        return v
+    if available:
+        def load(self, v: int) -> int:
+            return v + 1
+",
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Table"
+            && reason
+                == "`load` is both defined by this class body and bound by a block nested in it"),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_conditional_dunder_declines() {
+    let reasons = declines(
+        "\
+available: bool = True
+
+
+class Table:
+    n: int = 0
+    if available:
+        def __repr__(self) -> str:
+            return \"table\"
+",
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Table"
+            && reason
+                == "`__repr__` is bound by a block nested in the class body, and a dunder is settled before one runs"),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_loop_in_a_class_body_is_lowered_for_what_it_leaves_behind() {
+    // the loop variable stays in the namespace when the loop ends, so it is one of the
+    // names carried across
+    let reasons = declines(
+        "\
+class Table:
+    names = []
+    for width in (1, 2, 3):
+        names.append(width)
+",
+    );
+    assert!(reasons.is_empty(), "{reasons:?}");
+}
+
+#[test]
+fn a_try_in_a_class_body_declines() {
+    let reasons = declines(
+        "\
+class Table:
+    try:
+        n = 1
+    except ValueError:
+        n = 2
+",
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|(name, reason)| name == "Table"
+                && reason == "only fields and methods are lowered yet"),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_decorator_a_conditional_bound_declines_the_class() {
+    // init resolves a decorator out of the *module* namespace, and a block nested in the
+    // class body binds into the class namespace instead — which is nowhere init looks
+    let reasons = declines(
+        "\
+available: bool = True
+
+
+def wrap(f):
+    return f
+
+
+class Table:
+    if available:
+        helper = wrap
+
+    @helper
+    def load(self, n: int) -> int:
+        return n
+",
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Table"
+            && reason
+                == "`helper` is bound by the class body, and a decorator is resolved out of the module namespace at init"),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn an_import_under_a_class_body_conditional_declines() {
+    let reasons = declines(
+        "\
+available: bool = True
+
+
+class Table:
+    n: int = 0
+    if available:
+        import sys
+",
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Table"
+            && reason == "an import nested in a class body is not lowered yet"),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_class_level_assignment_to_an_attribute_declines() {
+    let reasons = declines(
+        "\
+class Holder:
+    n: int = 0
+
+
+class Table:
+    held = Holder()
+    held.n = 1
+",
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Table"
+            && reason == "only a plain class-level name is lowered yet"),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_class_level_assignment_unpacking_a_tuple_declines() {
+    let reasons = declines(
+        "\
+class Pair:
+    low, high = 1, 2
+",
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Pair"
+            && reason == "only a plain class-level name is lowered yet"),
+        "{reasons:?}"
+    );
+}
+
 /// the reason each declined entry in `source` gives, by name
 fn declines(source: &str) -> Vec<(String, String)> {
     with_source(source, |db, env, model, suite| {
@@ -6501,12 +7002,128 @@ class Held:
     }
 }
 
+/// a class whose `__new__` allocates and fills, and a subclass that inherits it
+const A_WRITTEN_NEW: &str = "\
+class Held:
+    def __new__(cls, n: int) -> \"Held\":
+        self = object.__new__(cls)
+        self.n = n
+        return self
+
+
+class Under(Held):
+    def __init__(self, n: int) -> None:
+        self.n = n * 2
+
+
+def make(n: int) -> Held:
+    return Held(n)
+
+
+def below(n: int) -> Under:
+    return Under(n)
+";
+
+#[test]
+fn a_written_new_is_handed_the_class_in_slot_zero() {
+    // python makes `__new__` a static method and puts the *class* in front of the
+    // arguments, so slot zero is bound out of the vector like any other static method's
+    // — and typed as the plain object a class is, because reading a field off it would
+    // be treating a type as an instance
+    assert!(
+        method_ir(A_WRITTEN_NEW, "Held", "__new__").contains("def __new__(cls: object, n: int)"),
+        "{}",
+        method_ir(A_WRITTEN_NEW, "Held", "__new__")
+    );
+}
+
+#[test]
+fn a_construction_of_a_class_that_writes_a_new_goes_through_python() {
+    // the direct allocation skips `__new__` entirely, which is the whole of what the
+    // written one exists to do. an inherited one counts: `Under` writes none of its own
+    // and still constructs through `Held`'s
+    let lowered = ir(A_WRITTEN_NEW);
+    for class in ["Held", "Under"] {
+        assert!(
+            lowered.contains(&format!("pycall {class}(")),
+            "{class}: {lowered}"
+        );
+        assert!(
+            !lowered.contains(&format!("new {class}(")),
+            "{class}: {lowered}"
+        );
+    }
+}
+
+#[test]
+fn a_new_whose_answer_is_another_class_declines() {
+    // every `C(...)` in the module is compiled believing it got a `C`, because the
+    // checker does not follow `__new__`. one that answers something else would hand each
+    // construction an object of a shape it was compiled not to expect
+    let reasons = declines(
+        "\
+class Aside:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+
+class Held:
+    def __new__(cls, n: int) -> Aside:
+        return Aside(n)
+",
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|(name, reason)| name == "Held" && reason.contains("`__new__` answers a `Aside`")),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_new_over_a_base_outside_the_module_declines() {
+    // the allocation is the base's, and only that base knows how big one of its
+    // instances is
+    let reasons = declines(
+        "\
+class Pair(tuple):
+    def __new__(cls, a: int, b: int) -> \"Pair\":
+        return tuple.__new__(cls, (a, b))
+",
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Pair"
+            && reason.contains("takes its instance layout from a base outside this module")),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_new_the_class_body_assigns_declines() {
+    // an assignment binds the name python fills from the allocator slot, so the name and
+    // the slot would answer differently
+    let reasons = declines(
+        "\
+def make(cls: object, n: int) -> object:
+    return object.__new__(cls)
+
+
+class Held:
+    __new__ = make
+",
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Held"
+            && reason.contains("`__new__ = ...` binds the name python fills from `tp_new`")),
+        "{reasons:?}"
+    );
+}
+
 #[test]
 fn a_dunder_whose_slot_has_no_adapter_still_declines() {
     // the gate is what keeps a slot the emitter cannot fill from compiling to a class
     // python never consults — a wrong answer where a decline was right
     for method in [
-        "def __new__(cls, n: int) -> \"Held\":\n        return object.__new__(cls)",
         "def __setattr__(self, name: str, value: object) -> None:\n        pass",
         "def __getattribute__(self, name: str) -> object:\n        return name",
         // `__get__` reaching `tp_descr_get` does not make this class a *data*
@@ -6647,6 +7264,195 @@ class Box:
             .iter()
             .any(|reason| reason.contains("`value` is defined more than once")),
         "{reasons:?}"
+    );
+}
+
+/// a property's halves leave the method table and become one published attribute
+///
+/// two `def value`s in one body is what `defined_once` turns down, and this is the one
+/// shape where they are not two definitions at all — python folds them into a single
+/// `property`. the halves keep their bodies, under names a source cannot write, and the
+/// name the source *did* write is published once
+#[test]
+fn a_property_pair_is_lowered_as_one_attribute() {
+    let source = "\
+class Box:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def value(self) -> int:
+        return self._n
+
+    @value.setter
+    def value(self, given: int) -> None:
+        self._n = given
+";
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.name == "Box")
+            .expect("Box is emitted");
+        assert_eq!(class.properties.len(), 1, "{:?}", class.properties);
+        let property = &class.properties[0];
+        assert_eq!(property.name, "value");
+        assert_eq!(property.getter.as_deref(), Some("value$get"));
+        assert_eq!(property.setter.as_deref(), Some("value$set"));
+        assert_eq!(property.deleter, None);
+        // the name the source wrote is not in the layout: `self._n` is the field, and
+        // `value` is reached through the descriptor
+        assert!(
+            class.fields.iter().all(|field| field.name != "value"),
+            "{:?}",
+            class.fields
+        );
+        // nor in the method table, where an entry would answer under the same name the
+        // getset entry has to
+        assert_eq!(
+            class
+                .table_methods()
+                .map(|method| method.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["__init__".to_string()]
+        );
+    });
+}
+
+/// a write to a property is a write to the descriptor, not to a field beside it
+///
+/// `logging.Manager.__init__` writes `self.disable = 0` where `disable` is a property,
+/// and a layout that took that as a field would store the raw value and never run the
+/// setter — which is where `_checkLevel` lives
+#[test]
+fn a_write_to_a_property_does_not_become_a_field() {
+    let source = "\
+class Manager:
+    def __init__(self) -> None:
+        self.disable = 0
+
+    @property
+    def disable(self) -> int:
+        return self._disable
+
+    @disable.setter
+    def disable(self, level: int) -> None:
+        self._disable = level + 1
+";
+    with_source(source, |db, env, model, suite| {
+        let module = crate::build_module(db, env, model, suite, "app", true);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.name == "Manager")
+            .expect("Manager is emitted");
+        let fields: Vec<&str> = class
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(fields, vec!["_disable"], "{fields:?}");
+    });
+}
+
+/// a property on a class its metaclass builds is turned down
+///
+/// the attribute a pair becomes is published by the type spec, and a class built through
+/// its metaclass is built out of a *namespace* — the spec is never consulted, so the
+/// attribute would simply not be there where the interpreted class has a `property`. that
+/// is what this pins: the class declines for the decorator its halves carry, and a change
+/// that let a decorated method through there has to answer for the getset as well
+#[test]
+fn a_property_on_a_class_its_metaclass_builds_is_declined() {
+    let reasons = declines(
+        "\
+from abc import ABCMeta
+
+
+class Meta(metaclass=ABCMeta):
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    def value(self, given: int) -> None:
+        pass
+",
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|(name, reason)| name == "Meta" && reason.contains("built through its metaclass")),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_property_half_the_getset_cannot_stand_for_is_declined() {
+    // each of these is *nearly* the construct, and says what it actually is rather than
+    // falling through to a message about a name written twice
+    let restated = declines(
+        "\
+class Box:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.getter
+    def value(self) -> int:
+        return 2
+",
+    );
+    assert!(
+        restated
+            .iter()
+            .any(|(_, reason)| reason.contains("writes a second `getter`")),
+        "{restated:?}"
+    );
+    let slotted = declines(
+        "\
+class Box:
+    @property
+    def __len__(self) -> int:
+        return 1
+
+    @__len__.setter
+    def __len__(self, given: int) -> None:
+        pass
+",
+    );
+    assert!(
+        slotted
+            .iter()
+            .any(|(_, reason)| reason.contains("fills a type slot")),
+        "{slotted:?}"
+    );
+    // `@other.setter` folds this body into a *different* property, which is not the one
+    // attribute a getset entry stands for
+    let foreign = declines(
+        "\
+class Box:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @property
+    def other(self) -> int:
+        return 2
+
+    @other.setter
+    def value(self, given: int) -> None:
+        pass
+",
+    );
+    assert!(
+        foreign
+            .iter()
+            .any(|(_, reason)| reason.contains("`value` is defined more than once")),
+        "{foreign:?}"
     );
 }
 
@@ -7024,4 +7830,95 @@ class Counter:
         ),
         vec![]
     );
+}
+
+/// `globals()` is the module namespace, and a compiled function has it in hand
+///
+/// calling the builtin would answer about the frame underneath, which for a compiled
+/// function is the caller's, in another module — so the read gave `None` for a name
+/// the module plainly binds and the write bound it in the caller
+#[test]
+fn globals_lowers_to_the_module_namespace() {
+    let ir = ir("\
+marker: int = 7
+
+
+def read() -> object:
+    return globals()
+");
+    assert!(ir.contains("= globals"), "{ir}");
+    assert!(!ir.contains("pycall globals"), "{ir}");
+}
+
+/// a module that binds `globals` itself has not written the builtin, and python calls
+/// what the name holds
+#[test]
+fn a_module_that_defines_globals_keeps_its_own() {
+    let ir = ir("\
+def globals() -> dict[str, object]:
+    return {}
+
+
+def read() -> object:
+    return globals()
+");
+    assert!(!ir.contains("= globals\n"), "{ir}");
+}
+
+/// the same question one scope in: a local holding a dict is not the builtin
+#[test]
+fn a_local_named_globals_is_not_the_builtin() {
+    let ir = ir("\
+def read() -> object:
+    globals: dict[str, object] = {}
+    return globals
+");
+    assert!(!ir.contains("= globals\n"), "{ir}");
+}
+
+/// `locals()` has no compiled answer at all: a compiled frame's locals are registers,
+/// several of them not even objects
+#[test]
+fn the_frame_reading_builtins_are_declined() {
+    for call in [
+        "locals()",
+        "vars()",
+        "dir()",
+        "eval(\"1\")",
+        "exec(\"a = 1\")",
+    ] {
+        let reason = decline(&format!("def f() -> object:\n    return {call}\n"));
+        assert!(reason.contains("calling frame"), "{call} gave `{reason}`");
+    }
+}
+
+/// `vars(x)` and `dir(x)` are about the object they are handed, not about a frame
+#[test]
+fn vars_and_dir_of_an_object_stay_compiled() {
+    assert_eq!(
+        declines("def f(a: object) -> object:\n    return (vars(a), dir(a))\n"),
+        vec![]
+    );
+}
+
+/// `exec` runs in the namespace it is given, and only falls back on the calling
+/// frame's when it is given none
+#[test]
+fn exec_with_a_namespace_of_its_own_stays_compiled() {
+    assert_eq!(
+        declines(
+            "\
+def f(ns: dict[str, object]) -> None:
+    exec(\"a = 1\", ns)
+"
+        ),
+        vec![]
+    );
+}
+
+/// …and `None` written there means the calling frame's, so it is the same decline
+#[test]
+fn exec_handed_none_for_a_namespace_is_declined() {
+    let reason = decline("def f() -> None:\n    exec(\"a = 1\", None)\n");
+    assert!(reason.contains("calling frame"), "{reason}");
 }

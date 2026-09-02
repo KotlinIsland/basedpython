@@ -95,6 +95,15 @@ fn propagate(function: &mut Function) {
                 continue;
             }
             let dest = *dest;
+            // `del x` names a place rather than producing a value, so there is no
+            // result to write somewhere else. the anonymous-temp test above already
+            // excludes it — a deleted name is a named local — but this is the property
+            // that matters, and leaving it implicit would make a silent no-op in
+            // `retarget` into a dropped assignment here
+            if block.ops[index].unbinds().is_some() {
+                index += 1;
+                continue;
+            }
             // the two registers must agree on representation, which they do by
             // construction, but the verifier is the only thing that guarantees it
             if register_types.get(dest.index()) != register_types.get(temp.index()) {
@@ -261,6 +270,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::AsyncIter { dest, .. }
         | Op::AsyncContext { dest, .. }
         | Op::IsMissing { dest, .. }
+        | Op::MethodStands { dest, .. }
         | Op::MatchSlice { dest, .. }
         | Op::IntCompare { dest, .. }
         | Op::FloatCompare { dest, .. }
@@ -269,9 +279,11 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::StrCompare { dest, .. }
         | Op::Truthy { dest, .. }
         | Op::Len { dest, .. }
+        | Op::StrOfInt { dest, .. }
         | Op::CallPython { dest, .. }
         | Op::CallValue { dest, .. }
         | Op::LoadGlobal { dest, .. }
+        | Op::ModuleDict { dest }
         | Op::StoreGlobal { dest, .. }
         | Op::DeleteGlobal { dest, .. }
         | Op::LoadClass { dest, .. }
@@ -296,6 +308,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::BuildTuple { dest, .. }
         | Op::BuildDict { dest, .. }
         | Op::GetItem { dest, .. }
+        | Op::DictFind { dest, .. }
         | Op::StrGetItem { dest, .. }
         | Op::StrItemCompare { dest, .. }
         | Op::SetItem { dest, .. }
@@ -323,7 +336,10 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::TupleBuild { dest, .. }
         | Op::TupleGet { dest, .. } => *dest = new_dest,
         Op::CallNative { dest, .. } => *dest = Some(new_dest),
-        Op::RaiseStandard { .. }
+        // every other arm here has no destination at all, so the caller never reaches
+        // it. `del` does have one, and it is refused there instead
+        Op::DeleteLocal { .. }
+        | Op::RaiseStandard { .. }
         | Op::RaiseWith { .. }
         | Op::FinishFrame { .. }
         | Op::RaiseObject { .. }

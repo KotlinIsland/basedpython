@@ -121,19 +121,46 @@ typedef size_t ByTagged;
 #define BY_UNLIKELY(x) (x)
 #endif
 
-static inline int By_IsShort(ByTagged x) { return (x & BY_INT_TAG) == 0; }
+/* telling the compiler which half of a tagged operation is which
+ *
+ * a C compiler prices an inline candidate by its whole body, cold blocks
+ * included, and the cold half of a tagged operation is a python-level call with
+ * error handling around it. so `By_IntAdd`, whose fast path is three
+ * instructions, is priced as if it were its slow path — and once it has been
+ * inlined into a compiled function, that function is over the threshold too and
+ * stops being inlinable into *its* caller. a compiled `def add(a, b): return
+ * a + b` was left as a real call from the loop that used it, with a full
+ * prologue and epilogue around one add.
+ *
+ * the two attributes below say what the cost model cannot work out on its own:
+ * a slow path is never worth inlining, and a fast path always is. the same
+ * split is what a runtime that compiles its slow paths into a separate object
+ * file gets for free.
+ *
+ * `BY_HOT` belongs only on a body that is genuinely a handful of instructions
+ * once its slow path is out of line, because it removes the compiler's judgement
+ * rather than informing it */
+#if defined(__GNUC__) || defined(__clang__)
+#define BY_HOT __attribute__((always_inline)) static inline
+#define BY_COLD __attribute__((noinline)) static
+#else
+#define BY_HOT static inline
+#define BY_COLD static
+#endif
 
-static inline Py_ssize_t By_ShortValue(ByTagged x) { return ((Py_ssize_t)x) >> 1; }
+BY_HOT int By_IsShort(ByTagged x) { return (x & BY_INT_TAG) == 0; }
 
-static inline ByTagged By_ShortFrom(Py_ssize_t v) {
+BY_HOT Py_ssize_t By_ShortValue(ByTagged x) { return ((Py_ssize_t)x) >> 1; }
+
+BY_HOT ByTagged By_ShortFrom(Py_ssize_t v) {
     return (ByTagged)((size_t)v << 1);
 }
 
-static inline int By_FitsShort(Py_ssize_t v) {
+BY_HOT int By_FitsShort(Py_ssize_t v) {
     return v >= BY_SHORT_MIN && v <= BY_SHORT_MAX;
 }
 
-static inline PyObject *By_LongOf(ByTagged x) {
+BY_HOT PyObject *By_LongOf(ByTagged x) {
     return (PyObject *)(x & ~BY_INT_TAG);
 }
 
@@ -163,13 +190,13 @@ static inline ByTagged By_TaggedFromLong(PyObject *o) {
     return ((ByTagged)(void *)o) | BY_INT_TAG;
 }
 
-static inline void By_DecRefTagged(ByTagged x) {
+BY_HOT void By_DecRefTagged(ByTagged x) {
     if (BY_UNLIKELY(!By_IsShort(x) && x != BY_INT_ERROR)) {
         Py_DECREF(By_LongOf(x));
     }
 }
 
-static inline void By_IncRefTagged(ByTagged x) {
+BY_HOT void By_IncRefTagged(ByTagged x) {
     if (BY_UNLIKELY(!By_IsShort(x) && x != BY_INT_ERROR)) {
         Py_INCREF(By_LongOf(x));
     }
@@ -182,7 +209,7 @@ static inline void By_IncRefTagged(ByTagged x) {
  * fast path costs speed and never correctness.
  */
 
-static inline ByTagged By_IntSlowBinary(ByTagged a, ByTagged b, const char *op) {
+BY_COLD ByTagged By_IntSlowBinary(ByTagged a, ByTagged b, const char *op) {
     PyObject *left = By_BoxInt(a);
     if (left == NULL) return BY_INT_ERROR;
     PyObject *right = By_BoxInt(b);
@@ -206,7 +233,7 @@ static inline ByTagged By_IntSlowBinary(ByTagged a, ByTagged b, const char *op) 
 }
 
 /* the operators with no worthwhile tagged fast path, or none at all */
-static inline ByTagged By_IntSlowBitwise(ByTagged a, ByTagged b, char op) {
+BY_COLD ByTagged By_IntSlowBitwise(ByTagged a, ByTagged b, char op) {
     PyObject *left = By_BoxInt(a);
     if (left == NULL) return BY_INT_ERROR;
     PyObject *right = By_BoxInt(b);
@@ -236,7 +263,7 @@ static inline ByTagged By_IntSlowBitwise(ByTagged a, ByTagged b, char op) {
     return tagged;
 }
 
-static inline ByTagged By_IntAdd(ByTagged a, ByTagged b) {
+BY_HOT ByTagged By_IntAdd(ByTagged a, ByTagged b) {
     if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {
         Py_ssize_t x = (Py_ssize_t)a, y = (Py_ssize_t)b;
         /* wrap in the unsigned domain, where overflow is defined, then use the
@@ -248,7 +275,7 @@ static inline ByTagged By_IntAdd(ByTagged a, ByTagged b) {
     return By_IntSlowBinary(a, b, "+");
 }
 
-static inline ByTagged By_IntSub(ByTagged a, ByTagged b) {
+BY_HOT ByTagged By_IntSub(ByTagged a, ByTagged b) {
     if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {
         Py_ssize_t x = (Py_ssize_t)a, y = (Py_ssize_t)b;
         Py_ssize_t diff = (Py_ssize_t)((size_t)x - (size_t)y);
@@ -260,7 +287,7 @@ static inline ByTagged By_IntSub(ByTagged a, ByTagged b) {
 /* a product of two values within this bound cannot leave the short range */
 #define BY_MUL_SAFE (((Py_ssize_t)1) << ((sizeof(Py_ssize_t) * 8 - 4) / 2))
 
-static inline ByTagged By_IntMul(ByTagged a, ByTagged b) {
+BY_HOT ByTagged By_IntMul(ByTagged a, ByTagged b) {
     if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {
         Py_ssize_t x = By_ShortValue(a), y = By_ShortValue(b);
         if (x > -BY_MUL_SAFE && x < BY_MUL_SAFE && y > -BY_MUL_SAFE && y < BY_MUL_SAFE) {
@@ -279,7 +306,7 @@ static inline ByTagged By_IntMul(ByTagged a, ByTagged b) {
  * re-performed through the abstract api on a pair that must fail the same way. the
  * message does not depend on the operands, only on their types and the operation, and
  * this is only ever reached on the way out */
-static inline void By_ZeroDivision(binaryfunc operation, int floating) {
+BY_COLD void By_ZeroDivision(binaryfunc operation, int floating) {
     PyObject *left = floating ? PyFloat_FromDouble(1.0) : PyLong_FromLong(1);
     PyObject *right = floating ? PyFloat_FromDouble(0.0) : PyLong_FromLong(0);
     PyObject *impossible = NULL;
@@ -292,19 +319,19 @@ static inline void By_ZeroDivision(binaryfunc operation, int floating) {
 }
 
 /* python floors rather than truncating: -7 // 2 is -4, not -3 */
-static inline Py_ssize_t By_FloorDivSsize(Py_ssize_t a, Py_ssize_t b) {
+BY_HOT Py_ssize_t By_FloorDivSsize(Py_ssize_t a, Py_ssize_t b) {
     Py_ssize_t q = a / b;
     if ((a % b != 0) && ((a < 0) != (b < 0))) q--;
     return q;
 }
 
-static inline Py_ssize_t By_ModSsize(Py_ssize_t a, Py_ssize_t b) {
+BY_HOT Py_ssize_t By_ModSsize(Py_ssize_t a, Py_ssize_t b) {
     Py_ssize_t r = a % b;
     if (r != 0 && ((r < 0) != (b < 0))) r += b;
     return r;
 }
 
-static inline ByTagged By_IntFloorDiv(ByTagged a, ByTagged b) {
+BY_HOT ByTagged By_IntFloorDiv(ByTagged a, ByTagged b) {
     if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {
         Py_ssize_t y = By_ShortValue(b);
         if (y == 0) {
@@ -320,7 +347,7 @@ static inline ByTagged By_IntFloorDiv(ByTagged a, ByTagged b) {
     return By_IntSlowBinary(a, b, "/");
 }
 
-static inline ByTagged By_IntMod(ByTagged a, ByTagged b) {
+BY_HOT ByTagged By_IntMod(ByTagged a, ByTagged b) {
     if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {
         Py_ssize_t y = By_ShortValue(b);
         if (y == 0) {
@@ -350,15 +377,15 @@ static inline double By_IntTrueDiv(ByTagged a, ByTagged b) {
 }
 
 /* `& | ^` are exact on the shifted representation: (2a)&(2b) == 2(a&b) */
-static inline ByTagged By_IntAnd(ByTagged a, ByTagged b) {
+BY_HOT ByTagged By_IntAnd(ByTagged a, ByTagged b) {
     if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) return a & b;
     return By_IntSlowBitwise(a, b, '&');
 }
-static inline ByTagged By_IntOr(ByTagged a, ByTagged b) {
+BY_HOT ByTagged By_IntOr(ByTagged a, ByTagged b) {
     if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) return a | b;
     return By_IntSlowBitwise(a, b, '|');
 }
-static inline ByTagged By_IntXor(ByTagged a, ByTagged b) {
+BY_HOT ByTagged By_IntXor(ByTagged a, ByTagged b) {
     if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) return a ^ b;
     return By_IntSlowBitwise(a, b, '^');
 }
@@ -387,7 +414,7 @@ static inline ByTagged By_IntNeg(ByTagged a) {
 
 /* ── int comparison ───────────────────────────────────────────────────────── */
 
-static inline char By_IntCompareSlow(ByTagged a, ByTagged b, int op) {
+BY_COLD char By_IntCompareSlow(ByTagged a, ByTagged b, int op) {
     PyObject *left = By_BoxInt(a);
     if (left == NULL) return 2;
     PyObject *right = By_BoxInt(b);
@@ -403,7 +430,7 @@ static inline char By_IntCompareSlow(ByTagged a, ByTagged b, int op) {
  * `a << 1 < b << 1`. that saves an arithmetic shift on each side of every
  * comparison — two per iteration in a counting loop */
 #define BY_DEFINE_INT_CMP(name, c_op, py_op)                                   \
-    static inline char name(ByTagged a, ByTagged b) {                          \
+    BY_HOT char name(ByTagged a, ByTagged b) {                                 \
         if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {                                  \
             return (char)((Py_ssize_t)a c_op(Py_ssize_t) b);                   \
         }                                                                      \
@@ -419,7 +446,7 @@ BY_DEFINE_INT_CMP(By_IntGe, >=, Py_GE)
 
 /* a machine integer given the tagged representation. the fast path is the whole
  * point of the counter being unboxed in the first place, so it is the one tested */
-static inline ByTagged By_IntFromI64(int64_t value) {
+BY_HOT ByTagged By_IntFromI64(int64_t value) {
     if (BY_LIKELY(By_FitsShort((Py_ssize_t)value))) {
         return By_ShortFrom((Py_ssize_t)value);
     }
@@ -482,7 +509,7 @@ BY_DEFINE_I64_CMP_SLOW(By_I64GeSlow, By_IntGe)
         return By_FloatObjectSlow(a, b, slow);                                 \
     }
 
-static inline double By_FloatObjectSlow(double a, PyObject *b,
+BY_COLD double By_FloatObjectSlow(double a, PyObject *b,
                                         PyObject *(*op)(PyObject *, PyObject *)) {
     PyObject *boxed = PyFloat_FromDouble(a);
     if (boxed == NULL) return BY_FLOAT_ERROR;
@@ -542,7 +569,7 @@ BY_DEFINE_FLOAT_OBJ_CMP(By_FloatObjGe, >=, Py_GE)
         return By_ObjFloatSlow(a, b, slow);                                    \
     }
 
-static inline double By_ObjFloatSlow(PyObject *a, double b,
+BY_COLD double By_ObjFloatSlow(PyObject *a, double b,
                                      PyObject *(*op)(PyObject *, PyObject *)) {
     PyObject *boxed = PyFloat_FromDouble(b);
     if (boxed == NULL) return BY_FLOAT_ERROR;
@@ -1830,6 +1857,205 @@ static inline PyObject *By_CallMethod(PyObject *receiver, PyObject *name, PyObje
                                      NULL);
 }
 
+/* a call site's licence to call one compiled body without looking the method up,
+ * taken once at import
+ *
+ * an override reached through a base-typed name has to ask the receiver which body
+ * to run, and asking is the whole cost: a lookup on the type, a bound call, and the
+ * boxed round trip a python-visible entry point takes. the answer is nearly always
+ * the same one, so it is worked out here instead — and the two things that could
+ * make it wrong later are each given a test the call site can afford.
+ *
+ * a *different class* is caught by comparing the receiver's type, which is exact:
+ * a subclass written in the interpreter has a type object of its own.
+ *
+ * a method *rebound* on the class is caught by the version tag. the interpreter
+ * bumps it whenever a type or any of its bases is written to — that is the signal
+ * its own attribute caches watch — so the version that held when the answer was
+ * checked is enough for every later call to test with one comparison.
+ *
+ * zero means the licence was refused: the name answers something this module did
+ * not compile, or the type will not carry a version. no version tag is ever zero,
+ * so a call site armed with zero takes the ordinary call for the life of the
+ * process, which is what it did before any of this */
+static inline unsigned int By_ArmMethod(PyObject *type, const char *name, PyCFunction body) {
+    if (type == NULL || !PyType_Check(type)) return 0u;
+    PyTypeObject *owner = (PyTypeObject *)type;
+    /* the lookup is also what makes the interpreter assign a version tag: a type
+     * nothing has been read from yet has none at all */
+    PyObject *found = PyObject_GetAttrString(type, name);
+    if (found == NULL) {
+        PyErr_Clear();
+        return 0u;
+    }
+    /* reading the type's own attribute hands back the descriptor rather than a bound
+     * method, so the compiled entry point is reachable through it */
+    int compiled = Py_IS_TYPE(found, &PyMethodDescr_Type)
+                   && ((PyMethodDescrObject *)found)->d_method != NULL
+                   && ((PyMethodDescrObject *)found)->d_method->ml_meth == body;
+    Py_DECREF(found);
+    if (!compiled) return 0u;
+#if PY_VERSION_HEX >= 0x030C0000
+    /* from 3.12 the tag is handed out on request rather than by whoever looks an
+     * attribute up, and a request is the only thing that reliably produces one */
+    if (!PyUnstable_Type_AssignVersionTag(owner)) return 0u;
+#endif
+    /* zero is both "never given a tag" and "written to since", and either is a refusal */
+    return owner->tp_version_tag;
+}
+
+/* whether `o` is exactly `type`, and `type` still answers as [`By_ArmMethod`] found */
+static inline char By_MethodStands(PyObject *o, PyObject *type, unsigned int armed) {
+    return (char)(armed != 0u && o != NULL && (PyObject *)Py_TYPE(o) == type
+                  && ((PyTypeObject *)type)->tp_version_tag == armed);
+}
+
+/* what one call site remembers about the method name it keeps calling
+ *
+ * `line.split(" ")`, `part.startswith("w")`, `part.upper()` — a loop over strings
+ * calls the same builtin on the same type every trip, and `PyObject_VectorcallMethod`
+ * re-derives it every trip: a lookup down the type, then a `method_vectorcall_*`
+ * that unpacks the calling convention again. on the string benchmark that rederivation
+ * is **28 per cent** of the running time, more than the splitting, the uppercasing
+ * and the joining put together.
+ *
+ * so a site records what it found. `method` is the answer and doubles as the
+ * armed/refused flag; `type` and `version` are the two things that could make the
+ * answer wrong later, and both are recorded on a refusal too, so a receiver the site
+ * cannot serve is asked about once rather than on every trip.
+ *
+ * a *different class* is caught by the type pointer, which is exact — a subclass
+ * that overrides the method has a type object of its own and never matches. a method
+ * *rebound* on the type is caught by the version tag, which the interpreter zeroes
+ * whenever a type or any of its bases is written to. `type` is only ever compared,
+ * never followed, so a type that has since been freed cannot be read through it.
+ *
+ * three fields cannot be written as one, so what keeps a *reader* from seeing half of
+ * one arming and half of another is that only one thread runs at a time. a site is
+ * therefore only used where that holds: an emitted module says `Py_MOD_GIL_NOT_USED`,
+ * and on a free-threaded build every call takes the ordinary path instead. two threads
+ * arming a site at once would otherwise be able to leave one type's name paired with
+ * another type's body, which is not a wrong answer but a call into the wrong object */
+typedef struct {
+    PyObject *type;
+    unsigned int version;
+    PyMethodDef *method;
+} ByMethodSite;
+
+#define BY_METHOD_SITE_INIT { NULL, 0u, NULL }
+
+#ifndef Py_GIL_DISABLED
+
+/* the two calling conventions a site can dispatch without repacking the arguments */
+typedef PyObject *(*ByFastCall)(PyObject *, PyObject *const *, Py_ssize_t);
+typedef PyObject *(*ByFastKwCall)(PyObject *, PyObject *const *, Py_ssize_t, PyObject *);
+
+/* work out what `name` on `tp` is, and record it — or record that it cannot be served
+ *
+ * every refusal here is a case where reaching the method through the descriptor would
+ * not be what an attribute lookup does:
+ *
+ * - a metaclass, or a `tp_getattro` of the type's own, can answer the name with
+ *   something other than what is on the type
+ * - an instance `__dict__` can shadow the type's entry, and only a type without one
+ *   is safe to answer from the type alone. a static type is also the only kind whose
+ *   storage layout guarantees there is no managed dict behind a zero `tp_dictoffset`
+ * - anything but a builtin method descriptor has a `__get__` of its own to run
+ * - a calling convention the site cannot lay the arguments out for, which is every
+ *   convention that wants a tuple
+ *
+ * the type and its version are recorded before the first thing that can refuse, so
+ * that a refusal is remembered on the same terms an answer is: a receiver this site
+ * will never be able to serve — every instance of a class written in the interpreter
+ * — is asked about once and then costs the same two comparisons as a hit.
+ *
+ * that order matters for a second reason. the attribute lookup below is the one step
+ * here that another thread can run inside, and it sits *after* the type has been
+ * recorded and the answer cleared — so a site another thread arms in the middle of
+ * this one is left holding that thread's type against this one's version, which no
+ * receiver matches, rather than that thread's type against this one's body */
+static void By_ArmMethodSite(ByMethodSite *site, PyTypeObject *tp, PyObject *name,
+                             Py_ssize_t nargs) {
+    site->type = (PyObject *)tp;
+    site->version = tp->tp_version_tag;
+    site->method = NULL;
+    if (!Py_IS_TYPE(tp, &PyType_Type)) return;
+    if (tp->tp_flags & Py_TPFLAGS_HEAPTYPE) return;
+    if (tp->tp_getattro != PyObject_GenericGetAttr) return;
+    if (tp->tp_dictoffset != 0) return;
+    PyObject *found = PyObject_GetAttr((PyObject *)tp, name);
+    if (found == NULL) {
+        PyErr_Clear();
+        return;
+    }
+    /* reading the type's own attribute hands back the descriptor rather than a bound
+     * method, so the builtin behind it is reachable through it */
+    PyMethodDef *method = Py_IS_TYPE(found, &PyMethodDescr_Type)
+                              ? ((PyMethodDescrObject *)found)->d_method
+                              : NULL;
+    Py_DECREF(found);
+    if (method == NULL) return;
+    int shape = method->ml_flags
+                & (METH_VARARGS | METH_KEYWORDS | METH_NOARGS | METH_O | METH_FASTCALL);
+    if (!((shape == METH_NOARGS && nargs == 0) || (shape == METH_O && nargs == 1)
+          || shape == METH_FASTCALL || shape == (METH_FASTCALL | METH_KEYWORDS))) {
+        return;
+    }
+#if PY_VERSION_HEX >= 0x030C0000
+    /* from 3.12 the tag is handed out on request rather than by whoever looks an
+     * attribute up, and a request is the only thing that reliably produces one */
+    if (!PyUnstable_Type_AssignVersionTag(tp)) return;
+#endif
+    site->version = tp->tp_version_tag;
+    /* zero is both "never given a tag" and "written to since", and either is a refusal */
+    if (site->version == 0u) return;
+    site->method = method;
+}
+
+#endif /* Py_GIL_DISABLED */
+
+/* a method call that remembers what the name resolved to last time
+ *
+ * the direct call is the body of `method_vectorcall_*` with the convention already
+ * decided. what it leaves out is that function's `Py_EnterRecursiveCall`, which is
+ * a third of what this saves — and which is not what bounds recursion here anyway:
+ * a builtin can only recurse by calling back into python, and every route back into
+ * python passes through the interpreter's own eval loop, which counts. every other
+ * direct C-API call in this runtime — `By_GetItem` reaching a `__getitem__`, and the
+ * rest — is already written on that understanding.
+ *
+ * on a free-threaded build there is no site at all: the three fields cannot be read
+ * or written as one, so the whole thing is left to `By_CallMethod` */
+static inline PyObject *By_CallMethodSite(ByMethodSite *site, PyObject *receiver,
+                                          PyObject *name, PyObject **args, Py_ssize_t nargs) {
+#ifndef Py_GIL_DISABLED
+    if (BY_LIKELY(receiver != NULL && name != NULL)) {
+        PyTypeObject *tp = Py_TYPE(receiver);
+        if (BY_UNLIKELY((PyObject *)tp != site->type || tp->tp_version_tag != site->version)) {
+            By_ArmMethodSite(site, tp, name, nargs);
+        }
+        PyMethodDef *method = site->method;
+        if (BY_LIKELY(method != NULL)) {
+            switch (method->ml_flags
+                    & (METH_VARARGS | METH_KEYWORDS | METH_NOARGS | METH_O | METH_FASTCALL)) {
+            case METH_NOARGS:
+                return method->ml_meth(receiver, NULL);
+            case METH_O:
+                return method->ml_meth(receiver, args[1]);
+            case METH_FASTCALL:
+                return ((ByFastCall)(void (*)(void))method->ml_meth)(receiver, args + 1, nargs);
+            default:
+                return ((ByFastKwCall)(void (*)(void))method->ml_meth)(receiver, args + 1, nargs,
+                                                                       NULL);
+            }
+        }
+    }
+#else
+    (void)site;
+#endif
+    return By_CallMethod(receiver, name, args, nargs);
+}
+
 /* `list.append(value)` without the attribute lookup
  *
  * the lookup is the whole cost of appending in a loop: `PyObject_VectorcallMethod`
@@ -2343,6 +2569,26 @@ static PyObject *By_SettledValue(PyObject *value, PyObject *const *twins,
         return By_SettlesInPlace(receiver, twins, types, count, depth - 1) ? By_NewRef(value)
                                                                           : NULL;
     }
+    /* a descriptor read off a type, which is every method an emitted type publishes and
+     * every slot a built-in one does. it holds nothing but the type it was read from, and
+     * cannot be written — so one whose owner is a twin is refused, exactly as a bound
+     * method already bound to one is, and every other is safe as itself.
+     *
+     * `pprint` is why this is here: `_dispatch[dict.__repr__] = _pprint_dict` keys the
+     * table on a slot wrapper, and refusing the *key* left all 18 values where they were */
+    if (Py_TYPE(value) == &PyMethodDescr_Type || Py_TYPE(value) == &PyWrapperDescr_Type
+        || Py_TYPE(value) == &PyClassMethodDescr_Type
+        || Py_TYPE(value) == &PyGetSetDescr_Type || Py_TYPE(value) == &PyMemberDescr_Type) {
+        PyObject *owner = PyObject_GetAttrString(value, "__objclass__");
+        int settled;
+        if (owner == NULL) {
+            PyErr_Clear();
+            return NULL;
+        }
+        settled = By_SettlesInPlace(owner, twins, types, count, depth - 1);
+        Py_DECREF(owner);
+        return settled ? By_NewRef(value) : NULL;
+    }
     /* a bound method is what a class hands back for the `classmethod` in its dict, so this
      * is the shape a declined class's methods are read as. what it binds is settled where
      * it stands; what it is bound *to* cannot be rewritten, so a method already bound to a
@@ -2551,6 +2797,153 @@ static inline int By_AdoptTwinAttributes(PyObject *const *twins, PyObject *const
         /* the attribute cache would otherwise go on serving what the type had before */
         PyType_Modified((PyTypeObject *)type);
     }
+    return 0;
+}
+
+/* the compiled methods an emitted type answers with, standing where its body's own
+ * functions do
+ *
+ * a class body that fills a table with methods of its own class writes the *interpreted*
+ * function into it, because the body that ran is the twin's:
+ *
+ *     class Unpickler:
+ *         dispatch = {}
+ *         def load_proto(self): ...
+ *         dispatch[PROTO[0]] = load_proto      # 68 of these in `pickle`
+ *
+ * that table is copied onto the emitted type as the object the body left, and two things
+ * follow. every call through it lands in the interpreted definition rather than the
+ * compiled one, which is slow. and `dispatch[k] is Unpickler.load_proto` answers False
+ * where the interpreted class answers True, which is *wrong* — the type answers with a
+ * compiled method while the table it publishes answers with the twin's function. so the
+ * table is moved rather than left.
+ *
+ * the pairing is by name, out of the two `tp_dict`s, which is the substitution
+ * `By_TwinReplacement` makes for a class one scope in — and the move itself is the same
+ * settling walk, so a table nested in a list or a dict of tables is reached the same way.
+ * three things are left alone:
+ *
+ *  - an entry the twin holds that is not a plain python function. whatever else stands
+ *    there is a wrapper the emitted type need not have rebuilt the same way, and a
+ *    `staticmethod` object is not the object a call through the table wants
+ *  - a function standing under two names in the twin's dict. `__str__ = __repr__` puts one
+ *    object under both, and there is no single compiled method it should become
+ *  - a method the type declined, which has no entry to pair against. what the type answers
+ *    under that name is the twin's function too — `By_AdoptTwinAttributes` carried it — so
+ *    the table and the type still agree, slow rather than wrong
+ *
+ * the class pairs are carried along in the same arrays, so a twin class sitting in one of
+ * these tables moves onto its type at the same time */
+static int By_RemapTwinMethods(PyObject *const *twins, PyObject *const *types,
+                               Py_ssize_t count) {
+    PyObject **from;
+    PyObject **to;
+    Py_ssize_t room = count;
+    Py_ssize_t total = count;
+    Py_ssize_t index;
+    Py_ssize_t at;
+
+    for (index = 0; index < count; index++) {
+        PyObject *twin = twins[index];
+        if (twin == NULL || !PyType_Check(twin)) continue;
+        if (((PyTypeObject *)twin)->tp_dict == NULL) continue;
+        room += PyDict_GET_SIZE(((PyTypeObject *)twin)->tp_dict);
+    }
+    if (room <= 0) return 0;
+    from = PyMem_New(PyObject *, (size_t)room);
+    to = PyMem_New(PyObject *, (size_t)room);
+    if (from == NULL || to == NULL) {
+        PyMem_Free(from);
+        PyMem_Free(to);
+        PyErr_NoMemory();
+        return -1;
+    }
+    /* held rather than borrowed for the whole walk below: settling one value can run
+     * arbitrary code, and a pair this is still to substitute must not go away underneath
+     * it */
+    for (index = 0; index < count; index++) {
+        from[index] = By_NewRef(twins[index]);
+        to[index] = By_NewRef(types[index]);
+    }
+
+    for (index = 0; index < count; index++) {
+        PyObject *twin = twins[index];
+        PyObject *type = types[index];
+        PyObject *source, *target, *names;
+        if (twin == NULL || type == NULL || twin == type) continue;
+        if (!PyType_Check(twin) || !PyType_Check(type)) continue;
+        source = ((PyTypeObject *)twin)->tp_dict;
+        target = ((PyTypeObject *)type)->tp_dict;
+        if (source == NULL || target == NULL) continue;
+        /* the keys first, as `By_AdoptTwinAttributes` takes them: nothing may be walking
+         * a dict while its values are read back out one at a time */
+        names = PyDict_Keys(source);
+        if (names == NULL) {
+            PyErr_Clear();
+            continue;
+        }
+        for (at = 0; at < PyList_GET_SIZE(names) && total < room; at++) {
+            PyObject *key = PyList_GET_ITEM(names, at);
+            PyObject *held = PyDict_GetItem(source, key);
+            PyObject *stands;
+            if (held == NULL || !PyFunction_Check(held)) continue;
+            stands = PyDict_GetItem(target, key);
+            if (stands == NULL) continue;
+            from[total] = By_NewRef(held);
+            to[total] = By_NewRef(stands);
+            total++;
+        }
+        Py_DECREF(names);
+    }
+
+    /* the ambiguous pairs, dropped before any of them is used. a slot with nothing in it
+     * matches no value, so the function it stood for is left exactly where the body put
+     * it */
+    for (index = count; index < total; index++) {
+        PyObject *paired = from[index];
+        Py_ssize_t other;
+        int ambiguous = 0;
+        if (paired == NULL) continue;
+        /* the pair being compared against is cleared *after* the scan, not during it —
+         * clearing it first would stop a third name under the same function matching */
+        for (other = index + 1; other < total; other++) {
+            if (from[other] != paired) continue;
+            Py_CLEAR(from[other]);
+            Py_CLEAR(to[other]);
+            ambiguous = 1;
+        }
+        if (ambiguous) {
+            Py_CLEAR(from[index]);
+            Py_CLEAR(to[index]);
+        }
+    }
+
+    if (total > count) {
+        for (index = 0; index < count; index++) {
+            PyObject *type = types[index];
+            PyObject *values;
+            if (type == NULL || !PyType_Check(type)) continue;
+            if (((PyTypeObject *)type)->tp_dict == NULL) continue;
+            /* taken out as a list for the same reason the keys above are, and it is the
+             * values *inside* these that move — the type's own entries stay as they are */
+            values = PyDict_Values(((PyTypeObject *)type)->tp_dict);
+            if (values == NULL) {
+                PyErr_Clear();
+                continue;
+            }
+            for (at = 0; at < PyList_GET_SIZE(values); at++) {
+                By_SettleTwins(PyList_GET_ITEM(values, at), from, to, total);
+            }
+            Py_DECREF(values);
+        }
+    }
+
+    for (index = 0; index < total; index++) {
+        Py_XDECREF(from[index]);
+        Py_XDECREF(to[index]);
+    }
+    PyMem_Free(from);
+    PyMem_Free(to);
     return 0;
 }
 
@@ -3125,6 +3518,46 @@ static inline char By_Contains(PyObject *container, PyObject *value, int negated
     return (char)(negated ? !found : found);
 }
 
+/* `k in d` answered by the very lookup `d[k]` would go on to make
+ *
+ * the two hash the same key and walk the same table, so where the second is only
+ * reached because the first said yes, one of them is doing the other's work again.
+ * this asks once and reports both answers as one value: a new reference where the
+ * key is there, and NULL where it is not. NULL with an exception set is failure —
+ * the caller tells the two apart with `PyErr_Occurred`, the way it already does
+ * for an exhausted iterator
+ *
+ * asking once has to be *earned* at runtime, because both of the things that would
+ * make asking twice observable are ordinary python. a dict subclass may have
+ * overridden `__contains__` or `__getitem__`, and then the number and order of
+ * those calls is the program's own business. a key may have a `__hash__` that
+ * counts how often it is called, and then hashing once where the source hashes
+ * twice is a different program. so the single probe is taken only for an exact
+ * dict keyed by an exact `str`, whose hash and equality are the interpreter's and
+ * have nothing to observe; everything else takes the protocol twice over, in the
+ * order it would have — and `__getitem__` only where `__contains__` said yes,
+ * which is the branch this stands in for */
+static inline PyObject *By_DictFind(PyObject *container, PyObject *key) {
+    /* a null operand carries an exception already set by whatever produced it */
+    if (container == NULL || key == NULL) return NULL;
+    if (BY_LIKELY(PyDict_CheckExact(container) && PyUnicode_CheckExact(key))) {
+#if PY_VERSION_HEX >= 0x030D0000
+        PyObject *value;
+        /* -1 failed, 0 absent, 1 there — and absent leaves `value` NULL */
+        if (PyDict_GetItemRef(container, key, &value) < 0) return NULL;
+        return value;
+#else
+        PyObject *value = PyDict_GetItemWithError(container, key);
+        /* absent and failed are both NULL here, which is what this returns for
+         * both anyway — the exception state is what separates them */
+        return value == NULL ? NULL : By_NewRef(value);
+#endif
+    }
+    int found = PySequence_Contains(container, key);
+    if (found <= 0) return NULL;
+    return PyObject_GetItem(container, key);
+}
+
 /* what a class body *assigned* to a slot dunder, bound to the receiver
  *
  * a name in `tp_dict` does not fill a type slot: python reads `tp_repr` for `repr(x)`
@@ -3203,6 +3636,57 @@ static inline int By_HoldSlotAlias(PyTypeObject *type, const char *name, PyObjec
     }
     Py_XSETREF(*held, By_NewRef(value));
     return 0;
+}
+
+/* the `Py_hash_t` python makes of what a written `__hash__` answered
+ *
+ * `slot_tp_hash`'s own conversion, and pointedly not `PyObject_Hash`. a value that fits a
+ * `Py_ssize_t` is taken as it stands; only one too large for that is folded, through
+ * `int.__hash__`, into the range a hash occupies. hashing every answer would fold the
+ * large ones twice — `_pydatetime.timedelta` caches a hash of its state tuple and hands
+ * that back, and folding it a second time moved every value past 2**61 - 1 to one the
+ * interpreted class never produced.
+ *
+ * `-1` is how a slot reports a failure, so python moves an answer of `-1` to `-2` */
+static inline Py_hash_t By_HashResult(PyObject *value) {
+    if (!PyLong_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "__hash__ method should return an integer");
+        return -1;
+    }
+    Py_hash_t hash = (Py_hash_t)PyLong_AsSsize_t(value);
+    if (hash == -1 && PyErr_Occurred()) {
+        PyErr_Clear();
+        hash = PyLong_Type.tp_hash(value);
+    }
+    if (hash == -1) hash = -2;
+    return hash;
+}
+
+/* publish a written `__new__` by *assigning* it onto the finished type
+ *
+ * not through the spec. a `tp_new` filled from a slot table is a C function, and python
+ * reads one of those as a base that owns the allocation: `tp_new_wrapper` walks up from
+ * the class looking for the allocator, stops at ours, and refuses `object.__new__(cls)`
+ * as unsafe — which is how nearly every written `__new__` gets the instance it fills in.
+ *
+ * assigning is what a `class` statement does. `type_setattro` runs python's own slot
+ * fixup, which sees a `__new__` in the dict and installs the dispatcher that looks the
+ * name back up on every construction. the class then holds exactly the `tp_new` an
+ * interpreted one holds, the allocation check walks past it to `object`, and the body's
+ * `object.__new__(cls)` is the plain allocation it was written as.
+ *
+ * the wrapper is bound as a `staticmethod` because that is what python makes `__new__`:
+ * the class arrives as the first argument rather than as a receiver, and the dispatcher
+ * puts it there */
+static inline int By_PublishNew(PyObject *type, PyMethodDef *def) {
+    PyObject *function = PyCFunction_NewEx(def, NULL, NULL);
+    if (function == NULL) return -1;
+    PyObject *published = PyStaticMethod_New(function);
+    Py_DECREF(function);
+    if (published == NULL) return -1;
+    int stored = PyObject_SetAttrString(type, "__new__", published);
+    Py_DECREF(published);
+    return stored;
 }
 
 /* a `tp_call` slot is handed a tuple and a dict where a method wrapper wants a
@@ -3351,15 +3835,16 @@ static inline PyObject *By_StrCharAt(PyObject *s, Py_ssize_t i) {
     return PyUnicode_FromOrdinal((int) PyUnicode_READ_CHAR(s, i));
 }
 
-/* `container[index]` where the index is already an integer register
+/* everything an indexed read can do apart from finding the element: the index
+ * that is out of range, the index that is not a machine integer, and the
+ * container that answers through the protocol
  *
- * boxing one to look up a list element allocates a `PyLongObject` per iteration
- * that nothing ever sees. on the fast path the index never leaves its register;
- * everything else boxes it and takes the ordinary protocol
- */
-static inline PyObject *By_GetItemTagged(PyObject *container, ByTagged index) {
+ * it repeats the fast cases rather than being reached only after them, so that
+ * it is a complete answer on its own and the caller above is free to test as
+ * few of them as it likes */
+BY_COLD PyObject *By_ItemSlow(PyObject *container, ByTagged index) {
     if (container == NULL || index == BY_INT_ERROR) return NULL;
-    if (BY_LIKELY(By_IsShort(index))) {
+    if (By_IsShort(index)) {
         Py_ssize_t i = By_ShortValue(index);
         if (PyList_CheckExact(container)) {
             Py_ssize_t n = PyList_GET_SIZE(container);
@@ -3368,7 +3853,6 @@ static inline PyObject *By_GetItemTagged(PyObject *container, ByTagged index) {
             PyErr_SetString(PyExc_IndexError, "list index out of range");
             return NULL;
         }
-        if (PyUnicode_CheckExact(container)) return By_StrCharAt(container, i);
         if (PyTuple_CheckExact(container)) {
             Py_ssize_t n = PyTuple_GET_SIZE(container);
             if (i < 0) i += n;
@@ -3382,6 +3866,36 @@ static inline PyObject *By_GetItemTagged(PyObject *container, ByTagged index) {
     PyObject *result = By_GetItem(container, boxed);
     Py_DECREF(boxed);
     return result;
+}
+
+/* `container[index]` where the index is already an integer register
+ *
+ * boxing one to look up a list element allocates a `PyLongObject` per iteration
+ * that nothing ever sees. on the fast path the index never leaves its register;
+ * everything else boxes it and takes the ordinary protocol.
+ *
+ * only the read itself is written here. an out-of-range index sets an error with
+ * a message, and a container that is none of these three takes the protocol —
+ * both are several times the size of what they guard, and inlining them into
+ * every subscript in a loop is what a scan over a list was paying for. moving
+ * them out of line is three per cent of the inheritance benchmark, and the three
+ * that stay are the three the suite indexes */
+static inline PyObject *By_GetItemTagged(PyObject *container, ByTagged index) {
+    if (BY_LIKELY(container != NULL && By_IsShort(index))) {
+        Py_ssize_t i = By_ShortValue(index);
+        if (PyList_CheckExact(container)) {
+            Py_ssize_t n = PyList_GET_SIZE(container);
+            if (i < 0) i += n;
+            if (BY_LIKELY(i >= 0 && i < n)) return By_NewRef(PyList_GET_ITEM(container, i));
+        } else if (PyTuple_CheckExact(container)) {
+            Py_ssize_t n = PyTuple_GET_SIZE(container);
+            if (i < 0) i += n;
+            if (BY_LIKELY(i >= 0 && i < n)) return By_NewRef(PyTuple_GET_ITEM(container, i));
+        } else if (PyUnicode_CheckExact(container)) {
+            return By_StrCharAt(container, i);
+        }
+    }
+    return By_ItemSlow(container, index);
 }
 
 /* `s[i]` where the static type says `s` is a `str` and `i` an integer
@@ -4092,6 +4606,73 @@ static inline PyObject *By_StrConcat(PyObject *a, PyObject *b) {
     return PyUnicode_Concat(a, b);
 }
 
+/* the widest decimal an ssize_t reaches, with room for a sign and a terminator */
+#define BY_INT_DIGITS 22
+
+/* the decimal digits of a machine integer, written backwards into a scratch
+ * buffer and copied forward
+ *
+ * `snprintf` and `PyUnicode_FromFormat` both cost more than boxing the value and
+ * asking python for its `str`, which is the thing this exists to be cheaper than.
+ * so the conversion is written out: a divide and a remainder per digit, and one
+ * pass to reverse them */
+static inline int By_DecimalDigits(char *out, Py_ssize_t value) {
+    char buffer[BY_INT_DIGITS];
+    int taken = 0;
+    int length = 0;
+    /* negated as unsigned, because the most negative value has no positive twin */
+    size_t magnitude = value < 0 ? (size_t)(-(value + 1)) + 1u : (size_t)value;
+    do {
+        buffer[taken++] = (char)('0' + (magnitude % 10));
+        magnitude /= 10;
+    } while (magnitude);
+    if (value < 0) out[length++] = '-';
+    while (taken > 0) out[length++] = buffer[--taken];
+    /* a compact string carries a terminator past its last character */
+    out[length] = '\0';
+    return length;
+}
+
+/* the `str` of a machine integer, built directly
+ *
+ * every character a decimal integer can have is ascii, so the object is made at
+ * the widest an ssize_t reaches and cut back to the digits actually written. that
+ * is one allocation for the whole conversion, against the two — a `PyLong` to
+ * throw away and the string a formatter builds — that going through `PyObject_Str`
+ * costs */
+static inline PyObject *By_ShortToStr(Py_ssize_t value) {
+    PyObject *text = PyUnicode_New(BY_INT_DIGITS, 127);
+    if (text == NULL) return NULL;
+    ((PyASCIIObject *)text)->length =
+        By_DecimalDigits((char *)PyUnicode_1BYTE_DATA(text), value);
+    return text;
+}
+
+/* `str(n)` for a tagged integer, given whatever the name `str` resolved to
+ *
+ * the resolution is the caller's and still happens every time, so a module that
+ * rebinds `str` is obeyed — `fn` is compared rather than assumed. what the fast
+ * path rests on is that the slow one boxes an unboxed value with
+ * `PyLong_FromSsize_t`, which builds a plain `int` and never a subclass, and
+ * `str` of a plain `int` is its decimal digits. a tagged value that is *not*
+ * short holds a `PyLongObject` that may well be a subclass, so it goes the long
+ * way round and is asked */
+static inline PyObject *By_StrOfInt(PyObject *fn, ByTagged n) {
+    if (BY_LIKELY(fn == (PyObject *)&PyUnicode_Type && By_IsShort(n))) {
+        return By_ShortToStr(By_ShortValue(n));
+    }
+    {
+        PyObject *boxed = By_BoxInt(n);
+        PyObject *result;
+        PyObject *argv[1];
+        if (boxed == NULL) return NULL;
+        argv[0] = boxed;
+        result = By_CallPython(fn, argv, 1);
+        Py_DECREF(boxed);
+        return result;
+    }
+}
+
 /* concatenate, taking over the caller's reference to `left`
  *
  * a `str` grows in place only when nothing else can see it, so the caller handing
@@ -4158,7 +4739,15 @@ static inline char By_StrCompare(PyObject *a, PyObject *b, int op) {
     }
 }
 
-/* `len` of anything with a length, as a tagged int */
+/* `len` of anything with a length, as a tagged int
+ *
+ * the tail is deliberately left inline, unlike the one in [`By_GetItemTagged`].
+ * putting it behind a call means every caller has a call *somewhere* in the
+ * block, and a c compiler that cannot see past one stops keeping things in
+ * registers across it. that costs nothing where the loop already calls out, and
+ * it cost the character scan — whose whole body is a length, an index and a
+ * comparison — twelve per cent, against six per cent gained on the inheritance
+ * benchmark. so this one stays whole */
 static inline ByTagged By_Len(PyObject *o) {
     // the common containers know their own size in a field
     if (PyList_CheckExact(o)) return By_ShortFrom(PyList_GET_SIZE(o));

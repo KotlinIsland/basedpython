@@ -72,6 +72,21 @@ pub fn report(module: &ModuleIr) -> String {
             class.name,
             if class.immutable { " (frozen)" } else { "" }
         );
+        // a property is not in the layout — it is a pair of compiled bodies behind one
+        // attribute — so it would otherwise be invisible here
+        for property in &class.properties {
+            let halves = [
+                property.getter.as_ref().map(|_| "get"),
+                property.setter.as_ref().map(|_| "set"),
+                property.deleter.as_ref().map(|_| "del"),
+            ];
+            let _ = writeln!(
+                out,
+                "property {}: {}\n",
+                property.name,
+                halves.into_iter().flatten().collect::<Vec<_>>().join(", ")
+            );
+        }
     }
 
     out.push_str("## bir\n");

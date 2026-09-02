@@ -280,6 +280,23 @@ pub struct Function {
     /// than by [applying the decorator](Self::decorators) at init — the decorator is
     /// dropped where this says anything other than [`Binding::Instance`]
     pub binding: Binding,
+    /// the coroutine this function is the body of, when it is one.
+    ///
+    /// an `async def` that never suspends gets a second emitted function holding the
+    /// same body, which an `await` of it calls instead of building a coroutine that one
+    /// `send` would finish. two things follow from that body being a coroutine's:
+    ///
+    /// - it is only ever reached from a call written against the coroutine's *name*, so
+    ///   it is only the right call while that name still holds this module's definition.
+    ///   one that declined, that a second `def` replaced, or that the module body
+    ///   rebound is a different function, and the interpreted definition has to answer
+    ///   for the `await` as well. so this one goes wherever that one goes
+    /// - a `StopIteration` leaving it is pep 479's case. a coroutine raising one is
+    ///   forging the exhaustion its own protocol reports, so python replaces it with
+    ///   `RuntimeError` as the frame leaves — and a call that skipped the frame has to
+    ///   do the same on its way out, or an `except StopIteration` around the `await`
+    ///   would start catching what it never caught
+    pub coroutine_body: Option<String>,
 }
 
 impl Function {
@@ -428,6 +445,41 @@ impl FieldDecl {
     /// `tp_alloc` zeroes the instance, so "never written" needs no constructor work
     pub fn presence(&self) -> String {
         format!("by_p_{}", mangle(&self.name))
+    }
+}
+
+/// a `@property` getter and the `@name.setter`/`@name.deleter` that go with it,
+/// lowered as one attribute
+///
+/// python builds one `property` object out of the pair and puts it in the class dict
+/// under the name all of them were written as. an emitted type publishes the same
+/// attribute through `tp_getset`, whose two function pointers are exactly the halves a
+/// `property` holds — so the pair stays one construct rather than becoming two entries
+/// in a method table that would both answer to the one name.
+///
+/// each half names a [`Function`] in the class's own `methods`, which is where the
+/// bodies live. they are kept out of the method table: a name reached through
+/// `tp_getset` and the same name reached through `tp_methods` would be two answers
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyIr {
+    /// the attribute python sees, already private-mangled
+    pub name: String,
+    /// the `@property` half. absent where the body wrote only a setter or a deleter,
+    /// which python answers with `AttributeError` rather than a value
+    pub getter: Option<String>,
+    /// the `@name.setter` half, absent where assigning has to raise
+    pub setter: Option<String>,
+    /// the `@name.deleter` half, absent where `del` has to raise
+    pub deleter: Option<String>,
+}
+
+impl PropertyIr {
+    /// whether this property is where the method of that name went
+    pub fn holds(&self, method: &str) -> bool {
+        [&self.getter, &self.setter, &self.deleter]
+            .into_iter()
+            .flatten()
+            .any(|half| half == method)
     }
 }
 
@@ -591,6 +643,8 @@ pub struct ClassIr {
     pub decorators: Vec<Decorator>,
     /// methods, whose first parameter is the receiver
     pub methods: Vec<Function>,
+    /// the `@property` pairs, each naming the methods holding its halves
+    pub properties: Vec<PropertyIr>,
     /// how the class resumes, when it is a generator or a coroutine
     pub resume: Option<Resumption>,
     /// the keyword arguments the class header carries, in source order
@@ -651,6 +705,26 @@ impl ClassIr {
     /// classes
     pub fn writable(&self) -> bool {
         !self.immutable && self.exported
+    }
+
+    /// the methods python reaches by name, through the method table
+    ///
+    /// a property's accessors are reached through its getset entry instead. a table
+    /// entry for one would put a `method_descriptor` in the type's dict under the
+    /// property's own name, which is the one place the getset entry has to be.
+    ///
+    /// `__new__` is left out for the same reason: it is published by *assigning* it onto
+    /// the finished type, because that is the only thing that reaches the slot fixup a
+    /// class statement runs and a type spec does not. a table entry would put a second
+    /// descriptor under the same name, filled before the assignment and dropped by it
+    pub fn table_methods(&self) -> impl Iterator<Item = &Function> {
+        self.methods.iter().filter(|method| {
+            method.name != "__new__"
+                && !self
+                    .properties
+                    .iter()
+                    .any(|property| property.holds(&method.name))
+        })
     }
 
     /// the C identifier for the instance struct
@@ -1064,6 +1138,7 @@ mod tests {
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
             binding: Binding::Instance,
+            coroutine_body: None,
         }
     }
 

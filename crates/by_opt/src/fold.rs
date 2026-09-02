@@ -159,6 +159,7 @@ fn fold(function: &mut Function, frozen: &HashSet<String>) {
                 .or_else(|| fold_box_round_trip(&types, &boxed_from, op))
                 .or_else(|| fold_unpack(&types, &built, op))
                 .or_else(|| fold_tuple_get(&built, op))
+                .or_else(|| fold_get_item(&types, &built, op))
                 .or_else(|| fold_frozen_read(frozen, &read, op))
             {
                 *op = folded;
@@ -410,6 +411,47 @@ fn fold_tuple_get(built: &HashMap<RegisterId, Vec<Value>>, op: &Op) -> Option<Op
     };
     let item = built.get(src)?.get(*index)?;
     Some(Op::Assign {
+        dest: *dest,
+        src: item.clone(),
+    })
+}
+
+/// `pair[0]`, where `pair` is a tuple this block just built
+///
+/// the move [`fold_tuple_get`] makes, for the *subscript* rather than for the
+/// unpack. a tuple is immutable, so an element of one built a few lines up is the
+/// value that went into it whoever else is holding the tuple by then — which is why
+/// this needs no escape analysis, only the guarantee that neither the tuple nor the
+/// item has been written since
+///
+/// a negative index counts from the end, as python's own subscript does. an index
+/// outside the tuple is left alone: raising `IndexError`, in python's wording, is
+/// the subscript's job and it already does it
+fn fold_get_item(types: &[RType], built: &HashMap<RegisterId, Vec<Value>>, op: &Op) -> Option<Op> {
+    let Op::GetItem {
+        dest,
+        container: Value::Register(container),
+        index: Value::Int(index),
+    } = op
+    else {
+        return None;
+    };
+    let items = built.get(container)?;
+    let length = i64::try_from(items.len()).ok()?;
+    let at = if *index < 0 {
+        index.checked_add(length)?
+    } else {
+        *index
+    };
+    let item = items.get(usize::try_from(at).ok()?)?;
+    // a fold may not invent a conversion, so the item has to have the representation
+    // the read was going to produce already
+    let dest_ty = types.get(dest.index())?;
+    let item_ty = match item {
+        Value::Register(id) => types.get(id.index()).cloned(),
+        other => other.immediate_type(),
+    }?;
+    (item_ty == *dest_ty).then(|| Op::Assign {
         dest: *dest,
         src: item.clone(),
     })
@@ -922,6 +964,7 @@ mod tests {
             }],
             decorators: Vec::new(),
             constants: Vec::new(),
+            properties: Vec::new(),
             slot_aliases: Vec::new(),
             generic: false,
             declares_slots: false,
@@ -985,6 +1028,7 @@ mod tests {
             }],
             decorators: Vec::new(),
             constants: Vec::new(),
+            properties: Vec::new(),
             slot_aliases: Vec::new(),
             generic: false,
             declares_slots: false,
@@ -1039,6 +1083,7 @@ mod tests {
             }],
             decorators: Vec::new(),
             constants: Vec::new(),
+            properties: Vec::new(),
             slot_aliases: Vec::new(),
             generic: false,
             declares_slots: false,
@@ -1095,6 +1140,7 @@ mod tests {
             }],
             decorators: Vec::new(),
             constants: Vec::new(),
+            properties: Vec::new(),
             slot_aliases: Vec::new(),
             generic: false,
             declares_slots: false,

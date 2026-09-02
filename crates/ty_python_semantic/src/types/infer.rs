@@ -742,9 +742,8 @@ impl<'db> TypeContext<'db> {
     /// all, so the context is dropped and the expression is inferred bare. the next round drops the
     /// same context and asks for the same bare key, unchanged
     fn is_worth_interning(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
-        self.annotation().is_some_and(|annotation| {
-            !any_over_type(db, env, annotation, false, |ty| ty.is_divergent())
-        })
+        self.annotation()
+            .is_some_and(|annotation| !annotation.mentions_divergence(db, env))
     }
 
     /// basedpython: the expected type a bare name in this context resolves

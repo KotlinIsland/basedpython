@@ -74,6 +74,67 @@ pub(crate) fn state_name(owner: &str) -> String {
     format!("{owner}$gen")
 }
 
+/// the direct edition's name, derived from the coroutine it is the body of
+///
+/// `$` is not an identifier character in python, so this can never collide with a
+/// name someone wrote
+pub(crate) fn direct_name(owner: &str) -> String {
+    format!("{owner}$direct")
+}
+
+/// whether an `async def` reaches its end without ever suspending
+///
+/// a coroutine suspends where the body says `await`, and at the awaits an `async for`,
+/// an `async with` or an `async` comprehension clause make on its behalf. a body with
+/// none of those runs straight through on its first `send`: the state machine it lowers
+/// to has one entry and one exit, and only ever writes `$state = -1`.
+///
+/// such a coroutine is still a coroutine — `f(...)` builds the object and hands it back
+/// like any other. what the property licenses is at the *await site*: `await f(...)`
+/// can call the body, because the object it would have built is one nothing else can
+/// reach and one `send` is the whole of what the await does to it.
+///
+/// a `yield` makes the function an async *generator*, which is a different surface
+/// with a different answer, so it is excluded here rather than counted as a suspension
+///
+/// deliberately over-eager: it looks inside nested `def`s and lambdas too, where an
+/// `await` belongs to the nested frame rather than this one. saying "suspends" of a
+/// coroutine that does not costs it this optimisation, and nothing else
+pub(crate) fn never_suspends(function: &ast::StmtFunctionDef) -> bool {
+    if !function.is_async {
+        return false;
+    }
+    let mut search = Suspensions { found: false };
+    ast::visitor::walk_body(&mut search, &function.body);
+    !search.found
+}
+
+/// whether any suspension point is written under here
+struct Suspensions {
+    found: bool,
+}
+
+impl<'a> ast::visitor::Visitor<'a> for Suspensions {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        self.found |= match stmt {
+            Stmt::For(node) => node.is_async,
+            Stmt::With(node) => node.is_async,
+            _ => false,
+        };
+        ast::visitor::walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        self.found |= matches!(expr, Expr::Await(_) | Expr::Yield(_) | Expr::YieldFrom(_));
+        ast::visitor::walk_expr(self, expr);
+    }
+
+    fn visit_comprehension(&mut self, comprehension: &'a ast::Comprehension) {
+        self.found |= comprehension.is_async;
+        ast::visitor::walk_comprehension(self, comprehension);
+    }
+}
+
 /// whether a function body yields
 pub(crate) fn is_generator(body: &[Stmt]) -> bool {
     crate::walk(body).into_iter().any(|stmt| {
@@ -363,8 +424,9 @@ pub(crate) fn park_live_registers(
             .is_some_and(|decl| decl.may_be_unassigned)
         {
             return Err(Decline::new(format!(
-                "`{}` has to survive a suspension and is not assigned on every path that \
-                 reaches it, so whether it was assigned would not survive with it",
+                "`{}` has to survive a suspension and may be unbound where it is read — \
+                 a path that skips its assignment, or a `del` — and whether it is bound \
+                 does not survive with it",
                 register_name(function, *id)
             )));
         }
@@ -464,6 +526,11 @@ fn live_in(
                 if let Some(dest) = op.dest() {
                     live.remove(&dest);
                 }
+                // `del x` reads its destination before leaving it unbound, so a name
+                // deleted after a suspension is live across it — which is what puts it
+                // in the parked set, where the check below refuses it because the byte
+                // saying whether it was bound does not survive with it
+                live.extend(op.unbinds());
                 live.extend(op.operands().iter().filter_map(|v| reads(v)));
             }
             if live != live_in[index] {

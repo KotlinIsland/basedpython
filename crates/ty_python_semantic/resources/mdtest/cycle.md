@@ -937,6 +937,41 @@ class Mutual:
         reveal_type(self.b)  # revealed: tuple[Divergent]
 ```
 
+a `return` is checked against the function's return type, and a `def` that wrote none has one
+recovered from this very body — so while that recovery runs, the context a `return` is checked
+against is the cycle's own marker. a container built under it read its element type back out of the
+context and came back `list[Divergent]`, which the next round reproduced unchanged, so the marker
+was what the iteration settled on and what a caller was shown. dropping the context leaves each
+round saying what the body actually builds:
+
+```py
+def in_return(x: int):
+    return [x]
+
+reveal_type(in_return(1))  # revealed: list[int]
+
+# a container reached through a call, and one nested inside another, settle the same way
+def through_call(x: int):
+    return list([x])
+
+reveal_type(through_call(1))  # revealed: list[int]
+
+def nested(x: int):
+    return {x: [x]}
+
+reveal_type(nested(1))  # revealed: dict[int, list[int]]
+```
+
+a body that really does nest itself one container deeper per round has no return type to reach, and
+keeps the marker that says so:
+
+```py
+def endless(x: int):
+    return [endless(x)]
+
+reveal_type(endless(1))  # revealed: list[Divergent]
+```
+
 ## a method that hands back its own bound method
 
 `return self.dispatch` makes `dispatch` return a bound method of `dispatch`, so the type is a cycle

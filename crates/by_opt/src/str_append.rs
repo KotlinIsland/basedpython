@@ -91,6 +91,10 @@ fn consume_dying_operands(function: &mut Function) {
             if let Some(dest) = op.dest() {
                 live.remove(&dest);
             }
+            // `del x` leaves its destination unbound, but it reads the value first —
+            // to release it — so the reference is still needed here and must not be
+            // handed to an append below
+            live.extend(op.unbinds());
             live.extend(op.operands().into_iter().filter_map(register));
         }
     }
@@ -148,6 +152,7 @@ fn live_in_sets(function: &Function) -> Vec<HashSet<RegisterId>> {
                 if let Some(dest) = op.dest() {
                     live.remove(&dest);
                 }
+                live.extend(op.unbinds());
                 live.extend(op.operands().into_iter().filter_map(register));
             }
 

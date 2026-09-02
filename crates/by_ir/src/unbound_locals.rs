@@ -9,6 +9,11 @@
 //! this is the same shape the verifier already uses to *reject* such a function, run
 //! here to fix it instead: the fixpoint below is the verifier's, and what it finds
 //! becomes a flag rather than an error.
+//!
+//! the byte is also what `del x` clears, and that is the one thing the fixpoint cannot
+//! find on its own: a deletion looks like a write to any forward analysis, so a local
+//! assigned on every path reaching it still comes out definitely-written. so the
+//! deletion asks for the byte directly, below.
 
 use std::collections::VecDeque;
 
@@ -20,7 +25,20 @@ use crate::ops::{BlockId, Terminator, Value};
 /// runs at lowering time rather than as an optimization: the verifier rejects such a
 /// read, so the flag has to be there before it looks
 pub fn mark(function: &mut Function) {
-    for id in unassigned_reads(function) {
+    let mut flagged: Vec<usize> = unassigned_reads(function);
+    // a register `del` can unbind is maybe-unassigned by construction, and the
+    // fixpoint above cannot see it: `del x` writes its destination as far as any
+    // forward analysis is concerned, so a local assigned on every path that reaches
+    // the `del` still comes out "definitely written". the byte is the unbound state
+    // the deletion needs, so the deletion is what asks for it
+    for block in &function.blocks {
+        for op in &block.ops {
+            if let Some(id) = op.unbinds() {
+                flagged.push(id.index());
+            }
+        }
+    }
+    for id in flagged {
         if let Some(decl) = function.registers.get_mut(id) {
             decl.may_be_unassigned = true;
         }

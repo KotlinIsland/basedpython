@@ -763,7 +763,7 @@ pub(crate) fn cmd_restage(build_directory: &Path, file: &Path) -> anyhow::Result
     })
 }
 
-#[allow(clippy::print_stderr)]
+#[expect(clippy::print_stderr)]
 pub(crate) fn cmd_build(
     min_version: Option<&str>,
     lowering: &LoweringArgs,

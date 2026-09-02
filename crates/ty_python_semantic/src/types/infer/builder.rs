@@ -6102,6 +6102,35 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         return_ty
                     };
 
+                    // basedpython: a `def` that wrote no return type has one recovered from this
+                    // very body, and while that recovery is still running the signature answers
+                    // with the cycle's own divergence marker. checking the returned expression
+                    // against the marker makes the marker the answer: `def f(x: int): return [x]`
+                    // reads its element type out of the context and comes back as
+                    // `list[Divergent]`, which the next round reproduces unchanged, so the marker
+                    // is what the iteration settles on and what a caller is shown.
+                    //
+                    // a marker is the cycle's stand-in for a type it has not reached yet, which is
+                    // no guidance at all, so the expression is inferred bare and the round says
+                    // what the body actually builds — `list[int]`, which the round after it is
+                    // free to use as a context like any written annotation.
+                    //
+                    // only a return type nobody wrote down is dropped this way. an annotation is a
+                    // constraint on the body however its own definition recurses: `-> dict[str,
+                    // JsonValue]` where `JsonValue` is a recursive alias carries a marker of that
+                    // alias's cycle, and dropping the context there leaves the returned display
+                    // without the bidirectional inference the annotation exists to give — which
+                    // reads back as a return type that does not fit the one written
+                    let declares_return_type = self
+                        .index
+                        .scope(file_scope_id)
+                        .node()
+                        .as_function()
+                        .is_some_and(|function| function.node(self.module()).returns.is_some());
+                    if !declares_return_type && context_ty.mentions_divergence(db, env) {
+                        return TypeContext::default();
+                    }
+
                     TypeContext::new(Some(context_ty))
                 })
                 .unwrap_or_default()

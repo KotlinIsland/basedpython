@@ -364,6 +364,20 @@ pub enum Op {
         index: i64,
         count: i64,
     },
+    /// whether a call on `src` may go straight to the body this module emitted for
+    /// `class`'s `method`, rather than through the object protocol
+    ///
+    /// the two questions are one test because a call site is licensed by both and by
+    /// neither alone: `src` has to be *exactly* a `class` — a subclass written in the
+    /// interpreter has a body of its own — and `class` has to still answer `method`
+    /// with what was compiled, which a rebinding after import undoes. what each
+    /// question costs at runtime is in `By_MethodStands`
+    MethodStands {
+        dest: RegisterId,
+        src: Value,
+        class: String,
+        method: String,
+    },
     /// whether a class pattern's lookup found nothing
     IsMissing { dest: RegisterId, src: Value },
     /// an element or a slice of a sequence a `match` case is taking apart
@@ -666,6 +680,18 @@ pub enum Op {
     /// resolved on every read for the same reason a call is — a module global may
     /// be rebound, and python would see it
     LoadGlobal { dest: RegisterId, name: String },
+    /// the module namespace itself, which is what `globals()` answers with
+    ///
+    /// the builtin cannot be called for it. `globals()` reads the *calling* frame's
+    /// namespace, and a compiled function pushes no frame — so it would answer with
+    /// whatever frame happens to be underneath, which is the caller's, in another
+    /// module. reading one gave `None` for a name the module plainly binds, and
+    /// `globals()["x"] = 1` bound `x` in the caller instead.
+    ///
+    /// the dict this reaches is the same one [`Self::LoadGlobal`] and
+    /// [`Self::StoreGlobal`] reach, so a write through it is visible at once to the
+    /// rest of the module and to the interpreted twin, exactly as python's is
+    ModuleDict { dest: RegisterId },
     /// bind a name in the module namespace: what an assignment under a `global`
     /// declaration does
     ///
@@ -683,6 +709,20 @@ pub enum Op {
     /// a name that is not bound is a `NameError`, which is not what deleting from a
     /// dict raises — see `By_DeleteGlobal`
     DeleteGlobal { dest: RegisterId, name: String },
+    /// unbind a local: `del x` where `x` is a register
+    ///
+    /// the unbound state is the byte the unbound-locals pass gives a register that
+    /// some path may read before writing — set by every write, tested by every read.
+    /// `del` puts it back to zero, so afterwards a read raises `UnboundLocalError`
+    /// with python's own wording, a second `del` raises the same, and a later write
+    /// binds the name again.
+    ///
+    /// the target is a `RegisterId` rather than a `Value` on purpose: this is a
+    /// *place* and not a value, and a pass that substitutes an immediate into an
+    /// operand would otherwise quietly retarget the unbinding. it is `dest` so that
+    /// everything renumbering registers reaches it, and [`Self::unbinds`] is what
+    /// tells the analyses that it is read as well as written
+    DeleteLocal { dest: RegisterId },
     /// the type object of a class this module emits, by identity rather than by name
     ///
     /// a class decorator replaces the *namespace* entry, and a module may rebind the
@@ -749,6 +789,28 @@ pub enum Op {
         /// an object, or an integer register — an integer index stays in its
         /// register on the fast path rather than being boxed for the lookup
         index: Value,
+    },
+    /// `k in d` answered by the very lookup `d[k]` would go on to make
+    ///
+    /// a membership test and the read that follows it hash the same key and walk
+    /// the same table, and on a histogram loop that pair is most of the running
+    /// time. this asks the table once and reports both answers in one register: a
+    /// new reference to the value where the key is there, and null where it is
+    /// not. failure is null with an exception set, the same three outcomes
+    /// [`Self::IterNext`] has and tested the same way
+    ///
+    /// asking once is a *runtime*-checked fact rather than a static one, because
+    /// both things it would take to make asking twice observable are ordinary
+    /// python. a dict subclass may have overridden `__contains__` or
+    /// `__getitem__`, and a key may have a `__hash__` that counts how often it is
+    /// called — so the single probe is taken only for an exact dict keyed by an
+    /// exact `str`, and everything else goes through the protocol twice, in the
+    /// order it would have: `__contains__`, and then `__getitem__` only where that
+    /// said yes
+    DictFind {
+        dest: RegisterId,
+        container: Value,
+        key: Value,
     },
     /// `s[i]` where the container is a `str` and the index an integer
     ///
@@ -852,6 +914,21 @@ pub enum Op {
         /// the register cannot be observed either
         consumes_lhs: bool,
     },
+    /// `str(n)` where `n` is a tagged integer
+    ///
+    /// this is a [`Self::CallPython`] of the name `str` and nothing more: the name is
+    /// resolved through the module namespace on every trip, so a module that rebinds
+    /// `str` — in its own source or through a write to `globals()` — is obeyed exactly
+    /// as it was before. what is different is only what happens once the resolution
+    /// has answered with the builtin.
+    ///
+    /// the general form has to give the integer an object representation to pass it,
+    /// and `str` of that object then formats it through a writer — two allocations to
+    /// produce a handful of ascii digits that were already in a register. the digits
+    /// are written straight into one string instead.
+    ///
+    /// only `by_opt`'s `str_of_int` pass produces this
+    StrOfInt { dest: RegisterId, value: Value },
     /// raise a standard error with a fixed message
     RaiseStandard {
         error: StandardError,
@@ -898,6 +975,7 @@ impl Op {
             | Self::FloatObjectBinary { .. }
             | Self::IsInstance { .. }
             | Self::MatchAttr { .. }
+            | Self::MethodStands { .. }
             | Self::IsMissing { .. }
             | Self::MatchSlice { .. }
             | Self::FloatObjectCompare { .. }
@@ -934,8 +1012,10 @@ impl Op {
             | Self::RaiseWith { .. }
             | Self::FinishFrame { .. }
             | Self::LoadGlobal { .. }
+            | Self::ModuleDict { .. }
             | Self::StoreGlobal { .. }
             | Self::DeleteGlobal { .. }
+            | Self::DeleteLocal { .. }
             | Self::CallValue { .. }
             | Self::CallMethod { .. }
             | Self::GetAttr { .. }
@@ -945,6 +1025,7 @@ impl Op {
             | Self::BuildTuple { .. }
             | Self::BuildDict { .. }
             | Self::GetItem { .. }
+            | Self::DictFind { .. }
             | Self::StrGetItem { .. }
             | Self::StrItemCompare { .. }
             | Self::SetItem { .. }
@@ -960,7 +1041,23 @@ impl Op {
             | Self::IsNull { .. }
             | Self::Len { .. }
             | Self::StrConcat { .. }
+            | Self::StrOfInt { .. }
             | Self::RaiseStandard { .. } => Vec::new(),
+        }
+    }
+
+    /// the register this operation *unbinds*, if any
+    ///
+    /// [`Self::dest`] answers "which register does this leave a new value in", and
+    /// `del x` is the one operation for which that is the wrong question: it leaves
+    /// its destination holding nothing, and it *reads* it on the way — both to answer
+    /// whether the name was bound and to release what it held. so every analysis that
+    /// asks what an operation reads has to ask this too, or it concludes the value was
+    /// dead at the `del` and hands the reference away underneath it
+    pub fn unbinds(&self) -> Option<RegisterId> {
+        match self {
+            Self::DeleteLocal { dest } => Some(*dest),
+            _ => None,
         }
     }
 
@@ -976,6 +1073,7 @@ impl Op {
             | Self::MatchRest { dest, .. }
             | Self::IsMapping { dest, .. }
             | Self::MatchAttr { dest, .. }
+            | Self::MethodStands { dest, .. }
             | Self::IsMissing { dest, .. }
             | Self::MatchSlice { dest, .. }
             | Self::IsInstance { dest, .. }
@@ -996,13 +1094,16 @@ impl Op {
             | Self::Unbox { dest, .. }
             | Self::TupleBuild { dest, .. }
             | Self::Len { dest, .. }
+            | Self::StrOfInt { dest, .. }
             | Self::CallPython { dest, .. }
             | Self::ImportModule { dest, .. }
             | Self::ImportFrom { dest, .. }
             | Self::CallValue { dest, .. }
             | Self::LoadGlobal { dest, .. }
+            | Self::ModuleDict { dest }
             | Self::StoreGlobal { dest, .. }
             | Self::DeleteGlobal { dest, .. }
+            | Self::DeleteLocal { dest }
             | Self::LoadClass { dest, .. }
             | Self::NewInstance { dest, .. }
             | Self::GetCell { dest, .. }
@@ -1020,6 +1121,7 @@ impl Op {
             | Self::BuildTuple { dest, .. }
             | Self::BuildDict { dest, .. }
             | Self::GetItem { dest, .. }
+            | Self::DictFind { dest, .. }
             | Self::StrGetItem { dest, .. }
             | Self::StrItemCompare { dest, .. }
             | Self::SetItem { dest, .. }
@@ -1071,6 +1173,7 @@ impl Op {
             | Self::MatchRest { dest, .. }
             | Self::IsMapping { dest, .. }
             | Self::MatchAttr { dest, .. }
+            | Self::MethodStands { dest, .. }
             | Self::IsMissing { dest, .. }
             | Self::MatchSlice { dest, .. }
             | Self::IsInstance { dest, .. }
@@ -1091,13 +1194,16 @@ impl Op {
             | Self::Unbox { dest, .. }
             | Self::TupleBuild { dest, .. }
             | Self::Len { dest, .. }
+            | Self::StrOfInt { dest, .. }
             | Self::CallPython { dest, .. }
             | Self::ImportModule { dest, .. }
             | Self::ImportFrom { dest, .. }
             | Self::CallValue { dest, .. }
             | Self::LoadGlobal { dest, .. }
+            | Self::ModuleDict { dest }
             | Self::StoreGlobal { dest, .. }
             | Self::DeleteGlobal { dest, .. }
+            | Self::DeleteLocal { dest }
             | Self::LoadClass { dest, .. }
             | Self::NewInstance { dest, .. }
             | Self::GetCell { dest, .. }
@@ -1115,6 +1221,7 @@ impl Op {
             | Self::BuildTuple { dest, .. }
             | Self::BuildDict { dest, .. }
             | Self::GetItem { dest, .. }
+            | Self::DictFind { dest, .. }
             | Self::StrGetItem { dest, .. }
             | Self::StrItemCompare { dest, .. }
             | Self::SetItem { dest, .. }
@@ -1160,6 +1267,7 @@ impl Op {
             } => vec![manager, exception],
             Self::Assign { src, .. }
             | Self::Box { src, .. }
+            | Self::MethodStands { src, .. }
             | Self::IsMissing { src, .. }
             | Self::IsMapping { src, .. }
             | Self::AsyncIter { src, .. }
@@ -1179,6 +1287,7 @@ impl Op {
             | Self::Unbox { src, .. }
             | Self::Truthy { src, .. }
             | Self::Len { src, .. }
+            | Self::StrOfInt { value: src, .. }
             | Self::GetIter { src, .. }
             | Self::IsNull { src, .. }
             | Self::TupleGet { src, .. }
@@ -1248,7 +1357,12 @@ impl Op {
             | Self::BuildSet { items, .. }
             | Self::BuildTuple { items, .. } => items.iter().collect(),
             Self::BuildDict { pairs, .. } => pairs.iter().collect(),
-            Self::GetItem {
+            Self::DictFind {
+                container,
+                key: index,
+                ..
+            }
+            | Self::GetItem {
                 container, index, ..
             }
             | Self::StrGetItem {
@@ -1270,7 +1384,9 @@ impl Op {
             Self::RaiseStandard { .. }
             | Self::FetchException { .. }
             | Self::LoadGlobal { .. }
+            | Self::ModuleDict { .. }
             | Self::DeleteGlobal { .. }
+            | Self::DeleteLocal { .. }
             | Self::LoadClass { .. }
             | Self::ImportModule { .. } => Vec::new(),
             Self::Enter { manager, .. } => vec![manager],
@@ -1328,6 +1444,7 @@ impl Op {
             } => vec![manager, exception],
             Self::Assign { src, .. }
             | Self::Box { src, .. }
+            | Self::MethodStands { src, .. }
             | Self::IsMissing { src, .. }
             | Self::IsMapping { src, .. }
             | Self::AsyncIter { src, .. }
@@ -1347,6 +1464,7 @@ impl Op {
             | Self::Unbox { src, .. }
             | Self::Truthy { src, .. }
             | Self::Len { src, .. }
+            | Self::StrOfInt { value: src, .. }
             | Self::GetIter { src, .. }
             | Self::IsNull { src, .. }
             | Self::TupleGet { src, .. }
@@ -1418,7 +1536,12 @@ impl Op {
             | Self::BuildSet { items, .. }
             | Self::BuildTuple { items, .. } => items.iter_mut().collect(),
             Self::BuildDict { pairs, .. } => pairs.iter_mut().collect(),
-            Self::GetItem {
+            Self::DictFind {
+                container,
+                key: index,
+                ..
+            }
+            | Self::GetItem {
                 container, index, ..
             }
             | Self::StrGetItem {
@@ -1440,7 +1563,9 @@ impl Op {
             Self::RaiseStandard { .. }
             | Self::FetchException { .. }
             | Self::LoadGlobal { .. }
+            | Self::ModuleDict { .. }
             | Self::DeleteGlobal { .. }
+            | Self::DeleteLocal { .. }
             | Self::LoadClass { .. }
             | Self::ImportModule { .. } => Vec::new(),
             Self::Enter { manager, .. } => vec![manager],
