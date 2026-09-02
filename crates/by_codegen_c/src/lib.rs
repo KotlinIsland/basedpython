@@ -6045,6 +6045,30 @@ fn emit_op(
             let expr = format!("By_Len({})", value_expr(src));
             assign_checked(module, function, *dest, &expr, error_target)
         }
+        // the file and the line are the ones `warn` would have read off this
+        // function's own frame, and they come from the same line table the `#line`
+        // directives above do — so a warning names the source somebody wrote, exactly
+        // as a `.pyc` carries the path it was compiled from. a module built without a
+        // table has nowhere to name; python renders an empty file name as an empty
+        // prefix rather than inventing one, and `by_build` gives every module a table
+        // before this runs
+        Op::Warn {
+            dest,
+            message,
+            category,
+            offset,
+        } => {
+            let (path, line) = module.lines.as_ref().map_or((String::new(), 0), |lines| {
+                (lines.path.clone(), lines.line(*offset))
+            });
+            let expr = format!(
+                "By_Warn({}, {}, by_module_dict, {}, {line})",
+                value_expr(message),
+                category.as_ref().map_or("NULL".to_string(), value_expr),
+                c_string(&path),
+            );
+            assign_checked(module, function, *dest, &expr, error_target)
+        }
         Op::StrOfInt { dest, value } => {
             let mut out = resolve_str(error_target);
             let _ = writeln!(

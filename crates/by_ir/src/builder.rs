@@ -204,6 +204,40 @@ impl FunctionBuilder {
         }
     }
 
+    /// take back a narrowing that has only just been emitted, handing over what it
+    /// was narrowing *from*
+    ///
+    /// a reader that only wants the object can use the source directly, because an
+    /// [`Op::Unbox`] to an instance leaves both registers holding the same pointer.
+    /// what it cannot do is leave the check unemitted — a value that is not of the
+    /// narrowed class has to meet the same `TypeError` it met before — so the op
+    /// comes back paired with its source, and the caller owes it a home on some path
+    /// the receiver still reaches.
+    ///
+    /// two conditions make that safe to offer. the narrowing has to be the **last**
+    /// op, which is what proves the two registers still hold the same value: nothing
+    /// has run in between that could have written either. and its destination has to
+    /// be **unnamed**, because the check lands on a path the value may not take — a
+    /// named local written on one path alone is a register read before it is set
+    pub fn take_last_narrowing(&mut self, dest: RegisterId) -> Option<(Op, Value)> {
+        if self.is_sealed(self.current) {
+            return None;
+        }
+        if self.registers.get(dest.index())?.name.is_some() {
+            return None;
+        }
+        let ops = self.pending.get_mut(self.current.index())?;
+        let source = match ops.last() {
+            Some(Op::Unbox {
+                dest: written,
+                src,
+                to: RType::Instance { .. },
+            }) if *written == dest => src.clone(),
+            _ => return None,
+        };
+        ops.pop().map(|op| (op, source))
+    }
+
     /// finish the current block. the first terminator wins, so a `return` inside
     /// an `if` arm is not overwritten by the arm's implicit jump
     pub fn terminate(&mut self, terminator: Terminator) {

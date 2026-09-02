@@ -709,6 +709,30 @@ pub enum Op {
     /// [`Self::StoreGlobal`] reach, so a write through it is visible at once to the
     /// rest of the module and to the interpreted twin, exactly as python's is
     ModuleDict { dest: RegisterId },
+    /// `warnings.warn(message, category)` at the default stack level, with the
+    /// context supplied rather than counted off frames
+    ///
+    /// `warn` blames the frame of whoever called it, and a compiled function pushes
+    /// none — so it blames the caller's frame instead, in another module. at a stack
+    /// level of one there is nothing to count, though: the frame it would have read is
+    /// this very function's, and everything it would have read off it is known. the
+    /// file and the line come from the module's line table, and `__name__` and
+    /// `__warningregistry__` are read out of the module namespace at the call. so the
+    /// call goes to `warn_explicit`, which takes all four.
+    ///
+    /// only that stack level. above one the frame to blame is the *caller's*, and how
+    /// many frames are missing under a compiled function is not a static question —
+    /// a compiled function calling another loses both
+    Warn {
+        dest: RegisterId,
+        message: Value,
+        /// the `category` the call wrote, when it wrote one. left out means python's
+        /// own defaulting applies, which the runtime helper reproduces
+        category: Option<Value>,
+        /// the byte offset the call is written at, which codegen turns into a line
+        /// number through the same table the `#line` directives come from
+        offset: u32,
+    },
     /// bind a name in the module namespace: what an assignment under a `global`
     /// declaration does
     ///
@@ -1056,6 +1080,7 @@ impl Op {
             | Self::FinishFrame { .. }
             | Self::LoadGlobal { .. }
             | Self::ModuleDict { .. }
+            | Self::Warn { .. }
             | Self::StoreGlobal { .. }
             | Self::DeleteGlobal { .. }
             | Self::DeleteLocal { .. }
@@ -1147,6 +1172,7 @@ impl Op {
             | Self::CallValue { dest, .. }
             | Self::LoadGlobal { dest, .. }
             | Self::ModuleDict { dest }
+            | Self::Warn { dest, .. }
             | Self::StoreGlobal { dest, .. }
             | Self::DeleteGlobal { dest, .. }
             | Self::DeleteLocal { dest }
@@ -1249,6 +1275,7 @@ impl Op {
             | Self::CallValue { dest, .. }
             | Self::LoadGlobal { dest, .. }
             | Self::ModuleDict { dest }
+            | Self::Warn { dest, .. }
             | Self::StoreGlobal { dest, .. }
             | Self::DeleteGlobal { dest, .. }
             | Self::DeleteLocal { dest }
@@ -1441,6 +1468,12 @@ impl Op {
             | Self::DeleteLocal { .. }
             | Self::LoadClass { .. }
             | Self::ImportModule { .. } => Vec::new(),
+            Self::Warn {
+                message, category, ..
+            } => match category {
+                Some(category) => vec![message, category],
+                None => vec![message],
+            },
             Self::Enter { manager, .. } => vec![manager],
             Self::ExitContext {
                 manager, exception, ..
@@ -1624,6 +1657,12 @@ impl Op {
             | Self::DeleteLocal { .. }
             | Self::LoadClass { .. }
             | Self::ImportModule { .. } => Vec::new(),
+            Self::Warn {
+                message, category, ..
+            } => match category {
+                Some(category) => vec![message, category],
+                None => vec![message],
+            },
             Self::Enter { manager, .. } => vec![manager],
             Self::ExitContext {
                 manager, exception, ..

@@ -200,6 +200,10 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         // reference to it is not a lookup and has nothing to fail at
         Op::ModuleDict { .. } => false,
 
+        // a warning raises whenever the filters say `error`, and the category and
+        // registry it is handed are whatever the module put there
+        Op::Warn { .. } => true,
+
         // a delete runs the protocol, which can raise
         Op::DeleteItem { .. } | Op::DeleteAttr { .. } => true,
 

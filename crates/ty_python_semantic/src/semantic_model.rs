@@ -1394,6 +1394,36 @@ impl<'db> SemanticModel<'db> {
             == Some(implicit)
     }
 
+    /// basedpython: the type a *read* of `name` on an instance of `class_def` answers
+    /// with, where the lookup finds anything at all.
+    ///
+    /// The native compiler asks this to decide what a class's storage for an attribute
+    /// has to be able to hold. One assignment's type is not that answer: `self.parent =
+    /// None` in `__init__` says the attribute holds `None` on the way out of the
+    /// constructor, and says nothing about what is written into it afterwards. The
+    /// attribute's own type is the union over every assignment the checker can see, and
+    /// where it cannot see them all — an implicit attribute whose only assignment is
+    /// `None`, which is a partial inference rather than a settled one — it carries
+    /// `Unknown` beside them to say so.
+    ///
+    /// The name is the one the class body writes, not the one python mangles a private
+    /// attribute to: member lookup answers under the written name.
+    pub fn instance_attribute_type(
+        &self,
+        class_def: &ast::StmtClassDef,
+        name: &str,
+    ) -> Option<Type<'db>> {
+        let env = self.program_environment();
+        let db = self.db;
+        let instance = class_def
+            .inferred_type(self)?
+            .to_instance_approximation(db, &env)?;
+        instance
+            .member(db, &env, name)
+            .place
+            .ignore_possibly_undefined()
+    }
+
     /// Returns `true` if the given class definition's name was previously
     /// bound in the same scope (i.e., the class definition is a re-assignment).
     pub fn is_class_name_reassigned(&self, class_def: &ast::StmtClassDef) -> bool {

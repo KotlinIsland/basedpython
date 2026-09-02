@@ -11,6 +11,7 @@
 
 use by_ir::function::FieldDecl;
 use by_ir::rtype::RType;
+use ruff_db::files::File;
 use ty_python_semantic::ProgramEnvironment;
 use ty_python_semantic::types::{KnownClass, Type};
 
@@ -36,7 +37,58 @@ pub type Lowered<T> = Result<T, Decline>;
 /// layout *is* its base's plus its own, so anything the base's fields cost —
 /// the presence byte an optional one carries — the subclass has to spend too, or
 /// its instances would be smaller than the base python lays them out over
-pub type Layouts = std::collections::HashMap<String, Vec<FieldDecl>>;
+///
+/// the *file* is carried beside them because a bare name is not an identity. every
+/// name in here came out of this module's own source, so a lookup keyed on one is
+/// safe wherever the name did too — but [`map_type_with`] starts from a ty type,
+/// which may be a class of the same name from anywhere. `csv` declares a `Dialect`
+/// and imports `_csv.Dialect` beside it, and asking the name alone gave the imported
+/// class this module's layout: `_Dialect(self)` was narrowed to a struct its answer
+/// is not, and `csv.excel()` raised where python built
+#[derive(Clone)]
+pub struct Layouts {
+    file: File,
+    classes: std::collections::HashMap<String, Vec<FieldDecl>>,
+}
+
+impl Layouts {
+    /// the classes `file` writes, each with no fields worked out yet
+    pub fn of(file: File, names: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            file,
+            classes: names.into_iter().map(|name| (name, Vec::new())).collect(),
+        }
+    }
+
+    /// how many classes are in here, which bounds the rounds it takes to settle
+    pub fn count(&self) -> usize {
+        self.classes.len()
+    }
+
+    pub fn contains_key(&self, name: &str) -> bool {
+        self.classes.contains_key(name)
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Vec<FieldDecl>> {
+        self.classes.get(name)
+    }
+
+    pub fn names(&self) -> impl Iterator<Item = &String> {
+        self.classes.keys()
+    }
+
+    pub fn insert(&mut self, name: String, fields: Vec<FieldDecl>) {
+        self.classes.insert(name, fields);
+    }
+
+    pub fn remove(&mut self, name: &str) {
+        self.classes.remove(name);
+    }
+
+    pub fn clear(&mut self) {
+        self.classes.clear();
+    }
+}
 
 /// [`map_type`], plus knowledge of which classes have an emitted layout
 ///
@@ -56,6 +108,9 @@ pub fn map_type_with(
     if !bare.is_dynamic()
         && let Some(class) = bare.nominal_class_name(db, env)
         && layouts.contains_key(class)
+        // the class *this* module wrote under that name, and not another module's of
+        // the same name — see [`Layouts`]
+        && bare.nominal_class_file(db, env) == Some(layouts.file)
     {
         return Ok(RType::Instance {
             class: class.to_string(),
@@ -360,6 +415,42 @@ mod tests {
         assert_eq!(param_repr("Never"), Ok(RType::OBJECT));
         // and a real `None` still gets the representation that says so
         assert_eq!(param_repr("None"), Ok(RType::NONE));
+    }
+
+    /// map the declared type of the single parameter of `def f(a: Alias)`, where
+    /// `Alias` is a type alias standing for `value`
+    fn alias_repr(value: &str) -> Result<RType, String> {
+        with_source(
+            &format!(
+                "from typing import Any\n\
+                 type Alias = {value}\n\
+                 def f(a: Alias) -> None:\n    pass\n"
+            ),
+            |db, env, model, suite| {
+                let ruff_python_ast::Stmt::FunctionDef(function) = &suite[2] else {
+                    return Err("not a function".to_string());
+                };
+                let parameter = &function.parameters.args[0].parameter;
+                let ty = ty_python_semantic::HasType::inferred_type(parameter, model)
+                    .ok_or_else(|| "no inferred type".to_string())?;
+                map_type(db, env, ty).map_err(|decline| decline.reason)
+            },
+        )
+    }
+
+    #[test]
+    fn an_alias_is_as_gradual_as_what_it_stands_for() {
+        // an alias is the same type under another spelling, so the gradual test has to
+        // reach through it. `_socket` writes `type _RetAddress = dynamic` and
+        // `socket.getsockname()` answers with it — read as a proof, that landed on
+        // `None`, the first representation a gradual type is assignable to, and
+        // `self._address = sock.getsockname()` then had nowhere to put a string
+        assert_eq!(alias_repr("Any"), Ok(RType::OBJECT));
+        // and out through a union around it, the way an ordinary gradual member is
+        assert_eq!(alias_repr("int | Any"), Ok(RType::OBJECT));
+        // a name over an ordinary type still stands for exactly that type
+        assert_eq!(alias_repr("int"), Ok(RType::INT));
+        assert_eq!(alias_repr("None"), Ok(RType::NONE));
     }
 
     #[test]
