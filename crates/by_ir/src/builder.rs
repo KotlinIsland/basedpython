@@ -277,6 +277,7 @@ impl FunctionBuilder {
             deferring: self.deferring,
             computed_defaults: self.computed_defaults,
             binding: crate::function::Binding::Instance,
+            coroutine_body: None,
         }
     }
 }

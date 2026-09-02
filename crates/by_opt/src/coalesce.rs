@@ -53,6 +53,12 @@ fn pairing(
     param_count: usize,
 ) -> Option<RegisterId> {
     let ops = &function.blocks[block].ops;
+    // `del x` leaves its destination unbound rather than holding a result, so there is
+    // nothing for a following store to take over. the named-local test below already
+    // excludes it; this is the reason
+    if ops[index].unbinds().is_some() {
+        return None;
+    }
     let temp = ops[index].dest()?;
     let Op::Assign {
         dest,

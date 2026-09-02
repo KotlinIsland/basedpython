@@ -60,13 +60,14 @@ use by_ir::ops::{
     UnaryOp, Value,
 };
 use by_ir::rtype::{Primitive, RType};
-use mapper::{Decline, Layouts, Lowered, map_type, map_type_with};
+use mapper::{Decline, Layouts, Lowered, map_fixed_tuple, map_type, map_type_with};
 use ruff_python_ast::{
     self as ast, CmpOp as AstCmpOp, Expr, ExprContext, Operator, Stmt, UnaryOp as AstUnaryOp,
 };
 use ruff_python_stdlib::identifiers::is_identifier;
 use ruff_text_size::{Ranged, TextSize};
 use ty_python_semantic::ProgramEnvironment;
+use ty_python_semantic::types::{KnownClass, TypeDefinition};
 use ty_python_semantic::{HasType, SemanticModel};
 
 /// lower every module-level function ty can represent natively
@@ -366,6 +367,33 @@ pub fn build_module(
             }),
     );
 
+    // an `async def` that never suspends gets a second edition holding the same body,
+    // which `await` of it calls instead of building a coroutine that one `send` would
+    // finish. its return is the body's own rather than the state object, so this is the
+    // signature *before* `resumable_return` widened it
+    //
+    // only a name a call would already have reached natively: a decorator, or a `global`
+    // that rebinds the name, means the name does not hold this definition, and the
+    // interpreted one has to answer for the `await` the same as for the call
+    signatures.extend(
+        suite
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Stmt::FunctionDef(function)
+                    if generators::never_suspends(function)
+                        && !decorated.contains(function.name.as_str())
+                        && defined_once(suite, function).is_ok() =>
+                {
+                    Some(function)
+                }
+                _ => None,
+            })
+            .filter_map(|function| {
+                let signature = signature(db, env, model, function, &layouts, None, &[]).ok()?;
+                Some((generators::direct_name(&function.name), signature))
+            }),
+    );
+
     // each emitted class's base, so an upcast to it is recognised as free
     let owned_mutable: HashSet<String> = mutable.iter().map(|name| (*name).to_string()).collect();
 
@@ -385,9 +413,33 @@ pub fn build_module(
         })
         .collect();
 
+    let properties = published_properties(db, model, suite, &layouts);
+
+    // read off the source rather than off the lowered methods: a `__new__` python never
+    // reaches the method table for — one carrying a decorator, one whose class declined —
+    // is still the constructor a `C(...)` in this module has to run
+    let constructs: HashSet<String> = suite
+        .iter()
+        .filter_map(|stmt| {
+            match stmt {
+            Stmt::ClassDef(class) => class
+                .body
+                .iter()
+                .any(|member| {
+                    matches!(member, Stmt::FunctionDef(method) if method.name.as_str() == "__new__")
+                })
+                .then(|| class.name.to_string()),
+            _ => None,
+        }
+        })
+        .collect();
+
+    let no_directs: HashSet<String> = HashSet::new();
     let unit = Unit {
         mutable: &owned_mutable,
+        constructs: &constructs,
         bases: &bases,
+        properties: &properties,
         unique_loop_bindings,
         db,
         env,
@@ -401,9 +453,37 @@ pub fn build_module(
         methods: &methods,
         signatures: &signatures,
         arrays: &arrays,
+        // filled in below: the editions themselves are lowered against a unit where
+        // nothing redirects, because a direct edition never contains an `await`
+        directs: &no_directs,
         // a module-level frame is in no class body, so nothing it names is mangled
         owner: None,
     };
+
+    // pass one and a half: the direct editions, before any caller, because an `await`
+    // only redirects to one that is there. one that declines leaves the `await` on the
+    // coroutine path, which is what it had before
+    let mut direct_editions: Vec<Function> = Vec::new();
+    let mut directs: HashSet<String> = HashSet::new();
+    for stmt in suite {
+        let Stmt::FunctionDef(function) = stmt else {
+            continue;
+        };
+        if !signatures.contains_key(&generators::direct_name(&function.name)) {
+            continue;
+        }
+        if let Ok(edition) = lower_direct_edition(unit, function)
+            .and_then(|mut edition| verify_one(&mut edition).map(|()| edition))
+        {
+            directs.insert(function.name.to_string());
+            direct_editions.push(edition);
+        }
+    }
+    let unit = Unit {
+        directs: &directs,
+        ..unit
+    };
+    module.functions.extend(direct_editions);
 
     // pass two: bodies, with the layouts available
     for stmt in suite {
@@ -455,6 +535,26 @@ pub fn build_module(
             }
         }
     }
+
+    // a direct edition is emitted for every coroutine that could have one, because
+    // whether an `await` reaches it is only known once the callers are lowered. one
+    // nothing reached is a second copy of a body under a name the namespace never
+    // binds, so it is dropped rather than emitted for nobody
+    //
+    // an edition holds no `await` of its own, so it can never be the caller here and
+    // this settles in one pass
+    let called: HashSet<String> = module
+        .all_functions()
+        .flat_map(|function| function.blocks.iter())
+        .flat_map(|block| block.ops.iter())
+        .filter_map(|op| match op {
+            Op::CallNative { owner, callee, .. } => Some(qualify(owner.as_deref(), callee)),
+            _ => None,
+        })
+        .collect();
+    module
+        .functions
+        .retain(|function| function.coroutine_body.is_none() || called.contains(&function.name));
 
     // the pruner drops things by name, and a dropped definition still deserves to
     // point at its source
@@ -834,6 +934,7 @@ fn lower_generator(
             constants: Vec::new(),
             slot_aliases: Vec::new(),
             generic: false,
+            properties: Vec::new(),
             methods: vec![resume],
             base: None,
             inherited_init: false,
@@ -997,9 +1098,12 @@ fn lower_resume(
 
     let mut lowering = Lowering {
         arrays: unit.arrays,
+        directs: unit.directs,
         in_range: Vec::new(),
         mutable: unit.mutable,
+        constructs: unit.constructs,
         bases: unit.bases,
+        properties: unit.properties,
         db,
         model,
         builder,
@@ -1058,6 +1162,19 @@ fn lower_resume(
         .take()
         .map(|generator| generator.resumptions)
         .unwrap_or_default();
+
+    // the property a *direct* edition rests on, checked against the machine that was
+    // actually built rather than trusted from the syntax it was read off. an `await`
+    // has already been lowered to a plain call by the time this runs, so a coroutine
+    // that turns out to have a resumption point after all has to take its edition down
+    // with it — declining here is what makes the pruner do that
+    if generators::never_suspends(function) && !resumptions.is_empty() {
+        return Err(Decline::new(format!(
+            "`{}` was read as a coroutine that never suspends and lowered to {} suspension point(s)",
+            function.name,
+            resumptions.len()
+        )));
+    }
 
     // the dispatch: `$state` against each resumption point, falling through to
     // exhausted. a chain of branches *is* a jump table, and the C compiler builds it
@@ -1231,6 +1348,16 @@ fn prune_unbuildable(
         let anchors = storage_anchors(module);
 
         let unbuildable = |function: &Function| -> Option<String> {
+            // an edition is only ever reached from a call written against the name its
+            // definition is installed under, so it is only the right call while that
+            // definition is still what the module holds
+            if let Some(coroutine_body) = &function.coroutine_body
+                && !targets.contains(coroutine_body)
+            {
+                return Some(format!(
+                    "`{coroutine_body}` declined, so the direct edition of it stands for nothing"
+                ));
+            }
             let representations = function
                 .registers
                 .iter()
@@ -1324,21 +1451,30 @@ fn prune_unbuildable(
                 None => true,
             }
         });
+        // an edition dropping is not a decline anyone wrote: the definition it is an
+        // edition of reports one of its own, and a second entry under a name the source
+        // never held would inflate every count taken off this list. it still has to keep
+        // the loop going, because a caller of it is now unbuildable too
+        let mut dropped_an_edition = false;
         module.functions.retain(|function| {
             match rebound(&function.name, function.exported).or_else(|| unbuildable(function)) {
                 Some(reason) => {
-                    fresh.push(Declined {
-                        name: function.name.clone(),
-                        reason,
-                        range: ranges.get(&function.name).copied(),
-                    });
+                    if function.coroutine_body.is_some() {
+                        dropped_an_edition = true;
+                    } else {
+                        fresh.push(Declined {
+                            name: function.name.clone(),
+                            reason,
+                            range: ranges.get(&function.name).copied(),
+                        });
+                    }
                     false
                 }
                 None => true,
             }
         });
 
-        if fresh.is_empty() {
+        if fresh.is_empty() && !dropped_an_edition {
             return;
         }
         module.declined.extend(fresh);
@@ -1497,10 +1633,49 @@ fn lower_class<'a>(
     let base = base_class(db, env, model, suite, class, layouts)?;
 
     let fields = class_fields(db, env, model, suite, class, layouts, deleted)?;
+    // the `@property` pairs, worked out before any method is lowered: the two halves of
+    // one are both written `def value`, so a pass that took them one at a time would see
+    // a name defined twice rather than the single attribute python builds out of them
+    let properties = property_groups(db, model, class)?;
+    let immutable = class.decorator_list.iter().any(|decorator| {
+        matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "frozen_data_class")
+    });
+    // a `frozen data class` publishes no setter at all, the way `@dataclass(frozen=True)`
+    // has none — so a property that writes would be the one way an attribute of one could
+    // still change
+    if immutable
+        && properties
+            .iter()
+            .any(|group| group.setter.is_some() || group.deleter.is_some())
+    {
+        return Err(Decline::new(
+            "a property that writes stands in a frozen class, which publishes no setters",
+        ));
+    }
     let mut lowered = Vec::new();
     let mut environments = Vec::new();
     let mut constants = Vec::new();
     let mut slot_aliases = Vec::new();
+    let mut published = Vec::new();
+    for group in &properties {
+        let mut published_group = by_ir::function::PropertyIr {
+            name: mangled(Some(&class.name), group.name),
+            getter: None,
+            setter: None,
+            deleter: None,
+        };
+        for (half, accessor) in group.halves() {
+            let (method, produced) = lower_accessor(unit, accessor, &class.name, half)?;
+            *match half {
+                Half::Get => &mut published_group.getter,
+                Half::Set => &mut published_group.setter,
+                Half::Delete => &mut published_group.deleter,
+            } = Some(method.name.clone());
+            lowered.push(method);
+            environments.extend(produced);
+        }
+        published.push(published_group);
+    }
     for statement in &class.body {
         match statement {
             // an annotation is not a binding, but an annotated *assignment* is the
@@ -1518,6 +1693,11 @@ fn lower_class<'a>(
                 }
             }
             Stmt::AnnAssign(_) => {}
+            // a property's halves were lowered above, as the one attribute they are
+            Stmt::FunctionDef(method)
+                if properties
+                    .iter()
+                    .any(|group| group.halves().any(|(_, half)| std::ptr::eq(half, method))) => {}
             Stmt::FunctionDef(method) => {
                 // a `data class` has its `__init__` generated from the fields, so a
                 // hand-written one would disagree with it. a plain class *is* its
@@ -1527,6 +1707,9 @@ fn lower_class<'a>(
                 let slotted = has_a_slot_adapter(method.name.as_str());
                 if method.name.as_str() == "__getattr__" {
                     getattr_hook_stands_alone(base.as_ref())?;
+                }
+                if method.name.as_str() == "__new__" {
+                    new_slot_is_adaptable(db, env, model, suite, base.as_ref(), layouts)?;
                 }
                 if method.name.starts_with("__")
                     && !own_init
@@ -1556,23 +1739,70 @@ fn lower_class<'a>(
                 }
                 defined_once(&class.body, method)?;
                 let (method, produced) = lower_method(unit, method, &class.name)?;
+                if method.name == "__new__" {
+                    new_answers_its_own_class(&method, &class.name)?;
+                }
                 lowered.push(method);
                 environments.extend(produced);
             }
             // a class-level constant: whatever it is, the interpreted definition
             // evaluated it already and module init copies it across
-            Stmt::Assign(assign) => match assign.targets.as_slice() {
-                // a dunder that fills a type slot needs one emitted alongside the copy.
-                // the copy writes into `tp_dict`, and a name there does not fill a slot —
-                // so `__repr__ = _repr` on its own leaves `repr(x)` going to the slot
-                // python inherited while `x.__repr__()` answers the assignment, which is
-                // two answers where the interpreted class has one
-                [Expr::Name(name)] => {
-                    slot_aliases.extend(assigned_slot(name.id.as_str(), &assign.value)?);
-                    constants.push(mangled(Some(&class.name), name.id.as_str()));
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    match target {
+                        // a dunder that fills a type slot needs one emitted alongside the
+                        // copy. the copy writes into `tp_dict`, and a name there does not
+                        // fill a slot — so `__repr__ = _repr` on its own leaves `repr(x)`
+                        // going to the slot python inherited while `x.__repr__()` answers
+                        // the assignment, which is two answers where the interpreted class
+                        // has one.
+                        //
+                        // `a = b = value` writes the one value under both names, so each
+                        // is asked the same question the single-target form asks
+                        Expr::Name(name) => {
+                            slot_aliases.extend(assigned_slot(name.id.as_str(), &assign.value)?);
+                            constants.push(mangled(Some(&class.name), name.id.as_str()));
+                        }
+                        // `dispatch[PROTO[0]] = load_proto` binds no name in the class
+                        // namespace — it writes into an object the body already built. the
+                        // interpreted definition made that write before module init reads
+                        // the body dict, so the object copied across is already finished
+                        Expr::Subscript(_) => {}
+                        _ => {
+                            return Err(Decline::new(
+                                "only a plain class-level name is lowered yet",
+                            ));
+                        }
+                    }
                 }
-                _ => return Err(Decline::new("only a plain class-level name is lowered yet")),
-            },
+            }
+            // python runs a class body as an ordinary block, so a conditional or a loop
+            // in one is an ordinary statement and what it binds lands in the class
+            // namespace like anything else:
+            //
+            //     class _Pickler:
+            //         if _HAVE_PICKLE_BUFFER:
+            //             def save_picklebuffer(self, obj): ...
+            //
+            // nothing here evaluates the condition. the interpreted definition ran the
+            // block already — once, where python runs it, with whatever the condition
+            // read and whatever it did on the way — and the namespace it left is the
+            // answer. so every name the block *could* bind becomes a class-level
+            // constant, taken off that namespace by the copy every other constant takes.
+            // where the condition was false the body never wrote the name, nothing is
+            // copied, and the emitted class has no such attribute either — which is what
+            // `hasattr` has to say about it
+            Stmt::If(_) | Stmt::For(_) | Stmt::While(_) => {
+                let mut names = Vec::new();
+                nested_bindings(std::slice::from_ref(statement), &mut names)?;
+                for name in names {
+                    nested_binding_stands_alone(&class.body, name)?;
+                    let name = mangled(Some(&class.name), name);
+                    if !constants.contains(&name) {
+                        constants.push(name);
+                    }
+                }
+            }
             Stmt::Pass(_) => {}
             // a docstring
             Stmt::Expr(node) if matches!(node.value.as_ref(), Expr::StringLiteral(_)) => {}
@@ -1611,6 +1841,37 @@ fn lower_class<'a>(
             clash.name
         )));
     }
+    // a property publishes its attribute through `tp_getset`, and a field's descriptor is
+    // already sitting under its own name there — the same collision a class-level
+    // constant has with one, and the same answer
+    if let Some(clash) = published.iter().find(|property| {
+        fields.iter().any(|field| field.name == property.name)
+            || constants.contains(&property.name)
+            || slot_aliases.iter().any(|alias| alias.name == property.name)
+    }) {
+        return Err(Decline::new(format!(
+            "`{}` is both a property and a name the class body binds directly",
+            clash.name
+        )));
+    }
+    // a property's halves are named with a `$`, which no source can write — but the
+    // symbol they mangle to replaces it with an underscore, and a method a source *did*
+    // write may already hold that symbol. two bodies under one symbol is a module that
+    // does not build at all, which is worse than one that declines
+    if let Some(clash) = published
+        .iter()
+        .flat_map(|property| [&property.getter, &property.setter, &property.deleter])
+        .flatten()
+        .find(|accessor| {
+            lowered
+                .iter()
+                .any(|method| method.name != **accessor && mangles_alike(&method.name, accessor))
+        })
+    {
+        return Err(Decline::new(format!(
+            "a property half named `{clash}` reaches the same symbol as a method of this class"
+        )));
+    }
     // this class's own decorators are applied at init and taken out of the twin's source,
     // so the module body must not reach the class in the window between the twin's
     // `class` statement and init — everything it bound in that window keeps the
@@ -1621,9 +1882,7 @@ fn lower_class<'a>(
             resume: None,
             exported: true,
             name: class.name.to_string(),
-            immutable: class.decorator_list.iter().any(|decorator| {
-                matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "frozen_data_class")
-            }),
+            immutable,
             base,
             // neither written nor generated: a `data class` always gets one, and a
             // written `__init__` is a method of its own
@@ -1638,10 +1897,24 @@ fn lower_class<'a>(
             constants,
             slot_aliases,
             methods: lowered,
+            properties: published,
             keywords,
         },
         environments,
     ))
+}
+
+/// whether two python names reach one C identifier
+///
+/// a symbol is the name with every character that is not alphanumeric replaced, so
+/// `value$set` and `value_set` arrive at the same one. a property's halves are named
+/// with a `$` no source can write, and this is what keeps that from being the only thing
+/// standing between them and a method a source did write
+fn mangles_alike(left: &str, right: &str) -> bool {
+    left.len() == right.len()
+        && left.chars().zip(right.chars()).all(|(left, right)| {
+            left == right || (!left.is_ascii_alphanumeric() && !right.is_ascii_alphanumeric())
+        })
 }
 
 /// `__getattr__` stands *behind* the ordinary lookup rather than replacing it
@@ -1654,6 +1927,65 @@ fn getattr_hook_stands_alone(base: Option<&ClassBase>) -> Lowered<()> {
         return Err(Decline::new(
             "`__getattr__` falls back from the lookup a base may have replaced, and this class extends one",
         ));
+    }
+    Ok(())
+}
+
+/// whether the emitter can publish this class's written `__new__`
+///
+/// the method itself needs nothing special: it is bound onto the finished type as the
+/// static method python makes of it, and python's own construction runs it and decides
+/// from what it answers whether `__init__` runs at all. that is what makes an interning
+/// `__new__`, one answering with a different class, and one answering a cached object all
+/// come out right without the emitter knowing which it is looking at.
+///
+/// what it needs is for the class to allocate its own instances. a class standing on a
+/// base outside this module has no layout of its own — `str`, `tuple` and `int` each
+/// allocate an instance whose size only that base knows — and the written `__new__` reaches
+/// that by calling the base's, through a subclass check that reads the emitted type as the
+/// allocator it is not
+fn new_slot_is_adaptable(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    model: &SemanticModel<'_>,
+    suite: &[Stmt],
+    base: Option<&ClassBase>,
+    layouts: &Layouts,
+) -> Lowered<()> {
+    let outside = match base {
+        None => false,
+        Some(ClassBase::External(_)) => true,
+        Some(ClassBase::InModule(name)) => {
+            laid_out_from_outside(db, env, model, suite, layouts, name)
+        }
+    };
+    if outside {
+        return Err(Decline::new(
+            "a `__new__` allocates, and this class takes its instance layout from a base outside this module — only that base knows how big one is",
+        ));
+    }
+    Ok(())
+}
+
+/// whether a written `__new__` is one whose answer a construction can be compiled against
+///
+/// python lets `__new__` answer with anything, and the checker does not follow it: every
+/// `C(...)` in this module is compiled believing the answer is a `C`. so a `__new__` whose
+/// answer is *known* to be some other class of this module's would hand every construction
+/// an object of a shape it was compiled not to expect, and the boundary check that catches
+/// that raises where the interpreted class simply hands the object over.
+///
+/// an answer nothing is known about is a different case and stays: it is the ordinary
+/// gradual one, and the same boundary check stands behind it
+fn new_answers_its_own_class(new: &Function, class: &str) -> Lowered<()> {
+    if let RType::Instance {
+        class: answered, ..
+    } = &new.ret
+        && answered != class
+    {
+        return Err(Decline::new(format!(
+            "`__new__` answers a `{answered}`, and a construction of `{class}` is compiled against the `{class}` the checker reports"
+        )));
     }
     Ok(())
 }
@@ -1684,6 +2016,16 @@ fn assigned_slot(name: &str, value: &Expr) -> Lowered<Option<SlotAlias>> {
         return Err(Decline::new(format!(
             "`{name} = None` turns a type slot off, and only `__hash__` has a standing value for that"
         )));
+    }
+    // a `def __new__` is reached through the slot alone, so the emitter never has to say
+    // what its own name is bound to. an *assignment* is the other way round: python wraps
+    // whatever was assigned in a `staticmethod` and the class dict keeps it, so the name
+    // and the slot have to agree — and the cell a slot alias reads is filled from a dict
+    // entry `PyType_Ready` has already replaced with the wrapper around `tp_new`
+    if name == "__new__" {
+        return Err(Decline::new(
+            "`__new__ = ...` binds the name python fills from `tp_new`, so the assignment and the slot would answer differently",
+        ));
     }
     if !has_a_slot_adapter(name) {
         return Err(Decline::new(format!(
@@ -1949,6 +2291,14 @@ fn init_fields(
         return Err(Decline::new("`__init__` takes no receiver"));
     }
 
+    // `self.value = x` where the body binds `value` with `@property` is not a write to
+    // the instance at all: it goes through the descriptor, which is what runs the
+    // setter's body. a field of that name would sit beside the property, take the write
+    // the descriptor was meant to have, and leave the setter never running —
+    // `logging.Manager.__init__` writes `self.disable = 0` and that is where `_checkLevel`
+    // would have been skipped
+    let properties = property_names(db, model, class);
+
     // the representation a field needs has to cover *every* write to it, not only
     // the one in `__init__`: a method assigning a wider value would otherwise be
     // storing something the struct cannot hold
@@ -1956,6 +2306,9 @@ fn init_fields(
     for (method, receiver) in &methods {
         for statement in walk_with_cases(&method.body) {
             for (name, target) in receiver_writes(statement, receiver, Some(&class.name))? {
+                if properties.contains(&name) {
+                    continue;
+                }
                 let ty = target
                     .inferred_type(model)
                     .ok_or_else(|| Decline::new("an attribute assignment has no inferred type"))?;
@@ -1999,7 +2352,7 @@ fn init_fields(
     let definite = definitely_assigned_attributes(&init.body, receiver, Some(&class.name));
     for statement in &init.body {
         for (name, _) in certain_writes(statement, receiver, Some(&class.name))? {
-            if fields.iter().any(|field| field.name == name) {
+            if properties.contains(&name) || fields.iter().any(|field| field.name == name) {
                 continue;
             }
             let ty = widths
@@ -2545,6 +2898,346 @@ pub fn without_init_decorators(source: &str, module: &ModuleIr) -> Result<String
         .map_err(|error| format!("blanking a decorator split a character: {error}"))
 }
 
+/// the attributes each emitted class publishes as a `property`
+///
+/// every one is a *data* descriptor, so a write on an instance reaches it rather than
+/// looking for somewhere on the instance to land — which is what makes it the one
+/// class-level binding an emitted instance can still be written through. a method or a
+/// class-level constant is not: writing over one puts a value in the instance dict an
+/// emitted instance does not have.
+///
+/// a lone `@property` with no setter is here too. the write reaches the descriptor and
+/// the descriptor refuses it, in python's own wording — which is the interpreted answer
+fn published_properties(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
+    suite: &[Stmt],
+    layouts: &Layouts,
+) -> HashMap<String, HashSet<String>> {
+    suite
+        .iter()
+        .filter_map(|statement| match statement {
+            Stmt::ClassDef(class) if layouts.contains_key(class.name.as_str()) => {
+                Some((class.name.to_string(), property_names(db, model, class)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// the attributes this class body binds with `@property`, under the names the body binds
+/// them as
+fn property_names(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
+    class: &ast::StmtClassDef,
+) -> HashSet<String> {
+    // a class body that binds `property` itself is the nearer scope the decorator is
+    // resolved out of, so nothing under it is one of these
+    if class_body_binds(&class.body, "property") {
+        return HashSet::new();
+    }
+    class
+        .body
+        .iter()
+        .filter_map(|statement| match statement {
+            Stmt::FunctionDef(function) if is_property_getter(db, model, function) => {
+                Some(mangled(Some(&class.name), &function.name))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// which half of a property an accessor is
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Half {
+    Get,
+    Set,
+    Delete,
+}
+
+impl Half {
+    /// the suffix the half's body is held under
+    ///
+    /// two halves are both written `def value`, and one symbol per name is not enough
+    /// for two bodies. `$` cannot appear in a python identifier, so a source name never
+    /// arrives here already carrying one
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::Get => "$get",
+            Self::Set => "$set",
+            Self::Delete => "$del",
+        }
+    }
+
+    /// how many parameters the half's `def` takes, receiver included
+    fn arity(self) -> usize {
+        match self {
+            Self::Set => 2,
+            Self::Get | Self::Delete => 1,
+        }
+    }
+
+    /// the attribute python's `property` reads this half out of, which is also the word
+    /// it uses in the `AttributeError` a missing one raises
+    fn written_as(self) -> &'static str {
+        match self {
+            Self::Get => "getter",
+            Self::Set => "setter",
+            Self::Delete => "deleter",
+        }
+    }
+}
+
+/// a `@property` getter and the halves written under it
+///
+/// python folds all of them into one `property` object bound once, under the name every
+/// `def` in the group was written as.
+///
+/// the attribute it becomes is published by the *type spec*, so a class built through its
+/// metaclass instead — which is built out of a namespace and never consults the spec —
+/// would simply not have it. nothing here asks that question, because every half carries a
+/// decorator and [`metaclass_carries_the_body`] already turns such a class down for
+/// exactly that; relaxing that gate has to answer this one
+struct PropertyGroup<'a> {
+    /// the name every half was written as, before private mangling
+    name: &'a str,
+    getter: Option<&'a ast::StmtFunctionDef>,
+    setter: Option<&'a ast::StmtFunctionDef>,
+    deleter: Option<&'a ast::StmtFunctionDef>,
+}
+
+impl<'a> PropertyGroup<'a> {
+    fn halves(&self) -> impl Iterator<Item = (Half, &'a ast::StmtFunctionDef)> + use<'a> {
+        [
+            (Half::Get, self.getter),
+            (Half::Set, self.setter),
+            (Half::Delete, self.deleter),
+        ]
+        .into_iter()
+        .filter_map(|(half, written)| written.map(|written| (half, written)))
+    }
+}
+
+/// the `@property` pairs this class body writes
+///
+/// the shape is exact, because anything looser would be lowering something else: every
+/// `def` of the name carries a single written decorator, the first of them is
+/// `@property`, and each of the others is `@<name>.setter` or `@<name>.deleter` on that
+/// same name. a different decorator, a rebound root, `property(fget, fset)` called
+/// directly — none of those is this construct, and a group that is *nearly* one declines
+/// with what stopped it rather than falling through to a message about a name defined
+/// twice
+fn property_groups<'a>(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
+    class: &'a ast::StmtClassDef,
+) -> Lowered<Vec<PropertyGroup<'a>>> {
+    // a class body that binds `property` itself is the nearer scope, and the decorator
+    // is resolved out of it — so `@property` there is whatever the body bound
+    if class_body_binds(&class.body, "property") {
+        return Ok(Vec::new());
+    }
+    let definitions = |name: &str| {
+        class
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::FunctionDef(function) if function.name.as_str() == name => Some(function),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut groups: Vec<PropertyGroup<'a>> = Vec::new();
+    for statement in &class.body {
+        let Stmt::FunctionDef(function) = statement else {
+            continue;
+        };
+        let name = function.name.as_str();
+        if groups.iter().any(|group| group.name == name) {
+            continue;
+        }
+        let written = definitions(name);
+        // a lone `@property` getter is left alone: module init copies the `property` the
+        // interpreted body already built, which keeps `fget` and `fset` answering, and
+        // taking it over here would trade that for a getset and recover no decline
+        if written.len() < 2
+            || !written[1..]
+                .iter()
+                .any(|later| accessor_half(db, model, later).is_ok())
+        {
+            continue;
+        }
+        // something below is a half of this name, so this *is* the construct — and what
+        // stands above it has to be the plain `@property` python folds them onto. a
+        // getter carrying a second decorator is a different object being folded
+        if !is_property_getter(db, model, written[0]) {
+            return Err(Decline::new(format!(
+                "`{name}` has a half written under it, and what stands above them is not a plain `@property`"
+            )));
+        }
+        let mut group = PropertyGroup {
+            name,
+            getter: Some(written[0]),
+            setter: None,
+            deleter: None,
+        };
+        for accessor in &written[1..] {
+            let half = accessor_half(db, model, accessor)?;
+            let slot = match half {
+                Half::Get => &mut group.getter,
+                Half::Set => &mut group.setter,
+                Half::Delete => &mut group.deleter,
+            };
+            // `@value.getter` replaces the getter above it, and a second `@value.setter`
+            // replaces the first — python keeps only the last, so the ones before it are
+            // written and never reached. lowering the group as written would keep them
+            if half == Half::Get || slot.is_some() {
+                return Err(Decline::new(format!(
+                    "`{name}` writes a second `{}`, which replaces the one above it rather than adding to it",
+                    half.written_as()
+                )));
+            }
+            *slot = Some(accessor);
+        }
+        // a dunder is read out of the *slot* rather than off the name, and a getset entry
+        // fills no slot — so `@property def __len__` would answer `x.__len__` and leave
+        // `len(x)` going wherever the base's slot went, which is two answers
+        if fills_a_type_slot(name) {
+            return Err(Decline::new(format!(
+                "`{name}` is a property and fills a type slot, which a getset entry does not"
+            )));
+        }
+        for (half, accessor) in group.halves() {
+            accessor_is_plain(accessor, half)?;
+        }
+        groups.push(group);
+    }
+    Ok(groups)
+}
+
+/// whether this definition is the `@property` a group starts with
+///
+/// matched by the bare name, the way `@staticmethod` and `@classmethod` are — and with
+/// the class body already ruled out as having bound it
+fn is_property_getter(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
+    function: &ast::StmtFunctionDef,
+) -> bool {
+    let [decorator] = function.decorator_list.as_slice() else {
+        return false;
+    };
+    matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "property")
+        && is_written_decorator(db, model, decorator)
+}
+
+/// which half `@value.setter` and its siblings write
+fn accessor_half(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
+    function: &ast::StmtFunctionDef,
+) -> Lowered<Half> {
+    let unrecognised = || {
+        Decline::new(format!(
+            "`{}` is written more than once, and the second is not a half of the property above it",
+            function.name
+        ))
+    };
+    let [decorator] = function.decorator_list.as_slice() else {
+        return Err(unrecognised());
+    };
+    if !is_written_decorator(db, model, decorator) {
+        return Err(unrecognised());
+    }
+    let Expr::Attribute(attribute) = &decorator.expression else {
+        return Err(unrecognised());
+    };
+    // the root has to be the name this very `def` binds: `@other.setter` folds this body
+    // into a *different* property, which is not the one-attribute construct lowered here
+    let Expr::Name(root) = attribute.value.as_ref() else {
+        return Err(unrecognised());
+    };
+    if root.id.as_str() != function.name.as_str() {
+        return Err(unrecognised());
+    }
+    match attribute.attr.as_str() {
+        "getter" => Ok(Half::Get),
+        "setter" => Ok(Half::Set),
+        "deleter" => Ok(Half::Delete),
+        _ => Err(unrecognised()),
+    }
+}
+
+/// whether a half is the plain accessor a getset entry can stand for
+///
+/// `tp_getset` calls a getter with the receiver and nothing else, and a setter with the
+/// receiver and the one value. a half that takes anything more can still be *called* as
+/// python calls it — through the `property` the interpreted body built — but not through
+/// the two function pointers this lowers it to
+fn accessor_is_plain(function: &ast::StmtFunctionDef, half: Half) -> Lowered<()> {
+    let parameters = &function.parameters;
+    let arity = parameters.posonlyargs.len() + parameters.args.len();
+    if arity != half.arity()
+        || !parameters.kwonlyargs.is_empty()
+        || parameters.vararg.is_some()
+        || parameters.kwarg.is_some()
+        || parameters
+            .iter_non_variadic_params()
+            .any(|parameter| parameter.default.is_some())
+    {
+        return Err(Decline::new(format!(
+            "a property `{}` reached through a getset takes exactly {} argument(s), and `{}` does not",
+            half.written_as(),
+            half.arity(),
+            function.name
+        )));
+    }
+    // a suspending accessor hands back a generator rather than running, and the state
+    // class it would need is named after the `def` — which both halves share
+    if function.is_async || generators::is_generator(&function.body) {
+        return Err(Decline::new(format!(
+            "a property `{}` that suspends is not lowered yet",
+            half.written_as()
+        )));
+    }
+    Ok(())
+}
+
+/// one half of a property, as the method holding its body
+///
+/// the decorator that made it *is* the construct, so it comes off: applying it at init
+/// would build a second `property` out of the native function and put it exactly where
+/// the getset entry has to be
+fn lower_accessor<'a>(
+    unit: Unit<'a>,
+    accessor: &'a ast::StmtFunctionDef,
+    class: &str,
+    half: Half,
+) -> Lowered<(Function, Vec<by_ir::function::ClassIr>)> {
+    let (mut method, produced) = lower_method(unit, accessor, class)?;
+    method.decorators.clear();
+    // a boundary that hands the call on takes the twin off the interpreted class by
+    // name, and the name a property is under there holds the `property` object rather
+    // than either half of it — so there is nothing for it to call
+    if method.defers() {
+        return Err(Decline::new(format!(
+            "a property `{}` whose boundary can hand the call on would reach the `property` object rather than the half it wants",
+            half.written_as()
+        )));
+    }
+    // an environment class is named after the `def`, which both halves share
+    if !produced.is_empty() {
+        return Err(Decline::new(format!(
+            "a property `{}` that makes closures is not lowered yet",
+            half.written_as()
+        )));
+    }
+    method.name.push_str(half.suffix());
+    Ok((method, produced))
+}
+
 /// whether this definition is the only one of its name in the scope it stands in
 ///
 /// two `def`s of one name bind whichever one *ran*, so a direct call cannot know which
@@ -2581,8 +3274,165 @@ fn class_body_binds(body: &[Stmt], name: &str) -> bool {
         Stmt::Assign(node) => node.targets.iter().any(|target| binds_name(target, name)),
         Stmt::AnnAssign(node) => binds_name(&node.target, name),
         Stmt::AugAssign(node) => binds_name(&node.target, name),
+        // a block nested in the body is part of the body, and what it binds is bound in
+        // the same namespace — so a decorator written below one reads what the block
+        // left there rather than the module's. the other block shapes never reach a
+        // lowered class at all: the body walk turns them down before this is asked
+        Stmt::If(node) => {
+            class_body_binds(&node.body, name)
+                || node
+                    .elif_else_clauses
+                    .iter()
+                    .any(|clause| class_body_binds(&clause.body, name))
+        }
+        Stmt::For(node) => {
+            binds_name(&node.target, name)
+                || class_body_binds(&node.body, name)
+                || class_body_binds(&node.orelse, name)
+        }
+        Stmt::While(node) => {
+            class_body_binds(&node.body, name) || class_body_binds(&node.orelse, name)
+        }
         _ => false,
     })
+}
+
+/// the names a block nested in a class body could bind into the class namespace
+///
+/// this is deliberately an over-approximation, and the direction it errs in is the whole
+/// design. a name collected here that the block never reached costs nothing:
+/// `By_ConstantValue` reads the interpreted definition's namespace by name and answers
+/// "the body did not write that", which is exactly what the emitted class should say
+/// about an attribute a false condition never defined. a name *missed* is an attribute
+/// the interpreted class has and the emitted one does not — so a statement whose
+/// bindings are not modelled here declines rather than being walked past
+fn nested_bindings<'a>(body: &'a [Stmt], names: &mut Vec<&'a str>) -> Lowered<()> {
+    for statement in body {
+        match statement {
+            Stmt::FunctionDef(node) => names.push(node.name.as_str()),
+            Stmt::Assign(node) => {
+                for target in &node.targets {
+                    bound_by_a_target(target, names)?;
+                }
+            }
+            // an annotation with no value binds nothing, the same as one written at the
+            // top of the body — where a class that is not a `data class` ignores it too
+            Stmt::AnnAssign(node) if node.value.is_none() => {}
+            Stmt::AnnAssign(node) => bound_by_a_target(&node.target, names)?,
+            Stmt::AugAssign(node) => bound_by_a_target(&node.target, names)?,
+            // `if let P := subject:` binds the pattern's captures, which are not names
+            // written anywhere this can read them off
+            Stmt::If(node) if node.pattern.is_some() => {
+                return Err(Decline::new(
+                    "a pattern's captures in a class body are not lowered yet",
+                ));
+            }
+            Stmt::If(node) => {
+                nested_bindings(&node.body, names)?;
+                for clause in &node.elif_else_clauses {
+                    nested_bindings(&clause.body, names)?;
+                }
+            }
+            // the loop variable is left behind in the namespace when the loop ends, so
+            // it is one of the names the block binds
+            Stmt::For(node) => {
+                bound_by_a_target(&node.target, names)?;
+                nested_bindings(&node.body, names)?;
+                nested_bindings(&node.orelse, names)?;
+            }
+            Stmt::While(node) => {
+                nested_bindings(&node.body, names)?;
+                nested_bindings(&node.orelse, names)?;
+            }
+            // an expression evaluated for its effect binds no name: whatever it did to
+            // whatever it reached, the interpreted definition did it before init reads
+            // the namespace
+            Stmt::Expr(_) | Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
+            _ => {
+                return Err(Decline::new(format!(
+                    "{} nested in a class body is not lowered yet",
+                    statement_word(statement)
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// the names an assignment target binds, for [`nested_bindings`]
+fn bound_by_a_target<'a>(target: &'a Expr, names: &mut Vec<&'a str>) -> Lowered<()> {
+    match target {
+        Expr::Name(name) => names.push(name.id.as_str()),
+        // a write into an object rather than a name the namespace takes —
+        // `dispatch[PickleBuffer] = save_picklebuffer` is the shape. the interpreted
+        // definition made the write before init reads the namespace, so the object
+        // copied across is already finished
+        Expr::Subscript(_) | Expr::Attribute(_) => {}
+        Expr::Tuple(tuple) => {
+            for element in tuple {
+                bound_by_a_target(element, names)?;
+            }
+        }
+        Expr::List(list) => {
+            for element in list {
+                bound_by_a_target(element, names)?;
+            }
+        }
+        Expr::Starred(starred) => bound_by_a_target(&starred.value, names)?,
+        _ => return Err(Decline::new("only a plain class-level name is lowered yet")),
+    }
+    Ok(())
+}
+
+/// whether a name a nested block binds is the only definition of that attribute
+///
+/// two ways it is not. a dunder decides a type slot, an instance layout, or what the
+/// class publishes about itself, and all three are settled from the body text while a
+/// nested block's binding is only known once the interpreter has run the block — so
+/// `__slots__` or `__init__` under a conditional would have the emitted class laid out
+/// for one answer and carrying the other.
+///
+/// and a `def` in the same body binds the same attribute twice: the `def` is lowered
+/// into the method table while the block's binding is copied off the interpreted
+/// definition, so the type would answer with whichever landed in its dict last while a
+/// compiled call site still reached the method
+fn nested_binding_stands_alone(body: &[Stmt], name: &str) -> Lowered<()> {
+    if name.starts_with("__") && name.ends_with("__") {
+        return Err(Decline::new(format!(
+            "`{name}` is bound by a block nested in the class body, and a dunder is settled before one runs"
+        )));
+    }
+    if body
+        .iter()
+        .any(|statement| matches!(statement, Stmt::FunctionDef(node) if node.name.as_str() == name))
+    {
+        return Err(Decline::new(format!(
+            "`{name}` is both defined by this class body and bound by a block nested in it"
+        )));
+    }
+    Ok(())
+}
+
+/// what to call a statement in a decline, in the word python spells it with
+fn statement_word(statement: &Stmt) -> &'static str {
+    match statement {
+        // the top of a class body does not lower one either, and a block is no place to
+        // settle a question the plain form has not been asked yet
+        Stmt::ClassDef(_) => "a class",
+        Stmt::Try(_) => "`try`",
+        Stmt::With(_) => "`with`",
+        Stmt::Match(_) => "`match`",
+        Stmt::Delete(_) => "`del`",
+        Stmt::Import(_) | Stmt::ImportFrom(_) => "an import",
+        Stmt::Global(_) => "`global`",
+        Stmt::Nonlocal(_) => "`nonlocal`",
+        Stmt::Raise(_) => "`raise`",
+        Stmt::Assert(_) => "`assert`",
+        Stmt::Return(_) => "`return`",
+        Stmt::TypeAlias(_) => "a type alias",
+        Stmt::Let(_) => "`let`",
+        _ => "a statement",
+    }
 }
 
 /// whether this module evaluates the annotations it writes
@@ -2964,6 +3814,74 @@ fn is_builtin_object(
     // says nothing about what it brings
     base.inferred_type(model)
         .is_some_and(|ty| !ty.is_dynamic() && mapper::map_type(db, env, ty).is_ok())
+}
+
+/// whether `expr` is the builtin function called `name`
+///
+/// python resolves a name local → enclosing → global → builtins, and only the last of
+/// those steps reaches a builtin. so the name is *resolved* rather than matched: a
+/// module that writes its own `def globals()` has bound the name itself, and
+/// `from builtins import len as globals` binds a builtins function under a name that
+/// is not its own. what settles both is the definition — the file it is written in,
+/// and the identifier it is written under — so both are asked
+fn is_builtin_function(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    model: &SemanticModel<'_>,
+    expr: &Expr,
+    name: &str,
+) -> bool {
+    defined_as(db, env, model, expr, name).is_some_and(|file| builtins_file(db, env) == Some(file))
+}
+
+/// whether `expr` is a function written under the identifier `name`, and the file it
+/// is written in
+///
+/// resolving rather than matching is the whole point: what a *call site* spells says
+/// nothing, because `from sys import _getframe as f` reaches the same function under
+/// another name and a module of one's own can bind `globals` to anything. the
+/// definition's own identifier is what the question is really about, so that is what
+/// is read
+fn defined_as(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    model: &SemanticModel<'_>,
+    expr: &Expr,
+    name: &str,
+) -> Option<ruff_db::files::File> {
+    let definition = expr
+        .inferred_type(model)
+        .and_then(|ty| ty.definition(db, env))?;
+    if !matches!(definition, TypeDefinition::Function(_)) {
+        return None;
+    }
+    // the *focus* range, which is the identifier a `def` was written under
+    let defined = definition.focus_range(db)?;
+    let source = ruff_db::source::source_text(db, defined.file());
+    let range = defined.range();
+    (source
+        .as_str()
+        .get(usize::from(range.start())..usize::from(range.end()))
+        == Some(name))
+    .then(|| defined.file())
+}
+
+/// the file `builtins` is written in
+///
+/// asked for through `object` rather than by path, because a path would have to know
+/// which extension the stub carries and which typeshed it came from, while `object`
+/// is a builtin whose home ty already resolves
+fn builtins_file(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+) -> Option<ruff_db::files::File> {
+    Some(
+        KnownClass::Object
+            .to_instance(db, env)
+            .definition(db, env)?
+            .focus_range(db)?
+            .file(),
+    )
 }
 
 /// a base written as a name, or as a chain of attributes on one, as a dotted path
@@ -3982,6 +4900,26 @@ fn method_binding(
         "classmethod" => Some(Binding::Class),
         _ => None,
     };
+    // python makes `__new__` a static method however it is written, and hands it the
+    // *class* as its first argument rather than as a receiver — so this is the one method
+    // whose convention the source does not choose. writing `@staticmethod` over it says
+    // the same thing a second time, so it comes off the list; anything else would be
+    // applied at init to a name that is bound by the assignment publishing the method,
+    // and the decorated value would be the one that assignment then overwrote
+    if function.name.as_str() == "__new__" {
+        decorators.retain(|decorator| decorator.as_name() != Some("staticmethod"));
+        if !decorators.is_empty() {
+            return Err(Decline::new(
+                "a decorator over `__new__` is applied at init to the name the published method binds, so the construction would not reach the decorated value",
+            ));
+        }
+        // a `__new__` that suspends hands back a generator rather than an instance, and
+        // its state object would be namespaced by a receiver this convention has none of
+        if generators::is_generator(&function.body) || function.is_async {
+            return Err(Decline::new("a `__new__` that suspends is not lowered yet"));
+        }
+        return Ok(Binding::Static);
+    }
     let Some(binding) = decorators.iter().find_map(convention) else {
         return Ok(Binding::Instance);
     };
@@ -3995,7 +4933,7 @@ fn method_binding(
     // our own would either double the convention or collide with that one
     if matches!(
         function.name.as_str(),
-        "__new__" | "__init_subclass__" | "__class_getitem__"
+        "__init_subclass__" | "__class_getitem__"
     ) {
         return Err(Decline::new(
             "python gives this method a convention of its own, which a method table entry would duplicate",
@@ -4023,8 +4961,14 @@ fn lower_method(
         class: class.to_string(),
         exact: false,
     };
-    let (mut lowered, environments) =
-        lower_function_with_receiver(unit, method, Some(Receiver::Explicit(&receiver)), None, &[])?;
+    let (mut lowered, environments) = lower_function_with_receiver(
+        unit,
+        method,
+        Some(Receiver::Explicit(&receiver)),
+        None,
+        &[],
+        Frame::AsWritten,
+    )?;
     // a `def __helper` in a class body is bound as `_C__helper`, in the method table
     // as everywhere else
     lowered.name = mangled(Some(class), &lowered.name);
@@ -4040,7 +4984,41 @@ fn lower_function(
     unit: Unit<'_>,
     function: &ast::StmtFunctionDef,
 ) -> Lowered<(Function, Vec<by_ir::function::ClassIr>)> {
-    lower_function_with_receiver(unit, function, None, None, &[])
+    lower_function_with_receiver(unit, function, None, None, &[], Frame::AsWritten)
+}
+
+/// which frame a body is being given
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Frame {
+    /// the one the `def` asks for: a generator or an `async def` gets a state class,
+    /// and the call allocates it rather than running anything
+    AsWritten,
+    /// no state class at all — the body runs straight through, which is what a
+    /// coroutine that [never suspends](generators::never_suspends) does on its only
+    /// `send`
+    Straight,
+}
+
+/// the same body as the ordinary call an `await` of it makes
+///
+/// a coroutine that never suspends has one entry and one exit, so the object it builds
+/// carries nothing between them. this is that body with no object at all: an `await` of
+/// the name reaches it directly, and everything else still gets the real coroutine
+fn lower_direct_edition(unit: Unit<'_>, function: &ast::StmtFunctionDef) -> Lowered<Function> {
+    let (mut lowered, environments) =
+        lower_function_with_receiver(unit, function, None, None, &[], Frame::Straight)?;
+    if !environments.is_empty() {
+        return Err(Decline::new(
+            "a direct edition of a coroutine that makes closures is not lowered yet",
+        ));
+    }
+    lowered.name = generators::direct_name(&function.name);
+    lowered.exported = false;
+    // the decorators belong to the name, which this edition does not hold — and
+    // applying them at init would rebind a name the namespace never had
+    lowered.decorators = Vec::new();
+    lowered.coroutine_body = Some(function.name.to_string());
+    Ok(lowered)
 }
 
 /// the same source lowered a second time, with its buffer-shaped parameters taken
@@ -4055,7 +5033,7 @@ fn lower_array_edition(
     arrays: &[(usize, RType)],
 ) -> Lowered<Function> {
     let (mut lowered, environments) =
-        lower_function_with_receiver(unit, function, None, None, arrays)?;
+        lower_function_with_receiver(unit, function, None, None, arrays, Frame::AsWritten)?;
     if !environments.is_empty() {
         return Err(Decline::new(
             "an unboxed edition of a function that makes closures is not lowered yet",
@@ -4077,6 +5055,7 @@ fn lower_function_with_receiver(
     receiver: Option<Receiver<'_>>,
     captures: Option<&closures::Nested>,
     arrays: &[(usize, RType)],
+    frame: Frame,
 ) -> Lowered<(Function, Vec<by_ir::function::ClassIr>)> {
     let Unit {
         env,
@@ -4127,18 +5106,25 @@ fn lower_function_with_receiver(
     // asked about — it has its own account of why neither of these fills slot zero with
     // a receiver, and the effective one no longer says which class the method is on
     let declared_receiver = receiver;
+    // `__new__` binds every parameter out of the argument vector the way any other static
+    // method does — the dispatcher python installs for it puts the class in front — while
+    // that first parameter is still the *class*, so it is typed as the plain object a
+    // class is. reading a field off it would otherwise treat a type as an instance
+    let takes_the_class = binding == Binding::Class || function.name.as_str() == "__new__";
     let receiver = match binding {
         Binding::Instance => receiver,
+        Binding::Static if takes_the_class => Some(Receiver::Explicit(&class_object)),
         Binding::Static => None,
         Binding::Class => Some(Receiver::Explicit(&class_object)),
     };
-    if binding == Binding::Class {
+    if takes_the_class {
         class_object_is_not_written(function, unit.owner)?;
     }
 
     // a generator and a coroutine do not run their body when called: they allocate a
     // state object and hand it back. the body becomes a method of that object
-    if generators::is_generator(&function.body) || function.is_async {
+    if frame == Frame::AsWritten && (generators::is_generator(&function.body) || function.is_async)
+    {
         // a nested one keeps its captures in the *state* object rather than reaching
         // back through the environment: the frame outlives the call that made it, and
         // a copy is what a capture already is. a *shared* one is a cell both frames
@@ -4512,9 +5498,12 @@ fn lower_function_with_receiver(
 
     let mut lowering = Lowering {
         arrays: unit.arrays,
+        directs: unit.directs,
         in_range: Vec::new(),
         mutable: unit.mutable,
+        constructs: unit.constructs,
         bases: unit.bases,
+        properties: unit.properties,
         db,
         model,
         builder,
@@ -4597,6 +5586,7 @@ fn lower_function_with_receiver(
                     Some(Receiver::Implicit(&receiver)),
                     Some(entry),
                     &[],
+                    Frame::AsWritten,
                 )?;
                 inner_environments.extend(inner);
                 method.owner = Some(environment.name.clone());
@@ -4617,6 +5607,7 @@ fn lower_function_with_receiver(
                     constants: Vec::new(),
                     slot_aliases: Vec::new(),
                     generic: false,
+                    properties: Vec::new(),
                     name: outer.name,
                     fields: outer.fields,
                     methods: Vec::new(),
@@ -4634,6 +5625,7 @@ fn lower_function_with_receiver(
                 constants: Vec::new(),
                 slot_aliases: Vec::new(),
                 generic: false,
+                properties: Vec::new(),
                 name: environment.name.clone(),
                 fields: environment.fields,
                 methods: lowered_methods,
@@ -4684,11 +5676,21 @@ struct Unit<'a> {
     signatures: &'a HashMap<String, Signature>,
     /// which module-level functions have an unboxed edition, and where
     arrays: &'a ArrayEditions,
+    /// the module-level coroutines a *direct* edition was emitted for, so an `await`
+    /// of one calls the body instead of building a coroutine — see
+    /// [`lower_direct_edition`]
+    directs: &'a HashSet<String>,
     /// each emitted class's base, so an upcast can be recognised as free
     bases: &'a HashMap<String, String>,
     /// the classes emitted as *mutable* heap types. a direct method call on one is
     /// only licensed where the receiver is exact — nothing else rules out an override
     mutable: &'a HashSet<String>,
+    /// the classes whose body writes a `__new__`, which is what a construction of one
+    /// has to reach — see [`Lowering::construct`]
+    constructs: &'a HashSet<String>,
+    /// the attributes each emitted class publishes as a `property` — see
+    /// [`published_properties`]
+    properties: &'a HashMap<String, HashSet<String>>,
     /// the class whose body the frame being lowered is written in, which is what
     /// decides how python mangles a private name — see [`mangled`]. a nested frame
     /// inherits it, because the mangling follows the source and not the receiver
@@ -4931,6 +5933,26 @@ struct Signature {
     /// see [`by_ir::function::Function::computed_defaults`]
     computed_defaults: Vec<usize>,
 }
+
+/// the chain a call site writes out in place of asking the object protocol
+struct Dispatch {
+    /// the emitted classes tested, in the order the tests are written
+    candidates: Vec<String>,
+    /// the representations every candidate takes its arguments in
+    params: Vec<RType>,
+    /// the representation every candidate's body answers with
+    produced: RType,
+    /// what the *site* hands on, which the arm the tests fall through to has to meet too
+    site: RType,
+}
+
+/// how many emitted classes one call site tests before it settles for the protocol
+///
+/// each candidate costs a compare, and a whole method body the c compiler is then free
+/// to inline behind it, so the chain earns its place only while it stays well under what
+/// a lookup on the type costs. a hierarchy wider than this still runs — every class of it
+/// through the arm the tests fall through to
+const DISPATCH_CANDIDATES: usize = 4;
 
 /// the suffix distinguishing a function's unboxed edition from its boxed one
 const ARRAY_EDITION: &str = "$arr";
@@ -5285,7 +6307,8 @@ fn reaches_the_end(body: &[Stmt]) -> bool {
 fn has_a_slot_adapter(name: &str) -> bool {
     matches!(
         name,
-        "__repr__"
+        "__new__"
+            | "__repr__"
             | "__str__"
             | "__len__"
             | "__bool__"
@@ -5475,6 +6498,69 @@ fn boxed_object(builder: &mut by_ir::builder::FunctionBuilder, id: RegisterId) -
     Value::Register(boxed)
 }
 
+/// the representation of a body that hands its pair back in registers, where it does
+///
+/// python builds a *fresh* tuple at every tuple display, so `f() is f()` is already
+/// false for a body whose every `return` is one — which is what licenses handing the
+/// elements back and building the object at the boundary instead. a body that passes
+/// a tuple *through*,
+///
+/// ```python
+/// def first(pair: tuple[int, int]) -> tuple[int, int]:
+///     return pair
+/// ```
+///
+/// is not one of those: `first(p) is p` is true, and a rebuilt tuple would answer
+/// false. so the display is the whole gate, and it is syntactic on purpose — the
+/// question is where the object came from, not what its type is
+fn tuple_return_type(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    model: &SemanticModel<'_>,
+    function: &ast::StmtFunctionDef,
+    layouts: &Layouts,
+) -> Option<RType> {
+    let body = &function.body;
+    // falling off the end hands back `None`, which no tuple representation holds
+    if reaches_the_end(body) {
+        return None;
+    }
+    let mut found: Option<RType> = None;
+    // every `return` has to be seen, a `case` body's included — one this missed would
+    // be lowered against a representation nothing proved it had. reaching further than
+    // [`return_type`] does can only make this refuse more often, never accept more
+    for stmt in walk_with_cases(body) {
+        let Stmt::Return(node) = stmt else { continue };
+        // a bare `return` is `None`, and so is a body with no `return` at all
+        let value = node.value.as_deref()?;
+        let Expr::Tuple(display) = value else {
+            return None;
+        };
+        // `return *rest, x` has no length until it runs
+        if display
+            .elts
+            .iter()
+            .any(|elt| matches!(elt, Expr::Starred(_)))
+        {
+            return None;
+        }
+        let rtype = map_fixed_tuple(db, env, value.inferred_type(model)?, layouts)?;
+        // the checker's length is what the struct is laid out from and the display's
+        // is what fills it, so a body only compiles this way where they agree
+        let RType::Tuple(slots) = &rtype else {
+            return None;
+        };
+        if slots.len() != display.elts.len() {
+            return None;
+        }
+        match &found {
+            Some(existing) if *existing != rtype => return None,
+            _ => found = Some(rtype),
+        }
+    }
+    found
+}
+
 fn return_type(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
@@ -5482,6 +6568,9 @@ fn return_type(
     function: &ast::StmtFunctionDef,
     layouts: &Layouts,
 ) -> Lowered<RType> {
+    if let Some(tuple) = tuple_return_type(db, env, model, function, layouts) {
+        return Ok(tuple);
+    }
     let body = &function.body;
     let mut found: Option<RType> = None;
     for stmt in walk(body) {
@@ -5978,8 +7067,15 @@ struct Lowering<'a, 'db> {
     signatures: &'a HashMap<String, Signature>,
     /// which module-level functions have an unboxed edition, and where
     arrays: &'a ArrayEditions,
+    /// the module-level coroutines a *direct* edition was emitted for
+    directs: &'a HashSet<String>,
     bases: &'a HashMap<String, String>,
     mutable: &'a HashSet<String>,
+    /// the classes whose body writes a `__new__` — see [`Lowering::construct`]
+    constructs: &'a HashSet<String>,
+    /// the attributes each emitted class publishes as a `property` — see
+    /// [`published_properties`]
+    properties: &'a HashMap<String, HashSet<String>>,
     /// the closure environment this frame allocates, when it makes closures
     environment: Option<Closures>,
     /// the `(index, array)` pairs a counting loop has proved in range, innermost last
@@ -6057,6 +7153,13 @@ impl Lowering<'_, '_> {
             self.layouts
                 .get(candidate)
                 .is_some_and(|fields| fields.iter().any(|field| field.name == name))
+                // a `property` is a *data* descriptor, so the write reaches it rather
+                // than looking for somewhere on the instance to land — and one with no
+                // setter raises there, which is what python does too
+                || self
+                    .properties
+                    .get(candidate)
+                    .is_some_and(|published| published.contains(name))
         };
         let mut current = class;
         // bounded by the class count, the way every base walk here is: a chain that
@@ -6186,55 +7289,12 @@ impl Lowering<'_, '_> {
                 }
                 Ok(())
             }
-            // `del` on a subscript or an attribute is the protocol's own operation;
-            // on a plain name it unbinds, which a register cannot express
+            // `del` on a subscript or an attribute is the protocol's own operation; on a
+            // plain name it unbinds, which a register expresses with the same byte a
+            // local some path may read before writing already carries
             Stmt::Delete(node) => {
                 for target in &node.targets {
-                    match target {
-                        Expr::Subscript(subscript) => {
-                            let (container, container_ty) = self.expression(&subscript.value)?;
-                            let container = self.widen_to_object(container, &container_ty);
-                            let (index, index_ty) = self.expression(&subscript.slice)?;
-                            let index = self.widen_to_object(index, &index_ty);
-                            let status = self.builder.temp(RType::BIT);
-                            self.builder.push(Op::DeleteItem {
-                                dest: status,
-                                container,
-                                index,
-                            });
-                        }
-                        Expr::Attribute(attribute) => {
-                            let (receiver, receiver_ty) = self.expression(&attribute.value)?;
-                            let receiver = self.widen_to_object(receiver, &receiver_ty);
-                            let status = self.builder.temp(RType::BIT);
-                            self.builder.push(Op::DeleteAttr {
-                                dest: status,
-                                receiver,
-                                name: self.attribute_name(&attribute.attr),
-                            });
-                        }
-                        // a name in the module namespace *does* have an unbound state:
-                        // it is not in the dict. a register does not, which is why the
-                        // rest of this arm still declines
-                        Expr::Name(name)
-                            if matches!(
-                                self.place(name.id.as_str()),
-                                Some(Place::Global { .. })
-                            ) =>
-                        {
-                            let status = self.builder.temp(RType::BIT);
-                            self.builder.push(Op::DeleteGlobal {
-                                dest: status,
-                                name: name.id.to_string(),
-                            });
-                        }
-                        _ => {
-                            return Err(Decline::new(
-                                "`del` on a plain name is not lowered yet — a register \
-                                 has no unbound state to return to",
-                            ));
-                        }
-                    }
+                    self.delete_target(target)?;
                 }
                 Ok(())
             }
@@ -6304,6 +7364,12 @@ impl Lowering<'_, '_> {
                     None => {
                         let ret = self.ret.clone();
                         self.coerce(Value::None, &RType::NONE, &ret)?
+                    }
+                    // the elements go straight into the struct the caller reads back:
+                    // the real `tuple` is built once, at the boundary a python caller
+                    // comes through, rather than on every call
+                    Some(expr) if let RType::Tuple(slots) = self.ret.clone() => {
+                        self.return_tuple_display(expr, &slots)?
                     }
                     Some(expr) => {
                         let (value, ty) = self.expression(expr)?;
@@ -6459,6 +7525,94 @@ impl Lowering<'_, '_> {
             other => Err(Decline::new(format!(
                 "`{}` is not lowered yet",
                 statement_kind(other)
+            ))),
+        }
+    }
+
+    /// one target of a `del`
+    ///
+    /// the statement stops where it raises, so the targets are lowered in source
+    /// order and each one's failure edge leaves the rest of them alone: after
+    /// `del a, b` raises on `a`, python has not touched `b`
+    fn delete_target(&mut self, target: &Expr) -> Lowered<()> {
+        match target {
+            Expr::Subscript(subscript) => {
+                let (container, container_ty) = self.expression(&subscript.value)?;
+                let container = self.widen_to_object(container, &container_ty);
+                let (index, index_ty) = self.expression(&subscript.slice)?;
+                let index = self.widen_to_object(index, &index_ty);
+                let status = self.builder.temp(RType::BIT);
+                self.builder.push(Op::DeleteItem {
+                    dest: status,
+                    container,
+                    index,
+                });
+                Ok(())
+            }
+            Expr::Attribute(attribute) => {
+                let (receiver, receiver_ty) = self.expression(&attribute.value)?;
+                let receiver = self.widen_to_object(receiver, &receiver_ty);
+                let status = self.builder.temp(RType::BIT);
+                self.builder.push(Op::DeleteAttr {
+                    dest: status,
+                    receiver,
+                    name: self.attribute_name(&attribute.attr),
+                });
+                Ok(())
+            }
+            // `del (a, b)` is `del a, b` written with brackets: python flattens a
+            // display target into its elements rather than deleting a tuple
+            Expr::Tuple(ast::ExprTuple { elts, .. }) | Expr::List(ast::ExprList { elts, .. }) => {
+                for element in elts {
+                    self.delete_target(element)?;
+                }
+                Ok(())
+            }
+            Expr::Name(name) => match self.place(name.id.as_str()) {
+                // a name in the module namespace unbinds by leaving the dict, and an
+                // unbound read there is `NameError` rather than `UnboundLocalError` —
+                // which is why it is its own operation
+                Some(Place::Global { .. }) => {
+                    let status = self.builder.temp(RType::BIT);
+                    self.builder.push(Op::DeleteGlobal {
+                        dest: status,
+                        name: name.id.to_string(),
+                    });
+                    Ok(())
+                }
+                // a local unbinds by clearing the byte that says whether it was
+                // written — the one the unbound-locals pass gives it — so a later read
+                // raises `UnboundLocalError`, a second `del` raises the same, and a
+                // later write binds the name again
+                Some(Place::Register(id)) => {
+                    self.builder.push(Op::DeleteLocal { dest: id });
+                    Ok(())
+                }
+                // a name that lives in an environment object belongs to a frame this
+                // one does not own: unbinding it means clearing the field, and every
+                // *reader* of it — here and in every frame that shares it — would then
+                // have to test for NULL where today it just reads
+                Some(Place::Cell { .. } | Place::Field { .. } | Place::Chained { .. }) => {
+                    Err(Decline::new(format!(
+                        "`del {}` unbinds a name another frame shares, which is a \
+                         cell rather than a register",
+                        name.id
+                    )))
+                }
+                // python makes a name local for the whole function as soon as anything
+                // in it binds or deletes the name, and `del` alone is such a statement.
+                // this lowering decides what is local from the *writes*, so a name only
+                // ever deleted resolved as a global everywhere else in the body — and
+                // the reads would have gone to the wrong place
+                None => Err(Decline::new(format!(
+                    "`del {}` is the only statement binding `{}` in this function, and a \
+                     name deleted but never assigned is local for the whole of it",
+                    name.id, name.id
+                ))),
+            },
+            other => Err(Decline::new(format!(
+                "`del` on {} is not lowered yet",
+                expression_kind(other)
             ))),
         }
     }
@@ -8467,6 +9621,33 @@ impl Lowering<'_, '_> {
         }
     }
 
+    /// `return a, b` from a body that hands its pair back in registers
+    ///
+    /// [`tuple_return_type`] has already proved every `return` here is a display of
+    /// this arity. it is proved again rather than assumed, because the two walks
+    /// disagreeing has to be a decline and not a struct filled from the wrong
+    /// expressions
+    fn return_tuple_display(&mut self, expr: &Expr, slots: &[RType]) -> Lowered<Value> {
+        let Expr::Tuple(display) = expr else {
+            return Err(Decline::new(
+                "a tuple returned in registers has to be written as a display",
+            ));
+        };
+        if display.elts.len() != slots.len() {
+            return Err(Decline::new(
+                "a tuple display of a different length from the return it fills",
+            ));
+        }
+        let mut items = Vec::with_capacity(slots.len());
+        for (element, slot) in display.elts.iter().zip(slots) {
+            let (value, ty) = self.expression(element)?;
+            items.push(self.coerce(value, &ty, slot)?);
+        }
+        let dest = self.builder.temp(RType::Tuple(slots.into()));
+        self.builder.push(Op::TupleBuild { dest, items });
+        Ok(Value::Register(dest))
+    }
+
     /// bind `value` to a target *list*, the way `a, b = xs` does
     fn unpack_into(&mut self, targets: &[Expr], value: Value, ty: &RType) -> Lowered<()> {
         let mut starred = None;
@@ -8480,19 +9661,34 @@ impl Lowering<'_, '_> {
                 starred = Some(index);
             }
         }
-        let src = self.widen_to_object(value, ty);
-        let slots: Box<[RType]> = vec![RType::OBJECT; targets.len()].into();
-        let unpacked = self.builder.temp(RType::Tuple(slots));
-        self.builder.push(Op::Unpack {
-            dest: unpacked,
-            src,
-            starred,
-        });
+        // a value already held as a fixed-length tuple has the slots the targets want
+        // right there — `whole, part = split(i)` never builds the object at all. a
+        // star collects a *list*, which the runtime unpack is what builds, so it takes
+        // the general path
+        let (unpacked, slots) = match ty {
+            RType::Tuple(slots) if slots.len() == targets.len() && starred.is_none() => {
+                (value, slots.clone())
+            }
+            _ => {
+                let src = self.widen_to_object(value, ty);
+                let slots: Box<[RType]> = vec![RType::OBJECT; targets.len()].into();
+                let unpacked = self.builder.temp(RType::Tuple(slots.clone()));
+                self.builder.push(Op::Unpack {
+                    dest: unpacked,
+                    src,
+                    starred,
+                });
+                (Value::Register(unpacked), slots)
+            }
+        };
         for (index, target) in targets.iter().enumerate() {
-            let item = self.builder.temp(RType::OBJECT);
+            let Some(slot) = slots.get(index) else {
+                return Err(Decline::new("an unpack target with no slot to read"));
+            };
+            let item = self.builder.temp(slot.clone());
             self.builder.push(Op::TupleGet {
                 dest: item,
-                src: Value::Register(unpacked),
+                src: unpacked.clone(),
                 index,
             });
             let target = match target {
@@ -8500,16 +9696,15 @@ impl Lowering<'_, '_> {
                 other => other,
             };
             // a name narrows back to its own representation, with a check. anything
-            // else stays an object, because that is what the slot holds
+            // else stays whatever the slot holds
             let (value, ty) = match target {
                 Expr::Name(_) => match self.peek_type(target) {
-                    Ok(want) if want != RType::OBJECT => (
-                        self.coerce(Value::Register(item), &RType::OBJECT, &want)?,
-                        want,
-                    ),
-                    _ => (Value::Register(item), RType::OBJECT),
+                    Ok(want) if want != *slot => {
+                        (self.coerce(Value::Register(item), slot, &want)?, want)
+                    }
+                    _ => (Value::Register(item), slot.clone()),
                 },
-                _ => (Value::Register(item), RType::OBJECT),
+                _ => (Value::Register(item), slot.clone()),
             };
             self.assign_to(target, value, &ty)?;
         }
@@ -8571,12 +9766,20 @@ impl Lowering<'_, '_> {
     /// wrong object. that one has to go out through the namespace and find what is
     /// really there.
     ///
+    /// a class writing its own `__new__` is the other. python runs that *before* the
+    /// allocation and lets it answer with anything at all — an object it had already, an
+    /// instance of some other class, one it filled in itself — and only where the answer
+    /// is an instance of the class asked for does `__init__` run. allocating here would
+    /// skip all of it: a cache would hand back a second object, and an `__init__` written
+    /// to be unreachable would run
+    ///
     /// only a plain positional call: a default or a keyword needs the binding the
     /// signature describes, and falling back to the interpreted path for those is
     /// correct — just slower
     fn construct(&mut self, name: &str, node: &ast::ExprCall) -> Lowered<Option<(Value, RType)>> {
         if !self.layouts.contains_key(name)
             || self.decorated.contains(name)
+            || self.runs_a_written_new(name)
             || !node.arguments.keywords.is_empty()
         {
             return Ok(None);
@@ -8785,6 +9988,48 @@ impl Lowering<'_, '_> {
     /// return value is the expression's own. the only difference is how the iterator
     /// is obtained — `iter(x)` versus `x.__await__()` — because awaiting an ordinary
     /// iterable has to be an error rather than silently working
+    /// `await f(...)` of a coroutine of ours that never suspends, which is the call
+    ///
+    /// the coroutine object such an await would build is one nothing else can reach: it
+    /// is made by this very expression, awaited once, and dropped. the one `send` the
+    /// await makes runs the body from its entry to its end, because there is no
+    /// suspension in between — so the value the await produces is the value the body
+    /// returns, and calling the body is the same program without the object.
+    ///
+    /// only the *syntactic* form. `c = f(i)` puts the coroutine in a name, and what a
+    /// name can be made to do — handed to `asyncio`, awaited twice, closed, or never
+    /// awaited at all so the `RuntimeWarning` fires — is a wider question than this one
+    ///
+    /// `None` where the shape does not qualify, and the ordinary delegation stands
+    fn direct_await(&mut self, node: &ast::ExprAwait) -> Lowered<Option<(Value, RType)>> {
+        let Expr::Call(call) = node.value.as_ref() else {
+            return Ok(None);
+        };
+        let Expr::Name(callee) = call.func.as_ref() else {
+            return Ok(None);
+        };
+        let name = callee.id.as_str();
+        // a `*` or a `**` in the arguments means python binds them at runtime, against
+        // the coroutine's own entry — which is a different signature from this one's
+        if call.arguments.args.iter().any(Expr::is_starred_expr)
+            || call.arguments.keywords.iter().any(|kw| kw.arg.is_none())
+        {
+            return Ok(None);
+        }
+        // the name has to still be the definition. a local, a parameter or a capture
+        // holding a callable is a value and not this module's `def` at all, and a call
+        // the boundary would have deferred to the interpreted twin has no twin here
+        if !self.directs.contains(name)
+            || self.binds(name)
+            || self.decorated.contains(name)
+            || self.defers_call(name, call)
+        {
+            return Ok(None);
+        }
+        let direct = generators::direct_name(name);
+        self.native_call(call, &direct).map(Some)
+    }
+
     fn delegate(&mut self, source: &Expr, awaitable: bool) -> Lowered<(Value, RType)> {
         let (value, ty) = self.expression(source)?;
         let boxed = self.widen_to_object(value, &ty);
@@ -9139,6 +10384,24 @@ impl Lowering<'_, '_> {
         Ok(())
     }
 
+    /// whether constructing `class` runs a written `__new__`
+    ///
+    /// inherited as much as written: a subclass with no `__new__` of its own still
+    /// constructs through its base's, and python hands that one the subclass
+    fn runs_a_written_new(&self, class: &str) -> bool {
+        let mut current = Some(class.to_string());
+        // bounded by the base count, because a chain that visits a class twice is a
+        // cycle — which would otherwise spin here rather than settle
+        for _ in 0..=self.bases.len() {
+            let Some(name) = current else { return false };
+            if self.constructs.contains(&name) {
+                return true;
+            }
+            current = self.bases.get(&name).cloned();
+        }
+        false
+    }
+
     /// whether `class` is `base`, or reaches it through its bases
     fn extends(&self, class: &str, base: &str) -> bool {
         let mut current = Some(class.to_string());
@@ -9175,6 +10438,25 @@ impl Lowering<'_, '_> {
         };
         if *ty == RType::OBJECT || held.as_ref() == Some(&RType::OBJECT) {
             return value;
+        }
+        // a fixed-length tuple held in registers becomes a real one by building it from
+        // its slots, which is a *fresh* object — exactly what the display it came from
+        // would have built. so this is only reached where the lowering has already
+        // proved the value has no identity of its own to lose
+        if let RType::Tuple(slots) = held.as_ref().unwrap_or(ty).clone() {
+            let mut items = Vec::with_capacity(slots.len());
+            for (index, slot) in slots.iter().enumerate() {
+                let item = self.builder.temp(slot.clone());
+                self.builder.push(Op::TupleGet {
+                    dest: item,
+                    src: value.clone(),
+                    index,
+                });
+                items.push(self.widen_to_object(Value::Register(item), slot));
+            }
+            let dest = self.builder.temp(RType::OBJECT);
+            self.builder.push(Op::BuildTuple { dest, items });
+            return Value::Register(dest);
         }
         // a machine integer's *object* representation is the tagged `int`, which is one
         // widening further on. going straight to `object` would declare a register the
@@ -9432,7 +10714,10 @@ impl Lowering<'_, '_> {
             // delegation: drive the inner iterator, forwarding every value it yields
             // and taking its return value as this expression's own
             Expr::YieldFrom(node) => self.delegate(&node.value, false),
-            Expr::Await(node) => self.delegate(&node.value, true),
+            Expr::Await(node) => match self.direct_await(node)? {
+                Some(direct) => Ok(direct),
+                None => self.delegate(&node.value, true),
+            },
             // the closure analysis already made a method for this lambda; the expression
             // is just the binding of it
             Expr::Lambda(node) => self.lambda(node),
@@ -9892,6 +11177,26 @@ impl Lowering<'_, '_> {
             return Ok((Value::Register(dest), ret));
         }
 
+        // an override reached through a base-typed name — `shapes[i].area()`, where the
+        // element is declared a `Shape` and may be a `Square`. the call site cannot name
+        // one body, so it asks the object protocol, and asking is most of what the call
+        // costs: a lookup on the type, then a boxed round trip through the python-facing
+        // entry point for what the compiled bodies would have passed in registers
+        //
+        // so the question is asked here instead, where the emitted classes under the
+        // receiver's static class are all known. each gets a test of its own and its body
+        // called directly; the protocol call stays as the last arm, and is what a
+        // receiver none of them describe still takes — a subclass written in the
+        // interpreter, or the method rebound on the class after import
+        if let RType::Instance { class, .. } = &receiver_ty
+            && node.arguments.keywords.is_empty()
+            && let Ok(site) = self.call_result_type(&Expr::Call(node.clone()))
+            && let Some(dispatch) =
+                self.dispatch_candidates(class, name.as_str(), node.arguments.args.len(), &site)
+        {
+            return self.dispatched_call(node, &receiver, &receiver_ty, name, &dispatch);
+        }
+
         // `xs.append(v)` on an unboxed buffer pushes the element itself. this is the
         // *statement* form; the comprehension has always built one directly, and
         // without this a list built by appending could never earn a buffer at all
@@ -9929,13 +11234,228 @@ impl Lowering<'_, '_> {
         self.narrow_call_result(dest, &Expr::Call(node.clone()))
     }
 
+    /// the emitted classes a call on a receiver statically typed `class` can reach
+    /// directly, and the signature every one of them answers with
+    ///
+    /// a candidate has to *declare* the method itself. one that only inherits it is left
+    /// to the protocol, because what a class's body binds is not knowable from the method
+    /// table alone — a `property` and a decorated override are both absent from it for
+    /// reasons that have nothing to do with inheritance — and reading past such a class
+    /// to a base's entry would call a body its instances do not have
+    ///
+    /// they also have to agree on everything the call site depends on: what it coerces
+    /// its arguments to, and what representation it takes back. one that differs is
+    /// dropped on its own rather than sinking the whole site, since a dropped candidate
+    /// still resolves through the protocol arm
+    fn dispatch_candidates(
+        &self,
+        class: &str,
+        name: &str,
+        argc: usize,
+        site: &RType,
+    ) -> Option<Dispatch> {
+        // the direct call is already licensed for these, and takes no test to reach
+        if !self.mutable.contains(class) {
+            return None;
+        }
+        let answered = |candidate: &str| -> Option<&Signature> {
+            let signature = self.methods.get(candidate)?.get(name)?;
+            (signature.params.len() == argc + 1
+                && !signature.vararg
+                && !signature.kwarg
+                && signature.kwonly == 0)
+                .then_some(signature)
+        };
+        let dispatched = answered(class)?.clone();
+        // what the site hands back is what the *call* was typed as, and that is not always
+        // what one body produces. a receiver whose mro takes the name somewhere else
+        // entirely — a base outside this module, listed first — answers with something a
+        // compiled body's representation has no room for, and only the site's own type
+        // has ever described both. so a body narrower than the site is widened to it, and
+        // anything else declines
+        if dispatched.ret != *site && *site != RType::OBJECT {
+            return None;
+        }
+        // sorted, because the chain is emitted in this order and two runs of the compiler
+        // over one source have to write the same C
+        let mut under: Vec<&String> = self
+            .layouts
+            .keys()
+            .filter(|other| other.as_str() != class && self.descends_from(other, class))
+            .collect();
+        under.sort();
+        let mut candidates = vec![class.to_string()];
+        for other in under {
+            if candidates.len() == DISPATCH_CANDIDATES {
+                break;
+            }
+            if let Some(signature) = answered(other)
+                && signature.ret == dispatched.ret
+                && signature
+                    .params
+                    .iter()
+                    .skip(1)
+                    .map(|(_, ty)| ty)
+                    .eq(dispatched.params.iter().skip(1).map(|(_, ty)| ty))
+            {
+                candidates.push(other.clone());
+            }
+        }
+        Some(Dispatch {
+            candidates,
+            params: dispatched
+                .params
+                .iter()
+                .skip(1)
+                .map(|(_, ty)| ty.clone())
+                .collect(),
+            produced: dispatched.ret,
+            site: site.clone(),
+        })
+    }
+
+    /// `receiver.name(args)` as a test per candidate, with the protocol call left as the
+    /// arm nothing else took
+    fn dispatched_call(
+        &mut self,
+        node: &ast::ExprCall,
+        receiver: &Value,
+        receiver_ty: &RType,
+        name: String,
+        dispatch: &Dispatch,
+    ) -> Lowered<(Value, RType)> {
+        let Dispatch {
+            candidates,
+            params,
+            produced,
+            site,
+        } = dispatch;
+        let produced = produced.clone();
+        let ret = site.clone();
+        // once, before any test, where the ordinary call would have evaluated them
+        let mut args = Vec::with_capacity(params.len());
+        for (argument, param) in node.arguments.args.iter().zip(params) {
+            let (value, ty) = self.expression(argument)?;
+            args.push(self.coerce(value, &ty, param)?);
+        }
+        let held = match receiver {
+            Value::Register(id) => self.builder.register_type(*id).cloned(),
+            other => other.immediate_type(),
+        };
+        let object = self.widen_to_object(receiver.clone(), receiver_ty);
+        let dest = self.builder.temp(ret.clone());
+        let join = self.builder.new_block();
+        for candidate in candidates {
+            let hit = self.builder.new_block();
+            let next = self.builder.new_block();
+            let stands = self.builder.temp(RType::BIT);
+            self.builder.push(Op::MethodStands {
+                dest: stands,
+                src: object.clone(),
+                class: candidate.clone(),
+                method: name.clone(),
+            });
+            self.builder.terminate(Terminator::Branch {
+                cond: Value::Register(stands),
+                then_block: hit,
+                else_block: next,
+            });
+            self.builder.switch_to(hit);
+            // the receiver reaches a *subclass*'s body, which is a narrowing the test has
+            // just proved and nothing downstream can see it prove. so it is written out
+            // as the ordinary checked one — the pointer arithmetic differs between a
+            // class that owns its layout and one that appends to a base, and this is what
+            // knows which
+            let mut direct = Vec::with_capacity(args.len() + 1);
+            direct.push(match &held {
+                Some(RType::Instance { class, .. })
+                    if class == candidate || self.descends_from(class, candidate) =>
+                {
+                    receiver.clone()
+                }
+                _ => {
+                    let narrowed = self.builder.temp(RType::Instance {
+                        class: candidate.clone(),
+                        exact: false,
+                    });
+                    self.builder.push(Op::Unbox {
+                        dest: narrowed,
+                        src: object.clone(),
+                        to: RType::Instance {
+                            class: candidate.clone(),
+                            exact: false,
+                        },
+                    });
+                    Value::Register(narrowed)
+                }
+            });
+            direct.extend(args.iter().cloned());
+            // the body may answer with something narrower than the site was typed as,
+            // which is a widening rather than a different value
+            let answered = if produced == ret {
+                dest
+            } else {
+                self.builder.temp(produced.clone())
+            };
+            self.builder.push(Op::CallNative {
+                dest: Some(answered),
+                owner: Some(candidate.clone()),
+                callee: name.clone(),
+                args: direct,
+            });
+            if answered != dest {
+                let widened = self.widen_to_object(Value::Register(answered), &produced);
+                self.builder.assign(dest, widened);
+            }
+            self.builder.terminate(Terminator::Goto(join));
+            self.builder.switch_to(next);
+        }
+        let mut boxed = Vec::with_capacity(args.len());
+        for (value, ty) in args.iter().zip(params) {
+            let value = value.clone();
+            boxed.push(self.widen_to_object(value, ty));
+        }
+        let answer = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::CallMethod {
+            dest: answer,
+            receiver: object,
+            name,
+            args: boxed,
+        });
+        if ret == RType::OBJECT {
+            self.builder.assign(dest, Value::Register(answer));
+        } else {
+            self.builder.push(Op::Unbox {
+                dest,
+                src: Value::Register(answer),
+                to: ret.clone(),
+            });
+        }
+        self.builder.terminate(Terminator::Goto(join));
+        self.builder.switch_to(join);
+        Ok((Value::Register(dest), ret))
+    }
+
+    /// the representation a call site hands on, whatever the callee turns out to be
+    ///
+    /// the checker's type for the call, where an object can be narrowed to it, and
+    /// `object` otherwise
+    fn call_result_type(&mut self, call: &Expr) -> Lowered<RType> {
+        let declared = self.peek_type(call)?;
+        Ok(if self.narrowable_here(&declared) {
+            declared
+        } else {
+            RType::OBJECT
+        })
+    }
+
     /// narrow a boxed call result to the representation the checker says it has
     ///
     /// the call proves nothing, so this is a *checked* unbox — the `arguments`
     /// soundness position, arriving for free
     fn narrow_call_result(&mut self, boxed: RegisterId, call: &Expr) -> Lowered<(Value, RType)> {
-        let declared = self.peek_type(call)?;
-        if self.narrowable_here(&declared) {
+        let declared = self.call_result_type(call)?;
+        if declared != RType::OBJECT {
             let narrowed = self.builder.temp(declared.clone());
             self.builder.push(Op::Unbox {
                 dest: narrowed,
@@ -10909,8 +12429,116 @@ impl Lowering<'_, '_> {
         Ok((Value::Register(result), RType::BIT))
     }
 
-    fn call(&mut self, node: &ast::ExprCall) -> Lowered<(Value, RType)> {
+    /// the builtins whose answer is about the frame that called them
+    ///
+    /// a compiled function pushes no python frame, so each of these reads whatever
+    /// frame happens to be underneath — which is the caller's, in another module
+    /// entirely. left as ordinary calls they are silent wrong answers rather than
+    /// errors: `globals().get("marker")` answered `None` for a name the module plainly
+    /// binds, `globals()["x"] = 1` bound `x` in the caller instead, and `locals()`
+    /// handed back the caller's whole namespace.
+    ///
+    /// `globals()` is the one with a compiled answer, because the namespace it asks
+    /// for is this module's own and the extension already holds it — see
+    /// [`Op::ModuleDict`]. the rest have none: a compiled frame's locals are
+    /// registers, several of them not even objects, so there is no dict to build and
+    /// the function is left to its interpreted definition.
+    ///
+    /// `Ok(None)` where the call is an ordinary one after all, and the lowering below
+    /// carries on with it
+    fn frame_reading(
+        &mut self,
+        node: &ast::ExprCall,
+        name: &str,
+    ) -> Lowered<Option<(Value, RType)>> {
+        if !matches!(
+            name,
+            "globals" | "locals" | "vars" | "dir" | "eval" | "exec"
+        ) {
+            return Ok(None);
+        }
+        // a name this frame binds is a value of its own and never a builtin. that is
+        // the cheap half of the question, so it is asked before the resolution
+        if self.binds(name) {
+            return Ok(None);
+        }
         let env = &self.model.program_environment();
+        if !is_builtin_function(self.db, env, self.model, &node.func, name) {
+            return Ok(None);
+        }
+        match name {
+            // `globals()` and `locals()` take nothing at all, so a call carrying
+            // arguments is a `TypeError` python has to raise rather than a namespace
+            // question — and the interpreted definition raises it with python's wording
+            "globals" if node.arguments.is_empty() => {
+                let dest = self.builder.temp(RType::OBJECT);
+                self.builder.push(Op::ModuleDict { dest });
+                Ok(Some((Value::Register(dest), RType::OBJECT)))
+            }
+            // `vars(x)` is `x.__dict__` and `dir(x)` is that object's names; only the
+            // argumentless spellings are about a frame
+            "vars" | "dir" if !node.arguments.is_empty() => Ok(None),
+            "eval" | "exec" if self.given_a_namespace(node) => Ok(None),
+            "eval" | "exec" => Err(Decline::new(format!(
+                "`{name}` with no namespace of its own runs in the calling frame's, and a compiled function pushes none"
+            ))),
+            _ => Err(Decline::new(format!(
+                "`{name}()` answers about the calling frame, and a compiled function pushes none"
+            ))),
+        }
+    }
+
+    /// whether `eval`/`exec` was handed a namespace to run the code in
+    ///
+    /// python defaults the `globals` argument to the *calling* frame's namespace, and
+    /// writing `None` there means the same thing — so nothing short of a value that
+    /// cannot be `None` settles it, and a `dict` is what the checker proves
+    fn given_a_namespace(&self, node: &ast::ExprCall) -> bool {
+        // a `*` earlier in the call moves every position after it, so which argument
+        // fills `globals` is not knowable here and the answer has to be no
+        if node.arguments.args.iter().any(Expr::is_starred_expr) {
+            return false;
+        }
+        let env = &self.model.program_environment();
+        node.arguments
+            .find_argument_value("globals", 1)
+            .and_then(|argument| argument.inferred_type(self.model))
+            .and_then(|ty| ty.nominal_class_name(self.db, env))
+            == Some("dict")
+    }
+
+    /// `sys._getframe()`, which hands back the frame of whoever called it
+    ///
+    /// the same defect [`Self::frame_reading`] covers, one step further out: a
+    /// compiled function pushes no frame, so the frame this answers with is its
+    /// caller's — and `sys._getframe().f_globals` then reads another module's
+    /// namespace while looking exactly like it read this one's.
+    ///
+    /// only the call written here. a stdlib function that walks frames *itself* —
+    /// `inspect.stack`, `warnings.warn`'s `stacklevel`, `namedtuple` reading
+    /// `__module__` off its caller — lands one frame short in the same way, and no
+    /// predicate over this function's own body can see that
+    fn refuse_a_frame_walk(&self, node: &ast::ExprCall) -> Lowered<()> {
+        let written = match node.func.as_ref() {
+            Expr::Attribute(attribute) => attribute.attr.as_str(),
+            Expr::Name(name) => name.id.as_str(),
+            _ => return Ok(()),
+        };
+        // a syntactic filter first: resolving a definition parses the module it is in,
+        // and that is not worth doing for every call in the unit
+        if written != "_getframe" {
+            return Ok(());
+        }
+        let env = &self.model.program_environment();
+        if defined_as(self.db, env, self.model, &node.func, "_getframe").is_none() {
+            return Ok(());
+        }
+        Err(Decline::new(
+            "`_getframe()` answers with the calling frame, and a compiled function pushes none",
+        ))
+    }
+
+    fn call(&mut self, node: &ast::ExprCall) -> Lowered<(Value, RType)> {
         // `super()` with no arguments is not an ordinary call: python's own compiler
         // fills the two arguments in from the frame. a compiled method has no frame,
         // but the compiler knows both — so it fills them in here instead. a shadowed
@@ -10924,6 +12552,14 @@ impl Lowering<'_, '_> {
         {
             return self.zero_argument_super();
         }
+        // the builtins that answer about the *calling* frame, asked ahead of every
+        // path below so that `exec(*argv)` reaches it too — see [`Self::frame_reading`]
+        if let Expr::Name(callee) = node.func.as_ref()
+            && let Some(handled) = self.frame_reading(node, callee.id.as_str())?
+        {
+            return Ok(handled);
+        }
+        self.refuse_a_frame_walk(node)?;
         // a `*` or a `**` in the arguments means the binding happens at runtime, so
         // the arguments become a tuple and a dict and python does the binding
         if node.arguments.args.iter().any(Expr::is_starred_expr)
@@ -11069,6 +12705,21 @@ impl Lowering<'_, '_> {
             return self.narrow_call_result(dest, &Expr::Call(node.clone()));
         }
 
+        self.native_call(node, name)
+    }
+
+    /// a call that reaches a definition in this same unit at its native entry point
+    ///
+    /// the arguments are bound here rather than at runtime: the callee's signature says
+    /// which parameter each one fills, what representation it has to arrive in, and
+    /// which of the ones left over have a default to stand in.
+    ///
+    /// `name` is the entry to reach, which is not always the name that was written —
+    /// an [unboxed edition](lower_array_edition) and the [direct edition](
+    /// lower_direct_edition) of a coroutine are both other spellings of the same
+    /// definition
+    fn native_call(&mut self, node: &ast::ExprCall, name: &str) -> Lowered<(Value, RType)> {
+        let env = &self.model.program_environment();
         // a caller already holding buffers reaches the callee's unboxed edition, which
         // takes them as they are. anything else — a list from python, a name that is
         // not a buffer here — goes to the boxed one, where the coercion below would

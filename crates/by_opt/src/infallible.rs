@@ -147,11 +147,16 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::Truthy { .. }
         | Op::Len { .. }
         | Op::StrConcat { .. }
+        // the fast path allocates and the slow one calls whatever `str` resolved to
+        | Op::StrOfInt { .. }
         | Op::CallPython { .. }
         | Op::CallValue { .. }
         | Op::LoadGlobal { .. }
         | Op::StoreGlobal { .. }
         | Op::DeleteGlobal { .. }
+        // unbinding a local that was already unbound is `UnboundLocalError`, exactly
+        // as reading one is
+        | Op::DeleteLocal { .. }
         | Op::ImportModule { .. }
         | Op::ImportFrom { .. }
         | Op::NewInstance { .. }
@@ -172,6 +177,7 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::BuildTuple { .. }
         | Op::BuildDict { .. }
         | Op::GetItem { .. }
+        | Op::DictFind { .. }
         | Op::StrGetItem { .. }
         | Op::StrItemCompare { .. }
         | Op::SetItem { .. }
@@ -187,6 +193,11 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::PushHandled { .. }
         | Op::PopHandled { .. }
         | Op::SetField { .. } => false,
+
+        // the module namespace is a dict this module already holds — the extension's
+        // own init put it there before anything compiled could be called, so taking a
+        // reference to it is not a lookup and has nothing to fail at
+        Op::ModuleDict { .. } => false,
 
         // a delete runs the protocol, which can raise
         Op::DeleteItem { .. } | Op::DeleteAttr { .. } => true,
@@ -230,7 +241,7 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         // an attribute lookup reaches `__getattr__`, and `__match_args__` with it
         Op::MatchAttr { .. } => true,
         // a pointer comparison against a singleton
-        Op::IsMissing { .. } => false,
+        Op::IsMissing { .. } | Op::MethodStands { .. } => false,
         // a slice reaches `__getitem__`, and allocates the list it hands back
         Op::MatchSlice { .. } => true,
         // `isinstance` reaches `__instancecheck__`, which can raise

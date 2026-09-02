@@ -36,6 +36,11 @@ A project that fails the same way on *both* binaries is not a regression and
 does not fail the check either, but it is still reported: the check is blind to
 that project, and saying nothing would let the corpus rot silently.
 
+A run in which *every* project was skipped does fail, in every mode. A skip is
+not a finding — a checkout or install failure hits both binaries equally — but
+the quiet that follows is measured over the set that ran, so an empty set
+renders exactly like a set that all matched.
+
 Modes:
 
 * ``check_ecosystem_roundtrip.py <by-new> --baseline <by-old>`` — diff the
@@ -636,6 +641,19 @@ def _assemble(header: list[str], sections: list[tuple[str, list[str]]]) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+def compared_projects(results: list[ProjectDiff] | list[ProjectErrors]) -> int:
+    """How many projects actually produced a comparison.
+
+    A project whose checkout or install failed is skipped, and a skip is not a
+    finding: it affects both binaries equally. But a run where *every* project
+    skipped reports no differences, which reads exactly like a run where every
+    project matched. Distinguishing the two is the whole reason this count
+    exists — the sweep harness scored two dead legs as agreement for months
+    before anyone noticed.
+    """
+    return sum(1 for r in results if r.skipped is None)
+
+
 def render_diff_report(
     results: list[ProjectDiff], old_label: str, new_label: str
 ) -> tuple[str, bool]:
@@ -656,7 +674,7 @@ def render_diff_report(
         (r for r in results if r.skipped is not None), key=lambda r: r.name
     )
     total_files = sum(r.files_checked for r in results)
-    n_projects = len(results) - len(skipped)
+    n_projects = compared_projects(results)
 
     lines: list[str] = ["## by ecosystem round-trip", "", COMMENT_MARKER, ""]
 
@@ -664,6 +682,16 @@ def render_diff_report(
         _SKIPPED_HEADING,
         [f"- `{r.name}`: {_one_line(r.skipped or '')}" for r in skipped],
     )
+
+    # a run that compared nothing is a broken harness, not a clean result. it is
+    # reported before anything else because every other line below would be
+    # measured over an empty set and read as success
+    if n_projects == 0:
+        lines.append(
+            f"❌ nothing ran: all {len(results)} requested project(s) were skipped, "
+            f"so this check compared no round-trip output at all."
+        )
+        return _assemble(lines, [skipped_section]), False
 
     if broken or fixed or changed or error_changed:
         lines.append(f"base: `{old_label}` → head: `{new_label}`")
@@ -747,8 +775,12 @@ def render_from_json(paths: list[Path], old_label: str, new_label: str) -> int:
     report, _clean = render_diff_report(projects, old_label, new_label)
     print(report)
     # findings (broken/changed/error-changed) are surfaced in the PR comment for
-    # humans to review — they don't fail the job. only a genuine harness crash
-    # (an uncaught exception above) is a failure
+    # humans to review — they don't fail the job. only a genuine harness crash is
+    # a failure, and a run that compared nothing is one of those: every shard
+    # skipping its projects renders as "no differences", which is exactly what a
+    # run where everything matched renders as
+    if compared_projects(projects) == 0:
+        return 1
     return 0
 
 
@@ -758,6 +790,14 @@ def render_error_report(results: list[ProjectErrors]) -> tuple[str, bool]:
     skipped = [r for r in results if r.skipped is not None]
 
     lines: list[str] = ["## by ecosystem round-trip", "", COMMENT_MARKER, ""]
+    if compared_projects(results) == 0:
+        lines.append(
+            f"❌ nothing ran: all {len(results)} requested project(s) were skipped, "
+            f"so this check built nothing at all."
+        )
+        for r in skipped:
+            lines.append(f"- `{r.name}`: {_one_line(r.skipped or '')}")
+        return "\n".join(lines).rstrip() + "\n", False
     if not errors:
         lines.append(
             f"✅ round-trip built cleanly across {total_files} files "

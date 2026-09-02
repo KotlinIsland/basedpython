@@ -11,6 +11,7 @@ unresolved-import diagnostics.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -20,12 +21,16 @@ from check_ecosystem_roundtrip import (
     COMMENT_CHAR_LIMIT,
     FileDiff,
     ProjectDiff,
+    ProjectErrors,
     ProjectOutcome,
     _detail_cap,
     _truncate_detail,
     canonical_error,
     classify_project,
+    compared_projects,
     render_diff_report,
+    render_error_report,
+    render_from_json,
 )
 
 
@@ -235,7 +240,12 @@ class TestRenderDiffReport:
         assert "base: x" in body
 
     def test_a_clean_report_lists_skipped_projects(self):
-        results = [ProjectDiff("spack", 0, [], "skipped: known to OOM the runner")]
+        # a project alongside the skip, because a corpus that is *only* a skip
+        # compared nothing and is reported as such — see TestARunThatComparedNothing
+        results = [
+            ProjectDiff("spack", 0, [], "skipped: known to OOM the runner"),
+            ProjectDiff("ran", 10, [], None),
+        ]
         body, clean = render_diff_report(results, "base", "head")
         assert clean
         assert "no round-trip differences" in body
@@ -359,3 +369,77 @@ class TestRenderDiffReport:
         body, _ = render_diff_report(results, "base", "head")
         assert "```diff" in body
         assert "+new" in body
+
+
+def skipped(name: str, note: str) -> ProjectDiff:
+    return ProjectDiff(name, 0, [], note)
+
+
+class TestARunThatComparedNothing:
+    """A run where every project skipped must not read as a run where every
+    project matched.
+
+    A skip is not a finding — a checkout or install failure hits both binaries
+    equally — so one skip is correctly quiet. But the quiet is measured over the
+    set that *did* run, and when that set is empty every line below it describes
+    nothing. This is the shape the sweep harness got wrong for months: two dead
+    legs agreed with each other.
+    """
+
+    def test_all_skipped_is_not_clean(self):
+        results = [
+            skipped(f"proj{i}", "setup failed: network unreachable") for i in range(8)
+        ]
+        body, clean = render_diff_report(results, "base", "head")
+        assert not clean
+        assert "nothing ran" in body
+        # the reason each project skipped is what tells a reader whether the
+        # corpus broke or the runner did
+        assert "network unreachable" in body
+        # and it must not also claim success
+        assert "no round-trip differences" not in body
+
+    def test_one_project_running_is_enough_to_report_on(self):
+        results = [skipped("gone", "setup failed: clone timed out")]
+        results.append(project("real", "changed", "diff"))
+        body, clean = render_diff_report(results, "base", "head")
+        assert clean  # a changed output is a finding for humans, not a failure
+        assert "nothing ran" not in body
+
+    def test_the_single_binary_report_agrees(self):
+        results = [
+            ProjectErrors(f"proj{i}", 0, [], "setup failed: boom") for i in range(3)
+        ]
+        body, clean = render_error_report(results)
+        assert not clean
+        assert "nothing ran" in body
+        assert "built cleanly" not in body
+
+    def test_the_merged_shard_report_exits_non_zero(self, tmp_path, capsys):
+        # the path CI actually takes: eight shards, every project skipped. the
+        # report is still printed, because a human needs to see why
+        shard = tmp_path / "roundtrip-0.json"
+        shard.write_text(
+            json.dumps(
+                {
+                    "projects": [
+                        {
+                            "name": "proj",
+                            "files_checked": 0,
+                            "skipped": "setup failed: boom",
+                            "diffs": [],
+                        }
+                    ]
+                }
+            )
+        )
+        code = render_from_json([shard], "base", "head")
+        assert code == 1
+        assert "nothing ran" in capsys.readouterr().out
+
+    def test_counting_ignores_skipped_only(self):
+        assert compared_projects([]) == 0
+        assert compared_projects([skipped("a", "why")]) == 0
+        assert (
+            compared_projects([skipped("a", "why"), project("b", "changed", "d")]) == 1
+        )

@@ -184,7 +184,9 @@ jobs:
       # projects that fail to round-trip on both base and head, are reported in
       # the PR comment for humans to review — none of them fail the job. the job
       # fails only if the harness itself fails (a non-zero exit here is a crash,
-      # not a finding)
+      # not a finding), and a run that compared *nothing* counts as one of those:
+      # every shard skipping its projects renders identically to every project
+      # matching, so a green build there would mean nothing ran
       - name: Render report
         env:
           MERGE_BASE: ${{ needs.build.outputs.merge-base }}

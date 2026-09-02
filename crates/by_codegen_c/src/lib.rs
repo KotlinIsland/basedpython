@@ -234,6 +234,16 @@ pub fn emit_module(module: &ModuleIr) -> String {
             }
         );
     }
+    // zero until import arms it, which is the answer that keeps every dispatch site on
+    // the protocol call — so a module whose init failed part way through is slow rather
+    // than wrong
+    for (class, method) in dispatch_licences(module) {
+        let _ = writeln!(
+            out,
+            "static unsigned int {} = 0;",
+            dispatch_licence(module, &class, &method)
+        );
+    }
     if !module.classes.is_empty() {
         out.push('\n');
     }
@@ -364,7 +374,60 @@ fn emit_tuple_struct(module: &ModuleIr, items: &[RType]) -> String {
     for (index, item) in items.iter().enumerate() {
         let _ = write!(out, " {} f{index};", ctype(module, item));
     }
-    let _ = writeln!(out, " }} ByTuple{};", tuple_mangle(items));
+    let name = format!("ByTuple{}", tuple_mangle(items));
+    let _ = writeln!(out, " }} {name};");
+    out.push_str(&emit_tuple_box(items, &name));
+    out
+}
+
+/// the two ways a fixed-length tuple held in registers becomes the real `tuple` a
+/// python caller reads back
+///
+/// this is the only place the object is built for a value that crossed a native
+/// boundary, so it is built exactly once per call — which is what makes it the same
+/// fresh object the display in the body would have handed back. the borrowing form
+/// leaves the caller's fields alone; the owning form releases them, which is what a
+/// wrapper returning the result of a native call needs
+fn emit_tuple_box(items: &[RType], name: &str) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "static inline PyObject *{name}_box({name} v) {{");
+    if items.is_empty() {
+        // `()` is one shared object, so there is nothing to fill and no array to
+        // declare — C has no zero-length one
+        out.push_str("    (void)v; return PyTuple_New(0);\n}\n");
+    } else {
+        let count = items.len();
+        let _ = writeln!(out, "    PyObject *by_i[{count}];");
+        for (index, item) in items.iter().enumerate() {
+            let _ = writeln!(
+                out,
+                "    by_i[{index}] = {};",
+                box_borrowed(item, &format!("v.f{index}"))
+            );
+        }
+        let any_null = (0..count)
+            .map(|index| format!("by_i[{index}] == NULL"))
+            .collect::<Vec<_>>()
+            .join(" || ");
+        let release = (0..count)
+            .map(|index| format!("Py_XDECREF(by_i[{index}]);"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        // only the *failed* build releases them here: `By_BuildTuple` takes the
+        // references it is handed, so releasing them after a successful one would
+        // leave the tuple holding a count it no longer owns
+        let _ = writeln!(out, "    if ({any_null}) {{ {release} return NULL; }}");
+        let _ = writeln!(out, "    return By_BuildTuple(by_i, {count});");
+        out.push_str("}\n");
+    }
+    let _ = writeln!(out, "static inline PyObject *{name}_box_owned({name} v) {{");
+    let _ = writeln!(out, "    PyObject *by_t = {name}_box(v);");
+    for (index, item) in items.iter().enumerate() {
+        if let Some(release) = dec_ref(item, &format!("v.f{index}")) {
+            let _ = writeln!(out, "    {release}");
+        }
+    }
+    out.push_str("    return by_t;\n}\n");
     out
 }
 
@@ -1014,6 +1077,23 @@ fn delete_field(module: &ModuleIr, field: &by_ir::function::FieldDecl, storage: 
     )
 }
 
+/// the C identifier the two halves of a property are reached through
+fn property_symbol(type_name: &str, name: &str) -> String {
+    format!("{type_name}_prop_{name}")
+}
+
+/// python's own wording for a half of a property the class never wrote
+///
+/// `property` reports a missing setter by naming the property and the *object's* type,
+/// which is the runtime one rather than the class the property was written in — so a
+/// subclass instance is named as the subclass, exactly as it is interpreted
+fn missing_half(name: &str, half: &str) -> String {
+    format!(
+        "\x20   PyErr_Format(PyExc_AttributeError, \"property '%s' of '%s' object has no {half}\", {}, By_TypeName(selfobj));\n",
+        c_string(name)
+    )
+}
+
 /// the getters, setters, slot table and type spec python sees
 fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     let struct_name = class.struct_name(module.name.dotted());
@@ -1072,7 +1152,72 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             mark_present(field, "self")
         );
     }
+    // a `@property` pair, as the one attribute python builds out of it. each half is
+    // reached through its own wrapper rather than its native entry, so the arguments are
+    // bound exactly as a call through the name would have bound them
+    for property in &class.properties {
+        let symbol = property_symbol(&type_name, &property.name);
+        let half = |written: &Option<String>| {
+            let name = written.as_deref()?;
+            let function = class.methods.iter().find(|method| method.name == name)?;
+            Some(function.wrapper_symbol(module.name.dotted()))
+        };
+        let _ = writeln!(
+            out,
+            "static PyObject *{symbol}_get(PyObject *selfobj, void *closure) {{\n\
+             \x20   (void)closure;\n\
+             {}}}",
+            match half(&property.getter) {
+                Some(wrapper) => format!("\x20   return {wrapper}(selfobj, NULL, 0, NULL);\n"),
+                None => format!(
+                    "{}\x20   return NULL;\n",
+                    missing_half(&property.name, "getter")
+                ),
+            }
+        );
+        // python hands a getset setter a NULL value for `del`, which is the deleter's
+        // whole business. where there is no deleter this is python's wording for a
+        // property missing one, not the "cannot delete an attribute" a field gives
+        let _ = writeln!(
+            out,
+            "static int {symbol}_set(PyObject *selfobj, PyObject *by_value, void *closure) {{\n\
+             \x20   PyObject *by_answer;\n\
+             \x20   (void)closure;\n\
+             \x20   if (by_value == NULL) {{\n\
+             {}\
+             \x20   }} else {{\n\
+             {}\
+             \x20   }}\n\
+             \x20   if (by_answer == NULL) return -1;\n\
+             \x20   Py_DECREF(by_answer);\n\
+             \x20   return 0;\n}}",
+            match half(&property.deleter) {
+                Some(wrapper) =>
+                    format!("\x20       by_answer = {wrapper}(selfobj, NULL, 0, NULL);\n"),
+                None => format!(
+                    "    {}\x20       return -1;\n",
+                    missing_half(&property.name, "deleter")
+                ),
+            },
+            match half(&property.setter) {
+                Some(wrapper) =>
+                    format!("\x20       by_answer = {wrapper}(selfobj, &by_value, 1, NULL);\n"),
+                None => format!(
+                    "    {}\x20       return -1;\n",
+                    missing_half(&property.name, "setter")
+                ),
+            }
+        );
+    }
     let _ = writeln!(out, "static PyGetSetDef {type_name}_getset[] = {{");
+    for property in &class.properties {
+        let symbol = property_symbol(&type_name, &property.name);
+        let _ = writeln!(
+            out,
+            "    {{{}, {symbol}_get, {symbol}_set, NULL, NULL}},",
+            c_string(&property.name)
+        );
+    }
     for field in &class.fields {
         let setter = if !class.writable() {
             "NULL".to_string()
@@ -1230,7 +1375,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
              \x20   {{\"athrow\", (PyCFunction)(void(*)(void)){type_name}_do_athrow, METH_FASTCALL, NULL}},"
         );
     }
-    for method in &class.methods {
+    for method in class.table_methods() {
         // `METH_STATIC` and `METH_CLASS` are masked off before the calling convention
         // is read, so either combines with the fastcall the wrapper is written for.
         // what they change is the descriptor the type publishes — a `staticmethod` or a
@@ -1248,6 +1393,18 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         );
     }
     out.push_str("    {NULL, NULL, 0, NULL}\n};\n\n");
+
+    // `__new__` is left out of the table above and given a definition of its own, which
+    // module init binds onto the finished type — see `By_PublishNew` for why the slot
+    // cannot come from the spec
+    if let Some(new) = publishes_new(class) {
+        let _ = writeln!(
+            out,
+            "static PyMethodDef {type_name}_new_def =\n\
+             \x20   {{\"__new__\", (PyCFunction)(void(*)(void)){}, METH_FASTCALL | METH_KEYWORDS, NULL}};\n",
+            new.wrapper_symbol(module.name.dotted())
+        );
+    }
 
     // a generator's state object *is* the iterator: `tp_iternext` drives `$resume`,
     // which returns the next yielded value or raises `StopIteration`
@@ -1550,9 +1707,14 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     } else {
         // a class with nothing to initialize supplies neither slot, so both are inherited
         // together — `object.__init__` refuses an argument only while `tp_new` is
-        // `object`'s too, and filling one of the pair alone would take one silently
-        let construction = if init.is_empty() {
-            String::new()
+        // `object`'s too, and filling one of the pair alone would take one silently.
+        //
+        // a written `__new__` leaves `tp_new` for the assignment module init makes, which
+        // is what installs python's own dispatcher — see [`publishes_new`]. the pair is
+        // then what the *source* wrote, and `object.__init__` lifts its refusal for the
+        // same reason it does there: the class overrode the allocator
+        let construction = if init.is_empty() || constructs_through_a_written_new(module, class) {
+            init
         } else {
             format!("{init}\x20   {{Py_tp_new, (void *)PyType_GenericNew}},\n")
         };
@@ -2120,6 +2282,36 @@ fn class_named<'a>(module: &'a ModuleIr, name: &str) -> Option<&'a ClassIr> {
     module.classes.iter().find(|class| class.name == name)
 }
 
+/// the static holding a dispatch site's licence to reach one compiled method body
+/// without the protocol — see `By_ArmMethod`
+fn dispatch_licence(module: &ModuleIr, class: &str, method: &str) -> String {
+    format!(
+        "by_stands_{}_{}_{}",
+        mangle(module.name.dotted()),
+        mangle(class),
+        mangle(method)
+    )
+}
+
+/// every `(class, method)` pair some dispatch site in this module tests
+///
+/// one static each, armed once at import. the pairs are collected from the emitted
+/// operations rather than from the classes, because a class whose method nothing
+/// dispatches on needs no licence and should not pay a lookup for one
+fn dispatch_licences(module: &ModuleIr) -> BTreeSet<(String, String)> {
+    let mut wanted = BTreeSet::new();
+    for function in module.all_functions() {
+        for block in &function.blocks {
+            for op in &block.ops {
+                if let Op::MethodStands { class, method, .. } = op {
+                    wanted.insert((class.clone(), method.clone()));
+                }
+            }
+        }
+    }
+    wanted
+}
+
 /// the field storage of `object`, as an expression of type `Fields *`
 ///
 /// for a class that owns its layout the object *is* the storage and this is the cast
@@ -2233,9 +2425,56 @@ fn is_base(module: &ModuleIr, class: &ClassIr) -> bool {
 ///
 /// a sealed type is immutable and cannot be subclassed, which is exactly what
 /// licenses the direct method call. a decorator that touches the class, and a
-/// subclass, each need the opposite — so those classes pay for it
+/// subclass, each need the opposite — so those classes pay for it.
+///
+/// a written `__new__` is the third: it is published by *assigning* it onto the finished
+/// type, which is the only way to reach the slot fixup that a class statement runs and a
+/// type spec does not — see [`publishes_new`]. an immutable type refuses that assignment
 fn mutable_type(module: &ModuleIr, class: &ClassIr) -> bool {
-    !class.decorators.is_empty() || is_base(module, class) || class.base.is_some()
+    !class.decorators.is_empty()
+        || is_base(module, class)
+        || class.base.is_some()
+        || publishes_new(class).is_some()
+}
+
+/// the written `__new__` this class publishes onto its finished type, where it wrote one
+///
+/// `tp_new` is deliberately **not** filled from the spec. a C function there is one
+/// python reads as a base that owns the allocation, and `object.__new__(cls)` — which is
+/// how almost every written `__new__` gets its instance — is then refused as unsafe,
+/// because the check walks up from the class looking for the allocator and stops at ours.
+///
+/// assigning the method onto the type instead is what a class statement does: python's
+/// own slot fixup sees a `__new__` in the dict and installs the dispatcher that looks the
+/// name up, so the class ends up with exactly the `tp_new` an interpreted one has. the
+/// allocation check then walks past it to `object`, and the body's `object.__new__(cls)`
+/// is the plain allocation it was written as
+fn publishes_new(class: &ClassIr) -> Option<&Function> {
+    dunder(class, "__new__")
+}
+
+/// whether a construction of this class runs a written `__new__`, its bases' included
+///
+/// a subclass inherits the slot the assignment installed on its base, so it must not
+/// name one of its own — filling `tp_new` with the generic allocation would put back
+/// exactly the answer the base overrode, and the subclass would allocate without ever
+/// running the constructor it inherited
+fn constructs_through_a_written_new(module: &ModuleIr, class: &ClassIr) -> bool {
+    let mut current = class;
+    // bounded by the class count, for the reason [`inherits_layout`] gives
+    for _ in 0..=module.classes.len() {
+        if publishes_new(current).is_some() {
+            return true;
+        }
+        let Some(name) = current.base.as_ref().and_then(ClassBase::in_module) else {
+            return false;
+        };
+        match class_named(module, name) {
+            Some(next) => current = next,
+            None => return false,
+        }
+    }
+    false
 }
 
 /// whether a class's type is built from a spec at import rather than being a static
@@ -2853,7 +3092,7 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
                     "static Py_hash_t {symbol}(PyObject *self) {{\n\
                      \x20   PyObject *by_r = {call};\n\
                      \x20   if (by_r == NULL) return -1;\n\
-                     \x20   Py_hash_t by_h = PyObject_Hash(by_r);\n\
+                     \x20   Py_hash_t by_h = By_HashResult(by_r);\n\
                      \x20   Py_DECREF(by_r);\n\
                      \x20   return by_h;\n}}"
                 );
@@ -3225,6 +3464,9 @@ fn box_owned(ty: &RType, expr: &str) -> String {
         RType::Primitive(Primitive::Float) => format!("By_BoxFloat({expr})"),
         RType::Primitive(Primitive::Bool | Primitive::Bit) => format!("By_BoxBool({expr})"),
         RType::Primitive(Primitive::None) => "By_BoxNone()".to_string(),
+        RType::Tuple(items) => {
+            format!("ByTuple{}_box_owned({expr})", tuple_mangle(items))
+        }
         _ => format!("(PyObject *)({expr})"),
     }
 }
@@ -3236,7 +3478,21 @@ fn box_borrowed(ty: &RType, expr: &str) -> String {
         RType::Primitive(Primitive::Float) => format!("By_BoxFloat({expr})"),
         RType::Primitive(Primitive::Bool | Primitive::Bit) => format!("By_BoxBool({expr})"),
         RType::Primitive(Primitive::None) => "By_BoxNone()".to_string(),
+        RType::Tuple(items) => format!("ByTuple{}_box({expr})", tuple_mangle(items)),
         _ => format!("By_NewRef((PyObject *)({expr}))"),
+    }
+}
+
+/// the value a place of this representation holds before anything has been written
+/// to it, and the one a fallible function hands back on its error path
+///
+/// [`RType::undefined`] is written as an *initializer*, and a struct's `{0}` is only
+/// one where a declaration takes it. a `return` or an assignment needs the compound
+/// literal, which is that initializer with the type named in front of it
+fn undefined(module: &ModuleIr, ty: &RType) -> String {
+    match ty {
+        RType::Tuple(_) => format!("({}){}", ctype(module, ty), ty.undefined()),
+        other => other.undefined().to_string(),
     }
 }
 
@@ -3300,26 +3556,27 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
     let _ = writeln!(out, "{} {{", signature(module, function));
     let owned = owned_registers(function);
 
-    for (index, decl) in function
-        .registers
-        .iter()
-        .enumerate()
-        .skip(function.param_count)
-    {
-        let _ = writeln!(
-            out,
-            "    {} {} = {};",
-            ctype(module, &decl.ty),
-            local(RegisterId(index)),
-            decl.ty.undefined()
-        );
+    for (index, decl) in function.registers.iter().enumerate() {
+        // a parameter is already declared — it is the signature — and it arrives
+        // bound, so its byte starts at 1. it only has one at all because `del n` can
+        // unbind a parameter like any other local
+        if index >= function.param_count {
+            let _ = writeln!(
+                out,
+                "    {} {} = {};",
+                ctype(module, &decl.ty),
+                local(RegisterId(index)),
+                decl.ty.undefined()
+            );
+        }
         // a local some path reaches without writing carries the answer to whether it
         // was written. it starts at 0 because no path has written it yet
         if decl.may_be_unassigned {
             let _ = writeln!(
                 out,
-                "    char {} = 0;",
-                by_ir::function::RegisterDecl::presence(RegisterId(index))
+                "    char {} = {};",
+                by_ir::function::RegisterDecl::presence(RegisterId(index)),
+                u8::from(index < function.param_count)
             );
         }
     }
@@ -3349,7 +3606,7 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
                 block.error_target,
             ));
             out.push_str(&emit_op(module, function, op, block.error_target));
-            out.push_str(&mark_assigned(function, op.dest()));
+            out.push_str(&mark_assigned(function, op));
         }
         out.push_str(&guard_unassigned(
             function,
@@ -3368,8 +3625,20 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
         // the error label is shared by every block, so it cannot use a
         // block-specific live set
         out.push_str("by_error: ;\n");
-        out.push_str(&emit_cleanup(function, "    ", None));
-        let _ = writeln!(out, "    return {};", function.ret.undefined());
+        // a coroutine's body raising `StopIteration` is forging the exhaustion the
+        // await protocol reports with one, and python replaces it with `RuntimeError`
+        // as the frame leaves. this body has no frame to leave — an `await` of it is a
+        // plain call — so the conversion happens on the way out instead, which is the
+        // same point in the same program
+        if function.coroutine_body.is_some() {
+            let _ = writeln!(
+                out,
+                "    By_ConvertStopIteration({});",
+                frame_kind(by_ir::function::Surface::Coroutine)
+            );
+        }
+        out.push_str(&emit_cleanup(function, "    ", None, None));
+        let _ = writeln!(out, "    return {};", undefined(module, &function.ret));
     }
 
     out.push_str("}\n");
@@ -3380,12 +3649,23 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
 ///
 /// `live` is the refcount pass's answer for this block, when it ran. without it
 /// every owned register is released, which is correct and merely wasteful
-fn emit_cleanup(function: &Function, indent: &str, live: Option<&[RegisterId]>) -> String {
+///
+/// `moved` is a register whose reference the exit is handing to the caller instead
+/// of releasing — see [`returned_by_move`]
+fn emit_cleanup(
+    function: &Function,
+    indent: &str,
+    live: Option<&[RegisterId]>,
+    moved: Option<RegisterId>,
+) -> String {
     let owned = owned_registers(function);
     let mut out = String::new();
     for (index, decl) in function.registers.iter().enumerate() {
         if owned.get(index).copied() != Some(true) {
             continue; // a borrowed parameter belongs to the caller
+        }
+        if moved == Some(RegisterId(index)) {
+            continue; // the caller is taking this one
         }
         if let Some(live) = live
             && !live.contains(&RegisterId(index))
@@ -3397,6 +3677,46 @@ fn emit_cleanup(function: &Function, indent: &str, live: Option<&[RegisterId]>) 
         }
     }
     out
+}
+
+/// the register a `return` hands its own reference to the caller, rather than
+/// retaining a second one and releasing its first
+///
+/// the reference a frame already holds is exactly what the caller has to be given,
+/// so the retain and the release that follows it cancel — and they are not free.
+/// on a small method called in a loop the pair is *fifteen per cent* of the call:
+/// `By_IncRefTagged` and `By_DecRefTagged` each branch on the tag, and each carries
+/// a `Py_INCREF`/`Py_DECREF` whose slow half is a call, which is enough to keep the
+/// c compiler from inlining a body that would otherwise be two instructions.
+///
+/// moving is only sound where the frame was going to release that very register on
+/// this path, so this asks the same three questions [`emit_cleanup`] asks and
+/// answers `None` to anything else. a borrowed register, a parameter the caller
+/// still owns, and one the refcount pass proved dead all keep the retain.
+///
+/// nothing runs between the two in the first place except other releases, and those
+/// can run `__del__` — but a moved reference is one the frame never drops, so the
+/// value it names is held across them by the very reference being handed on
+fn returned_by_move(
+    function: &Function,
+    value: &Value,
+    live: Option<&[RegisterId]>,
+) -> Option<RegisterId> {
+    let Value::Register(id) = value else {
+        return None;
+    };
+    if !owned_registers(function).get(id.index()).copied()? {
+        return None;
+    }
+    if let Some(live) = live
+        && !live.contains(id)
+    {
+        return None;
+    }
+    let decl = function.register(*id)?;
+    // the retain is written from the *return* type and the release from the
+    // register's, so they only cancel where the two agree
+    (decl.ty == function.ret && decl.ty.is_refcounted()).then_some(*id)
 }
 
 /// the C type of an array operand's elements
@@ -3683,11 +4003,25 @@ fn guard_unassigned(
     values: &[&Value],
     error_target: Option<BlockId>,
 ) -> String {
+    let registers: Vec<RegisterId> = values
+        .iter()
+        .filter_map(|value| match value {
+            Value::Register(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    guard_unassigned_registers(function, &registers, error_target)
+}
+
+/// as [`guard_unassigned`], for a register an operation names as a place rather than
+/// reading as a value — the destination of a `del`
+fn guard_unassigned_registers(
+    function: &Function,
+    registers: &[RegisterId],
+    error_target: Option<BlockId>,
+) -> String {
     let mut out = String::new();
-    for value in values {
-        let Value::Register(id) = value else {
-            continue;
-        };
+    for id in registers {
         let Some(decl) = function.register(*id) else {
             continue;
         };
@@ -3706,8 +4040,11 @@ fn guard_unassigned(
 }
 
 /// the assignment that records a flagged register as written
-fn mark_assigned(function: &Function, dest: Option<RegisterId>) -> String {
-    let Some(dest) = dest else {
+///
+/// `del` is the one operation whose destination comes out *un*bound, and it writes
+/// the byte itself — so it is excluded here rather than having its own store undone
+fn mark_assigned(function: &Function, op: &Op) -> String {
+    let Some(dest) = op.dest().filter(|_| op.unbinds().is_none()) else {
         return String::new();
     };
     if !function
@@ -3736,9 +4073,15 @@ fn emit_op(
             let expr = value_expr(src);
             let mut out = String::new();
             // an operand is always borrowed — a literal is a static and a register is
-            // the frame's — so an assignment never has an error edge of its own, and
-            // one whose destination holds no reference is a plain store
-            if !decl.ty.is_refcounted() {
+            // the frame's — so an assignment never has an error edge of its own.
+            //
+            // a destination that holds no reference is a plain store, and so is a
+            // borrowed one, for the other reason: the borrow pass proved the source
+            // goes on holding the value across every use, so there is nothing to
+            // retain and nothing here that was ever owned to give back
+            if decl.borrowed {
+                let _ = writeln!(out, "    {} = {expr};", local(*dest));
+            } else if !decl.ty.is_refcounted() {
                 out.push_str(&assign_owned(module, function, *dest, &expr));
             } else {
                 // copying a register: retain the new value before releasing the
@@ -3877,6 +4220,23 @@ fn emit_op(
                 (None, None) => return String::new(),
             };
             assign_checked(module, function, *dest, &expr, error_target)
+        }
+        Op::MethodStands {
+            dest,
+            src,
+            class,
+            method,
+        } => {
+            let Some(owner) = class_named(module, class) else {
+                return format!("    {} = 0;\n", local(*dest));
+            };
+            format!(
+                "    {} = By_MethodStands({}, {}_OBJ, {});\n",
+                local(*dest),
+                value_expr(src),
+                owner.type_name(module.name.dotted()),
+                dispatch_licence(module, class, method),
+            )
         }
         Op::IsMissing { dest, src } => format!(
             "    {} = (char)({} == By_MatchMissing());\n",
@@ -4709,6 +5069,17 @@ fn emit_op(
             out.push_str(&commit_checked(function, *dest, error_target));
             out
         }
+        // `globals()`, which is the very dict the two halves above reach. calling the
+        // builtin instead would answer about the *calling* frame, and a compiled
+        // function pushes none — so it would hand back the caller's namespace, in
+        // another module. `by_module_dict` is borrowed, and the register owns what it
+        // holds, so the reference is taken here
+        Op::ModuleDict { dest } => assign_owned(
+            module,
+            function,
+            *dest,
+            "(PyObject *)Py_NewRef(by_module_dict)",
+        ),
         // the write half of `LoadGlobal`, reaching the same dict through the same
         // interned key — a register write would leave the module's binding alone
         Op::StoreGlobal { dest, name, value } => global_namespace_op(
@@ -4732,6 +5103,35 @@ fn emit_op(
             &|slot| format!("By_DeleteGlobal(by_module_dict, {slot})"),
             error_target,
         ),
+        // `del x`: refuse if the name is already unbound, then release what it held
+        // and put the slot back to the value an unwritten register starts at. that
+        // value is release-safe for every representation — which is what lets the
+        // cleanup on the way out go on releasing this register unconditionally
+        Op::DeleteLocal { dest } => {
+            let Some(decl) = function.register(*dest) else {
+                return String::new();
+            };
+            let mut out = guard_unassigned_registers(function, &[*dest], error_target);
+            // a borrowed register holds a reference the frame never took, so there is
+            // nothing here to give back
+            if !decl.borrowed
+                && let Some(release) = dec_ref(&decl.ty, &local(*dest))
+            {
+                let _ = writeln!(out, "    {release}");
+            }
+            let _ = writeln!(
+                out,
+                "    {} = {};",
+                local(*dest),
+                undefined(module, &decl.ty)
+            );
+            let _ = writeln!(
+                out,
+                "    {} = 0;",
+                by_ir::function::RegisterDecl::presence(*dest)
+            );
+            out
+        }
         Op::LoadClass { dest, class } => {
             let Some(owner) = module
                 .classes
@@ -4899,16 +5299,33 @@ fn emit_op(
             // correct — a list is an `object` here, like every other container, so
             // there is nothing statically to key on, and a receiver that is not an
             // exact list pays one type check and takes the ordinary path
-            let call = match name.as_str() {
-                "append" => "By_ListAppend",
-                _ => "By_CallMethod",
-            };
-            let _ = writeln!(
-                out,
-                "      PyObject *by_t = {call}({}, {slot}, by_argv, {});",
-                value_expr(receiver),
-                args.len()
-            );
+            //
+            // every other name goes through a site of its own, which remembers what
+            // the name resolved to for the receiver's type and re-derives it only
+            // when the type or its version tag moves
+            match name.as_str() {
+                "append" => {
+                    let _ = writeln!(
+                        out,
+                        "      PyObject *by_t = By_ListAppend({}, {slot}, by_argv, {});",
+                        value_expr(receiver),
+                        args.len()
+                    );
+                }
+                _ => {
+                    let site = format!("by_site_{}", mangle(name));
+                    let _ = writeln!(
+                        out,
+                        "      static ByMethodSite {site} = BY_METHOD_SITE_INIT;"
+                    );
+                    let _ = writeln!(
+                        out,
+                        "      PyObject *by_t = By_CallMethodSite(&{site}, {}, {slot}, by_argv, {});",
+                        value_expr(receiver),
+                        args.len()
+                    );
+                }
+            }
             out.push_str(&commit_checked(function, *dest, error_target));
             out
         }
@@ -5090,6 +5507,27 @@ fn emit_op(
             let expr = format!("{call}({}, {})", value_expr(container), value_expr(index));
             assign_checked(module, function, *dest, &expr, error_target)
         }
+        Op::DictFind {
+            dest,
+            container,
+            key,
+        } => {
+            // a null result is an absent key *or* failure, so the check has to
+            // consult the exception state rather than the value alone
+            let expr = format!(
+                "By_DictFind({}, {})",
+                value_expr(container),
+                value_expr(key)
+            );
+            let mut out = assign_owned(module, function, *dest, &expr);
+            let _ = writeln!(
+                out,
+                "    if ({} == NULL && PyErr_Occurred()) goto {};",
+                local(*dest),
+                error_label(error_target)
+            );
+            out
+        }
         Op::StrGetItem {
             dest,
             container,
@@ -5210,6 +5648,42 @@ fn emit_op(
             let expr = format!("By_Len({})", value_expr(src));
             assign_checked(module, function, *dest, &expr, error_target)
         }
+        Op::StrOfInt { dest, value } => {
+            // the same resolution `Op::CallPython` emits, and for the same reason:
+            // the name is what a module rebinds, so it is asked every trip. only
+            // what happens to the answer differs
+            let mut out = String::new();
+            let _ = writeln!(
+                out,
+                "    {{ static PyObject *by_g_str = NULL; PyObject *by_fn = NULL;"
+            );
+            let _ = writeln!(
+                out,
+                "      if (by_g_str == NULL) by_g_str = By_InternedStr(\"str\", 3);"
+            );
+            let _ = writeln!(
+                out,
+                "      if (by_g_str == NULL) goto {};",
+                error_label(error_target)
+            );
+            let _ = writeln!(
+                out,
+                "      by_fn = By_LookupGlobal(by_module_dict, by_g_str);"
+            );
+            let _ = writeln!(
+                out,
+                "      if (by_fn == NULL) goto {};",
+                error_label(error_target)
+            );
+            let _ = writeln!(
+                out,
+                "      PyObject *by_t = By_StrOfInt(by_fn, {});",
+                value_expr(value)
+            );
+            let _ = writeln!(out, "      Py_DECREF(by_fn);");
+            out.push_str(&commit_checked(function, *dest, error_target));
+            out
+        }
         Op::StrConcat {
             dest,
             lhs,
@@ -5315,12 +5789,17 @@ fn emit_terminator(
             let ty = function.ret.clone();
             let expr = value_expr(value);
             // hand the caller an owned reference, then release everything this
-            // frame holds — including the register just retained
+            // frame holds. where the value *is* a register this frame owns, the
+            // reference it already holds is the one the caller gets, so neither the
+            // retain nor that register's release is written
+            let moved = returned_by_move(function, value, live);
             let _ = writeln!(out, "    {{ {} by_ret = {expr};", ctype(module, &ty));
-            if let Some(retain) = inc_ref(&ty, "by_ret") {
+            if let Some(retain) = inc_ref(&ty, "by_ret")
+                && moved.is_none()
+            {
                 let _ = writeln!(out, "      {retain}");
             }
-            out.push_str(&emit_cleanup(function, "      ", live));
+            out.push_str(&emit_cleanup(function, "      ", live, moved));
             out.push_str("      return by_ret; }\n");
             out
         }
@@ -5339,8 +5818,8 @@ fn emit_terminator(
             )
         }
         Terminator::Unreachable => {
-            let mut out = emit_cleanup(function, "    ", live);
-            let _ = writeln!(out, "    return {};", function.ret.undefined());
+            let mut out = emit_cleanup(function, "    ", live, None);
+            let _ = writeln!(out, "    return {};", undefined(module, &function.ret));
             out
         }
     }
@@ -6032,6 +6511,13 @@ fn emit_module_init(module: &ModuleIr) -> String {
             adopt_init,
             "    if (By_AdoptTwinAttributes(by_twin, by_type, {count}) < 0) return -1;"
         );
+        // and now that every type holds everything its body gave it, the methods those
+        // values captured. this waits for the adoption because a table a factory installed
+        // after the `class` statement is one of the values it has to reach
+        let _ = writeln!(
+            adopt_init,
+            "    if (By_RemapTwinMethods(by_twin, by_type, {count}) < 0) return -1;"
+        );
         let names = twins
             .iter()
             .map(|class| c_string(&class.name))
@@ -6175,6 +6661,15 @@ fn emit_module_init(module: &ModuleIr) -> String {
         let mut installed = String::new();
         if !ready.is_empty() {
             let _ = writeln!(installed, "{ready}");
+        }
+        // before anything else asks the type to build an instance: the assignment is what
+        // gives the class its `tp_new`, and until it has run the type still allocates the
+        // way `object` does
+        if publishes_new(class).is_some() {
+            let _ = writeln!(
+                installed,
+                "    if (By_PublishNew({type_name}_OBJ, &{type_name}_new_def) < 0) return -1;"
+            );
         }
         // the type exists from here, so it is what stands for this class's twin in every
         // remap below. a class built in the layout guard was built before the array even
@@ -6370,6 +6865,26 @@ fn emit_module_init(module: &ModuleIr) -> String {
          \x20   }\n"
             .to_string()
     };
+    // last, after every hand this module lays on its own classes: a decorator that
+    // replaced a method, a twin whose attributes were adopted. arming here is what makes
+    // the licence answer for what the class *ends up* holding rather than what it was
+    // built with
+    let arm_dispatch: String = dispatch_licences(module)
+        .iter()
+        .filter_map(|(class, method)| {
+            let owner = class_named(module, class)?;
+            let body = module.all_functions().find(|function| {
+                function.owner.as_deref() == Some(class) && function.name == *method
+            })?;
+            Some(format!(
+                "    {} = By_ArmMethod({}_OBJ, {}, (PyCFunction){});\n",
+                dispatch_licence(module, class, method),
+                owner.type_name(module.name.dotted()),
+                c_string(method),
+                body.wrapper_symbol(module.name.dotted()),
+            ))
+        })
+        .collect();
     let _ = write!(
         out,
         "static int by_exec(PyObject *module) {{\n\
@@ -6388,6 +6903,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
          {release_bodies}\
          \x20   if (PyModule_AddFunctions(module, by_methods) < 0) return -1;\n\
          {decorators}\
+         {arm_dispatch}\
          \x20   return 0;\n\
          }}\n\n\
          static PyModuleDef_Slot by_slots[] = {{\n\
@@ -6654,6 +7170,7 @@ mod tests {
             generic: false,
             declares_slots: false,
             constants: Vec::new(),
+            properties: Vec::new(),
             slot_aliases: Vec::new(),
             fields: vec![by_ir::function::FieldDecl {
                 name: "tag".to_string(),
@@ -7225,6 +7742,7 @@ mod tests {
             generic: false,
             declares_slots: false,
             constants: Vec::new(),
+            properties: Vec::new(),
             slot_aliases: Vec::new(),
             fields: vec![by_ir::function::FieldDecl {
                 name: "tag".to_string(),
@@ -7307,12 +7825,9 @@ mod tests {
     #[test]
     fn every_exit_releases_what_the_frame_owns_and_nothing_else() {
         let c = emit_module(&module_with(add()));
-        // the return retains the result, and the frame releases its own
-        // temporary — but not the parameters, which the caller still owns.
+        // the frame does not release the parameters, which the caller still owns.
         // releasing them here *and* in the wrapper was a double-decref that only
         // survived because small ints are unrefcounted
-        assert!(c.contains("By_IncRefTagged(by_ret);"), "{c}");
-        assert!(c.contains("By_DecRefTagged(r2);"), "{c}");
         let body = c
             .split("static ByTagged by_app_add(ByTagged r0, ByTagged r1) {")
             .nth(1)
@@ -7320,6 +7835,50 @@ mod tests {
             .expect("the body is emitted");
         assert!(!body.contains("By_DecRefTagged(r0);"), "{body}");
         assert!(!body.contains("By_DecRefTagged(r1);"), "{body}");
+    }
+
+    #[test]
+    fn a_returned_register_hands_its_own_reference_to_the_caller() {
+        let c = emit_module(&module_with(add()));
+        let returned = c
+            .split("{ ByTagged by_ret =")
+            .nth(1)
+            .and_then(|rest| rest.split("return by_ret;").next())
+            .expect("the return is emitted");
+        // the sum is the frame's own, and the caller is given the reference the
+        // frame already holds rather than a second one. the *error* path still
+        // releases it, because nothing is being handed out there
+        assert!(!returned.contains("By_IncRefTagged"), "{returned}");
+        assert!(!returned.contains("By_DecRefTagged(r2);"), "{returned}");
+        assert!(c.contains("by_error: ;\n    By_DecRefTagged(r2);"), "{c}");
+    }
+
+    #[test]
+    fn a_returned_parameter_is_still_retained() {
+        let mut builder = FunctionBuilder::new("first", RType::STR);
+        let a = builder.param("a", RType::STR);
+        builder.terminate(Terminator::Return(Value::Register(a)));
+        let c = emit_module(&module_with(builder.finish()));
+        let body = c
+            .split("static PyObject * by_app_first(PyObject * r0) {")
+            .nth(1)
+            .and_then(|rest| rest.split("static PyObject *byw").next())
+            .expect("the body is emitted");
+        // the frame never owned it, so there is no reference of its own to hand on
+        assert!(body.contains("Py_XINCREF(by_ret);"), "{body}");
+    }
+
+    #[test]
+    fn a_returned_register_the_analysis_rules_out_is_still_retained() {
+        let mut builder = FunctionBuilder::new("f", RType::STR);
+        let s = builder.temp(RType::STR);
+        builder.assign(s, Value::Str("x".to_string()));
+        builder.terminate(Terminator::Return(Value::Register(s)));
+        let mut module = module_with(builder.finish());
+        // claim nothing is owned at the exit: there is no release to cancel against
+        module.functions[0].blocks[0].owned_at_exit = Some(Vec::new());
+        let c = emit_module(&module);
+        assert!(c.contains("Py_XINCREF(by_ret);"), "{c}");
     }
 
     #[test]
@@ -7534,6 +8093,7 @@ mod tests {
             generic: false,
             declares_slots: false,
             constants: Vec::new(),
+            properties: Vec::new(),
             slot_aliases: Vec::new(),
             fields: vec![by_ir::function::FieldDecl {
                 name: "x".to_string(),
@@ -7961,6 +8521,30 @@ mod tests {
     }
 
     #[test]
+    fn a_borrowed_copy_is_a_plain_store() {
+        // `len(line)` over a `str` parameter: the operand position widens, and the
+        // widening is a `PyObject *` moving into another `PyObject *`
+        let mut builder = FunctionBuilder::new("size", RType::INT);
+        let line = builder.param("line", RType::STR);
+        let widened = builder.temp(RType::OBJECT);
+        let length = builder.temp(RType::INT);
+        builder.assign(widened, Value::Register(line));
+        builder.push(Op::Len {
+            dest: length,
+            src: Value::Register(widened),
+        });
+        builder.terminate(Terminator::Return(Value::Register(length)));
+        let mut function = builder.finish();
+        function.registers[widened.index()].borrowed = true;
+
+        let text = emit_function(&ModuleIr::new("app"), &function);
+        assert!(text.contains("    r1 = r0;\n"), "{text}");
+        assert!(!text.contains("Py_XINCREF"), "{text}");
+        // and the frame does not give back what it never took, on either way out
+        assert!(!text.contains("Py_XDECREF(r1)"), "{text}");
+    }
+
+    #[test]
     fn a_line_directive_points_at_the_by_source() {
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let a = builder.param("a", RType::INT);
@@ -8076,6 +8660,7 @@ mod tests {
             generic: false,
             declares_slots: false,
             constants: Vec::new(),
+            properties: Vec::new(),
             slot_aliases: Vec::new(),
             fields: vec![by_ir::function::FieldDecl {
                 name: "value".to_string(),
@@ -8164,6 +8749,7 @@ mod tests {
             generic: false,
             declares_slots: false,
             constants: Vec::new(),
+            properties: Vec::new(),
             slot_aliases: Vec::new(),
             fields: ["a", "rest", "extra"]
                 .into_iter()

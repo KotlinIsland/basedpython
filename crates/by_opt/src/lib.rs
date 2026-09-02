@@ -8,12 +8,15 @@
 pub mod borrow;
 mod coalesce;
 pub mod copy_propagation;
+pub mod dead_allocations;
 pub mod dead_registers;
+pub mod dict_find;
 pub mod fold;
 pub mod infallible;
 pub mod refcount;
 pub mod str_append;
 pub mod str_item_compare;
+pub mod str_of_int;
 pub mod unbox_counters;
 mod unswitch;
 
@@ -55,6 +58,14 @@ pub const PASSES: &[Pass] = &[
         name: "str-item-compare",
         run: str_item_compare::run,
     },
+    // before dead-registers, which is what removes the aliases and the temporary
+    // this orphans — the two sides hold a copy of the key each, and the pass sees
+    // through those itself rather than waiting for copy-propagation to unify them,
+    // because a refcounted copy is one propagation deliberately leaves standing
+    Pass {
+        name: "dict-find",
+        run: dict_find::run,
+    },
     // before dead-registers, which is what removes the temporary it frees up
     // after folding, which is what turns the step's operands into the immediates
     // the analysis looks for, and before coalesce, which would merge the counter
@@ -63,9 +74,23 @@ pub const PASSES: &[Pass] = &[
         name: "unbox-counters",
         run: unbox_counters::run,
     },
+    // after every fold, which is what orphans the allocations it removes, and before
+    // coalesce, which would merge an orphaned register with a live one and so make
+    // the write that fills it look read
+    Pass {
+        name: "dead-allocations",
+        run: dead_allocations::run,
+    },
     Pass {
         name: "coalesce",
         run: coalesce::run,
+    },
+    // before dead-registers, which is what removes the register the boxing it
+    // fuses away used to fill, and before unswitch, which would otherwise copy the
+    // unfused shape into a second body the pass then has to recognise twice
+    Pass {
+        name: "str-of-int",
+        run: str_of_int::run,
     },
     Pass {
         name: "dead-registers",
@@ -271,6 +296,7 @@ mod tests {
             methods: vec![builder.finish()],
             decorators: Vec::new(),
             constants: Vec::new(),
+            properties: Vec::new(),
             slot_aliases: Vec::new(),
             generic: false,
             declares_slots: false,

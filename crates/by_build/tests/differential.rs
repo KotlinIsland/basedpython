@@ -331,6 +331,24 @@ def _capture_async(fn, *args):
         return type(e).__name__ + ': ' + str(e)
     return None
 
+# drive a coroutine by hand, without a loop under it: one `send` is the whole of what
+# an await does to a coroutine that never suspends, and the value it finished with
+# arrives on the `StopIteration` the send raises
+def _sent_once(coro):
+    try:
+        coro.send(None)
+    except StopIteration as e:
+        return e.value
+    coro.close()
+    return 'suspended'
+
+# closed rather than dropped, so a coroutine that is never awaited does not leave a
+# `RuntimeWarning` behind for whichever leg happened to build it
+def _is_coroutine(coro):
+    out = asyncio.iscoroutine(coro)
+    coro.close()
+    return out
+
 class _Counter:
     def __init__(self, limit):
         self.limit = limit
@@ -737,6 +755,84 @@ def mix(a: int, b: int) -> int:
             "m.mix(10**20, 3)",
         ],
     );
+}
+
+#[test]
+fn arithmetic_that_leaves_the_short_range_agrees() {
+    // a tagged integer holds one bit fewer than a machine word, so an operation whose
+    // operands are both short can still produce a result that is not, and the answer
+    // then has to come back through cpython's own arithmetic. the runtime keeps that
+    // half of each operator out of line, so this is the boundary between two pieces of
+    // code rather than two branches of one — including at the very edge, where the
+    // result is exactly one past what a short can hold
+    agree(
+        "shortedge",
+        "\
+def add(a: int, b: int) -> int:
+    return a + b
+
+def sub(a: int, b: int) -> int:
+    return a - b
+
+def mul(a: int, b: int) -> int:
+    return a * b
+",
+        &[
+            "m.add(2**62 - 1, 1)",
+            "m.add(-(2**62), -1)",
+            "m.sub(-(2**62), 1)",
+            "m.sub(2**62 - 1, -1)",
+            "m.mul(2**31, 2**31)",
+            "m.mul(-(2**31), 2**31)",
+            "[m.add(a, b) for a in (2**62 - 1, -(2**62)) for b in (-1, 0, 1)]",
+            "[m.mul(a, b) for a in (2**40, -(2**40)) for b in (2**40, -(2**40), 0)]",
+        ],
+    );
+}
+
+#[test]
+fn an_operation_that_keeps_leaving_the_short_range_does_not_leak() {
+    // each trip round this loop boxes both operands, calls cpython, and tags the
+    // result. a reference dropped or kept anywhere along that path shows up as growth
+    // and nowhere else, because the short path never allocates at all
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_bigleak");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def climb(a: int, n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        total = total + a * a
+        i = i + 1
+    return total
+";
+    if build_source(
+        source,
+        "by_diff_bigleak",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import gc, by_diff_bigleak as m\n\
+         big = 2**80\n\
+         m.climb(big, 50)\n\
+         gc.collect(); before = len(gc.get_objects())\n\
+         print(m.climb(big, 2000) == big * big * 2000)\n\
+         gc.collect(); after = len(gc.get_objects())\n\
+         print('stable' if after <= before + 100 else f'grew {before}->{after}')\n",
+    );
+    assert_eq!(out, "True\nstable");
 }
 
 #[test]
@@ -1287,6 +1383,117 @@ fn a_temporary_object_argument_does_not_crash() {
          print('survived')\n",
     );
     assert_eq!(out, "survived");
+}
+
+/// the source a widened copy is read from, and the neighbours the borrow must not
+/// disturb
+///
+/// `len(x)` widens its operand into a temporary of its own, because a length is
+/// defined on anything at all. that temporary now borrows from the register it was
+/// copied from rather than retaining, so what has to hold is that the source is
+/// still holding the value at every use — including where the source is rebound
+/// every trip, and where the thing being measured changes under the loop
+const WIDENED_COPIES: &str = "\
+def scan(line: str) -> int:
+    best = 0
+    run = 0
+    i = 0
+    while i < len(line):
+        if line[i] == \" \":
+            if run > best:
+                best = run
+            run = 0
+        else:
+            run = run + 1
+        i = i + 1
+    if run > best:
+        best = run
+    return best
+
+# the copy's source is the parameter, and the parameter is rebound every trip —
+# so the value the last trip measured is dropped while the loop is still running
+def shrink(s: str) -> int:
+    n = 0
+    while len(s) > 0:
+        s = s[1:]
+        n = n + 1
+    return n
+
+# the length really does change under the loop, so it has to be asked afresh
+def grow(n: int) -> int:
+    out = []
+    while len(out) < n:
+        out.append(len(out))
+    return len(out)
+
+# a local whose value is replaced between one measurement and the next
+def swapped(n: int) -> int:
+    held = \"a\" * n
+    first = len(held)
+    held = \"bb\" * n
+    return first + len(held)
+
+def measure(o) -> int:
+    return len(o)
+";
+
+#[test]
+fn a_length_taken_of_a_widened_copy_agrees() {
+    agree(
+        "widened",
+        WIDENED_COPIES,
+        &[
+            "[m.scan(s) for s in ('', ' ', 'a', 'abc', 'a bb ccc d', '   ', 'ab  cd')]",
+            "m.scan('word0 word1 word2 ' * 40)",
+            "[m.shrink(s) for s in ('', 'a', 'abcdef', 'é🎉z')]",
+            "[m.grow(n) for n in (0, 1, 5, 40)]",
+            "[m.swapped(n) for n in (0, 1, 7)]",
+            "[m.measure(o) for o in ([], [1, 2], 'abc', {1: 2}, (1, 2, 3), range(9))]",
+            // a subclass may have said its own thing about both the length and the
+            // indexing, and a `str` annotation admits one
+            "m.scan(type('S', (str,), {'__len__': lambda self: 3})('a b c d'))",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.measure, 5), _capture(m.measure, None)]]",
+        ],
+    );
+}
+
+#[test]
+fn a_borrowed_copy_does_not_over_release_its_source() {
+    // the copy no longer retains, so an argument whose only reference is the
+    // caller's temporary is now being read through a register that owns nothing.
+    // getting the window wrong frees it mid-loop, which is fatal rather than merely
+    // wrong — and a stray release would show as a falling reference count
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_widened_rc");
+    let _ = std::fs::remove_dir_all(&dir);
+    if build_source(
+        WIDENED_COPIES,
+        "by_diff_widened_rc",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import sys, by_diff_widened_rc as m\n\
+         kept = 'a bb ccc ' * 30\n\
+         before = sys.getrefcount(kept)\n\
+         for _ in range(2000):\n\
+         \x20   m.scan(kept)\n\
+         \x20   m.scan('x y ' * 20)\n\
+         \x20   m.shrink('abcdef')\n\
+         \x20   m.measure([1, 2, 3])\n\
+         print('stable' if sys.getrefcount(kept) == before else 'moved')\n",
+    );
+    assert_eq!(out, "stable");
 }
 
 #[test]
@@ -2127,6 +2334,116 @@ def numerator(f) -> object:
             "[m.trimmed(s) for s in ('  x  ', 'x', '   ')]",
             "[m.upper_join(p) for p in ([], ['a'], ['ab', 'cd'])]",
             "[m.numerator(n) for n in (3, -7)]",
+        ],
+    );
+}
+
+/// a call site remembers what a method name resolved to, so every way that answer
+/// could stop being the right one has to be asked of it
+///
+/// the one that matters here is a *different class*: an annotation of `str` admits a
+/// subclass, and a subclass may have overridden the method. a site is also asked to
+/// serve receivers of several types in turn, because the answer it remembers is only
+/// ever for one of them — and `split` is asked with and without its argument, which
+/// are two different operations rather than one with a default
+#[test]
+fn a_remembered_method_still_reaches_an_override() {
+    agree_python(
+        "methodsite",
+        "\
+def shout(s: str) -> str:
+    return s.upper()
+
+def words(line: str, sep: str) -> object:
+    return line.split(sep)
+
+# no argument splits on runs of whitespace and drops the empties, where a single
+# space keeps every one of them
+def loose(line: str) -> object:
+    return line.split()
+
+def leads(s: str, prefix) -> object:
+    return s.startswith(prefix)
+
+def glued(sep: str, parts: object) -> str:
+    return sep.join(parts)
+
+# one site, several receiver types in turn: a str, a list and a tuple all reach
+# their own `count` through the same call
+def counted(o, x) -> object:
+    return o.count(x)
+
+def fetched(o, k) -> object:
+    return o.get(k)
+
+# a method call in a loop is what a site is for, and where a receiver that changes
+# type part way through would be missed
+def shout_all(items: list) -> object:
+    out = []
+    for i in items:
+        out.append(i.upper())
+    return out
+",
+        &[
+            "[m.shout(s) for s in ('', 'abc', 'ABC', 'é', '🎉', 'ß')]",
+            // a subclass that overrides the method, and one that inherits it
+            "m.shout(type('S', (str,), {'upper': lambda self: 'Z'})('ab'))",
+            "m.shout(type('P', (str,), {})('ab'))",
+            // the exact class first, then the subclass, then the exact class again
+            "[m.shout(s) for s in ('ab', type('S', (str,), {'upper': lambda self: 'Z'})('cd'), 'ef')]",
+            "[m.words(line, ' ') for line in ('', 'a', 'a b c', ' a  b ', 'a b ')]",
+            "[m.words('a-b-c', s) for s in ('-', 'x', 'a')]",
+            "[m.loose(line) for line in ('', '   ', 'a b c', ' a  b ', 'a\\tb\\nc')]",
+            "m.words(type('S', (str,), {'split': lambda self, sep: ['Z']})('a b'), ' ')",
+            "[m.leads(s, 'w') for s in ('', 'w', 'word', 'xw')]",
+            // `startswith` also takes a tuple of prefixes, and refuses anything else
+            "[m.leads('word', p) for p in ('w', ('x', 'w'), ('x',), ())]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.leads, 'word', 5)]]",
+            "[m.glued(s, p) for s in ('', '-', '::') for p in ([], ['a'], ['a', 'b'], ('c', 'd'))]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.glued, '-', [1, 2]), _capture(m.glued, '-', 5)]]",
+            "m.glued(type('S', (str,), {'join': lambda self, p: 'Z'})('-'), ['a'])",
+            "[m.counted(o, 'a') for o in ('banana', ['a', 'b', 'a'], ('a',))]",
+            "[m.counted(o, 1) for o in ([1, 1, 2], (1,))]",
+            "[m.fetched(o, 'k') for o in ({'k': 1}, {}, type('D', (dict,), {'get': lambda self, k: 'Z'})())]",
+            "m.shout_all(['ab', 'cd'])",
+            "m.shout_all([])",
+            "m.shout_all(['ab', type('S', (str,), {'upper': lambda self: 'Z'})('cd'), 'ef'])",
+        ],
+    );
+}
+
+/// the other way a remembered answer stops being right: the method is rebound on
+/// the type after the site was armed
+///
+/// the interpreter's version tag is what the site tests, and it is bumped by a write
+/// to the class or to any of its bases — so both are written to here, each after a
+/// call that has already armed the site against the old body
+#[test]
+fn a_remembered_method_notices_the_type_being_rebound() {
+    agree_python(
+        "methodrebind",
+        "\
+def speak(o) -> object:
+    return o.speak()
+
+def speak_twice(o) -> object:
+    return (o.speak(), o.speak())
+",
+        &[
+            "[m.speak(o) for o in (type('A', (), {'speak': lambda s: 'a'})(), type('B', (), {'speak': lambda s: 'b'})())]",
+            "\
+(lambda C: [
+    m.speak_twice(C()),
+    setattr(C, 'speak', lambda self: 'second'),
+    m.speak_twice(C()),
+])(type('C', (), {'speak': lambda self: 'first'}))",
+            // the same, but the write lands on a base rather than on the class itself
+            "\
+(lambda B, C: [
+    m.speak_twice(C()),
+    setattr(B, 'speak', lambda self: 'second'),
+    m.speak_twice(C()),
+])(*(lambda B: (B, type('C', (B,), {})))(type('B', (), {'speak': lambda self: 'first'})))",
         ],
     );
 }
@@ -3123,11 +3440,11 @@ def f(n: int) -> int:
 
 /// a decorator rooted at a name the class body bound keeps its decline
 ///
-/// `@total.setter` reads the property the body bound above it. a decorator is resolved
-/// out of the *module* namespace at init, where there is no such name — the lookup would
-/// raise `NameError` and take the whole extension's import with it. that shape also
-/// writes two `def`s of one name, which is its own decline and answers first, so
-/// `Rooted` stands beside it with the same root and distinct names
+/// a decorator is resolved out of the *module* namespace at init, where a name the class
+/// body bound does not exist — the lookup would raise `NameError` and take the whole
+/// extension's import with it. `@total.setter` is the one shape that is exempt, because
+/// it is not resolved at all: the pair it belongs to is lowered as the one attribute
+/// python folds it into, so `Box` stands beside `Rooted` as the case that still compiles
 #[test]
 fn a_decorator_rooted_in_the_class_body_declines() {
     let Some((python, toolchain)) = environment() else {
@@ -3186,7 +3503,7 @@ class Rooted:
         built.declined
     );
     assert!(
-        reasons("`total` is defined more than once"),
+        !reasons("`total` is defined more than once"),
         "declined: {:?}",
         built.declined
     );
@@ -3198,7 +3515,9 @@ class Rooted:
          b.total = 7\n\
          print(b.total, type(m.Box.total).__name__, m.Rooted().value())\n",
     );
-    assert_eq!(out, "7 property 3");
+    // `Box` publishes its pair through `tp_getset`, which is what a class implemented
+    // in C publishes an attribute through; `Rooted` fell back and keeps its own
+    assert_eq!(out, "7 getset_descriptor 3");
 }
 
 /// a class whose type slots publish more than its body wrote keeps its decorator's
@@ -3768,6 +4087,275 @@ def restore(n: int) -> int:
 }
 
 #[test]
+fn a_local_a_frame_deletes_leaves_the_name_unbound() {
+    // `del x` on a register clears the byte that says whether the local was written,
+    // which is the same byte a read-before-write is guarded by. so afterwards a read
+    // raises `UnboundLocalError`, a second `del` raises it too rather than doing
+    // nothing, and a later write binds the name again
+    agree_python(
+        "localdelete",
+        "\
+import sys
+
+
+def drop(n: int) -> str:
+    x = n
+    del x
+    try:
+        return repr(x)
+    except UnboundLocalError as error:
+        return f'UnboundLocalError: {error}'
+
+
+def twice(n: int) -> str:
+    x = n
+    del x
+    try:
+        del x
+    except UnboundLocalError as error:
+        return f'UnboundLocalError: {error}'
+    return 'deleted'
+
+
+def rebound(n: int) -> int:
+    x = n
+    del x
+    x = n + 1
+    return x
+
+
+def several(n: int) -> str:
+    a = n
+    b = n + 1
+    del a, b
+    try:
+        return repr(a)
+    except UnboundLocalError as error:
+        return f'UnboundLocalError: {error}'
+
+
+def stops_at_the_first(n: int) -> str:
+    # the statement stops where it raises, so the second target is still bound
+    a = n
+    b = n + 1
+    del a
+    try:
+        del a, b
+    except UnboundLocalError:
+        pass
+    return repr(b)
+
+
+def parameter(n: int) -> str:
+    del n
+    try:
+        return repr(n)
+    except UnboundLocalError as error:
+        return f'UnboundLocalError: {error}'
+
+
+def in_a_loop(n: int) -> str:
+    seen = []
+    for i in range(n):
+        held = i * 2
+        seen.append(held)
+        del held
+        try:
+            seen.append(held)
+        except UnboundLocalError:
+            seen.append(-1)
+    return repr(seen)
+
+
+def unwound(n: int) -> str:
+    # the answer to whether the name is bound has to survive the unwind, or the
+    # handler reads a slot the deletion emptied
+    x = n
+    try:
+        del x
+        raise ValueError('boom')
+    except ValueError:
+        try:
+            return repr(x)
+        except UnboundLocalError as error:
+            return f'UnboundLocalError: {error}'
+
+
+def finally_sees_it(n: int) -> str:
+    x = n
+    try:
+        del x
+    finally:
+        try:
+            out = repr(x)
+        except UnboundLocalError as error:
+            out = f'UnboundLocalError: {error}'
+    return out
+
+
+def an_object(n: int) -> str:
+    s = 'v' * n
+    del s
+    try:
+        return s
+    except UnboundLocalError as error:
+        return f'UnboundLocalError: {error}'
+
+
+def released(n: int) -> str:
+    # a delta rather than an absolute count, so the two legs' own temporaries cancel:
+    # the alias adds one reference and the deletion has to give it back
+    target = [n]
+    before = sys.getrefcount(target)
+    alias = target
+    during = sys.getrefcount(target)
+    del alias
+    after = sys.getrefcount(target)
+    return f'{during - before}:{after - before}'
+
+
+def drops_its_argument(target: object) -> int:
+    # the frame never took a reference to an argument, so deleting the name must not
+    # give one back. calling this repeatedly on the same object is the check: a
+    # release too many walks the caller's count down to nothing
+    del target
+    return 0
+
+
+def bracketed(n: int) -> str:
+    # `del (a, b)` is `del a, b`: python deletes the elements of a display target
+    # rather than the display
+    a = n
+    b = n + 1
+    del (a, b)
+    try:
+        return repr(b)
+    except UnboundLocalError as error:
+        return f'UnboundLocalError: {error}'
+
+
+def listed(n: int) -> str:
+    a = n
+    del [a]
+    try:
+        return repr(a)
+    except UnboundLocalError as error:
+        return f'UnboundLocalError: {error}'
+
+
+def already_conditional(n: int) -> str:
+    # the local is maybe-unassigned before the `del` as well as after it, so the two
+    # reasons the byte exists meet on the same register
+    if n > 0:
+        held = n
+    try:
+        del held
+    except UnboundLocalError as error:
+        return f'UnboundLocalError: {error}'
+    return 'deleted'
+
+
+def dropped_and_returned(n: int) -> int:
+    # the deleted name is never read again, so nothing but the exit path looks at the
+    # slot — which has to release what an unbound register holds without reading it
+    s = 'v' * n
+    del s
+    return n
+",
+        &[
+            "m.drop(1)",
+            "m.twice(1)",
+            "m.rebound(4)",
+            "m.several(2)",
+            "m.stops_at_the_first(3)",
+            "m.parameter(5)",
+            "m.in_a_loop(3)",
+            "m.unwound(6)",
+            "m.finally_sees_it(7)",
+            "m.an_object(3)",
+            "m.released(9)",
+            "m.bracketed(2)",
+            "m.listed(2)",
+            "m.already_conditional(1)",
+            "m.already_conditional(-1)",
+            "m.dropped_and_returned(3)",
+            "(lambda o: (sys.getrefcount(o), \
+             all(m.drops_its_argument(o) == 0 for _ in range(50)), \
+             sys.getrefcount(o)))(['kept'])",
+        ],
+    );
+}
+
+#[test]
+fn a_deleted_name_no_register_holds_stays_interpreted() {
+    // four shapes the register's byte cannot answer for, each of which keeps the
+    // function interpreted rather than answering wrongly: a name only ever deleted
+    // (python makes it local for the whole function, so the reads elsewhere in the
+    // body would have gone to the module namespace), a name a nested frame shares
+    // (one cell, whose unbound state is the field being NULL), the same name deleted
+    // from the *inner* side under `nonlocal`, and a name deleted after a suspension
+    // (the byte is a register, and no register survives one)
+    agree_python_with_declines(
+        "localdeclinedelete",
+        "\
+count = 1
+
+
+def only_deleted() -> str:
+    try:
+        del count
+    except UnboundLocalError as error:
+        return f'UnboundLocalError: {error}'
+    return 'deleted'
+
+
+def shared(n: int) -> str:
+    held = n
+
+    def read() -> int:
+        return held
+
+    out = read()
+    del held
+    try:
+        return f'{out} {read()}'
+    except NameError as error:
+        return f'{out} NameError'
+
+
+def declared_nonlocal(n: int) -> str:
+    held = n
+
+    def drop() -> None:
+        nonlocal held
+        del held
+
+    drop()
+    try:
+        return repr(held)
+    except UnboundLocalError as error:
+        return f'UnboundLocalError: {error}'
+
+
+def across_a_suspension(n: int):
+    held = n
+    yield held
+    del held
+    try:
+        yield held
+    except UnboundLocalError as error:
+        yield f'UnboundLocalError: {error}'
+",
+        &[
+            "m.only_deleted()",
+            "m.shared(2)",
+            "m.declared_nonlocal(4)",
+            "list(m.across_a_suspension(3))",
+        ],
+    );
+}
+
+#[test]
 fn a_global_a_nested_frame_declares_is_not_the_enclosing_local_of_that_name() {
     // the enclosing frame binds a local `seen` and the nested one declares `seen`
     // global, so they are two different places. deciding captures without consulting
@@ -3992,9 +4580,15 @@ def writes(n: int) -> int:
 
 
 def declines_and_reads() -> str:
-    # `del` on a plain local has no lowering, so this whole function stays interpreted
-    tmp = 1
-    del tmp
+    # `except*` has no lowering, so this whole function stays interpreted. any gate
+    # can be lifted — the `del tmp` that used to sit here was — so what keeps this
+    # honest is the assertion below rather than the choice of construct. `except*` is
+    # picked because it has nothing to do with name binding, which is where the work
+    # that moves this test tends to happen
+    try:
+        pass
+    except* ValueError:
+        pass
     return f'{flag}'
 ";
     let built = match build_source(
@@ -4014,9 +4608,9 @@ def declines_and_reads() -> str:
             return;
         }
     };
-    // the two legs of the same module: one compiled, one not. if `del` on a local ever
-    // gains a lowering this stops being true, and the assertion says so rather than
-    // quietly testing two compiled functions
+    // the two legs of the same module: one compiled, one not. if the construct above
+    // ever gains a lowering this stops being true, and the assertion says so rather
+    // than quietly testing two compiled functions
     assert_eq!(
         built
             .declined
@@ -4970,6 +5564,58 @@ def inner_label(n: Nest) -> str:
          print('stable' if after == before else f'leaked {before}->{after}')\n",
     );
     assert_eq!(out, "stable");
+}
+
+#[test]
+fn a_literal_used_in_a_loop_neither_leaks_nor_is_released_twice() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_constborrow");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def kept(line: str) -> int:
+    total = 0
+    for part in line.split(\" \"):
+        if part.startswith(\"w\"):
+            total = total + 1
+    return total
+
+def marked(line: str) -> str:
+    return \"-\".join(line.split(\" \"))
+";
+    if build_source(
+        source,
+        "by_diff_constborrow",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    // the literals are module statics the emitter builds once, so a register that
+    // only ever holds one borrows it. what that has to not do is give back a
+    // reference it never took: a release per trip would have taken the count to
+    // zero long before this loop ended, and a retain per trip would show as a leak.
+    // a one-character latin-1 string is a singleton the interpreter shares, so
+    // `"w"` here *is* the module's own
+    let out = run(
+        &python,
+        &dir,
+        "import sys, by_diff_constborrow as m\n\
+         line = 'word zero ' * 50\n\
+         wanted = line.replace(' ', '-')\n\
+         before = (sys.getrefcount(' '), sys.getrefcount('w'), sys.getrefcount('-'))\n\
+         answers = set()\n\
+         for _ in range(20000):\n\
+        \x20   answers.add((m.kept(line), m.marked(line) == wanted))\n\
+         after = (sys.getrefcount(' '), sys.getrefcount('w'), sys.getrefcount('-'))\n\
+         print(sorted(answers), 'stable' if after == before else f'moved {before}->{after}')\n",
+    );
+    assert_eq!(out, "[(50, True)] stable");
 }
 
 #[test]
@@ -6123,6 +6769,112 @@ async def forwards(n: int) -> int:
             "__import__('asyncio').run(m.nothing())",
             "__import__('asyncio').run(m.forwards(1))",
             "[__import__('asyncio').run(m.plain(a)) for a in (0, -3, 10 ** 20)]",
+        ],
+    );
+}
+
+/// `await f(...)` of a coroutine of ours that never suspends is compiled to the call
+///
+/// the object such an await would build is made by the expression, awaited once and
+/// dropped, so nothing can observe that it was never there. everything that *could*
+/// observe one is here: the coroutine reached any other way, the exception a body
+/// raises on the way out, and pep 479's replacement of a `StopIteration` — which the
+/// frame used to perform as it left and which the call now performs instead
+#[test]
+fn an_await_of_a_coroutine_that_never_suspends_agrees() {
+    agree(
+        "directawait",
+        "\
+async def doubled(n: int) -> int:
+    return n * 2
+
+async def nothing(n: int) -> None:
+    return
+
+async def defaulted(n: int, step: int = 3) -> int:
+    return n + step
+
+async def failing(n: int) -> int:
+    return 10 // n
+
+async def ending(kind: object) -> int:
+    raise kind('boom')
+
+async def chained(n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        total = total + await doubled(i)
+        i = i + 1
+    return total
+
+async def with_none(n: int) -> object:
+    got = await nothing(n)
+    return (got, await doubled(n))
+
+async def keyworded(n: int) -> int:
+    return await defaulted(n, step=10) + await defaulted(n)
+
+async def divided(n: int) -> int:
+    return await failing(n)
+
+async def guarding_stop(kind: object) -> object:
+    try:
+        return await ending(kind)
+    except StopIteration as e:
+        return 'stop ' + str(e)
+    except RuntimeError as e:
+        return 'runtime ' + str(e)
+    except BaseException as e:
+        return type(e).__name__ + ' ' + str(e)
+
+async def unpacked(args: object) -> int:
+    return await doubled(*args)
+
+async def shadowing(doubled: object, n: int) -> object:
+    return await doubled(n)
+
+async def streaming(n: int) -> object:
+    i = 0
+    while i < n:
+        yield await doubled(i)
+        i = i + 1
+
+async def awaited_by_name(n: int) -> int:
+    held = doubled(n)
+    return await held
+
+async def awaited_as_value(x: object) -> object:
+    return await x
+",
+        &[
+            "_run(m.chained(6))",
+            "_run(m.with_none(4))",
+            "_run(m.keyworded(2))",
+            "_run(m.divided(5))",
+            "_run(m.unpacked((7,)))",
+            "_run(m.shadowing(m.doubled, 9))",
+            "_run(_drain(m.streaming(4)))",
+            // the awaited body's own failure is the awaiting frame's failure, with the
+            // same exception and the same words
+            "_capture_async(m.divided, 0)",
+            "_run(m.guarding_stop(ValueError))",
+            "_run(m.guarding_stop(KeyError))",
+            // pep 479: a coroutine raising `StopIteration` is forging the exhaustion
+            // the await protocol reports with one, so python replaces it. an
+            // `except StopIteration` around the await must go on not catching it
+            "_run(m.guarding_stop(StopIteration))",
+            "_capture_async(m.ending, StopIteration)",
+            "_chain(_capture(_run, m.ending(StopIteration)))",
+            "_chain(_capture(_run, m.ending(ValueError)))",
+            // and the coroutine reached any other way is the object it always was:
+            // awaited out of a name, awaited as somebody else's argument, driven by
+            // hand, run by `asyncio` on its own, and asked what it is
+            "_run(m.doubled(21))",
+            "_run(m.awaited_by_name(8))",
+            "_run(m.awaited_as_value(m.doubled(4)))",
+            "_sent_once(m.doubled(6))",
+            "_is_coroutine(m.doubled(1))",
         ],
     );
 }
@@ -7564,6 +8316,232 @@ def mapped(**named: object) -> int:
          print('objects', 'stable' if len(gc.get_objects()) <= objects else 'leaked')\n",
     );
     assert_eq!(out, "refs stable\nobjects stable");
+}
+
+/// a `@property` and the `@name.setter` under it are one attribute
+///
+/// python folds the two `def`s into a single `property` bound once, and an emitted type
+/// publishes the same attribute through `tp_getset` — whose two function pointers are
+/// exactly the halves a `property` holds. so the write runs the setter's body, the read
+/// runs the getter's, and neither half is reachable under its own name
+#[test]
+fn a_property_pair_agrees() {
+    agree_python(
+        "proppair",
+        "\
+class Box:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def value(self) -> int:
+        return self._n * 10
+
+    @value.setter
+    def value(self, given: int) -> None:
+        self._n = given + 1
+
+
+def raised(fn: object) -> str:
+    try:
+        fn()
+    except AttributeError as error:
+        return str(error)
+    return 'nothing raised'
+",
+        &[
+            "m.Box(3).value",
+            // the setter's body ran, not a store beside it
+            "(lambda b: (setattr(b, 'value', 4), b.value, b._n))(m.Box(0))",
+            // a pair with no deleter refuses `del` in python's own wording, which names
+            // the *object's* type rather than the class the property was written in
+            "m.raised(lambda: delattr(m.Box(1), 'value'))",
+            // and neither half answers under its own name
+            "hasattr(m.Box(1), 'value$get')",
+        ],
+    );
+}
+
+/// a property with a deleter, and one without a setter
+///
+/// `del` reaches a getset through its setter with a NULL value, which is where the
+/// deleter's body goes. a half the body never wrote raises there instead, and python's
+/// wording for a missing one names which half it wanted
+#[test]
+fn a_property_deleter_agrees() {
+    agree_python(
+        "propdelete",
+        "\
+class Slot:
+    def __init__(self) -> None:
+        self._held = 1
+
+    @property
+    def held(self) -> int:
+        return self._held
+
+    @held.deleter
+    def held(self) -> None:
+        self._held = 0
+
+
+def raised(fn: object) -> str:
+    try:
+        fn()
+    except AttributeError as error:
+        return str(error)
+    return 'nothing raised'
+",
+        &[
+            "m.Slot().held",
+            "(lambda s: (delattr(s, 'held'), s.held))(m.Slot())",
+            // written with a deleter and no setter, so assigning is what raises
+            "m.raised(lambda: setattr(m.Slot(), 'held', 5))",
+        ],
+    );
+}
+
+/// a subclass that writes one half of a property writes a whole new one
+///
+/// python re-derives the property from what the subclass body bound, so a subclass with
+/// only a getter has no setter at all — the base's is not inherited into it. the emitted
+/// type has to shadow the base's entry the same way, or a write the interpreted class
+/// refuses would quietly reach the base's setter
+#[test]
+fn a_subclass_overriding_one_half_of_a_property_agrees() {
+    agree_python(
+        "propoverride",
+        "\
+class Base:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def value(self) -> int:
+        return self._n
+
+    @value.setter
+    def value(self, given: int) -> None:
+        self._n = given
+
+
+class Narrow(Base):
+    @property
+    def value(self) -> int:
+        return self._n * 2
+
+
+def raised(fn: object) -> str:
+    try:
+        fn()
+    except AttributeError as error:
+        return str(error)
+    return 'nothing raised'
+",
+        &[
+            "m.Base(3).value",
+            "m.Narrow(3).value",
+            "(lambda b: (setattr(b, 'value', 8), b.value))(m.Base(0))",
+            // the subclass wrote no setter, so it has none — the base's does not carry
+            "m.raised(lambda: setattr(m.Narrow(1), 'value', 8))",
+        ],
+    );
+}
+
+/// a property whose halves are not the shape a getset stands for
+///
+/// each of these is *nearly* the construct and is turned down for what it actually is,
+/// rather than falling through to a message about a name written twice
+#[test]
+fn a_property_the_backend_cannot_fold_declines() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_propdecline");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def marking(fn: object) -> object:
+    return fn
+
+
+class Restated:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.getter
+    def value(self) -> int:
+        return 2
+
+
+class Stacked:
+    @marking
+    @property
+    def value(self) -> int:
+        return 3
+
+    @value.setter
+    def value(self, given: int) -> None:
+        pass
+
+
+class Wide:
+    @property
+    def value(self) -> int:
+        return 5
+
+    @value.setter
+    def value(self, given: int, extra: int = 1) -> None:
+        pass
+";
+    let built = match build_source(
+        source,
+        "by_diff_propdecline",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    let reasons = |needle: &str| {
+        built
+            .declined
+            .iter()
+            .any(|declined| declined.reason.contains(needle))
+    };
+    assert!(
+        reasons("writes a second `getter`"),
+        "declined: {:?}",
+        built.declined
+    );
+    assert!(
+        reasons("what stands above them is not a plain `@property`"),
+        "declined: {:?}",
+        built.declined
+    );
+    assert!(
+        reasons("takes exactly 2 argument(s)"),
+        "declined: {:?}",
+        built.declined
+    );
+    // every one of them keeps its interpreted definition, so the `property` the body
+    // built is still what stands under the name
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_propdecline as m\n\
+         print(m.Restated().value, m.Stacked().value, m.Wide().value,\n\
+        \x20     type(m.Restated.value).__name__)\n",
+    );
+    assert_eq!(out, "2 3 5 property");
 }
 
 #[test]
@@ -9392,7 +10370,7 @@ class Deeper(Plain):
         declined,
         vec![(
             "TokenList",
-            "`__new__` fills a type slot with no adapter yet"
+            "a `__new__` allocates, and this class takes its instance layout from a base outside this module — only that base knows how big one is"
         )]
     );
     let out = run(
@@ -10362,6 +11340,202 @@ class Alone(codecs.Codec):
         "True 1 2\n\
          ['Reader', 'Codec', 'StreamReader', 'Codec', 'object']\n\
          method_descriptor method_descriptor method_descriptor"
+    );
+}
+
+#[test]
+fn a_conditional_in_a_class_body_carries_across_whichever_leg_ran() {
+    // `pickle._Pickler` is the shape: a `def` and a table write behind a module flag.
+    // nothing in the compiler evaluates the flag — the interpreted definition ran the
+    // block, and every name it could have bound is copied off the namespace it left.
+    //
+    // so this asserts the things that copy has to get right. the condition runs *once*,
+    // in body order, and its effect stands: `seen` is the record. a name a false leg
+    // never wrote is absent, which `hasattr` is the observable form of. an `if`/`else`
+    // where both legs write one name carries whichever leg python took, rather than
+    // declining as the rebinding it is not. and a write the block makes into something
+    // that is not the class namespace — `table[1]`, `box.n` — leaves no name behind and
+    // is already done by the time init reads that namespace.
+    //
+    // `kept` is the prize and `method_descriptor` is what says it was won: a class that
+    // used to decline whole now compiles every method the block does not hold, and only
+    // the block's own stay interpreted
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_class_conditional");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Box:
+    n: int = 0
+
+
+seen = []
+box = Box()
+
+
+def flag(name: str, value: bool) -> bool:
+    seen.append(name)
+    return value
+
+
+class Guarded:
+    table = {}
+
+    def kept(self, n: int) -> int:
+        return n + 1
+    if flag(\"on\", True):
+        def on_leg(self) -> int:
+            return 2
+        alias = 3
+        table[1] = alias
+        box.n = 7
+    if flag(\"off\", False):
+        def off_leg(self) -> int:
+            return 4
+        missing = 5
+    if flag(\"pick\", False):
+        def picked(self) -> str:
+            return \"then\"
+    else:
+        def picked(self) -> str:
+            return \"else\"
+";
+    let built = match build_source(
+        source,
+        "by_diff_class_conditional",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    let declined: Vec<(&str, &str)> = built
+        .declined
+        .iter()
+        .map(|declined| (declined.name.as_str(), declined.reason.as_str()))
+        .collect();
+    assert_eq!(declined, Vec::new());
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_class_conditional as m\n\
+         print(m.seen)\n\
+         print(hasattr(m.Guarded, 'on_leg'), hasattr(m.Guarded, 'off_leg'))\n\
+         print(hasattr(m.Guarded, 'alias'), hasattr(m.Guarded, 'missing'))\n\
+         g = m.Guarded()\n\
+         print(g.kept(1), g.on_leg(), g.picked(), m.Guarded.alias, m.Guarded.table)\n\
+         print(m.box.n, hasattr(m.Guarded, 'box'))\n\
+         print(type(m.Guarded.kept).__name__, type(m.Guarded.on_leg).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "['on', 'off', 'pick']\n\
+         True False\n\
+         True False\n\
+         2 2 else 3 {1: 3}\n\
+         7 False\n\
+         method_descriptor function"
+    );
+}
+
+#[test]
+fn the_shapes_a_class_body_block_is_not_lowered_for_decline() {
+    // three the copy cannot answer for, and the module still runs from the interpreted
+    // definitions the decline leaves standing.
+    //
+    // a `def` beside a block that binds the same name is two definitions of one
+    // attribute, and only the running interpreter knows which python kept. a dunder is
+    // settled from the body text — `__slots__` decides an instance layout before any
+    // block has run. and a `try` binds names this does not model, so it declines by
+    // name rather than being walked past with its bindings missed
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_class_conditional_declines");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+on = True
+
+
+class Twice:
+    def load(self, n: int) -> int:
+        return n
+    if on:
+        def load(self, n: int) -> int:
+            return n + 1
+
+
+class Dunder:
+    n = 0
+    if on:
+        def __repr__(self) -> str:
+            return \"dunder\"
+
+
+class Caught:
+    try:
+        n = 1
+    except ValueError:
+        n = 2
+";
+    let built = match build_source(
+        source,
+        "by_diff_class_conditional_declines",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    let mut declined: Vec<(&str, &str)> = built
+        .declined
+        .iter()
+        .map(|declined| (declined.name.as_str(), declined.reason.as_str()))
+        .filter(|(name, _)| matches!(*name, "Twice" | "Dunder" | "Caught"))
+        .collect();
+    declined.sort_unstable();
+    assert_eq!(
+        declined,
+        vec![
+            ("Caught", "only fields and methods are lowered yet"),
+            (
+                "Dunder",
+                "`__repr__` is bound by a block nested in the class body, and a dunder is settled before one runs",
+            ),
+            (
+                "Twice",
+                "`load` is both defined by this class body and bound by a block nested in it",
+            ),
+        ]
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_class_conditional_declines as m\n\
+         print(m.Twice().load(1), repr(m.Dunder()), m.Caught.n)\n\
+         print(type(m.Twice.load).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "2 dunder 1\n\
+         function"
     );
 }
 
@@ -12399,7 +13573,10 @@ class Inner(Outer):
     declined.sort_unstable();
     assert_eq!(
         declined,
-        vec![("Outer", "`__new__` fills a type slot with no adapter yet")]
+        vec![(
+            "Outer",
+            "python makes this method implicitly static or class, so slot zero holds the class rather than a receiver"
+        )]
     );
     let out = run(
         &python,
@@ -12444,8 +13621,8 @@ class Container:
 
 
 class Parser(Container):
-    def __new__(cls, tag: str) -> \"Parser\":
-        return object.__new__(cls)
+    def __setattr__(self, name: str, value: object) -> None:
+        object.__setattr__(self, name, value)
 
     def __init__(self, tag: str) -> None:
         Container.__init__(self, tag)
@@ -12487,10 +13664,16 @@ def describe(item: Container) -> str:
                 "Container",
                 "`Parser` declined, so it extends the interpreted definition rather than this type"
             ),
-            ("Parser", "`__new__` fills a type slot with no adapter yet"),
+            (
+                "Parser",
+                "`__setattr__` fills a type slot with no adapter yet"
+            ),
             // and the decline reaches the caller, which is what keeps `describe` from
-            // calling the base's `label` directly past an override it cannot see
-            ("describe", "`Container` declined, so it has no layout"),
+            // calling the base's `label` directly past an override it cannot see. it is
+            // named for `Parser` rather than for `Container` because the call tests the
+            // receiver against the subclass first, and that test is the first thing in
+            // the function that mentions a class no longer here
+            ("describe", "`Parser` declined, so it has no layout"),
         ]
     );
     let out = run(
@@ -15767,6 +16950,125 @@ def counted(xs: list[int], wanted: list[int]) -> int:
 }
 
 #[test]
+fn a_membership_test_and_the_read_it_guards_agree() {
+    // `if k in d: ... d[k]` hashes the same key and walks the same table twice, and
+    // the second lookup only runs because the first said yes — so it is done once,
+    // where the test is. that is only invisible where nothing can count the
+    // lookups: a dict subclass may have overridden either dunder, and a key may
+    // have a `__hash__` that counts its own calls. both of those come through here
+    // and must see exactly what the interpreted twin sees
+    agree_python(
+        "dictfind",
+        "\
+class Probe:
+    def __init__(self, tag: str) -> None:
+        self.tag = tag
+        self.hashes = 0
+
+    def __hash__(self) -> int:
+        self.hashes = self.hashes + 1
+        return 7
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+
+class Table:
+    def __init__(self, rows: dict[str, int], claim: bool) -> None:
+        self.rows = rows
+        self.claim = claim
+        self.asked = 0
+
+    def __contains__(self, key: object) -> bool:
+        self.asked = self.asked + 1
+        return self.claim
+
+    def __getitem__(self, key: str) -> int:
+        return self.rows[key]
+
+
+def fetched(d: dict[str, int], k: str) -> int:
+    if k in d:
+        return d[k]
+    return -1
+
+
+def unless_missing(d: dict[str, int], k: str) -> int:
+    if k not in d:
+        return -1
+    return d[k]
+
+
+def counted(words: list[str]) -> dict[str, int]:
+    seen: dict[str, int] = {}
+    for word in words:
+        if word in seen:
+            seen[word] = seen[word] + 1
+        else:
+            seen[word] = 1
+    return seen
+
+
+def whatever(d: dict[str, object], k: str) -> object:
+    if k in d:
+        return d[k]
+    return \"absent\"
+
+
+def through(t: Table, k: str) -> int:
+    if k in t:
+        return t[k]
+    return -1
+
+
+def hashed(d: dict[object, int], k: Probe) -> int:
+    if k in d:
+        v = d[k]
+        return v + k.hashes
+    return k.hashes
+
+
+def kept(d: dict[str, int], k: str) -> object:
+    if k in d:
+        found = d[k]
+        return (found, k)
+    return None
+",
+        &[
+            "[m.fetched({'a': 1}, k) for k in ['a', 'b']]",
+            "[m.unless_missing({'a': 1}, k) for k in ['a', 'b']]",
+            // the value the key maps to is itself false, so "found" cannot be read
+            // off the value's truth
+            "[m.fetched({'z': 0}, k) for k in ['z', 'y']]",
+            "[m.whatever({'n': None, 'e': '', 'f': False}, k) for k in ['n', 'e', 'f', 'g']]",
+            "m.counted(['a', 'b', 'a', 'c', 'a', 'b'])",
+            "m.counted([])",
+            "m.kept({'a': 1}, 'a')",
+            "m.kept({'a': 1}, 'b')",
+            // a subclass overriding one dunder or the other: `__contains__` saying
+            // yes where the table says no is what makes the second lookup real
+            "m.whatever(type('D', (dict,), {'__contains__': lambda s, k: True})({'a': 1}), 'a')",
+            "type(_capture(m.whatever, \
+             type('D', (dict,), {'__contains__': lambda s, k: True})(), 'a')).__name__",
+            "m.whatever(type('D', (dict,), {'__getitem__': lambda s, k: 'over'})({'a': 1}), 'a')",
+            "m.whatever(type('D', (dict,), {'__contains__': lambda s, k: False})({'a': 1}), 'a')",
+            // a container that is not a dict at all, answering both halves itself —
+            // and one that claims the key and then has none
+            "m.through(m.Table({'a': 1}, True), 'a')",
+            "m.through(m.Table({'a': 1}, False), 'a')",
+            "type(_capture(m.through, m.Table({}, True), 'a')).__name__",
+            "(lambda t: (m.through(t, 'a'), t.asked))(m.Table({'a': 1}, True))",
+            // the key counts its own hashes, so hashing it once where the twin
+            // hashes it twice shows up here
+            "m.hashed({}, m.Probe('p'))",
+            "(lambda p: m.hashed({p: 5}, p))(m.Probe('p'))",
+            // an unhashable probe is a TypeError from the test, before any read
+            "type(_capture(m.whatever, {'a': 1}, [])).__name__",
+        ],
+    );
+}
+
+#[test]
 fn the_container_dunders_fill_their_slots() {
     // `len(g)`, `g[i]`, `g[i] = v`, `v in g` and iteration all read *slots* — the
     // method table is never consulted for any of them. `__getitem__` and
@@ -17073,6 +18375,86 @@ def deep(n: float) -> str:
             // and a *python* subclass can override a compiled method
             "m.through_base(type('Sub', (m.Circle,), {'describe': lambda self: 'sub ' + self.name})('x', 1.0))",
             "m.direct(type('Sub', (m.Circle,), {'describe': lambda self: 'sub ' + self.name})('x', 1.0))",
+        ],
+    );
+}
+
+#[test]
+fn an_override_reached_through_a_base_agrees() {
+    // a call on a base-typed name tests the receiver against each emitted class under
+    // that base and calls the body directly where one matches. everything the tests do
+    // not describe has to still reach what the protocol would have found: a class that
+    // only *inherits* the method, a subclass written in the interpreter, and a method
+    // rebound on either class after import — the last of which no type test can see, and
+    // which is why the licence is taken once at import and checked on every call
+    agree_python(
+        "dispatch",
+        "\
+class Shape:
+    def __init__(self, size: int):
+        self.size = size
+
+    def area(self) -> int:
+        return self.size
+
+    def scaled(self, by: int) -> int:
+        return self.size * by
+
+    def label(self) -> str:
+        return 'shape'
+
+
+class Square(Shape):
+    def area(self) -> int:
+        return self.size * self.size
+
+    def scaled(self, by: int) -> int:
+        return self.size * self.size * by
+
+    def label(self) -> str:
+        return 'square'
+
+
+class Wide(Shape):
+    pass
+
+
+def area_of(shape: Shape) -> int:
+    return shape.area()
+
+
+def scale(shape: Shape, by: int) -> int:
+    return shape.scaled(by)
+
+
+def label_of(shape: Shape) -> str:
+    return shape.label()
+",
+        &[
+            "m.area_of(m.Shape(5))",
+            "m.area_of(m.Square(5))",
+            "m.scale(m.Shape(5), 3)",
+            "m.scale(m.Square(5), 3)",
+            "m.label_of(m.Shape(1))",
+            "m.label_of(m.Square(1))",
+            // a class that adds no body of its own is not one of the tested ones, so
+            // the base's body has to be found the long way round
+            "m.area_of(m.Wide(5))",
+            "m.label_of(m.Wide(5))",
+            // a subclass the interpreter writes has a type of its own, which no test
+            // matches
+            "m.area_of(type('Tri', (m.Shape,), {'area': lambda self: 100})(5))",
+            "m.area_of(type('Tri', (m.Square,), {'area': lambda self: 100})(5))",
+            // rebound after import, on the class the receiver is and on its base
+            "(setattr(m.Shape, 'area', lambda self: 99), m.area_of(m.Shape(5)))",
+            "(setattr(m.Shape, 'area', lambda self: 99), m.area_of(m.Square(5)))",
+            "(setattr(m.Shape, 'area', lambda self: 99), m.area_of(m.Wide(5)))",
+            "(setattr(m.Square, 'area', lambda self: -1), m.area_of(m.Square(5)))",
+            "(setattr(m.Square, 'area', lambda self: -1), m.area_of(m.Shape(5)))",
+            // writing anything else on the class is not a rebinding, and the answer
+            // stands either way
+            "(setattr(m.Shape, 'tag', 1), m.area_of(m.Square(5)))",
+            "(delattr(m.Square, 'area'), m.area_of(m.Square(5)))",
         ],
     );
 }
@@ -20144,5 +21526,1117 @@ fn the_class_an_assigned_dunder_fills_a_slot_on_is_compiled() {
         out,
         "wrapper_descriptor wrapper_descriptor\n\
          True function builtin_function_or_method"
+    );
+}
+
+#[test]
+fn a_pair_returned_as_a_display_travels_in_registers() {
+    // a body whose every `return` is a tuple display hands its elements back one per
+    // register, and a caller that unpacks them never builds the object at all. python
+    // builds a fresh tuple at each such display — `split(1) is split(1)` is already
+    // false — so the one built at the boundary is the object it would have handed back.
+    //
+    // ordinary python, because `is` is what the identity of a rebuilt tuple would show
+    // up in, and in `.by` `is` is the type test rather than the identity comparison
+    agree_python(
+        "pairreg",
+        "\
+def split(value: int) -> tuple[int, int]:
+    return value // 7, value % 7
+
+
+def summed(n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        whole, part = split(i)
+        total = total + whole + part
+        i = i + 1
+    return total
+
+
+# the two slots hold different representations, and each keeps its own
+def labelled(n: int) -> tuple[int, str]:
+    return n, str(n)
+
+
+# every `return` has to agree on the layout, across branches
+def either(n: int) -> tuple[int, int]:
+    if n < 0:
+        return 0, n
+    return n, 0
+
+
+# a pair that reaches a name is an ordinary object again, so it has an identity and
+# keeps it however many times it is read
+def aliased(n: int) -> bool:
+    p = split(n)
+    q = p
+    return p is q
+
+
+def held_twice(n: int) -> bool:
+    p = split(n)
+    xs = [p, p]
+    return xs[0] is xs[1]
+
+
+# an index the compiler cannot see still goes through the object, negative index and
+# `IndexError` included
+def at(n: int, i: int) -> int:
+    return split(n)[i]
+
+
+# a caught exception is taken out of the thread state, so a pair-returning call
+# inside a handler does not read the handled exception as its own failure
+def after_catching(n: int) -> int:
+    try:
+        raise ValueError(\"x\")
+    except ValueError:
+        whole, part = split(n)
+        return whole + part
+",
+        &[
+            "m.split(93)",
+            "m.split(0)",
+            // a value too wide for the tagged representation still rides in its slot
+            "m.split(10 ** 30)",
+            "m.summed(50)",
+            "m.labelled(4)",
+            "[m.either(n) for n in (-3, 3)]",
+            "type(m.split(1)).__name__",
+            "len(m.split(1))",
+            "m.split(1) == m.split(1)",
+            // the object handed to a python caller is a fresh tuple, exactly as the
+            // display in the body builds one
+            "m.split(1) is m.split(1)",
+            "[m.aliased(9), m.held_twice(9)]",
+            "[m.at(93, 0), m.at(93, 1), m.at(93, -1), m.at(93, -2)]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.at, 93, 5)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.at, 93, -5)]]",
+            "m.after_catching(93)",
+        ],
+    );
+}
+
+#[test]
+fn a_tuple_the_body_did_not_build_keeps_its_identity() {
+    // the register representation is licensed by *where the tuple came from*, not by
+    // its type. a body that hands back the pair it was given is handing back that very
+    // object — `passed(p) is p` is true — so it stays on the heap, and so does one
+    // whose length the checker cannot pin down
+    agree_python(
+        "pairkeep",
+        "\
+def passed(p: tuple[int, int]) -> tuple[int, int]:
+    return p
+
+
+def chosen(p: tuple[int, int], q: tuple[int, int], first: bool) -> tuple[int, int]:
+    if first:
+        return p
+    return q
+
+
+# a display in one branch and a pass-through in the other is still a pass-through
+def mixed(p: tuple[int, int], keep: bool) -> tuple[int, int]:
+    if keep:
+        return p
+    return 0, 0
+
+
+# `*` unpacking has no length until it runs
+def spread(p: tuple[int, int]) -> tuple[int, int, int]:
+    return (*p, 9)
+
+
+# and neither has a tuple of unbounded length
+def repeated(n: int) -> tuple[int, ...]:
+    return (n,) * 3
+",
+        &[
+            "(lambda p: [m.passed(p) is p, m.passed(p) == p])((1, 2))",
+            "(lambda p, q: [m.chosen(p, q, True) is p, m.chosen(p, q, False) is q])((1, 2), (3, 4))",
+            "(lambda p: [m.mixed(p, True) is p, m.mixed(p, False)])((1, 2))",
+            "(lambda p: m.spread(p))((1, 2))",
+            "m.repeated(5)",
+        ],
+    );
+}
+
+#[test]
+fn a_returned_pair_holds_each_slot_in_its_own_representation() {
+    // a slot is whatever its element type is: a `double` is not refcounted at all and
+    // a `str` is, so the tuple built at the boundary has to box each of them its own
+    // way. `.by` rather than `.py` because python's `float` annotation admits an
+    // `int`, which puts the slot back on the object protocol and so tests nothing.
+    //
+    // an instance of a class this module emits is refused and stays on the heap —
+    // the tuple structs are written before the class structs, so a slot naming one
+    // would name a type the C does not have yet
+    agree(
+        "pairslots",
+        "\
+class Point:
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+
+def placed(n: int) -> tuple[Point, int]:
+    return Point(n), n
+
+
+def scaled(n: int) -> tuple[float, float]:
+    return n * 1.5, n * 0.5
+
+
+def described(n: int) -> tuple[str, int]:
+    return str(n), n
+
+
+def total(n: int) -> float:
+    lo, hi = scaled(n)
+    return lo + hi
+
+
+def named(n: int) -> str:
+    text, count = described(n)
+    return text * count
+",
+        &[
+            "m.placed(3).__class__.__name__",
+            "[m.placed(3)[0].x, m.placed(3)[1]]",
+            "m.scaled(4)",
+            "m.described(3)",
+            "[m.total(4), m.named(2)]",
+            // the tuple the boundary builds owns its elements, and nothing else does:
+            // a leaked reference would keep the point alive after the tuple went
+            "(lambda: [len(m.placed(i)) for i in range(200)][-1])()",
+        ],
+    );
+}
+
+#[test]
+fn a_return_inside_a_match_case_is_seen_by_the_representation_choice() {
+    // the walk that decides how a body hands its pair back has to reach a `case`
+    // body: a `return` it missed would be lowered against a layout nothing proved it
+    // had. so a pass-through hidden in a `case` keeps the whole body on the heap
+    agree_python(
+        "pairmatch",
+        "\
+def picked(p: tuple[int, int], n: int) -> tuple[int, int]:
+    match n:
+        case 0:
+            return p
+        case _:
+            return n, n
+    return 0, 0
+",
+        &["(lambda p: [m.picked(p, 0) is p, m.picked(p, 3)])((1, 2))"],
+    );
+}
+
+#[test]
+fn globals_reaches_this_module_and_not_the_caller() {
+    // a compiled function pushes no python frame, so calling the builtin would answer
+    // about the frame underneath — the caller's, in another module. the read came back
+    // `None` for a name this module plainly binds, and the write bound `written` in the
+    // caller's namespace instead of here. every body shape asks the same question,
+    // because a nested function, a lambda and a method are all compiled the same way
+    agree_python(
+        "globalsdict",
+        "\
+marker = 7
+
+
+def read() -> object:
+    return globals().get('marker')
+
+
+def write() -> object:
+    globals()['written'] = 11
+    return globals().get('written')
+
+
+def nested() -> object:
+    def inner() -> object:
+        return globals().get('marker')
+
+    return inner()
+
+
+def by_lambda() -> object:
+    return (lambda: globals().get('marker'))()
+
+
+class Holder:
+    def read(self) -> object:
+        return globals().get('marker')
+",
+        &[
+            "m.read()",
+            "[m.write(), m.marker, sorted(k for k in vars(m) if not k.startswith('__'))]",
+            "m.nested()",
+            "m.by_lambda()",
+            "m.Holder().read()",
+        ],
+    );
+}
+
+#[test]
+fn a_globals_of_the_modules_own_is_not_the_builtin() {
+    // python resolves the name like any other, so a module that binds `globals` itself
+    // has to be called — answering with the module namespace would be a wrong answer
+    // that only a module defining an unusual name would ever see
+    agree_python(
+        "globalsshadow",
+        "\
+marker = 7
+
+
+def globals() -> dict[str, object]:
+    return {'marker': 99}
+
+
+def read() -> object:
+    return globals().get('marker')
+
+
+def local_shadow() -> object:
+    globals = {'marker': 42}
+    return globals.get('marker')
+",
+        &["m.read()", "m.local_shadow()"],
+    );
+}
+
+#[test]
+fn the_frame_reading_builtins_answer_from_the_interpreted_definition() {
+    // `locals()`, `vars()` and `dir()` with nothing to be about, and `eval`/`exec` with
+    // no namespace of their own, all read the calling frame — which a compiled function
+    // does not have. they are declined, and the interpreted definition answers
+    agree_python_with_declines(
+        "framebuiltins",
+        "\
+marker = 7
+
+
+def here() -> object:
+    alpha = 1
+    beta = 2
+    return locals()
+
+
+def as_vars() -> object:
+    gamma = 3
+    return vars()
+
+
+def names() -> object:
+    delta = 4
+    return dir()
+
+
+def evaluated() -> object:
+    return eval('marker')
+
+
+def ran() -> object:
+    out = []
+    exec('out.append(marker)')
+    return out
+",
+        &[
+            "m.here()",
+            "m.as_vars()",
+            "m.names()",
+            "m.evaluated()",
+            "m.ran()",
+        ],
+    );
+}
+
+#[test]
+fn exec_handed_a_namespace_of_its_own_stays_compiled() {
+    // the fallback is what makes the bare form frame-dependent; handed a `dict` neither
+    // builtin looks at a frame at all, so declining one would be pure cost
+    agree_python(
+        "execnamespace",
+        "\
+def ran(ns: dict[str, object]) -> object:
+    exec('produced = 3 * 4', ns)
+    return ns.get('produced')
+",
+        &["m.ran({})"],
+    );
+}
+
+#[test]
+fn a_frame_walk_answers_from_the_interpreted_definition() {
+    // `sys._getframe()` hands back the frame of whoever called it, so in a compiled
+    // function it reaches the caller's — and `f_globals` then reads another module's
+    // namespace while looking exactly like it read this one's
+    agree_python_with_declines(
+        "getframe",
+        "\
+import sys
+
+marker = 7
+
+
+def owner() -> object:
+    return sys._getframe().f_globals.get('marker')
+",
+        &["m.owner()"],
+    );
+}
+
+/// the source both dispatch-table tests below compile
+///
+/// the shape `pickle.Unpickler` writes 68 times and `pprint.PrettyPrinter` 18: a table
+/// bound in the class body and then filled, one entry per method, with the method the
+/// body has just defined. `run` reads the table back off the instance, which is the only
+/// way any of those entries is ever reached
+const A_DISPATCH_TABLE: &str = "\
+class Table:
+    dispatch = {}
+
+    def load_int(self, v):
+        return ('int', v * 2)
+    dispatch[int] = load_int
+
+    def load_str(self, v):
+        return ('str', v.upper())
+    dispatch[str] = load_str
+
+    # one method under two keys. the name is still one, so this is not the ambiguity
+    # that stops a method being paired with what the type publishes
+    dispatch[bool] = load_int
+
+    def run(self, v):
+        return self.dispatch[type(v)](self, v)
+
+
+def through(v):
+    return Table().run(v)
+
+
+def entries():
+    return sorted((k.__name__, v.__name__) for k, v in Table.dispatch.items())
+
+
+def identities():
+    return [Table.dispatch[int] is Table.load_int,
+            Table.dispatch[str] is Table.load_str,
+            Table.dispatch[bool] is Table.load_int]
+";
+
+#[test]
+fn a_dispatch_table_a_class_body_fills_answers_the_same_either_way() {
+    agree_python(
+        "dispatchtable",
+        A_DISPATCH_TABLE,
+        &[
+            "m.through(3)",
+            "m.through('ab')",
+            "m.through(True)",
+            "m.entries()",
+            "m.identities()",
+        ],
+    );
+}
+
+#[test]
+fn a_dispatch_table_holds_the_compiled_methods_the_type_publishes() {
+    // `agree` cannot see this: the interpreted definition of every one of these methods
+    // is still in the module, and a table left pointing at it answers exactly the same.
+    // what says which leg ran is the kind of object the table holds — a compiled type
+    // publishes a `method_descriptor` where the interpreted class holds a plain function
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_dispatchtablekind");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        A_DISPATCH_TABLE,
+        "by_diff_dispatchtablekind",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_dispatchtablekind as m\n\
+         print(type(m.Table.__dict__['load_int']).__name__)\n\
+         print(type(m.Table.dispatch[int]).__name__)\n\
+         print(m.identities())\n",
+    );
+    assert_eq!(
+        out,
+        "method_descriptor\nmethod_descriptor\n[True, True, True]"
+    );
+}
+
+#[test]
+fn a_method_the_class_body_bound_under_a_second_name_is_left_where_it_stands() {
+    // `show = render` puts one function under two names in the body, and there is no
+    // single compiled method it should become — so the table keeps what the body wrote.
+    // the entry then agrees with `show`, which is a copy of that same function, and both
+    // legs call the same body
+    agree_python(
+        "dispatchaliased",
+        "\
+class Aliased:
+    def render(self):
+        return 'r'
+
+    show = render
+    table = {'r': render}
+
+    def call(self):
+        return self.table['r'](self)
+
+
+def through():
+    return [Aliased().call(), Aliased.table['r'] is Aliased.show]
+",
+        &["m.through()"],
+    );
+}
+
+#[test]
+fn a_class_body_writing_one_value_under_two_names_agrees() {
+    agree_python(
+        "chainedclassconstant",
+        "\
+class Bounds:
+    low = high = 3
+
+    def span(self):
+        return (self.low, self.high, self.low is self.high)
+
+
+def through():
+    return Bounds().span()
+",
+        &["m.through()", "[m.Bounds.low, m.Bounds.high]"],
+    );
+}
+
+#[test]
+fn the_str_of_an_int_agrees() {
+    // the digits are written straight into an ascii string rather than reached through
+    // a `PyLong` and `int.__str__`, so every property of the answer the formatter used
+    // to establish has to be established here: the sign, the length the object claims,
+    // the terminator a compact string carries past its last character, and the whole of
+    // the range on either side of the one a machine word holds
+    agree_python(
+        "strofint",
+        "\
+import sys
+
+
+def digits(n: int) -> str:
+    return str(n)
+
+
+def joined(n: int) -> str:
+    return 'k' + str(n)
+
+
+def each(values: list[int]) -> list[str]:
+    return [str(v) for v in values]
+
+
+def counted(n: int) -> str:
+    last = ''
+    i = -3
+    while i < n:
+        last = str(i)
+        i = i + 1
+    return last
+
+
+def edges() -> list[str]:
+    return [
+        str(sys.maxsize),
+        str(-sys.maxsize - 1),
+        str(sys.maxsize + 1),
+        str(-sys.maxsize - 2),
+        str(10 ** 30),
+        str(-(10 ** 30)),
+    ]
+",
+        &[
+            "[m.digits(n) for n in (0, 1, -1, 9, -9, 10, 99, 100, 256, 257, -12345)]",
+            "[m.joined(n) for n in (0, 7, -7)]",
+            "m.each([-2, -1, 0, 1, 2, 10 ** 25])",
+            "m.counted(4)",
+            "m.edges()",
+            // the answer is a whole `str` and not merely one that prints right: an
+            // object whose claimed length or terminator disagreed with its digits
+            // would still compare equal on the ones it did hold. the hash is asked
+            // against this same process's `str`, because python salts it per run
+            "[(len(m.digits(n)), hash(m.digits(n)) == hash(str(n)), m.digits(n).encode()) \
+             for n in (0, -1, -12345, 10 ** 20)]",
+            "[type(m.digits(3)).__name__, m.digits(3) == '3']",
+        ],
+    );
+}
+
+#[test]
+fn a_str_the_module_rebinds_is_the_one_called() {
+    // the fast path rests on the name still resolving to the builtin, which is asked
+    // every trip rather than assumed once. a module that writes its own `str` into its
+    // namespace — which a compiled function's `globals()` reaches — has to be obeyed,
+    // and obeyed again when it puts the builtin back
+    agree_python(
+        "strofintrebind",
+        "\
+from typing import Any
+
+builtin: Any = str
+
+
+def shouted(n: object) -> str:
+    return '<' + builtin(n) + '>'
+
+
+def digits(n: int) -> str:
+    return str(n)
+
+
+def rebind() -> None:
+    globals()['str'] = shouted
+
+
+def restore() -> None:
+    globals()['str'] = builtin
+",
+        &["[m.digits(41), (m.rebind(), m.digits(41))[1], (m.restore(), m.digits(41))[1]]"],
+    );
+}
+
+#[test]
+fn a_str_subclass_bound_to_the_name_is_the_one_called() {
+    // the guard is an identity test against the builtin type object, so a *subclass* of
+    // `str` bound to the name fails it and is constructed the ordinary way — which is
+    // the only answer that keeps the result's type
+    agree_python(
+        "strofintsubclass",
+        "\
+from typing import Any
+
+
+class Loud(str):
+    pass
+
+
+builtin: Any = str
+
+
+def digits(n: int) -> str:
+    return str(n)
+
+
+def rebind() -> None:
+    globals()['str'] = Loud
+
+
+def restore() -> None:
+    globals()['str'] = builtin
+",
+        &[
+            "[(m.rebind(), type(m.digits(7)).__name__, m.digits(7))[1:], \
+              (m.restore(), type(m.digits(7)).__name__)[1]]",
+        ],
+    );
+}
+
+#[test]
+fn the_str_of_an_int_boxes_nothing_and_still_resolves_the_name() {
+    let Some((_, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_strofint_shape");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def keys(n: int) -> str:
+    last = 'k'
+    i = 0
+    while i < n:
+        last = 'k' + str(i)
+        i = i + 1
+    return last
+";
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(source, "by_diff_strofint_shape", &toolchain, &dir, &options).is_err() {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let emitted = std::fs::read_to_string(dir.join("by_diff_strofint_shape.c"))
+        .expect("the generated C is written beside the extension");
+    let body = emitted_function(&emitted, "by_by_diff_strofint_shape_keys");
+    // the conversion is fused, the argument's `PyLong` is gone with it, and the
+    // resolution the fusion is guarded on is still made
+    assert!(body.contains("By_StrOfInt("), "{body}");
+    assert!(!body.contains("By_BoxInt("), "{body}");
+    assert!(
+        body.contains("By_LookupGlobal(by_module_dict, by_g_str)"),
+        "{body}"
+    );
+}
+
+#[test]
+fn the_str_of_an_int_in_a_loop_does_not_leak() {
+    // the fast path allocates the answer itself and the slow one boxes an argument to
+    // throw away, so a reference kept or dropped on either shows up as growth and
+    // nowhere else
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_strofintleak");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def build(n: int, base: int) -> str:
+    last = ''
+    i = 0
+    while i < n:
+        last = 'k' + str(base + i)
+        i = i + 1
+    return last
+";
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(source, "by_diff_strofintleak", &toolchain, &dir, &options).is_err() {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import gc, by_diff_strofintleak as m\n\
+         big = 2**80\n\
+         m.build(50, 0); m.build(50, big)\n\
+         gc.collect(); before = len(gc.get_objects())\n\
+         print(m.build(8000, 0) == 'k7999')\n\
+         print(m.build(8000, big) == 'k' + str(big + 7999))\n\
+         gc.collect(); after = len(gc.get_objects())\n\
+         print('stable' if after <= before + 100 else f'grew {before}->{after}')\n",
+    );
+    assert_eq!(out, "True\nTrue\nstable");
+}
+
+#[test]
+fn an_indexed_read_agrees_on_every_container_and_at_every_edge() {
+    // only the element read is written at the call site now; the message an
+    // out-of-range index carries, and the protocol a container the fast path does
+    // not know takes, both live behind one call. so what has to agree is every
+    // shape that leaves the fast path — and every shape that stays on it
+    agree_python(
+        "indexedread",
+        "\
+def at(xs: object, i: int) -> object:
+    return xs[i]
+
+def scan(xs: object) -> int:
+    total = 0
+    i = 0
+    while i < len(xs):
+        total = total + 1
+        i = i + 1
+    return total
+
+
+class Own:
+    def __getitem__(self, i: int) -> str:
+        return 'own' + str(i)
+
+
+class Widened(list):
+    pass
+",
+        &[
+            // the three the fast path knows, forwards and backwards
+            "[m.at([10, 20, 30], 0), m.at([10, 20, 30], 2), m.at([10, 20, 30], -1)]",
+            "[m.at((10, 20, 30), 0), m.at((10, 20, 30), -3)]",
+            "[m.at('abc', 0), m.at('abc', 2), m.at('abc', -1)]",
+            // past either end of each, where the message is what has to match
+            "[(type(e).__name__, str(e)) for e in [_capture(m.at, [1, 2], 5)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.at, [1, 2], -5)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.at, (1, 2), 5)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.at, 'ab', 5)]]",
+            // a subclass of one the fast path knows is not one the fast path knows
+            "m.at(m.Widened([7, 8]), 1)",
+            // a container of its own, and one with no length at all
+            "[m.at(m.Own(), 4), m.scan([1, 2, 3]), m.scan('abcd'), m.scan((1, 2))]",
+            "[(type(e).__name__) for e in [_capture(m.at, 5, 0)]]",
+            "[(type(e).__name__) for e in [_capture(m.at, {'k': 1}, 0)]]",
+            // a mapping answers a key the sequence fast path would have refused
+            "m.at({0: 'zero', 1: 'one'}, 1)",
+        ],
+    );
+}
+
+#[test]
+fn a_returned_value_outlives_the_releases_that_follow_it() {
+    // a `return` now hands the caller the reference the frame already held rather
+    // than taking a second one, so the frame must not release that register on the
+    // way out. what makes the question sharp is that the releases it *does* still
+    // run can each run a `__del__`, which is arbitrary python — so the value being
+    // handed back has to survive one running in between
+    agree_python(
+        "returnedmove",
+        "\
+class Loud:
+    def __init__(self, log: list) -> None:
+        self.log = log
+
+    def __del__(self) -> None:
+        self.log.append('gone')
+
+
+def pick(log: list, n: int) -> str:
+    watcher = Loud(log)
+    answer = 'v' + str(n)
+    return answer
+
+
+def pick_early(log: list, n: int) -> str:
+    watcher = Loud(log)
+    if n > 0:
+        return 'high' + str(n)
+    return 'low' + str(n)
+
+
+def pick_finally(log: list, n: int) -> str:
+    watcher = Loud(log)
+    try:
+        return 'try' + str(n)
+    finally:
+        log.append('ran')
+",
+        &[
+            "[m.pick([], 1), m.pick([], 2)]",
+            "[m.pick_early([], 3), m.pick_early([], -3)]",
+            "m.pick_finally([], 4)",
+            // the `__del__` runs, and it runs before the caller sees the answer
+            "[_l := [], m.pick(_l, 5), _l][2]",
+            "[_l := [], m.pick_finally(_l, 6), _l][2]",
+            // the answer is not a borrowed reference into a frame that has gone:
+            // building many of them and holding them all would find one freed once
+            // too often
+            "[m.pick([], i) for i in range(200)][-1]",
+            "len({m.pick([], i) for i in range(200)})",
+        ],
+    );
+}
+
+/// the shapes a written `__new__` takes, in one module
+///
+/// `__new__` is python's allocator hook, and the whole of what an emitted class has to
+/// get right about it is that python's own construction decides what happens next: it
+/// runs `__init__` only where `__new__` answered with an instance of the class that was
+/// asked for. so a constructor that interns, one that answers with something else
+/// entirely, and one that allocates and fills are the same mechanism seen from three
+/// sides
+const WRITTEN_NEW: &str = "\
+class Point:
+    __slots__ = ('x', 'y')
+
+    def __new__(cls, x, y):
+        self = object.__new__(cls)
+        self.x = x + 1
+        self.y = y * 2
+        return self
+
+    def read(self):
+        return (self.x, self.y)
+
+
+class Initialised:
+    __slots__ = ('a', 'b')
+
+    def __new__(cls, a, b=5):
+        self = object.__new__(cls)
+        self.a = a
+        return self
+
+    def __init__(self, a, b=5):
+        self.b = b + len(type(self).__name__)
+
+    def read(self):
+        return (self.a, self.b)
+
+
+class Under(Initialised):
+    __slots__ = ()
+
+    def named(self):
+        return type(self).__name__
+
+
+class Deeper(Initialised):
+    __slots__ = ()
+
+    def __init__(self, a, b=5):
+        self.b = b * 100
+
+
+CACHE = {}
+
+
+class Interned:
+    __slots__ = ('key',)
+
+    def __new__(cls, key):
+        held = CACHE.get(key)
+        if held is not None:
+            return held
+        self = object.__new__(cls)
+        self.key = key
+        CACHE[key] = self
+        return self
+
+    def read(self):
+        return self.key
+
+
+def points():
+    return [Point(1, 2).read(), Point(0, 0).read(), Point(x=4, y=5).read()]
+
+
+def initialised():
+    return [Initialised(1).read(), Initialised(1, 2).read(), Initialised(b=3, a=9).read()]
+
+
+def under():
+    it = Under(7, 1)
+    # `Deeper` writes an `__init__` of its own and inherits the `__new__` above it, which
+    # is the shape a construction lowered to a plain allocation would skip
+    deeper = Deeper(3, 2)
+    return [it.read(), it.named(), isinstance(it, Initialised), deeper.read()]
+
+
+def interned():
+    first = Interned('k')
+    second = Interned('k')
+    return [first is second, first.read(), Interned('other') is first]
+
+
+def arity():
+    out = []
+    for call in (lambda: Point(1), lambda: Point(1, 2, 3), lambda: Point(1, 2, z=3)):
+        try:
+            call()
+        except TypeError as error:
+            out.append(str(error))
+        else:
+            out.append('no error')
+    return out
+";
+
+#[test]
+fn a_written_new_agrees_on_every_shape_of_construction() {
+    agree_python(
+        "writtennew",
+        WRITTEN_NEW,
+        &[
+            "m.points()",
+            "m.initialised()",
+            "m.under()",
+            "m.interned()",
+            "m.arity()",
+            "[m.Point(3, 4).x, m.Point(3, 4).y]",
+            "m.Under(2, 2).read()",
+        ],
+    );
+}
+
+#[test]
+fn a_written_new_is_the_one_the_compiled_type_runs() {
+    // `agree` cannot see this: the interpreted definition of `__new__` is still in the
+    // module, and a class left standing on it answers identically. what says which leg
+    // ran is the kind of object under the name — a compiled class publishes a
+    // `staticmethod` over a builtin, where the interpreted one holds a plain function
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_writtennewkind");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        WRITTEN_NEW,
+        "by_diff_writtennewkind",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_writtennewkind as m\n\
+         print(type(m.Point.__dict__['__new__']).__name__)\n\
+         print(type(m.Point.__dict__['__new__'].__func__).__name__)\n\
+         print(type(m.Point.__dict__['read']).__name__)\n\
+         print(type(m.Initialised.__dict__['__init__']).__name__)\n\
+         print(m.Point(1, 2).read())\n",
+    );
+    assert_eq!(
+        out,
+        "staticmethod\nbuiltin_function_or_method\nmethod_descriptor\nwrapper_descriptor\n(2, 4)"
+    );
+}
+
+#[test]
+fn a_written_new_that_reaches_a_base_outside_the_module_is_declined() {
+    // the allocation is the base's: only `tuple` knows how big one of its instances is,
+    // and the subclass check python runs on the way into that allocator reads the emitted
+    // type as an allocator of its own. so the class is left where it stands, and the
+    // construction it publishes is the interpreted one
+    agree_python_with_declines(
+        "newoveratuple",
+        "\
+class Pair(tuple):
+    def __new__(cls, a, b):
+        return super().__new__(cls, (a, b))
+
+    def total(self):
+        return self[0] + self[1]
+
+
+def through():
+    it = Pair(2, 3)
+    return [tuple(it), it.total(), isinstance(it, tuple)]
+",
+        &["m.through()"],
+    );
+}
+
+#[test]
+fn a_new_that_answers_another_class_is_declined() {
+    // python lets `__new__` answer with anything and runs `__init__` only where the answer
+    // is an instance of the class asked for. the checker does not follow it, so every
+    // construction in the module is compiled believing it got a `Diverting` — and the
+    // boundary that catches the mismatch raises where the interpreted class hands the
+    // object straight over
+    agree_python_with_declines(
+        "newdiverts",
+        "\
+class Elsewhere:
+    __slots__ = ('tag',)
+
+    def __init__(self, tag):
+        self.tag = tag
+
+
+class Diverting:
+    __slots__ = ('never',)
+
+    def __new__(cls, tag):
+        return Elsewhere(tag)
+
+    def __init__(self, tag):
+        raise AssertionError('__init__ ran after __new__ answered another class')
+
+
+def through():
+    it = Diverting('t')
+    return [type(it).__name__, it.tag, isinstance(it, Diverting)]
+",
+        &["m.through()"],
+    );
+}
+
+#[test]
+fn a_new_the_class_body_assigns_rather_than_defines_is_declined() {
+    // an assignment binds the very name python fills from the allocator slot, so the two
+    // would answer differently: the construction reaches the slot, and `Box.__new__`
+    // reaches whatever the body put under the name
+    agree_python_with_declines(
+        "newassigned",
+        "\
+def make(cls, tag):
+    self = object.__new__(cls)
+    self.tag = tag
+    return self
+
+
+class Box:
+    __slots__ = ('tag',)
+
+    __new__ = make
+
+    def read(self):
+        return self.tag
+
+
+def through():
+    return [Box('a').read(), Box('b').read()]
+",
+        &["m.through()"],
+    );
+}
+
+#[test]
+fn a_written_hash_larger_than_a_slot_holds_agrees() {
+    // `tp_hash` is a `Py_hash_t`, and python's own conversion takes the answer as it
+    // stands wherever it fits one — only a value too large is folded, through
+    // `int.__hash__`, into the range a hash occupies. hashing every answer instead folded
+    // the large ones a second time, which is how a cached hash of a state tuple came back
+    // as a number the interpreted class never produced
+    agree_python(
+        "hashwidth",
+        "\
+class Cached:
+    __slots__ = ('value',)
+
+    def __init__(self, value):
+        self.value = value
+
+    def __eq__(self, other):
+        return self.value == other.value
+
+    def __hash__(self):
+        return self.value
+
+
+def hashes(values):
+    return [hash(Cached(v)) for v in values]
+",
+        &[
+            "m.hashes([0, 1, -1, -2, 7])",
+            "m.hashes([2**61 - 2, 2**61 - 1, 2**61, 2**62, 2**63 - 1])",
+            "m.hashes([-(2**61), -(2**62), -(2**63)])",
+            "m.hashes([2**70, -(2**70), 2**200])",
+            "hash(m.Cached(3010437511937009226))",
+        ],
     );
 }

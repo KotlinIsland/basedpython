@@ -1850,8 +1850,10 @@ def fro(n):
     return map(to, n)
 
 # the mutual case settles a level shallower than the single-function one above, which is the
-# recursion being recognised on a different round rather than anything the program says
-reveal_type(to([]))  # revealed: map[map[Never]]
+# recursion being recognised on a different round rather than anything the program says. here it
+# is shallower still: the marker is the whole answer, because the depth bound is what recognised
+# the recursion and the bound replaces the value rather than folding into it
+reveal_type(to([]))  # revealed: Divergent
 ```
 
 ### recursion that grows a tuple

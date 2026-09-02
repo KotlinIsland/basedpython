@@ -1711,6 +1711,18 @@ impl<'db> Type<'db> {
         matches!(self, Type::Divergent(_))
     }
 
+    /// Whether a divergence marker appears anywhere inside this type.
+    ///
+    /// A marker stands for a type a cycle has not reached yet, so a type carrying one is not an
+    /// answer — it is the shape of an answer with a hole where the cycle still is.
+    pub(crate) fn mentions_divergence(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> bool {
+        any_over_type(db, env, self, false, |ty| ty.is_divergent())
+    }
+
     const fn as_divergent(self) -> Option<DivergentType> {
         match self {
             Type::Divergent(divergent) => Some(divergent),
@@ -8420,6 +8432,20 @@ impl<'db> Type<'db> {
             [element] => Some(*element),
             _ => None,
         }
+    }
+
+    /// basedpython: the element types of an *exact* `tuple` whose length is
+    /// statically known, when this is one
+    ///
+    /// a consumer that compiles a pair into registers rather than onto the heap
+    /// needs both the length and each element's type, and it needs the tuple to be
+    /// exactly a `tuple`: a `NamedTuple` or any other subclass carries attributes
+    /// and methods a plain one does not, so rebuilding it from its elements would
+    /// hand back a different object
+    pub fn fixed_tuple_element_types(self, db: &'db dyn Db) -> Option<Box<[Type<'db>]>> {
+        let spec = self.exact_tuple_instance_spec(db)?;
+        let fixed = spec.as_fixed_length()?;
+        Some(fixed.all_elements().into())
     }
 
     /// whether nothing can be a subclass of this instance's nominal class

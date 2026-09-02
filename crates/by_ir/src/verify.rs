@@ -471,6 +471,10 @@ impl Verifier<'_> {
                 self.expect(block, subject, &RType::OBJECT, "a class pattern");
                 self.expect_dest(block, *dest, &RType::OBJECT, "a class pattern");
             }
+            Op::MethodStands { dest, src, .. } => {
+                self.expect(block, src, &RType::OBJECT, "a dispatch test");
+                self.expect_dest(block, *dest, &RType::BIT, "a dispatch test");
+            }
             Op::IsMissing { dest, src } => {
                 self.expect(block, src, &RType::OBJECT, "a class pattern");
                 self.expect_dest(block, *dest, &RType::BIT, "a class pattern");
@@ -933,6 +937,9 @@ impl Verifier<'_> {
             Op::LoadGlobal { dest, .. } => {
                 self.expect_dest(block, *dest, &RType::OBJECT, "a global read");
             }
+            Op::ModuleDict { dest } => {
+                self.expect_dest(block, *dest, &RType::OBJECT, "the module namespace");
+            }
             Op::StoreGlobal { dest, value, .. } => {
                 // the namespace holds objects, so a write to one has to arrive boxed
                 self.expect(block, value, &RType::OBJECT, "a global write");
@@ -941,6 +948,9 @@ impl Verifier<'_> {
             Op::DeleteGlobal { dest, .. } => {
                 self.expect_dest(block, *dest, &RType::BIT, "a global delete");
             }
+            // no type to check: the destination keeps whatever representation it was
+            // declared with, and the deletion only puts it back to unbound
+            Op::DeleteLocal { .. } => {}
             Op::LoadClass { dest, .. } => {
                 self.expect_dest(block, *dest, &RType::OBJECT, "a class read");
             }
@@ -1072,6 +1082,17 @@ impl Verifier<'_> {
                 }
                 self.expect_dest(block, *dest, &RType::OBJECT, "a subscript");
             }
+            Op::DictFind {
+                dest,
+                container,
+                key,
+            } => {
+                self.expect(block, container, &RType::OBJECT, "a fused membership read");
+                // the key is looked up through the protocol on the path that is not
+                // an exact dict, so it has to be an object rather than a tagged int
+                self.expect(block, key, &RType::OBJECT, "a fused membership read");
+                self.expect_dest(block, *dest, &RType::OBJECT, "a fused membership read");
+            }
             Op::StrGetItem {
                 dest,
                 container,
@@ -1174,6 +1195,12 @@ impl Verifier<'_> {
                 // is widened to `object` by the frontend before it gets here
                 self.expect(block, src, &RType::OBJECT, "len");
                 self.expect_dest(block, *dest, &RType::INT, "len");
+            }
+            Op::StrOfInt { dest, value } => {
+                self.expect(block, value, &RType::INT, "str of an int");
+                // the answer is only a `str` when the name resolved to the builtin,
+                // and a module that rebound it may hand back anything at all
+                self.expect_dest(block, *dest, &RType::OBJECT, "str of an int");
             }
             Op::StrConcat {
                 dest,
@@ -1468,6 +1495,7 @@ mod tests {
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
             binding: crate::function::Binding::Instance,
+            coroutine_body: None,
         }
     }
 
@@ -1654,6 +1682,7 @@ mod tests {
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
             binding: crate::function::Binding::Instance,
+            coroutine_body: None,
         };
         let errors = verify(&f).unwrap_err();
         assert!(
@@ -1701,6 +1730,7 @@ mod tests {
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
             binding: crate::function::Binding::Instance,
+            coroutine_body: None,
         };
         assert_eq!(verify(&f), Ok(()));
     }
@@ -1749,6 +1779,7 @@ mod tests {
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
             binding: crate::function::Binding::Instance,
+            coroutine_body: None,
         };
         let errors = verify(&f).unwrap_err();
         assert!(
@@ -1848,6 +1879,7 @@ mod tests {
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
             binding: crate::function::Binding::Instance,
+            coroutine_body: None,
         };
         let errors = verify(&f).unwrap_err();
         assert!(errors.iter().any(|e| e.message.contains("past the end")));

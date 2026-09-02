@@ -164,6 +164,7 @@ fn rewrite_op(
             }
         }
         Op::LoadGlobal { dest, .. }
+        | Op::ModuleDict { dest }
         | Op::LoadClass { dest, .. }
         | Op::ImportModule { dest, .. } => {
             rewrite_dest(dest);
@@ -172,7 +173,7 @@ fn rewrite_op(
             rewrite_dest(dest);
             rewrite_value(value, remap);
         }
-        Op::DeleteGlobal { dest, .. } => {
+        Op::DeleteGlobal { dest, .. } | Op::DeleteLocal { dest } => {
             rewrite_dest(dest);
         }
         Op::ImportFrom { dest, module, .. } => {
@@ -242,6 +243,7 @@ fn rewrite_op(
             exception: None,
         }
         | Op::IsMissing { dest, src }
+        | Op::MethodStands { dest, src, .. }
         | Op::MatchAttr {
             dest, subject: src, ..
         }
@@ -267,6 +269,7 @@ fn rewrite_op(
         Op::TupleGet { dest, src, .. }
         | Op::Truthy { dest, src }
         | Op::Len { dest, src }
+        | Op::StrOfInt { dest, value: src }
         | Op::GetIter { dest, src }
         | Op::IsNull { dest, src } => {
             rewrite_dest(dest);
@@ -278,7 +281,12 @@ fn rewrite_op(
                 rewrite_value(pair, remap);
             }
         }
-        Op::GetItem {
+        Op::DictFind {
+            dest,
+            container,
+            key: index,
+        }
+        | Op::GetItem {
             dest,
             container,
             index,

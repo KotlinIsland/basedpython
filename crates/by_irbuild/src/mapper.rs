@@ -91,6 +91,48 @@ pub fn map_local_type(
     map_type_with(db, env, ty, layouts)
 }
 
+/// the representation a fixed-length tuple has when its elements are held in
+/// registers rather than in a heap object
+///
+/// this is never what a *place* holds — only what a value on its way from one place
+/// to another may be. a register tuple has no identity of its own, so anything that
+/// keeps one has to build the real object first, and [`RType::Tuple`] is only
+/// reached where the lowering can prove that happens at most once. `tuple[int, int]`
+/// is `(tagged, tagged)`; `tuple[int, ...]` has no length and is not one of these
+pub fn map_fixed_tuple(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    ty: Type<'_>,
+    layouts: &Layouts,
+) -> Option<RType> {
+    // gradual proves nothing about the length either, and `Never` is assignable to
+    // every tuple type there is
+    if ty.is_dynamic() || ty.is_never() || ty.has_gradual_member(db, env) {
+        return None;
+    }
+    let elements = ty.fixed_tuple_element_types(db)?;
+    // an empty tuple is `()`, which python hands back as one shared object — there is
+    // nothing to hold in registers and a zero-field struct to hold it in
+    if elements.is_empty() {
+        return None;
+    }
+    let slots = elements
+        .iter()
+        .map(|element| map_type_with(db, env, *element, layouts).ok())
+        .collect::<Option<Box<[RType]>>>()?;
+    // an instance of a class this module emits is a pointer to that class's struct,
+    // and the tuple structs are written out before any of them: a class field may
+    // itself be a fixed-length tuple, so the tuples have to come first. the pair
+    // stays on the heap rather than naming a type that does not exist yet
+    if slots
+        .iter()
+        .any(|slot| matches!(slot, RType::Instance { .. }))
+    {
+        return None;
+    }
+    Some(RType::Tuple(slots))
+}
+
 /// the representation `ty` would have had, had python's numeric promotion not
 /// widened it
 ///
