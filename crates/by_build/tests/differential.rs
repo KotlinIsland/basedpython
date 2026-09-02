@@ -331,6 +331,40 @@ def _capture_async(fn, *args):
         return type(e).__name__ + ': ' + str(e)
     return None
 
+# run a machine to its end and hand it back, so what a *second* resumption does to a
+# spent one can be asked directly rather than through a driver that hides it
+def _spend(coro):
+    try:
+        coro.send(None)
+    except StopIteration:
+        pass
+    return coro
+
+def _drained(gen):
+    for _ in gen:
+        pass
+    return gen
+
+# await something that is not a coroutine — an `asend` awaitable, say — so a driver
+# that insists on one can still reach it
+async def _awaits(aw):
+    return await aw
+
+async def _asend_spent(agen):
+    async for _ in agen:
+        pass
+    return await agen.asend(None)
+
+# a refused resumption leaves a coroutine nobody awaited, and python warns about one
+# that is merely dropped — so it is closed here, which is what the caller of a refused
+# send has to do anyway. the warning would otherwise be the only thing the two legs
+# disagreed about
+def _refused(coro, fn_name, *args):
+    try:
+        return _escaped(getattr(coro, fn_name), *args)
+    finally:
+        coro.close()
+
 # drive a coroutine by hand, without a loop under it: one `send` is the whole of what
 # an await does to a coroutine that never suspends, and the value it finished with
 # arrives on the `StopIteration` the send raises
@@ -1496,6 +1530,132 @@ fn a_borrowed_copy_does_not_over_release_its_source() {
     assert_eq!(out, "stable");
 }
 
+/// a copy inside a loop body `unswitch` duplicates, and a copy into a name
+///
+/// `unswitch` runs before the borrow pass and emits a second copy of every loop body,
+/// reusing the same registers, so nothing written inside one is ever written once.
+/// `table[key]` widens the key into an operand of its own three times a trip, and all
+/// six of those copies used to retain. the same body also fills a *named* local from
+/// a copy every trip, which the rule used to refuse on the name alone
+const BORROWED_COPIES: &str = "\
+def counted(table: dict[str, int], keys: list[str], passes: int) -> int:
+    running = 0
+    p = 0
+    n = len(keys)
+    while p < passes:
+        i = 0
+        while i < n:
+            key = keys[i]
+            running = running + table[key]
+            table[key] = table[key] + 1
+            i = i + 1
+        p = p + 1
+    return running
+
+
+# `kept` is a name the source program gave, filled from a copy every trip
+def held(text: str, n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        kept = text
+        total = total + len(kept)
+        i = i + 1
+    return total
+
+
+# the source is rebound between the copy and the use, so what the copy points at is
+# whatever the rebinding released
+def rebound(text: str, other: str, n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        kept = text
+        text = other
+        other = kept
+        total = total + len(kept)
+        i = i + 1
+    return total
+
+
+# one name filled from two different sources needs one answer for both
+def either(a: str, b: str, flag: bool) -> int:
+    if flag:
+        kept = a
+    else:
+        kept = b
+    return len(kept)
+
+
+# a copy that leaves the frame is a reference handed out, however the loops above are
+# compiled
+def carried(text: str) -> str:
+    kept = text
+    return kept
+";
+
+#[test]
+fn a_copy_in_a_duplicated_loop_body_agrees() {
+    agree(
+        "borrowedcopies",
+        BORROWED_COPIES,
+        &[
+            "[m.counted({'a': 1, 'b': 2}, ['a', 'b', 'a'], n) for n in (0, 1, 3)]",
+            "m.counted({'k': 0}, ['k'], 40)",
+            "[m.held(s, 3) for s in ('', 'a', 'abcdef', 'é🎉z')]",
+            "[m.rebound('ab', 'cde', n) for n in (0, 1, 2, 7)]",
+            "[m.either('ab', 'cde', f) for f in (True, False)]",
+            "[m.carried(s) for s in ('', 'abc')]",
+            // a subclass may have said its own thing about the length, and a `str`
+            // annotation admits one
+            "m.held(type('S', (str,), {'__len__': lambda self: 3})('abcd'), 2)",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.counted, {}, ['a'], 1)]]",
+        ],
+    );
+}
+
+#[test]
+fn a_borrowed_copy_in_a_duplicated_loop_body_does_not_move_its_source_references() {
+    // the copies no longer retain, so what holds the key through the subscript is the
+    // local it was read into. a stray release shows as a falling count and a missing
+    // one as a climbing count — and a release per trip reaches zero long before the
+    // loop ends, which is a crash rather than a wrong answer
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_borrowed_copies_rc");
+    let _ = std::fs::remove_dir_all(&dir);
+    if build_source(
+        BORROWED_COPIES,
+        "by_diff_borrowed_copies_rc",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import sys, by_diff_borrowed_copies_rc as m\n\
+         kept = 'a bb ccc ' * 30\n\
+         other = 'x y ' * 20\n\
+         table = {kept: 0, other: 0}\n\
+         keys = [kept, other]\n\
+         before = (sys.getrefcount(kept), sys.getrefcount(other))\n\
+         for _ in range(2000):\n\
+         \x20   m.counted(table, keys, 2)\n\
+         \x20   m.held(kept, 3)\n\
+         \x20   m.rebound(kept, other, 2)\n\
+         \x20   m.carried(kept)\n\
+         print('stable' if (sys.getrefcount(kept), sys.getrefcount(other)) == before else 'moved')\n",
+    );
+    assert_eq!(out, "stable");
+}
+
 #[test]
 fn short_circuit_operators_agree() {
     agree(
@@ -2193,6 +2353,100 @@ def twice(flip: object) -> object:
              m.__dict__.__setitem__('picked', lambda: 'module'), \
              m.twice(lambda: m.__dict__.pop('picked', None)))[2]",
         ],
+    );
+}
+
+/// an answer found under one builtins namespace is not handed to a call made under
+/// another
+///
+/// `By_LookupGlobal` reads builtins out of `PyEval_GetBuiltins`, which answers about
+/// the *calling* frame — and a compiled function pushes none of its own — so one call
+/// site can be reached with two different builtins namespaces without either of them
+/// ever being written to. neither arrival is a write, so nothing invalidates, and a
+/// memo has to compare the namespace itself.
+///
+/// what is pinned here is the unmemoised behaviour, exactly. it is deliberately *not*
+/// the interpreted twin's: a python function resolves against the builtins its own
+/// module was handed, so the twin answers `k7` under the frame below where both
+/// builds here answer `kF`. that divergence is older than the memo and is left
+/// standing — this test exists so that the memo cannot quietly widen it
+#[test]
+fn a_memo_does_not_carry_an_answer_across_two_builtins_namespaces() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_twobuiltins");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "def digits(n: int) -> str:\n    return 'k' + str(n)\n";
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(source, "by_diff_twobuiltins", &toolchain, &dir, &options).is_err() {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    // the first call arms the site against the real builtins, so the second is the
+    // one that has to notice it is standing somewhere else — and the third that the
+    // site has not been left holding the impostor
+    let out = run(
+        &python,
+        &dir,
+        "import builtins\n\
+         import by_diff_twobuiltins as m\n\
+         other = dict(vars(builtins))\n\
+         other['str'] = lambda n: 'F'\n\
+         frame = {'__builtins__': other, 'm': m}\n\
+         first = m.digits(7)\n\
+         exec('second = m.digits(7)', frame)\n\
+         print([first, frame['second'], m.digits(7)])\n",
+    );
+    assert_eq!(out, "['k7', 'kF', 'k7']");
+}
+
+/// a builtin rebound while a call site is already holding it is seen at once
+///
+/// the site remembers which namespace answered, so *that* namespace has to be one
+/// this build hears about being written to. a builtins namespace is only ever
+/// reached after the module's has missed, so a test that moves a module binding
+/// underneath a site never gets to the case where it is builtins that moved
+#[test]
+fn a_rebound_builtin_is_seen_while_a_site_still_holds_it() {
+    agree_python(
+        "builtinrebind",
+        "\
+def twice(flip: object) -> object:
+    out = []
+    i = 0
+    while i < 2:
+        out.append(picked())
+        flip()
+        i = i + 1
+    return out
+",
+        &[
+            "(setattr(__import__('builtins'), 'picked', lambda: 'first'), \
+             m.twice(lambda: setattr(__import__('builtins'), 'picked', lambda: 'second')))[1]",
+        ],
+    );
+}
+
+/// a name that is bound nowhere is asked about again the next time
+///
+/// a refusal has no dict entry behind it, so there is no write that could invalidate
+/// a memo of one. a `NameError` is therefore derived afresh every time rather than
+/// remembered — otherwise a name defined after the first read would never be found
+#[test]
+fn a_name_that_resolved_to_nothing_is_not_remembered() {
+    agree_python(
+        "namelater",
+        "\
+def read() -> object:
+    return arriving
+",
+        &["[type(_capture(m.read)).__name__, \
+              (m.__dict__.__setitem__('arriving', 'here'), m.read())[1], \
+              (m.__dict__.pop('arriving'), type(_capture(m.read)).__name__)[1]]"],
     );
 }
 
@@ -5753,6 +6007,131 @@ def countdown(p: Point, n: int) -> int:
     );
 }
 
+/// what a caller can do to an emitted class between two calls on it, and still be
+/// answered the way the interpreter would answer
+///
+/// every compiled call on a method here goes through a remembered answer of some kind —
+/// a licence for a method the class declares, a call-site memo for one it inherits — and
+/// each is a memo of an *attribute lookup*, so anything the caller can do to change what
+/// that lookup finds has to be caught. `Tally` has a subclass, so its instances carry a
+/// dict of their own: writing a value into one is the route that reaches neither the
+/// class nor its version tag
+#[test]
+fn a_remembered_method_notices_the_class_being_changed_under_it() {
+    agree_python(
+        "methodstale",
+        "\
+class Counter:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def step(self, d: int) -> int:
+        return self.n + d
+
+
+class Tally(Counter):
+    def double(self) -> int:
+        return self.n + self.n
+
+
+def declared(t: Tally) -> object:
+    return t.double()
+
+
+def inherited(t: Tally) -> object:
+    return t.step(1)
+",
+        &[
+            "[m.declared(m.Tally(5)), m.inherited(m.Tally(5))]",
+            // a value on the instance shadows the type's entry, for the method the
+            // class declares and for the one it inherits alike
+            "\
+(lambda t: [
+    m.declared(t),
+    setattr(t, 'double', lambda: 111),
+    m.declared(t),
+])(m.Tally(5))",
+            "\
+(lambda t: [
+    m.inherited(t),
+    setattr(t, 'step', lambda d: 222),
+    m.inherited(t),
+])(m.Tally(5))",
+            // the same shadow written past the attribute machinery, which is the route
+            // a `tp_setattro` of our own would not have seen
+            "\
+(lambda t: [
+    m.declared(t),
+    object.__setattr__(t, 'double', lambda: 333),
+    m.declared(t),
+])(m.Tally(5))",
+            // an instance written to under some *other* name still answers from the type
+            "\
+(lambda t: [
+    setattr(t, 'unrelated', 1),
+    m.declared(t),
+    m.inherited(t),
+])(m.Tally(5))",
+            // rebound on the class, after a call that has already settled the answer
+            "\
+(lambda t: [
+    m.declared(t),
+    setattr(m.Tally, 'double', lambda self: 444),
+    m.declared(t),
+])(m.Tally(5))",
+            // rebound on the *base*, which the class inherits the method from
+            "\
+(lambda t: [
+    m.inherited(t),
+    setattr(m.Counter, 'step', lambda self, d: 555),
+    m.inherited(t),
+])(m.Tally(5))",
+            // a subclass written in the interpreter overrides both
+            "\
+(lambda S: [m.declared(S(5)), m.inherited(S(5))])(
+    type('S', (m.Tally,), {
+        'double': lambda self: 666,
+        'step': lambda self, d: 777,
+    }))",
+        ],
+    );
+}
+
+/// a builtin whose entry point wants the defining class, which no call site can supply
+///
+/// `re.Pattern.search` is `METH_FASTCALL | METH_KEYWORDS | METH_METHOD`, and the extra
+/// flag moves the arguments along one: the array would land where the class belongs.
+/// only a heap type can carry it, so it is the convention a call-site memo meets as
+/// soon as it is willing to answer for one
+#[test]
+fn a_method_wanting_its_defining_class_is_not_called_as_a_plain_one() {
+    agree_python(
+        "methmethod",
+        "\
+import re
+
+
+def first(pattern: re.Pattern[str], text: str) -> object:
+    found = pattern.search(text)
+    if found is None:
+        return None
+    return found.group(0)
+
+
+def each(pattern: re.Pattern[str], texts: list[str]) -> list[object]:
+    out: list[object] = []
+    for text in texts:
+        out.append(first(pattern, text))
+    return out
+",
+        &[
+            "m.each(__import__('re').compile('a+'), ['baaad', 'none', 'aa', ''])",
+            // the same site over and over, which is what settles a memo on the answer
+            "m.each(__import__('re').compile('[0-9]+'), [str(n) for n in range(20)])",
+        ],
+    );
+}
+
 #[test]
 fn a_direct_method_call_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
@@ -7307,6 +7686,64 @@ def ended_falling_off() -> Any:
             // including the second time round, when the frame is already exhausted
             "[(g := m.ended((1, 2)), list(g), _escaped(next, g))[2:]]",
             "[(g := m.raised(), _escaped(list, g), _escaped(next, g))[1:]]",
+        ],
+    );
+}
+
+/// the two resumptions python refuses, at either end of a machine's life
+///
+/// a frame that has never run is suspended at no `yield`, so a sent value has no
+/// expression to become and python refuses a non-`None` one outright. all three
+/// surfaces refuse it and only the noun differs, which is why one rule serves.
+///
+/// the other end is the coroutine's alone: one that has finished is spent rather than
+/// exhausted, so awaiting it again raises where a generator hands back the
+/// `StopIteration` that means "ended". the exemptions are the interesting half —
+/// `close()` on a spent coroutine passes, because that is how a caller says it is
+/// done with it, and a `throw` into an *unstarted* one just propagates.
+#[test]
+fn the_resumptions_python_refuses_agree() {
+    agree_python(
+        "resumerefusals",
+        "\
+from typing import Any
+
+
+def counting() -> Any:
+    yield 1
+    yield 2
+
+
+async def once() -> int:
+    return 7
+
+
+async def streaming() -> Any:
+    yield 1
+",
+        &[
+            // a value sent into a frame that has not started, on each of the three
+            // surfaces — one rule, and only the noun in the message differs
+            "_escaped(m.counting().send, 5)",
+            "_refused(m.once(), 'send', 5)",
+            "_escaped(_run, _awaits(m.streaming().asend(5)))",
+            // `None` into an unstarted frame is how `next` itself resumes, so it stands
+            "m.counting().send(None)",
+            "[next(g := m.counting()), g.send(None)]",
+            // a spent coroutine is not an exhausted iterator, and says so to both
+            // the resumption a second await makes and to a throw
+            "_escaped(_spend(m.once()).send, None)",
+            "_escaped(_spend(m.once()).throw, ValueError('x'))",
+            // closing one is how a caller says it is done with it, and passes
+            "_spend(m.once()).close()",
+            // and a throw into one that never started carries its own exception out
+            "_refused(m.once(), 'throw', ValueError('x'))",
+            // the surfaces that really do end must be left exactly as they were: a
+            // generator answers `StopIteration`, an async generator
+            // `StopAsyncIteration`, and a throw into a finished generator propagates
+            "_escaped(_drained(m.counting()).send, None)",
+            "_escaped(_drained(m.counting()).throw, ValueError('x'))",
+            "_escaped(_run, _asend_spent(m.streaming()))",
         ],
     );
 }
@@ -21619,6 +22056,99 @@ def after_catching(n: int) -> int:
     );
 }
 
+/// a pair unpacked every trip round a loop, whose elements are the caller's own
+/// object
+///
+/// the two element reads no longer retain, so what keeps the value alive is the
+/// struct the call answered with. getting that window wrong frees the caller's string
+/// mid-loop, which is fatal rather than merely wrong
+const BORROWED_ELEMENTS: &str = "\
+def split(text: str) -> tuple[str, str]:
+    return text, text
+
+
+def scanned(text: str, n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        head, tail = split(text)
+        total = total + len(head) + len(tail)
+        i = i + 1
+    return total
+
+
+# the struct is written again under the loop, which releases what the first pair put
+# in it while the reads of the second are still to come
+def replaced(a: str, b: str, n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        head, tail = split(a)
+        other, rest = split(b)
+        total = total + len(head) + len(other) + len(tail) + len(rest)
+        i = i + 1
+    return total
+
+
+# an element that leaves the frame is a reference handed out, so it is owned however
+# the loop above is compiled
+def first(text: str) -> str:
+    head, tail = split(text)
+    return head
+";
+
+#[test]
+fn a_pair_unpacked_in_a_loop_agrees() {
+    agree(
+        "borrowedelements",
+        BORROWED_ELEMENTS,
+        &[
+            "[m.scanned(s, 3) for s in ('', 'a', 'abcdef', 'é🎉z')]",
+            "m.scanned('word ' * 40, 25)",
+            "[m.replaced('ab', 'cde', n) for n in (0, 1, 9)]",
+            "[m.first(s) for s in ('', 'abc')]",
+        ],
+    );
+}
+
+#[test]
+fn a_borrowed_tuple_element_does_not_move_its_source_references() {
+    // the element read takes nothing, so a stray release shows as a falling count and
+    // a missing one as a climbing count. a release per trip reaches zero long before
+    // the loop ends, which is a crash rather than a wrong answer
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join("by_diff_elements_rc");
+    let _ = std::fs::remove_dir_all(&dir);
+    if build_source(
+        BORROWED_ELEMENTS,
+        "by_diff_elements_rc",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import sys, by_diff_elements_rc as m\n\
+         kept = 'a bb ccc ' * 30\n\
+         other = 'x y ' * 20\n\
+         before = (sys.getrefcount(kept), sys.getrefcount(other))\n\
+         for _ in range(2000):\n\
+         \x20   m.scanned(kept, 5)\n\
+         \x20   m.replaced(kept, other, 5)\n\
+         \x20   m.first(kept)\n\
+         print('stable' if (sys.getrefcount(kept), sys.getrefcount(other)) == before else 'moved')\n",
+    );
+    assert_eq!(out, "stable");
+}
+
 #[test]
 fn a_tuple_the_body_did_not_build_keeps_its_identity() {
     // the register representation is licensed by *where the tuple came from*, not by
@@ -22193,11 +22723,16 @@ def keys(n: int) -> str:
         .expect("the generated C is written beside the extension");
     let body = emitted_function(&emitted, "by_by_diff_strofint_shape_keys");
     // the conversion is fused, the argument's `PyLong` is gone with it, and the
-    // resolution the fusion is guarded on is still made
+    // resolution the fusion is guarded on is still made — through the memo, which
+    // re-derives it whenever a namespace has been written to since the last answer
     assert!(body.contains("By_StrOfInt("), "{body}");
     assert!(!body.contains("By_BoxInt("), "{body}");
     assert!(
-        body.contains("By_LookupGlobal(by_module_dict, by_g_str)"),
+        body.contains("By_LookupGlobalSite(&by_gs_str, by_module_dict, by_g_str)"),
+        "{body}"
+    );
+    assert!(
+        body.contains("static ByGlobalSite by_gs_str = BY_GLOBAL_SITE_INIT;"),
         "{body}"
     );
 }

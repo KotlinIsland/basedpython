@@ -234,13 +234,13 @@ pub fn emit_module(module: &ModuleIr) -> String {
             }
         );
     }
-    // zero until import arms it, which is the answer that keeps every dispatch site on
+    // refused until import arms it, which is the answer that keeps every dispatch site on
     // the protocol call — so a module whose init failed part way through is slow rather
     // than wrong
     for (class, method) in dispatch_licences(module) {
         let _ = writeln!(
             out,
-            "static unsigned int {} = 0;",
+            "static ByMethodLicence {} = BY_METHOD_LICENCE_INIT;",
             dispatch_licence(module, &class, &method)
         );
     }
@@ -4231,7 +4231,7 @@ fn emit_op(
                 return format!("    {} = 0;\n", local(*dest));
             };
             format!(
-                "    {} = By_MethodStands({}, {}_OBJ, {});\n",
+                "    {} = By_MethodStands({}, {}_OBJ, &{});\n",
                 local(*dest),
                 value_expr(src),
                 owner.type_name(module.name.dotted()),
@@ -4836,6 +4836,13 @@ fn emit_op(
             };
             let expr = format!("{}.f{index}", value_expr(src));
             let mut out = String::new();
+            // as for a copy: the borrow pass proved the tuple goes on holding the
+            // element across every read of it, so there is nothing to retain and
+            // nothing here that was ever owned to give back
+            if decl.borrowed {
+                let _ = writeln!(out, "    {} = {expr};", local(*dest));
+                return out;
+            }
             if let Some(retain) = inc_ref(&decl.ty, &expr) {
                 let _ = writeln!(out, "    {retain}");
             }
@@ -5062,9 +5069,14 @@ fn emit_op(
                 "      if ({slot} == NULL) goto {};",
                 error_label(error_target)
             );
+            let site = format!("by_gs_{}", mangle(name));
             let _ = writeln!(
                 out,
-                "      PyObject *by_t = By_LookupGlobal(by_module_dict, {slot});"
+                "      static ByGlobalSite {site} = BY_GLOBAL_SITE_INIT;"
+            );
+            let _ = writeln!(
+                out,
+                "      PyObject *by_t = By_LookupGlobalSite(&{site}, by_module_dict, {slot});"
             );
             out.push_str(&commit_checked(function, *dest, error_target));
             out
@@ -5219,13 +5231,13 @@ fn emit_op(
         }
         Op::CallPython { dest, callee, args } => {
             let mut out = String::new();
-            // resolved on *every* call, not cached. caching would early-bind the
-            // name, and early binding is a tier-3 assumption gated on `api.lock` —
-            // at the default tier a module global may be rebound, and python
-            // would see it. the lookup is the same dict probe the interpreter does
+            // asked afresh whenever a namespace has been written to since the last
+            // answer, which is not the same as early binding: early binding is a
+            // tier-3 assumption gated on `api.lock`, where this is a memo with a
+            // validity test, so a module that rebinds the name is obeyed at once
             //
             // the slot below holds the interned *name*, which is what makes it
-            // sound to keep: it is what the lookup is keyed on, never its answer
+            // sound to keep unconditionally: it is what the lookup is keyed on
             let slot = format!("by_g_{}", mangle(callee));
             let _ = writeln!(
                 out,
@@ -5241,9 +5253,14 @@ fn emit_op(
                 "      if ({slot} == NULL) goto {};",
                 error_label(error_target)
             );
+            let site = format!("by_gs_{}", mangle(callee));
             let _ = writeln!(
                 out,
-                "      by_fn = By_LookupGlobal(by_module_dict, {slot});"
+                "      static ByGlobalSite {site} = BY_GLOBAL_SITE_INIT;"
+            );
+            let _ = writeln!(
+                out,
+                "      by_fn = By_LookupGlobalSite(&{site}, by_module_dict, {slot});"
             );
             let _ = writeln!(
                 out,
@@ -5649,9 +5666,10 @@ fn emit_op(
             assign_checked(module, function, *dest, &expr, error_target)
         }
         Op::StrOfInt { dest, value } => {
-            // the same resolution `Op::CallPython` emits, and for the same reason:
-            // the name is what a module rebinds, so it is asked every trip. only
-            // what happens to the answer differs
+            // the same resolution `Op::CallPython` emits, through a memo of the same
+            // shape: the name is what a module rebinds, so the answer is only kept
+            // for as long as no namespace has been written to. only what happens to
+            // the answer differs
             let mut out = String::new();
             let _ = writeln!(
                 out,
@@ -5668,7 +5686,11 @@ fn emit_op(
             );
             let _ = writeln!(
                 out,
-                "      by_fn = By_LookupGlobal(by_module_dict, by_g_str);"
+                "      static ByGlobalSite by_gs_str = BY_GLOBAL_SITE_INIT;"
+            );
+            let _ = writeln!(
+                out,
+                "      by_fn = By_LookupGlobalSite(&by_gs_str, by_module_dict, by_g_str);"
             );
             let _ = writeln!(
                 out,
@@ -6877,7 +6899,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
                 function.owner.as_deref() == Some(class) && function.name == *method
             })?;
             Some(format!(
-                "    {} = By_ArmMethod({}_OBJ, {}, (PyCFunction){});\n",
+                "    By_ArmMethod(&{}, {}_OBJ, {}, (PyCFunction){});\n",
                 dispatch_licence(module, class, method),
                 owner.type_name(module.name.dotted()),
                 c_string(method),
@@ -6891,6 +6913,11 @@ fn emit_module_init(module: &ModuleIr) -> String {
          \x20   PyObject *dict = PyModule_GetDict(module);\n\
          \x20   if (dict == NULL) return -1;\n\
          \x20   by_module_dict = dict;\n\
+         \x20   /* before anything below can bind a name in it: a memo of a global\n\
+         \x20    * is only allowed to exist while this namespace is being watched,\n\
+         \x20    * and a second execution of this module invalidates every memo the\n\
+         \x20    * first one left behind */\n\
+         \x20   By_WatchModule(dict);\n\
          {literal_init}\
          {run_body}\
          {layout_guard}\
@@ -8542,6 +8569,42 @@ mod tests {
         assert!(!text.contains("Py_XINCREF"), "{text}");
         // and the frame does not give back what it never took, on either way out
         assert!(!text.contains("Py_XDECREF(r1)"), "{text}");
+    }
+
+    #[test]
+    fn a_borrowed_tuple_element_is_a_plain_store() {
+        // `head, tail = split(s)`: the struct the call answered with owns both
+        // elements, so reading one takes nothing and gives nothing back
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let text_in = builder.param("s", RType::STR);
+        let pair = builder.temp(RType::Tuple(Box::new([RType::STR, RType::STR])));
+        let head = builder.local("head", RType::STR);
+        let length = builder.temp(RType::INT);
+        builder.push(Op::CallNative {
+            owner: None,
+            dest: Some(pair),
+            callee: "split".to_string(),
+            args: vec![Value::Register(text_in)],
+        });
+        builder.push(Op::TupleGet {
+            dest: head,
+            src: Value::Register(pair),
+            index: 0,
+        });
+        builder.push(Op::Len {
+            dest: length,
+            src: Value::Register(head),
+        });
+        builder.terminate(Terminator::Return(Value::Register(length)));
+        let mut function = builder.finish();
+        function.registers[head.index()].borrowed = true;
+
+        let text = emit_function(&ModuleIr::new("app"), &function);
+        assert!(text.contains("    r2 = r1.f0;\n"), "{text}");
+        assert!(!text.contains("Py_XINCREF(r1.f0)"), "{text}");
+        assert!(!text.contains("Py_XDECREF(r2)"), "{text}");
+        // the tuple itself still owns what it holds, on either way out
+        assert!(text.contains("Py_XDECREF(r1.f0)"), "{text}");
     }
 
     #[test]
