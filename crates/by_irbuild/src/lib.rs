@@ -44,6 +44,19 @@ impl Language {
     pub fn unique_loop_bindings(self) -> bool {
         matches!(self, Self::BasedPython)
     }
+
+    /// whether a parameter default that is not an immediate is evaluated once, where
+    /// the `def` stands
+    ///
+    /// python evaluates it there and hands that one object to every call that omits the
+    /// parameter, which is where the mutable-default gotcha comes from. basedpython does
+    /// not have the gotcha: `mutable_defaults` rewrites such a default to a sentinel and
+    /// a guard that re-evaluates it in the body, so each call gets its own — and the
+    /// expression is then read in the *callee's* scope rather than snapshotted at the
+    /// `def`
+    pub fn defaults_evaluated_at_the_def(self) -> bool {
+        matches!(self, Self::Python)
+    }
 }
 
 use std::fmt::Write;
@@ -81,7 +94,7 @@ pub fn build_module(
     model: &SemanticModel<'_>,
     suite: &[Stmt],
     module_name: impl Into<ModuleName>,
-    unique_loop_bindings: bool,
+    language: Language,
 ) -> ModuleIr {
     let mut module = ModuleIr::new(module_name);
 
@@ -447,7 +460,7 @@ pub fn build_module(
         constructs: &constructs,
         bases: &bases,
         properties: &properties,
-        unique_loop_bindings,
+        language,
         db,
         env,
         model,
@@ -1139,6 +1152,7 @@ fn lower_resume(
             "a `super()` with no arguments reads slot zero, which a generator's resume frame fills with its state",
         ),
         comprehensions: 0,
+        language: unit.language,
         environment: None,
         captures: Some(Captured {
             class: class.to_string(),
@@ -1158,6 +1172,9 @@ fn lower_resume(
             // a generator's state field is the frame's *own* local, parked
             free: false,
         }),
+        // a generator that shares a cell with the frame around it is turned down above,
+        // and its own state fields are reached as ordinary captures
+        owned_cells: None,
         generator: Some(Generator {
             class: class.to_string(),
             resumptions: Vec::new(),
@@ -5479,7 +5496,7 @@ fn lower_function_with_receiver(
     let never_written: HashSet<String> = bound.difference(&written).cloned().collect();
     // with per-iteration bindings a captured loop target is a *copy* rather than a
     // shared cell, and the environment holding it is re-allocated at each closure
-    let per_iteration = if unit.unique_loop_bindings {
+    let per_iteration = if unit.language.unique_loop_bindings() {
         closures::loop_targets(&function.body)
     } else {
         HashSet::new()
@@ -5562,6 +5579,27 @@ fn lower_function_with_receiver(
     } else {
         (outer_environment, None)
     };
+    // a nested function's computed default is kept on the environment that *is* its
+    // receiver, which is the closure environment where the frame split its two. it is
+    // written where the `def` stands and read back by the boundary, so it belongs to
+    // the closure rather than to the frame
+    let mut environment = environment;
+    if let Some(environment) = &mut environment {
+        for entry in &nested {
+            for parameter in computed_default_names(&entry.def) {
+                environment.fields.push(by_ir::function::FieldDecl {
+                    name: by_ir::function::receiver_default_field(
+                        entry.def.name.as_str(),
+                        &parameter,
+                    ),
+                    ty: RType::OBJECT,
+                    default: None,
+                    optional: false,
+                    defaulted_by: None,
+                });
+            }
+        }
+    }
 
     // the environment's own layout and method signatures, so the enclosing body can
     // both allocate it and call straight into its methods
@@ -5605,6 +5643,17 @@ fn lower_function_with_receiver(
     builder.variadic(vararg, kwarg);
     builder.binding_kinds(posonly, kwonly);
     builder.deferring(deferring);
+    // a nested function has no interpreted twin to hold its computed defaults, so the
+    // environment it carries holds them and the boundary fills them itself
+    if matches!(receiver, Some(Receiver::Implicit(_))) && !computed_defaults.is_empty() {
+        if !unit.language.defaults_evaluated_at_the_def() {
+            return Err(Decline::new(
+                "a parameter default that is not an immediate is re-evaluated at each \
+                 call here, which a nested function has no twin to do for it",
+            ));
+        }
+        builder.defaults_held_by_the_receiver();
+    }
     builder.computed_defaults(computed_defaults);
     let mut locals: HashMap<String, RegisterId> = HashMap::new();
 
@@ -5746,44 +5795,72 @@ fn lower_function_with_receiver(
         .map(|field| field.name.as_str())
         .collect();
 
-    // this frame's own field access: either the captures it reads as a *nested*
-    // function, or the shared cells it owns as an *enclosing* one
-    let own_captures = match (captures, environment.as_ref()) {
-        (Some(captured), _) => Some(Captured {
-            class: receiver
-                .and_then(|receiver| match receiver.rtype() {
-                    RType::Instance { class, .. } => Some(class.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default(),
-            // the receiver of a nested function is its own first parameter
-            receiver: RegisterId(0),
-            names: captured
-                .captures
-                .iter()
-                .filter(|name| !captured.shared.contains(name))
-                .filter(|name| held.contains(name.as_str()))
-                .cloned()
-                .collect(),
-            cells: captured
-                .shared
-                .iter()
-                .filter(|name| held.contains(name.as_str()))
-                .cloned()
-                .collect(),
-            free: true,
-        }),
-        (None, Some(environment)) if !shared.is_empty() => Some(Captured {
-            class: outer_environment
-                .as_ref()
-                .map_or_else(|| environment.name.clone(), |outer| outer.name.clone()),
-            receiver: outer_register.or(env_register).unwrap_or(RegisterId(0)),
+    // what this frame reads as a *nested* function: the captures held by the
+    // environment its own receiver points at
+    let own_captures = captures.map(|captured| Captured {
+        class: receiver
+            .and_then(|receiver| match receiver.rtype() {
+                RType::Instance { class, .. } => Some(class.clone()),
+                _ => None,
+            })
+            .unwrap_or_default(),
+        // the receiver of a nested function is its own first parameter
+        receiver: RegisterId(0),
+        names: captured
+            .captures
+            .iter()
+            .filter(|name| !captured.shared.contains(name))
+            .filter(|name| held.contains(name.as_str()))
+            .cloned()
+            .collect(),
+        cells: captured
+            .shared
+            .iter()
+            .filter(|name| held.contains(name.as_str()))
+            .cloned()
+            .collect(),
+        free: true,
+    });
+
+    // and the cells this frame *owns*: the ones its own nested functions share, which
+    // live in the environment it allocated rather than in the one above it.
+    //
+    // a frame in the middle of a chain has both, and they are different objects. giving
+    // one name the other's home is what made
+    //
+    // ```python
+    // def outer(a):
+    //     def middle():
+    //         acc = 0
+    //         def step():
+    //             nonlocal acc
+    //             acc = acc + a
+    //         step()
+    //         return acc
+    //     return middle
+    // ```
+    //
+    // read `acc` back as an unset cell: `middle` resolved its own captures against the
+    // environment `outer` made, found no `acc` there, and gave itself a register beside
+    // the cell `step` was writing
+    let owned_cells = environment.as_ref().and_then(|environment| {
+        // when the frame splits its environments the cells are in the outer one; the
+        // closure environment holds the per-iteration bindings instead
+        let holder = outer_environment.as_ref().unwrap_or(environment);
+        let cells: HashSet<String> = nested
+            .iter()
+            .flat_map(|entry| entry.shared.iter().cloned())
+            .filter(|name| holder.fields.iter().any(|field| field.name == *name))
+            .collect();
+        let register = outer_register.or(env_register)?;
+        (!cells.is_empty()).then(|| Captured {
+            class: holder.name.clone(),
+            receiver: register,
             names: HashSet::new(),
-            cells: shared.clone(),
+            cells,
             free: false,
-        }),
-        (None, _) => None,
-    };
+        })
+    });
 
     let zero_super = zero_argument_super(function, declared_receiver);
 
@@ -5811,12 +5888,14 @@ fn lower_function_with_receiver(
         handling: Vec::new(),
         owner: unit.owner.map(str::to_string),
         zero_super,
+        language: unit.language,
         comprehensions: 0,
         generator: None,
         delegations: 0,
         contexts: 0,
         cleanups: Vec::new(),
         captures: own_captures,
+        owned_cells,
         environment: environment.as_ref().map(|environment| Closures {
             class: environment.name.clone(),
             register: env_register.unwrap_or(RegisterId(0)),
@@ -5829,6 +5908,7 @@ fn lower_function_with_receiver(
                 })
                 .collect(),
             ready: HashSet::new(),
+            settled: closures::bound_only_by_their_def(&function.body),
             outer: outer_register,
             per_closure,
         }),
@@ -5944,10 +6024,10 @@ type Methods = HashMap<String, HashMap<String, Signature>>;
 struct Unit<'a> {
     /// the environment the module is being checked in, which every type query needs
     env: &'a ProgramEnvironment<'a>,
-    /// whether a closure made in a loop binds *that* iteration's values, which is
-    /// the language's default and the transpiler's. it decides one thing here:
-    /// whether a captured loop target is a shared cell or a per-closure copy
-    unique_loop_bindings: bool,
+    /// the language the source is written in, which two lowerings here have to ask
+    /// about: whether a captured loop target is a shared cell or a per-closure copy,
+    /// and whether a computed parameter default is snapshotted at the `def`
+    language: Language,
     db: &'a dyn ty_python_semantic::Db,
     model: &'a SemanticModel<'a>,
     native_callees: &'a HashSet<String>,
@@ -6190,6 +6270,10 @@ struct Closures {
     /// the nested functions whose `def` has been lowered, so the environment is
     /// live and a call to one can go straight to its native entry point
     ready: HashSet<String>,
+    /// the nested functions the frame binds nowhere but at their own `def`, which is
+    /// what makes the name still hold what that `def` put there — see
+    /// [`closures::bound_only_by_their_def`]
+    settled: HashSet<String>,
     /// the register holding the environment this one's `$outer` points at, when
     /// that is a *sibling* of this frame rather than the frame's own receiver
     outer: Option<RegisterId>,
@@ -6414,15 +6498,10 @@ fn signature(
         params.push(("$env".to_string(), rtype.clone()));
         defaults.push(None);
     }
-    // the binding order is the source order: positional-only, then ordinary, then
-    // keyword-only. `*args` and `**kwargs` come last because nothing binds them by
-    // name — the wrapper builds them out of what is left
-    let named = parameters
-        .posonlyargs
-        .iter()
-        .chain(parameters.args.iter())
-        .chain(parameters.kwonlyargs.iter())
-        .collect::<Vec<_>>();
+    // through the shared helper, because the indices this records for a computed
+    // default are read back against the same order when the environment is given a
+    // field for each — two orders would fill a field nothing reads
+    let named = named_parameters(parameters).collect::<Vec<_>>();
 
     // a parameter's register has to cover every value written into it, and its own
     // body is one of the writers. an *unannotated* parameter is declared by its
@@ -6458,25 +6537,22 @@ fn signature(
         //
         // anything computed is evaluated once too — at definition time, which is
         // before this module's init has finished and is where the mutable-default
-        // behaviour comes from. the interpreted definition already did that, and
-        // holds the one object every call has to share, so a call that omits such
-        // a parameter is handed to it rather than given a second one
+        // behaviour comes from. so the one object has to be kept somewhere every
+        // call that omits the parameter reaches.
+        //
+        // a module-level function's twin is in the module dict and a method's is an
+        // attribute of the interpreted class the fallback left there; either already
+        // holds the object, so such a call is handed to it. a *nested* function was
+        // never defined under a name of its own and has no twin — the frame that made
+        // the closure evaluates the default where the `def` stands and parks it in the
+        // environment instead, which the boundary reaches through slot zero
         let default = match &parameter.default {
             None => None,
             Some(expr) => match literal_value(expr) {
                 Some(value) => Some(value),
-                // a module-level function's twin is in the module dict and a method's is
-                // an attribute of the interpreted class the fallback left there. a
-                // *nested* function was never defined under a name of its own, so there
-                // is nothing to hand the call to
-                None if !matches!(receiver, Some(Receiver::Implicit(_))) => {
+                None => {
                     computed_defaults.push(params.len());
                     None
-                }
-                None => {
-                    return Err(Decline::new(
-                        "only a literal parameter default is lowered yet",
-                    ));
                 }
             },
         };
@@ -7328,6 +7404,39 @@ fn walk(body: &[Stmt]) -> Vec<&Stmt> {
     out
 }
 
+/// the parameters of `def` whose default is not an immediate, in binding order
+///
+/// python evaluates such a default once, where the `def` runs, and hands the one object
+/// to every call that omits the parameter. a nested function keeps it on the environment
+/// it carries — see [`by_ir::function::DefaultsHeldBy::Receiver`] — so this is
+/// asked twice: once to give the environment a field, and once at the `def` to fill it
+fn computed_default_names(def: &ast::StmtFunctionDef) -> Vec<String> {
+    named_parameters(&def.parameters)
+        .filter(|parameter| {
+            parameter
+                .default
+                .as_ref()
+                .is_some_and(|expr| literal_value(expr).is_none())
+        })
+        .map(|parameter| parameter.parameter.name.to_string())
+        .collect()
+}
+
+/// the parameters a caller may name, in the order the binding takes them
+///
+/// positional-only, then ordinary, then keyword-only. `*args` and `**kwargs` are left
+/// out: nothing binds them by name, and they can carry no default at all — the wrapper
+/// builds them out of what is left over
+fn named_parameters(
+    parameters: &ast::Parameters,
+) -> impl Iterator<Item = &ast::ParameterWithDefault> {
+    parameters
+        .posonlyargs
+        .iter()
+        .chain(parameters.args.iter())
+        .chain(parameters.kwonlyargs.iter())
+}
+
 /// as [`walk`], reaching the body of every `case` as well
 ///
 /// a `case` body is a body like any other and what it writes is a field like any other,
@@ -7392,6 +7501,13 @@ struct Lowering<'a, 'db> {
     cleanups: Vec<Cleanup>,
     /// the captures this frame reads through its receiver, when it *is* a closure
     captures: Option<Captured>,
+    /// the shared cells this frame *owns*, in the environment it allocated itself
+    ///
+    /// separate from [`Self::captures`] because a frame in the middle of a chain has
+    /// both, in two different objects
+    owned_cells: Option<Captured>,
+    /// the language the body is written in, for the lowerings whose answer it decides
+    language: Language,
     ret: RType,
     /// `(continue target, break target, cleanup depth)` for each enclosing loop,
     /// innermost last. the depth is what `break` unwinds to
@@ -9388,6 +9504,22 @@ impl Lowering<'_, '_> {
         Ok(())
     }
 
+    /// the register a `for` loop keeps its position in, where the loop can hold one
+    ///
+    /// with a cursor, an exact list stands in for its own iterator and a step is a
+    /// bounds test and a load rather than a call through `tp_iternext`.
+    ///
+    /// a generator's loop cannot have one. it parks its iterator in a field because
+    /// no register survives a `yield`, and the cursor is a register: a resumed frame
+    /// would start again from whatever an unset one holds. `By_CursorStep` would
+    /// still refuse to read outside the list, but the loop would silently start over
+    fn loop_cursor(&mut self) -> Option<RegisterId> {
+        if self.generator.is_some() {
+            return None;
+        }
+        Some(self.builder.temp(RType::fixed(by_ir::rtype::IntWidth::I64)))
+    }
+
     fn for_over_iterable(&mut self, node: &ast::StmtFor) -> Lowered<()> {
         let (iterable, iterable_ty) = self.expression(&node.iter)?;
         self.for_over_value(node, iterable, &iterable_ty)
@@ -9406,9 +9538,14 @@ impl Lowering<'_, '_> {
         let target = node.target.as_ref();
         let boxed = self.widen_to_object(iterable, iterable_ty);
         let iterator = self.builder.temp(RType::OBJECT);
+        // the two halves are built together and share one decision, because a `GetIter`
+        // that handed back a list to an `IterNext` with no cursor would step it through
+        // the protocol — and a list is not its own iterator, so that never ends
+        let cursor = self.loop_cursor();
         self.builder.push(Op::GetIter {
             dest: iterator,
             src: boxed,
+            cursor,
         });
         // in a generator the iterator has to outlive the frame: a `yield` in the body
         // returns, and a register does not come back. it has no source name, so the
@@ -9444,6 +9581,7 @@ impl Lowering<'_, '_> {
         self.builder.push(Op::IterNext {
             dest: raw,
             iter: live_iterator,
+            cursor,
         });
         let exhausted = self.builder.temp(RType::BIT);
         self.builder.push(Op::IsNull {
@@ -9504,6 +9642,19 @@ impl Lowering<'_, '_> {
         }
         if let Some(&id) = self.locals.get(name) {
             return Some(Place::Register(id));
+        }
+        // a cell this frame owns is asked about before one it captures: the two live in
+        // different objects, and this frame binds the name, so its own environment is
+        // where the value belongs
+        if let Some(owned) = &self.owned_cells
+            && owned.cells.contains(name)
+        {
+            return Some(Place::Cell {
+                receiver: owned.receiver,
+                class: owned.class.clone(),
+                name: name.to_string(),
+                free: owned.free,
+            });
         }
         let captured = self.captures.as_ref()?;
         if captured.cells.contains(name) {
@@ -10576,6 +10727,9 @@ impl Lowering<'_, '_> {
         };
         let class = environment.class.clone();
         let register = environment.register;
+        if let Some(parameters) = &node.parameters {
+            self.store_computed_defaults(&method, parameters)?;
+        }
         let dest = self.builder.temp(RType::OBJECT);
         self.builder.push(Op::MakeClosure {
             dest,
@@ -10586,6 +10740,72 @@ impl Lowering<'_, '_> {
         Ok((Value::Register(dest), RType::OBJECT))
     }
 
+    /// evaluate the defaults the closure being made here will keep on its environment
+    ///
+    /// python evaluates a default once, where the `def` runs, and hands that one object
+    /// to every call that omits the parameter — which is where the mutable-default
+    /// behaviour comes from. so this runs where the `def` stands, and writes into the
+    /// environment the closure is about to be made over.
+    ///
+    /// which means the environment has to be the one *this* `def` makes. a frame
+    /// allocates its environment once, so a `def` reached twice would overwrite the
+    /// object the first closure was given and the two would share — python gives each
+    /// its own. an environment re-allocated at each closure is the one exception, and
+    /// is exactly what a captured loop binding already asks for
+    fn store_computed_defaults(
+        &mut self,
+        method: &str,
+        parameters: &ast::Parameters,
+    ) -> Lowered<()> {
+        let computed: Vec<&ast::ParameterWithDefault> = named_parameters(parameters)
+            .filter(|parameter| {
+                parameter
+                    .default
+                    .as_ref()
+                    .is_some_and(|expr| literal_value(expr).is_none())
+            })
+            .collect();
+        if computed.is_empty() {
+            return Ok(());
+        }
+        // basedpython has no mutable-default gotcha: such a default is re-evaluated at
+        // each call, in the callee's own scope, so there is nothing to snapshot here.
+        // the nested function's own lowering says the same and declines
+        if !self.language.defaults_evaluated_at_the_def() {
+            return Err(Decline::new(
+                "a parameter default that is not an immediate is re-evaluated at each \
+                 call here, which a nested function has no twin to do for it",
+            ));
+        }
+        let Some(environment) = &self.environment else {
+            return Err(Decline::new("a nested function is not lowered yet"));
+        };
+        let (class, register) = (environment.class.clone(), environment.register);
+        if !self.loops.is_empty() && environment.per_closure.is_none() {
+            return Err(Decline::new(
+                "a `def` in a loop whose default is not an immediate would hand every \
+                 closure the one object, where python gives each its own",
+            ));
+        }
+        for parameter in computed {
+            let Some(expr) = &parameter.default else {
+                continue;
+            };
+            let (value, ty) = self.expression(expr)?;
+            let value = self.widen_to_object(value, &ty);
+            self.builder.push(Op::SetField {
+                receiver: Value::Register(register),
+                class: class.clone(),
+                field: by_ir::function::receiver_default_field(
+                    method,
+                    parameter.parameter.name.as_str(),
+                ),
+                value,
+            });
+        }
+        Ok(())
+    }
+
     /// bind a nested function's name to a closure over this frame's environment
     fn nested_def(&mut self, node: &ast::StmtFunctionDef) -> Lowered<()> {
         self.refresh_environment()?;
@@ -10594,12 +10814,15 @@ impl Lowering<'_, '_> {
         };
         let class = environment.class.clone();
         let register = environment.register;
+        self.store_computed_defaults(node.name.as_str(), &node.parameters)?;
 
-        let dest = self
-            .locals
-            .get(node.name.as_str())
-            .copied()
-            .ok_or_else(|| Decline::new("a nested function has no local to bind to"))?;
+        // a `def` binds its name like any other statement, so it goes wherever the name
+        // lives. that is a register in the ordinary case and a *shared cell* whenever
+        // some nested function reads the name — which is what a recursive nested
+        // function, or a pair of them that call each other, makes of it. binding those
+        // to a register of their own would leave the closure reading a cell the frame
+        // never wrote
+        let place = self.binding(node.name.as_str(), &RType::OBJECT);
         let closure = self.builder.temp(RType::OBJECT);
         self.builder.push(Op::MakeClosure {
             dest: closure,
@@ -10634,14 +10857,14 @@ impl Lowering<'_, '_> {
             }
             made = Value::Register(wrapped);
         }
-        let dest_ty = self.register_type(dest)?;
-        let value = self.coerce(made, &RType::OBJECT, &dest_ty)?;
-        self.builder.assign(dest, value);
+        self.write_place(&place, made, &RType::OBJECT)?;
         // `ready` means the name holds the closure *this frame made*, which is what
         // licenses calling it at its native entry. a decorator makes that false: the
-        // name holds whatever the decorator returned, and the entry point would skip it
+        // name holds whatever the decorator returned, and the entry point would skip
+        // it. so does any later binding of the name, which `settled` is what rules out
         if node.decorator_list.is_empty()
             && let Some(environment) = &mut self.environment
+            && environment.settled.contains(node.name.as_str())
         {
             environment.ready.insert(node.name.to_string());
         }
@@ -12206,9 +12429,11 @@ impl Lowering<'_, '_> {
         let (iterable, iterable_ty) = self.expression(&generator.iter)?;
         let boxed = self.widen_to_object(iterable, &iterable_ty);
         let iterator = self.builder.temp(RType::OBJECT);
+        let cursor = self.loop_cursor();
         self.builder.push(Op::GetIter {
             dest: iterator,
             src: boxed,
+            cursor,
         });
 
         let element_ty = match target {
@@ -12233,6 +12458,7 @@ impl Lowering<'_, '_> {
         self.builder.push(Op::IterNext {
             dest: raw,
             iter: Value::Register(iterator),
+            cursor,
         });
         let exhausted = self.builder.temp(RType::BIT);
         self.builder.push(Op::IsNull {
@@ -12976,6 +13202,64 @@ impl Lowering<'_, '_> {
         self.a_warning(node).map(Some)
     }
 
+    /// turn down a weak reference taken of an instance this module lays out
+    ///
+    /// an emitted instance *is* its layout, and a type spec adds no `__weakref__` — the
+    /// same fact that turns down a `__slots__` asking for one, and a body writing the
+    /// attribute. so `weakref.ref(self)` raises `TypeError` where python hands back a
+    /// reference, which is a wrong answer rather than a slower one. `_weakrefset.WeakSet`
+    /// is the shape: its `__init__` writes
+    ///
+    /// ```python
+    /// def _remove(item, selfref=ref(self)):
+    ///     ...
+    /// ```
+    ///
+    /// which snapshots a weak reference to the receiver where the `def` stands.
+    ///
+    /// only an argument this frame can already see as an emitted instance — an
+    /// `RType::Instance` is exactly that, because a class from outside the module maps
+    /// to a plain object. a weak reference taken of one *reached* some other way is the
+    /// same wrong answer and this does not see it; that is the limitation itself, not
+    /// this gate
+    fn a_weak_reference(&mut self, node: &ast::ExprCall) -> Lowered<()> {
+        let written = match node.func.as_ref() {
+            Expr::Attribute(attribute) => attribute.attr.as_str(),
+            Expr::Name(name) => name.id.as_str(),
+            _ => return Ok(()),
+        };
+        // a syntactic filter first, for the reason [`Self::a_frame_walk`] gives: the
+        // namespace lookup below parses the module it answers out of
+        if !matches!(written, "ref" | "proxy") {
+            return Ok(());
+        }
+        let Some(argument) = node.arguments.args.first() else {
+            return Ok(());
+        };
+        let emitted = match argument {
+            Expr::Name(name) => matches!(
+                self.place(name.id.as_str()),
+                Some(Place::Register(id))
+                    if matches!(self.register_type(id), Ok(RType::Instance { .. }))
+            ),
+            _ => false,
+        };
+        if !emitted {
+            return Ok(());
+        }
+        // and identity, not spelling: `ref` is a name a great many modules bind to
+        // something of their own
+        let env = &self.model.program_environment();
+        if node.func.inferred_type(self.model)
+            != ty_python_semantic::basedpython_weakref_symbol(self.db, env, written)
+        {
+            return Ok(());
+        }
+        Err(Decline::new(
+            "an emitted instance is its layout and a type spec adds no `__weakref__`, so a weak reference to one cannot be made",
+        ))
+    }
+
     /// `warnings.warn(...)` at the default stack level, lowered into the call it would
     /// have made once it had counted the frames
     ///
@@ -13107,6 +13391,7 @@ impl Lowering<'_, '_> {
         if let Some(handled) = self.a_frame_walk(node)? {
             return Ok(handled);
         }
+        self.a_weak_reference(node)?;
         // a `*` or a `**` in the arguments means the binding happens at runtime, so
         // the arguments become a tuple and a dict and python does the binding
         if node.arguments.args.iter().any(Expr::is_starred_expr)

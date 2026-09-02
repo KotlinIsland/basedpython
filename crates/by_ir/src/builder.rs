@@ -33,6 +33,7 @@ pub struct FunctionBuilder {
     kwarg: bool,
     deferring: Vec<usize>,
     computed_defaults: Vec<usize>,
+    defaults_held_by: crate::function::DefaultsHeldBy,
     posonly: usize,
     kwonly: usize,
     /// per-block `.by` spans, parallel to `blocks`
@@ -61,6 +62,7 @@ impl FunctionBuilder {
             kwarg: false,
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             posonly: 0,
             kwonly: 0,
             block_ranges: vec![None],
@@ -163,6 +165,13 @@ impl FunctionBuilder {
     /// see [`Function::computed_defaults`]
     pub fn computed_defaults(&mut self, computed: Vec<usize>) {
         self.computed_defaults = computed;
+    }
+
+    /// that those defaults are held by the receiver rather than by an interpreted twin
+    ///
+    /// see [`crate::function::DefaultsHeldBy::Receiver`]
+    pub fn defaults_held_by_the_receiver(&mut self) {
+        self.defaults_held_by = crate::function::DefaultsHeldBy::Receiver;
     }
 
     /// how many named parameters are positional-only, and how many keyword-only
@@ -310,6 +319,7 @@ impl FunctionBuilder {
             range: self.range,
             deferring: self.deferring,
             computed_defaults: self.computed_defaults,
+            defaults_held_by: self.defaults_held_by,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
         }

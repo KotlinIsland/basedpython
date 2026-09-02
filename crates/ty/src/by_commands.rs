@@ -1049,7 +1049,7 @@ pub(crate) fn cmd_compile(
             &model,
             parsed.suite(),
             name,
-            options.language.unique_loop_bindings(),
+            options.language,
         );
         // the real path, so a `#line` in the generated C resolves for a debugger
         let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());

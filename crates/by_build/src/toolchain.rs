@@ -95,6 +95,8 @@ print(json.dumps({
     'ext_suffix': get('EXT_SUFFIX') or '.so',
     'platform': sys.platform,
     'version': f'{sys.version_info[0]}.{sys.version_info[1]}',
+    # a debug interpreter is the one that wants cpython's header assertions kept
+    'debug': bool(get('Py_DEBUG')) or hasattr(sys, 'gettotalrefcount'),
 }))
 ";
 
@@ -141,6 +143,18 @@ struct Probe {
     platform: String,
     #[serde(default)]
     version: Option<String>,
+    /// whether the target is a debug interpreter
+    ///
+    /// this is the one field that does *not* default to the empty answer. an
+    /// interpreter that could not say is one we cannot tell a debug build from, and
+    /// reading silence as "release" would strip the assertions from exactly the build
+    /// that exists to run them. being wrong the other way costs speed
+    #[serde(default = "assume_a_debug_interpreter")]
+    debug: bool,
+}
+
+const fn assume_a_debug_interpreter() -> bool {
+    true
 }
 
 impl Toolchain {
@@ -190,11 +204,27 @@ impl Toolchain {
 
         // windows code is position independent by construction, and the flag asking for
         // it is one the compiler reports back as ignored
-        let compile_flags = if probe.platform == "win32" {
+        let mut compile_flags = if probe.platform == "win32" {
             Vec::new()
         } else {
             vec!["-fPIC".to_string()]
         };
+        // cpython's headers assert their own invariants, and an `assert` in a header
+        // is not free: `PyUnicode_READ_CHAR` carries two of them, which is enough to
+        // stop the compiler inlining it, so every character read through it became a
+        // call.
+        //
+        // this is not a risk being taken, it is a difference being removed. a release
+        // interpreter is itself built with `NDEBUG` — its `OPT` reads
+        // `-DNDEBUG -g -O3 -Wall` — and `setuptools` passes that same `CFLAGS` on to
+        // every extension it builds. compiling without it was what made us the
+        // exception
+        //
+        // a debug interpreter is the one build whose whole purpose is to run those
+        // checks, so it keeps them
+        if !probe.debug {
+            compile_flags.push("-DNDEBUG".to_string());
+        }
 
         let version = probe.version.as_deref().and_then(|text| {
             let (major, minor) = text.split_once('.')?;
@@ -301,11 +331,11 @@ fn parse_marshal(output: &[u8]) -> Option<FallbackCode> {
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = r#"{"cc": ["clang", "-pthread"], "include": ["/usr/include/python3.13"], "libdir": ["/usr/lib"], "libs": [], "ext_suffix": ".cpython-313-darwin.so", "platform": "darwin", "version": "3.13"}"#;
+    const SAMPLE: &str = r#"{"cc": ["clang", "-pthread"], "include": ["/usr/include/python3.13"], "libdir": ["/usr/lib"], "libs": [], "ext_suffix": ".cpython-313-darwin.so", "platform": "darwin", "version": "3.13", "debug": false}"#;
 
     /// what a windows interpreter reports: no library directory, and the import
     /// library found under the installation root
-    const WINDOWS: &str = r#"{"cc": ["cc"], "include": ["C:\\hostedtoolcache\\Python\\3.12.10\\x64\\Include"], "libdir": [], "libs": ["C:\\hostedtoolcache\\Python\\3.12.10\\x64\\libs\\python312.lib"], "ext_suffix": ".cp312-win_amd64.pyd", "platform": "win32", "version": "3.12"}"#;
+    const WINDOWS: &str = r#"{"cc": ["cc"], "include": ["C:\\hostedtoolcache\\Python\\3.12.10\\x64\\Include"], "libdir": [], "libs": ["C:\\hostedtoolcache\\Python\\3.12.10\\x64\\libs\\python312.lib"], "ext_suffix": ".cp312-win_amd64.pyd", "platform": "win32", "version": "3.12", "debug": false}"#;
 
     #[test]
     fn the_interpreter_version_is_recorded() {
@@ -468,17 +498,54 @@ mod tests {
 
     #[test]
     fn position_independence_is_asked_for_only_where_it_is_a_choice() {
-        assert_eq!(
+        assert!(
             Toolchain::from_probe("python3", SAMPLE)
                 .unwrap()
-                .compile_flags,
-            vec!["-fPIC"]
+                .compile_flags
+                .contains(&"-fPIC".to_string())
         );
         assert!(
-            Toolchain::from_probe("python3", WINDOWS)
+            !Toolchain::from_probe("python3", WINDOWS)
                 .unwrap()
                 .compile_flags
-                .is_empty()
+                .contains(&"-fPIC".to_string())
+        );
+    }
+
+    #[test]
+    fn a_release_interpreter_gets_cpythons_header_assertions_compiled_out() {
+        assert!(
+            Toolchain::from_probe("python3", SAMPLE)
+                .unwrap()
+                .compile_flags
+                .contains(&"-DNDEBUG".to_string())
+        );
+    }
+
+    #[test]
+    fn a_debug_interpreter_keeps_cpythons_header_assertions() {
+        // a debug interpreter was built to check its own invariants as it runs, and an
+        // extension compiled with them off is a hole in exactly that
+        let json = SAMPLE.replace(r#""debug": false"#, r#""debug": true"#);
+        assert!(
+            !Toolchain::from_probe("python3", &json)
+                .unwrap()
+                .compile_flags
+                .contains(&"-DNDEBUG".to_string())
+        );
+    }
+
+    #[test]
+    fn an_interpreter_that_did_not_say_keeps_them_too() {
+        // silence is not evidence of a release build, and the two ways of being wrong
+        // are not equal: reading it as release strips the checking from a build that
+        // exists to do the checking, while reading it as debug costs only speed
+        let json = SAMPLE.replace(r#", "debug": false"#, "");
+        assert!(
+            !Toolchain::from_probe("python3", &json)
+                .unwrap()
+                .compile_flags
+                .contains(&"-DNDEBUG".to_string())
         );
     }
 }

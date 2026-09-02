@@ -5945,7 +5945,11 @@ fn emit_op(
             character,
         } => {
             let expr = format!(
-                "By_StrItemCompareChar({}, {}, {}, {})",
+                "{}({}, {}, {}, {})",
+                match function.value_type(index) {
+                    Some(RType::INT) => "By_StrItemCompareChar",
+                    _ => "By_StrItemCompareCharI64",
+                },
                 value_expr(container),
                 value_expr(index),
                 *character as u32,
@@ -6020,14 +6024,32 @@ fn emit_op(
             value_expr(value),
             error_label(error_target)
         ),
-        Op::GetIter { dest, src } => {
-            let expr = format!("By_GetIter({})", value_expr(src));
-            assign_checked(module, function, *dest, &expr, error_target)
+        Op::GetIter { dest, src, cursor } => {
+            let mut out = match cursor {
+                Some(_) => {
+                    let expr = format!("By_CursorIter({})", value_expr(src));
+                    assign_checked(module, function, *dest, &expr, error_target)
+                }
+                None => {
+                    let expr = format!("By_GetIter({})", value_expr(src));
+                    assign_checked(module, function, *dest, &expr, error_target)
+                }
+            };
+            // the cursor starts a loop at the top of whatever it is walking. it is
+            // set *here* rather than where the register is declared because one
+            // register serves every trip through an enclosing loop
+            if let Some(cursor) = cursor {
+                let _ = writeln!(out, "    {} = 0;", local(*cursor));
+            }
+            out
         }
-        Op::IterNext { dest, iter } => {
+        Op::IterNext { dest, iter, cursor } => {
             // a null result is exhaustion *or* failure, so the check has to
             // consult the exception state rather than the value alone
-            let expr = format!("By_IterNext({})", value_expr(iter));
+            let expr = match cursor {
+                Some(cursor) => format!("By_CursorStep({}, &{})", value_expr(iter), local(*cursor)),
+                None => format!("By_IterNext({})", value_expr(iter)),
+            };
             let mut out = assign_owned(module, function, *dest, &expr);
             let _ = writeln!(
                 out,
@@ -6252,11 +6274,13 @@ fn defer_tests(function: &Function, receiver: bool) -> Vec<String> {
             format!("({slot} != NULL && !By_IsExactFloat({slot}))")
         })
         // an omitted parameter whose default is not an immediate: the interpreted
-        // definition holds the one object every such call has to share
+        // definition holds the one object every such call has to share — unless the
+        // receiver holds it, in which case this boundary can fill it itself
         .chain(
             function
                 .computed_defaults
                 .iter()
+                .filter(|_| function.defaults_held_by == by_ir::function::DefaultsHeldBy::Twin)
                 .map(|index| format!("{} == NULL", slot(index))),
         )
         .collect()
@@ -6350,8 +6374,36 @@ fn emit_wrapper(module: &ModuleIr, function: &Function, is_method: bool) -> Stri
             .and_then(Option::as_ref)
             .filter(|_| !(is_method && index == 0));
         let unbox = unbox_checked(module, &decl.ty, &slot);
-        match default {
-            Some(default) => {
+        // a default the *receiver* holds, which is how a nested function keeps one: the
+        // frame that made the closure evaluated it where the `def` stood and parked it
+        // in the environment, and `a0` is that environment
+        let from_receiver = (function.defaults_held_by
+            == by_ir::function::DefaultsHeldBy::Receiver
+            && function.computed_defaults.contains(&index))
+        .then(|| function.receiver_default_field(index))
+        .flatten();
+        match (default, from_receiver) {
+            (_, Some(field)) => {
+                let position = index - usize::from(is_method);
+                let held = unbox_checked(module, &decl.ty, "by_default");
+                let _ = writeln!(out, "    if (by_bound[{position}] != NULL) {{");
+                let _ = writeln!(out, "        {name} = {unbox};");
+                let _ = writeln!(out, "    }} else {{");
+                // the read raises rather than handing NULL on, in python's own wording.
+                // it cannot fire: the frame writes the field before the closure that
+                // reaches this boundary exists at all
+                let _ = writeln!(
+                    out,
+                    "        PyObject *by_default = By_ReadCell(a0->{}, {}, 0);",
+                    mangle_member(&field),
+                    c_string(decl.name.as_deref().unwrap_or(""))
+                );
+                let _ = writeln!(out, "        if (by_default == NULL) goto by_wrap_error;");
+                let _ = writeln!(out, "        {name} = {held};");
+                let _ = writeln!(out, "        Py_DECREF(by_default);");
+                let _ = writeln!(out, "    }}");
+            }
+            (Some(default), None) => {
                 let position = index - usize::from(is_method);
                 let _ = writeln!(out, "    if (by_bound[{position}] != NULL) {{");
                 let _ = writeln!(out, "        {name} = {unbox};");
@@ -6361,7 +6413,7 @@ fn emit_wrapper(module: &ModuleIr, function: &Function, is_method: bool) -> Stri
             }
             // a parameter with no default is guaranteed present: `By_BindArgs` reports
             // every missing one, in cpython's own wording
-            None => {
+            (None, None) => {
                 let _ = writeln!(out, "    {name} = {unbox};");
             }
         }
@@ -6418,7 +6470,7 @@ fn emit_wrapper(module: &ModuleIr, function: &Function, is_method: bool) -> Stri
     out.push_str("    return NULL;\n");
     // the jump here happens before any argument local is filled, so there is
     // nothing to release — and no error is set, because nothing went wrong
-    if !function.deferring.is_empty() || !function.computed_defaults.is_empty() {
+    if function.defers() {
         // the twin is taken off the interpreted class, and for a *static* method that
         // is the plain function the `staticmethod` wraps — so the call is the one a
         // module-level function makes, and `self` holds nothing to put in front of it
@@ -9367,6 +9419,75 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_nested_functions_computed_default_is_filled_from_its_environment() {
+        // a nested function has no interpreted definition to hand the call to, so its
+        // boundary fills the omitted parameter itself, out of the environment the frame
+        // parked the value in. there is nothing to defer to, and emitting a defer edge
+        // anyway would have module init reaching for a twin under the environment
+        // class's generated name
+        let mut builder = FunctionBuilder::new("cb", RType::OBJECT);
+        let _env = builder.param(
+            "$env",
+            RType::Instance {
+                class: "outer$env".to_string(),
+                exact: false,
+            },
+        );
+        let held = builder.param("name", RType::OBJECT);
+        builder.defaults(vec![None, None]);
+        builder.computed_defaults(vec![1]);
+        builder.defaults_held_by_the_receiver();
+        builder.terminate(Terminator::Return(Value::Register(held)));
+        let mut method = builder.finish();
+        method.owner = Some("outer$env".to_string());
+        let mut module = ModuleIr::new("app");
+        module.classes.push(ClassIr {
+            name: "outer$env".to_string(),
+            immutable: false,
+            exported: false,
+            base: None,
+            inherited_init: false,
+            generic: false,
+            declares_slots: false,
+            constants: Vec::new(),
+            properties: Vec::new(),
+            slot_aliases: Vec::new(),
+            fields: vec![by_ir::function::FieldDecl {
+                name: "$default$cb$name".to_string(),
+                ty: RType::OBJECT,
+                default: None,
+                optional: false,
+                defaulted_by: None,
+            }],
+            decorators: Vec::new(),
+            methods: vec![method],
+            resume: None,
+            keywords: Vec::new(),
+        });
+        let c = emit_module(&module);
+        // the opening brace, because the forward declaration of the same boundary comes
+        // first and `body_of` takes whichever it finds
+        let wrapper = body_of(
+            &c,
+            "static PyObject *byw_app_outer_env_cb(PyObject *self, PyObject *const *args, \
+             Py_ssize_t nargs, PyObject *kwnames) {",
+        );
+        // the parameter stays optional, and the omitted case reads the field rather
+        // than reporting a missing argument
+        assert!(
+            wrapper.contains("static const unsigned char by_required[] = { 0 };"),
+            "{wrapper}"
+        );
+        assert!(
+            wrapper.contains("By_ReadCell(a0->by_f__default_cb_name, \"name\", 0)"),
+            "{wrapper}"
+        );
+        // and no edge to a definition that was never bound under a name
+        assert!(!wrapper.contains("by_wrap_defer"), "{wrapper}");
+        assert!(!c.contains("byi_app_outer_env_cb"), "{c}");
+    }
+
     /// a class whose `__init__` is `def __init__(self, a, /, *rest, **extra)`: a
     /// receiver behind a positional-only marker, a `*args` and a `**kwargs` at once
     fn variadic_init() -> ModuleIr {
@@ -9474,6 +9595,38 @@ mod tests {
         assert!(
             wrapper.contains("a3 = By_PackKwargs(args, nargs, kwnames, by_names, 1, 1);"),
             "{wrapper}"
+        );
+    }
+
+    /// the index a scan reaches this with is already in a register, and the fused
+    /// comparison takes one as readily as a tagged int — so the representation the
+    /// index arrives in is what picks the helper, and nothing is shifted out and
+    /// straight back in
+    #[test]
+    fn a_character_comparison_reads_the_index_in_the_representation_it_arrives_in() {
+        let compare = |width: RType| {
+            let mut builder = FunctionBuilder::new("at", RType::BIT);
+            let text = builder.param("s", RType::STR);
+            let index = builder.local("i", width);
+            let answer = builder.temp(RType::BIT);
+            builder.push(Op::StrItemCompare {
+                dest: answer,
+                op: CmpOp::Eq,
+                container: Value::Register(text),
+                index: Value::Register(index),
+                character: ' ',
+            });
+            builder.terminate(Terminator::Return(Value::Register(answer)));
+            emit_module(&module_with(builder.finish()))
+        };
+        assert!(
+            compare(RType::INT).contains("By_StrItemCompareChar(r0, r1, 32, Py_EQ)"),
+            "a tagged index keeps the tagged helper"
+        );
+        assert!(
+            compare(RType::fixed(IntWidth::I64))
+                .contains("By_StrItemCompareCharI64(r0, r1, 32, Py_EQ)"),
+            "a machine index reads through the machine helper"
         );
     }
 }

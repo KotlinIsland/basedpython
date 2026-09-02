@@ -391,6 +391,7 @@ pub enum KnownModule {
     UnittestMock,
     Uuid,
     Warnings,
+    Weakref,
     Numbers,
     #[strum(serialize = "struct", serialize = "_struct")]
     Struct,
@@ -461,6 +462,7 @@ impl KnownModule {
             Self::TyExtensionsPydantic => "ty_extensions.pydantic",
             Self::ImportLib => "importlib",
             Self::Warnings => "warnings",
+            Self::Weakref => "weakref",
             Self::UnittestMock => "unittest.mock",
             Self::Uuid => "uuid",
             Self::Templatelib => "string.templatelib",
@@ -555,6 +557,7 @@ impl KnownModule {
             | Self::UnittestMock
             | Self::Uuid
             | Self::Warnings
+            | Self::Weakref
             | Self::Numbers
             | Self::Struct => false,
         }

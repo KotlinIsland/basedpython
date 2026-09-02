@@ -13,7 +13,7 @@ use std::fmt;
 
 use crate::function::{Function, ModuleIr};
 use crate::ops::{BlockId, Op, RegisterId, Terminator, UnaryOp, Value};
-use crate::rtype::{Primitive, RType};
+use crate::rtype::{IntWidth, Primitive, RType};
 
 /// something wrong with a function's BIR
 #[derive(Debug, Clone, PartialEq)]
@@ -382,6 +382,22 @@ impl Verifier<'_> {
                 format!(
                     "{what} produces {expected}, but r{} is declared {}",
                     dest.0, decl.ty
+                ),
+            ),
+            Some(_) => {}
+        }
+    }
+
+    /// a register an op reads *and* writes, so it is neither an operand nor a dest
+    fn expect_cursor(&mut self, block: BlockId, cursor: RegisterId) {
+        let expected = RType::fixed(IntWidth::I64);
+        match self.function.register(cursor) {
+            None => self.error(Some(block), format!("r{} is not declared", cursor.0)),
+            Some(decl) if decl.ty != expected => self.error(
+                Some(block),
+                format!(
+                    "a loop cursor is a machine integer, but r{} is declared {}",
+                    cursor.0, decl.ty
                 ),
             ),
             Some(_) => {}
@@ -836,7 +852,7 @@ impl Verifier<'_> {
                     self.expect(
                         block,
                         index,
-                        &RType::fixed(crate::rtype::IntWidth::I64),
+                        &RType::fixed(IntWidth::I64),
                         "an unchecked array index",
                     );
                 }
@@ -1142,8 +1158,13 @@ impl Verifier<'_> {
                 ..
             } => {
                 self.expect(block, container, &RType::STR, "a str subscript");
+                // a scan's counter reaches here already in a register, and the fused
+                // form reads a machine index as readily as a tagged one — so both
+                // representations are ordinary here, the way they are for the loop
+                // guard that counter also feeds
                 if let Some(ty) = self.operand_type(block, index)
                     && ty != RType::INT
+                    && ty != RType::fixed(IntWidth::I64)
                 {
                     self.error(
                         Some(block),
@@ -1204,13 +1225,19 @@ impl Verifier<'_> {
             Op::Reraise { value } => {
                 self.expect(block, value, &RType::OBJECT, "a re-raise");
             }
-            Op::GetIter { dest, src } => {
+            Op::GetIter { dest, src, cursor } => {
                 self.expect(block, src, &RType::OBJECT, "iter");
                 self.expect_dest(block, *dest, &RType::OBJECT, "iter");
+                if let Some(cursor) = cursor {
+                    self.expect_cursor(block, *cursor);
+                }
             }
-            Op::IterNext { dest, iter } => {
+            Op::IterNext { dest, iter, cursor } => {
                 self.expect(block, iter, &RType::OBJECT, "next");
                 self.expect_dest(block, *dest, &RType::OBJECT, "next");
+                if let Some(cursor) = cursor {
+                    self.expect_cursor(block, *cursor);
+                }
             }
             Op::IsNull { dest, src } => {
                 self.expect(block, src, &RType::OBJECT, "a null test");
@@ -1528,6 +1555,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
         }
@@ -1715,6 +1743,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
         };
@@ -1763,6 +1792,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
         };
@@ -1812,6 +1842,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
         };
@@ -1912,6 +1943,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
         };

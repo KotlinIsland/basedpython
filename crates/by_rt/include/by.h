@@ -5627,6 +5627,49 @@ static inline PyObject *By_GetIter(PyObject *o) { return PyObject_GetIter(o); }
  * PyErr_Occurred, exactly as the interpreter's FOR_ITER does */
 static inline PyObject *By_IterNext(PyObject *it) { return PyIter_Next(it); }
 
+/* what a `for` loop iterates over, when the loop keeps a cursor of its own
+ *
+ * an exact list stands in for its own iterator: the loop already holds a reference
+ * for as long as it would have held one to a `list_iterator`, and the position it
+ * would have kept inside that object lives in a register instead. anything else —
+ * a subclass that may have overridden `__iter__` included — still gets a real
+ * iterator, and [`By_CursorStep`] still steps it through the protocol */
+static inline PyObject *By_CursorIter(PyObject *o) {
+    if (BY_LIKELY(o != NULL && PyList_CheckExact(o))) return By_NewRef(o);
+    return PyObject_GetIter(o);
+}
+
+/* one step of such a loop: the element, or NULL at the end
+ *
+ * the length is read again every step, because that is what cpython's list iterator
+ * does — a list appended to under a `for` keeps feeding it and one popped from ends
+ * it early. reading a length once at the top would quietly disagree on both.
+ *
+ * `PyList_GET_ITEM` is safe here for the reason the bounds test just established,
+ * and the exactness test is what makes reading `ob_item` at all legitimate: a list
+ * subclass could have overridden `__getitem__`, and it never reaches this arm.
+ *
+ * the bounds test is unsigned, so it rejects a negative position as well as one past
+ * the end at no extra cost. a cursor should never be negative — the emitted loop sets
+ * it to zero before the first step — but the position is the one number here that
+ * indexes memory directly, and a test that only holds one end of it would let a
+ * register that never got set read outside the list.
+ *
+ * the position is an `int64_t` rather than a `Py_ssize_t` because that is the width
+ * the emitted register has, and the two are distinct types even where they are the
+ * same size */
+static inline PyObject *By_CursorStep(PyObject *it, int64_t *at) {
+    if (BY_LIKELY(PyList_CheckExact(it))) {
+        if (BY_LIKELY((uint64_t) *at < (uint64_t) PyList_GET_SIZE(it))) {
+            PyObject *item = PyList_GET_ITEM(it, (Py_ssize_t) *at);
+            *at += 1;
+            return By_NewRef(item);
+        }
+        return NULL;
+    }
+    return PyIter_Next(it);
+}
+
 /* ── str ──────────────────────────────────────────────────────────────────── */
 
 static inline PyObject *By_StrConcat(PyObject *a, PyObject *b) {
@@ -7027,6 +7070,44 @@ static inline char By_StrItemCompareChar(PyObject *s, ByTagged index, Py_UCS4 co
     Py_DECREF(character);
     Py_DECREF(item);
     return answer;
+}
+
+/* the same question as `By_StrItemCompareChar`, asked with a machine index
+ *
+ * a scan reaches this with its counter already in a register, and the tagged form
+ * would make the counter a tagged integer only for this call to shift it straight
+ * back — the whole of which is a round trip the fast path never needed. the range
+ * test is done in the machine width so that an index too large for a `Py_ssize_t`
+ * falls out of range rather than wrapping into it
+ *
+ * everything the fast path does not answer is handed to the tagged form, so a
+ * subclass, an out-of-range index and an index that has to become an object are
+ * all still answered in exactly one place */
+static inline char By_StrItemCompareCharI64(PyObject *s, int64_t index, Py_UCS4 codepoint,
+                                            int op) {
+    if (BY_LIKELY(s != NULL && PyUnicode_CheckExact(s))) {
+        int64_t length = (int64_t) PyUnicode_GET_LENGTH(s);
+        int64_t at = index < 0 ? index + length : index;
+        if (BY_LIKELY(at >= 0 && at < length)) {
+            Py_UCS4 found = PyUnicode_READ_CHAR(s, (Py_ssize_t) at);
+            switch (op) {
+                case Py_EQ: return (char) (found == codepoint);
+                case Py_NE: return (char) (found != codepoint);
+                case Py_LT: return (char) (found < codepoint);
+                case Py_LE: return (char) (found <= codepoint);
+                case Py_GT: return (char) (found > codepoint);
+                default: return (char) (found >= codepoint);
+            }
+        }
+    }
+    {
+        ByTagged tagged = By_IntFromI64(index);
+        char answer;
+        if (BY_UNLIKELY(tagged == BY_INT_ERROR)) return 2;
+        answer = By_StrItemCompareChar(s, tagged, codepoint, op);
+        By_DecRefTagged(tagged);
+        return answer;
+    }
 }
 
 #endif /* BY_RT_H */

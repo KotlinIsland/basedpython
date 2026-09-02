@@ -650,8 +650,14 @@ fn print_op(function: &Function, op: &Op) -> String {
             None => format!("raise {}", value(exception)),
         },
         Op::Reraise { value: v } => format!("reraise {}", value(v)),
-        Op::GetIter { dest, src } => format!("{} = iter {}", name(*dest), value(src)),
-        Op::IterNext { dest, iter } => format!("{} = next {}", name(*dest), value(iter)),
+        Op::GetIter { dest, src, cursor } => match cursor {
+            Some(cursor) => format!("{} = iter {} @{}", name(*dest), value(src), name(*cursor)),
+            None => format!("{} = iter {}", name(*dest), value(src)),
+        },
+        Op::IterNext { dest, iter, cursor } => match cursor {
+            Some(cursor) => format!("{} = next {} @{}", name(*dest), value(iter), name(*cursor)),
+            None => format!("{} = next {}", name(*dest), value(iter)),
+        },
         Op::IsNull { dest, src } => format!("{} = {} is null", name(*dest), value(src)),
         Op::StrConcat {
             dest,
@@ -769,6 +775,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
         }
@@ -837,6 +844,7 @@ b2:
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
         };

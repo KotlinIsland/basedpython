@@ -222,6 +222,14 @@ fn box_remaining_reads(function: &mut Function, register: RegisterId, steps: &[R
                 } if *rhs == register => function
                     .register(*lhs)
                     .is_some_and(|decl| matches!(decl.ty, RType::Primitive(Primitive::Fixed(_)))),
+                // a scan reads the character at its counter and asks one question of
+                // it. the fused comparison reads a machine index as readily as a
+                // tagged one, so handing the counter back its tagged value here would
+                // be a shift out and a shift straight back in, once per character
+                Op::StrItemCompare {
+                    index: Value::Register(index),
+                    ..
+                } if *index == register => true,
                 _ => false,
             } || op
                 .dest()
@@ -286,5 +294,90 @@ fn box_remaining_reads(function: &mut Function, register: RegisterId, steps: &[R
                 src: Value::Register(register),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use by_ir::builder::FunctionBuilder;
+    use by_ir::ops::{CmpOp, Terminator};
+    use by_ir::verify::verify;
+
+    use super::*;
+
+    fn module(function: Function) -> ModuleIr {
+        ModuleIr {
+            name: by_ir::ModuleName::new("app"),
+            functions: vec![function],
+            declined: Vec::new(),
+            classes: Vec::new(),
+            gradual: Vec::new(),
+            promoted: Vec::new(),
+            lines: None,
+            fallback_source: None,
+            fallback_code: None,
+        }
+    }
+
+    /// a counter set to zero and then read once, by whatever `reader` pushes
+    fn counted(reader: impl FnOnce(&mut FunctionBuilder, RegisterId, RegisterId)) -> ModuleIr {
+        let mut builder = FunctionBuilder::new("scan", RType::BOOL);
+        let text = builder.param("s", RType::STR);
+        let counter = builder.local("i", RType::INT);
+        builder.push(Op::Assign {
+            dest: counter,
+            src: Value::Int(0),
+        });
+        reader(&mut builder, text, counter);
+        builder.terminate(Terminator::Return(Value::Bool(true)));
+        let mut module = module(builder.finish());
+        run(&mut module);
+        module
+    }
+
+    fn boxes(module: &ModuleIr) -> usize {
+        module.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.ops)
+            .filter(|op| matches!(op, Op::Box { .. }))
+            .count()
+    }
+
+    #[test]
+    fn a_counter_that_only_indexes_a_character_comparison_is_never_boxed() {
+        let module = counted(|builder, text, counter| {
+            let answer = builder.temp(RType::BIT);
+            builder.push(Op::StrItemCompare {
+                dest: answer,
+                op: CmpOp::Eq,
+                container: Value::Register(text),
+                index: Value::Register(counter),
+                character: ' ',
+            });
+        });
+        assert_eq!(boxes(&module), 0, "{}", by_ir::print::print_module(&module));
+        assert_eq!(
+            module.functions[0].registers[1].ty,
+            RType::fixed(IntWidth::I64)
+        );
+        assert_eq!(verify(&module.functions[0]), Ok(()));
+    }
+
+    /// the fused comparison is the only reader that takes a machine index. a
+    /// character *read* has to produce the character as an object, and the index it
+    /// is asked for is the tagged one
+    #[test]
+    fn a_counter_that_reads_a_character_out_still_gets_its_tagged_value_back() {
+        let module = counted(|builder, text, counter| {
+            let character = builder.temp(RType::STR);
+            builder.push(Op::StrGetItem {
+                dest: character,
+                container: Value::Register(text),
+                index: Value::Register(counter),
+            });
+        });
+        assert_eq!(boxes(&module), 1, "{}", by_ir::print::print_module(&module));
+        assert_eq!(verify(&module.functions[0]), Ok(()));
     }
 }
