@@ -150,8 +150,9 @@ pub fn build_module(
         .chain(declared_global_anywhere(suite))
         .collect();
 
-    // every name this module reads anywhere — see `names_read`
-    let read = names_read(suite);
+    // every module-level definition the body goes on running below — see
+    // `watched_definitions`
+    let watched = watched_definitions(suite);
     // every attribute a `del` anywhere in this module names — see `deleted_attributes`
     let deleted = deleted_attributes(suite);
 
@@ -466,7 +467,7 @@ pub fn build_module(
         model,
         native_callees: &native_callees,
         decorated: &decorated,
-        read: &read,
+        watched: &watched,
         deleted: &deleted,
         suite,
         layouts: &layouts,
@@ -624,11 +625,28 @@ pub fn build_module(
             _ => None,
         })
         .collect();
+    // a definition that keeps its decorator runs it where it stands, so which
+    // definitions carry one at all is what says whose window a decline reopens
+    let carries_a_written_decorator: HashSet<String> = suite
+        .iter()
+        .filter_map(|statement| match statement {
+            Stmt::FunctionDef(function) => Some((&function.name, &function.decorator_list)),
+            Stmt::ClassDef(class) => Some((&class.name, &class.decorator_list)),
+            _ => None,
+        })
+        .filter(|(_, decorators)| {
+            decorators
+                .iter()
+                .any(|decorator| is_written_decorator(db, model, decorator))
+        })
+        .map(|(name, _)| name.to_string())
+        .collect();
     prune_unbuildable(
         &mut module,
         &ranges,
         &extends,
         &disturbed_definitions(suite),
+        &carries_a_written_decorator,
     );
     module
 }
@@ -1346,6 +1364,7 @@ fn prune_unbuildable(
     ranges: &HashMap<String, (u32, u32)>,
     extends: &[(String, Vec<String>)],
     disturbed: &Disturbed,
+    decorated: &HashSet<String>,
 ) {
     // the name is the whole of what module init has to install under, and only an
     // exported definition is installed at all
@@ -1367,7 +1386,41 @@ fn prune_unbuildable(
                 )
             })
     };
+    // the lowest definition that kept its decorator, and so runs it where it stands
+    //
+    // `watched_definitions` reads a decorated definition below another as evaluating
+    // nothing, because a decorator init applies has been taken out of the twin. that
+    // holds right up until the definition *declines*: then the decorator is still on the
+    // twin's `def`, arbitrary python runs there, and it runs inside the window every
+    // decorated definition above it is still in. so a decline here reopens those, and
+    // they follow it down
+    let reopened_below = |module: &ModuleIr| -> Option<(u32, String)> {
+        module
+            .declined
+            .iter()
+            .filter(|declined| decorated.contains(&declined.name))
+            .filter_map(|declined| {
+                declined
+                    .range
+                    .map(|(start, _)| (start, declined.name.clone()))
+            })
+            .max_by_key(|(start, _)| *start)
+    };
     loop {
+        let reopened = reopened_below(module);
+        let reopened = reopened
+            .as_ref()
+            .map(|(start, name)| (*start, name.as_str()));
+        // a definition above one that kept its decorator is back in the window that
+        // decorator's own application can see
+        let below = |name: &str| -> Option<String> {
+            let (start, culprit) = reopened?;
+            (decorated.contains(name) && ranges.get(name)?.0 < start).then(|| {
+                format!(
+                    "`{culprit}` declined below it and kept its decorator, which runs where it stands and can see what this one's has not done yet"
+                )
+            })
+        };
         let classes: HashSet<String> = module
             .classes
             .iter()
@@ -1470,6 +1523,7 @@ fn prune_unbuildable(
             };
             match rebound(&class.name, class.exported)
                 .or_else(|| hung_on(&class.name, class.exported))
+                .or_else(|| below(&class.name))
                 .or(declined_base)
                 .or_else(interpreted_subclass)
                 .or_else(|| class.methods.iter().find_map(&unbuildable))
@@ -1491,7 +1545,10 @@ fn prune_unbuildable(
         // the loop going, because a caller of it is now unbuildable too
         let mut dropped_an_edition = false;
         module.functions.retain(|function| {
-            match rebound(&function.name, function.exported).or_else(|| unbuildable(function)) {
+            match rebound(&function.name, function.exported)
+                .or_else(|| below(&function.name))
+                .or_else(|| unbuildable(function))
+            {
                 Some(reason) => {
                     if function.coroutine_body.is_some() {
                         dropped_an_edition = true;
@@ -1663,7 +1720,7 @@ fn lower_class<'a>(
     // class form with a field-initializing constructor — which is exactly what a
     // fixed layout needs. a plain class with bare annotations has no constructor
     // in the interpreted build either, so compiling one would invent behaviour
-    let (is_data, class_decorators) = class_modifiers(db, model, class)?;
+    let (is_data, class_decorators, wrote_a_decorator) = class_modifiers(db, model, class)?;
     let base = base_class(db, env, model, suite, class, layouts)?;
 
     let fields = class_fields(db, env, model, suite, class, layouts, deleted)?;
@@ -1762,7 +1819,7 @@ fn lower_class<'a>(
                 // become two entries in one method table
                 if let Some(rooted) = method.decorator_list.iter().find_map(|decorator| {
                     let path = function_modifier(db, model, decorator).ok()?;
-                    let Modifier::Apply(path) = path else {
+                    let (Modifier::Apply(path) | Modifier::Written(path)) = path else {
                         return None;
                     };
                     class_body_binds(&class.body, path.root()).then(|| path.root().to_string())
@@ -1916,7 +1973,7 @@ fn lower_class<'a>(
     // so the module body must not reach the class in the window between the twin's
     // `class` statement and init — everything it bound in that window keeps the
     // definition nothing had decorated yet
-    decorator_stays_unread(unit.read, class.name.as_str(), &class_decorators)?;
+    decorator_effects_stay_unseen(unit.watched, class.name.as_str(), wrote_a_decorator)?;
     Ok((
         by_ir::function::ClassIr {
             resume: None,
@@ -2716,14 +2773,19 @@ fn class_modifiers(
     db: &dyn ty_python_semantic::Db,
     model: &SemanticModel<'_>,
     class: &ast::StmtClassDef,
-) -> Lowered<(bool, Vec<Decorator>)> {
+) -> Lowered<(bool, Vec<Decorator>, bool)> {
     let mut is_data = false;
     let mut applied = Vec::new();
+    let mut written = false;
     for decorator in &class.decorator_list {
         match class_modifier(db, model, decorator)? {
             Modifier::DataClass => is_data = true,
             Modifier::Erased => {}
             Modifier::Apply(decorator) => applied.push(decorator),
+            Modifier::Written(decorator) => {
+                written = true;
+                applied.push(decorator);
+            }
         }
     }
     if !applied.is_empty()
@@ -2733,7 +2795,7 @@ fn class_modifiers(
             "an emitted type publishes `{unwritten}` alongside a method this class writes, and a decorator reads the class it is handed"
         )));
     }
-    Ok((is_data, applied))
+    Ok((is_data, applied, written))
 }
 
 /// the dunders an emitted type publishes alongside this one, because they share a slot
@@ -2808,6 +2870,14 @@ enum Modifier {
     /// a real python decorator, applied to the finished definition at module init —
     /// which is what the transpiler emits in a modifier's place
     Apply(Decorator),
+    /// the same, for one the source wrote with an `@`
+    ///
+    /// it is applied exactly as [`Modifier::Apply`] is, and told apart from it for one
+    /// reason: a modifier becomes a decorator this compiler *named*, and what those few
+    /// do is known — `final`, `override` and `abstractmethod` set a flag on what they
+    /// were handed and give it straight back. a written one is arbitrary python, and
+    /// [`decorator_effects_stay_unseen`] is what that costs
+    Written(Decorator),
 }
 
 /// the decorator expression this is, or why it is one the native build cannot evaluate
@@ -2850,149 +2920,146 @@ fn decorator_path(expression: &Expr) -> Lowered<Decorator> {
 
 /// whether a module-level definition can have its decorators moved to module init
 ///
-/// python runs a decorator where the definition stands, and the twin's body is what
-/// stands there — so init running it again is one evaluation too many, and the decorator
-/// comes out of the twin's source to make it one. that leaves a window, from the twin's
-/// `def` to the end of module init, in which the name holds a definition nothing has
-/// decorated yet. it is invisible unless something reads the name, and the module's own
-/// body is the only thing that can: everything else runs after init.
+/// python runs a decorator where the definition stands. the twin's body is what stands
+/// there, so init running it again would be one evaluation too many — the decorator comes
+/// out of the twin's source to keep it at one, and init applies it at the end of the
+/// import instead.
 ///
-/// so this is what decides whether the move is safe, and a definition it turns down
-/// declines rather than being compiled and decorated twice
-fn decorator_stays_unread(
-    read: &BTreeSet<&str>,
+/// that moves everything the decorator *does* along with the binding it hands back. from
+/// the twin's `def` until init reaches it the module is missing all of it: the name holds
+/// a definition nothing has decorated, and whatever else the decorator would have touched
+/// is untouched too. a `@enrol` that appends the function to a registry leaves that
+/// registry empty for the whole stretch — under a name that is not the function's at all,
+/// which is why asking only whether the module reads the definition missed it.
+///
+/// only the module's own body can be looking, because everything else runs after init. so
+/// the move is safe exactly when the rest of that body cannot look, which is what
+/// [`watched_definitions`] answers.
+///
+/// this is asked of a decorator the source **wrote** and not of a modifier, because the
+/// two are different amounts of unknown. a modifier becomes one of the handful of
+/// decorators this compiler names for itself — `final`, `override`, `abstractmethod`,
+/// `staticmethod`, `classmethod` — and each of those marks what it was handed and gives
+/// it back, with nothing for the rest of the module to notice either way. see
+/// [`Modifier::Written`]
+fn decorator_effects_stay_unseen(
+    watched: &BTreeSet<&str>,
     name: &str,
-    decorators: &[Decorator],
+    wrote_a_decorator: bool,
 ) -> Lowered<()> {
-    if decorators.is_empty() || !read.contains(name) {
+    if !wrote_a_decorator || !watched.contains(name) {
         return Ok(());
     }
     Err(Decline::new(format!(
-        "this module reads `{name}`, and its decorator cannot run where the definition stands and again over the compiled one"
+        "a decorator moved to module init runs at the end of the import instead of where `{name}` stands, and this module's body goes on running below it"
     )))
 }
 
-/// every name this module's own body can read before module init has finished
+/// every module-level definition this module's body goes on running below
 ///
-/// a decorator module init applies is taken out of the source the twin runs — see
-/// [`without_init_decorators`] — so from the twin's `def` until init reaches it, the
-/// definition stands in the namespace undecorated. anything that reads the name in that
-/// window keeps what it read: `TABLE = f()` in the module body straightforwardly, and
-/// `def g(): return f()` called from that body just the same, because `g` reads the
-/// global when it runs and not when it was written.
+/// a definition is in here when some module-level statement below it evaluates anything
+/// at all. that statement runs inside the window a moved decorator leaves — see
+/// [`decorator_effects_stay_unseen`] — and can see the module as it stood before the
+/// decorator ran.
 ///
-/// a load inside a `def` is a different matter: it happens when that definition *runs*,
-/// and everything that runs after import sees the decorated name. so the body reaches one
-/// only by naming the definition it is in — which is itself a load the body makes, and is
-/// followed from there. a module that defines helpers and calls none of them at import
-/// reads nothing at all, which is the common shape and the one that keeps compiling.
+/// the bar is "evaluates anything" rather than "reads the definition", because the name
+/// the decorator binds is only one of the things it changed and usually not the
+/// interesting one: `@atexit.register`, a route table, any `SEEN.append(fn)` writes
+/// somewhere else entirely. a decorator is arbitrary python and there is no reading of it
+/// that says where it wrote, so the question that can be answered is the other one —
+/// whether anything below is still in a position to look.
 ///
-/// an annotation is a read only where python evaluates one. under
+/// a statement is let past only when running it cannot reach the module at all: `pass`, a
+/// docstring, a binding of a literal, and a `def` whose header is literal too. a `def`'s
+/// *body* does not run where the `def` stands and is not part of the question; a `class`
+/// body does run there, so a class statement never is.
+///
+/// an annotation counts only where python evaluates one. under
 /// `from __future__ import annotations` it never does — `def f(x: Held)` stores the
-/// *string* `"Held"` — so a module written that way names a class in a signature without
-/// ever holding what the name meant at that moment
-fn names_read(suite: &[Stmt]) -> BTreeSet<&str> {
-    /// loads the module body makes as it runs, and the loads each definition holds
-    /// behind its own name
-    #[derive(Default)]
-    struct Reads<'a> {
-        now: BTreeSet<&'a str>,
-        held: HashMap<&'a str, BTreeSet<&'a str>>,
-    }
-    /// a walk that files every load under one heading
-    struct Into<'a, 'r>(&'r mut BTreeSet<&'a str>);
-    impl<'a> ruff_python_ast::visitor::Visitor<'a> for Into<'a, '_> {
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if let Expr::Name(name) = expr
-                && name.ctx.is_load()
-            {
-                self.0.insert(name.id.as_str());
-            }
-            ruff_python_ast::visitor::walk_expr(self, expr);
+/// *string* `"Held"` — so a module written that way carries signatures below a definition
+/// without ever looking at what the names in them meant
+fn watched_definitions(suite: &[Stmt]) -> BTreeSet<&str> {
+    /// an expression whose evaluation cannot reach anything this module holds
+    fn settled(expr: Option<&Expr>) -> bool {
+        let Some(expr) = expr else {
+            return true;
+        };
+        match expr {
+            Expr::NumberLiteral(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_) => true,
+            Expr::Tuple(tuple) => tuple.elts.iter().all(|element| settled(Some(element))),
+            Expr::List(list) => list.elts.iter().all(|element| settled(Some(element))),
+            Expr::Set(set) => set.elts.iter().all(|element| settled(Some(element))),
+            Expr::Dict(dict) => dict
+                .items
+                .iter()
+                .all(|item| settled(item.key.as_ref()) && settled(Some(&item.value))),
+            _ => false,
         }
     }
-    fn statements<'a>(into: &mut BTreeSet<&'a str>, body: &'a [Stmt]) {
-        for statement in body {
-            ruff_python_ast::visitor::walk_stmt(&mut Into(into), statement);
-        }
-    }
-    /// everything a `def` evaluates where it stands: its decorators, its defaults, and
-    /// its annotations where this module evaluates those. only the body waits to be called
-    fn header<'a>(
-        into: &mut BTreeSet<&'a str>,
-        function: &'a ast::StmtFunctionDef,
-        evaluated: bool,
-    ) {
-        let mut visit = Into(into);
-        for decorator in &function.decorator_list {
-            ruff_python_ast::visitor::walk_expr(&mut visit, &decorator.expression);
-        }
-        for parameter in &function.parameters {
-            if let Some(annotation) = parameter.annotation()
-                && evaluated
-            {
-                ruff_python_ast::visitor::walk_expr(&mut visit, annotation);
+    /// whether running this module-level statement can reach the module at all
+    fn inert(statement: &Stmt, evaluated: bool) -> bool {
+        match statement {
+            Stmt::Pass(_) => true,
+            Stmt::Expr(expression) => settled(Some(&expression.value)),
+            Stmt::Assign(assign) => settled(Some(&assign.value)),
+            Stmt::AnnAssign(assign) => {
+                settled(assign.value.as_deref())
+                    && (!evaluated || settled(Some(&assign.annotation)))
             }
-            if let Some(default) = parameter.default() {
-                ruff_python_ast::visitor::walk_expr(&mut visit, default);
+            // a `def` evaluates its header and nothing else. its decorators are not part
+            // of that: one init applies has been taken out of the twin and evaluates
+            // nothing here at all. that is only true for as long as the definition below
+            // keeps compiling, and `prune_unbuildable` is where a decline takes it back
+            Stmt::FunctionDef(function) => {
+                function.parameters.iter().all(|parameter| {
+                    settled(parameter.default()) && (!evaluated || settled(parameter.annotation()))
+                }) && (!evaluated || settled(function.returns.as_deref()))
             }
-        }
-        if let Some(returns) = &function.returns
-            && evaluated
-        {
-            ruff_python_ast::visitor::walk_expr(&mut visit, returns);
+            // a `class` statement *does* run its body, so it is only settled when
+            // everything in that body is. it must also name no base and no keyword:
+            // reading a base is reading a module-level name, and a base is asked
+            // `__init_subclass__` besides. with neither, `type` builds the class itself
+            // and the only other thing that runs is `__set_name__`, asked of every value
+            // the body bound — so a nested `class` is out too, because a class is the one
+            // settled binding that could answer to that name. a function cannot
+            Stmt::ClassDef(class) => {
+                class.arguments.is_none()
+                    && class.type_params.is_none()
+                    && class.body.iter().all(|statement| {
+                        !statement.is_class_def_stmt() && inert(statement, evaluated)
+                    })
+            }
+            _ => false,
         }
     }
 
     let evaluated = annotations_are_evaluated(suite);
-    let mut reads = Reads::default();
-    for statement in suite {
+    let mut watched = BTreeSet::new();
+    // from the bottom, so that "is anything below still running" is a single flag rather
+    // than a rescan per definition. a name defined twice is watched if *either* definition
+    // has something below it, which is the earlier one — and the earlier one is the one
+    // the window would be open longest for
+    let mut running_below = false;
+    for statement in suite.iter().rev() {
         match statement {
-            Stmt::FunctionDef(function) => {
-                header(&mut reads.now, function, evaluated);
-                let held = reads.held.entry(function.name.as_str()).or_default();
-                statements(held, &function.body);
+            Stmt::FunctionDef(function) if running_below => {
+                watched.insert(function.name.as_str());
             }
-            // a class body runs with the module, so what it reads the module reads. its
-            // methods' bodies do not, and they wait behind the class's own name
-            Stmt::ClassDef(class) => {
-                let mut visit = Into(&mut reads.now);
-                for decorator in &class.decorator_list {
-                    ruff_python_ast::visitor::walk_expr(&mut visit, &decorator.expression);
-                }
-                if let Some(arguments) = &class.arguments {
-                    ruff_python_ast::visitor::walk_arguments(&mut visit, arguments);
-                }
-                for member in &class.body {
-                    match member {
-                        Stmt::FunctionDef(method) => {
-                            header(&mut reads.now, method, evaluated);
-                            let held = reads.held.entry(class.name.as_str()).or_default();
-                            statements(held, &method.body);
-                        }
-                        other => statements(&mut reads.now, std::slice::from_ref(other)),
-                    }
-                }
+            Stmt::ClassDef(class) if running_below => {
+                watched.insert(class.name.as_str());
             }
-            other => statements(&mut reads.now, std::slice::from_ref(other)),
+            _ => {}
+        }
+        if !inert(statement, evaluated) {
+            running_below = true;
         }
     }
-
-    // naming a definition is enough to have reached what it holds: the body may call it,
-    // hand it to something that calls it, or store it where a later statement will
-    let mut read = reads.now;
-    let mut pending: Vec<&str> = read.iter().copied().collect();
-    while let Some(name) = pending.pop() {
-        let Some(held) = reads.held.get(name) else {
-            continue;
-        };
-        for inner in held {
-            if read.insert(inner) {
-                pending.push(inner);
-            }
-        }
-    }
-    read
+    watched
 }
 
 /// the interpreted twin's source with every decorator module init re-applies blanked out
@@ -3669,7 +3736,7 @@ fn class_modifier(
     decorator: &ast::Decorator,
 ) -> Lowered<Modifier> {
     if is_written_decorator(db, model, decorator) {
-        return decorator_path(&decorator.expression).map(Modifier::Apply);
+        return decorator_path(&decorator.expression).map(Modifier::Written);
     }
     let Expr::Name(name) = &decorator.expression else {
         return Err(Decline::new(
@@ -3705,7 +3772,7 @@ fn function_modifier(
     decorator: &ast::Decorator,
 ) -> Lowered<Modifier> {
     if is_written_decorator(db, model, decorator) {
-        return decorator_path(&decorator.expression).map(Modifier::Apply);
+        return decorator_path(&decorator.expression).map(Modifier::Written);
     }
     let Expr::Name(name) = &decorator.expression else {
         return Err(Decline::new("only a plain-name modifier is lowered yet"));
@@ -4245,7 +4312,7 @@ fn class_fields(
             "a `setattr` on the receiver names its attribute at runtime",
         ));
     }
-    let (is_data, _) = class_modifiers(db, model, class)?;
+    let (is_data, _, _) = class_modifiers(db, model, class)?;
     let base = base_class(db, env, model, suite, class, layouts)?;
 
     // a subclass's struct *begins* with its base's fields, in the same order and
@@ -4320,7 +4387,7 @@ fn class_fields(
     } else {
         spec_built_where_needed(db, env, model, suite, class, base.as_ref(), layouts, fields)?
     };
-    metaclass_carries_the_body(class, base.as_ref(), layouts)?;
+    metaclass_carries_the_body(db, model, class, base.as_ref(), layouts)?;
     finalizer_reaches_a_dealloc_of_ours(class, base.as_ref())?;
     let mut fields =
         presence_where_a_finalizer_reads(db, env, model, suite, layouts, class, fields);
@@ -4368,14 +4435,26 @@ fn finalizer_reaches_a_dealloc_of_ours(
 ///
 /// a keyword can only reach the metaclass, and a base of ours beside one from outside
 /// leaves nothing but the metaclass either. the metaclass decides what the class defines
-/// from the *namespace* — which is settled before a method decorator, applied to the
-/// finished type, could have run. an `abstractmethod` there also raises, since a compiled
-/// method is a descriptor and takes no attributes.
+/// from the *namespace* it is handed, so everything the class defines has to be in that
+/// namespace before the call — a `@classmethod` an `EnumType` reads, an `abstractmethod`
+/// mark an `ABCMeta` collects `__abstractmethods__` out of.
 ///
-/// a class-level constant is not in the same position, though it reads like it: it goes
-/// into the namespace with the methods, and the class is asked afterwards whether it kept
-/// the value — see `By_ConstantsHeldUp`. a decorator has no such answer, because what it
-/// produces is only knowable by running it on a class that already exists.
+/// three kinds of member reach it, and each by its own route:
+///
+/// - a plain method goes in as the descriptor the method table builds
+/// - a `@classmethod` or `@staticmethod` is not a decorator by the time the table is
+///   built at all: [`method_binding`] takes it off the list and the entry carries
+///   `METH_CLASS` or `METH_STATIC`, so `By_MethodDescriptor` puts exactly the kind of
+///   descriptor an interpreted class body would have put there
+/// - anything else a method still carries is taken from the *body* the interpreted
+///   definition ran, the way a class-level constant is — see `By_ConstantsHeldUp`. the
+///   decorator is never applied a second time, and what the body produced is by
+///   definition what a `class` statement would have handed the metaclass. the price is
+///   that such a method is the interpreted one
+///
+/// a `@property` pair is what is left. the two halves become one `property` module init
+/// writes onto the *finished* type, which is past the point the metaclass decided
+/// anything — so a class with one is still turned down here.
 ///
 /// this is asked while the layouts are still settling rather than while the body is
 /// lowered, and where it turns a class down that class leaves the layout set — so a
@@ -4384,6 +4463,8 @@ fn finalizer_reaches_a_dealloc_of_ours(
 /// it. what it asks does not depend on the fields, so it sits at the end of the settling
 /// where the more specific reasons the field passes give are reported first
 fn metaclass_carries_the_body(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
     class: &ast::StmtClassDef,
     base: Option<&ClassBase>,
     layouts: &Layouts,
@@ -4391,12 +4472,14 @@ fn metaclass_carries_the_body(
     if class_keywords(class)?.is_empty() && !stands_on_an_emitted_base(base, layouts) {
         return Ok(());
     }
-    let decorated = class.body.iter().any(|statement| {
-        matches!(statement, Stmt::FunctionDef(method) if !method.decorator_list.is_empty())
-    });
-    if decorated {
+    // a group `property_groups` cannot read is one `lower_class` turns the class down for
+    // on its own, with a reason of its own — so the question here is only about a pair it
+    // *can* read, and the error is left to the place that reports it
+    if let Ok(groups) = property_groups(db, model, class)
+        && !groups.is_empty()
+    {
         return Err(Decline::new(
-            "a decorated method on a class built through its metaclass is not lowered yet",
+            "a property on a class built through its metaclass is not lowered yet",
         ));
     }
     Ok(())
@@ -5392,9 +5475,14 @@ fn lower_function_with_receiver(
     // as well would apply them a second time, to the environment class's method
     let nested = matches!(receiver, Some(Receiver::Implicit(_)));
     let mut decorators = Vec::with_capacity(function.decorator_list.len());
+    let mut wrote_a_decorator = false;
     for decorator in function.decorator_list.iter().filter(|_| !nested) {
         match function_modifier(db, model, decorator)? {
             Modifier::Apply(name) => decorators.push(name),
+            Modifier::Written(name) => {
+                wrote_a_decorator = true;
+                decorators.push(name);
+            }
             Modifier::Erased | Modifier::DataClass => {}
         }
     }
@@ -5404,7 +5492,7 @@ fn lower_function_with_receiver(
     // the emitted type rather than applied to it, and comes off the list here
     let binding = method_binding(function, receiver, &mut decorators)?;
     if receiver.is_none() {
-        decorator_stays_unread(unit.read, function.name.as_str(), &decorators)?;
+        decorator_effects_stay_unseen(unit.watched, function.name.as_str(), wrote_a_decorator)?;
     }
     // a class method's slot zero holds the *class*: an ordinary object, and pointedly
     // not an instance of the layout, so nothing reads a field off it. a static method
@@ -6034,8 +6122,9 @@ struct Unit<'a> {
     /// the module-level functions whose name a decorator rebinds, so a call through
     /// that name has to resolve it rather than reach the native entry
     decorated: &'a HashSet<String>,
-    /// every name the module reads anywhere — see [`names_read`]
-    read: &'a BTreeSet<&'a str>,
+    /// every module-level definition the body goes on running below — see
+    /// [`watched_definitions`]
+    watched: &'a BTreeSet<&'a str>,
     /// every attribute a `del` in the module names — see [`deleted_attributes`]
     deleted: &'a HashSet<String>,
     /// the module body, so a class can be asked about a base's base — which is what

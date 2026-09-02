@@ -176,6 +176,25 @@ static inline PyObject *By_BoxInt(ByTagged x) {
 
 /* takes a new reference to `o` when it cannot be represented as a short */
 static inline ByTagged By_TaggedFromLong(PyObject *o) {
+#if PY_VERSION_HEX >= 0x030C0000
+    /* almost every `int` a program unboxes is one that fits a single digit, and
+     * python 3.12 onwards stores such a value in the object's own header rather
+     * than behind a pointer. reading it is a load and a multiply; asking
+     * `PyLong_AsLongLongAndOverflow` for it is a call into libpython that cannot
+     * be inlined, and a loop that reads an `int` out of a container pays that
+     * call on every trip.
+     *
+     * `PyUnstable_Long_*` are cpython's own accessors for exactly this, and the
+     * header defines them as inline functions over the macros that name them —
+     * so this is the interpreter's own fast path rather than a guess about its
+     * layout. the type test is what makes it safe to take: a caller handing over
+     * something that is not an `int` at all still reaches the checked route
+     * below and gets the `TypeError` from it */
+    if (BY_LIKELY(PyLong_Check(o) && PyUnstable_Long_IsCompact((PyLongObject *)o))) {
+        return By_ShortFrom(PyUnstable_Long_CompactValue((PyLongObject *)o));
+    }
+#endif
+    {
     int overflow = 0;
     Py_ssize_t value = PyLong_AsLongLongAndOverflow(o, &overflow);
     if (!overflow && value != -1) {
@@ -188,6 +207,7 @@ static inline ByTagged By_TaggedFromLong(PyObject *o) {
     PyErr_Clear();
     Py_INCREF(o);
     return ((ByTagged)(void *)o) | BY_INT_TAG;
+    }
 }
 
 BY_HOT void By_DecRefTagged(ByTagged x) {
@@ -1868,7 +1888,8 @@ typedef struct {
  * that */
 static PyObject *By_TwinReplacement(PyObject *value, const By_Twins *twins);
 
-/* the class-level constants a class body wrote, and where their values come from
+/* the namespace entries a class takes off the body its interpreted definition ran, and
+ * where their values come from
  *
  * the interpreted definition evaluated each of them once at class-definition time, and it
  * is the only place the same object can come from — so the body that definition wrote is
@@ -1881,8 +1902,29 @@ typedef struct {
     PyObject *body;
     const char *const *names;
     Py_ssize_t count;
+    /* how many of `names`, counted from the front, the body *has* to hold
+     *
+     * a class-level constant it did not write is simply not carried: the class ends up
+     * without the name, which is what a body that never wrote it means. a decorated method
+     * is not like that. the method table has already put an entry under the same name into
+     * the namespace, and that entry is the method with nothing applied to it — so a carry
+     * that does not happen leaves an *undecorated* method standing where the class wrote a
+     * decorated one, which no `@abstractmethod` would survive. those names come first and
+     * this is how many of them there are */
+    Py_ssize_t required;
     const By_Twins *twins;
 } By_ClassConstants;
+
+/* whether the body holds every name that has to be taken off it — see `required` */
+static inline int By_BodyCarriesRequired(const By_ClassConstants *constants) {
+    Py_ssize_t at;
+    if (constants == NULL || constants->required <= 0) return 1;
+    if (constants->body == NULL) return 0;
+    for (at = 0; at < constants->required; at++) {
+        if (PyDict_GetItemString(constants->body, constants->names[at]) == NULL) return 0;
+    }
+    return 1;
+}
 
 /* the value one of them takes, as a new reference
  *
@@ -2001,12 +2043,14 @@ static inline PyObject *By_MethodDescriptor(PyTypeObject *owner, PyMethodDef *de
  * reads the namespace — an `ABCMeta` deciding which of the base's abstract methods
  * this class left abstract — sees what the class actually defines.
  *
- * the constants go in for the same reason, and that is the whole of what makes a class
- * with one buildable this way: copied onto the *finished* type they would land behind the
- * metaclass's back, and a `__slots__` that arrived after `type.__new__` had already given
- * the instances a dict is not a `__slots__` at all. what the copy cannot promise, the
- * check after the call does — see `By_ConstantsHeldUp` — and where the call does not get
- * that far, the raise is the same refusal by another route.
+ * what is carried off the body goes in for the same reason, and that is the whole of what
+ * makes a class with a constant or a decorated method buildable this way: copied onto the
+ * *finished* type they would land behind the metaclass's back, and a `__slots__` that
+ * arrived after `type.__new__` had already given the instances a dict is not a `__slots__`
+ * at all — nor is an `abstractmethod` mark that arrived after `ABCMeta` collected them.
+ * what the copy cannot promise, the check after the call does — see `By_ConstantsHeldUp` —
+ * and where the call does not get that far, the raise is the same refusal by another
+ * route.
  *
  * the descriptors name `object` as their owner because the type they belong to is what
  * this call produces. that is also the more faithful answer: the interpreted twin holds
@@ -2017,7 +2061,13 @@ static inline PyObject *By_TypeThroughMetaclass(PyObject *module_dict, const cha
                                                 const By_ClassConstants *constants) {
     PyMethodDef *def;
     PyObject *module_name, *prepare, *args, *ns, *carried, *cls;
-    PyObject *meta = By_Metaclass(bases, kwds);
+    PyObject *meta;
+    /* asked before anything is built, because the answer is that nothing should be: a
+     * namespace missing a name the body had to supply would leave the method table's own
+     * undecorated entry standing under it, and the class would define something the
+     * `class` statement never wrote */
+    if (!By_BodyCarriesRequired(constants)) return By_LookupGlobalString(module_dict, name);
+    meta = By_Metaclass(bases, kwds);
     if (meta == NULL) return NULL;
     args = Py_BuildValue("(sO)", name, bases);
     if (args == NULL) {
@@ -2118,10 +2168,10 @@ static inline PyObject *By_TypeThroughMetaclass(PyObject *module_dict, const cha
  * calling the metaclass covers everything a spec cannot, at the cost of the instance
  * layout — so `through_metaclass` is false for a class with fields of its own, and the
  * interpreted definition the fallback already ran is what answers for it. it is false
- * again for anything the caller can only put on the *finished* type: a method decorator
- * lands after the metaclass has decided what the class defines, and a metaclass that
- * reads its namespace would disagree with it. a class-level constant does not, because
- * `constants` carries it into the namespace instead */
+ * again for anything the caller can only put on the *finished* type, because a metaclass
+ * that reads its namespace would disagree with it. neither a class-level constant nor a
+ * decorated method is in that position: `constants` carries both into the namespace,
+ * ahead of the call, with the value the interpreted body gave them */
 static inline PyObject *By_BuildClass(PyObject *module_dict, const char *name,
                                       PyObject *bases, PyObject *kwds, PyMethodDef *methods,
                                       PyType_Spec *spec, int through_metaclass,
@@ -3768,7 +3818,7 @@ static int By_RemapTwinMethods(const By_Twins *twins) {
 static inline int By_CopyClassConstant(PyObject *body, PyTypeObject *type, const char *name,
                                        const By_Twins *twins) {
     const char *const names[] = {name};
-    By_ClassConstants constants = {body, names, 1, twins};
+    By_ClassConstants constants = {body, names, 1, 0, twins};
     /* the same value a class built through its metaclass is handed before the call, so the
      * two constructions cannot drift apart about what a constant is */
     PyObject *stands = By_ConstantValue(&constants, 0);
@@ -4934,7 +4984,46 @@ static inline PyObject *By_GetItemTagged(PyObject *container, ByTagged index) {
  * long way, check included */
 static inline PyObject *By_StrItemTagged(PyObject *s, ByTagged index);
 
+/* everything an object-indexed read can do apart from finding a value in a dict:
+ * the integer index into a sequence, and the container that answers through the
+ * protocol
+ *
+ * as with [`By_ItemSlow`], it repeats the case its caller tests rather than being
+ * reached only after it, so it is a complete answer on its own */
+BY_COLD PyObject *By_GetItemSlow(PyObject *container, PyObject *index);
+
+/* `container[index]` where the index is an object
+ *
+ * `By_GetItemTagged` was split into a fast path and an out-of-line tail because a
+ * C compiler prices an inline candidate by its whole body, and the tail is several
+ * times the size of what it guards. this is the same split for the form the
+ * *unindexed* subscript takes, which had never had it: a `d[k]` in a loop was
+ * paying a call whose body then tested four container types before reaching the
+ * table.
+ *
+ * an exact dict is what the head answers, because an index that is not a machine
+ * integer is overwhelmingly a mapping key — the sequence cases arrive through
+ * `By_GetItemTagged`, which has a fast path of its own. a subclass may have
+ * overridden `__getitem__` and so is never answered here */
 static inline PyObject *By_GetItem(PyObject *container, PyObject *index) {
+    if (BY_LIKELY(container != NULL && index != NULL && PyDict_CheckExact(container))) {
+#if PY_VERSION_HEX >= 0x030D0000
+        PyObject *value;
+        if (BY_UNLIKELY(PyDict_GetItemRef(container, index, &value) < 0)) return NULL;
+        if (BY_LIKELY(value != NULL)) return value;
+#else
+        PyObject *value = PyDict_GetItemWithError(container, index);
+        if (BY_LIKELY(value != NULL)) return By_NewRef(value);
+        if (PyErr_Occurred()) return NULL;
+#endif
+        /* cpython raises the *key*, not a message */
+        PyErr_SetObject(PyExc_KeyError, index);
+        return NULL;
+    }
+    return By_GetItemSlow(container, index);
+}
+
+BY_COLD PyObject *By_GetItemSlow(PyObject *container, PyObject *index) {
     if (container == NULL || index == NULL) return NULL;
     if (PyLong_CheckExact(index)) {
         Py_ssize_t i = PyLong_AsSsize_t(index);
@@ -4994,7 +5083,23 @@ static inline char By_SetItemTagged(PyObject *container, ByTagged index, PyObjec
     return result;
 }
 
+BY_COLD char By_SetItemSlow(PyObject *container, PyObject *index, PyObject *value);
+
+/* `container[index] = value` where the index is an object, split for the reason
+ * [`By_GetItem`] is: the store into an exact dict is the case a loop repeats, and
+ * everything else is bigger than it and belongs out of line
+ *
+ * a null value means `del`, which is [`By_DeleteItem`]'s job — the head hands one
+ * on rather than to `PyDict_SetItem`, which has no such meaning for it */
 static inline char By_SetItem(PyObject *container, PyObject *index, PyObject *value) {
+    if (BY_LIKELY(container != NULL && index != NULL && value != NULL
+                  && PyDict_CheckExact(container))) {
+        return PyDict_SetItem(container, index, value) < 0 ? 2 : 0;
+    }
+    return By_SetItemSlow(container, index, value);
+}
+
+BY_COLD char By_SetItemSlow(PyObject *container, PyObject *index, PyObject *value) {
     if (container == NULL || index == NULL) return 2;
     if (PyList_CheckExact(container) && PyLong_CheckExact(index)) {
         Py_ssize_t i = PyLong_AsSsize_t(index);
