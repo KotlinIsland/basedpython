@@ -9,6 +9,36 @@ use std::path::PathBuf;
 use crate::ops::{BlockId, Op, RegisterId, Terminator, Value};
 use crate::rtype::RType;
 
+/// who keeps the one object a computed parameter default is evaluated to
+///
+/// python evaluates such a default once, where the definition stands, and hands that
+/// object to every call that omits the parameter — which is where the mutable-default
+/// behaviour comes from. so something has to be holding it by the time a call arrives
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DefaultsHeldBy {
+    /// this function's interpreted definition, which evaluated them while the fallback
+    /// source ran and still holds them under its own name
+    #[default]
+    Twin,
+    /// the receiver in slot zero.
+    ///
+    /// a *nested* function has no twin — it was never defined under a name of its own —
+    /// so there would be nothing to hand the call to. instead the frame that made the
+    /// closure evaluates each such default where the `def` stands and parks it in the
+    /// environment the closure carries, which is that receiver
+    Receiver,
+}
+
+/// the environment field a nested function's computed default for `parameter` is kept in
+///
+/// one place, because the frame that writes the field and the boundary that reads it are
+/// in different crates and a name they disagree on is a field nothing ever fills. the
+/// `$`s are what keep it apart from a captured name, the same way `$outer` and `$state`
+/// are kept apart
+pub fn receiver_default_field(function: &str, parameter: &str) -> String {
+    format!("$default${function}${parameter}")
+}
+
 /// a declared register
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegisterDecl {
@@ -271,6 +301,8 @@ pub struct Function {
     /// the parameter is still *optional*: it is the value that is unavailable here,
     /// not the arity
     pub computed_defaults: Vec<usize>,
+    /// who keeps the values for [`Self::computed_defaults`]
+    pub defaults_held_by: DefaultsHeldBy,
     /// decorators to apply, outermost first, after the native function is
     /// installed in the module namespace
     pub decorators: Vec<Decorator>,
@@ -336,7 +368,18 @@ impl Function {
 
     /// whether any call can be handed to the interpreted definition
     pub fn defers(&self) -> bool {
-        !self.deferring.is_empty() || !self.computed_defaults.is_empty()
+        !self.deferring.is_empty()
+            || (!self.computed_defaults.is_empty() && self.defaults_held_by == DefaultsHeldBy::Twin)
+    }
+
+    /// the environment field holding the value for the parameter at `index`, for a
+    /// function whose defaults are [held by its receiver](DefaultsHeldBy::Receiver)
+    ///
+    /// derived from the two names rather than carried, so the frame that writes the
+    /// field and the boundary that reads it cannot drift apart
+    pub fn receiver_default_field(&self, index: usize) -> Option<String> {
+        let parameter = self.params().get(index)?.name.as_deref()?;
+        Some(receiver_default_field(&self.name, parameter))
     }
 
     /// the C identifier for the handle to this function's interpreted definition,
@@ -1149,6 +1192,7 @@ mod tests {
             decorators: Vec::new(),
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
+            defaults_held_by: DefaultsHeldBy::Twin,
             binding: Binding::Instance,
             coroutine_body: None,
         }

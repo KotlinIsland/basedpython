@@ -2144,6 +2144,97 @@ def held(s: str, i: int) -> object:
     );
 }
 
+/// a scan's counter never becomes an `int` object, so the comparison reads it as a
+/// machine integer — a second index path, with its own range test and its own
+/// negative-index arithmetic, and every answer the tagged one gives has to come
+/// back out of it unchanged
+#[test]
+fn comparing_a_character_at_a_counter_agrees() {
+    agree(
+        "charcmpcounter",
+        "\
+def spaces(line: str) -> int:
+    n = 0
+    i = 0
+    while i < len(line):
+        if line[i] == \" \":
+            n = n + 1
+        i = i + 1
+    return n
+
+# counting down from zero, so every index after the first is negative
+def spaces_from_the_end(line: str, length: int) -> int:
+    n = 0
+    i = 0
+    while i > -length:
+        if line[i] == \" \":
+            n = n + 1
+        i = i - 1
+    return n
+
+# the counter walks past the last character, so the index that has to raise is a
+# machine one too
+def up_to(line: str, stop: int) -> int:
+    n = 0
+    i = 0
+    while i < stop:
+        if line[i] == \" \":
+            n = n + 1
+        i = i + 1
+    return n
+
+# every operator at a counter, against characters a byte-wise or utf-16 ordering
+# would place differently
+def order_of_each(line: str) -> object:
+    out = []
+    i = 0
+    while i < len(line):
+        out.append((line[i] == \"m\", \"m\" == line[i], line[i] < \"m\", \"m\" < line[i], line[i] <= \"m\", line[i] > \"m\", line[i] >= \"m\"))
+        i = i + 1
+    return out
+
+def astral_at(line: str) -> object:
+    out = []
+    i = 0
+    while i < len(line):
+        out.append(line[i] == \"\\U0001f389\")
+        i = i + 1
+    return out
+
+# an index no tagged `int` holds without an object of its own, which is past the end
+# of every text there is
+def at_a_huge_index(line: str) -> bool:
+    i = 4611686018427387903
+    return line[i] == \" \"
+
+def at_a_huge_negative_index(line: str) -> bool:
+    i = 0
+    i = i - 4611686018427387903
+    return line[i] == \" \"
+",
+        &[
+            // ascii, latin-1, two-byte and four-byte storage, and a text with
+            // nothing in it at all
+            "[m.spaces(s) for s in ('', ' ', 'a b c', '  ', 'é é', '\\u0100 \\u0100', '\\U0001f389 x', 'abc')]",
+            "[m.spaces_from_the_end(s, len(s)) for s in ('', ' ', 'a b c', 'é é', '\\U0001f389 x')]",
+            // the first and the last index of each, from both ends
+            "[(m.up_to(s, len(s)), m.spaces_from_the_end(s, 1), m.up_to(s, 1)) for s in (' a', 'a ', '\\U0001f389 ', ' \\U0001f389')]",
+            // one index past the end, and one index past the start
+            "[(type(e).__name__, str(e)) for e in [_capture(m.up_to, 'ab', 3), _capture(m.up_to, '', 1), _capture(m.spaces_from_the_end, 'ab', 3)]]",
+            "[m.order_of_each(s) for s in ('amz', 'éħ\\u0100', '\\U0001f389\\uffff')]",
+            "[m.astral_at(s) for s in ('\\U0001f389', '\\U0001f38a', 'a', '\\ud83c\\udf89'.encode('utf-16', 'surrogatepass').decode('utf-16'))]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.at_a_huge_index, 'ab'), _capture(m.at_a_huge_negative_index, 'ab')]]",
+            // a subclass may hand back any text at all from `__getitem__`, and the
+            // machine index has to reach that the same way the tagged one does
+            "[m.spaces(type('S', (str,), {'__getitem__': lambda s, i: ' '})('ab'))]",
+            "[m.spaces(type('S', (str,), {'__getitem__': lambda s, i: '  '})('ab'))]",
+            "[m.spaces(type('S', (str,), {'__getitem__': lambda s, i: ''})('ab'))]",
+            "[m.spaces(type('P', (str,), {})('a b')), m.spaces_from_the_end(type('P', (str,), {})('a b'), 3)]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.at_a_huge_index, type('P', (str,), {})('ab'))]]",
+        ],
+    );
+}
+
 #[test]
 fn string_building_agrees() {
     agree(
@@ -2707,6 +2798,206 @@ def joined(parts: list[str]) -> str:
             "[m.count(o) for o in ([], [1, 2], 'abc', (1, 2, 3), {1: 2, 3: 4}, range(5))]",
             "[m.first_big(xs) for xs in ([], [1, 2], [1, 20, 30])]",
             "[m.joined(p) for p in ([], ['a'], ['a', 'b', 'c'])]",
+        ],
+    );
+}
+
+#[test]
+fn a_list_subclass_is_iterated_through_its_own_dunders() {
+    // a `for` over an exact list is walked by index, which is only sound because the
+    // exactness test sends everything else through `iter()`. a subclass may have
+    // overridden `__iter__` and may hand back anything at all, and reading its
+    // `ob_item` would silently answer with what the override was written to hide
+    agree(
+        "iterexact",
+        "\
+def walked(o) -> object:
+    seen = []
+    for x in o:
+        seen.append(x)
+    return seen
+",
+        &[
+            // `__iter__` overridden: the elements the loop sees are not the ones stored
+            "m.walked(type('D', (list,), \
+             {'__iter__': lambda self: iter([9, 8])})([1, 2, 3]))",
+            // and a subclass that overrides nothing still has to agree
+            "m.walked(type('P', (list,), {})([1, 2, 3]))",
+            // a plain list is the arm the index walk is for
+            "m.walked([1, 2, 3])",
+        ],
+    );
+}
+
+#[test]
+fn a_list_resized_under_a_for_loop_agrees() {
+    // cpython's list iterator holds a position and re-reads the length every step, so
+    // a list appended to under a `for` keeps feeding it and one popped from ends it
+    // early. reading the length once at the top would be faster and would disagree
+    // with the interpreter about both
+    agree(
+        "iterresize",
+        "\
+def growing(xs: list[int], limit: int) -> object:
+    seen = []
+    for x in xs:
+        seen.append(x)
+        if len(xs) < limit:
+            xs.append(x + 10)
+    return seen
+
+def shrinking(xs: list[int]) -> object:
+    seen = []
+    for x in xs:
+        seen.append(x)
+        if xs:
+            xs.pop()
+    return seen
+
+def cleared(xs: list[int]) -> object:
+    seen = []
+    for x in xs:
+        seen.append(x)
+        xs.clear()
+    return seen
+
+def deleted(xs: list[int]) -> object:
+    seen = []
+    for x in xs:
+        seen.append(x)
+        if xs:
+            del xs[0]
+    return seen
+",
+        &[
+            "m.growing([1, 2], 5)",
+            "m.growing([], 3)",
+            "m.shrinking([1, 2, 3, 4, 5])",
+            "m.shrinking([1])",
+            "m.cleared([1, 2, 3])",
+            "m.deleted([1, 2, 3, 4, 5])",
+            "m.deleted([1])",
+        ],
+    );
+}
+
+#[test]
+fn rebinding_the_name_a_for_loop_reads_does_not_move_the_loop() {
+    // the loop walks the list it opened over, not whatever the name says later. it
+    // holds a reference of its own for exactly that reason — and a step that read the
+    // *name* each trip would follow the rebinding and walk a list nobody asked for
+    agree(
+        "iterrebind",
+        "\
+def rebound(xs: list[int]) -> object:
+    seen = []
+    for x in xs:
+        seen.append(x)
+        xs = [99, 98, 97]
+    return seen
+
+def dropped(xs: list[int]) -> object:
+    seen = []
+    for x in xs:
+        seen.append(x)
+        xs = []
+    return seen
+",
+        &[
+            "m.rebound([1, 2, 3])",
+            "m.rebound([])",
+            "m.dropped([1, 2, 3])",
+        ],
+    );
+}
+
+#[test]
+fn a_for_loop_keeps_the_list_it_walks_alive() {
+    // the loop holds a reference for exactly as long as it would have held one to a
+    // `list_iterator`, which is what keeps a `for` over a temporary reading memory
+    // that is still there. the elements are dropped as the only reference to them
+    // goes, so a step that borrowed rather than owning would hand back a dead object
+    agree(
+        "itertemp",
+        "\
+def made(n: int) -> object:
+    seen = []
+    for x in [n, n + 1, n + 2]:
+        seen.append(x)
+    return seen
+
+def doubled(xs: list[int]) -> object:
+    seen = []
+    for x in list(xs):
+        seen.append(x)
+    return seen
+",
+        &[
+            "m.made(1)",
+            "m.made(-3)",
+            "m.doubled([1, 2, 3])",
+            "m.doubled([])",
+        ],
+    );
+}
+
+#[test]
+fn a_for_loop_starts_over_on_every_trip_through_an_enclosing_one() {
+    // one cursor register serves every trip through whatever encloses it, so it is set
+    // where the loop opens rather than where the register is declared. left unset on
+    // the second trip, an inner loop would carry on from where the first one stopped
+    agree(
+        "iternest",
+        "\
+def pairs(xs: list[int], ys: list[int]) -> object:
+    seen = []
+    for x in xs:
+        for y in ys:
+            seen.append(x * 10 + y)
+    return seen
+
+def restarted(xs: list[int], times: int) -> object:
+    seen = []
+    n = 0
+    while n < times:
+        for x in xs:
+            seen.append(x)
+        n = n + 1
+    return seen
+",
+        &[
+            "m.pairs([1, 2], [3, 4])",
+            "m.pairs([1, 2], [])",
+            "m.pairs([], [3, 4])",
+            "m.restarted([1, 2], 3)",
+            "m.restarted([], 2)",
+        ],
+    );
+}
+
+#[test]
+fn a_for_loop_in_a_generator_resumes_where_it_left_off() {
+    // a generator parks its iterator in a field because no register survives a
+    // `yield`, and a cursor is a register — so a generator's loop keeps the protocol.
+    // given one, a resumed frame would start again from whatever an unset register
+    // holds, which is to say from the top
+    agree(
+        "itergen",
+        "\
+def each(xs: list[int]) -> object:
+    for x in xs:
+        yield x
+        yield x + 100
+
+def taken(xs: list[int]) -> object:
+    return list(each(xs))
+",
+        &[
+            "m.taken([1, 2, 3])",
+            "m.taken([])",
+            "list(m.each([4, 5]))",
+            // stopping part way and resuming is the same question asked once
+            "[next(it) for it in [iter(m.each([7, 8]))] for _ in range(3)]",
         ],
     );
 }
@@ -7257,6 +7548,232 @@ def missing() -> object:
 }
 
 #[test]
+fn a_nested_functions_computed_default_is_evaluated_once_where_the_def_stands() {
+    // python evaluates a default once, where the `def` runs, and hands that one object
+    // to every call that omits the parameter. a nested function has no interpreted twin
+    // to keep the object for it, so the environment the closure carries keeps it.
+    //
+    // `accumulates` is the sharp one: the list has to be *the same list* across two
+    // calls, which a default rebuilt per call would not be. `reads` is the sharp one in
+    // the other direction — the value is taken where the `def` stands, so a later write
+    // to the name it came from must not be visible through it
+    agree_python(
+        "nesteddefault",
+        "\
+def tally():
+    def accumulates(v, seen=[]):
+        seen.append(v)
+        return seen
+    return accumulates
+
+def snapshot(n):
+    held = n * 2
+    def reads(extra, base=held):
+        return base + extra
+    held = 0
+    return reads
+
+def two_of_them(a, b):
+    def joins(times, sep=b, offset=a + 1):
+        return sep.join([str(offset)] * times)
+    return joins
+
+def by_keyword(n):
+    def scaled(x, *, factor=n + 1):
+        return x * factor
+    return scaled
+",
+        &[
+            // one list, appended to twice through two separate calls
+            "[(f := m.tally(), f(1), f(2))[-1]]",
+            "[(f := m.tally(), f(1), f(2), f(1))[-1]]",
+            // and a second closure gets a list of its own
+            "[m.tally()(9), m.tally()(9)]",
+            // supplying the parameter leaves the default untouched
+            "[(f := m.tally(), f(1, [7]), f(2))[-1]]",
+            "m.snapshot(5)(1)",
+            "m.snapshot(10 ** 20)(1)",
+            "m.two_of_them(3, '-')(3)",
+            "m.by_keyword(4)(5)",
+            "m.by_keyword(4)(5, factor=2)",
+        ],
+    );
+}
+
+#[test]
+fn a_def_in_a_loop_whose_default_is_computed_is_declined() {
+    // a frame allocates its environment once, so two passes of the loop would put their
+    // defaults in one field and the first closure would find the second's object. python
+    // gives each `def` its own, so this is turned down rather than shared
+    agree_python_with_declines(
+        "loopdefault",
+        "\
+def each(xs):
+    out = []
+    for x in xs:
+        def holds(v, base=x):
+            return base + v
+        out.append(holds)
+    return out
+",
+        &["[f(1) for f in m.each([10, 20])]"],
+    );
+}
+
+#[test]
+fn a_class_that_takes_a_weak_reference_to_itself_is_declined() {
+    // an emitted instance is its layout and a type spec adds no `__weakref__`, so
+    // `ref(self)` raises `TypeError` where python hands back a reference. the class is
+    // turned down and runs interpreted instead, which is what makes both legs agree.
+    //
+    // this is `_weakrefset.WeakSet`'s shape, snapshotting the reference into a nested
+    // function's default — the two constructions are together because the gate is about
+    // the weak reference and not about where it stands
+    agree_python_with_declines(
+        "weakself",
+        "\
+from weakref import ref
+
+
+class Holder:
+    def __init__(self):
+        self.me = ref(self)
+
+    def alive(self):
+        return self.me() is self
+
+
+class Snapshots:
+    def __init__(self):
+        def report(prefix, selfref=ref(self)):
+            return prefix + type(selfref()).__name__
+        self.report = report
+",
+        &["m.Holder().alive()", "m.Snapshots().report('is ')"],
+    );
+}
+
+#[test]
+fn a_basedpython_default_that_is_not_an_immediate_is_re_evaluated_at_each_call() {
+    // basedpython has no mutable-default gotcha: `mutable_defaults` rewrites such a
+    // default to a sentinel and a guard that rebuilds it in the body, so each call gets
+    // its own list. snapshotting it at the `def` the way python does would be a wrong
+    // answer here, so a nested function declines rather than taking python's lowering
+    agree_with_declines(
+        "bydefault",
+        "\
+def tally() -> ((int) -> list[int]):
+    def accumulates(v: int, seen: list[int] = []) -> list[int]:
+        seen.append(v)
+        return seen
+    return accumulates
+",
+        &[
+            // a fresh list each call, which is what makes this different from python
+            "[(f := m.tally(), f(1), f(2))[-1]]",
+        ],
+    );
+}
+
+#[test]
+fn a_nested_function_that_reads_its_own_name_agrees() {
+    // a nested function that calls itself reads its own name out of the frame around
+    // it, and so does one that calls a sibling. that makes the name a *cell* rather
+    // than a plain local, and the `def` has to bind the cell — the same one the
+    // closure reads, or the call finds nothing there.
+    //
+    // this is the shape `_pylong` uses five times over: a divide-and-conquer `inner`
+    // defined beside the values it recurs against
+    agree(
+        "recursivedef",
+        "\
+def descend(n: int) -> int:
+    limit = 2
+    def inner(x: int) -> int:
+        if x <= limit:
+            return x
+        return inner(x - 1) + inner(x - 2)
+    return inner(n)
+
+def siblings(n: int) -> str:
+    def even(x: int) -> str:
+        if x == 0:
+            return \"even\"
+        return odd(x - 1)
+    def odd(x: int) -> str:
+        if x == 0:
+            return \"odd\"
+        return even(x - 1)
+    return even(n)
+
+def two_deep(base: int, n: int) -> int:
+    def middle(x: int) -> int:
+        def inner(y: int) -> int:
+            if y <= 0:
+                return base
+            return inner(y - 1) + 1
+        return inner(x)
+    return middle(n)
+
+def escapes(n: int) -> ((int) -> int):
+    def inner(x: int) -> int:
+        if x <= 0:
+            return n
+        return inner(x - 1)
+    return inner
+",
+        &[
+            "m.descend(8)",
+            "m.descend(0)",
+            "m.siblings(7)",
+            "m.siblings(0)",
+            "m.two_deep(0, 4)",
+            "m.two_deep(10 ** 20, 4)",
+            // the closure outlives the frame, so its own name has to have been read
+            // out of a cell rather than a register that went with the frame
+            "m.escapes(3)(5)",
+        ],
+    );
+}
+
+#[test]
+fn a_nested_function_rebound_after_its_def_is_called_through_the_name() {
+    // a closure the frame made itself is normally called at its native entry, because
+    // the name is known to hold it. binding the name to something else takes that
+    // licence away — the call has to read whatever the name holds now
+    agree(
+        "rebounddef",
+        "\
+def twice(f: (int) -> int) -> ((int) -> int):
+    def wrapped(x: int) -> int:
+        return f(f(x))
+    return wrapped
+
+def rewrapped(n: int) -> int:
+    def step(x: int) -> int:
+        return x + 1
+    step = twice(step)
+    return step(n)
+
+def rewrapped_in_a_loop(n: int) -> list[int]:
+    def step(x: int) -> int:
+        return x + 1
+    out = []
+    for _ in range(3):
+        out.append(step(n))
+        step = twice(step)
+    return out
+",
+        &[
+            "m.rewrapped(0)",
+            "m.rewrapped(10 ** 20)",
+            // the first pass reads the plain `def`, every later one a wrapped it
+            "m.rewrapped_in_a_loop(0)",
+        ],
+    );
+}
+
+#[test]
 fn closures_agree() {
     agree_with_declines(
         "closures",
@@ -7536,6 +8053,44 @@ def _capture_local(f: object) -> object:
             // reading it before is `UnboundLocalError`, which is a `NameError`
             "m.early_call()",
         ],
+    );
+}
+
+#[test]
+fn the_frame_that_owns_a_cell_reads_an_unset_one_as_its_own_local() {
+    // the two sides of a cell raise *different* errors for the same unset field. the
+    // frame that owns the name has an unwritten local of its own, which is
+    // `UnboundLocalError`; a frame that closes over it has a free variable, which is
+    // the plainer `NameError`. only the exact class tells them apart, so that is what
+    // this asks for
+    agree(
+        "cellunsetowner",
+        "\
+def owner(a: int) -> str:
+    def step() -> None:
+        nonlocal held
+        held = a
+    if a < 0:
+        held = 0
+    try:
+        return str(held)
+    except NameError as e:
+        return type(e).__name__
+
+def closes_over(a: int) -> str:
+    def read() -> str:
+        try:
+            return str(held)
+        except NameError as e:
+            return type(e).__name__
+    def step() -> None:
+        nonlocal held
+        held = a
+    out = read()
+    held = 0
+    return out
+",
+        &["m.owner(1)", "m.owner(-1)", "m.closes_over(1)"],
     );
 }
 
@@ -22263,6 +22818,28 @@ def counter() -> object:
             return n
         return step
     return middle
+
+def read_two_up(start: int) -> object:
+    n = start
+    def middle() -> int:
+        def bump() -> int:
+            nonlocal n
+            n = n + 10
+            return n
+        bump()
+        return n
+    return middle
+
+def owned_in_the_middle(a: int) -> object:
+    def middle() -> int:
+        acc = 0
+        def step() -> None:
+            nonlocal acc
+            acc = acc + a
+        step()
+        step()
+        return acc
+    return middle
 ",
         &[
             "m.three(1)(2)(3)",
@@ -22278,6 +22855,14 @@ def counter() -> object:
             // three closures off one middle frame all step one counter
             "[[g(), g(), g()] for g in [m.counter()()]]",
             "[(lambda h: [h(), m.counter()()()])(m.counter()())]",
+            // the middle frame reads a cell it does *not* own, so the read has to walk
+            // out to the frame that does rather than look for a field of its own
+            "[f(), f()][1] if (f := m.read_two_up(1)) else None",
+            // the cell belongs to the *middle* frame and that frame reads it itself.
+            // giving the middle frame a register for `acc` beside the cell its own
+            // nested function writes leaves the two halves disagreeing
+            "m.owned_in_the_middle(3)()",
+            "m.owned_in_the_middle(10 ** 20)()",
         ],
     );
 }

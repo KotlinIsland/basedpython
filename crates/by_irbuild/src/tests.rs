@@ -39,7 +39,8 @@ fn dotted(decorators: &[by_ir::function::Decorator]) -> Vec<String> {
 /// lower `source` and render the module's IR, failing if it does not verify
 fn ir(source: &str) -> String {
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         if let Err(errors) = verify_module(&module) {
             let detail = errors
                 .iter()
@@ -58,7 +59,8 @@ fn ir(source: &str) -> String {
 /// the reason the single function in `source` was declined
 fn decline(source: &str) -> String {
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(
             module.functions.is_empty(),
             "expected the function to be declined, but it lowered:\n{}",
@@ -334,7 +336,8 @@ def keyed(d: dict[str, int], k: str) -> int:
     return d[k]
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = |name: &str| {
                 module
@@ -382,7 +385,8 @@ def before(a: str, b: object) -> bool:
     return a < b
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = |name: &str| {
                 module
@@ -474,7 +478,8 @@ def f(xs: list[int]) -> object:
     return [1, 2, *xs, 3]
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -506,7 +511,8 @@ def f(d: dict[str, int]) -> object:
     return {'a': 1, **d}
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -534,7 +540,8 @@ def f(xs: list[int]) -> int:
     return add(*xs)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -563,7 +570,8 @@ def f(a: int, /, b: int, *, c: int) -> int:
     return a + b + c
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -584,7 +592,8 @@ def f(a: int, /, b: int, *, c: int) -> int:
 /// the representation of one parameter of the single function in `source`
 fn param_type(source: &str, function: &str, parameter: &str) -> RType {
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         module
             .all_functions()
@@ -681,7 +690,8 @@ def f(rows: list[list[int]]) -> object:
     return [x for row in rows if len(row) > 1 for x in row]
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -709,7 +719,8 @@ def f(xs: list[int]) -> int:
     return a + b
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -740,7 +751,8 @@ def f(xs: list[int]) -> object:
     return tail
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -773,7 +785,8 @@ def f() -> int:
     return a + b
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let f = module
                 .all_functions()
@@ -801,7 +814,8 @@ def f(xs: list[int]) -> int:
     return a + b
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let f = module
                 .all_functions()
                 .find(|function| function.name == "f")
@@ -830,7 +844,8 @@ def f(n: int) -> int:
         return 0
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let f = module
                 .all_functions()
                 .find(|function| function.name == "f")
@@ -860,7 +875,8 @@ def f(ValueError: object) -> None:
     raise ValueError
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let f = module
                 .all_functions()
                 .find(|function| function.name == "f")
@@ -892,7 +908,8 @@ def f(n: int) -> int:
         return 0
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let f = module
                 .all_functions()
                 .find(|function| function.name == "f")
@@ -924,7 +941,8 @@ def f() -> None:
     raise
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             module
                 .declined
                 .iter()
@@ -946,7 +964,8 @@ def fail(reason: str) -> int:
     raise ValueError(reason)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let fail = module
                 .all_functions()
                 .find(|function| function.name == "fail")
@@ -967,7 +986,8 @@ def f() -> None:
     raise Custom
 ";
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(
             !module.declined.iter().any(|declined| declined.name == "f"),
             "{:?}",
@@ -997,7 +1017,8 @@ data class Point:
         return self.x + self.y
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let [class] = module.classes.as_slice() else {
                 panic!("one class");
@@ -1024,7 +1045,8 @@ class Point:
     x: int
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .classes
@@ -1039,7 +1061,8 @@ class Point:
 /// the class-level constants of one emitted class, in the order the body wrote them
 fn class_constants(source: &str, class: &str) -> Vec<String> {
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         module
             .classes
@@ -1102,7 +1125,8 @@ class Tagged:
 /// the type slots one emitted class fills from an assignment, and whether each is called
 fn class_slot_aliases(source: &str, class: &str) -> Vec<(String, bool)> {
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         module
             .classes
@@ -1267,7 +1291,8 @@ data class Point:
     x: int = 1
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let class = &module.classes[0];
             let fields: Vec<&str> = class.fields.iter().map(|f| f.name.as_str()).collect();
@@ -1291,7 +1316,8 @@ class Tagged:
         self.KIND = kind
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let class = &module.classes[0];
             let field = class
@@ -1486,7 +1512,8 @@ class Stream:
         return self.__read()
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let class = &module.classes[0];
             let fields: Vec<&str> = class.fields.iter().map(|f| f.name.as_str()).collect();
@@ -1537,7 +1564,8 @@ class Stream:
         return [self.__buffer for _ in range(1)]
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .classes
@@ -1566,7 +1594,8 @@ class Point:
         return \"p\"
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let names: Vec<&str> = module.classes[0]
                 .methods
@@ -1609,7 +1638,8 @@ class Thing:
         self.b = b
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let [class] = module.classes.as_slice() else {
                 panic!("one class");
@@ -1655,7 +1685,8 @@ class Held:
 /// writes must not pay for a byte saying so
 fn layout(source: &str, class: &str) -> Vec<(String, RType, bool)> {
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         module
             .classes
@@ -2337,7 +2368,8 @@ class Over(Alias):
 ";
     assert_eq!(declines(SOURCE), Vec::new());
     let bases = with_source(SOURCE, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         module
             .classes
             .iter()
@@ -2447,7 +2479,8 @@ class Over(Alias):
 ";
     assert_eq!(declines(SOURCE), Vec::new());
     let bases = with_source(SOURCE, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         module
             .classes
             .iter()
@@ -2480,7 +2513,8 @@ class Over(Alias):
 ";
     assert_eq!(declines(SOURCE), Vec::new());
     let bases = with_source(SOURCE, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         module
             .classes
             .iter()
@@ -2649,7 +2683,8 @@ class Apart:
         self.n = n
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .classes
@@ -2718,7 +2753,8 @@ class Private:
     __slots__ = ('__hidden',)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .classes
@@ -3030,7 +3066,8 @@ class Held(Wrapper):
         self.note = note
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let declined: Vec<(String, String)> = module
                 .declined
                 .iter()
@@ -3101,7 +3138,8 @@ class Held(Wrapper, metaclass=Meta):
 /// the field representations of one emitted class, rendered
 fn field_types(source: &str, class: &str) -> Vec<(String, String)> {
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         module
             .classes
             .iter()
@@ -3183,7 +3221,8 @@ class Restating(Wrapper):
         self.code = code + 1
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let declined: Vec<(String, String)> = module
                 .declined
                 .iter()
@@ -3261,7 +3300,8 @@ class Storing(Base):
         ]
     );
     let bases = with_source(SOURCE, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         module
             .classes
             .iter()
@@ -3327,7 +3367,8 @@ class Aside(Base):
         ]
     );
     let bases = with_source(SOURCE, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         module
             .classes
             .iter()
@@ -3416,7 +3457,8 @@ class BelowConstant(Constant):
     // name a type this module never emits, and an `External` one below `Constant` would
     // give up a layout the module does have
     let bases = with_source(SOURCE, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         module
             .classes
             .iter()
@@ -3467,7 +3509,8 @@ def unproven(xs: list[float], n: int) -> float:
     return out
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let edition = |name: &str| {
                 module
                     .all_functions()
@@ -3509,7 +3552,8 @@ class Point:
             self.big = x
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .classes
@@ -3548,7 +3592,8 @@ class Point:
             self.small = 1
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             module
                 .classes
                 .iter()
@@ -3576,7 +3621,8 @@ class Point:
         self.y = y
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let class = &module.classes[0];
             let fields: Vec<&str> = class.fields.iter().map(|f| f.name.as_str()).collect();
@@ -3599,7 +3645,8 @@ data class Circle(Shape):
     radius: float
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let circle = module
                 .classes
@@ -3641,7 +3688,8 @@ class Marker:
 Marker = Marker()
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let named = |name: &str| module.classes.iter().any(|class| class.name == name);
             (named("Marker"), named("Ready"))
         },
@@ -3665,7 +3713,8 @@ data class Timed(Exception):
     at: int
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let declined = module
                 .declined
                 .iter()
@@ -3694,7 +3743,8 @@ class Timed(Exception):
         return \"timed\"
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .classes
@@ -3739,7 +3789,8 @@ def plain(p: Plain) -> int:
     return p.doubled()
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let ops = |name: &str| {
                 print_function(
@@ -3807,7 +3858,8 @@ def on_open(o: Open) -> int:
     return o.doubled()
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let ops = |name: &str| {
                 print_function(
@@ -3874,7 +3926,8 @@ def through(s: Shape) -> str:
     return s.describe()
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let through = print_function(
                 module
@@ -3940,7 +3993,8 @@ def build_quiet(n: int) -> int:
     return Quiet(n).doubled()
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let ops = |name: &str| {
                 let function = module
@@ -4003,7 +4057,8 @@ fn a_class_modifier_is_not_a_decorator() {
 "
         );
         let decorators = with_source(&source, |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(
                 module.declined.is_empty(),
                 "{modifier}: {:?}",
@@ -4108,7 +4163,8 @@ def f() -> None:
     pass
 ";
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         let decorated = module
             .functions
@@ -4134,7 +4190,8 @@ def f() -> None:
     pass
 ";
     let reason = with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         module
             .declined
             .iter()
@@ -4157,7 +4214,8 @@ def f(n: int) -> int:
     return n
 ";
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         let decorated = module
             .functions
@@ -4190,7 +4248,8 @@ class Box:
         return 1
 ";
     let reasons = with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(
             module.classes.iter().all(|class| class.name != "Box"),
             "Box must not be emitted"
@@ -4262,7 +4321,8 @@ class Box:
 "
         );
         let decorators = with_source(&source, |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(
                 module.declined.is_empty(),
                 "{modifier}: {:?}",
@@ -4324,7 +4384,8 @@ fn a_method_that_is_not_bound_to_its_receiver_carries_its_convention() {
         ),
     ] {
         with_source(source, |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(
                 module.declined.is_empty(),
                 "{source}: {:?}",
@@ -4440,7 +4501,8 @@ fn a_global_a_frame_assigns_is_written_to_the_namespace_and_read_back_from_it() 
         ),
     ] {
         let (stores, loads) = with_source(source, |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(
                 module.declined.is_empty(),
                 "{source}: {:?}",
@@ -4500,7 +4562,8 @@ def declared_out_here(n: int) -> int:
     return look() + tally
 ";
     let (fields, loads) = with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         let nested: Vec<&by_ir::function::Function> = module
             .classes
@@ -4568,7 +4631,8 @@ def add(n: int) -> int:
     return inner(1)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let environments: Vec<&str> = module
                 .classes
@@ -4597,7 +4661,8 @@ def both(a: int, *rest: int, **named: object) -> int:
     return a + len(rest) + len(named)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = &module.functions[0];
             assert!(function.vararg);
@@ -4823,7 +4888,8 @@ def bad(a: int) -> None:
         pass
 ";
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].name, "good");
         assert_eq!(module.declined.len(), 1);
@@ -4861,7 +4927,8 @@ def sum_of(p: Point) -> int:
     return p.x + p.y
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             // the method reaches `self` through the forced receiver, the free
             // function through its annotation — both are field reads
@@ -4889,7 +4956,8 @@ data class Counter:
         return self.n
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let method = &module.classes[0].methods[0];
             let text = print_function(method);
@@ -4923,7 +4991,8 @@ data class Point:
     y: int
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let line = module
                 .classes
@@ -4962,7 +5031,8 @@ def read(p: Plain) -> object:
     return p.x
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let read = &module.functions[0];
             assert!(
                 has_op(read, |op| matches!(op, Op::GetAttr { .. })),
@@ -4984,7 +5054,8 @@ data class Loose:
     y: int
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let frozen = |name: &str| {
                 module
                     .classes
@@ -5012,7 +5083,8 @@ def diag(a: int) -> int:
     return Point(a, a).x
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let text = print_function(&module.functions[0]);
             assert!(
@@ -5046,7 +5118,8 @@ def caller(a: int) -> int:
     return helper(a)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let reason = |name: &str| {
                 module
                     .declined
@@ -5083,7 +5156,8 @@ def top(a: int) -> int:
     return middle(a)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.functions.is_empty(), "{:?}", module.functions);
             assert_eq!(module.declined.len(), 3);
         },
@@ -5111,7 +5185,8 @@ def read(p: Point) -> int:
     return p.x
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.classes.is_empty(), "{:?}", module.classes);
             assert!(module.functions.is_empty(), "{:?}", module.functions);
             let reason = |name: &str| {
@@ -5151,7 +5226,8 @@ class Parser(Container):
         Container.__init__(self, tag)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.classes.is_empty(), "{:?}", module.classes);
             let reason = |name: &str| {
                 module
@@ -5190,7 +5266,8 @@ def alone(a: int) -> int:
     return a + 1
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let names: Vec<&str> = module
                 .functions
                 .iter()
@@ -5223,7 +5300,8 @@ def use(p: Point) -> int:
     return p.scaled(3) + p.total()
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let scaled = module.classes[0]
                 .methods
@@ -5267,7 +5345,8 @@ def use(c: Cell) -> int:
     return c.doubled()
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = &module.functions[0];
             let text = print_function(function);
@@ -5297,7 +5376,8 @@ def use(b: Box) -> int:
     return b.add(2)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let function = &module.functions[0];
             let text = print_function(function);
             // no box on the way in and no unbox on the way out. the block asking whether
@@ -5346,7 +5426,8 @@ def use(p: object) -> object:
     return p.total()
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(
                 has_op(&module.functions[0], |op| matches!(
                     op,
@@ -5378,7 +5459,8 @@ data class Point:
         return self.x
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let class = module
                 .classes
@@ -5413,7 +5495,8 @@ def slow(a: int) -> None:
         pass
 ";
     let range = with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         module
             .declined
             .iter()
@@ -5442,7 +5525,8 @@ def caller(a: int) -> int:
     return helper(a)
 ";
     let range = with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         module
             .declined
             .iter()
@@ -5464,7 +5548,8 @@ def f(a: int) -> int:
     return 0
 ";
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         let function = &module.functions[0];
         let (start, end) = function.range.expect("the function has a span");
         assert!(source[start as usize..end as usize].starts_with("def f"));
@@ -5492,7 +5577,8 @@ def f(a: int) -> int:
     return c
 ";
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         let (start, _) = module.functions[0].blocks[0]
             .range
             .expect("the entry block has a span");
@@ -5513,7 +5599,8 @@ def apply(f: object, a: int) -> object:
     return f(a)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = &module.functions[0];
             assert!(
@@ -5535,7 +5622,8 @@ def pick(flag: bool) -> object:
     return fn(\"abc\")
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let function = &module.functions[0];
             assert!(
                 has_op(function, |op| matches!(op, Op::CallValue { .. })),
@@ -5554,7 +5642,8 @@ def use(a: int) -> object:
     return print(a)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let function = &module.functions[0];
             assert!(
                 has_op(function, |op| matches!(op, Op::CallPython { .. })),
@@ -5575,7 +5664,8 @@ def use(len: object, s: str) -> object:
     return len(s)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let function = &module.functions[0];
             assert!(
                 has_op(function, |op| matches!(op, Op::CallValue { .. })),
@@ -5597,7 +5687,8 @@ def limit() -> object:
     return LIMIT
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let function = &module.functions[0];
             assert!(
                 has_op(function, |op| matches!(op, Op::LoadGlobal { .. })),
@@ -5618,7 +5709,8 @@ def make_adder(n: int) -> object:
     return add
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let environment = module
                 .classes
@@ -5673,7 +5765,8 @@ def counter() -> (() -> int):
     return get
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let environment = &module.classes[0];
             // a cell is always `object`: it starts unset, and NULL has to be
@@ -5711,7 +5804,8 @@ def bumper() -> (() -> int):
     return bump
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let bump = &module.classes[0].methods[0];
             let text = print_function(bump);
@@ -5743,7 +5837,8 @@ def prefix(n: int) -> float:
     return out
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let prefix = module
                 .all_functions()
@@ -5781,7 +5876,8 @@ def each(xs: list[int]) -> list[object]:
     return out
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let each = module
                 .all_functions()
@@ -5832,7 +5928,7 @@ def each(xs: list[int]) -> list[object]:
     return out
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", false);
+            let module = crate::build_module(db, env, model, suite, "app", crate::Language::Python);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let each = module
                 .all_functions()
@@ -5869,7 +5965,8 @@ def each(xs: list[int]) -> list[object]:
     return out
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let field = |class: &str, name: &str| {
                 module
@@ -5909,7 +6006,8 @@ def each(xs: list[int]) -> list[object]:
     return [lambda: i for i in xs]
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let inner = module
                 .all_functions()
@@ -5941,7 +6039,8 @@ def loop_closures() -> list[object]:
     return out
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let outer = print_function(&module.functions[0]);
             // one allocation, before the loop — not one per iteration
@@ -5961,7 +6060,8 @@ def outer(n: int) -> object:
     return bump
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             module
                 .declined
                 .iter()
@@ -5987,7 +6087,8 @@ def outer(a: int) -> object:
     return middle
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let field = |class: &str, name: &str| {
                 module
@@ -6029,7 +6130,8 @@ def outer(a: int) -> object:
     return middle
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let inner = module
                 .all_functions()
@@ -6077,7 +6179,8 @@ def outer() -> object:
     return middle
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let holders: Vec<&str> = module
                 .classes
@@ -6104,7 +6207,8 @@ def helper(a: int) -> int:
     return double(a)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let environment = module
                 .classes
@@ -6129,7 +6233,8 @@ def twice(f: object) -> object:
     return wrapper
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let method = &module.classes[0].methods[0];
             let text = print_function(method);
@@ -6161,7 +6266,8 @@ def run(times: int, k: int) -> int:
     return total
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let outer = &module.functions[0];
             let text = print_function(outer);
@@ -6189,7 +6295,8 @@ def early(a: int) -> int:
     return helper(a)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             module
                 .declined
                 .iter()
@@ -6211,7 +6318,8 @@ def counted(n: int) -> object:
         i = i + 1
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let state = &module.classes[0];
             assert_eq!(state.name, "counted$gen");
@@ -6261,6 +6369,8 @@ fn a_value_that_has_to_survive_a_suspension_takes_a_field() {
     builder.push(Op::GetIter {
         dest: held,
         src: Value::Register(receiver),
+        // a generator parks its iterator, and a parked loop keeps the protocol
+        cursor: None,
     });
     let suspend_at = builder.current_block();
     builder.terminate(Terminator::Return(Value::None));
@@ -6324,6 +6434,8 @@ fn a_parked_value_that_may_be_unassigned_declines() {
     builder.push(Op::GetIter {
         dest: held,
         src: Value::Register(receiver),
+        // a generator parks its iterator, and a parked loop keeps the protocol
+        cursor: None,
     });
     builder.terminate(Terminator::Goto(suspend_at));
     builder.switch_to(suspend_at);
@@ -6375,7 +6487,8 @@ async def summed(n: int, held: object) -> int:
     return total
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let state = module
                 .classes
@@ -6415,7 +6528,8 @@ def each(words: list[str]) -> object:
         yield w
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let state = &module.classes[0];
             // one reserved field per `for`, because the iterator has no source name
@@ -6439,7 +6553,8 @@ def guarded(log: list[str], n: int) -> object:
         log.append(\"closed\")
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let state = &module.classes[0];
             // the exception rides in a field, checked at every resumption point
@@ -6477,7 +6592,8 @@ def outer(n: int) -> object:
     yield got
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let outer = module
                 .classes
@@ -6508,7 +6624,8 @@ async def chained(awaitable: object) -> object:
     return await awaitable
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let chained = module
                 .classes
@@ -6536,7 +6653,8 @@ async def chained(awaitable: object) -> object:
 /// what the resume method of `chained` lowers to, for the direct-await tests below
 fn awaiting_frame(source: &str) -> (String, Vec<String>) {
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         let chained = module
             .classes
@@ -6659,7 +6777,8 @@ async def chained(awaitable: object) -> object:
 "
         );
         let emitted = with_source(&source, |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             module
                 .all_functions()
                 .map(by_ir::Function::qualified_name)
@@ -6682,7 +6801,8 @@ async def both(n: int) -> object:
     yield n
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             module
                 .classes
                 .iter()
@@ -6704,7 +6824,8 @@ def guarded(mgr: object) -> str:
     return \"after\"
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = &module.functions[0];
             let text = print_function(function);
@@ -6728,7 +6849,8 @@ def early(log: list[str]) -> str:
         log.append(\"f\")
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let function = &module.functions[0];
             let text = print_function(function);
@@ -6760,7 +6882,8 @@ def looped(log: list[str], n: int) -> str:
     return \"done\"
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let text = print_function(&module.functions[0]);
             // the `break` unwinds to the loop's depth: the inner `finally` runs, the
@@ -6781,7 +6904,8 @@ def adder(n: int) -> ((int) -> int):
     return lambda x: x + n
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let environment = &module.classes[0];
             assert_eq!(environment.name, "adder$env");
@@ -6807,7 +6931,8 @@ def counter() -> (() -> int):
     return f
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let method = &module.classes[0].methods[0];
             assert!(
@@ -6833,7 +6958,8 @@ data class Scaler:
         return lambda x: x * self.k
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let names: Vec<&str> = module
                 .classes
@@ -6875,7 +7001,8 @@ def counted(n: int) -> object:
         i = i + 1
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let state = &module.classes[0];
             let ty = |name: &str| {
@@ -6918,7 +7045,8 @@ fn a_generator_local_that_may_be_unset_stays_a_cell() {
         ),
     ] {
         with_source(source, |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             let state = &module.classes[0];
             let field = state
                 .fields
@@ -6947,7 +7075,8 @@ def caller(a: int) -> int:
     return both(a, 1, 2, k=3)
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let caller = module
                 .functions
@@ -6973,7 +7102,8 @@ def picked(flag: bool, n: int) -> int:
     return value
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .functions
@@ -7006,7 +7136,8 @@ def drop(n: int) -> int:
     return n
 ",
         |db, env, model, suite| {
-            let module = crate::build_module(db, env, model, suite, "app", true);
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             module
                 .functions
@@ -7323,7 +7454,8 @@ class Pair:
 /// the reason each declined entry in `source` gives, by name
 fn declines(source: &str) -> Vec<(String, String)> {
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         module
             .declined
             .iter()
@@ -7339,7 +7471,8 @@ fn declines(source: &str) -> Vec<(String, String)> {
 /// slower or differently-scoped shape while still computing the same thing
 fn method_ir(source: &str, class: &str, method: &str) -> String {
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         module
             .classes
@@ -7741,7 +7874,8 @@ class Box:
         return 2
 ";
     let reasons = with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(
             module.classes.iter().all(|class| class.name != "Box"),
             "Box must not be emitted"
@@ -7782,7 +7916,8 @@ class Box:
         self._n = given
 ";
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         let class = module
             .classes
@@ -7835,7 +7970,8 @@ class Manager:
         self._disable = level + 1
 ";
     with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         let class = module
             .classes
@@ -7966,7 +8102,8 @@ def _(n: int) -> int:
     return n + 1
 ";
     let reasons = with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.functions.is_empty(), "nothing may compile");
         module
             .declined
@@ -8010,7 +8147,8 @@ class Held:
         return 2
 ";
     let twin = with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         crate::without_init_decorators(source, &module).expect("the twin parses")
     });
@@ -8034,7 +8172,8 @@ class Held:
         return 2
 ";
     let twin = with_source(source, |db, env, model, suite| {
-        let module = crate::build_module(db, env, model, suite, "app", true);
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
         assert!(module.declined.is_empty(), "{:?}", module.declined);
         crate::without_init_decorators(source, &module).expect("the twin parses")
     });
@@ -8544,6 +8683,54 @@ def f(ns: dict[str, object]) -> None:
 }
 
 /// …and `None` written there means the calling frame's, so it is the same decline
+/// a nested function that calls itself, which is what makes its own name a cell
+const A_RECURSIVE_NESTED_FUNCTION: &str = "\
+def outer(n: int) -> int:
+    def inner(x: int) -> int:
+        if x <= 0:
+            return n
+        return inner(x - 1)
+    return inner(n)
+";
+
+#[test]
+fn a_recursive_nested_functions_def_binds_the_cell_its_body_reads() {
+    // one field, written where the `def` stands and read back by the recursive call.
+    // a register beside it would leave the body reading a field nothing ever wrote
+    let rendered = ir(A_RECURSIVE_NESTED_FUNCTION);
+    assert!(
+        rendered.contains("$outer$env.<outer$env.inner> ="),
+        "{rendered}"
+    );
+    let body = method_ir(A_RECURSIVE_NESTED_FUNCTION, "outer$env", "inner");
+    assert!(body.contains("cell $env.<outer$env.inner>"), "{body}");
+}
+
+#[test]
+fn the_frame_that_made_a_recursive_closure_still_calls_it_directly() {
+    // the enclosing frame's own call does not go through the cell: it made the closure
+    // and nothing rebinds the name, so the native entry is what the call is
+    let rendered = ir(A_RECURSIVE_NESTED_FUNCTION);
+    assert!(rendered.contains("call outer$env.inner("), "{rendered}");
+}
+
+#[test]
+fn a_nested_function_the_frame_rebinds_is_called_through_its_name() {
+    // `step` holds the wrapper by the time it is called, so the direct entry would be
+    // calling something the name no longer names
+    let rendered = ir("\
+def wrap(f: object) -> object:
+    return f
+
+def outer(n: int) -> int:
+    def step(x: int) -> int:
+        return x + 1
+    step = wrap(step)
+    return step(n)
+");
+    assert!(!rendered.contains("call outer$env.step("), "{rendered}");
+}
+
 #[test]
 fn exec_handed_none_for_a_namespace_is_declined() {
     let reason = decline("def f() -> None:\n    exec(\"a = 1\", None)\n");

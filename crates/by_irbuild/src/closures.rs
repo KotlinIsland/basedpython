@@ -30,7 +30,7 @@
 //! *owns*; everything else is reached through the chain, so there is exactly one home
 //! for every name.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use ruff_python_ast::visitor::{self, Visitor};
 use ruff_python_ast::{self as ast, Expr, Stmt};
@@ -147,6 +147,130 @@ pub(crate) fn nested_functions(
         });
     }
     Ok(out)
+}
+
+/// the nested functions in `body` that nothing binds except their own `def`
+///
+/// a frame calls a closure it made itself at that closure's native entry point, which
+/// skips reading the name entirely. that is only the same thing while the name still
+/// holds what the `def` put there, so
+///
+/// ```python
+/// def outer(n):
+///     def step(x):
+///         return x + 1
+///     step = twice(step)
+///     return step(n)
+/// ```
+///
+/// has to read the name: it holds the wrapper by the time it is called. which of the
+/// two ran first is a runtime question in a loop, so the answer here is static.
+///
+/// deliberately over-reporting. a binding of the name anywhere at all disqualifies it,
+/// including one inside a *different* nested function that happens to reuse the name
+/// for a local of its own. that costs a direct call and never an answer
+pub(crate) fn bound_only_by_their_def(body: &[Stmt]) -> HashSet<String> {
+    struct Scan<'a> {
+        /// how many times each name is bound, the `def` included
+        counts: HashMap<&'a str, usize>,
+    }
+    impl<'a> Scan<'a> {
+        fn bind(&mut self, name: &'a str) {
+            *self.counts.entry(name).or_default() += 1;
+        }
+    }
+    impl<'a> Visitor<'a> for Scan<'a> {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            match stmt {
+                Stmt::FunctionDef(node) => self.bind(node.name.as_str()),
+                Stmt::ClassDef(node) => self.bind(node.name.as_str()),
+                Stmt::TypeAlias(node) => {
+                    if let Expr::Name(name) = node.name.as_ref() {
+                        self.bind(name.id.as_str());
+                    }
+                }
+                // a `global` or `nonlocal` declaration moves the name's home somewhere
+                // this frame's environment is not, which the direct call assumes it is
+                Stmt::Global(node) => {
+                    for name in &node.names {
+                        self.bind(name.as_str());
+                    }
+                }
+                Stmt::Nonlocal(node) => {
+                    for name in &node.names {
+                        self.bind(name.as_str());
+                    }
+                }
+                _ => {}
+            }
+            visitor::walk_stmt(self, stmt);
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            // every binding that reaches a plain name goes through a store context —
+            // an assignment, an augmented one, a `for` target, a `with ... as`, a
+            // walrus, a comprehension target, an element of an unpacking. `del` is
+            // here too: it unbinds, which is just as much a change
+            if let Expr::Name(name) = expr
+                && matches!(name.ctx, ast::ExprContext::Store | ast::ExprContext::Del)
+            {
+                self.bind(name.id.as_str());
+            }
+            visitor::walk_expr(self, expr);
+        }
+
+        fn visit_except_handler(&mut self, handler: &'a ast::ExceptHandler) {
+            let ast::ExceptHandler::ExceptHandler(node) = handler;
+            if let Some(bound) = &node.name {
+                self.bind(bound.as_str());
+            }
+            visitor::walk_except_handler(self, handler);
+        }
+
+        fn visit_alias(&mut self, alias: &'a ast::Alias) {
+            let bound = alias.asname.as_ref().unwrap_or(&alias.name);
+            self.bind(bound.as_str());
+        }
+
+        fn visit_pattern(&mut self, pattern: &'a ast::Pattern) {
+            match pattern {
+                ast::Pattern::MatchAs(node) => {
+                    if let Some(bound) = &node.name {
+                        self.bind(bound.as_str());
+                    }
+                }
+                ast::Pattern::MatchStar(node) => {
+                    if let Some(bound) = &node.name {
+                        self.bind(bound.as_str());
+                    }
+                }
+                ast::Pattern::MatchMapping(node) => {
+                    if let Some(bound) = &node.rest {
+                        self.bind(bound.as_str());
+                    }
+                }
+                _ => {}
+            }
+            visitor::walk_pattern(self, pattern);
+        }
+    }
+
+    let mut scan = Scan {
+        counts: HashMap::new(),
+    };
+    scan.visit_body(body);
+    let counts = scan.counts;
+    // this frame's own `def`s: [`crate::walk`] stops at a nested body, and a function
+    // two deep is bound in a frame that is not this one
+    crate::walk(body)
+        .into_iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::FunctionDef(def) => Some(def.name.as_str()),
+            _ => None,
+        })
+        .filter(|name| counts.get(name).copied() == Some(1))
+        .map(str::to_string)
+        .collect()
 }
 
 /// a `StmtFunctionDef` equivalent to a lambda: its parameters, and its body as a

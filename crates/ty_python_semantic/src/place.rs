@@ -813,6 +813,22 @@ pub fn basedpython_warnings_symbol<'db>(
         .ignore_possibly_undefined()
 }
 
+/// basedpython: the type of `name` in the `weakref` module namespace.
+///
+/// The native backend has to recognise `weakref.ref` and `weakref.proxy` by identity
+/// rather than by spelling, for the same reason it recognises `warnings.warn` that way:
+/// `ref` is a short name plenty of modules bind to something of their own, and
+/// `from weakref import ref` reaches the real one under a name that is not its own.
+pub fn basedpython_weakref_symbol<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    name: &str,
+) -> Option<Type<'db>> {
+    known_module_symbol(db, env, KnownModule::Weakref, name)
+        .place
+        .ignore_possibly_undefined()
+}
+
 /// Lookup the type of `symbol` in the `typing_extensions` module namespace.
 ///
 /// Returns `Place::Undefined` if the `typing_extensions` module isn't available for some reason.

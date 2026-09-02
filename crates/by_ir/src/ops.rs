@@ -928,10 +928,33 @@ pub enum Op {
     /// put a fetched exception back, for an unmatched handler or a bare re-raise
     Reraise { value: Value },
     /// `iter(o)`
-    GetIter { dest: RegisterId, src: Value },
+    ///
+    /// `cursor` names a machine-integer register the loop keeps its position in, and
+    /// asks for the walked-by-index form: an *exact* list is its own iterator, held
+    /// in `dest` the way a real iterator would be, and everything else still gets one
+    /// from `iter(o)`. see [`Self::IterNext`], which has to agree with this about
+    /// which form it is in — the two are only ever built as a pair
+    GetIter {
+        dest: RegisterId,
+        src: Value,
+        cursor: Option<RegisterId>,
+    },
     /// one step of an iterator. a null result means exhausted *or* failed, which
     /// the emitted error check distinguishes with `PyErr_Occurred`
-    IterNext { dest: RegisterId, iter: Value },
+    ///
+    /// with a `cursor`, a step over an exact list is a bounds test and a load rather
+    /// than a call through `tp_iternext`. the cursor register is read and written in
+    /// place, which is why it is not a `dest`: the step's destination is the element.
+    ///
+    /// the list's length is read again every step, because that is what cpython's own
+    /// list iterator does — a list appended to under a `for` keeps feeding it, and one
+    /// popped from ends it early. a length taken once at the top would quietly
+    /// disagree with the interpreter about both
+    IterNext {
+        dest: RegisterId,
+        iter: Value,
+        cursor: Option<RegisterId>,
+    },
     /// whether an object register is null, as a bit. this is how an exhausted
     /// iterator is tested, so it must not itself be treated as an error
     IsNull { dest: RegisterId, src: Value },
@@ -1126,6 +1149,19 @@ impl Op {
     pub fn unbinds(&self) -> Option<RegisterId> {
         match self {
             Self::DeleteLocal { dest } => Some(*dest),
+            _ => None,
+        }
+    }
+
+    /// the position register a `for` loop keeps its cursor in, if it is walking an
+    /// exact list by index
+    ///
+    /// it is read and written by the same operation, so it is neither a [`Self::dest`]
+    /// nor one of the [`Self::operands`] — which means anything walking a function's
+    /// registers has to ask for it separately or it will look dead
+    pub fn loop_cursor(&self) -> Option<RegisterId> {
+        match self {
+            Self::GetIter { cursor, .. } | Self::IterNext { cursor, .. } => *cursor,
             _ => None,
         }
     }

@@ -68,13 +68,6 @@ pub fn module_from_source(
     language: Language,
 ) -> by_ir::function::ModuleIr {
     with_source_in(source, language, |db, env, model, suite| {
-        crate::build_module(
-            db,
-            env,
-            model,
-            suite,
-            module_name,
-            language.unique_loop_bindings(),
-        )
+        crate::build_module(db, env, model, suite, module_name, language)
     })
 }

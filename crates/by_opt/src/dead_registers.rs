@@ -66,6 +66,11 @@ fn live_registers(function: &Function) -> HashSet<RegisterId> {
             if let Some(dest) = op.dest() {
                 live.insert(dest);
             }
+            // a loop cursor is read and written in place, so it is neither a dest nor
+            // an operand — and nothing else here would keep it alive
+            if let Some(cursor) = op.loop_cursor() {
+                live.insert(cursor);
+            }
             for operand in op.operands() {
                 if let Value::Register(id) = operand {
                     live.insert(*id);
@@ -150,9 +155,12 @@ fn rewrite_op(
             rewrite_dest(dest);
             rewrite_value(operand, remap);
         }
-        Op::IterNext { dest, iter } => {
+        Op::IterNext { dest, iter, cursor } => {
             rewrite_dest(dest);
             rewrite_value(iter, remap);
+            if let Some(cursor) = cursor {
+                rewrite_dest(cursor);
+            }
         }
         Op::CallNative { dest, args, .. } => {
             if let Some(dest) = dest {
@@ -284,11 +292,17 @@ fn rewrite_op(
                 rewrite_value(item, remap);
             }
         }
+        Op::GetIter { dest, src, cursor } => {
+            rewrite_dest(dest);
+            rewrite_value(src, remap);
+            if let Some(cursor) = cursor {
+                rewrite_dest(cursor);
+            }
+        }
         Op::TupleGet { dest, src, .. }
         | Op::Truthy { dest, src }
         | Op::Len { dest, src }
         | Op::StrOfInt { dest, value: src }
-        | Op::GetIter { dest, src }
         | Op::IsNull { dest, src } => {
             rewrite_dest(dest);
             rewrite_value(src, remap);
