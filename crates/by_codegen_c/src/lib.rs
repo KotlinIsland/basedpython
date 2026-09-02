@@ -2480,24 +2480,50 @@ fn field_owner<'a>(module: &'a ModuleIr, class: &'a ClassIr, field: &str) -> &'a
 /// handed `STRICT = 'strict'` builds a member the module body's references do not name.
 /// `By_ConstantsHeldUp` is that check, and where it fails the interpreted definition
 /// stands — the same answer such a class had when this said no to it outright
+///
+/// a decorated method rides in beside the constants and for the same reason. it is
+/// carried rather than applied: the interpreted body ran the decorator once already, so
+/// what it produced is what a `class` statement would have handed the metaclass, and
+/// applying the decorator to the method table's own entry instead would both run it a
+/// second time and arrive too late for a metaclass reading the namespace. that needs a
+/// body to take the value off, which only an exported class has — see
+/// [`carried_off_the_body`]
 fn metaclass_construction(class: &ClassIr) -> bool {
     class.fields.is_empty()
         // a resumable class is a generator's state object: its state *is* its fields,
         // so this is already false, and nothing in the language can name it as a base
         && class.resume.is_none()
-        && !decorates_a_method(class)
+        && (class.exported || !decorates_a_method(class))
 }
 
 /// whether any of this class's methods carries a decorator
-///
-/// a method decorator is applied to the finished type, which is the only place a spec
-/// leaves for it — but a metaclass decides from the *namespace*, before that, so the
-/// two would disagree about what the class defines
 fn decorates_a_method(class: &ClassIr) -> bool {
     class
         .methods
         .iter()
         .any(|method| !method.decorators.is_empty())
+}
+
+/// every namespace entry this class takes off the interpreted body, the ones it cannot do
+/// without first
+///
+/// `By_ClassConstants::required` counts from the front of the list, so a decorated
+/// method's name has to stand ahead of every constant's: a constant the body did not write
+/// leaves the class without the name, while a decorated method's absence would leave the
+/// method table's own undecorated entry answering for it
+fn carried_off_the_body(class: &ClassIr) -> (Vec<&str>, usize) {
+    let decorated: Vec<&str> = class
+        .methods
+        .iter()
+        .filter(|method| !method.decorators.is_empty())
+        .map(|method| method.name.as_str())
+        .collect();
+    let required = decorated.len();
+    let carried = decorated
+        .into_iter()
+        .chain(class.constants.iter().map(String::as_str))
+        .collect();
+    (carried, required)
 }
 
 /// the class in this module named `name`, when it has one
@@ -6663,14 +6689,15 @@ fn external_construction(
     } else {
         "by_kwds"
     };
-    // the constants a metaclass construction writes into the namespace, and reads back off
-    // the class to see whether it agreed. a class no interpreted `class` statement wrote
-    // has no captured body to take a value off, and there is nothing to carry
-    let (declare, constants) = match slot.filter(|_| !class.constants.is_empty()) {
+    // what a metaclass construction writes into the namespace off the interpreted body,
+    // and reads back off the class to see whether it agreed. a class no interpreted
+    // `class` statement wrote has no captured body to take a value off, and there is
+    // nothing to carry
+    let (carried, required) = carried_off_the_body(class);
+    let (declare, constants) = match slot.filter(|_| !carried.is_empty()) {
         None => (String::new(), "NULL".to_string()),
         Some(slot) => {
-            let names = class
-                .constants
+            let names = carried
                 .iter()
                 .map(|name| c_string(name))
                 .collect::<Vec<_>>()
@@ -6678,8 +6705,8 @@ fn external_construction(
             (
                 format!(
                     "\x20     static const char *const by_constants[] = {{{names}}};\n\
-                     \x20     By_ClassConstants by_carried = {{by_body[{slot}], by_constants, {}, &by_twins}};\n",
-                    class.constants.len()
+                     \x20     By_ClassConstants by_carried = {{by_body[{slot}], by_constants, {}, {required}, &by_twins}};\n",
+                    carried.len()
                 ),
                 "&by_carried".to_string(),
             )
@@ -8393,6 +8420,47 @@ mod tests {
         assert!(
             !c.contains("{Py_tp_dealloc, (void *)By_app_Wrapped_Type_dealloc},"),
             "no slot takes the base's freeing over: {c}"
+        );
+    }
+
+    /// a decorated method rides into the namespace with the constants, and ahead of them
+    ///
+    /// the order is what `By_ClassConstants::required` counts against, so it is asserted
+    /// rather than left to whichever way the two lists happened to be joined. this is a
+    /// shape assertion because the behaviour it protects only shows up when the body has
+    /// *lost* the name, which the module the differential harness builds never does
+    #[test]
+    fn a_decorated_method_is_carried_into_the_namespace_ahead_of_the_constants() {
+        let mut module = module_with(add());
+        let mut class = appending_class();
+        class.fields.clear();
+        class.constants = vec!["TAG".to_string()];
+        class.keywords = vec![by_ir::function::ClassKeyword {
+            name: "metaclass".to_string(),
+            value: by_ir::function::KeywordValue::Path("ABCMeta".to_string()),
+        }];
+        let mut method = add();
+        method.name = "area".to_string();
+        method.decorators = vec![by_ir::function::Decorator::name("abstractmethod")];
+        class.methods.push(method);
+        module.classes.push(class);
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("static const char *const by_constants[] = {\"area\", \"TAG\"};"),
+            "the method comes first: {c}"
+        );
+        assert!(
+            c.contains(
+                "By_ClassConstants by_carried = {by_body[0], by_constants, 2, 1, &by_twins};"
+            ),
+            "one of the two has to be found: {c}"
+        );
+        // and the class is still built by calling the metaclass, which is the whole point
+        // of putting the value where the metaclass can read it
+        assert!(
+            c.contains(", by_kwds, By_app_Wrapped_Type_methods, NULL, 1, &by_carried);"),
+            "the metaclass is what builds it, and it is handed the carry: {c}"
         );
     }
 

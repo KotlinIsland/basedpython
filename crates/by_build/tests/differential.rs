@@ -3663,24 +3663,57 @@ def mark(f: object) -> object:
 @mark
 def counted() -> int:
     return 1
-
-
-@mark
-def counted_twice() -> int:
-    return 2
 ",
-        &["m.counted()", "m.counted_twice()", "m.marked"],
+        &["m.counted()", "m.marked"],
     );
 }
 
-/// a definition the module *reads* keeps its decorator, and declines
+/// a decorator that hands back something which is not a function at all
+///
+/// `typing` is full of this shape — `@_SpecialForm def NoReturn` leaves an *instance*
+/// under the name, built from the definition it was handed. so init has to apply the
+/// decorator to a namespace entry that then stops being callable in the ordinary way, and
+/// what the instance keeps is read off the compiled function rather than off the twin's.
+///
+/// `__doc__` is deliberately not one of the things asked here: a compiled function does
+/// not carry one at all, which is a divergence of its own and nothing to do with
+/// decorators — `tokenize.generate_tokens.__doc__` is `None` compiled and a string
+/// interpreted. see `scratch.tasks.md`
+#[test]
+fn a_decorator_that_returns_something_other_than_a_function_agrees() {
+    agree_python(
+        "decoratorinstance",
+        "\
+class Form:
+    def __init__(self, fn):
+        self.fn = fn
+        self.name = fn.__name__
+
+    def __call__(self, n):
+        return self.fn(n) + 1
+
+
+@Form
+def bumped(n: int) -> int:
+    return n * 2
+",
+        &[
+            "m.bumped(3)",
+            "type(m.bumped).__name__",
+            "m.bumped.name",
+            "m.bumped.fn(3)",
+        ],
+    );
+}
+
+/// a definition the module body goes on running below keeps its decorator, and declines
 ///
 /// taking the decorator out of the twin's source leaves the name holding an undecorated
 /// definition from the twin's `def` until module init reaches it — a window nothing can
 /// see unless the module's own body looks. `AT_IMPORT` looks directly and `alias` keeps
 /// what it found, and both of them would otherwise hold what `double` never wrapped
 #[test]
-fn a_decorated_definition_the_module_reads_declines() {
+fn a_decorated_definition_the_module_body_runs_below_declines() {
     agree_with_declines(
         "decoratorread",
         "\
@@ -3699,6 +3732,36 @@ AT_IMPORT = one()
 alias = one
 ",
         &["m.one()", "m.AT_IMPORT", "m.alias()"],
+    );
+}
+
+/// what a decorator *did* on the way is in the window too, under whatever name it did it
+///
+/// the decorated name is not the only thing the window shows. `enrol` returns what it was
+/// handed, so `one` itself is right at every moment — but it appends on the way, and the
+/// twin no longer runs it, so `REGISTRY` is empty for as long as the window lasts.
+/// `SNAPSHOT` is the module body looking at that, and it never names `one` at all
+#[test]
+fn a_decorators_effect_under_another_name_is_in_the_window_too() {
+    agree_python_with_declines(
+        "decoratoreffect",
+        "\
+REGISTRY = []
+
+
+def enrol(f):
+    REGISTRY.append(f.__name__)
+    return f
+
+
+@enrol
+def one() -> int:
+    return 1
+
+
+SNAPSHOT = list(REGISTRY)
+",
+        &["m.one()", "m.REGISTRY", "m.SNAPSHOT"],
     );
 }
 
@@ -3811,7 +3874,11 @@ fn a_decorated_method_is_the_interpreted_one_and_its_siblings_are_not() {
 /// the source both class-decorator tests below compile
 ///
 /// `mark` hands back what it was given and records only the name, so the binding is right
-/// however many times it ran and `seen` is the one thing that can show a second run
+/// however many times it ran and `seen` is the one thing that can show a second run.
+///
+/// the decorated class is the last statement, and the plain one stands above it: a second
+/// decorated `class` below would be something still running under the first, which keeps
+/// its own decorator on the twin instead — see `watched_definitions`
 const MARKED_CLASSES: &str = "\
 seen = []
 
@@ -3821,31 +3888,29 @@ def mark(o):
     return o
 
 
+class Plain:
+    def h(self) -> int:
+        return 2
+
+
 @mark
 class Marked:
     def g(self) -> int:
         return 1
-
-
-@mark
-class Second:
-    def h(self) -> int:
-        return 2
 ";
 
 /// a class's decorator is evaluated once, and what it did on the way happened once
 ///
 /// python runs it where the `class` statement stands. the interpreted twin is what stands
 /// there and module init ran it again over the namespace entry the compiled type had
-/// taken, so `seen` read `['Marked', 'Second', 'Marked', 'Second']` where python reads
-/// `['Marked', 'Second']` — and the class each name ended up bound to was right either
-/// way, which is what made it silent
+/// taken, so `seen` read `['Marked', 'Marked']` where python reads `['Marked']` — and the
+/// class the name ended up bound to was right either way, which is what made it silent
 #[test]
 fn a_class_decorator_runs_once() {
     agree_python(
         "classdecoratoronce",
         MARKED_CLASSES,
-        &["m.Marked().g()", "m.Second().h()", "m.seen"],
+        &["m.Marked().g()", "m.Plain().h()", "m.seen"],
     );
 }
 
@@ -3883,23 +3948,24 @@ fn a_decorated_class_is_the_compiled_type() {
         &dir,
         "import by_diff_classdecoratoronce_t as m\n\
          print(type(m.Marked.__dict__['g']).__name__,\n\
-         \x20     type(m.Second.__dict__['h']).__name__)\n\
+         \x20     type(m.Plain.__dict__['h']).__name__)\n\
          print(m.seen)\n",
     );
-    assert_eq!(
-        out,
-        "method_descriptor method_descriptor\n['Marked', 'Second']"
-    );
+    assert_eq!(out, "method_descriptor method_descriptor\n['Marked']");
 }
 
-/// a decorated class the module *reads* keeps its decorator, and declines
+/// and so does a decorated class one goes on running below
 ///
 /// taking the decorator out of the twin's source leaves the interpreted definition
 /// standing undecorated from its `class` statement until module init reaches it. `TABLE`
 /// looks in that window and keeps what it found, so the list would hold a class the
-/// module's own name no longer means — `TABLE[0] is Held` would answer `False`
+/// module's own name no longer means — `TABLE[0] is Held` would answer `False`.
+///
+/// this one agrees whichever way the gate answers, because a class the module body binds
+/// has other reasons to decline; `a_decorated_class_the_module_body_runs_below_declines`
+/// in `by_irbuild` is where the reason itself is pinned
 #[test]
-fn a_decorated_class_the_module_reads_declines() {
+fn a_decorated_class_the_module_body_runs_below_declines() {
     agree_python_with_declines(
         "classdecoratorread",
         "\
@@ -3923,11 +3989,12 @@ TABLE = [Held]
     );
 }
 
-/// a class named in an *unevaluated* annotation is not read, and keeps compiling
+/// a class named only in an *unevaluated* annotation still keeps compiling
 ///
 /// `from __future__ import annotations` makes `Held` in that signature a string nothing
-/// evaluates, so the module never holds the undecorated definition and the decorator can
-/// still move to init. without the future import this is `TABLE = [Held]` again
+/// evaluates, so the `def` below runs nothing where it stands and the decorator can still
+/// move to init. without the future import the signature is a statement that evaluates
+/// something, and the class keeps its decorator instead
 #[test]
 fn a_decorated_class_named_in_a_deferred_annotation_still_compiles() {
     let Some((python, toolchain)) = environment() else {
@@ -3996,6 +4063,8 @@ fn a_decorator_written_as_a_path_agrees() {
     agree_python(
         "pathdeco",
         "\
+from __future__ import annotations
+
 import abc
 import functools
 
@@ -4069,6 +4138,8 @@ fn a_path_decorated_definition_is_the_compiled_one() {
     let dir = diff_root().join("by_diff_pathdecolive");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
+from __future__ import annotations
+
 import abc
 import functools
 
@@ -4364,6 +4435,8 @@ fn a_call_to_a_decorated_function_from_the_same_module_agrees() {
     agree_python(
         "decoratedcallee",
         "\
+from __future__ import annotations
+
 def double(fn):
     def inner(x: int) -> int:
         return fn(x) * 2
@@ -4405,6 +4478,8 @@ fn a_construction_of_a_decorated_class_from_the_same_module_agrees() {
     agree_python(
         "decoratedclassctor",
         "\
+from __future__ import annotations
+
 class Other:
     def __init__(self, x: int) -> None:
         self.x = x + 100
@@ -7220,6 +7295,8 @@ fn a_final_receiver_notices_the_class_being_changed_under_it() {
     agree_python(
         "finalstale",
         "\
+from __future__ import annotations
+
 from typing import final
 
 
@@ -10665,10 +10742,9 @@ data class Point:
 /// `abc.abstractmethod` writes `__isabstractmethod__` onto its argument and hands the
 /// same object back, so it is the whole class of decorator a compiled method has to
 /// stay writable for — a method descriptor takes no attributes at all. and the two
-/// class constructions have to be covered separately: `Plain` is built from a spec, so
-/// the decorators reach methods this module compiled, while `Shape`'s metaclass rules
-/// a spec out and its construction falls back to the interpreted definition, which
-/// already carries them
+/// class constructions have to be covered separately: `Plain` is built from a spec, and
+/// the decorated method is put onto the finished type, while `Shape`'s metaclass rules a
+/// spec out and the same value goes into the namespace the metaclass is handed instead
 #[test]
 fn a_mutating_method_decorator_agrees() {
     agree_python(
@@ -13000,6 +13076,163 @@ def widened(value: object) -> str:
     );
 }
 
+/// a decorated method reaches the namespace the metaclass reads, not the type it built
+///
+/// `ABCMeta` decides `__abstractmethods__` by walking the namespace it is handed, so a
+/// mark that arrived on the finished type afterwards is one it never counted — the class
+/// would be concrete where python's is abstract. every one of these has to be in the
+/// namespace before the call, and each gets there its own way: a `@classmethod` or
+/// `@staticmethod` as the descriptor its method table entry builds, and anything else as
+/// the value the interpreted body already produced
+#[test]
+fn a_decorated_method_on_a_class_built_through_its_metaclass_agrees() {
+    agree_python(
+        "metadeco",
+        "\
+from abc import ABCMeta, abstractmethod
+
+SEEN = []
+
+
+def mark(fn: object) -> object:
+    SEEN.append(fn.__name__)
+    return fn
+
+
+class Marked(metaclass=ABCMeta):
+    @abstractmethod
+    def area(self) -> int:
+        return 0
+
+    @classmethod
+    def kind(cls) -> str:
+        return cls.__name__
+
+    @staticmethod
+    def tag() -> str:
+        return 'marked'
+
+    @mark
+    def counted(self) -> int:
+        return 5
+
+    @mark
+    def __hidden(self) -> int:
+        return 6
+
+    def plain(self) -> int:
+        return 7
+
+    def reaches(self) -> int:
+        return self.__hidden()
+
+
+class Filled(Marked):
+    def area(self) -> int:
+        return 4
+",
+        &[
+            // the mark reached the metaclass, so the class python refuses to build an
+            // instance of is the class this module built too
+            "sorted(m.Marked.__abstractmethods__)",
+            "m.Marked.area.__isabstractmethod__",
+            "type(_capture(m.Marked)).__name__",
+            "str(_capture(m.Marked))",
+            // and the subclass that answers it is concrete
+            "(sorted(m.Filled.__abstractmethods__), m.Filled().area())",
+            // the two conventions bind what they are meant to bind, off the class and
+            // off an instance alike
+            "(m.Marked.kind(), m.Filled.kind(), m.Filled().kind())",
+            "(m.Marked.tag(), m.Filled().tag())",
+            // an arbitrary decorator ran exactly once, which is what carrying the body's
+            // answer buys over applying it a second time at init
+            "m.SEEN",
+            "m.Filled().counted()",
+            // a private name is carried under the name python mangled it to, and the
+            // compiled method that calls it finds it there
+            "m.Filled().reaches()",
+            "m.Filled().plain()",
+            // the class is the one the metaclass built, all the way down
+            "(type(m.Marked).__name__, [c.__name__ for c in m.Filled.__mro__])",
+            "(isinstance(m.Filled(), m.Marked), issubclass(m.Filled, m.Marked))",
+        ],
+    );
+}
+
+/// …and the class those methods are on is the compiled one
+///
+/// the test above compares two legs that agree whether or not either was compiled: a
+/// class that fell back to its interpreted definition answers every one of those calls
+/// identically. the undecorated sibling is what says which leg ran — a compiled type
+/// holds a `method_descriptor` where the interpreted class holds a plain function — and
+/// the carried methods stand beside it as what the body gave them
+#[test]
+fn a_class_carrying_a_decorated_method_is_the_compiled_one() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_metadecolive");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+from abc import ABCMeta, abstractmethod
+
+
+def mark(fn: object) -> object:
+    return fn
+
+
+class Marked(metaclass=ABCMeta):
+    @abstractmethod
+    def area(self) -> int:
+        return 0
+
+    @classmethod
+    def kind(cls) -> str:
+        return cls.__name__
+
+    @mark
+    def counted(self) -> int:
+        return 5
+
+    def plain(self) -> int:
+        return 7
+";
+    let built = match build_source(
+        source,
+        "by_diff_metadecolive",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_metadecolive as m\n\
+         d = m.Marked.__dict__\n\
+         print(type(d['plain']).__name__, type(d['kind']).__name__)\n\
+         print(type(d['area']).__name__, type(d['counted']).__name__)\n\
+         print(sorted(m.Marked.__abstractmethods__), type(m.Marked).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        // the plain method is the compiled entry, so this class is not the twin
+        "method_descriptor classmethod_descriptor\n\
+         function function\n\
+         ['area'] ABCMeta"
+    );
+}
+
 /// a class inside a package reports the whole dotted module it was written in
 ///
 /// the test above asks this of a top-level module, where the module's own name and
@@ -15312,6 +15545,9 @@ fn a_subclass_of_a_class_the_metaclass_gate_turns_down_is_built_here() {
     // was lowered instead, the base stayed in the set and the subclass cascaded behind
     // it, which is what this decline used to be two of.
     //
+    // the `property` a pair becomes is written onto the finished type, past where the
+    // metaclass decided anything, which is what `Paired` is turned down for.
+    //
     // `Constant` is the other half, and it is the boundary: a class-level constant no
     // longer turns a class down, so both it and its subclass are built here. the bases
     // carry `ABCMeta`, so `PyType_FromSpecWithBases` is closed to every class in this
@@ -15327,13 +15563,17 @@ fn a_subclass_of_a_class_the_metaclass_gate_turns_down_is_built_here() {
 from abc import ABCMeta
 
 
-class Decorated(metaclass=ABCMeta):
-    @staticmethod
-    def label() -> str:
-        return \"decorated\"
+class Paired(metaclass=ABCMeta):
+    @property
+    def label(self) -> str:
+        return \"paired\"
+
+    @label.setter
+    def label(self, given: str) -> None:
+        pass
 
 
-class BelowDecorated(Decorated):
+class BelowPaired(Paired):
     def size(self) -> int:
         return 1
 
@@ -15374,22 +15614,22 @@ class BelowConstant(Constant):
             .iter()
             .map(|declined| declined.name.as_str())
             .collect::<Vec<_>>(),
-        ["Decorated"]
+        ["Paired"]
     );
     let out = run(
         &python,
         &dir,
         "import by_diff_gatedbase as m\n\
-         print(m.BelowDecorated().size(), m.BelowDecorated.label())\n\
+         print(m.BelowPaired().size(), m.BelowPaired().label)\n\
          print(m.BelowConstant().size(), m.BelowConstant.TAG, m.BelowConstant().label())\n\
          print([b.__name__ for b in m.BelowConstant.__mro__])\n\
-         print(isinstance(m.BelowConstant(), m.Constant), isinstance(m.BelowDecorated(), m.Decorated))\n\
-         print(type(m.BelowDecorated.size).__name__, type(m.BelowConstant.size).__name__,\n\
+         print(isinstance(m.BelowConstant(), m.Constant), isinstance(m.BelowPaired(), m.Paired))\n\
+         print(type(m.BelowPaired.size).__name__, type(m.BelowConstant.size).__name__,\n\
          \x20     type(m.Constant.label).__name__)\n",
     );
     assert_eq!(
         out,
-        "1 decorated\n\
+        "1 paired\n\
          2 1 constant\n\
          ['BelowConstant', 'Constant', 'object']\n\
          True True\n\
@@ -15635,13 +15875,44 @@ fn a_decorated_class_carries_the_body_its_own_decorator_was_handed() {
     // a field the interpreted one hides, which no sweep can see.
     //
     // the descriptors are what say the compiled types answered: an interpreted leg has a
-    // plain `function` in both places
+    // plain `function` in both places.
+    //
+    // one class per module, because `field(...)` in a class body is a call the module
+    // makes where the `class` statement stands — a second class below the first would be
+    // running that call inside the window the first one's decorator leaves, and the first
+    // would keep its decorator rather than move it
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_decoratedconstant");
-    let _ = std::fs::remove_dir_all(&dir);
-    let source = "\
+    let one = |tag: &str, source: &str, script: &str| -> Option<String> {
+        let dir = diff_root().join(format!("by_diff_{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let built = match build_source(
+            source,
+            tag,
+            &toolchain,
+            &dir,
+            &Options {
+                language: by_irbuild::Language::Python,
+                ..Options::default()
+            },
+        ) {
+            Ok(built) => built,
+            Err(error) => {
+                assert!(missing_toolchain(&error), "failed to build: {error:#}");
+                eprintln!("skipping: no working C toolchain ({error})");
+                return None;
+            }
+        };
+        assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+        Some(run(&python, &dir, script))
+    };
+
+    let deleted = one(
+        "by_diff_decoratedconstant",
+        "\
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 
 
@@ -15652,6 +15923,25 @@ class Sub:
 
     def name(self) -> str:
         return self.tag
+",
+        "from dataclasses import fields\n\
+         import by_diff_decoratedconstant as m\n\
+         print(m.Sub('x').name())\n\
+         print([(f.name, f.init, f.repr) for f in fields(m.Sub)])\n\
+         print(type(m.Sub.name).__name__)\n",
+    );
+    let Some(deleted) = deleted else { return };
+    assert_eq!(
+        deleted,
+        "x\n[('tag', True, True), ('later', False, True)]\nmethod_descriptor"
+    );
+
+    let replaced = one(
+        "by_diff_decoratedconstant_h",
+        "\
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -15661,41 +15951,19 @@ class Holder:
 
     def total(self) -> int:
         return self.shown + self.hidden
-";
-    let built = match build_source(
-        source,
-        "by_diff_decoratedconstant",
-        &toolchain,
-        &dir,
-        &Options {
-            language: by_irbuild::Language::Python,
-            ..Options::default()
-        },
-    ) {
-        Ok(built) => built,
-        Err(error) => {
-            assert!(missing_toolchain(&error), "failed to build: {error:#}");
-            eprintln!("skipping: no working C toolchain ({error})");
-            return;
-        }
-    };
-    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
-    let out = run(
-        &python,
-        &dir,
+",
         "from dataclasses import fields\n\
-         import by_diff_decoratedconstant as m\n\
-         print(m.Sub('x').name(), repr(m.Holder()), m.Holder().total())\n\
-         print([(f.name, f.init, f.repr) for f in fields(m.Sub)])\n\
+         import by_diff_decoratedconstant_h as m\n\
+         print(repr(m.Holder()), m.Holder().total())\n\
          print([(f.name, f.init, f.repr) for f in fields(m.Holder)])\n\
-         print(type(m.Sub.name).__name__, type(m.Holder.total).__name__)\n",
+         print(type(m.Holder.total).__name__)\n",
     );
+    let Some(replaced) = replaced else { return };
     assert_eq!(
-        out,
-        "x Holder(shown=1) 3\n\
-         [('tag', True, True), ('later', False, True)]\n\
+        replaced,
+        "Holder(shown=1) 3\n\
          [('shown', True, True), ('hidden', True, False)]\n\
-         method_descriptor method_descriptor"
+         method_descriptor"
     );
 }
 
@@ -19721,6 +19989,134 @@ def kept(d: dict[str, int], k: str) -> object:
 }
 
 #[test]
+fn a_dict_subscript_answers_only_for_an_exact_dict() {
+    // `d[k]` and `d[k] = v` are read and written straight into the table, which is
+    // only the interpreter's own answer where nothing can have replaced it. a
+    // subclass may have overridden either dunder and then the table is not the
+    // program's answer at all; a key may be unhashable, or have a `__hash__` that
+    // raises, or an `__eq__` that changes the dict while it is being walked. all of
+    // those reach the same route the interpreted twin takes, and a missing key has
+    // to raise the `KeyError` carrying the *key* rather than a message
+    agree_python(
+        "dictitem",
+        "\
+class Boom:
+    def __hash__(self) -> int:
+        raise ValueError('no hash')
+
+
+class Churn:
+    def __init__(self, tag: str) -> None:
+        self.tag = tag
+        self.table: dict[object, object] = {}
+        self.armed = False
+
+    def __hash__(self) -> int:
+        return 7
+
+    # every stored key of this hash is compared against the one being looked up, so
+    # this runs *during* the walk. it mutates once and then disarms, because a change
+    # on every comparison would leave the lookup restarting forever
+    def __eq__(self, other: object) -> bool:
+        if self.armed:
+            self.armed = False
+            self.table[self.tag] = 1
+        return False
+
+
+def read(table: dict[object, object], key: object) -> object:
+    return table[key]
+
+
+def write(table: dict[object, object], key: object, value: object) -> object:
+    table[key] = value
+    return table
+
+
+def bump(table: dict[str, int], key: str) -> int:
+    table[key] = table[key] + 1
+    return table[key]
+",
+        &[
+            "m.read({'a': 1}, 'a')",
+            "m.write({}, 'a', 1)",
+            "m.bump({'a': 1}, 'a')",
+            // the key itself is what a missing one raises, not a message about it
+            "type(_capture(m.read, {'a': 1}, 'b')).__name__",
+            "_capture(m.read, {'a': 1}, 'b').args",
+            "_capture(m.bump, {}, 'a').args",
+            // a subclass has overridden the dunder, so the table is not the answer —
+            // including for a key the table does not hold at all
+            "m.read(type('D', (dict,), {'__getitem__': lambda s, k: 'over'})({'a': 1}), 'a')",
+            "m.read(type('D', (dict,), {'__getitem__': lambda s, k: 'over'})(), 'zz')",
+            "m.write(type('D', (dict,), \
+             {'__setitem__': lambda s, k, v: dict.__setitem__(s, k, v * 10)})(), 'a', 5)",
+            // a mapping that is not a dict at all answers through the protocol
+            "m.read(type('M', (), {'__getitem__': lambda s, k: 'mapping'})(), 'a')",
+            // an unhashable key, and one whose `__hash__` raises something of its own
+            "type(_capture(m.read, {'a': 1}, [])).__name__",
+            "type(_capture(m.read, {'a': 1}, m.Boom())).__name__",
+            "type(_capture(m.write, {}, m.Boom(), 1)).__name__",
+            // the key's `__eq__` writes to the dict it is being looked up in: the
+            // stored key and the probe hash alike, so the walk compares them and the
+            // table changes underneath it
+            "(lambda c, t: (t.__setitem__(c, 1), setattr(c, 'table', t), \
+             setattr(c, 'armed', True), \
+             type(_capture(m.read, t, m.Churn('b'))).__name__))(m.Churn('a'), {})",
+        ],
+    );
+}
+
+#[test]
+fn an_int_unboxes_at_every_width() {
+    // a value read out of a container arrives as an object and has to become the
+    // tagged representation. python keeps a small enough `int` in the object's own
+    // header and anything larger behind a pointer, and the two are read completely
+    // differently — so the widths either side of that boundary, and either side of
+    // the one where a tagged value stops fitting a machine word, all have to come
+    // back as themselves
+    agree_python(
+        "unboxwidth",
+        "\
+class Counted(int):
+    pass
+
+
+def value_of(table: dict[str, int], key: str) -> int:
+    return table[key]
+
+
+def sum_at(values: list[int], count: int) -> int:
+    running = 0
+    i = 0
+    while i < count:
+        running = running + values[i]
+        i = i + 1
+    return running
+",
+        &[
+            // zero and the two signs of a single digit, then the first width needing
+            // two of them, then one past what a tagged word holds
+            "[m.value_of({'k': n}, 'k') for n in \
+             (0, 1, -1, 2 ** 30 - 1, -(2 ** 30 - 1), 2 ** 30, -(2 ** 30), \
+              2 ** 62, -(2 ** 62), 2 ** 200, -(2 ** 200))]",
+            // a subclass that adds nothing is still read for its value. `bool` is an
+            // `int` too, but the tagged representation cannot carry which one it was,
+            // so a `True` read out of a `dict[str, int]` comes back as `1` — that is
+            // older than this route and is not asserted here
+            "m.value_of({'k': m.Counted(7)}, 'k')",
+            "m.sum_at([0, 1, -1, 2 ** 30, 2 ** 200, True], 6)",
+            "m.sum_at([], 0)",
+            // a value that is not an `int` at all still fails, and here it fails the
+            // same way in both legs — the unboxing raises where python's own `+`
+            // would. a value the interpreter never adds is a compiler-only check and
+            // so is not comparable, which is why the read on its own is not asserted
+            "type(_capture(m.sum_at, [1, None], 2)).__name__",
+        ],
+    );
+}
+
+#[test]
 fn the_container_dunders_fill_their_slots() {
     // `len(g)`, `g[i]`, `g[i] = v`, `v in g` and iteration all read *slots* — the
     // method table is never consulted for any of them. `__getitem__` and
@@ -20916,6 +21312,8 @@ fn a_final_receiver_still_agrees() {
     agree(
         "finalplace",
         "\
+from __future__ import annotations
+
 from typing import final
 
 data class Open:
@@ -21584,6 +21982,8 @@ fn a_decorated_class_agrees() {
     agree(
         "classdecorator",
         "\
+from __future__ import annotations
+
 def tagged(cls: type) -> type:
     cls.tag = 'seen'
     return cls
@@ -21693,6 +22093,8 @@ fn a_dataclass_decorator_builds_a_constructor_that_runs() {
     agree_python(
         "dataclassdecorator",
         "\
+from __future__ import annotations
+
 from dataclasses import dataclass, field, fields, replace
 
 
@@ -21738,9 +22140,12 @@ fn a_decorated_class_is_the_compiled_one_and_its_dict_is_collectable() {
     let dir = diff_root().join("by_diff_decoratedlive");
     let _ = std::fs::remove_dir_all(&dir);
     // `from __future__ import annotations` is what keeps `through`'s parameter from
-    // being a *read* of `Derived`: without it the module evaluates the annotation where
-    // the `def` stands, which is inside the window where `Derived` still holds the
-    // interpreted definition, and the class declines rather than move its decorator
+    // evaluating `Derived` where the `def` stands, which is inside the window every
+    // decorated definition above it is in until module init closes it.
+    //
+    // `Derived` names a base, and naming one is both a read of the module and an
+    // `__init_subclass__` call on what it found — so it stands above the two decorated
+    // definitions whose windows it would otherwise be running inside
     let source = "\
 from __future__ import annotations
 
@@ -21750,6 +22155,20 @@ from dataclasses import dataclass
 def tagged(cls: type) -> type:
     cls.tag = 'seen'
     return cls
+
+
+class Plain:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def read(self) -> int:
+        return self.n
+
+
+@tagged
+class Derived(Plain):
+    def tripled(self) -> int:
+        return self.n * 3
 
 
 @dataclass
@@ -21767,20 +22186,6 @@ class Held:
 
     def read(self) -> int:
         return self.n
-
-
-class Plain:
-    def __init__(self, n: int) -> None:
-        self.n = n
-
-    def read(self) -> int:
-        return self.n
-
-
-@tagged
-class Derived(Plain):
-    def tripled(self) -> int:
-        return self.n * 3
 
 
 def through(d: Derived) -> int:

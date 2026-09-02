@@ -1074,6 +1074,37 @@ fn class_constants(source: &str, class: &str) -> Vec<String> {
     })
 }
 
+/// the decorators each method of one emitted class still carries, in the order they lower
+///
+/// what a method *keeps* is the question the metaclass construction turns on: a decorator
+/// still on the list is carried off the interpreted body, and one lowering consumed is a
+/// method table entry with a convention on it
+fn method_decorators(source: &str, class: &str) -> Vec<(String, Vec<String>)> {
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        module
+            .classes
+            .iter()
+            .find(|candidate| candidate.name == class)
+            .unwrap_or_else(|| panic!("{class} is emitted"))
+            .methods
+            .iter()
+            .map(|method| {
+                (
+                    method.name.clone(),
+                    method
+                        .decorators
+                        .iter()
+                        .map(by_ir::function::Decorator::dotted)
+                        .collect(),
+                )
+            })
+            .collect()
+    })
+}
+
 #[test]
 fn an_annotated_class_attribute_is_a_class_constant() {
     // the statement was skipped outright, so the attribute was lost: `Tagged.KIND`
@@ -2231,8 +2262,9 @@ fn a_class_level_constant_under_a_class_keyword_is_carried_not_declined() {
     // not: it goes into the namespace with the methods, and the class is asked afterwards
     // whether it kept the value. so the class lowers, carrying the constant.
     //
-    // a decorated method is the boundary, and the one thing this gate still turns down —
-    // what a decorator produces is only knowable by running it on a finished class
+    // a `@property` pair is the boundary, and the one thing this gate still turns down —
+    // the `property` the two halves become is written onto the *finished* type, past the
+    // point the metaclass decided anything
     assert_eq!(
         class_constants(
             "\
@@ -2255,17 +2287,71 @@ class Tagged(metaclass=ABCMeta):
 from abc import ABCMeta
 
 
-class Decorated(metaclass=ABCMeta):
-    @staticmethod
-    def label() -> str:
-        return \"decorated\"
+class Paired(metaclass=ABCMeta):
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    def value(self, given: int) -> None:
+        pass
 "
         ),
         vec![(
-            "Decorated".to_string(),
-            "a decorated method on a class built through its metaclass is not lowered yet"
-                .to_string()
+            "Paired".to_string(),
+            "a property on a class built through its metaclass is not lowered yet".to_string()
         )]
+    );
+}
+
+/// every route a method decorator takes into the namespace the metaclass is handed
+///
+/// the metaclass decides what the class defines from that namespace, so a decorator whose
+/// answer arrived later would be a decorator the metaclass never saw. each of these puts
+/// it there before the call instead, and none of them declines
+#[test]
+fn a_decorated_method_under_a_class_keyword_reaches_the_namespace() {
+    // `@classmethod` and `@staticmethod` are gone by the time there is a method table:
+    // the entry carries `METH_CLASS` or `METH_STATIC` and the runtime builds the same
+    // descriptor a class body would have written
+    assert_eq!(
+        method_decorators(
+            "\
+from abc import ABCMeta
+
+
+class Bound(metaclass=ABCMeta):
+    @classmethod
+    def kind(cls) -> str:
+        return \"bound\"
+
+    @staticmethod
+    def tag() -> str:
+        return \"bound\"
+",
+            "Bound"
+        ),
+        vec![
+            ("kind".to_string(), Vec::new()),
+            ("tag".to_string(), Vec::new())
+        ]
+    );
+    // anything else stays on the method and is carried off the interpreted body, which is
+    // where the decorator's single application already landed
+    assert_eq!(
+        method_decorators(
+            "\
+from abc import ABCMeta, abstractmethod
+
+
+class Marked(metaclass=ABCMeta):
+    @abstractmethod
+    def area(self) -> int:
+        return 0
+",
+            "Marked"
+        ),
+        vec![("area".to_string(), vec!["abstractmethod".to_string()])]
     );
 }
 
@@ -3423,13 +3509,17 @@ fn a_subclass_of_a_class_the_metaclass_gate_turns_down_builds_on_the_interpreted
 from abc import ABCMeta
 
 
-class Decorated(metaclass=ABCMeta):
-    @staticmethod
-    def label() -> str:
-        return \"decorated\"
+class Paired(metaclass=ABCMeta):
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    def value(self, given: int) -> None:
+        pass
 
 
-class BelowDecorated(Decorated):
+class BelowPaired(Paired):
     def size(self) -> int:
         return 1
 
@@ -3448,12 +3538,11 @@ class BelowConstant(Constant):
     assert_eq!(
         declines(SOURCE),
         vec![(
-            "Decorated".to_string(),
-            "a decorated method on a class built through its metaclass is not lowered yet"
-                .to_string()
+            "Paired".to_string(),
+            "a property on a class built through its metaclass is not lowered yet".to_string()
         )]
     );
-    // the base each subclass gets is the point: an `InModule` one below `Decorated` would
+    // the base each subclass gets is the point: an `InModule` one below `Paired` would
     // name a type this module never emits, and an `External` one below `Constant` would
     // give up a layout the module does have
     let bases = with_source(SOURCE, |db, env, model, suite| {
@@ -3469,8 +3558,8 @@ class BelowConstant(Constant):
         bases,
         vec![
             (
-                "BelowDecorated".to_string(),
-                Some(ClassBase::External(vec!["Decorated".to_string()]))
+                "BelowPaired".to_string(),
+                Some(ClassBase::External(vec!["Paired".to_string()]))
             ),
             // a keyword-only class header has no bases at all
             (
@@ -3960,20 +4049,25 @@ fn a_decorated_class_gives_up_its_direct_call_and_its_direct_construction() {
     // returned. allocating the emitted layout instead skipped the decorator outright,
     // and a decorator returning another class had every construction in the module
     // building the wrong object with no diagnostic at all
+    // `Loud` is the last statement that runs anything, and the annotations below it are
+    // deferred, so nothing here can see the module between the twin's `class` and init —
+    // which is what keeps a decorated class compiling at all. see `watched_definitions`
     with_source(
         "\
+from __future__ import annotations
+
 def tagged(cls: type) -> type:
     return cls
 
-@tagged
-class Loud:
+class Quiet:
     def __init__(self, n: int) -> None:
         self.n = n
 
     def doubled(self) -> int:
         return self.n * 2
 
-class Quiet:
+@tagged
+class Loud:
     def __init__(self, n: int) -> None:
         self.n = n
 
@@ -8130,14 +8224,12 @@ def _(n: int) -> int:
 /// it out changes the class the twin builds rather than only when the decorator ran
 #[test]
 fn only_the_decorators_init_applies_come_out_of_the_twin() {
+    // one decorated definition, and it is the last statement: a second one below it would
+    // be something still running under the first, which keeps its decorator on the twin —
+    // see `watched_definitions`
     let source = "\
 def mark(f: object) -> object:
     return f
-
-
-@mark
-def counted() -> int:
-    return 1
 
 
 @mark
@@ -8180,9 +8272,10 @@ class Held:
     assert!(twin.contains("@staticmethod"), "{twin}");
 }
 
-/// a decorated definition the module reads cannot have its decorator moved to init
+/// a decorated definition the module body is still running below cannot have its
+/// decorator moved to init
 #[test]
-fn a_decorated_definition_the_module_reads_declines() {
+fn a_decorated_definition_the_module_body_runs_below_declines() {
     let reasons = declines(
         "\
 def mark(f: object) -> object:
@@ -8200,14 +8293,14 @@ at_import = counted()
     assert!(
         reasons
             .iter()
-            .any(|(name, reason)| name == "counted" && reason.contains("this module reads")),
+            .any(|(name, reason)| name == "counted" && reason.contains("goes on running below it")),
         "{reasons:?}"
     );
 }
 
-/// and neither can a decorated class the module reads
+/// and neither can a decorated class one is still running below
 #[test]
-fn a_decorated_class_the_module_reads_declines() {
+fn a_decorated_class_the_module_body_runs_below_declines() {
     let reasons = declines(
         "\
 def mark(c: object) -> object:
@@ -8226,9 +8319,118 @@ table = [Held]
     assert!(
         reasons
             .iter()
-            .any(|(name, reason)| name == "Held" && reason.contains("this module reads")),
+            .any(|(name, reason)| name == "Held" && reason.contains("goes on running below it")),
         "{reasons:?}"
     );
+}
+
+/// the statement below need not name the definition at all
+///
+/// what the decorator did is missing for as long as the window is open, and it did it
+/// wherever it liked. `enrol` never gives its own name away, and `snapshot` never mentions
+/// `counted` — the two are connected only through a list that neither of them is
+#[test]
+fn a_decorated_definition_declines_over_a_statement_that_never_names_it() {
+    let reasons = declines(
+        "\
+registry: list[str] = []
+
+
+def enrol(f: object) -> object:
+    registry.append('seen')
+    return f
+
+
+@enrol
+def counted() -> int:
+    return 1
+
+
+snapshot = len(registry)
+",
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|(name, reason)| name == "counted" && reason.contains("goes on running below it")),
+        "{reasons:?}"
+    );
+}
+
+/// a definition with nothing running below it keeps its decorator moved to init
+///
+/// this is the other half of [`a_decorated_definition_declines_over_a_statement_that_never_names_it`]:
+/// the gate is about what is *below* the definition, and a binding of a literal evaluates
+/// nothing that could have seen the module either way
+#[test]
+fn a_decorated_definition_over_settled_statements_still_compiles() {
+    let reasons = declines(
+        "\
+def mark(f: object) -> object:
+    return f
+
+
+@mark
+def counted() -> int:
+    return 1
+
+
+version = (1, 2)
+names = ['counted']
+",
+    );
+    assert!(reasons.is_empty(), "{reasons:?}");
+}
+
+/// and a decorated definition below one is nothing running below it either — until it
+/// declines
+///
+/// `first` compiles beside `second` because `second`'s decorator comes out of the twin
+/// too, so nothing evaluates between the two. `third`'s does not: a decorator that is a
+/// call keeps its decline, and the twin's `@maker()` then runs where it stands, inside the
+/// window both of the others are still in.
+///
+/// the annotations are deferred so that the headers below `first` evaluate nothing either
+#[test]
+fn a_decorated_definition_that_keeps_its_decorator_reopens_the_ones_above_it() {
+    let stack = "\
+from __future__ import annotations
+
+
+def mark(f: object) -> object:
+    return f
+
+
+def maker() -> object:
+    return mark
+
+
+@mark
+def first() -> int:
+    return 1
+
+
+@mark
+def second() -> int:
+    return 2
+";
+    assert!(declines(stack).is_empty(), "{:?}", declines(stack));
+
+    let reasons = declines(&format!(
+        "{stack}
+
+@maker()
+def third() -> int:
+    return 3
+"
+    ));
+    for name in ["first", "second"] {
+        assert!(
+            reasons.iter().any(|(declined, reason)| declined == name
+                && reason.contains("`third` declined below it and kept its decorator")),
+            "{reasons:?}"
+        );
+    }
 }
 
 /// a frame that finishes and a body that raises `StopIteration` are different

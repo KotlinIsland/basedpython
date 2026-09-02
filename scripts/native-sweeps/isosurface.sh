@@ -184,7 +184,17 @@ for b in $(sweep_modules "$LIB" "$@"); do
            printf '%s\tCRASHED\t%s\tinterpreted[%s]\tcompiled[%s]\n' \
              "$b" "$(echo "$i" | wc -l | tr -d ' ')" "$istat" "$cstat"
          else
-           printf '%s\tsame\t%s\n' "$b" "$(echo "$i" | wc -l | tr -d ' ')"
+           # a module that rewrote `__module__` matches nothing this rung asked about, so
+           # both legs answer with an empty list and the row would read `same 0` — zero
+           # classes compared, presented as agreement. `_collections_abc` does exactly that
+           # (it answers `collections.abc`), and so do `abc`, `enum`, `inspect`, `io` and
+           # `typing`, so six modules were being scored as agreeing about nothing. kept apart
+           # so the denominator is honest, the way `isoinstance` keeps `nothing-to-probe`
+           if [ -z "$i" ]; then
+             printf '%s\tnothing-to-compare\n' "$b"
+           else
+             printf '%s\tsame\t%s\n' "$b" "$(echo "$i" | wc -l | tr -d ' ')"
+           fi
          fi ;;
     esac >> "$OUT"
   elif [ "$istat" -ne 0 ] || [ "$cstat" -ne 0 ]; then
@@ -211,4 +221,4 @@ for b in $(sweep_modules "$LIB" "$@"); do
   fi >> "$OUT"
 done
 sweep_end || exit 1
-echo "walked: $(grep -cE $'\t(same|DIFFERS|CRASHED|timed-out|import-failed|no-artifact)' "$OUT")   exercised: $(grep -cE $'\t(same|DIFFERS)' "$OUT")   differing: $(grep -c $'\tDIFFERS' "$OUT")   crashed: $(grep -c $'\tCRASHED\t' "$OUT")   lost: $(grep -c $'\t| lost ' "$OUT")   timed-out: $(grep -c $'\ttimed-out' "$OUT")   import-failed: $(grep -c $'\timport-failed' "$OUT")   no-artifact: $(grep -c $'\tno-artifact' "$OUT")"
+echo "walked: $(grep -cE $'\t(same|DIFFERS|CRASHED|timed-out|nothing-to-compare|import-failed|no-artifact)' "$OUT")   exercised: $(grep -cE $'\t(same|DIFFERS)' "$OUT")   differing: $(grep -c $'\tDIFFERS' "$OUT")   crashed: $(grep -c $'\tCRASHED\t' "$OUT")   lost: $(grep -c $'\t| lost ' "$OUT")   timed-out: $(grep -c $'\ttimed-out' "$OUT")   nothing-to-compare: $(grep -c $'\tnothing-to-compare' "$OUT")   import-failed: $(grep -c $'\timport-failed' "$OUT")   no-artifact: $(grep -c $'\tno-artifact' "$OUT")"
