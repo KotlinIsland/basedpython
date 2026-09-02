@@ -930,6 +930,23 @@ static inline char By_Truthy(PyObject *o) {
 #define By_ClearManagedDict(obj) ((void)(obj))
 #endif
 
+/* the flag naming a type whose instances keep their attributes *inline*, where reading
+ * the dict is what builds it
+ *
+ * [`By_DictShadows`] rests on being able to look at an instance's dict without creating
+ * one, and `_PyObject_GetDictPtr` gives that for every storage but this: for an inline
+ * type it materialises a dict from the values first, so a read there would be an
+ * allocation per instance rather than a load. 3.13 is where the two became separate
+ * flags — before it every managed dict was an inline one, so naming the managed flag
+ * there names exactly the same set of types */
+#if PY_VERSION_HEX >= 0x030D0000
+#define BY_INLINE_VALUES_FLAG Py_TPFLAGS_INLINE_VALUES
+#elif PY_VERSION_HEX >= 0x030B0000
+#define BY_INLINE_VALUES_FLAG Py_TPFLAGS_MANAGED_DICT
+#else
+#define BY_INLINE_VALUES_FLAG 0
+#endif
+
 /* the flags a class asking for an instance dict declares, or nothing where the running
  * interpreter has no managed dict to give it
  *
@@ -1076,6 +1093,243 @@ static inline char By_DeleteGlobal(PyObject *dict, PyObject *name) {
         return 2;
     }
     return 0;
+}
+
+/* a global read that remembers what the name resolved to last time
+ *
+ * `By_LookupGlobal` is two dict probes and a `PyEval_GetBuiltins` on every trip, and
+ * for a name that resolves to a builtin — `str`, `len`, an exception class — the
+ * module namespace has to miss before the second probe is even reached. that is a
+ * quarter of `keybuild` and of `excs`, and a twelfth of `words`, against a ±1% floor
+ * two identical builds measured for themselves; nothing else in the suite resolves a
+ * global often enough to notice either way.
+ *
+ * the memo below is a cache with a validity test, not an assumption: a name that is
+ * rebound is seen at once, which is what separates this from the early binding that
+ * tier 3 gets to make. what makes the test cheap is that it asks about the *dicts*
+ * rather than about the name — one counter, bumped by a dict watcher whenever any
+ * namespace this process ever resolved a global through is written to.
+ *
+ * the counter is deliberately one number for the whole interpreter rather than one
+ * per dict. a write to any module's namespace therefore re-resolves every memo in
+ * the process, which is far more invalidation than is needed — but a memo can never
+ * be left holding an answer from a dict that has since moved on, and the cost of
+ * over-invalidating is one lookup, where the cost of under-invalidating is a silent
+ * wrong answer */
+typedef struct {
+    /* the counter's value when this was armed. zero is "cold": the counter starts
+     * at one and only ever rises, so a cold site can never match it */
+    uint64_t generation;
+    /* the builtins the answer came from, or NULL when the module namespace answered
+     *
+     * this is not covered by the counter. `By_LookupGlobal` reads builtins out of
+     * `PyEval_GetBuiltins`, which answers about the *calling* frame — and a compiled
+     * function pushes none — so the very same site can be reached with two different
+     * builtins dicts without either of them being written to. a site the module
+     * namespace answered skips the comparison entirely, because builtins were never
+     * consulted to produce that answer and cannot change it */
+    PyObject *builtins;
+    /* borrowed from whichever dict answered: the dict holds the reference, and the
+     * only way the value can leave that dict is an event that bumps the counter */
+    PyObject *value;
+} ByGlobalSite;
+
+#define BY_GLOBAL_SITE_INIT { 0u, NULL, NULL }
+
+/* dict watchers arrived in 3.12, and there is no other way to be told that a
+ * namespace was written to that does not read a field deprecated for exactly this
+ * use. below that version every lookup is made in full */
+#if !defined(Py_GIL_DISABLED) && PY_VERSION_HEX >= 0x030C0000
+#define BY_GLOBAL_SITES 1
+#endif
+
+#ifdef BY_GLOBAL_SITES
+
+/* what every memo in one interpreter is invalidated by
+ *
+ * cpython hands out eight dict watchers per interpreter and a project has more
+ * modules than that, so a module that registered its own would be the eighth one to
+ * work. the registration is made once and found again through the interpreter's own
+ * dictionary, which is where an extension module is meant to keep what it shares
+ * with other extension modules */
+typedef struct {
+    uint64_t generation;
+    int watcher;
+} ByGlobals;
+
+/* what this module's own sites read. NULL means this module memoises nothing */
+static ByGlobals *by_globals = NULL;
+
+/* what this module's callback bumps, if this is the module that registered the
+ * watcher. it is deliberately *not* the same variable
+ *
+ * only one module in an interpreter registers, and every other module's sites are
+ * invalidated by that one module's callback. so a module that gives up memoising —
+ * by clearing `by_globals` — must not be able to take the invalidation of everyone
+ * else's sites with it. this is set once, when the registration succeeds, and never
+ * cleared */
+static ByGlobals *by_globals_watched = NULL;
+
+static int By_GlobalsChanged(PyDict_WatchEvent event, PyObject *dict, PyObject *key,
+                             PyObject *value) {
+    (void)event;
+    (void)dict;
+    (void)key;
+    (void)value;
+    if (by_globals_watched != NULL) by_globals_watched->generation += 1;
+    return 0;
+}
+
+/* find this interpreter's counter, registering the watcher the first time
+ *
+ * the struct outlives every module that reaches it, on purpose: the capsule is given
+ * no destructor. the readers are compiled code in every module that found it, and
+ * freeing it while any of them could still run would turn a memo into a read of
+ * freed memory. it is two words per interpreter.
+ *
+ * a failure at any step is answered by leaving `by_globals` NULL, which is what every
+ * site tests before trusting itself — a build that cannot be told about writes makes
+ * every lookup in full rather than making one it cannot invalidate */
+static void By_FindGlobals(void) {
+    static const char *key = "_by_global_memo";
+    PyInterpreterState *interpreter;
+    PyObject *state;
+    PyObject *capsule;
+    ByGlobals *shared;
+    if (by_globals != NULL) return;
+    interpreter = PyInterpreterState_Get();
+    if (interpreter == NULL) return;
+    state = PyInterpreterState_GetDict(interpreter);
+    if (state == NULL) return;
+    capsule = PyDict_GetItemString(state, key);
+    if (capsule != NULL) {
+        by_globals = (ByGlobals *)PyCapsule_GetPointer(capsule, key);
+        if (by_globals == NULL) PyErr_Clear();
+        return;
+    }
+    PyErr_Clear();
+    shared = (ByGlobals *)PyMem_RawMalloc(sizeof(ByGlobals));
+    if (shared == NULL) return;
+    /* one, not zero, so that a cold site's zero can never be mistaken for a match */
+    shared->generation = 1u;
+    shared->watcher = PyDict_AddWatcher(By_GlobalsChanged);
+    if (shared->watcher < 0) {
+        PyErr_Clear();
+        PyMem_RawFree(shared);
+        return;
+    }
+    by_globals_watched = shared;
+    capsule = PyCapsule_New(shared, key, NULL);
+    if (capsule == NULL) {
+        PyErr_Clear();
+        /* the watcher cannot be handed back, so the struct is kept and serves this
+         * module alone rather than being freed out from under a live registration */
+        by_globals = shared;
+        return;
+    }
+    if (PyDict_SetItemString(state, key, capsule) < 0) PyErr_Clear();
+    Py_DECREF(capsule);
+    by_globals = shared;
+}
+
+/* start watching a namespace, and refuse to memoise anything resolved through one
+ * that will not be watched
+ *
+ * every dict a site's answer can come from passes through here first, so a write
+ * that this build would not hear about is a write no site was armed against */
+static int By_WatchGlobals(PyObject *dict) {
+    if (by_globals == NULL || dict == NULL || !PyDict_Check(dict)) return 0;
+    if (PyDict_Watch(by_globals->watcher, dict) < 0) {
+        PyErr_Clear();
+        return 0;
+    }
+    return 1;
+}
+
+/* the module namespace this module's compiled code resolves globals through
+ *
+ * the bump is what keeps a second `by_exec` — a module re-executed, or executed in
+ * another interpreter — from being answered out of the first one's namespace */
+static void By_WatchModule(PyObject *dict) {
+    By_FindGlobals();
+    if (!By_WatchGlobals(dict)) {
+        by_globals = NULL;
+        return;
+    }
+    by_globals->generation += 1;
+}
+
+/* resolve the name in full and record what answered, or record nothing
+ *
+ * the counter is read *before* the lookups rather than after, so that whatever a site
+ * ends up holding is stamped with the generation the answer was found under and never
+ * with a later one. nothing between the two points can currently move the counter —
+ * every namespace here is an exact dict, and reading one runs no python — but reading
+ * after would be the kind of correct-by-accident that a new step in the middle
+ * silently turns into a memo of a value that has already been replaced */
+static PyObject *By_ArmGlobalSite(ByGlobalSite *site, PyObject *dict, PyObject *name) {
+    uint64_t generation;
+    PyObject *value;
+    PyObject *builtins;
+    site->generation = 0u;
+    if (by_globals == NULL || dict == NULL || name == NULL) {
+        return By_LookupGlobal(dict, name);
+    }
+    generation = by_globals->generation;
+    value = PyDict_GetItemWithError(dict, name);
+    if (value != NULL) {
+        site->builtins = NULL;
+        site->value = value;
+        site->generation = generation;
+        return Py_NewRef(value);
+    }
+    if (PyErr_Occurred()) return NULL;
+    builtins = PyEval_GetBuiltins();
+    if (builtins == NULL) {
+        PyErr_Format(PyExc_NameError, "name '%U' is not defined", name);
+        return NULL;
+    }
+    value = PyDict_GetItemWithError(builtins, name);
+    if (value == NULL) {
+        if (PyErr_Occurred()) return NULL;
+        /* a name bound nowhere is pointedly *not* remembered: a refusal has no dict
+         * entry behind it, so nothing would invalidate a memo of one when the name
+         * is finally defined */
+        PyErr_Format(PyExc_NameError, "name '%U' is not defined", name);
+        return NULL;
+    }
+    if (By_WatchGlobals(builtins)) {
+        site->builtins = builtins;
+        site->value = value;
+        site->generation = generation;
+    }
+    return Py_NewRef(value);
+}
+
+#else
+
+/* nothing is remembered on this build, so there is nothing to invalidate */
+static void By_WatchModule(PyObject *dict) { (void)dict; }
+
+#endif /* BY_GLOBAL_SITES */
+
+/* `By_LookupGlobal` through a per-site memo of its answer
+ *
+ * on a free-threaded build there is no memo at all: the three fields cannot be read
+ * or written as one, and an emitted module says `Py_MOD_GIL_NOT_USED`, so two
+ * threads could otherwise leave one dict's generation paired with another's answer */
+static inline PyObject *By_LookupGlobalSite(ByGlobalSite *site, PyObject *dict,
+                                            PyObject *name) {
+#ifdef BY_GLOBAL_SITES
+    if (BY_LIKELY(by_globals != NULL && site->generation == by_globals->generation
+                  && (site->builtins == NULL || site->builtins == PyEval_GetBuiltins()))) {
+        return Py_NewRef(site->value);
+    }
+    return By_ArmGlobalSite(site, dict, name);
+#else
+    (void)site;
+    return By_LookupGlobal(dict, name);
+#endif
 }
 
 /* whether a type spec can be built on this tuple of bases
@@ -1857,13 +2111,39 @@ static inline PyObject *By_CallMethod(PyObject *receiver, PyObject *name, PyObje
                                      NULL);
 }
 
+/* whether `o`'s *own* dict answers `name`, so that nothing read off its type is the
+ * answer an attribute lookup would give
+ *
+ * a method is a non-data descriptor, which is the whole of why this has to be asked: a
+ * value stored under the same name on the instance wins over the type's entry, so
+ * `t.step = f` makes `t.step(1)` call `f` and every answer taken from the type is the
+ * wrong one. an emitted class keeps its fields in its layout and the dict beside them
+ * exists only so that `obj.extra = 3` works the way the interpreted twin does — so the
+ * dict is very nearly always absent, and absent is a load and a comparison to establish.
+ *
+ * a type whose instances keep their attributes inline is never asked, because asking is
+ * what would build the dict; [`BY_INLINE_VALUES_FLAG`] names those and they are refused
+ * where a licence is taken instead. anything the question cannot be answered for is
+ * answered `1`, which is the refusal */
+static inline int By_DictShadows(PyObject *o, PyObject *name) {
+    if (Py_TYPE(o)->tp_dictoffset == 0) return 0;
+    PyObject **dict = _PyObject_GetDictPtr(o);
+    if (dict == NULL || *dict == NULL) return 0;
+    int found = PyDict_Contains(*dict, name);
+    if (found < 0) {
+        PyErr_Clear();
+        return 1;
+    }
+    return found;
+}
+
 /* a call site's licence to call one compiled body without looking the method up,
  * taken once at import
  *
  * an override reached through a base-typed name has to ask the receiver which body
  * to run, and asking is the whole cost: a lookup on the type, a bound call, and the
  * boxed round trip a python-visible entry point takes. the answer is nearly always
- * the same one, so it is worked out here instead — and the two things that could
+ * the same one, so it is worked out here instead — and the three things that could
  * make it wrong later are each given a test the call site can afford.
  *
  * a *different class* is caught by comparing the receiver's type, which is exact:
@@ -1874,19 +2154,35 @@ static inline PyObject *By_CallMethod(PyObject *receiver, PyObject *name, PyObje
  * its own attribute caches watch — so the version that held when the answer was
  * checked is enough for every later call to test with one comparison.
  *
- * zero means the licence was refused: the name answers something this module did
- * not compile, or the type will not carry a version. no version tag is ever zero,
- * so a call site armed with zero takes the ordinary call for the life of the
- * process, which is what it did before any of this */
-static inline unsigned int By_ArmMethod(PyObject *type, const char *name, PyCFunction body) {
-    if (type == NULL || !PyType_Check(type)) return 0u;
+ * a value on the *instance* under the same name is caught by [`By_DictShadows`], which
+ * is why the name is kept here rather than only being read at import. nothing about the
+ * class says whether one instance of it has been written to.
+ *
+ * a zero version means the licence was refused: the name answers something this module
+ * did not compile, the type will not carry a version, or its instances keep attributes
+ * inline and so cannot be asked the third question. no version tag is ever zero, so a
+ * call site armed with zero takes the ordinary call for the life of the process, which
+ * is what it did before any of this */
+typedef struct {
+    unsigned int version;
+    PyObject *name;
+} ByMethodLicence;
+
+#define BY_METHOD_LICENCE_INIT { 0u, NULL }
+
+static inline void By_ArmMethod(ByMethodLicence *licence, PyObject *type, const char *name,
+                                PyCFunction body) {
+    licence->version = 0u;
+    licence->name = NULL;
+    if (type == NULL || !PyType_Check(type)) return;
     PyTypeObject *owner = (PyTypeObject *)type;
+    if (owner->tp_flags & BY_INLINE_VALUES_FLAG) return;
     /* the lookup is also what makes the interpreter assign a version tag: a type
      * nothing has been read from yet has none at all */
     PyObject *found = PyObject_GetAttrString(type, name);
     if (found == NULL) {
         PyErr_Clear();
-        return 0u;
+        return;
     }
     /* reading the type's own attribute hands back the descriptor rather than a bound
      * method, so the compiled entry point is reachable through it */
@@ -1894,20 +2190,29 @@ static inline unsigned int By_ArmMethod(PyObject *type, const char *name, PyCFun
                    && ((PyMethodDescrObject *)found)->d_method != NULL
                    && ((PyMethodDescrObject *)found)->d_method->ml_meth == body;
     Py_DECREF(found);
-    if (!compiled) return 0u;
+    if (!compiled) return;
 #if PY_VERSION_HEX >= 0x030C0000
     /* from 3.12 the tag is handed out on request rather than by whoever looks an
      * attribute up, and a request is the only thing that reliably produces one */
-    if (!PyUnstable_Type_AssignVersionTag(owner)) return 0u;
+    if (!PyUnstable_Type_AssignVersionTag(owner)) return;
 #endif
+    PyObject *interned = By_InternedStr(name, (Py_ssize_t)strlen(name));
+    if (interned == NULL) {
+        PyErr_Clear();
+        return;
+    }
+    licence->name = interned;
     /* zero is both "never given a tag" and "written to since", and either is a refusal */
-    return owner->tp_version_tag;
+    licence->version = owner->tp_version_tag;
 }
 
-/* whether `o` is exactly `type`, and `type` still answers as [`By_ArmMethod`] found */
-static inline char By_MethodStands(PyObject *o, PyObject *type, unsigned int armed) {
-    return (char)(armed != 0u && o != NULL && (PyObject *)Py_TYPE(o) == type
-                  && ((PyTypeObject *)type)->tp_version_tag == armed);
+/* whether `o` is exactly `type`, `type` still answers as [`By_ArmMethod`] found, and
+ * `o` itself does not answer the name */
+static inline char By_MethodStands(PyObject *o, PyObject *type,
+                                   const ByMethodLicence *licence) {
+    return (char)(licence->version != 0u && o != NULL && (PyObject *)Py_TYPE(o) == type
+                  && ((PyTypeObject *)type)->tp_version_tag == licence->version
+                  && !By_DictShadows(o, licence->name));
 }
 
 /* what one call site remembers about the method name it keeps calling
@@ -1929,8 +2234,18 @@ static inline char By_MethodStands(PyObject *o, PyObject *type, unsigned int arm
  * *rebound* on the type is caught by the version tag, which the interpreter zeroes
  * whenever a type or any of its bases is written to. `type` is only ever compared,
  * never followed, so a type that has since been freed cannot be read through it.
+ * a value on the *instance* under the same name is caught where the answer is used,
+ * because it is a fact about the receiver rather than about its class.
  *
- * three fields cannot be written as one, so what keeps a *reader* from seeing half of
+ * `misses` is what keeps a site that cannot settle from costing more than having no
+ * site at all. a loop over a list holding two classes turn about re-derives the answer
+ * every trip and never gets to use one, and re-deriving is dearer than the ordinary
+ * call — so after a few of those the site stops trying and every later call takes the
+ * ordinary path. it counts re-derivations rather than calls, so a site that settles
+ * pays nothing for it, and a site whose one class is written to a handful of times
+ * still gets to re-settle.
+ *
+ * four fields cannot be written as one, so what keeps a *reader* from seeing half of
  * one arming and half of another is that only one thread runs at a time. a site is
  * therefore only used where that holds: an emitted module says `Py_MOD_GIL_NOT_USED`,
  * and on a free-threaded build every call takes the ordinary path instead. two threads
@@ -1940,9 +2255,17 @@ typedef struct {
     PyObject *type;
     unsigned int version;
     PyMethodDef *method;
+    unsigned int misses;
 } ByMethodSite;
 
-#define BY_METHOD_SITE_INIT { NULL, 0u, NULL }
+#define BY_METHOD_SITE_INIT { NULL, 0u, NULL, 0u }
+
+/* how many times a site re-derives its answer before it settles for the ordinary call
+ *
+ * low, because a site that has not settled by now is one whose receivers vary, and each
+ * further attempt is a lookup on top of the call it was supposed to save. high enough
+ * that arming, a refusal, and a class written to once or twice all fit under it */
+#define BY_METHOD_SITE_MISSES 8u
 
 #ifndef Py_GIL_DISABLED
 
@@ -1957,12 +2280,24 @@ typedef PyObject *(*ByFastKwCall)(PyObject *, PyObject *const *, Py_ssize_t, PyO
  *
  * - a metaclass, or a `tp_getattro` of the type's own, can answer the name with
  *   something other than what is on the type
- * - an instance `__dict__` can shadow the type's entry, and only a type without one
- *   is safe to answer from the type alone. a static type is also the only kind whose
- *   storage layout guarantees there is no managed dict behind a zero `tp_dictoffset`
+ * - a type whose instances keep their attributes inline: an instance's own value
+ *   shadows the type's entry, so the answer only stands where the receiver can be
+ *   asked, and asking an inline type is what builds the dict it was asked about.
+ *   every other storage is a load, made at the call rather than here — nothing about
+ *   the class says whether one instance of it has been written to
  * - anything but a builtin method descriptor has a `__get__` of its own to run
  * - a calling convention the site cannot lay the arguments out for, which is every
- *   convention that wants a tuple
+ *   convention that wants a tuple, and every one that wants an argument this does not
+ *   have to give
+ *
+ * a heap type is *not* refused, though it was while a zero `tp_dictoffset` was the only
+ * way this had of ruling an instance dict out. the rest of what a heap type can do that
+ * a static one cannot is caught by what is already here: a rebinding zeroes the version
+ * tag, on the class or on any of its bases; a subclass has a type object of its own; and
+ * a version tag is drawn from a counter that only ever goes up, so a type freed and
+ * another built where it stood cannot answer to the first one's version. what the
+ * refusal *was* also covering, and had to be written out on its own, is the calling
+ * convention: `METH_METHOD` is a heap type's alone.
  *
  * the type and its version are recorded before the first thing that can refuse, so
  * that a refusal is remembered on the same terms an answer is: a receiver this site
@@ -1980,9 +2315,8 @@ static void By_ArmMethodSite(ByMethodSite *site, PyTypeObject *tp, PyObject *nam
     site->version = tp->tp_version_tag;
     site->method = NULL;
     if (!Py_IS_TYPE(tp, &PyType_Type)) return;
-    if (tp->tp_flags & Py_TPFLAGS_HEAPTYPE) return;
     if (tp->tp_getattro != PyObject_GenericGetAttr) return;
-    if (tp->tp_dictoffset != 0) return;
+    if (tp->tp_flags & BY_INLINE_VALUES_FLAG) return;
     PyObject *found = PyObject_GetAttr((PyObject *)tp, name);
     if (found == NULL) {
         PyErr_Clear();
@@ -1995,8 +2329,15 @@ static void By_ArmMethodSite(ByMethodSite *site, PyTypeObject *tp, PyObject *nam
                               : NULL;
     Py_DECREF(found);
     if (method == NULL) return;
-    int shape = method->ml_flags
-                & (METH_VARARGS | METH_KEYWORDS | METH_NOARGS | METH_O | METH_FASTCALL);
+    /* the whole of the flags decides, with only the one bit that says nothing about the
+     * arguments set aside. a mask naming the conventions this knows would *drop* the
+     * bits it does not know rather than refuse them, and `METH_METHOD` is exactly such
+     * a bit: its entry point takes the defining class between the receiver and the
+     * arguments, so calling it as a plain fast call writes the argument array into the
+     * class parameter. `re.Pattern.search` is one, and only a heap type can carry the
+     * flag at all — which is why this went unseen while heap types were refused
+     * outright */
+    int shape = method->ml_flags & ~METH_COEXIST;
     if (!((shape == METH_NOARGS && nargs == 0) || (shape == METH_O && nargs == 1)
           || shape == METH_FASTCALL || shape == (METH_FASTCALL | METH_KEYWORDS))) {
         return;
@@ -2024,7 +2365,7 @@ static void By_ArmMethodSite(ByMethodSite *site, PyTypeObject *tp, PyObject *nam
  * direct C-API call in this runtime — `By_GetItem` reaching a `__getitem__`, and the
  * rest — is already written on that understanding.
  *
- * on a free-threaded build there is no site at all: the three fields cannot be read
+ * on a free-threaded build there is no site at all: the four fields cannot be read
  * or written as one, so the whole thing is left to `By_CallMethod` */
 static inline PyObject *By_CallMethodSite(ByMethodSite *site, PyObject *receiver,
                                           PyObject *name, PyObject **args, Py_ssize_t nargs) {
@@ -2032,10 +2373,14 @@ static inline PyObject *By_CallMethodSite(ByMethodSite *site, PyObject *receiver
     if (BY_LIKELY(receiver != NULL && name != NULL)) {
         PyTypeObject *tp = Py_TYPE(receiver);
         if (BY_UNLIKELY((PyObject *)tp != site->type || tp->tp_version_tag != site->version)) {
+            if (site->misses >= BY_METHOD_SITE_MISSES) {
+                return By_CallMethod(receiver, name, args, nargs);
+            }
+            site->misses++;
             By_ArmMethodSite(site, tp, name, nargs);
         }
         PyMethodDef *method = site->method;
-        if (BY_LIKELY(method != NULL)) {
+        if (BY_LIKELY(method != NULL) && BY_LIKELY(!By_DictShadows(receiver, name))) {
             switch (method->ml_flags
                     & (METH_VARARGS | METH_KEYWORDS | METH_NOARGS | METH_O | METH_FASTCALL)) {
             case METH_NOARGS:
@@ -4806,6 +5151,48 @@ static inline PyObject *By_TakeReturn(PyObject **returned) {
 #define BY_FRAME_COROUTINE 1
 #define BY_FRAME_ASYNC_GENERATOR 2
 
+/* what python calls this surface in a message it writes about one */
+static inline const char *By_FrameNoun(int frame) {
+    return frame == BY_FRAME_COROUTINE         ? "coroutine"
+           : frame == BY_FRAME_ASYNC_GENERATOR ? "async generator"
+                                               : "generator";
+}
+
+/* refuse a resumption python itself would not have performed
+ *
+ * two refusals, one at each end of a machine's life, and they are the same question:
+ * can this frame take what is being sent into it.
+ *
+ * a frame that has never run is suspended at no `yield`, so there is no expression for
+ * a sent value to become. python refuses a non-`None` one rather than dropping it, and
+ * all three surfaces refuse it — only the noun in the message differs. `next(g)` and
+ * every resumption that carries nothing send `None`, so they pass.
+ *
+ * a *coroutine* that has finished is not an exhausted iterator, it is spent: awaiting
+ * one twice is a mistake about ownership rather than the end of a sequence, so python
+ * raises where a generator answers `StopIteration` and an async generator answers
+ * `StopAsyncIteration`. that half is the coroutine's alone. `close()` is exempt because
+ * closing a spent coroutine is how a caller says it is done with it, and `throw` into
+ * an *unstarted* coroutine is exempt too — the thrown exception simply propagates.
+ *
+ * `state` is 0 before the frame first runs and -1 once it has left for good, so
+ * anything above 0 is a real suspension point with a `yield` to resume. `arg` is NULL
+ * where the caller carries no sent value at all, as a `throw` does */
+static inline int By_RefuseResumption(ByTagged state, int frame, PyObject *arg) {
+    if (!By_IsShort(state)) return 0;
+    Py_ssize_t at = (Py_ssize_t)By_ShortValue(state);
+    if (at == 0 && arg != NULL && arg != Py_None) {
+        PyErr_Format(PyExc_TypeError, "can't send non-None value to a just-started %s",
+                     By_FrameNoun(frame));
+        return -1;
+    }
+    if (at < 0 && frame == BY_FRAME_COROUTINE) {
+        PyErr_SetString(PyExc_RuntimeError, "cannot reuse already awaited coroutine");
+        return -1;
+    }
+    return 0;
+}
+
 /* pep 479: a `StopIteration` that *escapes* a generator frame becomes a
  * `RuntimeError`, so that an accidental one — most often from a bare `next()` on an
  * exhausted iterator somewhere inside the body — cannot masquerade as the frame
@@ -4836,9 +5223,7 @@ static inline void By_ConvertStopIteration(int frame) {
     } else {
         return;
     }
-    const char *surface = frame == BY_FRAME_COROUTINE          ? "coroutine"
-                          : frame == BY_FRAME_ASYNC_GENERATOR  ? "async generator"
-                                                               : "generator";
+    const char *surface = By_FrameNoun(frame);
     PyObject *type, *value, *tb;
     PyErr_Fetch(&type, &value, &tb);
     PyErr_NormalizeException(&type, &value, &tb);
@@ -4889,6 +5274,7 @@ static inline void By_ParkSent(PyObject **sent, PyObject *value) {
 static inline PyObject *By_StepGenerator(PyObject *self, PyObject **sent, PyObject **returned,
                                          ByTagged *state, int frame, PyObject *arg,
                                          PyObject *(*resume)(PyObject *)) {
+    if (By_RefuseResumption(*state, frame, arg) < 0) return NULL;
     By_ParkSent(sent, arg);
     PyObject *result = resume(self);
     if (result != NULL) return result;
@@ -4919,6 +5305,11 @@ static inline PyObject *By_ThrowInto(PyObject *self, PyObject **sent, PyObject *
                                    PyObject *exception,
                                    PyObject *(*resume)(PyObject *)) {
     if (thrown == NULL) return NULL;
+    /* a spent coroutine refuses a throw for the same reason it refuses a send, and
+     * before the argument is examined: python answers the reuse rather than whatever
+     * was being thrown. no sent value rides in on a throw, so the just-started half
+     * cannot fire here */
+    if (By_RefuseResumption(*state, frame, NULL) < 0) return NULL;
     PyObject *instance = NULL;
     if (PyExceptionInstance_Check(exception)) {
         instance = By_NewRef(exception);
@@ -5723,6 +6114,7 @@ static inline PySendResult By_SendGenerator(PyObject *self, PyObject **sent,
                                             PyObject *(*resume)(PyObject *), PyObject *arg,
                                             PyObject **result) {
     PyObject *step;
+    if (By_RefuseResumption(*state, frame, arg) < 0) return PYGEN_ERROR;
     By_ParkSent(sent, arg);
     step = resume(self);
     if (step != NULL) {

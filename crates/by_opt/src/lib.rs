@@ -51,6 +51,16 @@ pub const PASSES: &[Pass] = &[
         name: "fold",
         run: fold::run,
     },
+    // and once more, because the group only reaches a fixed point on the third
+    // trip. `total + pair[0]` takes two rounds to become `total + whole`: the first
+    // fold reads the element off the tuple the block just built, the propagation
+    // that follows unifies the element with the register that was boxed into it,
+    // and only then can the second fold cancel the box against the unbox — which
+    // leaves a copy of its own that nothing was propagating away
+    Pass {
+        name: "copy-propagation",
+        run: copy_propagation::run,
+    },
     // after folding, which is what makes the compared-against literal an immediate
     // rather than a register the pass would not recognise, and before
     // dead-registers, which is what removes the character register it orphans

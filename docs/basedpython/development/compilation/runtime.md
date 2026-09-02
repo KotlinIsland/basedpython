@@ -458,8 +458,14 @@ a compiled module's `PyInit_` function, in order:
 
 module-level `let` bindings are [`Final`](../../features/modifiers.md), so they
 are early-bound: a reference from a compiled function reads a static slot rather
-than doing a namespace lookup. a non-`let` module global keeps late binding, and
-the [performance docs should say so](plan.md)
+than doing a namespace lookup
+
+a non-`let` module global keeps late binding, and a builtin is late-bound too — a
+module that rebinds `str` is obeyed. each call site remembers what its name last
+resolved to, and re-derives it whenever any namespace has been written to since,
+which a dict watcher on those namespaces is what says. so the binding is still
+looked up rather than assumed, and looking it up again is what a rebinding costs
+rather than what every read costs
 
 installing a native definition writes over the name the fallback left behind,
 which is that definition only while nothing rebound it. the singleton idiom
