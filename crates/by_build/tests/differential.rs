@@ -3860,11 +3860,15 @@ class Rooted:
         "import by_diff_classrooteddeco as m\n\
          b = m.Box(1)\n\
          b.total = 7\n\
-         print(b.total, type(m.Box.total).__name__, m.Rooted().value())\n",
+         print(b.total, type(m.Box.total).__name__,\n\
+        \x20     type(m.Box.__dict__['total'].fget).__name__, m.Rooted().value())\n",
     );
-    // `Box` publishes its pair through `tp_getset`, which is what a class implemented
-    // in C publishes an attribute through; `Rooted` fell back and keeps its own
-    assert_eq!(out, "7 getset_descriptor 3");
+    // `Box` publishes its pair as the `property` an interpreted class publishes — so the
+    // descriptor's own type no longer says which leg answered, and the half inside it is
+    // what does: a `method_descriptor` is compiled, and the interpreted definition this
+    // could have fallen back to would hold a `function`. `Rooted` fell back and keeps its
+    // own
+    assert_eq!(out, "7 property method_descriptor 3");
 }
 
 /// a class whose type slots publish more than its body wrote keeps its decorator's
@@ -5262,10 +5266,6 @@ fn a_class_takes_an_attribute_its_layout_never_had() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    if !supports(&toolchain, (3, 13)) {
-        eprintln!("skipping: an instance dict is a managed one, which 3.13 published");
-        return;
-    }
     let dir = diff_root().join("by_diff_instdict");
     let _ = std::fs::remove_dir_all(&dir);
     let options = Options {
@@ -5344,13 +5344,6 @@ fn a_slotted_class_over_a_base_that_declares_none_still_takes_a_dict() {
     // python asks the whole chain: a `__slots__` on one class does not take the dict its
     // base already gave the instance away again. so the declaration only settles the
     // question where every class the layout comes from carries it
-    let Some((_, toolchain)) = environment() else {
-        return;
-    };
-    if !supports(&toolchain, (3, 13)) {
-        eprintln!("skipping: an instance dict is a managed one, which 3.13 published");
-        return;
-    }
     agree_python(
         "slotschain",
         "\
@@ -5378,6 +5371,395 @@ def took(obj, name):
             "m.took(m.Tight(), 'brand_new')",
             "m.took(m.Loose(), 'brand_new')",
             "m.Tight().bump()",
+        ],
+    );
+}
+
+/// a class whose body binds a name its `__init__` also assigns, which is python's
+/// commonest way of writing a field with a fallback
+const A_FIELD_WITH_A_CLASS_LEVEL_VALUE: &str = "\
+class Held:
+    tag = 'none'
+
+    def __init__(self, own):
+        if own:
+            self.tag = 'own'
+
+    def drop(self):
+        del self.tag
+
+    def put(self, value):
+        self.tag = value
+
+    def read(self):
+        return self.tag
+";
+
+#[test]
+fn a_field_falls_back_to_the_value_its_class_body_bound() {
+    // `tag = None` beside a `self.tag = tag` is two answers under one name, and the whole
+    // of what makes it work is that python keeps them apart: the class's value answers
+    // until the instance has one of its own, the instance's shadows it once it has, and a
+    // `del` puts the instance back to answering the class's. an emitted instance has no
+    // dict to hold the second answer in, so all three come out of the layout and the one
+    // descriptor over it
+    agree_python(
+        "clsdefault",
+        A_FIELD_WITH_A_CLASS_LEVEL_VALUE,
+        &[
+            "m.Held.tag",
+            "(m.Held(False).tag, m.Held(True).tag)",
+            "(hasattr(m.Held(False), 'tag'), getattr(m.Held(False), 'tag', 'absent'))",
+            // a delete on an instance with nothing of its own is the class's value being
+            // read through, not an attribute to remove
+            "repr(_capture(m.Held(False).drop))",
+            "(lambda h: (h.drop(), h.tag, repr(_capture(h.drop))))(m.Held(True))",
+            // and the field comes back, still shadowing, after it has been away
+            "(lambda h: (h.drop(), h.put('again'), h.tag, m.Held.tag))(m.Held(True))",
+            "(lambda h: (h.put('set'), h.tag, h.drop(), h.tag))(m.Held(False))",
+        ],
+    );
+}
+
+#[test]
+fn a_method_reading_a_defaulted_field_gets_the_class_level_value_too() {
+    // a compiled method reads the layout straight, without the descriptor over it — so it
+    // has to ask the same question the descriptor asks or the two disagree about the very
+    // same attribute. `asyncio`'s `_LoopBoundMixin` is the shape: `self._loop` is read
+    // before anything has written one, and `_loop = None` is the whole answer
+    agree_python(
+        "clsdefaultread",
+        A_FIELD_WITH_A_CLASS_LEVEL_VALUE,
+        &[
+            "(m.Held(False).read(), m.Held(True).read())",
+            "(m.Held(False).read(), m.Held(False).tag)",
+            "(lambda h: (h.drop(), h.read()))(m.Held(True))",
+            "(lambda h: (h.put('set'), h.read(), h.drop(), h.read()))(m.Held(False))",
+        ],
+    );
+}
+
+#[test]
+fn a_field_its_constructor_always_assigns_still_keeps_a_class_level_value() {
+    // `xml.etree.ElementTree.Element` is written this way, and it is the commonest shape
+    // of the two: nothing reads the class's value on a constructed instance, so a layout
+    // could have left out the byte that says whether the instance has one. it cannot —
+    // the read off the class needs a value, and `del` puts an instance back to answering
+    // it, which is a state such a field would otherwise have no way to be in
+    agree_python(
+        "clsdefaultalways",
+        "\
+class Node:
+    tag = 'unset'
+
+    def __init__(self, tag):
+        self.tag = tag
+",
+        &[
+            "m.Node.tag",
+            "m.Node('own').tag",
+            "(lambda h: (delattr(h, 'tag'), h.tag, repr(_capture(delattr, h, 'tag'))))(m.Node('own'))",
+            "(lambda h: (delattr(h, 'tag'), setattr(h, 'tag', 'again'), h.tag))(m.Node('own'))",
+            "(hasattr(m.Node('own'), 'tag'), m.Node.tag)",
+        ],
+    );
+}
+
+#[test]
+fn a_class_level_value_of_another_type_than_the_field_holds_still_answers() {
+    // `xml.etree.ElementTree.Element` writes `tag = None` over a field every assignment
+    // gives a `str`, and `http.client.HTTPConnection` writes `debuglevel = 0` over one an
+    // `int` fits. the layout is sized from what the *assignments* write, so a class-level
+    // value of another type has nowhere to go — the field has to be widened to hold either,
+    // exactly as it is for two methods that write it differently
+    agree_python(
+        "clsdefaultwiden",
+        "\
+class Node:
+    tag = None
+    level = 0
+
+    def __init__(self, own):
+        if own:
+            self.tag = 'own'
+            self.level = 3
+
+    def read(self):
+        return (self.tag, self.level)
+",
+        &[
+            "(m.Node.tag, m.Node.level)",
+            "(m.Node(False).tag, m.Node(False).level)",
+            "(m.Node(True).tag, m.Node(True).level)",
+            "(m.Node(False).read(), m.Node(True).read())",
+            "(lambda h: (delattr(h, 'tag'), h.read()))(m.Node(True))",
+        ],
+    );
+}
+
+#[test]
+fn the_class_level_value_a_field_falls_back_to_is_the_one_shared_object() {
+    // python evaluates a class body once, so a mutable value it binds is a single object
+    // every instance without one of its own is reading — mutating it through one shows up
+    // in the class and in every other. the compiled class holds that same object rather
+    // than a copy per instance, which is what keeps the sharing observable
+    agree_python(
+        "clsdefaultmut",
+        "\
+class Bag:
+    items = []
+
+    def __init__(self, own):
+        if own:
+            self.items = ['own']
+",
+        &[
+            "(lambda a, b: (a.items is b.items, a.items is m.Bag.items))(m.Bag(False), m.Bag(False))",
+            "(lambda a, b: (a.items.append(7), b.items, m.Bag.items))(m.Bag(False), m.Bag(False))",
+            "(lambda a, b: (a.items.append(7), b.items))(m.Bag(False), m.Bag(True))",
+        ],
+    );
+}
+
+#[test]
+fn a_subclass_reads_the_class_level_value_of_whichever_class_bound_it() {
+    // the value belongs to the class whose body wrote it, so a subclass that binds nothing
+    // reads its base's and one that binds its own reads that instead — while an instance
+    // of either that assigns still shadows both
+    agree_python(
+        "clsdefaultsub",
+        "\
+class Base:
+    tag = 'base'
+
+    def __init__(self, own):
+        if own:
+            self.tag = 'own'
+
+
+class Rebound(Base):
+    tag = 'rebound'
+
+
+class Plain(Base):
+    pass
+",
+        &[
+            "(m.Base.tag, m.Rebound.tag, m.Plain.tag)",
+            "(m.Base(False).tag, m.Rebound(False).tag, m.Plain(False).tag)",
+            "(m.Base(True).tag, m.Rebound(True).tag, m.Plain(True).tag)",
+            "(lambda h: (delattr(h, 'tag'), h.tag))(m.Rebound(True))",
+            "repr(_capture(delattr, m.Plain(False), 'tag'))",
+        ],
+    );
+}
+
+#[test]
+fn a_property_bound_beside_an_assignment_of_its_name_is_not_a_defaulted_field() {
+    // `calendar.Calendar` is written this way, and it is the shape a field with a
+    // class-level fallback is indistinguishable from without knowing what the value is.
+    // it is not a field at all: `self.first = ...` runs the property's setter, which puts
+    // the value somewhere else entirely, and the instance keeps nothing of its own. taking
+    // it for a fallback would answer every read with the class's own value instead
+    agree_python_with_declines(
+        "clsdefaultprop",
+        "\
+class Cal:
+    def _get(self):
+        return self._held % 7
+
+    def _set(self, value):
+        self._held = value
+
+    first = property(_get, _set)
+
+    def __init__(self, first):
+        self.first = first
+",
+        &[
+            "m.Cal(3).first",
+            "m.Cal(9).first",
+            "(lambda c: (setattr(c, 'first', 8), c.first, c._held))(m.Cal(0))",
+            "type(vars(m.Cal)['first']).__name__",
+        ],
+    );
+}
+
+#[test]
+fn a_subclass_that_adds_storage_still_shares_its_base_s_class_level_value() {
+    // a subclass adding a field of its own lays out and publishes the whole set, its
+    // base's included — so it puts up its own descriptor for the inherited name while the
+    // value stays where the base's body wrote it. one object, two descriptors reading it,
+    // and only the base is allowed to fill it
+    agree_python(
+        "clsdefaultshared",
+        "\
+class Base:
+    tag = 'base'
+
+    def __init__(self, own):
+        if own:
+            self.tag = 'own'
+
+
+class Wider(Base):
+    def __init__(self, own):
+        Base.__init__(self, own)
+        self.extra = 'extra'
+",
+        &[
+            "(m.Base.tag, m.Wider.tag)",
+            "(m.Wider(False).tag, m.Wider(True).tag, m.Wider(False).extra)",
+            "m.Base.tag is m.Wider.tag",
+            "(lambda h: (delattr(h, 'tag'), h.tag, h.extra))(m.Wider(True))",
+            "repr(_capture(delattr, m.Wider(False), 'tag'))",
+        ],
+    );
+}
+
+#[test]
+fn a_class_level_value_over_a_field_a_base_left_no_room_to_be_absent_in_declines() {
+    // the base's constructor assigns on every path, so its layout carries no byte saying
+    // whether an instance has a value — and the subclass cannot add one to a struct the
+    // base already settled. the answer is the interpreted definition, which still gets
+    // both readings right
+    agree_python_with_declines(
+        "clsdefaultnoroom",
+        "\
+class Base:
+    def __init__(self, tag):
+        self.tag = tag
+
+
+class Rebound(Base):
+    tag = 'rebound'
+",
+        &[
+            "m.Rebound.tag",
+            "(m.Base('own').tag, m.Rebound('own').tag)",
+            "(lambda h: (delattr(h, 'tag'), h.tag))(m.Rebound('own'))",
+        ],
+    );
+}
+
+#[test]
+fn a_defaulted_field_in_storage_appended_past_an_outside_base_still_answers() {
+    // a class extending something this module does not write keeps its own fields in a
+    // region *past* the base's instance, so the struct holding them does not start where
+    // the object does and its members are at no fixed offset from it. reading the presence
+    // byte as an offset from the instance read the exception's own fields instead, and
+    // every freshly built instance came back as having a value of its own — the one thing
+    // the class-level value exists to answer instead
+    agree_python(
+        "clsdefaultappend",
+        "\
+class Failed(Exception):
+    tag = 'base'
+
+    def __init__(self, own):
+        if own:
+            self.tag = 'own'
+
+
+class Rebound(Failed):
+    tag = 'rebound'
+",
+        &[
+            "(m.Failed.tag, m.Rebound.tag)",
+            "(m.Failed(False).tag, m.Failed(True).tag)",
+            "(m.Rebound(False).tag, m.Rebound(True).tag)",
+            "(lambda h: (delattr(h, 'tag'), h.tag))(m.Failed(True))",
+            "repr(_capture(delattr, m.Failed(False), 'tag'))",
+        ],
+    );
+}
+
+#[test]
+fn a_defaulted_field_is_answered_by_a_descriptor_of_ours() {
+    // a class that fell back to its interpreted definition answers every one of the
+    // comparisons above identically, so nothing they say proves the compiled leg was the
+    // one asked. the entry in the type's dict is what does: a plain field's is python's
+    // own `getset_descriptor`, and a defaulted one's has to be ours or the read off the
+    // class would be answering with the descriptor rather than the value
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_clsdefaultdesc");
+    let _ = std::fs::remove_dir_all(&dir);
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(
+        A_FIELD_WITH_A_CLASS_LEVEL_VALUE,
+        "by_diff_clsdefaultdesc",
+        &toolchain,
+        &dir,
+        &options,
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_clsdefaultdesc as m\n\
+         print(type(vars(m.Held)['tag']).__name__, type(m.Held.drop).__name__)\n",
+    );
+    assert_eq!(out, "field_default method_descriptor");
+}
+
+#[test]
+fn a_class_over_a_slotted_base_takes_a_dict_the_base_does_not() {
+    // the other direction of the same rule, and the one the *layout* has to be arranged
+    // for: `Tight` keeps the bare layout and `Loose` under it keeps a dict, so the two
+    // disagree about whether the word holding one is there. they cannot disagree about
+    // where `kept` sits — `reach` is handed a `Tight` and reads that field out of a
+    // `Loose` — so the word is reserved on both and only `Loose` names it to its type
+    agree_python(
+        "slotsbase",
+        "\
+class Tight:
+    __slots__ = ('kept',)
+
+    def __init__(self):
+        self.kept = 1
+
+    def read(self):
+        return self.kept
+
+
+class Loose(Tight):
+    def bump(self):
+        self.kept = self.kept + 1
+        return self.kept
+
+
+def reach(t: Tight) -> object:
+    return t.read()
+
+
+def took(obj, name):
+    try:
+        setattr(obj, name, 7)
+    except AttributeError:
+        return 'AttributeError'
+    return getattr(obj, name)
+",
+        &[
+            "[m.reach(m.Tight()), m.reach(m.Loose())]",
+            "m.took(m.Tight(), 'brand_new')",
+            "m.took(m.Loose(), 'brand_new')",
+            "m.Loose().bump()",
+            // the field the base declared, read through a base-typed name out of an
+            // instance of the subclass — which is where a word the two disagreed about
+            // would move the offset
+            "(lambda o: [setattr(o, 'brand_new', 3), m.reach(o), o.bump(), o.brand_new])(m.Loose())",
+            // and the shadow the direct call has to keep asking about, on the subclass
+            // whose instances have somewhere to hold one
+            "(lambda o: [m.reach(o), setattr(o, 'read', lambda: 99), m.reach(o)])(m.Loose())",
         ],
     );
 }
@@ -5963,6 +6345,76 @@ def marked(line: str) -> str:
          print(sorted(answers), 'stable' if after == before else f'moved {before}->{after}')\n",
     );
     assert_eq!(out, "[(50, True)] stable");
+}
+
+/// a narrowing check whose source is a temporary, and a chain of copies off one
+///
+/// `key = keys[i]` narrows the subscript's result to a `str`, and that narrowing is a
+/// type test and a retain of the very object it was given — so it borrows, resting on
+/// the temporary the subscript filled. `table[key]` three times a trip then copies the
+/// key three more times, and each of those rests on the same temporary rather than on
+/// the key: cutting the chain at the key instead would turn three free copies into
+/// three retained ones
+const BORROWED_NARROWINGS: &str = "\
+def picked(holder: list[str], passes: int) -> int:
+    total = 0
+    i = 0
+    while i < passes:
+        got = holder[0]
+        total = total + len(got)
+        i = i + 1
+    return total
+
+def counted(table: dict[str, int], keys: list[str], passes: int) -> int:
+    running = 0
+    i = 0
+    while i < passes:
+        key = keys[0]
+        running = running + table[key] + table[key] + table[key]
+        i = i + 1
+    return running
+";
+
+#[test]
+fn a_borrowed_narrowing_does_not_over_release_what_it_narrowed() {
+    // the narrowing no longer retains, so the register is reading through something it
+    // does not own. the subscript's temporary holds the only reference the borrow
+    // rests on, and it is released every trip — so a window that is wrong by one
+    // operation frees the string out of the list, which is fatal rather than merely
+    // wrong. a stray release shows first as a falling reference count
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_narrowborrow");
+    let _ = std::fs::remove_dir_all(&dir);
+    if build_source(
+        BORROWED_NARROWINGS,
+        "by_diff_narrowborrow",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import sys, by_diff_narrowborrow as m\n\
+         held = 'abcdefghij' * 4\n\
+         holder = [held]\n\
+         key = 'k' * 12\n\
+         table = {key: 7}\n\
+         before = (sys.getrefcount(held), sys.getrefcount(key))\n\
+         answers = set()\n\
+         for _ in range(2000):\n\
+        \x20   answers.add((m.picked(holder, 5), m.counted(table, [key], 5)))\n\
+         after = (sys.getrefcount(held), sys.getrefcount(key))\n\
+         print(sorted(answers), 'stable' if after == before else f'moved {before}->{after}')\n",
+    );
+    assert_eq!(out, "[(200, 105)] stable");
 }
 
 #[test]
@@ -9047,9 +9499,9 @@ def mapped(**named: object) -> int:
 /// a `@property` and the `@name.setter` under it are one attribute
 ///
 /// python folds the two `def`s into a single `property` bound once, and an emitted type
-/// publishes the same attribute through `tp_getset` — whose two function pointers are
-/// exactly the halves a `property` holds. so the write runs the setter's body, the read
-/// runs the getter's, and neither half is reachable under its own name
+/// builds the same object out of the same two halves at module init. so the write runs
+/// the setter's body, the read runs the getter's, and neither half is reachable under its
+/// own name
 #[test]
 fn a_property_pair_agrees() {
     agree_python(
@@ -9088,11 +9540,189 @@ def raised(fn: object) -> str:
     );
 }
 
+/// what the type publishes under a property's name is a `property`
+///
+/// this is the half no behavioural comparison can reach. an attribute published through
+/// `tp_getset` reads and writes exactly as a property does, so every test that only
+/// *uses* the attribute passes either way — while `C.value.fget` raises, and so do
+/// `.fset`, `.getter(...)`, `.setter(...)` and `isinstance(C.value, property)`. so this
+/// asks the type what it holds rather than asking an instance what it answers.
+///
+/// the half inside it is what says which leg ran: a `method_descriptor` is the compiled
+/// one, and an interpreted fallback would hold a `function` there
+#[test]
+fn a_property_is_published_as_a_property_object() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_propobject");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Box:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def value(self) -> int:
+        return self._n
+
+    @value.setter
+    def value(self, given: int) -> None:
+        self._n = given
+";
+    let built = match build_source(
+        source,
+        "by_diff_propobject",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_propobject as m\n\
+         p = m.Box.__dict__['value']\n\
+         print(type(p).__name__, isinstance(p, property), p.fdel)\n\
+         print(type(p.fget).__name__, p.fget.__name__, p.fget.__qualname__)\n\
+         print(type(p.fset).__name__, p.fset.__qualname__)\n\
+         # the halves are reached through the property and under no name of their own\n\
+         print(p.fget(m.Box(4)), p.fset(m.Box(0), 1), hasattr(m.Box, 'value$get'))\n\
+         # each verb builds a *new* property and leaves the class holding the old one\n\
+         fresh = p.deleter(lambda self: None)\n\
+         print(type(fresh).__name__, fresh is p, fresh.fget is p.fget,\n\
+        \x20     m.Box.__dict__['value'] is p)\n",
+    );
+    assert_eq!(
+        out,
+        "property True None\n\
+         method_descriptor value Box.value\n\
+         method_descriptor Box.value\n\
+         4 None False\n\
+         property False True True"
+    );
+}
+
+/// a class whose type is a static struct is published to the same way
+///
+/// nearly every emitted class is built from a type spec, and a property could have been
+/// put on one of those with `setattr`. a class carrying a field spelled as a dunder is
+/// the exception: it stays the static `PyTypeObject` it always was, and python refuses
+/// `setattr` on one outright — "cannot set 'x' attribute of immutable type". so the
+/// property is written into `tp_dict`, which is the one route open to both kinds, and
+/// this is the kind that would have caught a change back to the other
+#[test]
+fn a_property_reaches_a_static_type_as_well() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_propstatic");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Holder:
+    def __init__(self) -> None:
+        self.__wrapped__ = 1
+
+    @property
+    def value(self) -> int:
+        return self.__wrapped__ * 2
+
+    @value.setter
+    def value(self, given: int) -> None:
+        self.__wrapped__ = given
+";
+    let built = match build_source(
+        source,
+        "by_diff_propstatic",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_propstatic as m\n\
+         # without this the class is a spec type and the test is the one above again\n\
+         print(bool(m.Holder.__flags__ & (1 << 9)))\n\
+         p = m.Holder.__dict__['value']\n\
+         print(type(p).__name__, type(p.fget).__name__)\n\
+         h = m.Holder()\n\
+         h.value = 5\n\
+         print(h.value)\n",
+    );
+    assert_eq!(out, "False\nproperty method_descriptor\n10");
+}
+
+/// a property answers to its own name, which is what a missing half is reported under
+///
+/// nothing calls `__set_name__` on a property built at module init, and `type.__new__`
+/// is what calls it on one a class body left behind. below 3.13 that call is the *only*
+/// thing that gives a property a name: one that never got it reports a missing half as
+/// "property of 'Box' object has no setter", with the name dropped out of the middle.
+/// 3.13 grew a fallback to the getter's own name, so the two are indistinguishable there
+/// — this bites when it is run under 3.11 or 3.12.
+///
+/// the name is asked for through the wording rather than through `property.__name__`,
+/// which is itself 3.13 and later
+#[test]
+fn a_property_carries_the_name_it_was_published_under() {
+    agree_python(
+        "propname",
+        "\
+class Box:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def value(self) -> int:
+        return self._n
+
+    @value.deleter
+    def value(self) -> None:
+        self._n = 0
+
+
+def raised(fn: object) -> str:
+    try:
+        fn()
+    except AttributeError as error:
+        return str(error)
+    return 'nothing raised'
+",
+        &[
+            "type(m.Box.__dict__['value']).__name__",
+            // written with no setter, so the write is what raises — and the wording names
+            // the property, which is the name `__set_name__` settled
+            "m.raised(lambda: setattr(m.Box(1), 'value', 2))",
+        ],
+    );
+}
+
 /// a property with a deleter, and one without a setter
 ///
-/// `del` reaches a getset through its setter with a NULL value, which is where the
-/// deleter's body goes. a half the body never wrote raises there instead, and python's
-/// wording for a missing one names which half it wanted
+/// `del` reaches the deleter the `property` holds, and a half the body never wrote raises
+/// there instead — in python's own wording for a missing one, naming which half it wanted
 #[test]
 fn a_property_deleter_agrees() {
     agree_python(
@@ -9254,7 +9884,7 @@ class Wide:
         built.declined
     );
     assert!(
-        reasons("takes exactly 2 argument(s)"),
+        reasons("is called with exactly 2 argument(s)"),
         "declined: {:?}",
         built.declined
     );
@@ -12880,7 +13510,7 @@ Text.marker = 7
 }
 
 #[test]
-fn a_late_gift_that_could_hand_the_interpreted_class_back_is_left_alone() {
+fn a_late_gift_that_could_hand_the_interpreted_class_back_is_moved_onto_the_type() {
     // carrying an attribute across is only sound where the value cannot answer with the
     // interpreted definition, which is about to stop being the class under its name. a
     // value that *is* one is replaced by the type standing in for it, a container the
@@ -12890,8 +13520,11 @@ fn a_late_gift_that_could_hand_the_interpreted_class_back_is_left_alone() {
     //
     // so `MARKER`, `PAIR`, `shout`, `ITEMS` (a list of nothing that could be a class) and
     // `HIDDEN` (a tuple whose one entry is a twin, rebuilt around the type that replaced
-    // it) all come across, while `SAMPLE` does not: it is an *instance* of the interpreted
-    // class, and its type is not something this can rewrite.
+    // it) all come across. `SAMPLE` is an *instance* of the interpreted class, and it comes
+    // across as an instance of the type that replaced it: the object cannot be re-typed and
+    // cannot be built again, so its state is moved onto one allocated with no constructor
+    // running. that is what makes `type(Held.SAMPLE) is Other` hold, where the object the
+    // body built answers a class nothing else in the module can reach.
     //
     // a dunder never comes across either — a name in the type's dict does not fill a type
     // slot, so `__ge__` there would answer `a.__ge__(b)` while `a >= b` still went to the
@@ -12960,7 +13593,7 @@ Ordered.__ge__ = lambda self, right: True
         &dir,
         "import by_diff_twinshapes as m\n\
          print(m.Held.MARKER, m.Held.PAIR is m.Other, m.Held().shout())\n\
-         print(hasattr(m.Held, 'SAMPLE'), m.Held.ITEMS, m.Held.HIDDEN[0] is m.Other)\n\
+         print(type(m.Held.SAMPLE) is m.Other, m.Held.ITEMS, m.Held.HIDDEN[0] is m.Other)\n\
          print(m.Ordered() >= m.Ordered(), m.Ordered().tag())\n\
          print(type(m.Held.tag).__name__, type(m.Other.tag).__name__,\n\
          \x20     type(m.Ordered.tag).__name__)\n",
@@ -12968,9 +13601,234 @@ Ordered.__ge__ = lambda self, right: True
     assert_eq!(
         out,
         "3 True HELD\n\
-         False [1, 2] True\n\
+         True [1, 2] True\n\
          True ordered\n\
          method_descriptor method_descriptor function"
+    );
+}
+
+/// an object several names hold is moved once, so they go on holding one object
+///
+/// this is the shape `logging` writes and the reason a move has to be remembered at all:
+///
+/// ```python
+/// root = RootLogger(WARNING)
+/// Logger.root = root
+/// Logger.manager = Manager(Logger.root)
+/// ```
+///
+/// the `Manager` captures the very object the class attribute holds. moving each reading
+/// on its own would build a second root, leave `Logger.manager.root is Logger.root` False
+/// and give the module two roots that drift apart from the first write — a fresh silent
+/// wrong answer in place of the loud one the missing attribute gave.
+#[test]
+fn an_instance_several_names_hold_is_moved_once() {
+    // `leaf` is reached four ways: under its own module-level name, under an alias the
+    // body bound, as a class attribute, and as a field of another moved instance. all four
+    // have to answer the same object, and it has to be an instance of the *emitted* `Leaf`
+    // rather than of the definition the body built it with.
+    //
+    // `wrapper_descriptor` is what says the compiled type answered: a class that fell back
+    // to its interpreted definition would hold every one of these already, because it *is*
+    // the object the module body wrote to
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_twinshared");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Leaf:
+    def __init__(self, tag: str) -> None:
+        self.tag = tag
+
+
+class Holder:
+    def __init__(self, leaf: Leaf) -> None:
+        self.leaf = leaf
+
+
+leaf = Leaf(\"one\")
+alias = leaf
+Holder.shared = leaf
+Holder.wrapper = Holder(leaf)
+";
+    let built = match build_source(
+        source,
+        "by_diff_twinshared",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_twinshared as m\n\
+         print(type(m.Holder.shared) is m.Leaf, m.Holder.shared.tag)\n\
+         print(m.Holder.wrapper.leaf is m.Holder.shared, m.leaf is m.Holder.shared,\n\
+         \x20     m.alias is m.Holder.shared)\n\
+         print(type(m.Holder.wrapper) is m.Holder, type(m.Leaf.__init__).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "True one\n\
+         True True True\n\
+         True wrapper_descriptor"
+    );
+}
+
+/// an instance the emitted layout cannot hold stays where the module body built it
+///
+/// the move is decided before it is begun, because a half-filled instance would be the
+/// worst answer of the three available. a field the layout treats as always defined has no
+/// presence byte and no check at any read, so one left unwritten does not raise — an
+/// unwritten tagged integer reads back as `0`. so an instance that cannot be moved
+/// *completely* is not moved at all, and the attribute goes on being absent, which is the
+/// loud failure it already gave.
+#[test]
+fn an_instance_the_layout_cannot_hold_is_left_where_the_body_built_it() {
+    // three refusals, one for each thing the layout has no room for.
+    //
+    // `spare` carries an attribute nothing declared, so the emitted instance would answer
+    // the layout's fields and quietly lose `extra`. `bare` was built through `__new__` and
+    // never ran `__init__`, so the field the layout treats as always defined was never
+    // written and there is nothing to move onto it. `raised` is an instance of a class
+    // standing on a base python allocates, and whatever `Exception` keeps for it lives in
+    // a part of the object nothing here can read back.
+    //
+    // both classes still compile — the refusal is about one value, not about the class —
+    // and `wrapper_descriptor`/`method_descriptor` is what says so
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_twinunmoved");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Loose:
+    def __init__(self) -> None:
+        self.a = 1
+
+
+class Tagged(Exception):
+    def tag(self) -> str:
+        return \"tagged\"
+
+
+spare = Loose()
+spare.extra = 2
+Loose.spare = spare
+
+bare = Loose.__new__(Loose)
+Loose.bare = bare
+
+raised = Tagged(\"boom\")
+Tagged.raised = raised
+";
+    let built = match build_source(
+        source,
+        "by_diff_twinunmoved",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_twinunmoved as m\n\
+         print(hasattr(m.Loose, 'spare'), hasattr(m.Loose, 'bare'),\n\
+         \x20     hasattr(m.Tagged, 'raised'))\n\
+         print(type(m.spare) is m.Loose, type(m.bare) is m.Loose,\n\
+         \x20     type(m.raised) is m.Tagged)\n\
+         print(type(m.Loose.__init__).__name__, type(m.Tagged.tag).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "False False False\n\
+         False False False\n\
+         wrapper_descriptor method_descriptor"
+    );
+}
+
+/// a frozen class needs no rule of its own, because its own setter is the rule
+///
+/// the move writes each field through the type's setter, so that a value takes the same
+/// conversion an assignment from python would. a frozen class publishes none, and that is
+/// the whole answer for it: one with fields refuses at the first of them, and one with no
+/// fields has nothing to lose and moves. the alternative — turning every immutable class
+/// down up front — would cost the second case for nothing.
+#[test]
+fn a_frozen_instance_moves_only_where_it_has_no_field_to_fill() {
+    // `Fixed.origin` is absent because `n` has no setter to write it through, and absent is
+    // the right answer: an emitted instance with `n` unwritten would answer `0`, which is
+    // the quiet wrong answer the whole move is arranged to avoid. `Blank.nothing` moves,
+    // because a frozen class with no fields is entirely its type
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_twinfrozen");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+frozen data class Fixed:
+    n: int
+
+
+frozen data class Blank:
+    pass
+
+
+origin = Fixed(0)
+Fixed.origin = origin
+
+nothing = Blank()
+Blank.nothing = nothing
+";
+    let built = match build_source(
+        source,
+        "by_diff_twinfrozen",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_twinfrozen as m\n\
+         print(hasattr(m.Fixed, 'origin'), type(m.origin) is m.Fixed)\n\
+         print(type(m.Blank.nothing) is m.Blank, m.nothing is m.Blank.nothing)\n",
+    );
+    assert_eq!(
+        out,
+        "False False\n\
+         True True"
     );
 }
 
@@ -13983,11 +14841,11 @@ class _Printer:
 }
 
 #[test]
-fn a_name_that_is_both_a_class_constant_and_a_field_keeps_the_interpreted_class() {
-    // the constant is copied into the type's dict *after* `PyType_Ready` put the field's
-    // descriptor there, so the constant wins and every instance answers the class-level
-    // value instead of its own. that is a silent wrong answer, so the class declines and
-    // the interpreted definition — which python's own rules already get right — answers
+fn an_annotated_class_level_value_beside_a_field_is_the_same_fallback() {
+    // an *annotated* class-level value is the same fallback a bare one is: the annotation
+    // only adds an entry to `__annotations__`, and the value lands in the class namespace
+    // either way. so it reaches the field the same way, and the class that used to decline
+    // over the pair now answers both readings from the one descriptor
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -14020,21 +14878,18 @@ class Tagged:
             return;
         }
     };
-    assert!(
-        built.declined.iter().any(|declined| declined
-            .reason
-            .contains("both a class-level constant and a field")),
-        "declined: {:?}",
-        built.declined
-    );
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
     let out = run(
         &python,
         &dir,
         "import by_diff_constantfieldclash as m\n\
          print(m.Tagged('mine').KIND, m.Tagged('mine').read(), m.Tagged.KIND)\n\
-         print(type(m.Tagged.read).__name__)\n",
+         print(type(m.Tagged.read).__name__, type(vars(m.Tagged)['KIND']).__name__)\n",
     );
-    assert_eq!(out, "mine mine class-level\nfunction");
+    assert_eq!(
+        out,
+        "mine mine class-level\nmethod_descriptor field_default"
+    );
 }
 
 #[test]
@@ -23242,12 +24097,14 @@ fn the_str_of_an_int_boxes_nothing_and_still_resolves_the_name() {
     };
     let dir = diff_root().join("by_diff_strofint_shape");
     let _ = std::fs::remove_dir_all(&dir);
+    // nothing is concatenated onto the digits, so this is the conversion on its own
+    // — a prefix in front of it would be fused further still, into `By_StrConcatInt`
     let source = "\
 def keys(n: int) -> str:
     last = 'k'
     i = 0
     while i < n:
-        last = 'k' + str(i)
+        last = str(i)
         i = i + 1
     return last
 ";
@@ -23313,6 +24170,354 @@ def build(n: int, base: int) -> str:
          gc.collect(); before = len(gc.get_objects())\n\
          print(m.build(8000, 0) == 'k7999')\n\
          print(m.build(8000, big) == 'k' + str(big + 7999))\n\
+         gc.collect(); after = len(gc.get_objects())\n\
+         print('stable' if after <= before + 100 else f'grew {before}->{after}')\n",
+    );
+    assert_eq!(out, "True\nTrue\nstable");
+}
+
+#[test]
+fn a_prefix_and_the_digits_of_an_int_take_one_allocation() {
+    let Some((_, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_strconcatint_shape");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def keys(n: int) -> str:
+    last = 'k'
+    i = 0
+    while i < n:
+        last = 'k' + str(i)
+        i = i + 1
+    return last
+
+
+def joined(n: int) -> str:
+    out = ''
+    i = 0
+    while i < n:
+        out = out + str(i)
+        i = i + 1
+    return out
+";
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(
+        source,
+        "by_diff_strconcatint_shape",
+        &toolchain,
+        &dir,
+        &options,
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let emitted = std::fs::read_to_string(dir.join("by_diff_strconcatint_shape.c"))
+        .expect("the generated C is written beside the extension");
+
+    // the digits, the check on them and the concatenation are one operation, so the
+    // string the digits used to be built into is gone — and with it the second
+    // allocation and the copy back out of it. the resolution the fast path is
+    // guarded on is still made, through the same memo the unfused shape used
+    let body = emitted_function(&emitted, "by_by_diff_strconcatint_shape_keys");
+    assert!(body.contains("By_StrConcatInt("), "{body}");
+    assert!(!body.contains("By_StrOfInt("), "{body}");
+    assert!(!body.contains("By_StrConcat("), "{body}");
+    assert!(!body.contains("By_UnboxStr("), "{body}");
+    assert!(
+        body.contains("By_LookupGlobalSite(&by_gs_str, by_module_dict, by_g_str)"),
+        "{body}"
+    );
+
+    // an accumulation is left alone: `str_append` has already turned it into a
+    // resize in place, and a chain of those is linear where a chain of copies would
+    // be quadratic — which is worth more than the one small allocation fusing it
+    // would save
+    let body = emitted_function(&emitted, "by_by_diff_strconcatint_shape_joined");
+    assert!(body.contains("By_StrAppend("), "{body}");
+    assert!(!body.contains("By_StrConcatInt("), "{body}");
+}
+
+#[test]
+fn an_intermediate_the_program_can_still_see_is_not_fused_away() {
+    // `t = str(i)` is the program's own value, and the fusion is only entitled to
+    // remove a string nothing outside it can reach. `twice` reads the intermediate a
+    // second time, so removing the operation that fills it would leave that read
+    // looking at a register nothing ever wrote; `once` reads it only the once but
+    // gives it a name, which is where this pass stops asking — a named register is
+    // the program's, and whether the string it holds was built is not this pass's to
+    // decide
+    let Some((_, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_strconcatint_shared");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def twice(i: int) -> str:
+    t = str(i)
+    return 'k' + t + t
+
+
+def once(i: int) -> str:
+    t = str(i)
+    return 'k' + t
+";
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(
+        source,
+        "by_diff_strconcatint_shared",
+        &toolchain,
+        &dir,
+        &options,
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let emitted = std::fs::read_to_string(dir.join("by_diff_strconcatint_shared.c"))
+        .expect("the generated C is written beside the extension");
+    for name in ["twice", "once"] {
+        let body = emitted_function(&emitted, &format!("by_by_diff_strconcatint_shared_{name}"));
+        assert!(body.contains("By_StrOfInt("), "{name}: {body}");
+        assert!(!body.contains("By_StrConcatInt("), "{name}: {body}");
+    }
+}
+
+#[test]
+fn fusing_a_prefix_onto_the_digits_does_not_change_what_a_bad_str_raises() {
+    // a rebound `str` may hand back anything, and what the unfused shape did with
+    // that is raise from its own unbox — before the concatenation, and in the
+    // compiler's own words rather than the interpreter's. the fused operation makes
+    // the same check in the same place, so the two shapes have to say the same thing.
+    //
+    // that they say something other than what cpython says for `'k' + 1` is older
+    // than this fusion and is what any annotated `-> str` already answers; the point
+    // here is only that fusing did not move it
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_strconcatint_badstr");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+from typing import Any
+
+builtin: Any = str
+
+
+def counted(n: object) -> int:
+    return 1
+
+
+def fused(n: int) -> str:
+    return 'k' + str(n)
+
+
+def unfused(n: int) -> str:
+    t = str(n)
+    return 'k' + t
+";
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(
+        source,
+        "by_diff_strconcatint_badstr",
+        &toolchain,
+        &dir,
+        &options,
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_strconcatint_badstr as m\n\
+         m.__dict__['str'] = m.counted\n\
+         said = []\n\
+         for fn in (m.fused, m.unfused):\n\
+         \x20   try:\n\
+         \x20       fn(7)\n\
+         \x20       said.append('no error')\n\
+         \x20   except TypeError as e:\n\
+         \x20       said.append(f'{type(e).__name__}: {e}')\n\
+         print(said[0])\n\
+         print('same' if said[0] == said[1] else f'differs: {said[1]}')\n",
+    );
+    assert_eq!(out, "TypeError: expected str, got int\nsame");
+}
+
+#[test]
+fn a_prefix_and_the_digits_agree_at_every_width_sign_and_magnitude() {
+    // the fused allocation is sized before either half is written, so a length it
+    // gets wrong is memory it writes past. what settles the length is the prefix's
+    // own — including none at all — and how many digits the integer needs; what
+    // settles the *width* is the prefix's storage, since a decimal is all ascii and
+    // widens nothing.
+    //
+    // the magnitudes bracket the tagged representation: either side of the largest
+    // value a tagged word carries, and either side of the widest an ssize_t reaches.
+    // past those the integer is an object and the slow path answers
+    agree_python(
+        "strconcatintwidths",
+        "\
+def plain(i: int) -> str:
+    return 'k' + str(i)
+
+
+def empty(i: int) -> str:
+    return '' + str(i)
+
+
+def latin(i: int) -> str:
+    return '\\u00e9' + str(i)
+
+
+def wide(i: int) -> str:
+    return '\\u65e5' + str(i)
+
+
+def widest(i: int) -> str:
+    return '\\U0001d11e' + str(i)
+
+
+def long_prefix(i: int) -> str:
+    return 'abcdefghijklmnopqrstuvwxyz0123456789' + str(i)
+
+
+def around(i: int) -> str:
+    return 'a' + str(i) + 'b' + str(i + 1)
+",
+        &[
+            "[[f(v) for f in [m.plain, m.empty, m.latin, m.wide, m.widest, m.long_prefix, m.around]] \
+              for v in [0, 1, 9, 10, -1, -9, -10, 123456789, -123456789]]",
+            "[[f(v) for f in [m.plain, m.empty, m.latin, m.wide, m.widest, m.long_prefix, m.around]] \
+              for v in [4611686018427387903, 4611686018427387904, \
+                        -4611686018427387904, -4611686018427387905]]",
+            "[[f(v) for f in [m.plain, m.empty, m.latin, m.wide, m.widest, m.long_prefix, m.around]] \
+              for v in [9223372036854775807, -9223372036854775808, 2 ** 70, -(2 ** 70)]]",
+            // the storage a string is kept in is the narrowest its characters fit,
+            // and the answer's characters are the prefix's plus ascii — so a result
+            // stored any wider than its prefix is one cpython would never build
+            "[[len(f(v)), max(ord(c) for c in f(v))] \
+              for f in [m.plain, m.empty, m.latin, m.wide, m.widest] \
+              for v in [7, -7, 2 ** 70]]",
+            // an intermediate the program keeps is not fused away, and reads the same
+            "[m.around(-1), m.around(2 ** 70)]",
+        ],
+    );
+}
+
+#[test]
+fn a_prefix_and_the_digits_obey_a_rebound_name() {
+    // the name is resolved through the module namespace on every trip and the answer
+    // is compared against the builtin rather than assumed, so a module that rebinds
+    // `str` is obeyed — and what a rebound one hands back is checked to be a `str`
+    // before it is concatenated, because it may be anything at all
+    agree_python(
+        "strconcatintrebound",
+        "\
+from typing import Any
+
+
+class Loud(str):
+    pass
+
+
+builtin: Any = str
+
+
+def shouted(n: object) -> str:
+    return '<' + builtin(n) + '>'
+
+
+def counted(n: object) -> int:
+    return 1
+
+
+def prefixed(n: int) -> str:
+    return 'k' + str(n)
+
+
+def rebind(fn: Any) -> None:
+    globals()['str'] = fn
+
+
+def restore() -> None:
+    globals()['str'] = builtin
+",
+        &[
+            "[m.prefixed(7), (m.rebind(m.shouted), m.prefixed(7))[1], \
+              (m.restore(), m.prefixed(7))[1]]",
+            // a *subclass* bound to the name fails the identity test, so it is
+            // constructed the ordinary way and its characters are what is joined on
+            "[(m.rebind(m.Loud), m.prefixed(7), type(m.prefixed(7)).__name__)[1:], \
+              (m.restore(), m.prefixed(7))[1]]",
+            // and one that hands back something that is not a `str` at all raises,
+            // where the unfused shape's own check raised
+            "[type(e).__name__ for e in \
+              [(m.rebind(m.counted), _capture(m.prefixed, 7))[1]]] \
+             + [(m.restore(), m.prefixed(7))[1]]",
+        ],
+    );
+}
+
+#[test]
+fn a_prefix_and_the_digits_in_a_loop_do_not_leak() {
+    // the fast path allocates the answer itself and the slow one allocates the digits
+    // and then throws them away, so a reference kept or dropped on either shows up as
+    // growth and nowhere else
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_strconcatintleak");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def build(n: int, base: int) -> str:
+    last = ''
+    i = 0
+    while i < n:
+        last = '\\u65e5k' + str(base + i)
+        i = i + 1
+    return last
+";
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(
+        source,
+        "by_diff_strconcatintleak",
+        &toolchain,
+        &dir,
+        &options,
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import gc, by_diff_strconcatintleak as m\n\
+         big = 2**80\n\
+         m.build(50, 0); m.build(50, big)\n\
+         gc.collect(); before = len(gc.get_objects())\n\
+         print(m.build(8000, 0) == '\\u65e5k7999')\n\
+         print(m.build(8000, big) == '\\u65e5k' + str(big + 7999))\n\
          gc.collect(); after = len(gc.get_objects())\n\
          print('stable' if after <= before + 100 else f'grew {before}->{after}')\n",
     );

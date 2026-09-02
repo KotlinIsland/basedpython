@@ -136,7 +136,12 @@ fn rewrite_op(
         | Op::ObjectBinary { dest, lhs, rhs, .. }
         | Op::ObjectCompare { dest, lhs, rhs, .. }
         | Op::StrCompare { dest, lhs, rhs, .. }
-        | Op::StrConcat { dest, lhs, rhs, .. } => {
+        | Op::StrConcat { dest, lhs, rhs, .. }
+        | Op::StrConcatInt {
+            dest,
+            lhs,
+            value: rhs,
+        } => {
             rewrite_dest(dest);
             rewrite_value(lhs, remap);
             rewrite_value(rhs, remap);

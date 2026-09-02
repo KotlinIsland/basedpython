@@ -27,7 +27,8 @@ use std::fmt::Write;
 use std::ptr;
 
 use by_ir::function::{
-    Binding, ClassBase, ClassIr, Function, KeywordValue, ModuleIr, RegisterDecl, SlotAlias, Surface,
+    Binding, ClassBase, ClassIr, Function, KeywordValue, ModuleIr, PropertyIr, RegisterDecl,
+    SlotAlias, Surface,
 };
 use by_ir::ops::{BinOp, BlockId, CmpOp, Mutation, Op, RegisterId, Terminator, UnaryOp, Value};
 use by_ir::rtype::{Primitive, RType, tuple_mangle};
@@ -116,6 +117,7 @@ fn mangle_member(name: &str) -> String {
         ty: RType::OBJECT,
         default: None,
         optional: false,
+        defaulted_by: None,
     }
     .member()
 }
@@ -472,11 +474,11 @@ fn emit_collected_instance(module: &ModuleIr, class: &ClassIr) -> String {
         "static int {type_name}_traverse({struct_name} *self, visitproc visit, void *arg) {{\n\
          \x20   Py_VISIT(Py_TYPE(self));\n\
          {visits}\
-         \x20   By_VisitManagedDict((PyObject *)self, visit, arg);\n\
+         \x20   Py_VISIT(self->{BY_DICT_MEMBER});\n\
          \x20   return 0;\n}}\n\n\
          static int {type_name}_clear({struct_name} *self) {{\n\
          {clears}\
-         \x20   By_ClearManagedDict((PyObject *)self);\n\
+         \x20   Py_CLEAR(self->{BY_DICT_MEMBER});\n\
          \x20   return 0;\n}}\n\n"
     )
 }
@@ -621,6 +623,14 @@ fn emit_class_struct(module: &ModuleIr, class: &ClassIr) -> String {
         "typedef struct {} {{\n{header}",
         class.struct_name(module.name.dotted())
     );
+    // before the fields, so that every class in one chain agrees on where they start:
+    // a subclass's struct is a clone of its base's with its own fields after, and a
+    // base-typed pointer to a subclass instance reads the base's fields at the base's
+    // offsets. reserved rather than declared, because it is python's rule about
+    // `__slots__` that decides which of them the word is *reachable* on
+    if reserves_dict_word(module, class) {
+        let _ = writeln!(out, "    PyObject *{BY_DICT_MEMBER};");
+    }
     // where a `return` puts its value. a resumable frame reports finishing by writing
     // here and handing back nothing, so that the slot python asks with — `am_send` —
     // can say what the frame returned without an exception ever being built. it is not
@@ -653,13 +663,11 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
     if frees_its_instances(module, class) {
         out.push_str(&emit_appended_storage(module, class));
     } else {
-        // the pair only exists where the dict does: below 3.13 the type never asks to be
-        // collected, and a function nothing reaches is a warning the build turns into an
-        // error
+        // the pair only exists where the dict does: a class without one asks to be
+        // collected for no reason, and a function nothing reaches is a warning the build
+        // turns into an error
         if keeps_a_dict {
-            out.push_str("#if BY_HAS_MANAGED_DICT\n");
             out.push_str(&emit_collected_instance(module, class));
-            out.push_str("#endif\n\n");
         }
         // dealloc releases each refcounted field, then the object
         let _ = writeln!(
@@ -667,11 +675,11 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
             "static void {type_name}_dealloc({struct_name} *self) {{"
         );
         // a collected instance is on the collector's list until it says otherwise, and
-        // a list holding a half-freed object is what the next collection walks. below
-        // 3.13 the instance was never on that list, and asking about an object with no
+        // a list holding a half-freed object is what the next collection walks. a class
+        // without a dict is not a collected type, and asking about an object with no
         // collector header in front of it reads memory that is not there
         if keeps_a_dict {
-            out.push_str("#if BY_HAS_MANAGED_DICT\n    PyObject_GC_UnTrack(self);\n#endif\n");
+            out.push_str("    PyObject_GC_UnTrack(self);\n");
         }
         // a finalizer does not run itself: `subtype_dealloc` calls it, and a type that
         // writes its own dealloc has to do the same or the cleanups never happen. a
@@ -687,7 +695,7 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
             );
         }
         if keeps_a_dict {
-            out.push_str("    By_ClearManagedDict((PyObject *)self);\n");
+            let _ = writeln!(out, "    Py_CLEAR(self->{BY_DICT_MEMBER});");
         }
         // a return nobody asked for still owns its value: a generator dropped between
         // its frame finishing and the finish being read leaves one here
@@ -1114,16 +1122,28 @@ fn property_symbol(type_name: &str, name: &str) -> String {
     format!("{type_name}_prop_{name}")
 }
 
-/// python's own wording for a half of a property the class never wrote
+/// the three halves of a property, each as the C identifier its `PyMethodDef` goes under
+/// and the body the class holds for it
 ///
-/// `property` reports a missing setter by naming the property and the *object's* type,
-/// which is the runtime one rather than the class the property was written in — so a
-/// subclass instance is named as the subclass, exactly as it is interpreted
-fn missing_half(name: &str, half: &str) -> String {
-    format!(
-        "\x20   PyErr_Format(PyExc_AttributeError, \"property '%s' of '%s' object has no {half}\", {}, By_TypeName(selfobj));\n",
-        c_string(name)
-    )
+/// a half the class holds no body for has to read as absent at both sites — where the
+/// definition is emitted and where the property is published — or the second would name a
+/// symbol the first never wrote. so both read the pair off this one walk
+fn property_halves<'a>(
+    class: &'a ClassIr,
+    property: &'a PropertyIr,
+) -> impl Iterator<Item = (&'static str, Option<&'a Function>)> {
+    [
+        ("get", &property.getter),
+        ("set", &property.setter),
+        ("del", &property.deleter),
+    ]
+    .into_iter()
+    .map(|(half, written)| {
+        let body = written
+            .as_deref()
+            .and_then(|name| class.methods.iter().find(|method| method.name == name));
+        (half, body)
+    })
 }
 
 /// the getters, setters, slot table and type spec python sees
@@ -1131,6 +1151,15 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     let struct_name = class.struct_name(module.name.dotted());
     let type_name = class.type_name(module.name.dotted());
     let mut out = String::new();
+
+    // the class-level value a field falls back to, held for as long as the module is. it
+    // stands here because a subclass reads the cell of whichever class wrote the value,
+    // and a base is always emitted before the classes that extend it
+    for field in &class.fields {
+        if let Some((cell, true)) = field_default(module, class, field) {
+            let _ = writeln!(out, "static PyObject *{cell} = NULL;");
+        }
+    }
 
     // getters and setters, so python sees ordinary attributes
     for field in &class.fields {
@@ -1152,6 +1181,24 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             field.name,
             bind_self(module, field_owner(module, class, &field.name), "selfobj"),
             box_borrowed(&field.ty, &format!("self->{}", field.member()))
+        );
+    }
+    // whether an instance has an answer of its own, for the descriptor a defaulted field
+    // publishes to ask. it reaches the byte exactly as the getter beside it does, which is
+    // the whole point of emitting it: a class appending its storage past an outside base
+    // keeps that storage somewhere the instance pointer does not begin
+    for field in &class.fields {
+        if field_default(module, class, field).is_none() {
+            continue;
+        }
+        let _ = writeln!(
+            out,
+            "static int {type_name}_has_{}(PyObject *selfobj) {{\n\
+             \x20   {}\n\
+             \x20   return self->{} != 0;\n}}",
+            field.name,
+            bind_self(module, field_owner(module, class, &field.name), "selfobj"),
+            field.presence()
         );
     }
     // a mutable field needs a setter, and the setter has to check its value for
@@ -1184,73 +1231,38 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             mark_present(field, "self")
         );
     }
-    // a `@property` pair, as the one attribute python builds out of it. each half is
-    // reached through its own wrapper rather than its native entry, so the arguments are
-    // bound exactly as a call through the name would have bound them
+    // the halves of a `@property`, as the two or three callables python builds one
+    // `property` out of at module init. each is reached through its own wrapper rather
+    // than its native entry, so the arguments are bound exactly as a call through the
+    // name would have bound them
     for property in &class.properties {
         let symbol = property_symbol(&type_name, &property.name);
-        let half = |written: &Option<String>| {
-            let name = written.as_deref()?;
-            let function = class.methods.iter().find(|method| method.name == name)?;
-            Some(function.wrapper_symbol(module.name.dotted()))
-        };
-        let _ = writeln!(
-            out,
-            "static PyObject *{symbol}_get(PyObject *selfobj, void *closure) {{\n\
-             \x20   (void)closure;\n\
-             {}}}",
-            match half(&property.getter) {
-                Some(wrapper) => format!("\x20   return {wrapper}(selfobj, NULL, 0, NULL);\n"),
-                None => format!(
-                    "{}\x20   return NULL;\n",
-                    missing_half(&property.name, "getter")
-                ),
-            }
-        );
-        // python hands a getset setter a NULL value for `del`, which is the deleter's
-        // whole business. where there is no deleter this is python's wording for a
-        // property missing one, not the "cannot delete an attribute" a field gives
-        let _ = writeln!(
-            out,
-            "static int {symbol}_set(PyObject *selfobj, PyObject *by_value, void *closure) {{\n\
-             \x20   PyObject *by_answer;\n\
-             \x20   (void)closure;\n\
-             \x20   if (by_value == NULL) {{\n\
-             {}\
-             \x20   }} else {{\n\
-             {}\
-             \x20   }}\n\
-             \x20   if (by_answer == NULL) return -1;\n\
-             \x20   Py_DECREF(by_answer);\n\
-             \x20   return 0;\n}}",
-            match half(&property.deleter) {
-                Some(wrapper) =>
-                    format!("\x20       by_answer = {wrapper}(selfobj, NULL, 0, NULL);\n"),
-                None => format!(
-                    "    {}\x20       return -1;\n",
-                    missing_half(&property.name, "deleter")
-                ),
-            },
-            match half(&property.setter) {
-                Some(wrapper) =>
-                    format!("\x20       by_answer = {wrapper}(selfobj, &by_value, 1, NULL);\n"),
-                None => format!(
-                    "    {}\x20       return -1;\n",
-                    missing_half(&property.name, "setter")
-                ),
-            }
-        );
+        for (half, body) in property_halves(class, property) {
+            let Some(function) = body else { continue };
+            // the *property's* name, not the half's: this def is what `__name__` and
+            // `__qualname__` are read off, and both halves were written under the one
+            // name the class publishes them under
+            let _ = writeln!(
+                out,
+                "static PyMethodDef {symbol}_{half}_def =\n\
+                 \x20   {{{}, (PyCFunction)(void(*)(void)){}, METH_FASTCALL | METH_KEYWORDS, NULL}};",
+                c_string(&property.name),
+                function.wrapper_symbol(module.name.dotted())
+            );
+        }
     }
     let _ = writeln!(out, "static PyGetSetDef {type_name}_getset[] = {{");
-    for property in &class.properties {
-        let symbol = property_symbol(&type_name, &property.name);
-        let _ = writeln!(
-            out,
-            "    {{{}, {symbol}_get, {symbol}_set, NULL, NULL}},",
-            c_string(&property.name)
-        );
-    }
     for field in &class.fields {
+        // a defaulted field's entry is a descriptor of ours, written into the type's dict
+        // at init over whatever stands there. an entry here as well would be replaced by
+        // it and change nothing — but only while the two agree about which fields are
+        // defaulted, so both ask the one question rather than two that could drift.
+        // leaving it out is also what makes an install that never happened *loud*: the
+        // attribute is then missing outright, rather than quietly answering a read off the
+        // class with a descriptor that hands back itself
+        if field_default(module, class, field).is_some() {
+            continue;
+        }
         let setter = if !class.writable() {
             "NULL".to_string()
         } else {
@@ -1269,12 +1281,39 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // refusal such a class already gives is at least loud
     if instance_dict(module, class) && class.fields.is_empty() {
         out.push_str(
-            "#if BY_HAS_MANAGED_DICT\n\
-             \x20   {\"__dict__\", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},\n\
-             #endif\n",
+            "    {\"__dict__\", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},\n",
         );
     }
     out.push_str("    {NULL, NULL, NULL, NULL, NULL}\n};\n\n");
+
+    // `__dictoffset__` is not an attribute the table binds: `PyType_FromSpec` lifts it
+    // out and writes it into `tp_dictoffset`, which is the only way a type built from a
+    // spec can say where its instances keep a dict
+    if instance_dict(module, class) {
+        let _ = write!(
+            out,
+            "static PyMemberDef {type_name}_members[] = {{\n\
+             \x20   {{\"__dictoffset__\", BY_DICT_OFFSET_MEMBER,\n\
+             \x20    offsetof({struct_name}, {BY_DICT_MEMBER}), BY_DICT_OFFSET_FLAGS}},\n\
+             \x20   {{NULL, 0, 0, 0}}\n}};\n\n"
+        );
+    }
+
+    // the names an instance of this class keeps in its layout, published so that an
+    // instance the module body built can be moved onto this type — `By_MovedInstance`
+    // says what the move is and why it needs them
+    if let Some(symbol) = instance_layout_symbol(module, class) {
+        let _ = writeln!(out, "static const By_Field {symbol}[] = {{");
+        for field in &class.fields {
+            let _ = writeln!(
+                out,
+                "    {{{}, {}}},",
+                c_string(&field.name),
+                i32::from(field.optional)
+            );
+        }
+        out.push_str("    {NULL, 0}\n};\n\n");
+    }
 
     // the method table, using each method's python wrapper
     // `send` stores the value the `yield` expression evaluates to, then resumes.
@@ -1765,15 +1804,15 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             format!("{init}\x20   {{Py_tp_new, (void *)PyType_GenericNew}},\n")
         };
         // a collected type has to hand the collector both halves, or an instance in a
-        // cycle is never reached at all. guarded for the reason [`dict_on_every_version`]
-        // gives: below 3.13 the type asks for no dict, so it is not a collected type and
-        // has no pair to hand over
+        // cycle is never reached at all. a class without a dict has nothing extra to
+        // reach, so it is not a collected type and has no pair to hand over. the members
+        // table is where the type is told the dict's offset — `PyType_Spec` has no field
+        // for `tp_dictoffset` and no slot id for it either
         let walked = if instance_dict(module, class) {
             format!(
-                "#if BY_HAS_MANAGED_DICT\n\
-                 \x20   {{Py_tp_traverse, (void *){type_name}_traverse}},\n\
+                "\x20   {{Py_tp_traverse, (void *){type_name}_traverse}},\n\
                  \x20   {{Py_tp_clear, (void *){type_name}_clear}},\n\
-                 #endif\n"
+                 \x20   {{Py_tp_members, (void *){type_name}_members}},\n"
             )
         } else {
             String::new()
@@ -1847,16 +1886,15 @@ fn decorated_chain(module: &ModuleIr, class: &ClassIr) -> bool {
 /// is often code it *generated* from what it read — `@dataclass` writes an `__init__`
 /// that assigns one attribute per annotation — and that code is ordinary python which
 /// assumes an ordinary instance, so on a bare layout every assignment fell off and
-/// `E(3)` raised. see [`dict_on_every_version`] for what follows from the difference
-/// between wanting a dict and not working without one.
+/// `E(3)` raised.
 ///
-/// a managed dict costs the *layout* nothing: python keeps it in the pre-header, so the
-/// struct, its base's prefix and every offset a compiled function reads are untouched.
-/// what it costs is allocation — an instance grows by the pre-header and the two words a
-/// collected type carries, which for a two-field class is a doubling and took about a
-/// quarter off `alloc` and `objects`. a class writing `__slots__` gets all of it back:
-/// the same source built with the declaration times identically to the same source built
-/// before the dict existed.
+/// the dict is a word in the class's own struct, at an offset the type names through a
+/// `__dictoffset__` member. that is what lets a call site ask whether an instance shadows
+/// a method with a single load: a *managed* dict lives in a pre-header, and the only way
+/// to reach one is `_PyObject_GetDictPtr`, which lives in libpython and so is a call the
+/// C compiler cannot see through — on a loop calling one method that call was 89 per cent
+/// of the running time. what the word costs the instance is nothing on balance: it is
+/// eight bytes where the pre-header a managed dict needs is sixteen.
 ///
 /// only a class that owns its layout from `object`. one standing on a base outside the
 /// module takes that base's answer about a dict, and a spec claiming one anyway would be
@@ -1870,20 +1908,68 @@ fn instance_dict(module: &ModuleIr, class: &ClassIr) -> bool {
         && (decorated_chain(module, class) || !slots_declared_throughout(module, class))
 }
 
-/// whether a class keeps its dict on *every* interpreter this C could be built against
+/// the struct member holding an instance's dict
+const BY_DICT_MEMBER: &str = "by_dict";
+
+/// the table naming what an instance of this class keeps, or `None` for a class whose
+/// instances cannot be moved onto the emitted type
 ///
-/// a managed dict is the one form that leaves the struct alone, and nothing below 3.13
-/// publishes a way to walk or release one — so below that the dict is simply not there,
-/// and the class is built exactly as it was before dicts existed. that is a fair answer
-/// for a class that merely *wants* one, and no answer at all for a class whose generated
-/// code cannot run without one: a module holding one of those refuses to install anything
-/// at all below 3.13, so its dict is there whatever is running.
+/// the module body builds objects out of the *interpreted* definitions, because that is
+/// what stands under each name while it runs — `logging` writes `Logger.root = root`,
+/// `_pydatetime` writes `timedelta.max`. every one of those is then an instance of a
+/// class nothing else in the process can reach, and `By_MovedInstance` moves its state
+/// onto an instance of the emitted type instead. these are the names it reads.
 ///
-/// so this is the predicate a *decline* may rest on. lifting a refusal because a class
-/// has a dict is only sound where the dict is there on every version, and a refusal that
-/// held on 3.13 and not on 3.12 would be a wrong answer on one of them
-fn dict_on_every_version(module: &ModuleIr, class: &ClassIr) -> bool {
-    instance_dict(module, class) && decorated_chain(module, class)
+/// the one condition is whether the fields really are the whole of an instance. a class
+/// whose layout sits past a base python allocates keeps state in that base's part of the
+/// object, which nothing here can read back or write — see [`external_storage`].
+///
+/// an *immutable* class is deliberately not a second condition, though it publishes no
+/// setters and so cannot be filled. it needs no rule of its own: the move goes through the
+/// type's own setter, so a frozen class with fields refuses at the first of them, while
+/// one with no fields has no state to lose and moves soundly. a rule here would only cost
+/// the second case
+fn instance_layout_symbol(module: &ModuleIr, class: &ClassIr) -> Option<String> {
+    if !class.exported || inherits_layout(module, class) {
+        return None;
+    }
+    Some(format!("{}_fields", class.type_name(module.name.dotted())))
+}
+
+/// whether this class's struct carries the dict word, whether or not its own instances
+/// can reach one
+///
+/// python's `__slots__` rule works *down* a chain: `class B: __slots__ = ("a",)` gives
+/// its instances no dict, and `class C(B): pass` gives its own one anyway. so a base and
+/// a subclass can disagree about whether a dict exists — and they cannot disagree about
+/// where the fields start, because a subclass's struct is a clone of its base's and every
+/// direct call on a base-typed receiver reads the base's offsets out of a subclass
+/// instance. so the word is reserved for the whole chain wherever any rung of it keeps a
+/// dict, and only the rungs that keep one name the offset to the type
+fn reserves_dict_word(module: &ModuleIr, class: &ClassIr) -> bool {
+    module.classes.iter().any(|other| {
+        instance_dict(module, other)
+            && (other.name == class.name || descends_from(module, other, &class.name))
+    })
+}
+
+/// whether `class` reaches `ancestor` by following in-module bases
+fn descends_from(module: &ModuleIr, class: &ClassIr, ancestor: &str) -> bool {
+    let mut current = class;
+    // bounded by the class count, for the reason [`inherits_layout`] gives
+    for _ in 0..=module.classes.len() {
+        let Some(name) = current.base.as_ref().and_then(ClassBase::in_module) else {
+            return false;
+        };
+        if name == ancestor {
+            return true;
+        }
+        match class_named(module, name) {
+            Some(next) => current = next,
+            None => return false,
+        }
+    }
+    false
 }
 
 /// whether every class this one takes its layout from declares `__slots__`
@@ -2319,7 +2405,7 @@ fn answers_for_its_classes(module: &ModuleIr) -> bool {
                     {
                         if let Some(class) = instance_held(&boxed, receiver)
                             && let Some(owner) = class_named(module, class)
-                            && !dict_on_every_version(module, owner)
+                            && !instance_dict(module, owner)
                             && !owner.fields.iter().any(|field| field.name == *name)
                         {
                             return true;
@@ -2990,6 +3076,39 @@ fn alias_cell(type_name: &str, name: &str) -> String {
     format!("{type_name}_alias_{}", name.trim_matches('_'))
 }
 
+/// the static holding the class-level value a defaulted field falls back to
+fn default_cell(type_name: &str, field: &str) -> String {
+    format!("{type_name}_default_{}", mangle(field))
+}
+
+/// where a defaulted field's class-level value lives, and whether this class is the one
+/// that fills the cell
+///
+/// the cell belongs to the class whose body wrote the value, so a subclass that inherits
+/// the field reads that same cell and fills nothing of its own — which is what makes the
+/// base's value the answer for a subclass that binds none
+fn field_default(
+    module: &ModuleIr,
+    class: &ClassIr,
+    field: &by_ir::function::FieldDecl,
+) -> Option<(String, bool)> {
+    let owner = class_named(module, field.defaulted_by.as_deref()?)?;
+    Some((
+        default_cell(&owner.type_name(module.name.dotted()), &field.name),
+        owner.name == class.name,
+    ))
+}
+
+/// the cell a field named by the IR falls back to, where it has one
+fn named_field_default(module: &ModuleIr, class: &str, field: &str) -> Option<String> {
+    let decl = field_decl(module, class, field)?;
+    let owner = class_named(module, decl.defaulted_by.as_deref()?)?;
+    Some(default_cell(
+        &owner.type_name(module.name.dotted()),
+        &decl.name,
+    ))
+}
+
 /// what answers a type slot: a method the class defined, or a value its body assigned
 ///
 /// `__repr__ = _repr` has to fill `tp_repr` exactly as a `def __repr__` does, and the
@@ -3583,6 +3702,33 @@ fn unbox_checked(module: &ModuleIr, ty: &RType, expr: &str) -> String {
     }
 }
 
+/// check that `expr` has the representation `ty`, answering with it unretained
+///
+/// only the narrowings that are a *test* have one of these, because only those hand
+/// back the very object they were given: a `str`, a `list` and a native instance are
+/// all a `PyObject *` already, where an `int` or a `float` is a machine value the
+/// unbox has to build. `None` for anything else, which leaves the caller on the
+/// owning path — and a register whose unbox changes the representation can then
+/// never be silently taken as a borrow
+fn check_expr(module: &ModuleIr, ty: &RType, expr: &str) -> Option<String> {
+    match ty {
+        RType::Primitive(Primitive::Str) => Some(format!("By_CheckStr({expr})")),
+        RType::Primitive(Primitive::List) => Some(format!("By_CheckList({expr})")),
+        RType::Instance { class, .. } => module
+            .classes
+            .iter()
+            .find(|candidate| candidate.name == *class)
+            .map(|owner| {
+                format!(
+                    "({})By_CheckInstance({expr}, (PyTypeObject *){}_OBJ)",
+                    ctype(module, ty),
+                    owner.type_name(module.name.dotted())
+                )
+            }),
+        _ => None,
+    }
+}
+
 /// unbox `expr` into the representation `ty`
 fn unbox_expr(ty: &RType, expr: &str) -> String {
     match ty {
@@ -4100,6 +4246,25 @@ fn commit_checked(function: &Function, dest: RegisterId, error_target: Option<Bl
     )
 }
 
+/// open a block that has resolved the name `str` into `by_fn`
+///
+/// this is the same resolution [`Op::CallPython`] emits, through a memo of the same
+/// shape: the name is what a module rebinds, so the answer is only kept for as long
+/// as no namespace has been written to. what the operations that use it differ in is
+/// only what they then do with the answer — the caller closes the block itself, and
+/// owes `by_fn` a release
+fn resolve_str(error_target: Option<BlockId>) -> String {
+    let label = error_label(error_target);
+    format!(
+        "    {{ static PyObject *by_g_str = NULL; PyObject *by_fn = NULL;\n      \
+         if (by_g_str == NULL) by_g_str = By_InternedStr(\"str\", 3);\n      \
+         if (by_g_str == NULL) goto {label};\n      \
+         static ByGlobalSite by_gs_str = BY_GLOBAL_SITE_INIT;\n      \
+         by_fn = By_LookupGlobalSite(&by_gs_str, by_module_dict, by_g_str);\n      \
+         if (by_fn == NULL) goto {label};\n"
+    )
+}
+
 /// an operation on this module's own namespace, keyed by an interned name
 ///
 /// the write and the delete want the name in exactly the form the read does — an
@@ -4390,11 +4555,12 @@ fn emit_op(
             // a class whose instances have no dict has nowhere to hold a shadowing
             // value, so the question is settled here and the arm taking the protocol
             // call becomes unreachable
-            let keeps_a_dict =
-                class_named(module, class).is_some_and(|owner| instance_dict(module, owner));
-            if !keeps_a_dict {
+            let Some(owner) =
+                class_named(module, class).filter(|owner| instance_dict(module, owner))
+            else {
                 return format!("    {} = 0;\n", local(*dest));
-            }
+            };
+            let struct_name = owner.struct_name(module.name.dotted());
             let slot = format!("by_m_{}", mangle(method));
             let mut out = String::new();
             let _ = writeln!(out, "    {{ static PyObject *{slot} = NULL;");
@@ -4410,10 +4576,12 @@ fn emit_op(
             );
             // the receiver arrives as a pointer to the class's own struct, which begins
             // with the object header — so the cast is the whole of the conversion, and
-            // no reference is taken for a test that stores nothing
+            // no reference is taken for a test that stores nothing. the offset is written
+            // out rather than read off the type, which keeps the whole test to two loads
             let _ = writeln!(
                 out,
-                "      {} = (char)By_DictShadows((PyObject *){}, {slot}); }}",
+                "      {} = (char)By_DictShadowsAt((PyObject *){}, \
+                 offsetof({struct_name}, {BY_DICT_MEMBER}), {slot}); }}",
                 local(*dest),
                 value_expr(src)
             );
@@ -4746,6 +4914,24 @@ fn emit_op(
             assign_checked(module, function, *dest, &call, error_target)
         }
         Op::Unbox { dest, src, to } => {
+            if function.register(*dest).is_some_and(|decl| decl.borrowed)
+                && let Some(check) = check_expr(module, to, &value_expr(src))
+            {
+                // the narrowing still has to happen — a borrow says nothing about
+                // what type the value is — but the reference it would have taken is
+                // waste: the borrow pass proved the source goes on holding the value
+                // across every use, so there is nothing here that was ever owned
+                return format!(
+                    "    {{ {ctype} by_t = {check};\n      \
+                     if (BY_UNLIKELY(by_t == NULL)) goto {label};\n      \
+                     {target} = by_t; }}\n",
+                    ctype = function
+                        .register(*dest)
+                        .map_or_else(String::new, |decl| ctype(module, &decl.ty)),
+                    label = error_label(error_target),
+                    target = local(*dest),
+                );
+            }
             let call = match to {
                 RType::Primitive(Primitive::Int) => format!("By_UnboxInt({})", value_expr(src)),
                 RType::Primitive(Primitive::Float) => format!("By_UnboxFloat({})", value_expr(src)),
@@ -5537,24 +5723,37 @@ fn emit_op(
             // and no descriptor, though for a class appending to a base the storage has
             // to be found first
             let fields = receiver_fields(module, class, field, receiver);
-            let expr = format!("{fields}->{}", mangle_member(field));
+            let mut expr = format!("{fields}->{}", mangle_member(field));
             // an attribute `__init__` assigns on only some paths may not be there, and
             // python answers a read of one with `AttributeError` rather than a value
             let mut out = String::new();
+            // unless the class body bound a value of its own under the name, which is what
+            // python answers with until the instance has one. it is the same question the
+            // descriptor over the field asks, and it has to be asked here too: a method
+            // reads the layout directly, so an `AttributeError` here is exactly the answer
+            // the class-level value exists to replace — `asyncio`'s `_LoopBoundMixin` reads
+            // `self._loop` before anything has written one
             if let Some(decl) = field_decl(module, class, field)
                 && decl.optional
             {
-                let _ = writeln!(
-                    out,
-                    "    if (BY_UNLIKELY(!{}->{})) {{ PyErr_Format(PyExc_AttributeError, \
-                     \"'%s' object has no attribute '%s'\", By_TypeName((PyObject *){}), {}); \
-                     goto {}; }}",
-                    fields,
-                    decl.presence(),
-                    value_expr(receiver),
-                    c_string(field),
-                    error_label(error_target)
-                );
+                match named_field_default(module, class, field) {
+                    Some(cell) => {
+                        expr = format!("({fields}->{} ? {expr} : {cell})", decl.presence());
+                    }
+                    None => {
+                        let _ = writeln!(
+                            out,
+                            "    if (BY_UNLIKELY(!{}->{})) {{ PyErr_Format(PyExc_AttributeError, \
+                             \"'%s' object has no attribute '%s'\", By_TypeName((PyObject *){}), {}); \
+                             goto {}; }}",
+                            fields,
+                            decl.presence(),
+                            value_expr(receiver),
+                            c_string(field),
+                            error_label(error_target)
+                        );
+                    }
+                }
             }
             let borrowed = function.register(*dest).is_some_and(|decl| decl.borrowed);
             if borrowed {
@@ -5847,40 +6046,22 @@ fn emit_op(
             assign_checked(module, function, *dest, &expr, error_target)
         }
         Op::StrOfInt { dest, value } => {
-            // the same resolution `Op::CallPython` emits, through a memo of the same
-            // shape: the name is what a module rebinds, so the answer is only kept
-            // for as long as no namespace has been written to. only what happens to
-            // the answer differs
-            let mut out = String::new();
-            let _ = writeln!(
-                out,
-                "    {{ static PyObject *by_g_str = NULL; PyObject *by_fn = NULL;"
-            );
-            let _ = writeln!(
-                out,
-                "      if (by_g_str == NULL) by_g_str = By_InternedStr(\"str\", 3);"
-            );
-            let _ = writeln!(
-                out,
-                "      if (by_g_str == NULL) goto {};",
-                error_label(error_target)
-            );
-            let _ = writeln!(
-                out,
-                "      static ByGlobalSite by_gs_str = BY_GLOBAL_SITE_INIT;"
-            );
-            let _ = writeln!(
-                out,
-                "      by_fn = By_LookupGlobalSite(&by_gs_str, by_module_dict, by_g_str);"
-            );
-            let _ = writeln!(
-                out,
-                "      if (by_fn == NULL) goto {};",
-                error_label(error_target)
-            );
+            let mut out = resolve_str(error_target);
             let _ = writeln!(
                 out,
                 "      PyObject *by_t = By_StrOfInt(by_fn, {});",
+                value_expr(value)
+            );
+            let _ = writeln!(out, "      Py_DECREF(by_fn);");
+            out.push_str(&commit_checked(function, *dest, error_target));
+            out
+        }
+        Op::StrConcatInt { dest, lhs, value } => {
+            let mut out = resolve_str(error_target);
+            let _ = writeln!(
+                out,
+                "      PyObject *by_t = By_StrConcatInt({}, by_fn, {});",
+                value_expr(lhs),
                 value_expr(value)
             );
             let _ = writeln!(out, "      Py_DECREF(by_fn);");
@@ -6393,7 +6574,6 @@ fn external_construction(
     type_name: &str,
     pack: &str,
     slot: Option<usize>,
-    twins: usize,
 ) -> String {
     let spec = if !class.keywords.is_empty() || stands_on_an_emitted_base(module, class) {
         // a keyword has nowhere to go in a spec, and a base of ours beside one from
@@ -6422,7 +6602,7 @@ fn external_construction(
             (
                 format!(
                     "\x20     static const char *const by_constants[] = {{{names}}};\n\
-                     \x20     By_ClassConstants by_carried = {{by_body[{slot}], by_constants, {}, by_twin, by_type, {twins}}};\n",
+                     \x20     By_ClassConstants by_carried = {{by_body[{slot}], by_constants, {}, &by_twins}};\n",
                     class.constants.len()
                 ),
                 "&by_carried".to_string(),
@@ -6564,19 +6744,6 @@ fn emit_module_init(module: &ModuleIr) -> String {
     {
         conditions.push("!BY_HAS_TYPE_DATA");
     }
-    // a class whose *generated* code cannot run without an instance dict is the same
-    // question again: below 3.13 there is no published way to walk or release a managed
-    // one, and a class whose decorator writes assignments that would all fall off is
-    // worse than no compiled type at all. a class that merely wants a dict is not in
-    // here — it does without one down there, which is what every emitted class did
-    // before dicts existed
-    if module
-        .classes
-        .iter()
-        .any(|class| dict_on_every_version(module, class))
-    {
-        conditions.push("!BY_HAS_MANAGED_DICT");
-    }
     // whether the fallback source has to be run with its class bodies captured. the
     // capture costs a dict copy per class the body writes, so a module with nothing to
     // take out of one runs its body the plain way. a decorated method is taken out of a
@@ -6676,10 +6843,23 @@ fn emit_module_init(module: &ModuleIr) -> String {
         // built. a slot is NULL until then, and `By_TwinReplacement` reads that as a
         // refusal — so a constant naming a class built later is left off rather than
         // copied across as the twin
+        // the layouts run alongside, and a NULL entry is a class whose instances stay
+        // where the body built them — see `By_MovedInstance` for what a non-NULL one buys
+        let layouts = twins
+            .iter()
+            .map(|class| match instance_layout_symbol(module, class) {
+                Some(symbol) => symbol,
+                None => "NULL".to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         let _ = writeln!(
             twin_init,
             "    PyObject *by_twin[{count}];\n\
-             \x20   PyObject *by_type[{count}] = {{NULL}};"
+             \x20   PyObject *by_type[{count}] = {{NULL}};\n\
+             \x20   static const By_Field *const by_layout[{count}] = {{{layouts}}};\n\
+             \x20   By_Twins by_twins = {{by_twin, by_type, by_layout, {count}, PyDict_New()}};\n\
+             \x20   if (by_twins.moved == NULL) return -1;"
         );
         // and the bodies those `class` statements wrote, which is where a class-level
         // constant's value comes from — the twin has been through its own decorators by
@@ -6712,14 +6892,14 @@ fn emit_module_init(module: &ModuleIr) -> String {
         }
         let _ = writeln!(
             adopt_init,
-            "    if (By_AdoptTwinAttributes(by_twin, by_type, {count}) < 0) return -1;"
+            "    if (By_AdoptTwinAttributes(&by_twins) < 0) return -1;"
         );
         // and now that every type holds everything its body gave it, the methods those
         // values captured. this waits for the adoption because a table a factory installed
         // after the `class` statement is one of the values it has to reach
         let _ = writeln!(
             adopt_init,
-            "    if (By_RemapTwinMethods(by_twin, by_type, {count}) < 0) return -1;"
+            "    if (By_RemapTwinMethods(&by_twins) < 0) return -1;"
         );
         let names = twins
             .iter()
@@ -6735,15 +6915,16 @@ fn emit_module_init(module: &ModuleIr) -> String {
         for function in module.all_functions().filter(|function| function.defers()) {
             let _ = writeln!(
                 twin_remap,
-                "    By_SettleTwins({}, by_twin, by_type, {count});",
+                "    By_SettleTwins({}, &by_twins);",
                 function.interpreted_symbol(module.name.dotted())
             );
         }
         let _ = writeln!(
             twin_remap,
             "    {{ static const char *const by_name[] = {{{names}}};\n\
-             \x20     int by_remapped = By_RemapTwinAliases(dict, by_twin, by_type, by_name, {count});\n\
+             \x20     int by_remapped = By_RemapTwinAliases(dict, &by_twins, by_name);\n\
              \x20     for (Py_ssize_t by_at = 0; by_at < {count}; by_at++) Py_XDECREF(by_twin[by_at]);\n\
+             \x20     Py_CLEAR(by_twins.moved);\n\
              \x20     if (by_remapped < 0) return -1; }}"
         );
     }
@@ -6804,7 +6985,6 @@ fn emit_module_init(module: &ModuleIr) -> String {
                         base.type_name(module.name.dotted())
                     ),
                     slot,
-                    twins.len()
                 )
             )
         } else if let Some(externals) = class.base.as_ref().and_then(ClassBase::external) {
@@ -6850,7 +7030,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
                  {}\
                  \x20     {releases}\n\
                  \x20     if ({type_name} == NULL) return -1; }}",
-                external_construction(module, class, &type_name, &pack, slot, twins.len())
+                external_construction(module, class, &type_name, &pack, slot)
             )
         } else {
             format!(
@@ -6872,6 +7052,27 @@ fn emit_module_init(module: &ModuleIr) -> String {
             let _ = writeln!(
                 installed,
                 "    if (By_PublishNew({type_name}_OBJ, &{type_name}_new_def) < 0) return -1;"
+            );
+        }
+        // a `@property` is published by building the object and putting it in the type's
+        // dict, which is what a `class` statement does — see `By_PublishProperty`. it goes
+        // here rather than after the adoption because the adoption carries a name the type
+        // does not already hold, and the name a property is under is exactly one of those:
+        // left later, the twin's own `property` would be carried first and this would
+        // replace it, so the compiled halves would be reached through a second object
+        for property in &class.properties {
+            let symbol = property_symbol(&type_name, &property.name);
+            let defs = property_halves(class, property)
+                .map(|(half, body)| match body {
+                    Some(_) => format!("&{symbol}_{half}_def"),
+                    None => "NULL".to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(
+                installed,
+                "    if (By_PublishProperty({type_name}_OBJ, {}, {defs}) < 0) return -1;",
+                c_string(&property.name)
             );
         }
         // the type exists from here, so it is what stands for this class's twin in every
@@ -6912,9 +7113,29 @@ fn emit_module_init(module: &ModuleIr) -> String {
             let Some(slot) = slot else { continue };
             let _ = writeln!(
                 installed,
-                "    if (By_CopyClassConstant(by_body[{slot}], (PyTypeObject *){type_name}_OBJ, {}, by_twin, by_type, {}) < 0) return -1;",
-                c_string(constant),
-                twins.len()
+                "    if (By_CopyClassConstant(by_body[{slot}], (PyTypeObject *){type_name}_OBJ, {}, &by_twins) < 0) return -1;",
+                c_string(constant)
+            );
+        }
+        // and a field's class-level value goes the same way: the copy has put it in the
+        // type's dict, and this takes it into the cell and puts the one descriptor that
+        // answers both a class read and an instance read over the top of it
+        for field in &class.fields {
+            let Some((cell, holds)) = field_default(module, class, field) else {
+                continue;
+            };
+            let setter = if class.writable() {
+                format!("{type_name}_set_{}", field.name)
+            } else {
+                "NULL".to_string()
+            };
+            let _ = writeln!(
+                installed,
+                "    if (By_HoldFieldDefault((PyTypeObject *){type_name}_OBJ, {}, &{cell}, {}, {type_name}_get_{}, {setter}, {type_name}_has_{}) < 0) return -1;",
+                c_string(&field.name),
+                i32::from(holds),
+                field.name,
+                field.name
             );
         }
         // a dunder the body assigned is now in the type's dict under its own name, and
@@ -6953,11 +7174,10 @@ fn emit_module_init(module: &ModuleIr) -> String {
             let _ = writeln!(
                 installed,
                 "    {{ static const char *const by_decorators[] = {{{names}}};\n\
-                 \x20     if (By_DecoratedMethod({body}, (PyTypeObject *){type_name}_OBJ, dict, {}, {}, by_decorators, {}, by_twin, by_type, {}) < 0) return -1; }}",
+                 \x20     if (By_DecoratedMethod({body}, (PyTypeObject *){type_name}_OBJ, dict, {}, {}, by_decorators, {}, &by_twins) < 0) return -1; }}",
                 c_string(&class.name),
                 c_string(&method.name),
-                method.decorators.len(),
-                twins.len()
+                method.decorators.len()
             );
         }
         // a closure environment is a real type with a real layout, and nothing
@@ -7385,6 +7605,7 @@ mod tests {
                 ty: RType::OBJECT,
                 default: None,
                 optional: false,
+                defaulted_by: None,
             }],
             decorators: Vec::new(),
             methods: Vec::new(),
@@ -7590,22 +7811,23 @@ mod tests {
         );
     }
 
-    /// a module holding a class that is written an attribute its layout does not hold
-    /// keeps the whole-module refusal
+    /// a module holding a `__slots__` class that is written an attribute its layout does
+    /// not hold keeps the whole-module refusal
     ///
-    /// an emitted class has no instance dict, so such a write lands nowhere — the class's
-    /// instances are ones only the interpreted definition can build. the frontend no longer
-    /// hands over IR like this: an unpacking target is a field like any other now, and a
-    /// write of a name the layout chain has nowhere for declines. the IR is built by hand
-    /// here for that reason, because this is the guard for a lowering added *later* that
-    /// finds a way past both
+    /// such a class has no instance dict, so the write lands nowhere — its instances are
+    /// ones only the interpreted definition can build. the frontend no longer hands over
+    /// IR like this: an unpacking target is a field like any other now, and a write of a
+    /// name the layout chain has nowhere for declines. the IR is built by hand here for
+    /// that reason, because this is the guard for a lowering added *later* that finds a
+    /// way past both
     #[test]
-    fn a_class_written_an_attribute_it_does_not_hold_keeps_the_module_refusing() {
+    fn a_slotted_class_written_an_attribute_it_does_not_hold_keeps_the_module_refusing() {
         let mut module = module_with(add());
         module.classes.push(appending_class());
         let mut wakeup = appending_class();
         wakeup.name = "Wakeup".to_string();
         wakeup.base = None;
+        wakeup.declares_slots = true;
         wakeup.methods.push(writes_an_unheld_attribute("Wakeup"));
         module.classes.push(wakeup);
         let c = emit_module(&module);
@@ -7625,11 +7847,13 @@ mod tests {
         let mut wakeup = appending_class();
         wakeup.name = "Wakeup".to_string();
         wakeup.base = None;
+        wakeup.declares_slots = true;
         wakeup.fields.push(by_ir::function::FieldDecl {
             name: "spare".to_string(),
             ty: RType::OBJECT,
             default: None,
             optional: false,
+            defaulted_by: None,
         });
         wakeup.methods.push(writes_an_unheld_attribute("Wakeup"));
         module.classes.push(wakeup);
@@ -7638,6 +7862,127 @@ mod tests {
         assert!(
             !c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
             "a class that holds the attribute does not hold the module: {c}"
+        );
+    }
+
+    /// a class keeping a dict keeps it in a word of its own, and tells its type where
+    ///
+    /// the offset is what lets the shadow test at a call site be a load rather than a
+    /// call into libpython, so it is written out at both ends: as a `__dictoffset__`
+    /// member, which is the only way a type built from a spec can carry one, and as an
+    /// `offsetof` at every site that asks
+    #[test]
+    fn a_class_keeping_a_dict_names_the_word_it_keeps_it_in() {
+        let mut module = module_with(add());
+        let mut open = appending_class();
+        open.name = "Open".to_string();
+        open.base = None;
+        module.classes.push(open);
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("    PyObject *by_dict;"),
+            "the dict is a word in the struct: {c}"
+        );
+        assert!(
+            c.contains(
+                "{\"__dictoffset__\", BY_DICT_OFFSET_MEMBER,\n\
+                 \x20    offsetof(By_app_Open, by_dict), BY_DICT_OFFSET_FLAGS}"
+            ),
+            "the type is told where the word is: {c}"
+        );
+        assert!(
+            c.contains("{Py_tp_members, (void *)By_app_Open_Type_members}"),
+            "the members table reaches the type: {c}"
+        );
+    }
+
+    /// a class declaring `__slots__` still reserves the word where something under it
+    /// keeps a dict
+    ///
+    /// the two disagree about whether a dict exists and cannot disagree about where the
+    /// fields start: a subclass's struct is a clone of its base's, and a direct call on a
+    /// base-typed receiver reads the base's offsets out of a subclass instance
+    #[test]
+    fn a_slotted_base_reserves_the_word_its_subclass_keeps_a_dict_in() {
+        let mut module = module_with(add());
+        let mut tight = appending_class();
+        tight.name = "Tight".to_string();
+        tight.base = None;
+        tight.declares_slots = true;
+        module.classes.push(tight);
+        let mut loose = appending_class();
+        loose.name = "Loose".to_string();
+        loose.base = Some(ClassBase::InModule("Tight".to_string()));
+        module.classes.push(loose);
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains(
+                "typedef struct By_app_Tight {\n\
+                 \x20   PyObject_HEAD\n\
+                 \x20   PyObject *by_dict;"
+            ),
+            "the base reserves the word: {c}"
+        );
+        assert!(
+            c.contains(
+                "typedef struct By_app_Loose {\n\
+                 \x20   PyObject_HEAD\n\
+                 \x20   PyObject *by_dict;"
+            ),
+            "the subclass keeps it at the same offset: {c}"
+        );
+        // only the subclass can reach one, so only the subclass names the offset
+        assert!(
+            !c.contains("offsetof(By_app_Tight, by_dict)"),
+            "the slotted base publishes no dict: {c}"
+        );
+        assert!(
+            c.contains("offsetof(By_app_Loose, by_dict)"),
+            "the subclass publishes one: {c}"
+        );
+    }
+
+    /// a class with no dict anywhere in its chain reserves nothing
+    #[test]
+    fn a_chain_that_declares_slots_throughout_keeps_the_bare_layout() {
+        let mut module = module_with(add());
+        let mut tight = appending_class();
+        tight.name = "Tight".to_string();
+        tight.base = None;
+        tight.declares_slots = true;
+        module.classes.push(tight);
+        let mut tighter = appending_class();
+        tighter.name = "Tighter".to_string();
+        tighter.base = Some(ClassBase::InModule("Tight".to_string()));
+        tighter.declares_slots = true;
+        module.classes.push(tighter);
+        let c = emit_module(&module);
+
+        assert!(
+            !c.contains("PyObject *by_dict;"),
+            "nothing in the chain keeps a dict, so no word is reserved: {c}"
+        );
+    }
+
+    /// a class *without* `__slots__` narrows too, and for the other reason: it keeps a
+    /// dict, which is where python puts a name the layout never mentioned. it is the same
+    /// place the interpreted twin would have put it
+    #[test]
+    fn a_class_keeping_a_dict_answers_for_an_attribute_its_layout_does_not_hold() {
+        let mut module = module_with(add());
+        module.classes.push(appending_class());
+        let mut wakeup = appending_class();
+        wakeup.name = "Wakeup".to_string();
+        wakeup.base = None;
+        wakeup.methods.push(writes_an_unheld_attribute("Wakeup"));
+        module.classes.push(wakeup);
+        let c = emit_module(&module);
+
+        assert!(
+            !c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
+            "a class with a dict answers for the write itself: {c}"
         );
     }
 
@@ -7992,6 +8337,7 @@ mod tests {
                 ty: RType::OBJECT,
                 default: None,
                 optional: false,
+                defaulted_by: None,
             }],
             decorators: Vec::new(),
             methods: Vec::new(),
@@ -8012,6 +8358,7 @@ mod tests {
             ty: RType::OBJECT,
             default: None,
             optional: false,
+            defaulted_by: None,
         });
         inner
     }
@@ -8343,6 +8690,7 @@ mod tests {
                 ty: RType::INT,
                 default: None,
                 optional: false,
+                defaulted_by: None,
             }],
             decorators: Vec::new(),
             methods: Vec::new(),
@@ -8946,6 +9294,7 @@ mod tests {
                 ty: RType::OBJECT,
                 default: None,
                 optional: false,
+                defaulted_by: None,
             }],
             decorators: Vec::new(),
             methods: vec![init],
@@ -9037,6 +9386,7 @@ mod tests {
                     ty: RType::OBJECT,
                     default: None,
                     optional: false,
+                    defaulted_by: None,
                 })
                 .collect(),
             decorators: Vec::new(),

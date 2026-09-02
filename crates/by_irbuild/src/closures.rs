@@ -502,6 +502,7 @@ pub(crate) fn environment(
             ty,
             default: None,
             optional: false,
+            defaulted_by: None,
         });
     }
     // a nested environment holds its enclosing one, so a name further up is a chained
@@ -510,6 +511,7 @@ pub(crate) fn environment(
     if let Some(enclosing) = enclosing {
         fields.push(by_ir::function::FieldDecl {
             optional: false,
+            defaulted_by: None,
             name: OUTER_FIELD.to_string(),
             ty: by_ir::rtype::RType::Instance {
                 class: enclosing.to_string(),
@@ -526,6 +528,7 @@ pub(crate) fn environment(
             ty: by_ir::rtype::RType::NONE,
             default: None,
             optional: false,
+            defaulted_by: None,
         });
     }
     Ok(Some(Environment {

@@ -15,6 +15,7 @@ pub mod fold;
 pub mod infallible;
 pub mod refcount;
 pub mod str_append;
+pub mod str_concat_int;
 pub mod str_item_compare;
 pub mod str_of_int;
 pub mod unbox_counters;
@@ -127,6 +128,13 @@ pub const PASSES: &[Pass] = &[
     Pass {
         name: "str-append",
         run: str_append::run,
+    },
+    // after str-append, whose marks say which concatenations are already an
+    // in-place resize — those are worth more than the allocation this would save,
+    // so it declines them rather than having to predict them
+    Pass {
+        name: "str-concat-int",
+        run: str_concat_int::run,
     },
     // last: it reads the final shape of every block
     Pass {
@@ -295,12 +303,14 @@ mod tests {
                     ty: RType::FLOAT,
                     default: None,
                     optional: false,
+                    defaulted_by: None,
                 },
                 by_ir::function::FieldDecl {
                     name: "b".to_string(),
                     ty: RType::FLOAT,
                     default: None,
                     optional: false,
+                    defaulted_by: None,
                 },
             ],
             methods: vec![builder.finish()],

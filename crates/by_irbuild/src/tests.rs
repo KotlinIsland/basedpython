@@ -1278,14 +1278,47 @@ data class Point:
 }
 
 #[test]
-fn a_name_that_is_both_a_class_constant_and_a_field_declines() {
-    // both land in the type's dict — the field as a descriptor at `PyType_Ready`, the
-    // constant copied over the top of it afterwards. the constant wins, so an instance
-    // with its own value answers the class-level one instead: a silent wrong answer
-    let reasons = declines(
+fn a_name_that_is_both_a_class_level_value_and_a_field_carries_it_as_a_default() {
+    // this is python's commonest way of writing a field with a fallback, and the two
+    // answers under the one name are what the presence byte tells apart — so the field
+    // takes one whether or not `__init__` would have needed it
+    with_source(
         "\
 class Tagged:
     KIND: str = \"class-level\"
+
+    def __init__(self, kind: str) -> None:
+        self.KIND = kind
+",
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
+            assert!(module.declined.is_empty(), "{:?}", module.declined);
+            let class = &module.classes[0];
+            let field = class
+                .fields
+                .iter()
+                .find(|field| field.name == "KIND")
+                .expect("the field is laid out");
+            assert_eq!(field.defaulted_by.as_deref(), Some("Tagged"));
+            assert!(field.optional, "a defaulted field needs an absent state");
+            // it stays a constant: the copy is what puts the value in the type's dict for
+            // the descriptor to take out of it at init
+            assert!(class.constants.contains(&"KIND".to_string()));
+        },
+    );
+}
+
+#[test]
+fn a_class_level_value_that_may_be_a_descriptor_still_declines_against_a_field() {
+    // `calendar.Calendar` writes `firstweekday = property(...)` beside a
+    // `self.firstweekday = ...`, and that is not a field at all: the assignment runs the
+    // property's setter and the instance keeps nothing of its own. it is spelled exactly
+    // like a field with a fallback, so only the value tells them apart — and nothing here
+    // knows what a call is going to answer
+    let reasons = declines(
+        "\
+class Tagged:
+    KIND = property(lambda self: \"class-level\")
 
     def __init__(self, kind: str) -> None:
         self.KIND = kind
@@ -1294,6 +1327,54 @@ class Tagged:
     assert!(
         reasons.iter().any(|(name, reason)| name == "Tagged"
             && reason.contains("both a class-level constant and a field")),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_dunder_that_is_both_a_class_level_value_and_a_field_still_declines() {
+    // a dunder in that shape is two mechanisms over one name: the type slot the assignment
+    // fills is taken back out of the type's dict by name, and a descriptor standing there
+    // instead would be held as the slot's filler and called as one. leaving every dunder
+    // out is what keeps them apart, and it costs nothing — a name python reaches through a
+    // slot is not an attribute a class keeps a fallback for
+    let reasons = declines(
+        "\
+class Sized:
+    __len__ = 3
+
+    def __init__(self, own: bool) -> None:
+        if own:
+            self.__len__ = 9
+",
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Sized"
+            && reason.contains("both a class-level constant and a field")),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_class_level_value_over_a_field_its_base_fixed_declines() {
+    // the presence byte is part of the base's layout, and a subclass cannot add one to a
+    // struct its base already settled. without it the base's own constructor would write
+    // the field while recording nothing, and every instance would read as having nothing
+    // of its own — the class's value answering over an instance that has one
+    let reasons = declines(
+        "\
+class Base:
+    def __init__(self, kind: str) -> None:
+        self.KIND = kind
+
+
+class Rebound(Base):
+    KIND = \"rebound\"
+",
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Rebound"
+            && reason.contains("a field its base laid out with no absent state")),
         "{reasons:?}"
     );
 }
@@ -7462,7 +7543,7 @@ class Box:
             class.fields
         );
         // nor in the method table, where an entry would answer under the same name the
-        // getset entry has to
+        // published property has to
         assert_eq!(
             class
                 .table_methods()
@@ -7512,11 +7593,11 @@ class Manager:
 
 /// a property on a class its metaclass builds is turned down
 ///
-/// the attribute a pair becomes is published by the type spec, and a class built through
-/// its metaclass is built out of a *namespace* — the spec is never consulted, so the
-/// attribute would simply not be there where the interpreted class has a `property`. that
-/// is what this pins: the class declines for the decorator its halves carry, and a change
-/// that let a decorated method through there has to answer for the getset as well
+/// the `property` a pair becomes is written into the type module init built, and a class
+/// built through its metaclass is built out of a *namespace* the metaclass is free to do
+/// anything with — so what module init wrote may be on a type nothing reaches. that is
+/// what this pins: the class declines for the decorator its halves carry, and a change
+/// that let a decorated method through there has to answer for the property as well
 #[test]
 fn a_property_on_a_class_its_metaclass_builds_is_declined() {
     let reasons = declines(
@@ -7543,7 +7624,7 @@ class Meta(metaclass=ABCMeta):
 }
 
 #[test]
-fn a_property_half_the_getset_cannot_stand_for_is_declined() {
+fn a_property_half_the_backend_cannot_reach_is_declined() {
     // each of these is *nearly* the construct, and says what it actually is rather than
     // falling through to a message about a name written twice
     let restated = declines(
@@ -7583,7 +7664,7 @@ class Box:
         "{slotted:?}"
     );
     // `@other.setter` folds this body into a *different* property, which is not the one
-    // attribute a getset entry stands for
+    // attribute this lowers a group into
     let foreign = declines(
         "\
 class Box:
