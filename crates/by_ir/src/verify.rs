@@ -475,6 +475,19 @@ impl Verifier<'_> {
                 self.expect(block, src, &RType::OBJECT, "a dispatch test");
                 self.expect_dest(block, *dest, &RType::BIT, "a dispatch test");
             }
+            Op::DictShadows { dest, src, .. } => {
+                // the test reads the instance's type and its dict slot and stores the
+                // pointer nowhere, so it borrows — which is why an emitted class's own
+                // pointer is taken as it stands rather than through a `box`, the one
+                // widening that would otherwise cost a reference on the fast path
+                if !matches!(
+                    self.operand_type(block, src),
+                    None | Some(RType::Instance { .. })
+                ) {
+                    self.expect(block, src, &RType::OBJECT, "an instance-dict test");
+                }
+                self.expect_dest(block, *dest, &RType::BIT, "an instance-dict test");
+            }
             Op::IsMissing { dest, src } => {
                 self.expect(block, src, &RType::OBJECT, "a class pattern");
                 self.expect_dest(block, *dest, &RType::BIT, "a class pattern");

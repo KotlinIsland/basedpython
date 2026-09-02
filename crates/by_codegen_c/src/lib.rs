@@ -22,7 +22,7 @@
 //! the caller receives an owned reference. this is not the code an optimizer would
 //! produce; it is code whose correctness can be read off locally.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write;
 use std::ptr;
 
@@ -482,13 +482,18 @@ fn emit_collected_instance(module: &ModuleIr, class: &ClassIr) -> String {
 }
 
 /// `tp_dealloc`, `tp_traverse` and `tp_clear` for a class whose fields sit past a
-/// base's instance
+/// base's instance, and for a base such a class stands on
 ///
 /// everything else about inheriting a layout says "supply no slots, the base allocates
 /// and frees" — but the base cannot know about storage appended after its own data, so
 /// without these three the appended fields simply leak. the traverse and clear are not
 /// optional either: a base like `Exception` is a GC type, so ours is, and a field the
-/// collector cannot see holds its cycle alive forever
+/// collector cannot see holds its cycle alive forever.
+///
+/// a base holding nothing of its own gets the same three with nothing in them: what it
+/// is here for is to *be* the rung the appending class chains to, which python's own
+/// three cannot be — see [`built_from_a_spec_ahead`]. such a class binds no storage at
+/// all, because it declared no region for `By_TypeData` to find
 fn emit_appended_storage(module: &ModuleIr, class: &ClassIr) -> String {
     let struct_name = class.struct_name(module.name.dotted());
     let type_name = class.type_name(module.name.dotted());
@@ -496,7 +501,15 @@ fn emit_appended_storage(module: &ModuleIr, class: &ClassIr) -> String {
     // different type whose data area is somewhere else again, and the base to chain to
     // is this class's base rather than that subclass's
     let declared = format!("((PyTypeObject *){type_name}_OBJ)");
-    let fields = format!("({struct_name} *)By_TypeData(self, {declared})");
+    // and only where there is a region to reach: a base standing here to carry the three
+    // slots declared none, and `By_TypeData` against it would be a pointer past the end
+    let bind = |touched: &str| {
+        if touched.is_empty() {
+            String::new()
+        } else {
+            format!("    {struct_name} *by_f = ({struct_name} *)By_TypeData(self, {declared});\n")
+        }
+    };
     let mut out = String::new();
 
     let mut visits = String::new();
@@ -516,6 +529,7 @@ fn emit_appended_storage(module: &ModuleIr, class: &ClassIr) -> String {
             field.member()
         );
     }
+    let (bound_visits, bound_clears) = (bind(&visits), bind(&clears));
 
     // an instance of a heap type counts as a reference to that type, and the collector
     // has to see it or a cycle through the type is never broken. exactly one traverse in
@@ -527,7 +541,7 @@ fn emit_appended_storage(module: &ModuleIr, class: &ClassIr) -> String {
     let _ = write!(
         out,
         "static int {type_name}_traverse(PyObject *self, visitproc visit, void *arg) {{\n\
-         \x20   {struct_name} *by_f = {fields};\n\
+         {bound_visits}\
          {visits}\
          \x20   PyTypeObject *by_base = {declared}->tp_base;\n\
          \x20   if (by_base->tp_traverse) {{\n\
@@ -537,7 +551,7 @@ fn emit_appended_storage(module: &ModuleIr, class: &ClassIr) -> String {
          \x20   if (!(by_base->tp_flags & Py_TPFLAGS_HEAPTYPE)) Py_VISIT(Py_TYPE(self));\n\
          \x20   return 0;\n}}\n\n\
          static int {type_name}_clear(PyObject *self) {{\n\
-         \x20   {struct_name} *by_f = {fields};\n\
+         {bound_clears}\
          {clears}\
          \x20   PyTypeObject *by_base = {declared}->tp_base;\n\
          \x20   if (by_base->tp_clear) return by_base->tp_clear(self);\n\
@@ -556,18 +570,36 @@ fn emit_appended_storage(module: &ModuleIr, class: &ClassIr) -> String {
             let _ = writeln!(out_slot(&mut releases), "    {release}");
         }
     }
-    // and dropped by exactly one rung, the same one the traverse reports it from: a base
-    // that is itself a heap type has a deallocator of its own that drops it, and two
-    // drops for the one reference free the type underneath everything still using it
+    let released = if releases.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\x20   {{ {struct_name} *by_f = ({struct_name} *)By_TypeData(self, {declared});\n\
+             {releases}\
+             \x20   }}\n"
+        )
+    };
+    // the instance comes off the collector's list for the release, because releasing a
+    // field can run arbitrary python and a collection walking a half-cleared object would
+    // read a field that is already gone — and then goes straight back on, because a
+    // collected base takes it off again itself and some of them do it without checking.
+    // `OSError`'s deallocator is one of those: handed an object already off the list it
+    // unlinks it a second time and corrupts the list, which is a segfault at the first
+    // deallocation. `subtype_dealloc` re-tracks in the same place and for the same reason
+    //
+    // and the type reference is dropped by exactly one rung, the same one the traverse
+    // reports it from: a base that is itself a heap type has a deallocator of its own that
+    // drops it, and two drops for the one reference free the type underneath everything
+    // still using it
     let _ = write!(
         out,
         "static void {type_name}_dealloc(PyObject *self) {{\n\
          \x20   PyTypeObject *by_type = Py_TYPE(self);\n\
          \x20   PyTypeObject *by_base = {declared}->tp_base;\n\
-         \x20   if (PyType_HasFeature(by_type, Py_TPFLAGS_HAVE_GC)) PyObject_GC_UnTrack(self);\n\
-         \x20   {{ {struct_name} *by_f = {fields};\n\
-         {releases}\
-         \x20   }}\n\
+         \x20   int by_tracked = PyType_HasFeature(by_type, Py_TPFLAGS_HAVE_GC);\n\
+         \x20   if (by_tracked) PyObject_GC_UnTrack(self);\n\
+         {released}\
+         \x20   if (by_tracked && PyType_IS_GC(by_base)) PyObject_GC_Track(self);\n\
          \x20   by_base->tp_dealloc(self);\n\
          \x20   if (!(by_base->tp_flags & Py_TPFLAGS_HEAPTYPE)\n\
          \x20       && (by_type->tp_flags & Py_TPFLAGS_HEAPTYPE)) Py_DECREF(by_type);\n}}\n\n"
@@ -618,7 +650,7 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
     let mut out = String::new();
 
     let keeps_a_dict = instance_dict(module, class);
-    if external_storage(module, class) {
+    if frees_its_instances(module, class) {
         out.push_str(&emit_appended_storage(module, class));
     } else {
         // the pair only exists where the dict does: below 3.13 the type never asks to be
@@ -1658,7 +1690,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // first deallocation. saying so unconditionally is consistent either way: `tp_alloc`
     // and `tp_free` are both this type's, so they agree with each other whether or not
     // the base happens to be collected
-    let collected = if external_storage(module, class) {
+    let collected = if frees_its_instances(module, class) {
         " | Py_TPFLAGS_HAVE_GC"
     } else if instance_dict(module, class) {
         // the dict holds whatever was put in it, so the collector has to be able to walk
@@ -1703,7 +1735,21 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         // `__init__`, because a spec does not run the slot fixup a class statement does
         // — the base's `tp_init` would answer instead and the written one would simply
         // never be called
-        ("0".to_string(), init)
+        //
+        // and it supplies the three where a class of ours appends its storage past this
+        // one's instance: that class chains its deallocation here, and the chain has to
+        // go on down rather than turn around. the size stays the base's, because there
+        // is still nothing of this class's own in the instance
+        let chained = if chains_a_deallocation(module, class) {
+            format!(
+                "\x20   {{Py_tp_dealloc, (void *){type_name}_dealloc}},\n\
+                 \x20   {{Py_tp_traverse, (void *){type_name}_traverse}},\n\
+                 \x20   {{Py_tp_clear, (void *){type_name}_clear}},\n"
+            )
+        } else {
+            String::new()
+        };
+        ("0".to_string(), format!("{chained}{init}"))
     } else {
         // a class with nothing to initialize supplies neither slot, so both are inherited
         // together — `object.__init__` refuses an argument only while `tp_new` is
@@ -1956,17 +2002,112 @@ fn external_storage(module: &ModuleIr, class: &ClassIr) -> bool {
 /// no construction to fall back to
 ///
 /// module init builds these ahead of everything else, where a refusal can still leave the
-/// whole module interpreted — see `By_SpecClass`. the classes it builds there and the
-/// classes the rest of module init must *not* build again have to be the same set, so
-/// both ask this rather than re-deriving it
+/// whole module interpreted — see `By_SpecClass`
 fn appends_storage_from_a_spec(module: &ModuleIr, class: &ClassIr) -> bool {
     external_storage(module, class)
         && class.keywords.is_empty()
         && !stands_on_an_emitted_base(module, class)
 }
 
-/// the class this one appends its storage to, where that is one this module also builds
-/// from a spec
+/// every class module init builds from a type spec ahead of everything else
+///
+/// two shapes are in here. the first is a class whose fields sit past a base's instance,
+/// which has no other construction at all — see [`appends_storage_from_a_spec`]. the
+/// second is a base one of those stands on, whatever that base holds: reaching appended
+/// storage takes `tp_dealloc`, `tp_traverse` and `tp_clear` of the appending class's
+/// own, and each of the three calls the base's. `subtype_dealloc` — what a `class`
+/// statement's type carries — reads the base to chain to from `Py_TYPE(self)` rather
+/// than from the type that declared it, so it finds the appending class's back and calls
+/// it until the stack runs out. having no fields does not save such a base from that:
+/// what breaks the chain is carrying the three slots we emit, and a spec that asks for
+/// none of them is handed `subtype_dealloc` just the same.
+///
+/// the classes built there and the classes the rest of module init must *not* build
+/// again have to be the same set, so both ask this rather than re-deriving it
+fn built_from_a_spec_ahead(module: &ModuleIr) -> HashSet<&str> {
+    let mut ahead: HashSet<&str> = module
+        .classes
+        .iter()
+        .filter(|class| appends_storage_from_a_spec(module, class))
+        .map(|class| class.name.as_str())
+        .collect();
+    // a base is declared before the class standing on it, so one pass back through the
+    // module's order settles a chain of any depth
+    for class in module.classes.iter().rev() {
+        if ahead.contains(class.name.as_str())
+            && let Some(base) = base_declared_earlier(module, class)
+            && a_spec_can_free(module, base)
+        {
+            ahead.insert(base.name.as_str());
+        }
+    }
+    ahead
+}
+
+/// whether module init could build this class from a type spec that frees its own
+/// instances — the one shape of heap base a chain of appended storage can stand on
+///
+/// the whole chain under it is asked, because each rung frees an instance by calling the
+/// one below: a rung python built instead is where the walk back up starts
+fn a_spec_can_free(module: &ModuleIr, class: &ClassIr) -> bool {
+    let mut current = class;
+    // bounded by the class count, for the reason [`inherits_layout`] gives
+    for _ in 0..=module.classes.len() {
+        if !inherits_layout(module, current)
+            || !current.keywords.is_empty()
+            || stands_on_an_emitted_base(module, current)
+        {
+            return false;
+        }
+        // a base from outside is one python allocates and frees, which is where the
+        // chain of deallocators was walking to
+        let Some(base) = base_declared_earlier(module, current) else {
+            return current
+                .base
+                .as_ref()
+                .is_some_and(|base| base.in_module().is_none());
+        };
+        current = base;
+    }
+    false
+}
+
+/// the in-module base this class's type is built on, where the module declares it first
+///
+/// module init builds the two in the order the source declares them, and a spec stands
+/// on the finished type of the one below. a class statement cannot name a base declared
+/// after it, so this only ever rules out a shape the source could not have written
+fn base_declared_earlier<'a>(module: &'a ModuleIr, class: &ClassIr) -> Option<&'a ClassIr> {
+    let wanted = class.base.as_ref()?.in_module()?;
+    module
+        .classes
+        .iter()
+        .take_while(|candidate| candidate.name != class.name)
+        .find(|candidate| candidate.name == wanted)
+}
+
+/// whether module init builds this class from a type spec ahead of everything else
+fn built_ahead(module: &ModuleIr, class: &ClassIr) -> bool {
+    built_from_a_spec_ahead(module).contains(class.name.as_str())
+}
+
+/// whether this class holds nothing of its own and still has to free its instances
+///
+/// a class of ours whose fields sit past this one's instance chains its deallocation
+/// here, so this class supplies the same three slots one with storage does — with
+/// nothing of its own to release. without them the type is handed `subtype_dealloc`,
+/// which sends the appending class's deallocator straight back to itself
+fn chains_a_deallocation(module: &ModuleIr, class: &ClassIr) -> bool {
+    !external_storage(module, class) && built_ahead(module, class)
+}
+
+/// whether this class supplies `tp_dealloc`, `tp_traverse` and `tp_clear` of its own
+fn frees_its_instances(module: &ModuleIr, class: &ClassIr) -> bool {
+    external_storage(module, class) || chains_a_deallocation(module, class)
+}
+
+/// the class this one's type is built on, where that is one this module also builds from
+/// a spec ahead of everything else
 ///
 /// such a base is the one heap type a spec can be built on: its `tp_dealloc`,
 /// `tp_traverse` and `tp_clear` are ones this module emitted, and each of those reads
@@ -1974,33 +2115,29 @@ fn appends_storage_from_a_spec(module: &ModuleIr, class: &ClassIr) -> bool {
 /// `Py_TYPE(self)` — so the chain walks down to the outside base and stops, where
 /// `subtype_dealloc` would come straight back. see `By_SpecSubclass`.
 ///
-/// the base has to come first in the module's order, because that is the order module
-/// init builds them in and the subclass's spec stands on the finished type. a class
-/// statement cannot name a base declared after it, so this only ever rules out a shape
-/// the source could not have written.
+/// where this class holds storage of its own the two field lists have to line up the way
+/// the frontend lays a subclass out: a class's declared fields *begin* with its base's,
+/// in the same order, and what it adds of its own is the run past them. that run is the
+/// whole of what this class stores — the base keeps its own fields in a region of its
+/// own, reached through the type that declared them, so a subclass that stored copies of
+/// them would give the pair two of each and the base's methods and the subclass's would
+/// write different ones. a list that is not its base's followed by something more is
+/// some other shape entirely, and this says nothing about it.
 ///
-/// and the two field lists have to line up the way the frontend lays a subclass out: a
-/// class's declared fields *begin* with its base's, in the same order, and what it adds
-/// of its own is the run past them. that run is the whole of what this class stores —
-/// the base keeps its own fields in a region of its own, reached through the type that
-/// declared them, so a subclass that stored copies of them would give the pair two of
-/// each and the base's methods and the subclass's would write different ones. a list
-/// that is not its base's followed by something more is some other shape entirely, and
-/// this says nothing about it
+/// a class holding nothing of its own asks nothing of the base's layout. it declares no
+/// region and reads the base's fields through the descriptors the base published, so
+/// there is no list of its own to line up — it stands here to carry the three slots and
+/// nothing else
 fn appended_over_an_emitted_base<'a>(module: &'a ModuleIr, class: &ClassIr) -> Option<&'a ClassIr> {
-    let wanted = class.base.as_ref()?.in_module()?;
-    let base = module
-        .classes
-        .iter()
-        .take_while(|candidate| candidate.name != class.name)
-        .find(|candidate| candidate.name == wanted)?;
-    let extends = class.fields.len() > base.fields.len()
-        && class
-            .fields
-            .iter()
-            .zip(&base.fields)
-            .all(|(field, inherited)| field == inherited);
-    (appends_storage_from_a_spec(module, base) && extends).then_some(base)
+    let base = base_declared_earlier(module, class)?;
+    let extends = class.fields.is_empty()
+        || (class.fields.len() > base.fields.len()
+            && class
+                .fields
+                .iter()
+                .zip(&base.fields)
+                .all(|(field, inherited)| field == inherited));
+    (extends && built_ahead(module, base)).then_some(base)
 }
 
 /// whether this class names `name` in its own header
@@ -2116,7 +2253,7 @@ fn unbuilt_with<'a>(module: &'a ModuleIr, class: &'a ClassIr) -> Vec<&'a ClassIr
 /// however little else runs, and [`unbuilt_with`] for the helper classes that go quiet
 /// along with it
 fn declines_on_its_own(module: &ModuleIr, class: &ClassIr) -> bool {
-    appends_storage_from_a_spec(module, class) && answers_for_its_classes(module) && {
+    built_ahead(module, class) && answers_for_its_classes(module) && {
         let unbuilt = unbuilt_with(module, class);
         !read_outside(module, &unbuilt, &class.name)
     }
@@ -2362,7 +2499,11 @@ fn receiver_fields(module: &ModuleIr, class: &str, field: &str, receiver: &Value
 ///
 /// a constructor fills every field the class declares, and a chain of appended storage
 /// keeps each rung's in a region of its own — so it needs a pointer to each. the class's
-/// own is `self`, which is what every other generated body already reads
+/// own is `self`, which is what every other generated body already reads.
+///
+/// a rung holding nothing is counted and left unbound: it declared no region to point
+/// at, and no field can name it — but the numbering is [`field_rung`]'s, which counts
+/// every rung the chain passes through
 fn bind_storage_chain(module: &ModuleIr, class: &ClassIr) -> String {
     let mut out = bind_self(module, class, "selfobj");
     let mut current = class;
@@ -2373,12 +2514,14 @@ fn bind_storage_chain(module: &ModuleIr, class: &ClassIr) -> String {
             break;
         };
         rung += 1;
-        let _ = write!(
-            out,
-            "\n    {} *by_up{rung} = {};",
-            base.struct_name(module.name.dotted()),
-            fields_of(module, base, "selfobj")
-        );
+        if !own_fields(module, base).is_empty() {
+            let _ = write!(
+                out,
+                "\n    {} *by_up{rung} = {};",
+                base.struct_name(module.name.dotted()),
+                fields_of(module, base, "selfobj")
+            );
+        }
         current = base;
     }
     out
@@ -4237,6 +4380,44 @@ fn emit_op(
                 owner.type_name(module.name.dotted()),
                 dispatch_licence(module, class, method),
             )
+        }
+        Op::DictShadows {
+            dest,
+            src,
+            class,
+            method,
+        } => {
+            // a class whose instances have no dict has nowhere to hold a shadowing
+            // value, so the question is settled here and the arm taking the protocol
+            // call becomes unreachable
+            let keeps_a_dict =
+                class_named(module, class).is_some_and(|owner| instance_dict(module, owner));
+            if !keeps_a_dict {
+                return format!("    {} = 0;\n", local(*dest));
+            }
+            let slot = format!("by_m_{}", mangle(method));
+            let mut out = String::new();
+            let _ = writeln!(out, "    {{ static PyObject *{slot} = NULL;");
+            let _ = writeln!(
+                out,
+                "      if ({slot} == NULL) {slot} = By_InternedStr({});",
+                c_string_sized(method)
+            );
+            let _ = writeln!(
+                out,
+                "      if ({slot} == NULL) goto {};",
+                error_label(error_target)
+            );
+            // the receiver arrives as a pointer to the class's own struct, which begins
+            // with the object header — so the cast is the whole of the conversion, and
+            // no reference is taken for a test that stores nothing
+            let _ = writeln!(
+                out,
+                "      {} = (char)By_DictShadows((PyObject *){}, {slot}); }}",
+                local(*dest),
+                value_expr(src)
+            );
+            out
         }
         Op::IsMissing { dest, src } => format!(
             "    {} = (char)({} == By_MatchMissing());\n",
@@ -6379,7 +6560,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
     if module
         .classes
         .iter()
-        .any(|class| appends_storage_from_a_spec(module, class))
+        .any(|class| built_ahead(module, class))
     {
         conditions.push("!BY_HAS_TYPE_DATA");
     }
@@ -6426,7 +6607,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
         );
     }
     for class in &module.classes {
-        if appends_storage_from_a_spec(module, class) {
+        if built_ahead(module, class) {
             let type_name = class.type_name(module.name.dotted());
             // one of these standing on another is built on the *finished* type below it
             // rather than on the interpreted definition — which is the only base such a
@@ -6589,7 +6770,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
             exported_so_far += 1;
             slot
         });
-        let ready = if appends_storage_from_a_spec(module, class) {
+        let ready = if built_ahead(module, class) {
             // already built, by the one construction open to it
             String::new()
         } else if !heap_type(module, class) {
@@ -6877,10 +7058,6 @@ fn emit_module_init(module: &ModuleIr) -> String {
             .to_string()
     } else {
         "\x20   if (by_fallback_source[0] != '\\0') {\n\
-         \x20       if (PyDict_GetItemString(dict, \"__builtins__\") == NULL &&\n\
-         \x20           PyDict_SetItemString(dict, \"__builtins__\", PyEval_GetBuiltins()) < 0) {\n\
-         \x20           return -1;\n\
-         \x20       }\n\
          \x20       PyObject *result = By_ExecModuleBody(&by_fallback, dict);\n\
          \x20       if (result == NULL) return -1;\n\
          \x20       Py_DECREF(result);\n\
@@ -6913,6 +7090,10 @@ fn emit_module_init(module: &ModuleIr) -> String {
          \x20   PyObject *dict = PyModule_GetDict(module);\n\
          \x20   if (dict == NULL) return -1;\n\
          \x20   by_module_dict = dict;\n\
+         \x20   /* before the body below can read a global, and before it can write\n\
+         \x20    * `__builtins__` itself: what this module resolves builtins through\n\
+         \x20    * is settled by the import, the way an interpreted module's is */\n\
+         \x20   if (By_BindBuiltins(dict) < 0) return -1;\n\
          \x20   /* before anything below can bind a name in it: a memo of a global\n\
          \x20    * is only allowed to exist while this namespace is being watched,\n\
          \x20    * and a second execution of this module invalidates every memo the\n\
@@ -7734,11 +7915,13 @@ mod tests {
         );
     }
 
-    /// a base that lays nothing out of its own is built by calling its metaclass, so its
-    /// type is a `class` statement's after all — `subtype_dealloc` and the recursion
-    /// that comes with it. only a base built from a spec here can be chained to
+    /// a base that lays nothing out of its own is still the rung `Deeper`'s deallocator
+    /// chains to, and a `class` statement's type there is `subtype_dealloc` and the
+    /// recursion that comes with it. so it is built from a spec too, and given the three
+    /// slots with nothing in them — a spec asking for none of them would be handed
+    /// `subtype_dealloc` just the same
     #[test]
-    fn a_base_this_module_does_not_build_from_a_spec_is_not_one_to_stand_on() {
+    fn a_base_that_holds_nothing_is_still_built_from_a_spec_to_stand_on() {
         let mut module = module_with(add());
         let mut base = appending_class();
         base.fields.clear();
@@ -7750,12 +7933,45 @@ mod tests {
         module.classes.push(inner);
         let c = emit_module(&module);
 
-        assert!(!c.contains("By_SpecSubclass"), "{c}");
         assert!(
             c.contains(
-                "By_app_Deeper_Type = By_SpecClass(dict, \"Deeper\", &By_app_Deeper_Type_spec);"
+                "By_app_Wrapped_Type = By_SpecClass(dict, \"Wrapped\", &By_app_Wrapped_Type_spec);"
             ),
-            "{c}"
+            "the base is built from a spec of its own: {c}"
+        );
+        assert!(
+            c.contains(
+                "By_app_Deeper_Type = By_SpecSubclass(dict, \"Deeper\", &By_app_Deeper_Type_spec, \"Wrapped\", By_app_Wrapped_Type_OBJ);"
+            ),
+            "and the subclass stands on the finished type: {c}"
+        );
+        assert!(
+            c.contains("{Py_tp_dealloc, (void *)By_app_Wrapped_Type_dealloc},"),
+            "the base carries the deallocator that breaks the chain: {c}"
+        );
+        // and it binds no storage, because it declared no region for one
+        assert!(
+            !c.contains("By_app_Wrapped *by_f"),
+            "nothing of the base's own is reached: {c}"
+        );
+    }
+
+    /// the same base, with nothing appending storage past it. it is then an ordinary
+    /// class with no storage of its own: no slots to free an instance with, and the
+    /// construction that can fall back to the interpreted definition
+    #[test]
+    fn a_base_nothing_appends_past_keeps_the_construction_it_had() {
+        let mut module = module_with(add());
+        let mut base = appending_class();
+        base.fields.clear();
+        module.classes.push(base);
+        let c = emit_module(&module);
+
+        assert!(!c.contains("By_SpecClass"), "{c}");
+        assert!(c.contains("By_BuildClass"), "{c}");
+        assert!(
+            !c.contains("{Py_tp_dealloc, (void *)By_app_Wrapped_Type_dealloc},"),
+            "no slot takes the base's freeing over: {c}"
         );
     }
 

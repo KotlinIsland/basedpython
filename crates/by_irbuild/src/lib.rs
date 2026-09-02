@@ -397,6 +397,12 @@ pub fn build_module(
     // each emitted class's base, so an upcast to it is recognised as free
     let owned_mutable: HashSet<String> = mutable.iter().map(|name| (*name).to_string()).collect();
 
+    let slotted: HashSet<String> = declared
+        .iter()
+        .filter(|class| declared_slots(class).is_some())
+        .map(|class| class.name.to_string())
+        .collect();
+
     let bases: HashMap<String, String> = suite
         .iter()
         .filter_map(|stmt| match stmt {
@@ -437,6 +443,7 @@ pub fn build_module(
     let no_directs: HashSet<String> = HashSet::new();
     let unit = Unit {
         mutable: &owned_mutable,
+        slotted: &slotted,
         constructs: &constructs,
         bases: &bases,
         properties: &properties,
@@ -1101,6 +1108,7 @@ fn lower_resume(
         directs: unit.directs,
         in_range: Vec::new(),
         mutable: unit.mutable,
+        slotted: unit.slotted,
         constructs: unit.constructs,
         bases: unit.bases,
         properties: unit.properties,
@@ -4323,13 +4331,11 @@ fn appends_past_a_base_of_ours(
 /// statement's type carries — reads it from `Py_TYPE(self)` instead, finds this class's
 /// own deallocator, and calls it back until the stack runs out.
 ///
-/// the questions are exactly the ones the backend asks before it builds a base from a
-/// spec, because the two have to name the same set: a class lowered here whose base the
-/// backend then builds some other way has no construction left at all. so the base must
-/// be one of ours, keep storage of its own past a layout from outside, carry no class
-/// keyword, and stand on no base of ours beside one from outside. and it has to be
-/// written *before* this class, because module init builds them in that order and this
-/// class's spec stands on the finished type
+/// what the base *holds* is beside the point: a base with no fields of its own is no
+/// safer, because a type spec that asks for none of the three slots is handed
+/// `subtype_dealloc` just the same. so the backend gives such a base the three with
+/// nothing in them, and the whole chain under this class has to be asked about rather
+/// than only the rung immediately below
 fn stands_on_a_spec_built_base(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
@@ -4344,27 +4350,101 @@ fn stands_on_a_spec_built_base(
         // an instance it allocated — which is the shape a spec was made for
         return false;
     };
-    let Some(written) = class_written(suite, name) else {
-        return false;
-    };
-    if position_of(suite, name) >= position_of(suite, class.name.as_str()) {
-        return false;
+    frees_its_instances(
+        db,
+        env,
+        model,
+        suite,
+        layouts,
+        name,
+        position_of(suite, class.name.as_str()),
+    )
+}
+
+/// whether module init builds the class written under `name` from a type spec that frees
+/// its own instances, and does so before the class written at `before`
+///
+/// the questions are exactly the ones the backend asks before it builds a base from a
+/// spec, because the two have to name the same set: a class lowered here whose base the
+/// backend then builds some other way has no construction left at all. so the base must
+/// be one of ours, take its layout from outside, carry no class keyword, stand on no base
+/// of ours beside one from outside, and be one a spec can be built on at all — which a
+/// base whose metaclass is not `type` is not.
+///
+/// and it has to be written *before* the class standing on it, because module init builds
+/// them in that order and that class's spec stands on the finished type.
+///
+/// then the same of the rung below, all the way down: each rung frees an instance by
+/// calling the one under it, so a rung python built instead is where the walk turns back
+fn frees_its_instances(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    model: &SemanticModel<'_>,
+    suite: &[Stmt],
+    layouts: &Layouts,
+    name: &str,
+    before: usize,
+) -> bool {
+    let mut wanted = name.to_string();
+    let mut before = before;
+    // bounded the way [`laid_out_from_outside`] is: a chain that visits a class twice is
+    // a cycle, and a cycle would otherwise spin here rather than settle
+    for _ in 0..=suite.len() {
+        let Some(written) = class_written(suite, &wanted) else {
+            return false;
+        };
+        let at = position_of(suite, &wanted);
+        if at >= before {
+            return false;
+        }
+        // a class that declines has no layout, and its type is its interpreted
+        // definition's — a `class` statement's, with `subtype_dealloc` on it
+        if !layouts.contains_key(wanted.as_str()) {
+            return false;
+        }
+        if !laid_out_from_outside(db, env, model, suite, layouts, &wanted) {
+            return false;
+        }
+        // an empty list that was read, rather than one that could not be: a keyword this
+        // module cannot lower is a keyword all the same, and it has nowhere to go in a
+        // spec either way
+        if !class_keywords(written).is_ok_and(|keywords| keywords.is_empty()) {
+            return false;
+        }
+        if base_with_another_metaclass(db, model, written).is_some() {
+            return false;
+        }
+        let under = base_class(db, env, model, suite, written, layouts)
+            .ok()
+            .flatten();
+        // a class with no base at all owns its layout, which the walk above already
+        // turned down — but saying so here rather than leaning on that keeps the two
+        // answers from having to agree at a distance
+        let Some(under) = under else {
+            return false;
+        };
+        // a base list that reads as external but names a class this module *writes* is a
+        // `class` statement's type at import whichever way that class went — the type we
+        // built, or its interpreted definition where it declined. either is a heap type,
+        // and a spec cannot be built on one: `By_SpecClass` reads the twin's own base and
+        // turns a heap type down, which would leave the whole module interpreted. asked
+        // of the source for the reason [`class_written`] gives
+        if under.external().is_some()
+            && under
+                .plain_names()
+                .any(|name| class_written(suite, name).is_some())
+        {
+            return false;
+        }
+        // a base from outside is one python allocates and frees, which is where the
+        // chain of deallocators was walking to
+        let Some(next) = under.in_module() else {
+            return true;
+        };
+        before = at;
+        wanted = next.to_string();
     }
-    // a base with no storage of its own is built by calling its metaclass, so its type is
-    // a `class` statement's after all
-    if layouts.get(name).is_none_or(Vec::is_empty) {
-        return false;
-    }
-    if !laid_out_from_outside(db, env, model, suite, layouts, name) {
-        return false;
-    }
-    if class_keywords(written).is_ok_and(|keywords| !keywords.is_empty()) {
-        return false;
-    }
-    let under = base_class(db, env, model, suite, written, layouts)
-        .ok()
-        .flatten();
-    !stands_on_an_emitted_base(under.as_ref(), layouts)
+    false
 }
 
 /// where in the module body the class statement under a name is written
@@ -5501,6 +5581,7 @@ fn lower_function_with_receiver(
         directs: unit.directs,
         in_range: Vec::new(),
         mutable: unit.mutable,
+        slotted: unit.slotted,
         constructs: unit.constructs,
         bases: unit.bases,
         properties: unit.properties,
@@ -5682,9 +5763,14 @@ struct Unit<'a> {
     directs: &'a HashSet<String>,
     /// each emitted class's base, so an upcast can be recognised as free
     bases: &'a HashMap<String, String>,
-    /// the classes emitted as *mutable* heap types. a direct method call on one is
-    /// only licensed where the receiver is exact — nothing else rules out an override
+    /// the classes emitted as *mutable* heap types. python can rebind a method on one
+    /// or subclass it, so a call on one goes through a test rather than straight to a
+    /// body — see [`Lowering::dispatch_candidates`]
     mutable: &'a HashSet<String>,
+    /// the classes whose body declares `__slots__`, and whose instances therefore have
+    /// no dict to hold a value shadowing a method — see
+    /// [`Lowering::keeps_instance_dict`]
+    slotted: &'a HashSet<String>,
     /// the classes whose body writes a `__new__`, which is what a construction of one
     /// has to reach — see [`Lowering::construct`]
     constructs: &'a HashSet<String>,
@@ -7071,6 +7157,7 @@ struct Lowering<'a, 'db> {
     directs: &'a HashSet<String>,
     bases: &'a HashMap<String, String>,
     mutable: &'a HashSet<String>,
+    slotted: &'a HashSet<String>,
     /// the classes whose body writes a `__new__` — see [`Lowering::construct`]
     constructs: &'a HashSet<String>,
     /// the attributes each emitted class publishes as a `property` — see
@@ -10414,6 +10501,19 @@ impl Lowering<'_, '_> {
         false
     }
 
+    /// whether an instance of `class` has somewhere of its own to hold a value that
+    /// shadows a method name
+    ///
+    /// python gives an instance a `__dict__` unless every class contributing to its
+    /// layout declared `__slots__`, and an emitted class follows it. only a class with
+    /// no base at all is asked here — one standing on another is a mutable heap type and
+    /// never reaches the direct call — so the class's own declaration is the whole of
+    /// the chain. `instance_dict` in the C emitter is what actually decides, and asks the
+    /// question again for a class this cannot see
+    fn keeps_instance_dict(&self, class: &str) -> bool {
+        !self.slotted.contains(class)
+    }
+
     /// whether an `object` may be narrowed to `rtype` in this module
     ///
     /// a native class is narrowable exactly when its layout was emitted here: the
@@ -11124,10 +11224,16 @@ impl Lowering<'_, '_> {
         // a receiver whose class the compiler emitted is called directly. an
         // emitted class cannot be subclassed — the static type object does not
         // set `Py_TPFLAGS_BASETYPE`, and a base class declines — so no override
-        // can exist and there is nothing for a vtable to dispatch on
-        // an *exact* receiver is licensed for the direct call even where the class
-        // is otherwise open: `@final` and `sealed` both say no subclass exists, so
-        // there is no override for the protocol to find
+        // can exist and there is nothing for a vtable to dispatch on. it is also an
+        // immutable type, so `C.m = f` raises rather than rebinding the method
+        //
+        // what neither of those rules out is a value on the *instance*: a method is a
+        // non-data descriptor, so `o.m = f` stored in the instance's own dict wins over
+        // the class's entry, and `o.m()` then calls it. an emitted class keeps a dict
+        // beside its layout so that `o.extra = 3` works the way the interpreted twin
+        // does, and that dict is exactly where such a value goes. so the call asks
+        // first, and the protocol call is the arm the answer sends it to
+        //
         // the method may be declared on a *base*: the symbol lives there, and the
         // receiver's struct begins with the base's, so the pointer is already valid
         let owner_of = |class: &str| {
@@ -11144,16 +11250,24 @@ impl Lowering<'_, '_> {
             }
             None
         };
-        if let RType::Instance { class, exact } = &receiver_ty
-            && (*exact || !self.mutable.contains(class))
-            && let Some(class) = owner_of(class)
+        if let RType::Instance { class, .. } = &receiver_ty
+            && !self.mutable.contains(class)
+            && let Some(owner) = owner_of(class)
             && let Some(signature) = self
                 .methods
-                .get(&class)
+                .get(&owner)
                 .and_then(|table| table.get(name.as_str()))
             && signature.params.len() == node.arguments.args.len() + 1
+            // the shadow answers with whatever was stored, which reaches the same
+            // register as the compiled body's answer. a return the protocol call
+            // cannot be narrowed to has nowhere to land, and the whole site takes
+            // the ordinary protocol call below instead
+            && (!self.keeps_instance_dict(class)
+                || signature.ret == RType::OBJECT
+                || self.narrowable_here(&signature.ret))
         {
-            let owner = class.clone();
+            let shadowable = self.keeps_instance_dict(class);
+            let class = class.clone();
             let params: Vec<RType> = signature
                 .params
                 .iter()
@@ -11161,19 +11275,73 @@ impl Lowering<'_, '_> {
                 .map(|(_, rtype)| rtype.clone())
                 .collect();
             let ret = signature.ret.clone();
-            let mut args = Vec::with_capacity(params.len() + 1);
-            args.push(receiver);
+            // once, before the test, where the ordinary call would have evaluated them
+            let mut args = Vec::with_capacity(params.len());
             for (argument, param) in node.arguments.args.iter().zip(&params) {
                 let (value, ty) = self.expression(argument)?;
                 args.push(self.coerce(value, &ty, param)?);
             }
+            let mut direct = Vec::with_capacity(args.len() + 1);
+            direct.push(receiver.clone());
+            direct.extend(args.iter().cloned());
+            if !shadowable {
+                let dest = self.builder.temp(ret.clone());
+                self.builder.push(Op::CallNative {
+                    dest: Some(dest),
+                    owner: Some(owner),
+                    callee: name,
+                    args: direct,
+                });
+                return Ok((Value::Register(dest), ret));
+            }
+
+            // the test takes the receiver as it stands: it reads the instance and stores
+            // nothing, so widening it — which is a reference taken and released again —
+            // would be the fast path paying for the slow one
+            let shadowed = self.builder.temp(RType::BIT);
+            self.builder.push(Op::DictShadows {
+                dest: shadowed,
+                src: receiver.clone(),
+                class,
+                method: name.clone(),
+            });
             let dest = self.builder.temp(ret.clone());
+            let stored = self.builder.new_block();
+            let compiled = self.builder.new_block();
+            let join = self.builder.new_block();
+            self.builder.terminate(Terminator::Branch {
+                cond: Value::Register(shadowed),
+                then_block: stored,
+                else_block: compiled,
+            });
+
+            self.builder.switch_to(compiled);
             self.builder.push(Op::CallNative {
                 dest: Some(dest),
                 owner: Some(owner),
-                callee: name,
-                args,
+                callee: name.clone(),
+                args: direct,
             });
+            self.builder.terminate(Terminator::Goto(join));
+
+            self.builder.switch_to(stored);
+            let object = self.widen_to_object(receiver, &receiver_ty);
+            let mut boxed = Vec::with_capacity(args.len());
+            for (value, ty) in args.into_iter().zip(&params) {
+                boxed.push(self.widen_to_object(value, ty));
+            }
+            let answer = self.builder.temp(RType::OBJECT);
+            self.builder.push(Op::CallMethod {
+                dest: answer,
+                receiver: object,
+                name,
+                args: boxed,
+            });
+            let narrowed = self.coerce(Value::Register(answer), &RType::OBJECT, &ret)?;
+            self.builder.assign(dest, narrowed);
+            self.builder.terminate(Terminator::Goto(join));
+
+            self.builder.switch_to(join);
             return Ok((Value::Register(dest), ret));
         }
 

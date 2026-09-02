@@ -51,6 +51,25 @@ fn missing_toolchain(error: &anyhow::Error) -> bool {
     })
 }
 
+/// a temp directory of this process's own
+///
+/// every leg below builds into a fixed path under the system temp directory, named after
+/// the test. nextest gives each *test* a process of its own, so one run never collides
+/// with itself — but nothing stops two *runs* choosing the same directory, and a 3.13
+/// sweep beside a 3.14 one does exactly that. the two then overwrite each other's sources
+/// between the build and the read.
+///
+/// the failures that produces are the convincing kind. a collision during setup fails
+/// fast enough to look like a missing toolchain, and one *after* the build fails having
+/// genuinely compiled and compared, so it reads as a difference the compiler produced.
+/// twenty-nine of those were chased as a regression before the shared path was noticed.
+///
+/// the module's own name is a separate argument from the directory holding it, so putting
+/// the process id here changes where a test builds and nothing about what it builds
+fn diff_root() -> PathBuf {
+    std::env::temp_dir().join(format!("by_diff_p{}", std::process::id()))
+}
+
 fn environment() -> Option<(String, Toolchain)> {
     let python = match std::env::var("PYTHON") {
         Ok(python) => python,
@@ -445,6 +464,24 @@ def _capture(fn, *args):
         return e
     return None
 
+# call `fn` from a frame standing in a builtins namespace of its own: the real one
+# with `overrides` applied over it. what a *callee* resolves must not move, because
+# python binds a function's builtins to the module that defined it — so this changes
+# the caller's namespace and nothing else
+def _under_builtins(fn, **overrides):
+    frame = {'__builtins__': dict(vars(__import__('builtins')), **overrides), 'fn': fn}
+    exec('out = fn()', frame)
+    return frame['out']
+
+# import `name` afresh from such a frame and evaluate `call` against it there, with the
+# module bound to `m`. what a module body binds is the *interpreter's* builtins, not the
+# builtins of whoever asked for the import, so this too must leave resolution where it was
+def _reimported_under_builtins(name, call, **overrides):
+    __import__('sys').modules.pop(name, None)
+    frame = {'__builtins__': dict(vars(__import__('builtins')), **overrides)}
+    exec('import ' + name + ' as m\\nout = ' + call, frame)
+    return frame['out']
+
 # raising an exception and catching it again, which is the only way an exception class
 # is asked for the traceback and the frames a `raise` hangs on the instance
 def _raised_and_caught(kind, *args):
@@ -705,8 +742,8 @@ fn agree_in(
         return;
     };
 
-    let compiled_dir = std::env::temp_dir().join(format!("by_diff_{tag}_c"));
-    let interpreted_dir = std::env::temp_dir().join(format!("by_diff_{tag}_i"));
+    let compiled_dir = diff_root().join(format!("by_diff_{tag}_c"));
+    let interpreted_dir = diff_root().join(format!("by_diff_{tag}_i"));
     let _ = std::fs::remove_dir_all(&compiled_dir);
     let _ = std::fs::remove_dir_all(&interpreted_dir);
 
@@ -832,7 +869,7 @@ fn an_operation_that_keeps_leaving_the_short_range_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_bigleak");
+    let dir = diff_root().join("by_diff_bigleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def climb(a: int, n: int) -> int:
@@ -1231,7 +1268,7 @@ fn an_error_from_the_object_protocol_propagates() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_objerr");
+    let dir = diff_root().join("by_diff_objerr");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "def add(a, b) -> object:\n    return a + b\n";
     if build_source(
@@ -1264,7 +1301,7 @@ fn boxed_values_do_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_objleak");
+    let dir = diff_root().join("by_diff_objleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def chain(a, b) -> object:
@@ -1305,7 +1342,7 @@ fn an_unboxed_buffer_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_bufleak");
+    let dir = diff_root().join("by_diff_bufleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def built(n: int) -> float:
@@ -1393,7 +1430,7 @@ fn a_temporary_object_argument_does_not_crash() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_argtemp");
+    let dir = diff_root().join("by_diff_argtemp");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "def echo(x) -> object:\n    return x\n";
     if build_source(
@@ -1500,7 +1537,7 @@ fn a_borrowed_copy_does_not_over_release_its_source() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_widened_rc");
+    let dir = diff_root().join("by_diff_widened_rc");
     let _ = std::fs::remove_dir_all(&dir);
     if build_source(
         WIDENED_COPIES,
@@ -1623,7 +1660,7 @@ fn a_borrowed_copy_in_a_duplicated_loop_body_does_not_move_its_source_references
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_borrowed_copies_rc");
+    let dir = diff_root().join("by_diff_borrowed_copies_rc");
     let _ = std::fs::remove_dir_all(&dir);
     if build_source(
         BORROWED_COPIES,
@@ -1688,7 +1725,7 @@ fn short_circuiting_really_short_circuits() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_shortcircuit");
+    let dir = diff_root().join("by_diff_shortcircuit");
     let _ = std::fs::remove_dir_all(&dir);
     // dividing by zero raises; `a or b` must not evaluate `b` when `a` is truthy
     let source = "\
@@ -2197,7 +2234,7 @@ fn the_compiled_build_is_the_one_that_answers_for_a_nul_literal() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_nulstr_which");
+    let dir = diff_root().join("by_diff_nulstr_which");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         NUL_LITERALS,
@@ -2258,7 +2295,7 @@ fn a_call_out_checks_what_comes_back() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_callcheck");
+    let dir = diff_root().join("by_diff_callcheck");
     let _ = std::fs::remove_dir_all(&dir);
     // `abs` is a builtin the checker knows returns an int, so the call site
     // narrows with a checked unbox. shadowing it in the module namespace — which
@@ -2296,7 +2333,7 @@ fn a_missing_global_raises_a_name_error() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_nameerr");
+    let dir = diff_root().join("by_diff_nameerr");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "def f() -> object:\n    return nowhere()\n";
     if build_source(
@@ -2356,52 +2393,97 @@ def twice(flip: object) -> object:
     );
 }
 
-/// an answer found under one builtins namespace is not handed to a call made under
-/// another
+/// a builtin is resolved through the module the function was defined in, and never
+/// through whichever frame called it
 ///
-/// `By_LookupGlobal` reads builtins out of `PyEval_GetBuiltins`, which answers about
-/// the *calling* frame — and a compiled function pushes none of its own — so one call
-/// site can be reached with two different builtins namespaces without either of them
-/// ever being written to. neither arrival is a write, so nothing invalidates, and a
-/// memo has to compare the namespace itself.
+/// python binds a function's builtins once, at the `def`, by reading
+/// `__globals__['__builtins__']`; the caller's namespace never enters into it. an
+/// emitted function pushes no frame at all, so a runtime that asked the interpreter
+/// which builtins were in scope was asking about the caller — and one call site could
+/// then be reached under two namespaces without either of them being written to.
 ///
-/// what is pinned here is the unmemoised behaviour, exactly. it is deliberately *not*
-/// the interpreted twin's: a python function resolves against the builtins its own
-/// module was handed, so the twin answers `k7` under the frame below where both
-/// builds here answer `kF`. that divergence is older than the memo and is left
-/// standing — this test exists so that the memo cannot quietly widen it
+/// this used to pin that wrong answer, on the grounds that the memo must not widen a
+/// divergence older than itself. the divergence is gone, so what it pins now is the
+/// twin's answer
 #[test]
-fn a_memo_does_not_carry_an_answer_across_two_builtins_namespaces() {
-    let Some((python, toolchain)) = environment() else {
-        return;
-    };
-    let dir = std::env::temp_dir().join("by_diff_twobuiltins");
-    let _ = std::fs::remove_dir_all(&dir);
-    let source = "def digits(n: int) -> str:\n    return 'k' + str(n)\n";
-    let options = Options {
-        language: by_irbuild::Language::Python,
-        ..Options::default()
-    };
-    if build_source(source, "by_diff_twobuiltins", &toolchain, &dir, &options).is_err() {
-        eprintln!("skipping: no working C toolchain");
-        return;
-    }
-    // the first call arms the site against the real builtins, so the second is the
-    // one that has to notice it is standing somewhere else — and the third that the
-    // site has not been left holding the impostor
-    let out = run(
-        &python,
-        &dir,
-        "import builtins\n\
-         import by_diff_twobuiltins as m\n\
-         other = dict(vars(builtins))\n\
-         other['str'] = lambda n: 'F'\n\
-         frame = {'__builtins__': other, 'm': m}\n\
-         first = m.digits(7)\n\
-         exec('second = m.digits(7)', frame)\n\
-         print([first, frame['second'], m.digits(7)])\n",
+fn a_builtin_resolves_through_the_defining_module_and_not_the_caller() {
+    agree_python(
+        "callerbuiltins",
+        "\
+def digits(n: int) -> str:
+    return 'k' + str(n)
+
+def absentee() -> object:
+    return nowhere
+",
+        &[
+            // the first call arms a site against the module's own builtins, the second
+            // is made from a frame standing in another namespace entirely, and the
+            // third is what a site left holding the impostor would fail
+            "[m.digits(7), _under_builtins(lambda: m.digits(7), str=lambda n: 'F'), m.digits(7)]",
+            // a name the caller's builtins bind and the module's do not is still a
+            // `NameError` — the wrong namespace answering would produce a value
+            "_under_builtins(lambda: repr(_capture(m.absentee)), nowhere='reachable')",
+            // and the frame that asks for the import has no more say than the frame
+            // that calls: a module body binds the interpreter's builtins either way
+            "_reimported_under_builtins(m.__name__, 'm.digits(7)', str=lambda n: 'F')",
+        ],
     );
-    assert_eq!(out, "['k7', 'kF', 'k7']");
+}
+
+/// deleting a module global falls the read through to the module's own builtins
+///
+/// the two namespaces a global can be answered by are reached in order, so this is
+/// the case where the second one is consulted for a name the first used to bind —
+/// under a caller that binds it differently again, to keep the fall-through honest
+/// about which builtins it falls through to
+#[test]
+fn a_deleted_module_global_falls_through_to_the_defining_module_s_builtins() {
+    agree_python(
+        "deletedfallthrough",
+        "\
+def read() -> object:
+    return picked
+",
+        &["(setattr(__import__('builtins'), 'picked', 'builtins'), \
+              m.__dict__.__setitem__('picked', 'module'), \
+              m.read(), \
+              m.__dict__.pop('picked'), \
+              _under_builtins(m.read, picked='caller'), \
+              m.read())[2:]"],
+    );
+}
+
+/// the `__builtins__` a module carries is the interpreter's, and reading it happens
+/// once
+///
+/// python fills the entry in when it executes a module body and a function made by
+/// that body holds what stood there *then*. rebinding the entry afterwards is
+/// therefore not a way to redirect anything already defined — which is what lets the
+/// memo below treat the namespace as fixed. the entry is allowed to be the `builtins`
+/// module or its dict, and neither form is a redirection either
+#[test]
+fn a_module_s_builtins_entry_is_the_interpreter_s_and_is_read_once() {
+    agree_python(
+        "builtinsentry",
+        "\
+def digits(n: int) -> str:
+    return 'k' + str(n)
+",
+        &[
+            "[m.__dict__['__builtins__'] is vars(__import__('builtins')), m.digits(7)]",
+            "(m.__dict__.__setitem__('__builtins__', {'str': lambda n: 'X'}), m.digits(7))[1]",
+            "(m.__dict__.__setitem__('__builtins__', __import__('builtins')), m.digits(7))[1]",
+            // a reload runs an interpreted module's body again over the namespace it
+            // already has, where an extension module's exec slot is not run a second
+            // time at all. so the two builds arrive at this answer by different roads
+            // — and the entry standing here as the `builtins` module rather than its
+            // dict is the one way the road the extension does not currently take
+            // would be told apart
+            "(m.__dict__.__setitem__('__builtins__', __import__('builtins')), \
+              __import__('importlib').reload(m).digits(7))[1]",
+        ],
+    );
 }
 
 /// a builtin rebound while a call site is already holding it is seen at once
@@ -2444,9 +2526,20 @@ fn a_name_that_resolved_to_nothing_is_not_remembered() {
 def read() -> object:
     return arriving
 ",
-        &["[type(_capture(m.read)).__name__, \
+        &[
+            "[type(_capture(m.read)).__name__, \
               (m.__dict__.__setitem__('arriving', 'here'), m.read())[1], \
-              (m.__dict__.pop('arriving'), type(_capture(m.read)).__name__)[1]]"],
+              (m.__dict__.pop('arriving'), type(_capture(m.read)).__name__)[1]]",
+            // the same over *builtins*, which is the case a memo of the refusal would
+            // survive: the module namespace is written to on the way out of the first
+            // read above, and a write is the one thing that could throw such a memo
+            // away. nothing this module resolves ever reaches builtins, so nothing has
+            // asked to hear about writes to it either
+            "[type(_capture(m.read)).__name__, \
+              (setattr(__import__('builtins'), 'arriving', 'here'), m.read())[1], \
+              (delattr(__import__('builtins'), 'arriving'), \
+               type(_capture(m.read)).__name__)[1]]",
+        ],
     );
 }
 
@@ -2495,7 +2588,7 @@ fn iterating_a_wrongly_typed_list_raises() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_iterchk");
+    let dir = diff_root().join("by_diff_iterchk");
     let _ = std::fs::remove_dir_all(&dir);
     // the annotation says int elements; the unbox per element is the
     // `iterations` soundness position and must catch a lie
@@ -2707,7 +2800,7 @@ fn a_missing_attribute_raises() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_attrerr");
+    let dir = diff_root().join("by_diff_attrerr");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "def f(o) -> object:\n    return o.nope\n";
     if build_source(
@@ -2738,7 +2831,7 @@ fn list_displays_agree_and_do_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_listbuild");
+    let dir = diff_root().join("by_diff_listbuild");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def pair(a, b) -> object:
@@ -3034,7 +3127,7 @@ fn a_rebound_global_is_observed() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_rebind");
+    let dir = diff_root().join("by_diff_rebind");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "def size(o) -> object:\n    return helper(o)\n";
     if build_source(
@@ -3262,7 +3355,7 @@ fn a_decorated_method_is_the_interpreted_one_and_its_siblings_are_not() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_methoddecoratoronce_t");
+    let dir = diff_root().join("by_diff_methoddecoratoronce_t");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         MARKED_METHODS,
@@ -3346,7 +3439,7 @@ fn a_decorated_class_is_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_classdecoratoronce_t");
+    let dir = diff_root().join("by_diff_classdecoratoronce_t");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         MARKED_CLASSES,
@@ -3421,7 +3514,7 @@ fn a_decorated_class_named_in_a_deferred_annotation_still_compiles() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_classdecoratorannotation");
+    let dir = diff_root().join("by_diff_classdecoratorannotation");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 from __future__ import annotations
@@ -3554,7 +3647,7 @@ fn a_path_decorated_definition_is_the_compiled_one() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_pathdecolive");
+    let dir = diff_root().join("by_diff_pathdecolive");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 import abc
@@ -3636,7 +3729,7 @@ fn a_decorator_that_is_a_call_declines() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_calldeco");
+    let dir = diff_root().join("by_diff_calldeco");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 MADE = []
@@ -3704,7 +3797,7 @@ fn a_decorator_rooted_in_the_class_body_declines() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_classrooteddeco");
+    let dir = diff_root().join("by_diff_classrooteddeco");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Box:
@@ -3788,7 +3881,7 @@ fn a_class_decorator_over_a_partly_filled_slot_declines() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_partialslot");
+    let dir = diff_root().join("by_diff_partialslot");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 import functools
@@ -4019,7 +4112,7 @@ fn a_static_or_class_method_is_the_compiled_one() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_staticmethod_which");
+    let dir = diff_root().join("by_diff_staticmethod_which");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Box:
@@ -4164,7 +4257,7 @@ fn a_class_method_the_boundary_would_hand_over_declines() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_classmethod_defer");
+    let dir = diff_root().join("by_diff_classmethod_defer");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 DEFAULT = [1, 2]
@@ -4764,7 +4857,7 @@ fn a_compiled_frame_is_what_reaches_the_module_namespace() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_globalidentity");
+    let dir = diff_root().join("by_diff_globalidentity");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 inited = False
@@ -4821,7 +4914,7 @@ fn a_declined_function_reads_the_global_a_compiled_one_wrote() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_globaltwin");
+    let dir = diff_root().join("by_diff_globaltwin");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 flag = 0
@@ -4894,7 +4987,7 @@ fn a_second_decorator_over_a_static_method_declines() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_staticmethod_stacked");
+    let dir = diff_root().join("by_diff_staticmethod_stacked");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def mark(fn):
@@ -4950,7 +5043,7 @@ fn string_literals_do_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_strleak");
+    let dir = diff_root().join("by_diff_strleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def classify(n: int) -> str:
@@ -4991,7 +5084,7 @@ fn a_concatenated_operand_keeps_the_callers_reference() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_strhold");
+    let dir = diff_root().join("by_diff_strhold");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def join(a: str, b: str) -> str:
@@ -5078,7 +5171,7 @@ fn a_native_constructor_checks_its_argument_types() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_ctorcheck");
+    let dir = diff_root().join("by_diff_ctorcheck");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "data class Point:\n    x: int\n    y: int\n";
     if build_source(
@@ -5109,7 +5202,7 @@ fn a_native_class_has_a_fixed_layout() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_layout");
+    let dir = diff_root().join("by_diff_layout");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 data class Point:
@@ -5173,7 +5266,7 @@ fn a_class_takes_an_attribute_its_layout_never_had() {
         eprintln!("skipping: an instance dict is a managed one, which 3.13 published");
         return;
     }
-    let dir = std::env::temp_dir().join("by_diff_instdict");
+    let dir = diff_root().join("by_diff_instdict");
     let _ = std::fs::remove_dir_all(&dir);
     let options = Options {
         language: by_irbuild::Language::Python,
@@ -5294,7 +5387,7 @@ fn a_native_class_instance_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_classleak");
+    let dir = diff_root().join("by_diff_classleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 data class Holder:
@@ -5363,7 +5456,7 @@ fn a_float_module_imports_without_any_extra_runtime_module() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_floatimport");
+    let dir = diff_root().join("by_diff_floatimport");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "def area(r: float) -> float:\n    return 3.0 * r * r\n";
     if build_source(
@@ -5395,7 +5488,7 @@ fn a_compiled_function_is_a_c_function_object() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_cfunc");
+    let dir = diff_root().join("by_diff_cfunc");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "def f(a: int) -> int:\n    return a\n";
     if build_source(
@@ -5440,7 +5533,7 @@ fn no_any_turns_a_gradual_decline_into_an_error() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_noany");
+    let dir = diff_root().join("by_diff_noany");
     let _ = std::fs::remove_dir_all(&dir);
 
     let source = "\
@@ -5493,7 +5586,7 @@ fn require_native_rejects_any_decline_at_all() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_reqnative");
+    let dir = diff_root().join("by_diff_reqnative");
     let _ = std::fs::remove_dir_all(&dir);
     // precisely typed and still declines: `except*` has no lowering
     let source = "\
@@ -5548,7 +5641,7 @@ fn no_any_accepts_a_fully_typed_module() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_noany_ok");
+    let dir = diff_root().join("by_diff_noany_ok");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "def f(a: int, b: int) -> int:\n    return a * b\n";
     match build_source(
@@ -5595,7 +5688,7 @@ fn a_declined_function_is_reported_with_a_reason() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir: PathBuf = std::env::temp_dir().join("by_diff_declined");
+    let dir: PathBuf = diff_root().join("by_diff_declined");
     let _ = std::fs::remove_dir_all(&dir);
 
     let source = "\
@@ -5684,7 +5777,7 @@ fn a_field_setter_checks_its_value() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_setcheck");
+    let dir = diff_root().join("by_diff_setcheck");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 data class Point:
@@ -5729,7 +5822,7 @@ fn a_class_typed_argument_is_checked_at_the_boundary() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_argcheck");
+    let dir = diff_root().join("by_diff_argcheck");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 data class Point:
@@ -5773,7 +5866,7 @@ fn a_field_read_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_fieldleak");
+    let dir = diff_root().join("by_diff_fieldleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 data class Holder:
@@ -5825,7 +5918,7 @@ fn a_literal_used_in_a_loop_neither_leaks_nor_is_released_twice() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_constborrow");
+    let dir = diff_root().join("by_diff_constborrow");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def kept(line: str) -> int:
@@ -6097,6 +6190,202 @@ def inherited(t: Tally) -> object:
     );
 }
 
+/// the source the shadowed-method tests build
+///
+/// `Alone` has no base and no subclass, which is the shape a call site names one body
+/// for outright — no test, no lookup, nothing to invalidate. `Slotted` is the same class
+/// with python's own declaration that its instances hold exactly the declared
+/// attributes, which is what leaves the direct call with nothing to ask
+const A_CLASS_NOTHING_DERIVES_FROM: &str = "\
+class Alone:
+    def __init__(self, n):
+        self.n = n
+
+    def double(self):
+        return self.n + self.n
+
+    def twice_over(self):
+        return self.double() + self.double()
+
+
+class Slotted:
+    __slots__ = ('n',)
+
+    def __init__(self, n):
+        self.n = n
+
+    def double(self):
+        return self.n + self.n
+
+
+def alone(a):
+    return a.double()
+
+
+def nested(a):
+    return a.twice_over()
+
+
+def slotted(s):
+    return s.double()
+";
+
+/// a value written on the instance of a class nothing derives from
+///
+/// a method is a non-data descriptor, so `a.double = f` stored in the instance's own dict
+/// wins over the class's entry. this class is the one shape a call site does not have to
+/// test anything for — nothing can subclass it and nothing can rebind a method on it —
+/// and the instance is the one route left. every call below reaches the same compiled
+/// body, so a guard that stops asking shows up on all of them at once
+#[test]
+fn a_value_on_the_instance_shadows_the_method_of_a_class_nothing_derives_from() {
+    agree_python(
+        "aloneshadow",
+        A_CLASS_NOTHING_DERIVES_FROM,
+        &[
+            "[m.alone(m.Alone(5)), m.nested(m.Alone(5)), m.slotted(m.Slotted(5))]",
+            // the shadow, and the same call answered before and after it
+            "\
+(lambda a: [
+    m.alone(a),
+    setattr(a, 'double', lambda: 222),
+    m.alone(a),
+])(m.Alone(5))",
+            // written past the attribute machinery, which is the route a `tp_setattro`
+            // of our own would not have seen — and the reason a per-class flag saying
+            // no instance has been written to cannot be kept honest
+            "\
+(lambda a: [
+    m.alone(a),
+    object.__setattr__(a, 'double', lambda: 333),
+    m.alone(a),
+])(m.Alone(5))",
+            // taken away again, and the class's own body answers once more
+            "\
+(lambda a: [
+    setattr(a, 'double', lambda: 444),
+    m.alone(a),
+    delattr(a, 'double'),
+    m.alone(a),
+])(m.Alone(5))",
+            // some *other* name written on the instance leaves the method alone
+            "\
+(lambda a: [
+    setattr(a, 'unrelated', 1),
+    m.alone(a),
+])(m.Alone(5))",
+            // the shadow reached from inside another compiled method, where the receiver
+            // is `self` rather than an argument
+            "\
+(lambda a: [
+    m.nested(a),
+    setattr(a, 'double', lambda: 555),
+    m.nested(a),
+])(m.Alone(5))",
+            // an instance with no dict has nowhere to put one, and python says so
+            "\
+(lambda s: [
+    m.slotted(s),
+    type(_capture(setattr, s, 'double', lambda: 666)).__name__,
+    m.slotted(s),
+])(m.Slotted(5))",
+        ],
+    );
+}
+
+/// a `final` receiver, which says no subclass exists and nothing else
+///
+/// the class still stands in an inheritance chain, so it is emitted as a mutable heap
+/// type: `Fixed.tripled = f` rebinds the method and a value written on an instance
+/// shadows it. `final` rules out neither, and a call site that read it as licensing a
+/// direct call answered from the compiled body through both
+#[test]
+fn a_final_receiver_notices_the_class_being_changed_under_it() {
+    agree_python(
+        "finalstale",
+        "\
+from typing import final
+
+
+class Open:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def doubled(self) -> int:
+        return self.n * 2
+
+
+@final
+class Fixed(Open):
+    def tripled(self) -> int:
+        return self.n * 3
+
+
+def on_final(f: Fixed) -> object:
+    return f.tripled()
+",
+        &[
+            "m.on_final(m.Fixed(5))",
+            "\
+(lambda f: [
+    m.on_final(f),
+    setattr(f, 'tripled', lambda: 111),
+    m.on_final(f),
+])(m.Fixed(5))",
+            "\
+(lambda f: [
+    m.on_final(f),
+    object.__setattr__(f, 'tripled', lambda: 222),
+    m.on_final(f),
+])(m.Fixed(5))",
+            "\
+(lambda f: [
+    m.on_final(f),
+    setattr(m.Fixed, 'tripled', lambda self: 333),
+    m.on_final(f),
+])(m.Fixed(5))",
+        ],
+    );
+}
+
+/// that the calls above were answered by compiled bodies rather than by the fallback
+///
+/// a class left to its interpreted definition answers every one of them the way python
+/// does, so the test above passes just as well with nothing compiled at all. an emitted
+/// method is a `method_descriptor` where the interpreted one is a `function`
+#[test]
+fn the_shadowed_calls_are_answered_by_compiled_bodies() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_aloneshadowkind");
+    let _ = std::fs::remove_dir_all(&dir);
+    if build_source(
+        A_CLASS_NOTHING_DERIVES_FROM,
+        "by_diff_aloneshadowkind",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_aloneshadowkind as m\n\
+         print(type(m.Alone.double).__name__)\n\
+         print(type(m.Slotted.double).__name__)\n\
+         print(type(m.alone).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "method_descriptor\nmethod_descriptor\nbuiltin_function_or_method"
+    );
+}
+
 /// a builtin whose entry point wants the defining class, which no call site can supply
 ///
 /// `re.Pattern.search` is `METH_FASTCALL | METH_KEYWORDS | METH_METHOD`, and the extra
@@ -6137,7 +6426,7 @@ fn a_direct_method_call_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_methleak");
+    let dir = diff_root().join("by_diff_methleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 data class Holder:
@@ -6186,7 +6475,7 @@ fn a_borrowed_intermediate_does_not_leak_or_lose_a_reference() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_borrow");
+    let dir = diff_root().join("by_diff_borrow");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 data class Holder:
@@ -6272,7 +6561,7 @@ fn a_borrow_survives_a_finalizer_that_runs_a_collection() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_finalizer");
+    let dir = diff_root().join("by_diff_finalizer");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 data class Inner:
@@ -6407,7 +6696,7 @@ fn a_closure_does_not_leak_its_environment() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_closureleak");
+    let dir = diff_root().join("by_diff_closureleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def make(label: str) -> object:
@@ -6452,7 +6741,7 @@ fn a_closure_environment_is_not_visible_in_the_module() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_envhidden");
+    let dir = diff_root().join("by_diff_envhidden");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def make(n: int) -> object:
@@ -6489,7 +6778,7 @@ fn a_raise_out_of_a_try_body_does_not_leak_what_it_wrote() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_handlerleak");
+    let dir = diff_root().join("by_diff_handlerleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def guarded(words: list[str], index: int) -> str:
@@ -6630,7 +6919,7 @@ fn a_shared_cell_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_cellleak");
+    let dir = diff_root().join("by_diff_cellleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def holder(label: str) -> ((str) -> str):
@@ -6755,7 +7044,7 @@ fn a_generator_is_a_real_iterator_to_python() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_geniter");
+    let dir = diff_root().join("by_diff_geniter");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def counted(n: int) -> object:
@@ -6795,7 +7084,7 @@ def counted(n: int) -> object:
 /// so the test would pass without exercising anything
 fn leak_module(tag: &'static str) -> Option<(String, std::path::PathBuf)> {
     let (python, toolchain) = environment()?;
-    let dir = std::env::temp_dir().join(tag);
+    let dir = diff_root().join(tag);
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Boom(Exception):
@@ -7033,7 +7322,7 @@ fn a_re_raise_does_not_retain_the_exception() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_reraiseleak");
+    let dir = diff_root().join("by_diff_reraiseleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Boom(Exception):
@@ -7506,7 +7795,7 @@ fn a_compiled_state_object_answers_the_send_slot() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_sendslot_pin");
+    let dir = diff_root().join("by_diff_sendslot_pin");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def counting(n: int) -> object:
@@ -7834,7 +8123,7 @@ fn a_state_object_tells_the_runtime_which_surface_it_is() {
     let Some((_python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_framekind_pin");
+    let dir = diff_root().join("by_diff_framekind_pin");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 from typing import Any
@@ -7935,7 +8224,7 @@ fn a_finish_is_emitted_apart_from_a_written_stop_iteration() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_finish_pin");
+    let dir = diff_root().join("by_diff_finish_pin");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def bare(n: int) -> object:
@@ -8197,7 +8486,7 @@ fn a_parked_value_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_parkleak");
+    let dir = diff_root().join("by_diff_parkleak");
     let _ = std::fs::remove_dir_all(&dir);
     // `label + (yield i)` holds the label across the suspension, so the state object
     // owns it for as long as the frame is parked
@@ -8267,7 +8556,7 @@ fn a_coroutine_is_awaitable_and_not_iterable() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_coro");
+    let dir = diff_root().join("by_diff_coro");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 async def plain(n: int) -> int:
@@ -8306,7 +8595,7 @@ fn a_coroutine_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_coroleak");
+    let dir = diff_root().join("by_diff_coroleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 async def echo(label: str) -> str:
@@ -8562,7 +8851,7 @@ fn a_string_default_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_defaultleak");
+    let dir = diff_root().join("by_diff_defaultleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def padded(a: str, fill: str = \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\") -> str:
@@ -8708,7 +8997,7 @@ fn a_variadic_argument_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_varleak");
+    let dir = diff_root().join("by_diff_varleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def joined(*parts: str) -> int:
@@ -8894,7 +9183,7 @@ fn a_property_the_backend_cannot_fold_declines() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_propdecline");
+    let dir = diff_root().join("by_diff_propdecline");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def marking(fn: object) -> object:
@@ -9223,7 +9512,7 @@ fn an_unboxed_array_does_not_leak_its_buffer() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_arrayleak");
+    let dir = diff_root().join("by_diff_arrayleak");
     let _ = std::fs::remove_dir_all(&dir);
     // the buffer is `PyMem_Malloc`, not a `PyObject` — so a leak of one is invisible
     // to `gc.get_objects()` and to a refcount check. the process's own footprint is
@@ -9665,8 +9954,8 @@ def counters() -> list[object]:
         out.append(get)
     return [f() for f in out]
 ";
-    let dir = std::env::temp_dir().join("by_diff_pyloop");
-    let interpreted = std::env::temp_dir().join("by_diff_pyloop_i");
+    let dir = diff_root().join("by_diff_pyloop");
+    let interpreted = diff_root().join("by_diff_pyloop_i");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&interpreted);
     std::fs::create_dir_all(&interpreted).expect("the directory is created");
@@ -10378,7 +10667,7 @@ fn a_subclass_that_appends_nothing_is_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_appendnothing_t");
+    let dir = diff_root().join("by_diff_appendnothing_t");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         APPENDED_FAMILY,
@@ -10513,7 +10802,7 @@ fn only_the_class_no_spec_can_build_is_left_interpreted() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_perclassheld_t");
+    let dir = diff_root().join("by_diff_perclassheld_t");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         REFUSED_BESIDE_KEPT,
@@ -10564,7 +10853,7 @@ fn the_classes_beside_a_refused_one_lay_out_and_deallocate() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_perclassheld_d");
+    let dir = diff_root().join("by_diff_perclassheld_d");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         REFUSED_BESIDE_KEPT,
@@ -10688,7 +10977,7 @@ fn a_chain_of_appended_storage_deallocates_without_growing() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_appendchain_t");
+    let dir = diff_root().join("by_diff_appendchain_t");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         APPENDED_CHAIN,
@@ -10739,6 +11028,257 @@ fn a_chain_of_appended_storage_deallocates_without_growing() {
     assert_eq!(out, "method_descriptor\nTrue\nsection:s:m\nstable\ncaught");
 }
 
+/// a chain whose lower rungs hold nothing at all, which is the stdlib's commonest
+/// exception family: `tarfile` writes `TarError`, `FilterError` and then five classes
+/// with a field each, and `contextlib`, `selectors` and `_pyio` all repeat the shape
+///
+/// a rung holding nothing is still a rung the deallocation passes through, and a `class`
+/// statement's type there carries `subtype_dealloc` — which reads the deallocator to
+/// chain to out of `Py_TYPE(self)`, finds the appending class's own, and calls it back
+/// until the stack runs out. so the hollow rungs are built from specs of their own too,
+/// and given the three slots with nothing in them.
+///
+/// `Held` is the harder half: it appends its storage past a hollow rung, but the field
+/// its constructor writes through `Base.__init__` lives two rungs further down, in
+/// `Base`'s own region. two copies of that field would leave whichever one the method
+/// reads at whatever `tp_alloc` zeroed
+const HOLLOW_CHAIN: &str = "\
+class TarError(Exception):
+    pass
+
+
+class FilterError(TarError):
+    pass
+
+
+class AbsolutePathError(FilterError):
+    def __init__(self, name):
+        FilterError.__init__(self, 'absolute')
+        self.name = name
+
+    def label(self):
+        return 'absolute:' + self.name
+
+
+class LinkOutsideError(AbsolutePathError):
+    def __init__(self, name, link):
+        AbsolutePathError.__init__(self, name)
+        self.link = link
+
+    def label(self):
+        return 'outside:' + self.name + ':' + self.link
+
+
+class Base(Exception):
+    def __init__(self, message):
+        Exception.__init__(self, message)
+        self.message = message
+
+    def label(self):
+        return 'base:' + self.message
+
+
+class Hollow(Base):
+    pass
+
+
+class Held(Hollow):
+    def __init__(self, message, code):
+        Base.__init__(self, message)
+        self.code = code
+
+    def label(self):
+        return 'held:' + self.message + ':' + str(self.code)
+";
+
+#[test]
+fn a_chain_over_a_base_that_holds_nothing_agrees() {
+    agree_python(
+        "hollowchain",
+        HOLLOW_CHAIN,
+        &[
+            "[(e.name, e.label(), e.args) for e in [m.AbsolutePathError('n')]]",
+            "[(e.name, e.link, e.label()) for e in [m.LinkOutsideError('n', 'l')]]",
+            "[(e.message, e.code, e.label()) for e in [m.Held('m', 7)]]",
+            "[(e.message, e.label()) for e in [m.Base('m')]]",
+            "[c.__name__ for c in m.LinkOutsideError.__mro__]",
+            "(m.TarError('t').args, m.FilterError('f').args, m.Hollow('h').args)",
+            // a field a rung two below declared, written and read back through this one
+            "[(e.message, (setattr(e, 'message', 'w'), e.message)[1], e.label())\n\
+             \x20 for e in [m.Held('m', 7)]]",
+            "(isinstance(m.LinkOutsideError('n', 'l'), m.TarError),\n\
+             \x20isinstance(m.AbsolutePathError('n'), Exception),\n\
+             \x20isinstance(m.Held('m', 1), m.Base), issubclass(m.Hollow, m.Base))",
+            "[(type(e).__name__, e.name, e.link)\n\
+             \x20 for e in [_raised_and_caught(m.LinkOutsideError, 'n', 'l')]]",
+            "[(type(e).__name__, e.args) for e in [_raised_and_caught(m.FilterError, 'f')]]",
+            // python's own subclass of a hollow rung, whose deallocation goes through
+            // every compiled rung below it
+            "[(s('f').args, type(s('f')).__name__) for s in [type('Py', (m.FilterError,), {})]]",
+            // every instance holds a cycle through the appended field, so the collector
+            // has to reach past the hollow rungs to see it
+            "(len([e for e in [m.LinkOutsideError([i], 'l') for i in range(200)]\n\
+             \x20     if setattr(e, 'name', e) is None]), __import__('gc').collect() >= 0)",
+        ],
+    );
+}
+
+/// the same chain, built and dropped in bulk. a hollow rung left to its interpreted
+/// definition is where this goes wrong loudly: the appending class's deallocator would
+/// call `subtype_dealloc`, which would find that same deallocator through `Py_TYPE(self)`
+/// and call it straight back until the stack ran out
+#[test]
+fn a_chain_over_a_base_that_holds_nothing_deallocates_without_growing() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_hollowchain_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        HOLLOW_CHAIN,
+        "by_diff_hollowchain_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import gc, by_diff_hollowchain_t as m\n\
+         # `method_descriptor` against `function` is what says the compiled type\n\
+         # answered — the interpreted definition answers every question below the same\n\
+         print(type(m.AbsolutePathError.__dict__['label']).__name__,\n\
+         \x20     type(m.Held.__dict__['label']).__name__)\n\
+         # a hollow rung asks for no room of its own, and the rungs that do append grow\n\
+         print(Exception.__basicsize__ == m.TarError.__basicsize__\n\
+         \x20     == m.FilterError.__basicsize__\n\
+         \x20     < m.AbsolutePathError.__basicsize__ < m.LinkOutsideError.__basicsize__)\n\
+         print(m.Base.__basicsize__ == m.Hollow.__basicsize__ < m.Held.__basicsize__)\n\
+         # a method reading a field a rung two below it wrote\n\
+         print(m.Held('m', 7).label())\n\
+         gc.collect(); before = len(gc.get_objects())\n\
+         for _ in range(20000):\n\
+         \x20   e = m.LinkOutsideError(['n'], 'l')\n\
+         \x20   e.name = e\n\
+         \x20   h = m.Held(['m'], 7)\n\
+         \x20   h.code = h\n\
+         \x20   q = m.FilterError('f')\n\
+         \x20   del e, h, q\n\
+         gc.collect(); after = len(gc.get_objects())\n\
+         print('stable' if after <= before + 200 else f'grew {before}->{after}')\n\
+         # and a deep chain of them raised and caught, which is the deallocation the\n\
+         # recursion would show up in\n\
+         for _ in range(20000):\n\
+         \x20   try: raise m.LinkOutsideError('n', 'l')\n\
+         \x20   except m.TarError: pass\n\
+         print('caught')\n",
+    );
+    assert_eq!(
+        out,
+        "method_descriptor method_descriptor\n\
+         True\nTrue\nheld:m:7\nstable\ncaught"
+    );
+}
+
+/// storage appended past an `OSError`, which is `smtplib`'s whole exception family
+///
+/// the release takes the instance off the collector's list, and it has to go straight back
+/// on before the base is handed it: `OSError`'s deallocator takes it off again without
+/// checking, and unlinking an object that is already unlinked corrupts the list. that was
+/// a segfault at the very first deallocation, and `Exception` hid it — its deallocator
+/// checks, so every test written over one passed
+const OSERROR_FAMILY: &str = "\
+class Failure(OSError):
+    pass
+
+
+class Refused(Failure):
+    def __init__(self, code, note):
+        Failure.__init__(self, note)
+        self.code = code
+        self.note = note
+
+    def label(self):
+        return 'refused:' + str(self.code) + ':' + self.note
+
+
+class Direct(OSError):
+    def __init__(self, code):
+        OSError.__init__(self, code)
+        self.code = code
+";
+
+#[test]
+fn storage_appended_past_an_oserror_agrees() {
+    agree_python(
+        "oserrfamily",
+        OSERROR_FAMILY,
+        &[
+            "[(e.code, e.note, e.label(), e.args) for e in [m.Refused(4, 'n')]]",
+            "[(e.code, e.args) for e in [m.Direct(7)]]",
+            "(m.Failure('f').args, [c.__name__ for c in m.Refused.__mro__])",
+            "(isinstance(m.Refused(1, 'n'), OSError), issubclass(m.Direct, OSError))",
+            "[(type(e).__name__, e.code) for e in [_raised_and_caught(m.Refused, 2, 'n')]]",
+            // the deallocation that corrupted the collector's list, in bulk
+            "(len([e for e in [m.Refused(i, 'n') for i in range(2000)]]),\n\
+             \x20len([e for e in [m.Direct(i) for i in range(2000)]]),\n\
+             \x20len([e for e in [m.Failure('f') for i in range(2000)]]),\n\
+             \x20__import__('gc').collect() >= 0)",
+        ],
+    );
+}
+
+/// a `__del__` anywhere in such a chain turns the class that writes it down, because the
+/// finalizer is reached from the deallocator of whichever class owns the instance layout
+/// — and here that is the outside base, whose deallocator does not call one. so the
+/// hollow rung keeps its interpreted definition, and the class appending storage past it
+/// has no base of ours to chain to and keeps its own
+#[test]
+fn a_finalizer_on_a_hollow_rung_declines_the_chain() {
+    let source = "\
+class Root(Exception):
+    pass
+
+
+class Hollow(Root):
+    def __del__(self):
+        _seen.append('gone')
+
+
+class Held(Hollow):
+    def __init__(self, code):
+        Hollow.__init__(self, 'held')
+        self.code = code
+
+
+_seen = []
+
+
+def seen():
+    return list(_seen)
+";
+    agree_python_with_declines(
+        "hollowfinal",
+        source,
+        &[
+            "[(m.Held(1).code, m.seen()) for _ in [0]]",
+            "[(len([m.Held(i) for i in range(50)]), __import__('gc').collect() >= 0,\n\
+             \x20  len(m.seen())) for _ in [0]]",
+        ],
+    );
+}
+
 #[test]
 fn a_subclass_with_no_storage_stands_on_a_base_that_declined_later() {
     // a base is settled as one of ours while the layouts settle, and only the body being
@@ -10753,7 +11293,7 @@ fn a_subclass_with_no_storage_stands_on_a_base_that_declined_later() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_lostbase");
+    let dir = diff_root().join("by_diff_lostbase");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class TokenList(list):
@@ -10947,7 +11487,7 @@ fn a_base_beside_an_outside_one_is_built_by_calling_its_metaclass() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_mixedmeta");
+    let dir = diff_root().join("by_diff_mixedmeta");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 import abc
@@ -11125,7 +11665,7 @@ class Point:
     def total(self) -> int:
         return self.x + self.y
 ";
-    let base = std::env::temp_dir().join("by_diff_pkgmodule");
+    let base = diff_root().join("by_diff_pkgmodule");
     let _ = std::fs::remove_dir_all(&base);
     let compiled_root = base.join("c");
     let interpreted_root = base.join("i");
@@ -11255,7 +11795,7 @@ fn which_build_answers_for_a_metaclass_class() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_metafields");
+    let dir = diff_root().join("by_diff_metafields");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 from abc import ABC, ABCMeta
@@ -11377,7 +11917,7 @@ fn a_metaclass_that_remakes_a_class_level_constant_is_turned_down_after_the_call
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_metaconstant");
+    let dir = diff_root().join("by_diff_metaconstant");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 from enum import StrEnum, auto
@@ -11458,7 +11998,7 @@ fn a_dunder_the_module_body_hangs_on_a_class_keeps_it_off_the_compiled_surface()
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_hungdunder");
+    let dir = diff_root().join("by_diff_hungdunder");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 from abc import ABCMeta
@@ -11557,7 +12097,7 @@ fn a_constant_that_reads_back_differently_every_time_is_not_turned_down_for_it()
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_metaunstable");
+    let dir = diff_root().join("by_diff_metaunstable");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 from abc import ABCMeta
@@ -11631,7 +12171,7 @@ fn a_metaclass_that_raises_on_the_namespace_it_is_handed_leaves_the_import_stand
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_metaraise");
+    let dir = diff_root().join("by_diff_metaraise");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 from collections import namedtuple
@@ -11716,7 +12256,7 @@ fn a_class_level_constant_beside_a_base_of_ours_reaches_the_metaclass_namespace(
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_metaconstant_base");
+    let dir = diff_root().join("by_diff_metaconstant_base");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 import codecs
@@ -11800,7 +12340,7 @@ fn a_conditional_in_a_class_body_carries_across_whichever_leg_ran() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_class_conditional");
+    let dir = diff_root().join("by_diff_class_conditional");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Box:
@@ -11897,7 +12437,7 @@ fn the_shapes_a_class_body_block_is_not_lowered_for_decline() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_class_conditional_declines");
+    let dir = diff_root().join("by_diff_class_conditional_declines");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 on = True
@@ -11989,7 +12529,7 @@ fn a_slots_declaration_reaches_the_metaclass_rather_than_the_finished_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_metaslots");
+    let dir = diff_root().join("by_diff_metaslots");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 from abc import ABC
@@ -12053,7 +12593,7 @@ fn a_class_constant_naming_another_class_reaches_the_metaclass_namespace_remappe
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_metaconstant_remap");
+    let dir = diff_root().join("by_diff_metaconstant_remap");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 from abc import ABCMeta
@@ -12119,7 +12659,7 @@ fn a_class_the_module_pops_out_of_its_own_globals_stays_off_the_compiled_surface
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_poppedclass");
+    let dir = diff_root().join("by_diff_poppedclass");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 from abc import ABCMeta
@@ -12206,7 +12746,7 @@ fn an_annotated_class_attribute_reaches_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_annotatedconstant");
+    let dir = diff_root().join("by_diff_annotatedconstant");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Tagged:
@@ -12364,7 +12904,7 @@ fn a_late_gift_that_could_hand_the_interpreted_class_back_is_left_alone() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_twinshapes");
+    let dir = diff_root().join("by_diff_twinshapes");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Other:
@@ -12483,7 +13023,7 @@ fn a_class_attribute_naming_a_module_function_keeps_the_definition_that_binds() 
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_fntwinbind");
+    let dir = diff_root().join("by_diff_fntwinbind");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def _dump(this: object) -> str:
@@ -12545,7 +13085,7 @@ fn a_declined_class_keeps_the_dunder_slot_a_module_function_filled() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_fntwindunder");
+    let dir = diff_root().join("by_diff_fntwindunder");
     let _ = std::fs::remove_dir_all(&dir);
     // the late gift is the decline lever, and a *dunder* one is what turns the class down
     // rather than having its attributes adopted — see the twin-shapes test above. it is
@@ -12620,7 +13160,7 @@ fn a_container_entry_a_decorator_later_installs_on_a_class_keeps_binding() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_fntwinconvert");
+    let dir = diff_root().join("by_diff_fntwinconvert");
     let _ = std::fs::remove_dir_all(&dir);
     // the late dunder gift turns `Ordered` down, which is the only state `total_ordering`
     // can act on at all: an emitted type is a *static* type and refuses `setattr`
@@ -12707,7 +13247,7 @@ fn identity_against_a_module_function_is_the_one_thing_a_captured_twin_gets_wron
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_fntwinalias");
+    let dir = diff_root().join("by_diff_fntwinalias");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def proxy() -> int:
@@ -12800,7 +13340,7 @@ fn a_class_keeps_what_a_factory_installed_on_it_after_the_class_statement() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_late_factory");
+    let dir = diff_root().join("by_diff_late_factory");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Other:
@@ -12964,7 +13504,7 @@ fn an_annotation_that_could_hand_the_interpreted_class_back_is_refused() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_annreach");
+    let dir = diff_root().join("by_diff_annreach");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Node:
@@ -13053,7 +13593,7 @@ fn an_annotation_that_never_resolves_is_refused_rather_than_emptied() {
     if !supports(&toolchain, (3, 14)) {
         return;
     }
-    let dir = std::env::temp_dir().join("by_diff_annlost");
+    let dir = diff_root().join("by_diff_annlost");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Node:
@@ -13121,7 +13661,7 @@ fn a_class_that_keeps_a_dunder_of_its_own_stays_a_static_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_anndunder");
+    let dir = diff_root().join("by_diff_anndunder");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Keeps:
@@ -13195,7 +13735,7 @@ fn a_subclass_of_a_class_the_metaclass_gate_turns_down_is_built_here() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_gatedbase");
+    let dir = diff_root().join("by_diff_gatedbase");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 from abc import ABCMeta
@@ -13286,7 +13826,7 @@ fn a_pair_the_body_cross_links_agrees_when_the_link_is_made_after_the_class_stat
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_gatedpair");
+    let dir = diff_root().join("by_diff_gatedpair");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Root:
@@ -13386,7 +13926,7 @@ fn a_private_name_in_a_class_body_is_mangled() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_privatemangle");
+    let dir = diff_root().join("by_diff_privatemangle");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class _Printer:
@@ -13451,7 +13991,7 @@ fn a_name_that_is_both_a_class_constant_and_a_field_keeps_the_interpreted_class(
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_constantfieldclash");
+    let dir = diff_root().join("by_diff_constantfieldclash");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Tagged:
@@ -13516,7 +14056,7 @@ fn a_decorated_class_carries_the_body_its_own_decorator_was_handed() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_decoratedconstant");
+    let dir = diff_root().join("by_diff_decoratedconstant");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 from dataclasses import dataclass, field
@@ -13595,7 +14135,7 @@ fn the_class_body_capture_reaches_only_this_module_s_own_body() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_capturescope");
+    let dir = diff_root().join("by_diff_capturescope");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Held:
@@ -13674,7 +14214,7 @@ fn fields_past_a_python_base_leave_that_class_to_its_interpreted_definition() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_pythonbasestorage");
+    let dir = diff_root().join("by_diff_pythonbasestorage");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 import codecs
@@ -13758,7 +14298,7 @@ fn a_spec_that_cannot_place_the_dict_leaves_the_module_to_its_interpreted_defini
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_specdictplacement");
+    let dir = diff_root().join("by_diff_specdictplacement");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 import codecs
@@ -13822,7 +14362,7 @@ fn a_finalizer_over_fields_answers_for_a_construction_that_raised() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_finalizerfields");
+    let dir = diff_root().join("by_diff_finalizerfields");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Held:
@@ -13902,7 +14442,7 @@ fn a_dict_offset_from_a_base_that_does_not_own_the_layout_keeps_the_interpreted_
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_borrowedoffset");
+    let dir = diff_root().join("by_diff_borrowedoffset");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 import codecs
@@ -13970,7 +14510,7 @@ fn a_class_whose_base_declined_declines_with_it() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_declinedbase");
+    let dir = diff_root().join("by_diff_declinedbase");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Outer:
@@ -14046,7 +14586,7 @@ fn a_base_an_interpreted_class_extends_declines_with_it() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_interpretedsub");
+    let dir = diff_root().join("by_diff_interpretedsub");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Container:
@@ -14143,7 +14683,7 @@ fn a_zero_argument_super_is_lowered_to_the_two_argument_form() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_zerosuper");
+    let dir = diff_root().join("by_diff_zerosuper");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Holder(dict):
@@ -14217,7 +14757,7 @@ fn a_zero_argument_super_follows_the_mro_of_the_instance() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_supermro");
+    let dir = diff_root().join("by_diff_supermro");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class A:
@@ -14281,7 +14821,7 @@ fn a_zero_argument_super_names_the_class_the_class_statement_made() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_superowner");
+    let dir = diff_root().join("by_diff_superowner");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Base:
@@ -14347,7 +14887,7 @@ fn a_zero_argument_super_declines_where_slot_zero_is_not_the_receiver() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_supernoslot");
+    let dir = diff_root().join("by_diff_supernoslot");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class A:
@@ -14511,7 +15051,7 @@ fn a_shadowed_super_is_called_the_way_python_calls_it() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_supershadow");
+    let dir = diff_root().join("by_diff_supershadow");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def super() -> str:
@@ -16992,7 +17532,7 @@ fn a_constructor_that_defers_is_still_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_computedinitslot");
+    let dir = diff_root().join("by_diff_computedinitslot");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 _sentinel = object()
@@ -17284,7 +17824,7 @@ fn the_power_dunder_is_answered_by_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_powslot");
+    let dir = diff_root().join("by_diff_powslot");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Mod:
@@ -17763,7 +18303,7 @@ fn a_complex_conversion_is_answered_by_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_complexslot");
+    let dir = diff_root().join("by_diff_complexslot");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Cell:
@@ -17809,7 +18349,7 @@ fn an_await_method_fills_the_async_slot() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_awaitslot");
+    let dir = diff_root().join("by_diff_awaitslot");
     let _ = std::fs::remove_dir_all(&dir);
     // the awaited iterator is a class of its own rather than a generator, so what
     // this exercises is `am_await` alone
@@ -17879,7 +18419,7 @@ fn a_del_method_fills_the_finalizer_slot() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_delslot");
+    let dir = diff_root().join("by_diff_delslot");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Closer:
@@ -17967,7 +18507,7 @@ fn a_getattr_hook_stands_behind_the_ordinary_lookup() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_getattrhook");
+    let dir = diff_root().join("by_diff_getattrhook");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Proxy:
@@ -18038,7 +18578,7 @@ fn a_descriptor_get_fills_its_slot() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_descrget");
+    let dir = diff_root().join("by_diff_descrget");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Doubler:
@@ -18529,8 +19069,8 @@ def total(xs: list[float]) -> float:
 def sliced(xs: list[int]) -> str:
     return str(xs[1:3])
 ";
-    let dir = std::env::temp_dir().join("by_diff_plainpy");
-    let interpreted = std::env::temp_dir().join("by_diff_plainpy_i");
+    let dir = diff_root().join("by_diff_plainpy");
+    let interpreted = diff_root().join("by_diff_plainpy_i");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&interpreted);
     std::fs::create_dir_all(&interpreted).expect("the directory is created");
@@ -18966,7 +19506,7 @@ fn a_subclass_that_writes_no_init_inherits_the_slot() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_inheritedinitslot");
+    let dir = diff_root().join("by_diff_inheritedinitslot");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 LOG = []
@@ -19124,7 +19664,7 @@ fn a_slots_declaration_is_storage_the_emitted_type_owns() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_slotsowned");
+    let dir = diff_root().join("by_diff_slotsowned");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         SLOTTED,
@@ -19327,7 +19867,7 @@ fn a_decorated_class_is_the_compiled_one_and_its_dict_is_collectable() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_decoratedlive");
+    let dir = diff_root().join("by_diff_decoratedlive");
     let _ = std::fs::remove_dir_all(&dir);
     // `from __future__ import annotations` is what keeps `through`'s parameter from
     // being a *read* of `Derived`: without it the module evaluates the annotation where
@@ -20644,7 +21184,7 @@ fn a_module_level_name_bound_to_a_class_follows_the_class_it_named() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_classalias");
+    let dir = diff_root().join("by_diff_classalias");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class C:
@@ -20708,7 +21248,7 @@ fn a_class_constant_naming_another_class_is_the_type_that_replaced_it() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_classconst");
+    let dir = diff_root().join("by_diff_classconst");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class C:
@@ -20804,7 +21344,7 @@ fn an_alias_reaches_the_compiled_type_rather_than_the_twin() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_aliasbase_type");
+    let dir = diff_root().join("by_diff_aliasbase_type");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 class Root:
@@ -20863,7 +21403,7 @@ fn an_alias_does_not_carry_a_base_this_module_lays_out_past_the_gate() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_aliaslaid");
+    let dir = diff_root().join("by_diff_aliaslaid");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 import codecs
@@ -21307,7 +21847,7 @@ fn the_compiled_types_are_what_answer_for_every_write_shape() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_attrshapes_t");
+    let dir = diff_root().join("by_diff_attrshapes_t");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         ATTRIBUTE_WRITE_SHAPES,
@@ -21390,7 +21930,7 @@ fn only_the_class_that_reads_its_own_dict_is_left_interpreted() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_attrdict_t");
+    let dir = diff_root().join("by_diff_attrdict_t");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         READS_ITS_OWN_DICT,
@@ -21494,7 +22034,7 @@ fn the_class_that_deletes_an_attribute_is_the_compiled_one() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_deleteattr_t");
+    let dir = diff_root().join("by_diff_deleteattr_t");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         DELETES_AN_ATTRIBUTE,
@@ -21537,7 +22077,7 @@ fn deleting_an_attribute_releases_it_exactly_once() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_deleterefs_t");
+    let dir = diff_root().join("by_diff_deleterefs_t");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         DELETES_AN_ATTRIBUTE,
@@ -21671,7 +22211,7 @@ fn the_nested_function_reaching_the_receiver_is_in_the_compiled_init() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_nestedself_t");
+    let dir = diff_root().join("by_diff_nestedself_t");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         "\
@@ -21756,7 +22296,7 @@ fn the_class_a_classmethod_write_declines_is_the_interpreted_one() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_clswrite_t");
+    let dir = diff_root().join("by_diff_clswrite_t");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         WRITES_ON_THE_CLASS,
@@ -21929,7 +22469,7 @@ fn the_class_an_assigned_dunder_fills_a_slot_on_is_compiled() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_assigneddunder_t");
+    let dir = diff_root().join("by_diff_assigneddunder_t");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         ASSIGNED_DUNDERS,
@@ -22119,7 +22659,7 @@ fn a_borrowed_tuple_element_does_not_move_its_source_references() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_elements_rc");
+    let dir = diff_root().join("by_diff_elements_rc");
     let _ = std::fs::remove_dir_all(&dir);
     if build_source(
         BORROWED_ELEMENTS,
@@ -22485,7 +23025,7 @@ fn a_dispatch_table_holds_the_compiled_methods_the_type_publishes() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_dispatchtablekind");
+    let dir = diff_root().join("by_diff_dispatchtablekind");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         A_DISPATCH_TABLE,
@@ -22700,7 +23240,7 @@ fn the_str_of_an_int_boxes_nothing_and_still_resolves_the_name() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_strofint_shape");
+    let dir = diff_root().join("by_diff_strofint_shape");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def keys(n: int) -> str:
@@ -22745,7 +23285,7 @@ fn the_str_of_an_int_in_a_loop_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_strofintleak");
+    let dir = diff_root().join("by_diff_strofintleak");
     let _ = std::fs::remove_dir_all(&dir);
     let source = "\
 def build(n: int, base: int) -> str:
@@ -23014,7 +23554,7 @@ fn a_written_new_is_the_one_the_compiled_type_runs() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = std::env::temp_dir().join("by_diff_writtennewkind");
+    let dir = diff_root().join("by_diff_writtennewkind");
     let _ = std::fs::remove_dir_all(&dir);
     let built = match build_source(
         WRITTEN_NEW,

@@ -15,11 +15,16 @@ use crate::single_file::with_source;
 
 /// whether any block holds an op matching `predicate`
 fn has_op(function: &by_ir::function::Function, predicate: impl Fn(&Op) -> bool) -> bool {
+    count_op(function, predicate) > 0
+}
+
+fn count_op(function: &by_ir::function::Function, predicate: impl Fn(&Op) -> bool) -> usize {
     function
         .blocks
         .iter()
         .flat_map(|block| block.ops.iter())
-        .any(predicate)
+        .filter(|op| predicate(op))
+        .count()
 }
 
 /// each decorator as it was written, which is what a test about *which* decorators
@@ -2595,13 +2600,13 @@ class Fine:
 }
 
 #[test]
-fn fields_past_a_base_this_module_emits_decline() {
-    // `Wrapper` lays nothing out of its own, so it is built by calling its metaclass and
-    // its type is a `class` statement's — `subtype_dealloc` and the rest. `Held`'s fields
-    // would sit past a `Wrapper` instance, so it supplies the three type slots that reach
-    // them and each calls `Wrapper`'s. python's own three resolve which base to chain to
-    // from the instance's type, find `Held`'s there, and call it back until the stack
-    // runs out.
+fn fields_past_a_base_that_holds_nothing_are_lowered() {
+    // `Wrapper` and `Held` lay nothing out of their own, so neither needs storage past an
+    // instance — but `Deep`'s fields do, and reaching them takes three type slots of
+    // `Deep`'s own that call the base's. what breaks that chain is the base carrying
+    // slots *we* emitted, which read the base to chain to from the type that declared
+    // them; holding no fields does nothing for it either way. so both rungs are built
+    // from specs of their own and given the three with nothing in them.
     //
     // `Beside` is the boundary: its layout chain ends at `object` rather than outside, so
     // its struct *begins* with `Rooted`'s rather than sitting past an instance of it, and
@@ -2613,6 +2618,10 @@ class Wrapper(OSError):
 
 
 class Held(Wrapper):
+    pass
+
+
+class Deep(Held):
     def __init__(self, code: int) -> None:
         self.code = code
 
@@ -2628,19 +2637,85 @@ class Beside(Rooted):
         self.extra = extra
 ",
     );
+    assert_eq!(reasons, Vec::new());
+}
+
+#[test]
+fn fields_past_a_hollow_base_beside_a_class_this_module_writes_decline() {
+    // `Hollow` reads as standing on a base from outside, but the list also names `Mixin`
+    // — a class this module writes and then turns down. what stands under that name at
+    // import is a `class` statement's type all the same, so the type `Hollow` is built on
+    // is a heap one, and a spec cannot be built on one of those. the refusal would be the
+    // whole module's, which is a worse answer than `Deep` keeping its own definition
+    let reasons = declines(
+        "\
+class Mixin:
+    def hide(self) -> None:
+        setattr(self, 'hidden', 1)
+
+
+class Hollow(OSError, Mixin):
+    pass
+
+
+class Deep(Hollow):
+    def __init__(self, code: int) -> None:
+        self.code = code
+",
+    );
     assert_eq!(
         reasons,
         vec![
+            (
+                "Mixin".to_string(),
+                "a `setattr` on the receiver names its attribute at runtime".to_string()
+            ),
+            (
+                "Deep".to_string(),
+                "a class whose fields sit past a base's instance needs a base python frees itself, and one this module builds from a spec is the only one of ours that is"
+                    .to_string()
+            ),
+            (
+                "Hollow".to_string(),
+                "`Deep` declined, so it extends the interpreted definition rather than this type"
+                    .to_string()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn fields_past_a_base_this_module_does_not_free_decline() {
+    // `Wrapper` stores through `setattr`, which no layout can record, so this module
+    // leaves it to its interpreted definition — a `class` statement's type, carrying
+    // `subtype_dealloc`. `Held`'s fields would sit past a `Wrapper` instance, so it
+    // supplies the three type slots that reach them and each calls `Wrapper`'s. python's
+    // own three resolve which base to chain to from the instance's type, find `Held`'s
+    // there, and call it back until the stack runs out
+    let reasons = declines(
+        "\
+class Wrapper(OSError):
+    def hide(self) -> None:
+        setattr(self, 'hidden', 1)
+
+
+class Held(Wrapper):
+    def __init__(self, code: int) -> None:
+        self.code = code
+",
+    );
+    assert_eq!(
+        reasons,
+        vec![
+            (
+                "Wrapper".to_string(),
+                "a `setattr` on the receiver names its attribute at runtime".to_string()
+            ),
             (
                 "Held".to_string(),
                 "a class whose fields sit past a base's instance needs a base python frees itself, and one this module builds from a spec is the only one of ours that is"
                     .to_string()
             ),
-            (
-                "Wrapper".to_string(),
-                "`Held` declined, so it extends the interpreted definition rather than this type"
-                    .to_string()
-            )
         ]
     );
 }
@@ -3358,10 +3433,12 @@ def plain(p: Plain) -> int:
 }
 
 #[test]
-fn a_final_receiver_keeps_its_direct_call() {
-    // AB3 and AB4 traded the direct call away for any class in an inheritance chain.
-    // `final` is about the *place*: nothing can subclass it, so there is no override
-    // for the protocol to find
+fn a_final_receiver_answers_through_the_licence() {
+    // `final` rules out an override and nothing else. the class is still a mutable heap
+    // type, so `Fixed.tripled = f` rebinds the method and a value written on an instance
+    // shadows it — a direct call sees neither, and answered from the compiled body while
+    // python answered from the shadow. the licence asks all three questions at once, so
+    // that is what a receiver of one takes
     with_source(
         "\
 data class Open:
@@ -3399,31 +3476,36 @@ def on_open(o: Open) -> int:
                         .unwrap_or_else(|| panic!("{name} is compiled")),
                 )
             };
-            // both classes are in an inheritance chain, so both are mutable heap
-            // types — only the *place* differs
+            // both classes are in an inheritance chain, so both are mutable heap types.
+            // the licence's test is what reaches the body, and the body is still reached
+            assert!(
+                ops("on_final").contains("method-stands r1 Fixed.tripled"),
+                "{}",
+                ops("on_final")
+            );
             assert!(
                 ops("on_final").contains("call Fixed.tripled"),
                 "{}",
                 ops("on_final")
             );
-            // and an *inherited* method too: the symbol lives on the base, and the
-            // receiver's struct begins with the base's, so the pointer is valid
-            assert!(
-                ops("on_final_inherited").contains("call Open.doubled"),
-                "{}",
-                ops("on_final_inherited")
-            );
-            // an open receiver reaches the same body, but only through the test — and
-            // an exact one needs no test at all
+            // an open receiver takes the same test for a method it declares
             assert!(
                 ops("on_open").contains("method-stands r1 Open.doubled"),
                 "{}",
                 ops("on_open")
             );
+            // a method the class only *inherits* is not one a licence can be taken for:
+            // what a class's body binds is not knowable from the method table alone, so
+            // the ordinary protocol call is what an inherited name reaches
             assert!(
-                !ops("on_final").contains("method-stands"),
+                ops("on_final_inherited").contains(".doubled()"),
                 "{}",
-                ops("on_final")
+                ops("on_final_inherited")
+            );
+            assert!(
+                !ops("on_final_inherited").contains("call Open.doubled"),
+                "{}",
+                ops("on_final_inherited")
             );
         },
     );
@@ -4780,7 +4862,10 @@ def alone(a: int) -> int:
 
 #[test]
 fn a_method_call_on_an_emitted_class_is_direct() {
-    // an emitted class cannot be subclassed, so there is nothing to dispatch on
+    // an emitted class cannot be subclassed, so there is nothing to dispatch on. what
+    // is left is a value written into the instance's own dict, which shadows the
+    // class's method — so every protocol call here is the arm behind that one test,
+    // and there is no other reason for one to appear
     with_source(
         "\
 data class Point:
@@ -4808,11 +4893,51 @@ def use(p: Point) -> int:
             for function in [scaled, &module.functions[0]] {
                 let text = print_function(function);
                 assert!(text.contains("call Point."), "{text}");
-                assert!(
-                    !has_op(function, |op| matches!(op, Op::CallMethod { .. })),
+                let asked = count_op(function, |op| matches!(op, Op::DictShadows { .. }));
+                assert!(asked > 0, "{text}");
+                assert_eq!(
+                    count_op(function, |op| matches!(op, Op::CallMethod { .. })),
+                    asked,
                     "{text}"
                 );
             }
+        },
+    );
+}
+
+#[test]
+fn a_slots_class_reaches_its_body_with_nothing_asked() {
+    // `__slots__` is python's own way of saying an instance's attributes are exactly the
+    // declared ones, so there is no dict for a value shadowing a method to go in — and
+    // python itself refuses the write. that leaves the direct call with nothing to test,
+    // which is the shape it had before the test existed
+    with_source(
+        "\
+class Cell:
+    __slots__ = (\"n\",)
+
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def doubled(self) -> int:
+        return self.n * 2
+
+def use(c: Cell) -> int:
+    return c.doubled()
+",
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", true);
+            assert!(module.declined.is_empty(), "{:?}", module.declined);
+            let function = &module.functions[0];
+            let text = print_function(function);
+            assert!(text.contains("call Cell.doubled"), "{text}");
+            assert!(
+                !has_op(function, |op| matches!(
+                    op,
+                    Op::DictShadows { .. } | Op::CallMethod { .. }
+                )),
+                "{text}"
+            );
         },
     );
 }
@@ -4832,13 +4957,40 @@ def use(b: Box) -> int:
 ",
         |db, env, model, suite| {
             let module = crate::build_module(db, env, model, suite, "app", true);
-            let text = print_function(&module.functions[0]);
-            // no box on the way in and no unbox on the way out
+            let function = &module.functions[0];
+            let text = print_function(function);
+            // no box on the way in and no unbox on the way out. the block asking whether
+            // the instance shadows the method is on the way to the call and boxes
+            // nothing either — the receiver is read where it lies
+            let direct = function
+                .blocks
+                .iter()
+                .find(|block| {
+                    block
+                        .ops
+                        .iter()
+                        .any(|op| matches!(op, Op::CallNative { .. }))
+                })
+                .expect("the direct call is emitted");
+            for block in function.blocks.iter().filter(|block| {
+                block
+                    .ops
+                    .iter()
+                    .any(|op| matches!(op, Op::DictShadows { .. }))
+            }) {
+                assert!(
+                    !block
+                        .ops
+                        .iter()
+                        .any(|op| matches!(op, Op::Box { .. } | Op::Unbox { .. })),
+                    "{text}"
+                );
+            }
             assert!(
-                !has_op(&module.functions[0], |op| matches!(
-                    op,
-                    Op::Box { .. } | Op::Unbox { .. }
-                )),
+                !direct
+                    .ops
+                    .iter()
+                    .any(|op| matches!(op, Op::Box { .. } | Op::Unbox { .. })),
                 "{text}"
             );
         },

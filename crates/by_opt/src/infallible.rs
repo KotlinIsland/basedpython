@@ -242,6 +242,9 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         Op::MatchAttr { .. } => true,
         // a pointer comparison against a singleton
         Op::IsMissing { .. } | Op::MethodStands { .. } => false,
+        // reading the instance's own dict. the lookup can raise on an unhashable key,
+        // and `By_DictShadows` answers that with the refusal rather than the error
+        Op::DictShadows { .. } => false,
         // a slice reaches `__getitem__`, and allocates the list it hands back
         Op::MatchSlice { .. } => true,
         // `isinstance` reaches `__instancecheck__`, which can raise

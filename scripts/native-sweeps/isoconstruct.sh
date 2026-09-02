@@ -148,6 +148,18 @@ for b in $(sweep_modules "$LIB" "$@"); do
            printf '%s\tsame\t%s\n' "$b" "$(printf '%s' "$i" | grep -c '')"
          fi ;;
     esac >> "$OUT"
+  elif sweep_pair_died "$i" "$c"; then
+    # a death outranks a slow constructor, and is asked about first for that reason. the
+    # restart loop steps past a segfault and carries on, so a leg that crashed can still
+    # reach a class that outruns its two seconds — and the timeout test below would then
+    # be the one that matched, writing a row with no death in it for `crashed:` to count
+    # and calling no `sweep_note_death`, so `sweep_end`'s cross-check had nothing to
+    # disagree with. `smtplib` segfaulted on every construction and was reported
+    # `timed-out` with `crashed: 0`
+    sweep_note_death "$b"
+    { printf '%s\tCRASHED\t%s\tDIED signal in one leg\n' "$b" "$(printf '%s' "$i" | grep -c '')"
+      diff <(printf '%s' "$i") <(printf '%s' "$c") | awk -v b="$b" '{print b "\t| " $0}'
+    } >> "$OUT"
   elif printf '%s%s' "$i" "$c" | grep -q '_Slow timed out'; then
     # a constructor that outran its two seconds on one leg and not the other, or an
     # import that outran its thirty, says nothing about the compiler — a loaded machine
