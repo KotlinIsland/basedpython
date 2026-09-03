@@ -147,7 +147,7 @@ on
 | `callTypeArguments`       | the type arguments inferred for a generic call              |
 | `typeArgumentNames`       | the parameter a positional type argument fills              |
 | `numericPromotions`       | the arms numeric promotion adds to `float` and `complex`    |
-| `revealedTypes`           | what a `reveal_type` call reveals                           |
+| `revealedTypes`           | what a `reveal_type` call reveals, and what it narrowed     |
 | `implicitParameters`      | a [trailing lambda](trailing-lambdas.md)'s `it`             |
 | `implicitSelf`            | the `self` an [`init(...)`](init-method.md) binds           |
 | `lambdaParameterTypes`    | the type of an unannotated `lambda` parameter               |

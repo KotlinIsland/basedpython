@@ -1435,6 +1435,26 @@ impl<'db> SemanticModel<'db> {
         place.as_symbol().is_some_and(Symbol::is_reassigned)
     }
 
+    /// The type the place `expr` loads was declared with, when the load reads something narrower
+    /// than the declaration allows.
+    ///
+    /// `loaded_ty` is the type the load itself produced. Returns `None` unless a declaration
+    /// bounds the place with a wider type than that. The resolution itself is
+    /// `crate::place::declared_type_at_load`, which is not public.
+    pub fn declared_type_at_load(
+        &self,
+        expr: ast::ExprRef<'_>,
+        loaded_ty: Type<'db>,
+    ) -> Option<Type<'db>> {
+        crate::place::declared_type_at_load(
+            self.db,
+            &self.program_environment(),
+            self.program_file(),
+            expr,
+            loaded_ty,
+        )
+    }
+
     /// Returns the scope in which `node` is defined (handles string annotations).
     pub fn scope(&self, node: ast::AnyNodeRef<'_>) -> Option<FileScopeId> {
         let index = semantic_index(self.db, self.program_file());

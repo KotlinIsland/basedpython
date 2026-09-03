@@ -29,6 +29,82 @@ def _(x: int):
     assert_type(y, int)
 ```
 
+## Reporting the declared type
+
+A declared place holds anything its annotation allows, while a load of it reads only what reaches
+that point. `reveal_type` answers with the narrower type, and reports the declaration alongside it
+so the bound on the place is visible too.
+
+```py
+from typing_extensions import reveal_type
+
+a: int = 1
+
+# snapshot: revealed-type
+reveal_type(a)
+```
+
+```snapshot
+info[revealed-type]: Revealed type
+ --> src/mdtest_snippet.py:6:13
+  |
+6 | reveal_type(a)
+  |             ^ `Literal[1]`
+info: Declared type: `int`
+```
+
+Narrowing a parameter tells the same story the other way round: the declaration is the type the
+narrowing started from.
+
+```py
+def narrowed(value: int | str) -> None:
+    if isinstance(value, int):
+        # snapshot: revealed-type
+        reveal_type(value)
+```
+
+```snapshot
+info[revealed-type]: Revealed type
+  --> src/mdtest_snippet.py:10:21
+   |
+10 |         reveal_type(value)
+   |                     ^^^^^ `int`
+info: Declared type: `int | str`
+```
+
+Nothing is reported for a place no annotation declares.
+
+```py
+b = 1
+
+# snapshot: revealed-type
+reveal_type(b)
+```
+
+```snapshot
+info[revealed-type]: Revealed type
+  --> src/mdtest_snippet.py:14:13
+   |
+14 | reveal_type(b)
+   |             ^ `Literal[1]`
+```
+
+Nor for a place whose declared type is the one the call already read.
+
+```py
+def unnarrowed(value: int) -> None:
+    # snapshot: revealed-type
+    reveal_type(value)
+```
+
+```snapshot
+info[revealed-type]: Revealed type
+  --> src/mdtest_snippet.py:17:17
+   |
+17 |     reveal_type(value)
+   |                 ^^^^^ `int`
+```
+
 ## Without importing it
 
 For convenience, we also allow `reveal_type` to be used without importing it, even if that would

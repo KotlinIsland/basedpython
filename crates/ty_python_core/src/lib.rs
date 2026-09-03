@@ -20,8 +20,8 @@ use ty_module_resolver::ModuleName;
 use crate::frozen::{FrozenMap, FrozenSet};
 pub use crate::place::ScopedPlaceId;
 pub use crate::statement::{Statement, StatementNodeKey};
-use ast_ids::AstIds;
 pub use ast_ids::ExpressionNodeKey;
+use ast_ids::{AstIds, ScopedUseId};
 use builder::SemanticIndexBuilder;
 pub use definition::DefinitionState;
 use definition::{Definition, DefinitionNodeKey, Definitions};
@@ -450,6 +450,15 @@ impl<'db> SemanticIndex<'db> {
     #[track_caller]
     fn ast_ids(&self) -> &AstIds {
         &self.ast_ids
+    }
+
+    /// Returns the id of `expression`'s use of a place, or `None` when the index recorded no use
+    /// there.
+    ///
+    /// An expression the index never saw has no use id: a name parsed out of a string annotation,
+    /// for example, is not a node the file's own scopes were built from.
+    pub fn try_use_id(&self, expression: ast::ExprRef<'_>) -> Option<ScopedUseId> {
+        self.ast_ids.try_use_id(expression)
     }
 
     /// Returns the ID of the `expression`'s enclosing scope.
