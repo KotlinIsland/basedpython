@@ -1,12 +1,16 @@
 use crate::ProgramEnvironment;
 use itertools::Either;
 use ruff_index::IndexSlice;
-use ruff_python_ast::PythonVersion;
+use ruff_python_ast::{self as ast, PythonVersion};
 use ty_module_resolver::{
     KnownModule, Module, ModuleName, file_to_module, resolve_module_confident,
 };
 
 use crate::dunder_all::dunder_all_names;
+use crate::place_load::{
+    ImplicitPlaceLoad, PlaceLoadMode, PlaceLoadResolutionStep, PlaceLoadSource,
+    PlaceLoadSourceKind, resolve_place_load,
+};
 use crate::reachability::{
     ReachabilityEvaluationCache, evaluate_reachability, evaluate_reachability_with_cache,
 };
@@ -19,7 +23,7 @@ use crate::types::{
 use crate::{Db, FxIndexSet, FxOrderSet};
 use ty_python_core::definition::{Definition, DefinitionKind, DefinitionState};
 use ty_python_core::narrowing_constraints::ScopedNarrowingConstraint;
-use ty_python_core::place::ScopedPlaceId;
+use ty_python_core::place::{PlaceExpr, ScopedPlaceId};
 use ty_python_core::predicate::{Predicate, ScopedPredicateId};
 use ty_python_core::reachability_constraints::{
     ReachabilityConstraints, ScopedReachabilityConstraintId,
@@ -27,8 +31,8 @@ use ty_python_core::reachability_constraints::{
 use ty_python_core::scope::ScopeId;
 use ty_python_core::{
     BindingWithConstraints, BindingWithConstraintsIterator, BoundnessAnalysis,
-    DeclarationWithConstraint, DeclarationsIterator, ProgramFile, Truthiness, global_scope,
-    place_table, use_def_map,
+    DeclarationWithConstraint, DeclarationsIterator, ProgramFile, SemanticIndex, Truthiness,
+    global_scope, place_table, semantic_index, use_def_map,
 };
 
 pub(crate) use implicit_globals::{
@@ -1512,6 +1516,189 @@ impl<'db> DeclarationsBoundnessEvaluator<'_, 'db> {
             }
         }
     }
+}
+
+/// The type the place an expression loads was declared with, when the load read something
+/// narrower than the declaration allows.
+///
+/// A load reads the value that reaches it, which is often more specific than what the place is
+/// allowed to hold: `a` in `a: int = 1` reads `Literal[1]`, and an `int | str` parameter reads
+/// `int` inside an `isinstance(…, int)` branch. The declared type is the second half of that
+/// picture — the upper bound on everything the place can ever hold — which is worth showing
+/// next to the value for a reader who asked what a name is.
+///
+/// Returns `None` unless the load resolves to a single declared place whose declared type is
+/// wider than what was read. Nothing is reported for a place no annotation declares, for a load
+/// that draws on sources that disagree, or for a load that already read the declared type.
+pub(crate) fn declared_type_at_load<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: ProgramFile<'db>,
+    expr: ast::ExprRef<'_>,
+    loaded_ty: Type<'db>,
+) -> Option<Type<'db>> {
+    let index = semantic_index(db, file);
+
+    // an expression the index never saw belongs to no scope and records no use, so there are no
+    // reaching definitions to resolve. a name parsed out of a string annotation is one such
+    let scope = index.try_expression_scope_id(&expr)?.to_scope_id(db, file);
+    index.try_use_id(expr)?;
+
+    let place_expr = PlaceExpr::try_from_expr(expr)?;
+    let mut resolution = resolve_place_load(
+        db,
+        index,
+        scope,
+        place_expr,
+        PlaceLoadMode::AtExpression(expr),
+    );
+
+    let declared = loop {
+        match resolution.next()? {
+            PlaceLoadResolutionStep::Source(source) => {
+                match source_declaration(db, env, index, source) {
+                    SourceDeclaration::Declared(declared) => break declared,
+                    SourceDeclaration::Undeclared => return None,
+                    SourceDeclaration::Empty => {}
+                }
+            }
+            PlaceLoadResolutionStep::MemberResolutionCondition(_) => {}
+            PlaceLoadResolutionStep::Exhausted(_) => return None,
+        }
+    };
+
+    // a dynamic declaration bounds nothing, so reporting it would add a line that says less than
+    // the revealed type already does. a bare `Final`, which declares no type at all, arrives here
+    // as `Unknown`
+    if declared.is_dynamic() {
+        return None;
+    }
+
+    // a load that reads something the declaration does not allow means the two answers describe
+    // different things, so pairing them would mislead rather than inform
+    if !loaded_ty.is_assignable_to(db, env, declared) {
+        return None;
+    }
+
+    (!declared.is_equivalent_to(db, env, loaded_ty)).then_some(declared)
+}
+
+/// What one source of a place load says about the place's declared type.
+enum SourceDeclaration<'db> {
+    /// The source supplies a value, and this type was declared for it.
+    Declared(Type<'db>),
+    /// The source supplies a value that no declaration bounds, or several values whose
+    /// declarations disagree. Either way the load has no single declared type.
+    Undeclared,
+    /// The source supplies no value here, so resolution moves on to the next one.
+    Empty,
+}
+
+fn source_declaration<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    index: &'db SemanticIndex<'db>,
+    source: PlaceLoadSource<'db>,
+) -> SourceDeclaration<'db> {
+    match source.kind {
+        PlaceLoadSourceKind::Bindings(bindings) => {
+            let predicates = bindings.predicates();
+            let reachability_constraints = bindings.reachability_constraints();
+            let mut declared: Option<Type<'db>> = None;
+
+            for binding_with_constraints in bindings {
+                let DefinitionState::Defined(binding) = binding_with_constraints.binding else {
+                    continue;
+                };
+                if evaluate_reachability_with_cache(
+                    db,
+                    None,
+                    reachability_constraints,
+                    predicates,
+                    binding_with_constraints.reachability_constraint,
+                )
+                .is_always_false()
+                {
+                    continue;
+                }
+
+                let Some(binding_declared) = declared_type_of_binding(db, env, index, binding)
+                else {
+                    return SourceDeclaration::Undeclared;
+                };
+                match declared {
+                    None => declared = Some(binding_declared),
+                    Some(previous) if previous.is_equivalent_to(db, env, binding_declared) => {}
+                    Some(_) => return SourceDeclaration::Undeclared,
+                }
+            }
+
+            declared.map_or(SourceDeclaration::Empty, SourceDeclaration::Declared)
+        }
+        PlaceLoadSourceKind::DefinitionsFromOwningScope { scope, id } => {
+            declared_place(place_by_id(
+                db,
+                scope,
+                id,
+                RequiresExplicitReExport::No,
+                ConsideredDefinitions::AllReachable,
+            ))
+        }
+        PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::ExplicitGlobalSymbol { file, name }) => {
+            declared_place(explicit_global_symbol(db, file, &name))
+        }
+        PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::ModuleImplicitGlobal { file, name }) => {
+            declared_place(module_type_implicit_global_symbol(db, file, &name))
+        }
+        PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::Builtin(name)) => {
+            declared_place(implicit_builtins_symbol(db, env, &name))
+        }
+        // a debugger's observation is a value with no declaration behind it, and the two implicit
+        // class-body loads are synthesized rather than written, so neither has an annotation to
+        // report
+        PlaceLoadSourceKind::Observed(_)
+        | PlaceLoadSourceKind::Implicit(
+            ImplicitPlaceLoad::DunderClass(_) | ImplicitPlaceLoad::ClassBodySymbol(_),
+        ) => SourceDeclaration::Undeclared,
+    }
+}
+
+/// Reads a whole-place lookup, which already answers with the declared type when the place has
+/// one.
+fn declared_place(place: PlaceAndQualifiers<'_>) -> SourceDeclaration<'_> {
+    match place.place {
+        Place::Defined(defined) if defined.origin.is_declared() => {
+            SourceDeclaration::Declared(defined.ty)
+        }
+        Place::Defined(_) => SourceDeclaration::Undeclared,
+        Place::Undefined => SourceDeclaration::Empty,
+    }
+}
+
+/// The type declared for the place a binding writes to.
+///
+/// The binding may carry the annotation itself, as `a: int = 1` does, or a separate statement may
+/// have declared the place that a plain `a = 1` writes to.
+fn declared_type_of_binding<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    index: &SemanticIndex<'db>,
+    binding: Definition<'db>,
+) -> Option<Type<'db>> {
+    if let Some(declared) = inferred_declaration(db, binding).declared() {
+        return Some(declared.inner_type());
+    }
+
+    place_from_declarations(
+        db,
+        env,
+        index
+            .use_def_map(binding.file_scope(db))
+            .declarations_at_binding(binding),
+    )
+    .ignore_conflicting_declarations()
+    .place
+    .ignore_possibly_undefined()
 }
 
 /// Implementation of [`symbol`].

@@ -169,7 +169,7 @@ def f(x: int) -> None:
         },
         "label": [
           {
-            "value": "revealed: int"
+            "value": "int"
           }
         ],
         "kind": 1,

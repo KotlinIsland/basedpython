@@ -39,10 +39,10 @@ use crate::diagnostic::format_enumeration;
 use crate::place::{
     ConsideredDefinitions, DefinedPlace, Definedness, LookupError, Place, PlaceAndQualifiers,
     RequiresExplicitReExport, TypeOrigin, builtins_module_scope, class_body_implicit_symbol,
-    explicit_global_symbol, implicit_builtins_symbol, loop_header_reachability,
-    module_type_implicit_global_declaration, module_type_implicit_global_symbol, place_by_id,
-    place_from_bindings_with_reachability_cache, place_from_declarations_with_reachability_cache,
-    typing_extensions_symbol,
+    declared_type_at_load, explicit_global_symbol, implicit_builtins_symbol,
+    loop_header_reachability, module_type_implicit_global_declaration,
+    module_type_implicit_global_symbol, place_by_id, place_from_bindings_with_reachability_cache,
+    place_from_declarations_with_reachability_cache, typing_extensions_symbol,
 };
 use crate::place_load::{
     ImplicitPlaceLoad, PlaceExprPrefixLoad, PlaceExprPrefixLoads, PlaceLoadFailure, PlaceLoadMode,
@@ -12333,7 +12333,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         };
                         if is_reveal_type && let Some(first_arg) = arguments.args.first() {
                             let revealed_ty = self.expression_type(first_arg);
-                            report_revealed_type(&self.context, revealed_ty, first_arg);
+                            let declared_ty = declared_type_at_load(
+                                self.db(),
+                                env,
+                                self.context.program_file(),
+                                ast::ExprRef::from(first_arg),
+                                revealed_ty,
+                            );
+                            report_revealed_type(
+                                &self.context,
+                                revealed_ty,
+                                declared_ty,
+                                first_arg,
+                            );
                         }
                     }
                     _ => {}

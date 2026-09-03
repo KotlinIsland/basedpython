@@ -414,17 +414,31 @@ impl InlayHint {
     }
 
     /// The type a `reveal_type` call reveals, shown at the end of its line.
+    ///
+    /// `declared` is the wider type the revealed place was declared with, when the call read
+    /// something narrower than the declaration allows. Showing both makes the narrowing itself
+    /// visible, rather than only its result.
     fn revealed_type(
         db: &dyn Db,
         env: &ProgramEnvironment<'_>,
         position: TextSize,
         revealed: Type,
+        declared: Option<Type>,
     ) -> Self {
+        let label = match declared {
+            Some(declared) => format!(
+                "{}, narrowed from {}",
+                revealed.display(db, env),
+                declared.display(db, env)
+            ),
+            None => revealed.display(db, env).to_string(),
+        };
+
         Self {
             position,
             kind: InlayHintKind::RevealedType,
             label: InlayHintLabel {
-                parts: vec![format!("revealed: {}", revealed.display(db, env)).into()],
+                parts: vec![label.into()],
             },
             padding_left: true,
             padding_right: false,
@@ -759,10 +773,10 @@ pub struct InlayHintSettings {
     pub numeric_promotions: bool,
 
     /// Whether to show the type a `reveal_type` call reveals, at the end of its
-    /// line.
+    /// line. A place declared wider than what the call read shows both types.
     ///
     /// ```python
-    /// reveal_type(1)" revealed: Literal[1]"
+    /// reveal_type(1)" Literal[1]"
     /// ```
     pub revealed_types: bool,
 
@@ -1368,14 +1382,10 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
-        let Some(revealed) = call
-            .arguments
-            .args
-            .iter()
-            .exactly_one()
-            .ok()
-            .and_then(|argument| argument.inferred_type(&self.model))
-        else {
+        let Some(argument) = call.arguments.args.iter().exactly_one().ok() else {
+            return;
+        };
+        let Some(revealed) = argument.inferred_type(&self.model) else {
             return;
         };
 
@@ -1384,6 +1394,8 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             env,
             self.source.line_end(call.range().end()),
             revealed,
+            self.model
+                .declared_type_at_load(ast::ExprRef::from(argument), revealed),
         ));
     }
 
@@ -2502,9 +2514,9 @@ Source with applied edits:
             revealed_types: true,
             numeric_promotions: true,
             ..InlayHintSettings::none()
-        }), @r"
+        }), @"
         «_| int»
-        «_revealed: int | float | None»
+        «_int | float | None»
         ");
     }
 
@@ -10570,6 +10582,9 @@ Source with applied edits:
         }));
     }
 
+    /// A place declared wider than the value that reaches the call shows both, so the narrowing
+    /// is visible. A place with nothing declared, or one read at its full declared type, shows
+    /// only what the call revealed.
     #[test]
     fn revealed_types() {
         let mut test = inlay_hint_test(
@@ -10581,6 +10596,13 @@ Source with applied edits:
 
             def f(y: int) -> None:
                 reveal_type(y)
+
+            a: int = 1
+            reveal_type(a)
+
+            def g(z: int | str) -> None:
+                if isinstance(z, int):
+                    reveal_type(z)
             ",
         );
 

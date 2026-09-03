@@ -66,7 +66,7 @@ use ruff_text_size::Ranged;
 use salsa::plumbing::AsId;
 use ty_module_resolver::{ImportingFile, KnownModule, ModuleName, file_to_module, resolve_module};
 
-use crate::place::{DefinedPlace, Definedness, Place, place_from_bindings};
+use crate::place::{DefinedPlace, Definedness, Place, declared_type_at_load, place_from_bindings};
 use crate::types::call::{Binding, CallArguments};
 use crate::types::callable::{CallableFunctionProvenance, CallableTypeKind};
 use crate::types::constraints::ConstraintSet;
@@ -3344,6 +3344,7 @@ impl KnownFunction {
                 report_revealed_type(
                     context,
                     revealed_type,
+                    revealed_declared_type(context, revealed_type, call_expression),
                     call_argument_node(call_expression, "obj", 0)
                         .unwrap_or_else(|| ast::AnyNodeRef::from(call_expression)),
                 );
@@ -3812,9 +3813,13 @@ impl KnownFunction {
 }
 
 /// Emit a `revealed-type` diagnostic for a `reveal_type(...)` call.
+///
+/// `declared_type` is the wider type the revealed place was declared with, when the call read
+/// something narrower than the declaration allows.
 pub(super) fn report_revealed_type<'db>(
     context: &InferContext<'db, '_>,
     revealed_type: Type<'db>,
+    declared_type: Option<Type<'db>>,
     argument_node: impl Ranged,
 ) {
     let db = context.db();
@@ -3827,7 +3832,30 @@ pub(super) fn report_revealed_type<'db>(
                 revealed_type.display(db, env).preserve_long_unions()
             )),
         );
+        if let Some(declared_type) = declared_type {
+            diag.info(format_args!(
+                "Declared type: `{}`",
+                declared_type.display(db, env).preserve_long_unions()
+            ));
+        }
     }
+}
+
+/// The declared type bounding the place a `reveal_type(...)` call reads, when the call revealed
+/// something narrower.
+fn revealed_declared_type<'db>(
+    context: &InferContext<'db, '_>,
+    revealed_type: Type<'db>,
+    call_expression: &ast::ExprCall,
+) -> Option<Type<'db>> {
+    let argument = call_expression.arguments.find_argument_value("obj", 0)?;
+    declared_type_at_load(
+        context.db(),
+        context.program_environment(),
+        context.program_file(),
+        ast::ExprRef::from(argument),
+        revealed_type,
+    )
 }
 
 #[cfg(test)]
