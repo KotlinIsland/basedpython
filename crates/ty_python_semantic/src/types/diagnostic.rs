@@ -1743,8 +1743,9 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
-    /// Checks for a trailing-lambda block whose callback takes arguments the
-    /// block has no parameter for.
+    /// Checks for a trailing-lambda block and its callback disagreeing about
+    /// what the call passes: a callback that takes arguments the block has no
+    /// parameter for, and a body that reads an `it` the callback never fills.
     ///
     /// ## Why is this bad?
     /// A block binds one argument, as `it` — plus its callback's implicit
@@ -1752,6 +1753,12 @@ declare_lint! {
     /// unqualified. A callback that takes more than that, or takes a variadic
     /// parameter, passes arguments the block cannot name, and would be called
     /// with more arguments than it declares.
+    ///
+    /// The other direction is a callback that passes nothing. The block still
+    /// has its `it` parameter — the lambda the lowering writes always declares
+    /// one, so `it` inside the block always means that parameter and never an
+    /// outer name — but a callback invoked as `fn()` leaves it at its `None`
+    /// default, so reading it reads a value the call never sent.
     ///
     /// ## Example
     ///
@@ -1761,9 +1768,15 @@ declare_lint! {
     ///
     /// f:  # error: the block binds only `it`, so `"two"` has nowhere to go
     ///     print(it)
+    ///
+    /// def g(a: () -> None):
+    ///     a()
+    ///
+    /// g:
+    ///     print(it)  # error: `g`'s callback passes nothing for `it`
     /// ```
     pub(crate) static TRAILING_LAMBDA_PARAMETERS = {
-        summary: "detects a trailing-lambda callback taking arguments the block cannot bind",
+        summary: "detects a trailing-lambda block and its callback disagreeing about what is passed",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,

@@ -3700,16 +3700,12 @@ pub fn trailing_lambda_implicit_parameters<'db>(
     else {
         return Vec::new();
     };
-    // a block declares `it` only when its callback passes one, so read that off
-    // the binding the block actually made rather than deciding it again here — but
-    // the index makes that binding before anything is resolved across modules, so an
-    // imported callee gets an `it` it may not pass. the callee's type settles it
-    let binds_it = function.parameters.args.first().is_some_and(|it| {
-        semantic_index(db, db.program_file(model.file()))
-            .try_definition(&it.parameter)
-            .is_some()
-    }) && crate::types::trailing_lambda::trailing_lambda_passes_it(db, callee)
-        != Some(false);
+    // the block has an `it` parameter whatever its callback does, because the lambda the
+    // lowering writes always declares one. hinting it is only worth doing when the call
+    // fills it — a callback invoked as `fn()` leaves it at its `None` default, and naming
+    // it would point the reader at a value that never arrives
+    let binds_it = !function.parameters.args.is_empty()
+        && crate::types::trailing_lambda::trailing_lambda_passes_it(db, callee) != Some(false);
     let it = binds_it
         .then(|| crate::types::trailing_lambda::trailing_lambda_it_type(db, callee))
         .flatten();

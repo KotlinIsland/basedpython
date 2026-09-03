@@ -80,9 +80,10 @@ use crate::types::diagnostic::{
     INVALID_TYPE_VARIABLE_CONSTRAINTS, INVALID_TYPE_VARIABLE_DEFAULT, INVALID_VARIANCE_DECLARATION,
     NARROWING_GUARD_AS_VALUE, NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST,
     NON_OVERLAPPING_TYPE_TEST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
-    POSSIBLY_MISSING_SUBMODULE, REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING, TypeCheckDiagnostics,
-    UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL,
-    UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_CAST, UNSOUND_YIELD,
+    POSSIBLY_MISSING_SUBMODULE, REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING,
+    TRAILING_LAMBDA_PARAMETERS, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
+    UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
+    UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_CAST, UNSOUND_YIELD,
     UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, YieldKind,
     display_required_elements, hint_if_stdlib_attribute_exists_on_other_versions,
     refutable_unpacking_applies, report_attempted_protocol_instantiation,
@@ -136,7 +137,9 @@ use crate::types::soundness::{
 use crate::types::special_form::TypeQualifier;
 use crate::types::subclass_of::SubclassOfInner;
 use crate::types::template::{Promotable, TemplateLiteralType, TemplatePart};
-use crate::types::trailing_lambda::trailing_lambda_keyword;
+use crate::types::trailing_lambda::{
+    enclosing_block, trailing_lambda_keyword, trailing_lambda_passes_it,
+};
 use crate::types::tuple::promotion::TupleSizePromotionConstraints;
 use crate::types::tuple::{Tuple, TupleLength, TupleSpecBuilder, TupleType, VariableSegment};
 use crate::types::type_alias::{ManualPEP695TypeAliasType, PEP695TypeAliasType};
@@ -12857,6 +12860,59 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         diag.add_primary_tag(ruff_db::diagnostic::DiagnosticTag::Deprecated);
     }
 
+    /// basedpython: whether `name_node` reads the `it` a trailing-lambda block binds when
+    /// the block's callback passes no argument for it.
+    ///
+    /// The lowering always gives the block that parameter — `def _trailing_lambda_0(it=None)`
+    /// — so the name always resolves and always shadows an outer `it`, exactly as it does at
+    /// runtime. When the callback is invoked as `fn()` nothing ever fills it, and the body is
+    /// reading the default rather than a value the call passed.
+    ///
+    /// A nested binding takes the name back — a comprehension target, an assignment in the
+    /// body — and reading *that* is ordinary code, so only a read that reaches the parameter
+    /// itself is reported.
+    fn reads_unfilled_block_it(&self, name_node: &ast::ExprName) -> bool {
+        let db = self.db();
+        if !self.is_basedpython_file() {
+            return false;
+        }
+        let Some((block_scope, callee)) = enclosing_block(db, self.scope()) else {
+            return false;
+        };
+        if trailing_lambda_passes_it(db, callee) != Some(false) {
+            return false;
+        }
+        let block_file_scope = block_scope.file_scope_id(db);
+        let module = self.module();
+        let Some(block) = block_scope.scope(db).node().as_function() else {
+            return false;
+        };
+        let Some(it) = block.node(module).parameters.args.first() else {
+            return false;
+        };
+        if it.parameter.name.id != name_node.id {
+            return false;
+        }
+        let Some(parameter) = self.index.try_definition(&it.parameter) else {
+            return false;
+        };
+        let file_scope = self.scope().file_scope_id(db);
+        if file_scope != block_file_scope {
+            // a comprehension opened inside the block: the parameter is reached through the
+            // enclosing scope, so it is what this reads unless something here claims the name
+            return self
+                .index
+                .place_table(file_scope)
+                .symbol_id(&name_node.id)
+                .is_none();
+        }
+        let use_id = ast::ExprRef::Name(name_node).scoped_use_id(db, self.program_file());
+        self.index
+            .use_def_map(file_scope)
+            .bindings_at_use(use_id)
+            .any(|binding| binding.binding.definition() == Some(parameter))
+    }
+
     fn infer_name_load(&mut self, name_node: &ast::ExprName, tcx: TypeContext<'db>) -> Type<'db> {
         let symbol_name = &name_node.id;
         let db = self.db();
@@ -12878,6 +12934,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             )
         {
             return resolved.ty();
+        }
+
+        // basedpython: the block always has an `it` parameter, because the lambda the
+        // lowering writes always declares one — but a callback invoked as `fn()` never
+        // fills it, so reading it reads the `None` default rather than a value
+        if self.reads_unfilled_block_it(name_node)
+            && let Some(builder) = self
+                .context
+                .report_lint(&TRAILING_LAMBDA_PARAMETERS, name_node)
+        {
+            let mut diagnostic = builder.into_diagnostic(
+                "this block's callback passes no argument, so `it` is never given a value",
+            );
+            diagnostic
+                .info("the block is called as `fn()`, which leaves `it` at its `None` default");
         }
 
         let expr = PlaceExpr::from_expr_name(name_node);

@@ -2044,40 +2044,6 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             .is_some_and(|last| parameter_modifiers(source, last).once)
     }
 
-    /// basedpython: whether a trailing-lambda block declares `it` — it does when
-    /// its callback passes an argument for it, the one after any receiver the
-    /// callback declares.
-    ///
-    /// A callback that passes nothing is invoked as `a()`, so a block that
-    /// declared `it` anyway would resolve a name the callee never fills. Leaving
-    /// it undeclared makes `it` an ordinary unresolved name there, which is what
-    /// it is — the same rule as kotlin's, where `it` exists exactly when the
-    /// lambda takes one parameter.
-    ///
-    /// Resolved syntactically, like [`trailing_lambda_callee_is_once`]: the
-    /// callback's declared type has to be an arrow written at the callee's `def`.
-    /// Anything this cannot see through — an import, a method, a `Callable[...]`
-    /// spelling, a gradual `(...) -> None` — declares `it` conservatively, since
-    /// an `it` that resolves to nothing is the safer miss of the two.
-    ///
-    /// [`trailing_lambda_callee_is_once`]: Self::trailing_lambda_callee_is_once
-    fn trailing_lambda_declares_it(&self, callee: &ast::Expr) -> bool {
-        let Some(def) = self.callee_definition(callee) else {
-            return true;
-        };
-        let Some(annotation) =
-            last_bound_parameter(&def.parameters).and_then(|last| last.annotation.as_deref())
-        else {
-            return true;
-        };
-        let ast::Expr::CallableType(callback) = annotation else {
-            return true;
-        };
-        // the receiver is bound implicitly and is not `it`; `args` holds what the
-        // callback passes, and a gradual `(...)` is one of them
-        !callback.args.is_empty()
-    }
-
     /// basedpython: the `def` a trailing-lambda callee names, for the parts of a
     /// block that are settled before type inference runs.
     ///
@@ -3942,15 +3908,6 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     self.visit_expr(default);
                 }
 
-                // basedpython: a trailing lambda block's whole parameter list is
-                // the implicit `it`, and it declares that only when its callback
-                // passes one. resolved out here, where the callee's enclosing
-                // scopes are still on the stack
-                let declares_parameters = !*is_trailing_lambda
-                    || function_def
-                        .trailing_lambda_callee()
-                        .is_none_or(|callee| self.trailing_lambda_declares_it(callee));
-
                 let (nested_bindings, block_scope) = self.with_type_params(
                     NodeWithScopeRef::FunctionTypeParameters(function_def),
                     type_params.as_deref(),
@@ -3968,9 +3925,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         builder.push_scope(NodeWithScopeRef::Function(function_def));
                         let block_scope = builder.current_scope();
 
-                        if declares_parameters {
-                            builder.declare_parameters(parameters);
-                        }
+                        builder.declare_parameters(parameters);
 
                         let mut first_parameter_name = parameters
                             .iter_non_variadic_params()

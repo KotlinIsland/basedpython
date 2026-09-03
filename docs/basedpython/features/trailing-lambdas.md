@@ -29,24 +29,28 @@ f:  # error: the block binds only `it`, so `"two"` has nowhere to go
     print(it)
 ```
 
-`it` exists exactly when the callback passes one. a callback that takes *nothing*
-is invoked as `a()`, so a block filling it binds no `it` at all, and the name
-means nothing more there than any other name nobody wrote
+every block has an `it`, whatever its callback passes — the lambda the lowering
+writes always declares the parameter, so inside a block `it` always means that
+parameter and never a name from an enclosing scope. a callback that takes
+*nothing* is invoked as `a()`, though, so nothing ever fills it, and reading it
+reads the `None` default rather than a value the call sent:
 
 ```by
 def g(a: () -> None):
     a()
 
 g:
-    print(it)  # error[unresolved-reference] — `a` passes no argument
+    print(it)  # error[trailing-lambda-parameters] — `a` passes no argument
 
 g:
     print("hi")  # fine — the block just doesn't take one
 ```
 
-nothing holds the name, so such a block is free to use `it` for a local of its
-own. a callback whose shape cannot be read — a gradual `(...) -> None`, an
-imported callee — keeps `it`, untyped
+a body that writes the name first is reading its own local rather than the
+parameter, so such a block is free to use `it` for something of its own. a
+callback whose shape cannot be read — a gradual `(...) -> None`, a
+`Callable[...]` spelling — says nothing either way, and leaves `it` untyped and
+unreported
 
 ## as a value
 
