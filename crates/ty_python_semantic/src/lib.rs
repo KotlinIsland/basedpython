@@ -178,6 +178,16 @@ pub struct AnalysisSettings {
     /// So this is the setting the native compiler reads to choose a representation.
     pub strict_float: bool,
 
+    /// basedpython: whether a `let` / `var` declaration written inside a block binds
+    /// its name for that block only.
+    ///
+    /// Python has no block scopes — a name bound anywhere in a function is a local of
+    /// that whole function — and the python this lowers to keeps it that way, so this
+    /// is a rule the checker enforces rather than something the emitted code does. A
+    /// plain assignment is unaffected: only the binding keyword scopes a name to its
+    /// block.
+    pub block_scoped_declarations: bool,
+
     /// Whether the basedpython "fluid specializations" feature is disabled.
     ///
     /// When disabled, inferred generic specializations are not widened flow-sensitively by
@@ -315,6 +325,7 @@ impl AnalysisSettings {
             shipped_modules: None,
             exported_dependencies: None,
             strict_float: false,
+            block_scoped_declarations: basedpython,
             disable_fluid_specializations: !basedpython,
             sound_types: basedpython,
             infer_unannotated_signatures: basedpython,

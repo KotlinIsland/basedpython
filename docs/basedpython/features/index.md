@@ -145,6 +145,7 @@ the forms a class, function or binding can take
 <div class="by-index" markdown>
 
 - [modifiers and visibility](modifiers.md)
+- [block scoping](block-scoping.md)
 - [based enums (`enum class`)](enums.md)
 - [sealed classes](sealed-classes.md)
 - [init method shorthand](init-method.md)

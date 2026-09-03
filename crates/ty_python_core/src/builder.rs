@@ -4,8 +4,8 @@ use std::sync::Arc;
 use except_handlers::TryNodeContextStackManager;
 use itertools::Itertools;
 use ruff_python_ast::helpers::{
-    Truthiness, any_over_expr, is_dotted_name, last_bound_parameter, parameter_modifiers,
-    return_guards, statement_expression_values,
+    BindingKeyword, Truthiness, any_over_expr, binding_keyword, is_dotted_name,
+    last_bound_parameter, parameter_modifiers, return_guards, statement_expression_values,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -26,6 +26,7 @@ use ruff_text_size::{Ranged, TextRange};
 use smallvec::SmallVec;
 use ty_module_resolver::{ImportingFile, ModuleName, ResolverEnvironment, resolve_module};
 
+use crate::BlockScopedDeclaration;
 use crate::HasTrackedScope;
 use crate::ProgramFile;
 use crate::ast_ids::node_key::ExpressionNodeKey;
@@ -90,6 +91,10 @@ struct Loop {
     break_states: Vec<FlowSnapshot>,
     /// Flow states at each `continue` in the current loop.
     continue_states: Vec<FlowSnapshot>,
+    /// basedpython: how many blocks of the current scope were open when the loop
+    /// started. A `break` or a `continue` leaves every block opened since, so the
+    /// names those blocks declared go out of scope on that edge.
+    blocks_at_entry: usize,
 }
 
 /// A narrowing alias: a variable whose RHS is a narrowing expression
@@ -110,6 +115,11 @@ struct ScopeInfo<'ast> {
     current_loop: Option<Loop>,
     /// Saved narrowing aliases from the enclosing scope, restored on `pop_scope`.
     narrowing_aliases: FxHashMap<Name, NarrowingAlias<'ast>>,
+    /// basedpython: saved open blocks from the enclosing scope, restored on
+    /// `pop_scope`. A scope's own body is not a block, so a declaration written at
+    /// the top of a nested function belongs to no block at all — least of all to
+    /// whichever block the `def` happened to sit in.
+    open_blocks: Vec<OpenBlock>,
     /// `global` and `nonlocal` declarations from scopes nested under this one. This is used for:
     ///
     /// 1. Visibility of nested writes. A nested function that binds a variable might affect the
@@ -235,6 +245,10 @@ impl ConditionFlowSnapshot {
     }
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent walk flags and one cached setting, not a state machine"
+)]
 pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     // Builder state
     db: &'db dyn Db,
@@ -326,6 +340,62 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     /// basedpython: places this file's narrowing return annotations name, computed on
     /// demand. See [`Self::basedpython_guard_targets`].
     basedpython_guard_targets: Option<GuardTargets>,
+
+    /// basedpython: whether a `let` / `var` declaration inside a block is visible
+    /// only within that block. See [`Db::block_scoped_declarations`].
+    block_scoped_declarations: bool,
+
+    /// basedpython: the blocks of the current scope still being visited, outermost
+    /// first, each holding the `let` / `var` declarations written directly inside
+    /// it. The innermost is emptied into the scope's table when that block ends,
+    /// which is where the names it bound go out of scope.
+    open_blocks: Vec<OpenBlock>,
+
+    /// basedpython: every block-scoped declaration of each scope, in the order the
+    /// blocks ended. [`Self::build`] sorts each list into source order, which is
+    /// what reads them.
+    block_declarations_by_scope: FxHashMap<FileScopeId, Vec<BlockScopedDeclaration>>,
+}
+
+/// basedpython: the symbols a block took out of scope. Almost always empty, and
+/// never large.
+type BlockDeclarations = SmallVec<[ScopedSymbolId; 4]>;
+
+/// basedpython: a block being visited, and the declarations that go out of scope
+/// when it ends.
+#[derive(Debug, Default)]
+struct OpenBlock {
+    /// The `let` / `var` declarations written directly in this block.
+    declared: Vec<PendingBlockDeclaration>,
+    /// The symbols that have already gone out of scope inside this block, because a
+    /// block nested in it ended.
+    ///
+    /// An edge that leaves this block from within — an exception, a `break` — was
+    /// taken at a point where those were still bound, so they have to go out of
+    /// scope on that edge too.
+    closed: Vec<ScopedSymbolId>,
+}
+
+impl OpenBlock {
+    /// Every symbol that is out of scope once this block has been left, in any way.
+    fn out_of_scope(&self) -> impl Iterator<Item = ScopedSymbolId> + '_ {
+        self.declared
+            .iter()
+            .map(|declaration| declaration.symbol)
+            .chain(self.closed.iter().copied())
+    }
+}
+
+/// basedpython: a `let` / `var` declaration inside a block that has not ended yet,
+/// so the block it is scoped to is not yet known.
+#[derive(Debug)]
+struct PendingBlockDeclaration {
+    /// The symbol the declaration binds.
+    symbol: ScopedSymbolId,
+    /// Which keyword made the binding block-scoped.
+    keyword: BindingKeyword,
+    /// Where that keyword is written.
+    keyword_range: TextRange,
 }
 
 impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
@@ -387,6 +457,10 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             destructures: FxHashMap::default(),
             case_names: FxHashMap::default(),
             basedpython_guard_targets: None,
+
+            block_scoped_declarations: db.block_scoped_declarations(file.file(db)),
+            open_blocks: Vec::new(),
+            block_declarations_by_scope: FxHashMap::default(),
         };
 
         builder.push_scope_with_parent(NodeWithScopeRef::Module, None);
@@ -516,9 +590,11 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
     /// Push a new loop, returning the outer loop, if any.
     fn push_loop(&mut self) -> Option<Loop> {
-        self.current_scope_info_mut()
-            .current_loop
-            .replace(Loop::default())
+        let blocks_at_entry = self.open_blocks.len();
+        self.current_scope_info_mut().current_loop.replace(Loop {
+            blocks_at_entry,
+            ..Loop::default()
+        })
     }
 
     /// Pop a loop, replacing with the previous saved outer loop, if any.
@@ -562,10 +638,12 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         // Save narrowing aliases. They will be restored with `pop_scope` after returning from inspecting the inner scope.
         // TODO: Cross-scope alias narrowing is not supported yet.
         let saved_aliases = std::mem::take(&mut self.narrowing_aliases);
+        let saved_open_blocks = std::mem::take(&mut self.open_blocks);
         self.scope_stack.push(ScopeInfo {
             file_scope_id,
             current_loop: None,
             narrowing_aliases: saved_aliases,
+            open_blocks: saved_open_blocks,
             nested_global_or_nonlocal_declarations: FxHashMap::default(),
             this_scope_global_or_nonlocal_declarations: FxHashMap::default(),
             pending_captures: FxHashMap::default(),
@@ -937,6 +1015,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         let ScopeInfo {
             file_scope_id: popped_scope_id,
             narrowing_aliases,
+            open_blocks,
             mut nested_global_or_nonlocal_declarations,
             this_scope_global_or_nonlocal_declarations,
             pending_captures,
@@ -946,6 +1025,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             .pop()
             .expect("Root scope should be present");
         self.narrowing_aliases = narrowing_aliases;
+        self.open_blocks = open_blocks;
 
         let children_end = self.scopes.next_index();
 
@@ -3788,6 +3868,130 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         }
     }
 
+    /// basedpython: records that `stmt` declares `symbol` with a binding keyword, if
+    /// it does, and — when a block is open to scope it to — that `symbol` goes out
+    /// of scope when that block ends.
+    ///
+    /// Only a plain name is ever block-scoped: an attribute or a subscript belongs
+    /// to whatever object it hangs off, which outlives the block either way, so the
+    /// caller only reaches here for a `Name` target.
+    fn record_binding_keyword(&mut self, stmt: &ast::StmtAnnAssign, symbol: ScopedSymbolId) {
+        // only a basedpython file can carry one, and asking costs a read of the
+        // source that a python file would otherwise never need here
+        if !self.source_type.is_basedpython() {
+            return;
+        }
+        let Some((keyword, keyword_range)) = binding_keyword(stmt, self.source_text().as_str())
+        else {
+            return;
+        };
+        self.current_place_table_mut().mark_keyword_declared(symbol);
+
+        if !self.block_scoped_declarations {
+            return;
+        }
+        if let Some(block) = self.open_blocks.last_mut() {
+            block.declared.push(PendingBlockDeclaration {
+                symbol,
+                keyword,
+                keyword_range,
+            });
+        }
+    }
+
+    /// basedpython: visits the body of a block statement — an `if` or `elif` or
+    /// `else` clause, a loop body, a `with` body, a `try` clause, a `match` case.
+    ///
+    /// Python has no block scopes: a name bound anywhere in a function is a local
+    /// of that whole function, and the python this lowers to keeps it that way. So
+    /// a `let` / `var` written in a block is *visible* only within the block, which
+    /// is modeled by unbinding the names it declared once the block has been
+    /// walked. Every shape of control flow then falls out of the flow analysis
+    /// already there, exactly as a `del` at the end of the block would.
+    fn visit_block_body(&mut self, body: &'ast [ast::Stmt]) -> BlockDeclarations {
+        if !self.block_scoped_declarations {
+            self.visit_body(body);
+            return BlockDeclarations::default();
+        }
+
+        let Some(range) = body
+            .first()
+            .zip(body.last())
+            .map(|(first, last)| TextRange::new(first.start(), last.end()))
+        else {
+            // an empty body — the synthetic `else` the `if` handling adds when the
+            // source has none — declares nothing
+            self.visit_body(body);
+            return BlockDeclarations::default();
+        };
+
+        self.open_blocks.push(OpenBlock::default());
+        self.visit_body(body);
+        let block = self
+            .open_blocks
+            .pop()
+            .expect("the block pushed above is still on the stack");
+
+        let out_of_scope: BlockDeclarations = block.out_of_scope().collect();
+        if out_of_scope.is_empty() {
+            return out_of_scope;
+        }
+
+        if !block.declared.is_empty() {
+            let scope = self.current_scope();
+            let recorded = self.block_declarations_by_scope.entry(scope).or_default();
+            recorded.reserve(block.declared.len());
+            for PendingBlockDeclaration {
+                symbol,
+                keyword,
+                keyword_range,
+            } in block.declared
+            {
+                recorded.push(BlockScopedDeclaration {
+                    symbol,
+                    keyword,
+                    keyword_range,
+                    block: range,
+                });
+            }
+        }
+
+        // the names the block itself declared are unbound where it ends; the ones a
+        // nested block declared were already unbound where *that* block ended, and
+        // are carried up only so an edge out of an enclosing block can unbind them
+        // as well
+        self.unbind_block_declarations(&out_of_scope);
+        if let Some(enclosing) = self.open_blocks.last_mut() {
+            enclosing.closed.extend(out_of_scope.iter().copied());
+        }
+        out_of_scope
+    }
+
+    /// basedpython: takes `symbols` out of scope, as leaving the block that declared
+    /// them does.
+    fn unbind_block_declarations(&mut self, symbols: &BlockDeclarations) {
+        for symbol in symbols {
+            self.invalidate_narrowing_aliases_for((*symbol).into());
+            self.delete_binding((*symbol).into());
+        }
+    }
+
+    /// basedpython: takes out of scope every name declared in a block the current
+    /// `break` or `continue` jumps out of.
+    ///
+    /// The jump leaves each of those blocks just as running off its end does, but
+    /// from the inside, where the block has not unbound anything yet.
+    fn unbind_blocks_left_by_jump(&mut self) {
+        let Some(current_loop) = self.current_scope_info().current_loop.as_ref() else {
+            return;
+        };
+        let left: BlockDeclarations = self.open_blocks[current_loop.blocks_at_entry..]
+            .iter()
+            .flat_map(OpenBlock::out_of_scope)
+            .collect();
+        self.unbind_block_declarations(&left);
+    }
+
     pub(super) fn build(mut self) -> SemanticIndex<'db> {
         self.visit_body(self.module.suite());
 
@@ -3842,6 +4046,18 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             narrowing_alias_predicates: FrozenMap::from(self.alias_predicates),
             destructures: FrozenMap::from(self.destructures),
             case_names: FrozenMap::from(self.case_names),
+            block_scoped_declarations: FrozenMap::from_entries(
+                self.block_declarations_by_scope
+                    .into_iter()
+                    .map(|(scope, mut declarations)| {
+                        // a block records when it ends, so a nested one records
+                        // first even though it was written later
+                        declarations
+                            .sort_unstable_by_key(|declaration| declaration.keyword_range.start());
+                        (scope, declarations.into_boxed_slice())
+                    })
+                    .collect(),
+            ),
         }
     }
 
@@ -4457,6 +4673,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
                 if let ast::Expr::Name(name) = &*node.target {
                     let symbol_id = self.add_symbol(name.id.clone());
+                    self.record_binding_keyword(node, symbol_id);
                     let symbol = self.current_place_table().symbol(symbol_id);
                     // Check whether the variable has been declared global.
                     if symbol.is_global() {
@@ -4580,7 +4797,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     self.flow_restore(no_match);
                     self.record_negated_narrowing_constraint(match_predicate, narrowing_id);
                     self.record_negated_reachability_constraint(reachability);
-                    self.visit_body(orelse);
+                    self.visit_block_body(orelse);
 
                     // the block has to diverge, which is this point being
                     // unreachable. Recorded for inference to check, and left in
@@ -4612,7 +4829,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 self.in_type_checking_block =
                     if_block_in_type_checking || is_outer_block_in_type_checking;
 
-                self.visit_body(&node.body);
+                self.visit_block_body(&node.body);
 
                 let mut post_clauses: Vec<FlowSnapshot> = vec![];
                 let elif_else_clauses = node.elif_else_clauses.iter().map(|clause| {
@@ -4682,7 +4899,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     self.in_type_checking_block =
                         is_outer_block_in_type_checking || clause_in_type_checking;
 
-                    self.visit_body(clause_body);
+                    self.visit_block_body(clause_body);
 
                     let Some(next_falsy) = next_falsy else {
                         break;
@@ -4735,7 +4952,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 self.record_reachability_constraint(predicate);
 
                 let outer_loop = self.push_loop();
-                self.visit_body(body);
+                self.visit_block_body(body);
                 let this_loop = self.pop_loop(outer_loop);
 
                 // Loop-back bindings include everything that's visible if/when control reaches the
@@ -4771,7 +4988,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
                 self.record_negated_narrowing_constraint(predicate, predicate_id);
 
-                self.visit_body(orelse);
+                self.visit_block_body(orelse);
 
                 // Breaking out of a while loop bypasses the `else` clause, so merge in the break
                 // states after visiting `else`.
@@ -4814,7 +5031,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         }
                     }
                 }
-                self.visit_body(body);
+                self.visit_block_body(body);
             }
 
             ast::Stmt::For(
@@ -4890,7 +5107,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 }
 
                 let outer_loop = self.push_loop();
-                self.visit_body(body);
+                self.visit_block_body(body);
                 let this_loop = self.pop_loop(outer_loop);
 
                 // Loop-back bindings include everything that's visible if/when control reaches the
@@ -4926,7 +5143,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         self.flow_merge(pre_loop);
                     }
                 }
-                self.visit_body(orelse);
+                self.visit_block_body(orelse);
 
                 // Breaking out of a `for` loop bypasses the `else` clause, so merge in the break
                 // states after visiting `else`.
@@ -5034,7 +5251,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         match_success_guard_failure
                     });
 
-                    self.visit_body(&case.body);
+                    self.visit_block_body(&case.body);
 
                     post_case_snapshots.push(self.flow_snapshot());
 
@@ -5088,7 +5305,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 self.try_node_context_stack_manager.push_context();
 
                 // Visit the `try` block!
-                self.visit_body(body);
+                let try_block_declarations = self.visit_block_body(body);
 
                 let mut post_except_states = vec![];
 
@@ -5114,6 +5331,12 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     for state in try_block_snapshots {
                         self.flow_merge(state);
                     }
+
+                    // basedpython: an exception leaves the `try` block from inside
+                    // it, at a point where the block had not unbound its own
+                    // declarations yet. A handler is a sibling block, so those names
+                    // are out of scope in it either way.
+                    self.unbind_block_declarations(&try_block_declarations);
 
                     let pre_except_state = self.flow_snapshot();
                     let num_handlers = handlers.len();
@@ -5150,7 +5373,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                             None
                         };
 
-                        self.visit_body(handler_body);
+                        self.visit_block_body(handler_body);
                         // The caught exception is cleared at the end of the except clause
                         if let Some(symbol) = symbol {
                             self.delete_binding(symbol.into());
@@ -5171,7 +5394,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     self.flow_restore(post_try_block_state);
                 }
 
-                self.visit_body(orelse);
+                self.visit_block_body(orelse);
 
                 for post_except_state in post_except_states {
                     self.flow_merge(post_except_state);
@@ -5202,7 +5425,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     for snapshot in snapshots {
                         self.flow_merge(snapshot);
                     }
-                    self.visit_body(finalbody);
+                    self.visit_block_body(finalbody);
                     if !self.flow_snapshot().is_always_unreachable() {
                         self.record_terminal_finally_entry();
                     }
@@ -5210,7 +5433,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 } else {
                     // Mixed normal and terminal entry states are still handled by the normal path
                     // only. See the corresponding TODO tests in `terminal_statements.md`.
-                    self.visit_body(finalbody);
+                    self.visit_block_body(finalbody);
                 }
                 self.in_try = was_in_try;
             }
@@ -5232,6 +5455,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     self.check_break_value(stmt, value);
                     self.visit_expr(value);
                 }
+                self.unbind_blocks_left_by_jump();
                 let snapshot = self.flow_snapshot();
                 if let Some(current_loop) = self.current_loop_mut() {
                     if stmt.is_continue_stmt() {

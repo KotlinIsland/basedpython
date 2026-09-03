@@ -214,6 +214,7 @@ Settings: Settings {
         shipped_modules: None,
         exported_dependencies: None,
         strict_float: false,
+        block_scoped_declarations: true,
         disable_fluid_specializations: false,
         sound_types: true,
         infer_unannotated_signatures: true,

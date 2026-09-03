@@ -168,6 +168,51 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
 
 ---
 
+### `block-scoped-declarations`
+
+Whether a `let` or `var` declaration written inside a block binds its name for
+that block only. This is a basedpython feature.
+
+Python has no block scopes: a name bound anywhere in a function is a local of
+that whole function, and the python a `.by` file lowers to keeps it that way. So
+this is a rule the checker enforces rather than something the emitted code does:
+
+```by
+if flag:
+    let a = 1
+
+print(a)  # error: `a` is not in scope here
+```
+
+Only the binding keyword scopes a name to its block. A plain `a = 1` binds for
+the whole enclosing function or module, as it does in python.
+
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
+
+**Default value**: `true`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Let a `let` or `var` in a block be visible for the rest of the scope
+    block-scoped-declarations = false
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Let a `let` or `var` in a block be visible for the rest of the scope
+    block-scoped-declarations = false
+    ```
+
+---
+
 ### `dependency-groups`
 
 The requirement groups the matching files may import from.
@@ -1568,6 +1613,51 @@ Defaults to `true`, and to `false` under the `ty-compatible` type checking prese
     [overrides.analysis]
     # Let private attributes constrain inferred variance to covariance
     bivariant-private-attributes = false
+    ```
+
+---
+
+#### `block-scoped-declarations`
+
+Whether a `let` or `var` declaration written inside a block binds its name for
+that block only. This is a basedpython feature.
+
+Python has no block scopes: a name bound anywhere in a function is a local of
+that whole function, and the python a `.by` file lowers to keeps it that way. So
+this is a rule the checker enforces rather than something the emitted code does:
+
+```by
+if flag:
+    let a = 1
+
+print(a)  # error: `a` is not in scope here
+```
+
+Only the binding keyword scopes a name to its block. A plain `a = 1` binds for
+the whole enclosing function or module, as it does in python.
+
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
+
+**Default value**: `true`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # Let a `let` or `var` in a block be visible for the rest of the scope
+    block-scoped-declarations = false
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # Let a `let` or `var` in a block be visible for the rest of the scope
+    block-scoped-declarations = false
     ```
 
 ---

@@ -92,6 +92,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNSOUND_YIELD);
     registry.register_lint(&INVALID_ASSIGNMENT);
     registry.register_lint(&REFUTABLE_DESTRUCTURING);
+    registry.register_lint(&IMPLICIT_DECLARATION);
     registry.register_lint(&REFUTABLE_UNPACKING);
     registry.register_lint(&ITERATION_OVER_CHARACTER);
     registry.register_lint(&INVALID_AWAIT);
@@ -523,6 +524,16 @@ declare_lint! {
         summary: "detects functions with empty bodies that have a non-`None` return type annotation",
         status: LintStatus::stable("0.0.14"),
         default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    #[doc = include_str!("../../resources/lint_docs/implicit-declaration.md")]
+    pub(crate) static IMPLICIT_DECLARATION = {
+        summary: "detects a variable that is assigned without being declared with `let` or `var`",
+        status: LintStatus::stable("0.0.72"),
+        default_level: Level::Ignore,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -4402,16 +4413,14 @@ pub(super) fn report_invalid_type_checking_constant(context: &InferContext, node
     );
 }
 
-pub(super) fn report_possibly_unresolved_reference(
-    context: &InferContext,
+pub(super) fn report_possibly_unresolved_reference<'db, 'env: 'db>(
+    context: &'env InferContext,
     expr_name_node: &ast::ExprName,
-) {
-    let Some(builder) = context.report_lint(&POSSIBLY_UNRESOLVED_REFERENCE, expr_name_node) else {
-        return;
-    };
+) -> Option<LintDiagnosticGuard<'db, 'env>> {
+    let builder = context.report_lint(&POSSIBLY_UNRESOLVED_REFERENCE, expr_name_node)?;
 
     let ast::ExprName { id, .. } = expr_name_node;
-    builder.into_diagnostic(format_args!("Name `{id}` used when possibly not defined"));
+    Some(builder.into_diagnostic(format_args!("Name `{id}` used when possibly not defined")))
 }
 
 pub(super) fn report_possibly_missing_attribute(

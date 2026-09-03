@@ -2050,6 +2050,35 @@ pub struct AnalysisOptions {
     )]
     pub disable_fluid_specializations: Option<bool>,
 
+    /// Whether a `let` or `var` declaration written inside a block binds its name for
+    /// that block only. This is a basedpython feature.
+    ///
+    /// Python has no block scopes: a name bound anywhere in a function is a local of
+    /// that whole function, and the python a `.by` file lowers to keeps it that way. So
+    /// this is a rule the checker enforces rather than something the emitted code does:
+    ///
+    /// ```by
+    /// if flag:
+    ///     let a = 1
+    ///
+    /// print(a)  # error: `a` is not in scope here
+    /// ```
+    ///
+    /// Only the binding keyword scopes a name to its block. A plain `a = 1` binds for
+    /// the whole enclosing function or module, as it does in python.
+    ///
+    /// Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"true"#,
+        value_type = "bool",
+        example = r#"
+        # Let a `let` or `var` in a block be visible for the rest of the scope
+        block-scoped-declarations = false
+        "#
+    )]
+    pub block_scoped_declarations: Option<bool>,
+
     /// Whether `float` and `complex` annotations mean *only* themselves. This is a
     /// basedpython feature.
     ///
@@ -2422,6 +2451,7 @@ impl AnalysisOptions {
             respect_type_ignore_comments,
             allowed_unresolved_imports,
             replace_imports_with_any,
+            block_scoped_declarations,
             strict_float,
             disable_fluid_specializations,
             sound_types,
@@ -2443,6 +2473,7 @@ impl AnalysisOptions {
             respect_type_ignore_comments: respect_type_ignore_default,
             allowed_unresolved_imports: allowed_unresolved_imports_default,
             replace_imports_with_any: replace_imports_with_any_default,
+            block_scoped_declarations: block_scoped_declarations_default,
             strict_float: strict_float_default,
             disable_fluid_specializations: disable_fluid_specializations_default,
             sound_types: sound_types_default,
@@ -2490,6 +2521,8 @@ impl AnalysisOptions {
                 .unwrap_or(respect_type_ignore_default),
             allowed_unresolved_imports,
             replace_imports_with_any,
+            block_scoped_declarations: block_scoped_declarations
+                .unwrap_or(block_scoped_declarations_default),
             strict_float: strict_float.unwrap_or(strict_float_default),
             disable_fluid_specializations: disable_fluid_specializations
                 .unwrap_or(disable_fluid_specializations_default),

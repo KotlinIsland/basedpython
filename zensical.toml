@@ -155,6 +155,7 @@ features = [
   ] },
   { "declarations" = [
     { "modifiers and visibility" = "features/modifiers.md" },
+    { "block scoping" = "features/block-scoping.md" },
     { "based enums" = "features/enums.md" },
     { "sealed classes" = "features/sealed-classes.md" },
     { "init method shorthand" = "features/init-method.md" },

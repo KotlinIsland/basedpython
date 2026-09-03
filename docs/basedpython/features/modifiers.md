@@ -119,6 +119,9 @@ the initializer may be omitted: `let x: int` declares a read-only attribute and
 a bare `let x` an uninitialized `Final`, both bound by a single later assignment.
 `newtype` introduces a distinct `typing.NewType`-backed type at module scope
 
+a `let` or `var` written inside a block — an `if` body, a loop body, a `try` clause —
+belongs to that block and is gone after it. see [block scoping](block-scoping.md)
+
 `class var x: T` is the same class variable with its type *declared* rather than
 read off a value, which is the only form a stub can write. `class let x: T = v`
 is the read-only one — python spells that `Final`, which in a class body cannot

@@ -133,6 +133,13 @@
             "null"
           ]
         },
+        "block-scoped-declarations": {
+          "description": "Whether a `let` or `var` declaration written inside a block binds its name for\nthat block only. This is a basedpython feature.\n\nPython has no block scopes: a name bound anywhere in a function is a local of\nthat whole function, and the python a `.by` file lowers to keeps it that way. So\nthis is a rule the checker enforces rather than something the emitted code does:\n\n```by\nif flag:\n    let a = 1\n\nprint(a)  # error: `a` is not in scope here\n```\n\nOnly the binding keyword scopes a name to its block. A plain `a = 1` binds for\nthe whole enclosing function or module, as it does in python.\n\nDefaults to `true`, and to `false` under the `ty-compatible` type checking preset.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "dependency-groups": {
           "description": "The requirement groups the matching files may import from.\n\n`project` names `[project].dependencies`, an extra or a PEP 735 dependency group\nis named by its own name, and `*` names every group.\n\nWhen this is unset, a file may import from every group unless it is part of what\nthe project ships — the modules named by `shipped-modules` — in which case it may\nimport only `project` and the extras. Nothing the project ships can import a\ndependency group, because nothing installs one alongside the project.",
           "type": [
@@ -901,6 +908,16 @@
           "title": "detects implicit concatenated strings in type annotations",
           "description": "## What it does\n\nChecks for implicit concatenated strings in type annotation positions.\n\n## Why is this bad?\n\nStatic analysis tools like ty can't analyze type annotations that use implicit concatenated strings.\n\n## Examples\n\n<!-- fmt:off -->\n\n```python\nfrom typing import Literal\n\ndef test() -> \"Literal[\" \"5\" \"]\":  # error\n    return 5\n```\n\n<!-- fmt:on -->\n\nUse instead:\n\n```python\nfrom typing import Literal\n\n\ndef test() -> \"Literal[5]\":\n    return 5\n```",
           "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "implicit-declaration": {
+          "title": "detects a variable that is assigned without being declared with `let` or `var`",
+          "description": "## What it does\n\nChecks for a variable that a basedpython file assigns without ever declaring it.\n\n## Why is this bad?\n\nPython introduces a variable by assigning to it, so a typo makes a new variable\nrather than an error, and reading a statement tells you nothing about whether\nthe name is new or one you have seen before.\n\nbasedpython has a keyword for each: `let` for a binding that never changes, and\n`var` for one that does. With this rule on, every variable a scope binds has to\nbe declared once with one of them, and every later assignment is visibly a\nre-assignment.\n\nThis rule is off by default, because a file written without the keywords is\nvalid basedpython.\n\n## Examples\n\nEvery assignment to a name the scope never declares is reported, so a variable\nintroduced this way is reported wherever it is written:\n\n`undeclared.by`:\n\n```by\ncount = 0  # error: [implicit-declaration]\ncount = count + 1  # error: [implicit-declaration]\n```\n\nDeclaring it once answers all of them:\n\n`declared.by`:\n\n```by\nvar count = 0\ncount = count + 1\n```\n\nAn assignment to something other than a plain name — an attribute, a subscript,\nan item of an unpacking — is not a declaration, and is never reported.",
+          "default": "ignore",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
