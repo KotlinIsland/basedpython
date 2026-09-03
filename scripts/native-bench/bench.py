@@ -832,7 +832,7 @@ def self_check(by: Path, python: str, python_version: str) -> int:
         ("an unknown benchmark name", ["nosuchbenchmark"], "no such benchmark"),
     ):
         try:
-            load_manifest(selection)
+            _ = load_manifest(selection)
             failures.append(f"{what}: was accepted")
         except Failure as failure:
             if wanted not in str(failure):

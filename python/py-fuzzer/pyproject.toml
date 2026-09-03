@@ -81,3 +81,13 @@ unfixable = [
 [tool.ruff.lint.isort]
 combine-as-imports = true
 split-on-trailing-comma = false
+
+# these files come from upstream ruff, where a call written for its effect alone is
+# ordinary style. writing the discard out at each site would put a conflict in every
+# one of them on the next upstream sync, so the rule is off for them rather than for
+# the project — code of our own here is still checked
+[[tool.ty.overrides]]
+include = ["fuzz.py"]
+
+[tool.ty.overrides.rules]
+unused-return-value = "ignore"

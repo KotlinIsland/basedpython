@@ -77,6 +77,23 @@ untyped()
 gradual()
 ```
 
+## a gradual result with a `None` in it is still gradual
+
+a call reached through an untyped receiver answers with the gradual type unioned against whatever
+the checker does know, which for a method declared to return `None` is `Any | None`. nothing is
+known to have been discarded there either, so it is no more reported than a bare `Any` — while a
+union whose arms are all known still is.
+
+```py
+from typing import Any
+
+def gradual_or_none() -> Any | None: ...
+def known_or_none() -> int | None: ...
+
+gradual_or_none()
+known_or_none()  # error: [unused-return-value]
+```
+
 ## a method is reported like any other call
 
 ```py

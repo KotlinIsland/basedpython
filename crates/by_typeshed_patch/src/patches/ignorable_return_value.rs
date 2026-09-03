@@ -79,7 +79,21 @@ const IGNORABLE: &[(&str, &[&str])] = &[
         ],
     ),
     ("os", &["write", "system", "lseek"]),
-    ("pathlib", &["Path.write_text", "Path.write_bytes"]),
+    // the movers answer with the destination the caller already handed them, the same
+    // shape as the `shutil` copies below
+    (
+        "pathlib",
+        &[
+            "Path.write_text",
+            "Path.write_bytes",
+            "Path.rename",
+            "Path.replace",
+            "Path.copy",
+            "Path.copy_into",
+            "Path.move",
+            "Path.move_into",
+        ],
+    ),
     // `check_call` raises on failure, so the exit status it answers with is
     // always zero; `call` and `run` are routinely used for the side effect
     ("subprocess", &["call", "check_call", "run", "Popen.wait"]),
@@ -180,6 +194,12 @@ const TARGET_SYMBOLS: &[&str] = &[
     "os.lseek",
     "pathlib.Path.write_text",
     "pathlib.Path.write_bytes",
+    "pathlib.Path.rename",
+    "pathlib.Path.replace",
+    "pathlib.Path.copy",
+    "pathlib.Path.copy_into",
+    "pathlib.Path.move",
+    "pathlib.Path.move_into",
     "subprocess.call",
     "subprocess.check_call",
     "subprocess.run",

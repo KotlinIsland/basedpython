@@ -275,7 +275,7 @@ async def _run(
     started = time.monotonic()
     killed: str | None = None
     while not comm.done():
-        await asyncio.wait({comm}, timeout=0.25)
+        _ = await asyncio.wait({comm}, timeout=0.25)
         if comm.done():
             break
         if timeout is not None and time.monotonic() - started > timeout:
@@ -318,8 +318,8 @@ async def reset_project(root: Path):
     """Restore pristine source for the next binary: bring back the tracked
     `.py` files reverse deleted and drop the generated `.by`/`out`. Keep the
     venv (if any). The clones are git repos, so this is cheap."""
-    await _run(Path("git"), ["-C", str(root), "checkout", "--", "."])
-    await _run(Path("git"), ["-C", str(root), "clean", "-fdx", "-e", ".venv"])
+    _ = await _run(Path("git"), ["-C", str(root), "checkout", "--", "."])
+    _ = await _run(Path("git"), ["-C", str(root), "clean", "-fdx", "-e", ".venv"])
 
 
 async def roundtrip_project(
