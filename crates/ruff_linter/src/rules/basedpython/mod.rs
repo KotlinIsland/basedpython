@@ -34,6 +34,7 @@ mod tests {
     #[test_case(Rule::UnnecessaryStubBody, Path::new("BY017.by"))]
     #[test_case(Rule::ManualSentinel, Path::new("BY019.by"))]
     #[test_case(Rule::ManualCastCall, Path::new("BY020.by"))]
+    #[test_case(Rule::ManualProperty, Path::new("BY021.by"))]
     #[test_case(Rule::RedundantNoneCoalesce, Path::new("BY101.by"))]
     fn rules(rule_code: Rule, path: &Path) -> Result<()> {
         let snapshot = format!("{}_{}", rule_code.noqa_code(), path.to_string_lossy());

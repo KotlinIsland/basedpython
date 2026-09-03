@@ -1158,6 +1158,7 @@ pub fn code_to_rule(linter: Linter, code: &str) -> Option<(RuleGroup, Rule)> {
         (Basedpython, "017") => rules::basedpython::rules::UnnecessaryStubBody,
         (Basedpython, "019") => rules::basedpython::rules::ManualSentinel,
         (Basedpython, "020") => rules::basedpython::rules::ManualCastCall,
+        (Basedpython, "021") => rules::basedpython::rules::ManualProperty,
         (Basedpython, "101") => rules::basedpython::rules::RedundantNoneCoalesce,
 
         // airflow

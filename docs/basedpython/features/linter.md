@@ -25,11 +25,16 @@ spelling of something basedpython has syntax for:
 | `BY017` | `unnecessary-stub-body`    | a `: ...` body an [empty declaration](empty-declarations.md) needs no more |
 | `BY019` | `manual-sentinel`          | a `Sentinel(…)` assignment, which is [`sentinel`](sentinel.md)             |
 | `BY020` | `manual-cast-call`         | a `typing.cast` call, which is the [`cast`](cast.md) keyword               |
+| `BY021` | `manual-property`          | a `@property`, which is a [declaration with accessors](properties.md)      |
 | `BY101` | `redundant-none-coalesce`  | a `??` whose fallback cannot change the result                             |
 
 every one of them is fixable. `BY020`'s fix is the only one that is always
 unsafe — the `cast!` it writes is [checked](checked-cast.md) where `typing.cast`
 is a no-op, so the rewrite adds a way for the program to fail.
+
+`BY021` is the only one that sometimes has no fix to offer. an accessor body is
+re-rendered when it is lowered and does not keep a comment, so a property with a
+comment in it is reported and left for you to move.
 
 they also compose with the upstream rules that produce their input. `SIM108`
 turns an `if` / `else` block into a conditional expression, and `BY001` takes it

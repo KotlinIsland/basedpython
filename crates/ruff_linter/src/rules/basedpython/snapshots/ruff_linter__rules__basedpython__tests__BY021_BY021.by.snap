@@ -1,0 +1,170 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY021 [*] `@property` can be written as `let area` with accessors
+ --> BY021.by:6:5
+  |
+5 |       # a computed property: one getter, nothing else
+6 | /     @property
+7 | |     def area(self) -> int:
+8 | |         return self.w * self.h
+  | |______________________________^
+help: Replace with a `let area` declaration
+  |
+5 |     # a computed property: one getter, nothing else
+  -     @property
+  -     def area(self) -> int:
+  -         return self.w * self.h
+6 +     let area: int
+7 +         get() = self.w * self.h
+8 |
+  |
+
+BY021 [*] `@property` can be written as `var age` with accessors
+  --> BY021.by:16:5
+   |
+15 |       # a getter and its setter, both annotated
+16 | /     @property
+17 | |     def age(self) -> int:
+18 | |         return self._age
+19 | |
+20 | |     @age.setter
+21 | |     def age(self, value: int) -> None:
+22 | |         assert value >= 0
+23 | |         self._age = value
+   | |_________________________^
+help: Replace with a `var age` declaration
+   |
+15 |     # a getter and its setter, both annotated
+   -     @property
+   -     def age(self) -> int:
+   -         return self._age
+   -
+   -     @age.setter
+   -     def age(self, value: int) -> None:
+   -         assert value >= 0
+   -         self._age = value
+16 +     var age: int
+17 +         get() = self._age
+18 +         set(value):
+19 +             assert value >= 0
+20 +             self._age = value
+21 |
+   |
+
+BY021 [*] `@property` can be written as `let tag` with accessors
+  --> BY021.by:28:5
+   |
+26 |   class Untyped:
+27 |       # a read-only declaration may leave its type to the getter
+28 | /     @property
+29 | |     def tag(self):
+30 | |         return self._tag
+   | |________________________^
+help: Replace with a `let tag` declaration
+   |
+27 |     # a read-only declaration may leave its type to the getter
+   -     @property
+   -     def tag(self):
+   -         return self._tag
+28 +     let tag
+29 +         get() = self._tag
+30 |
+   |
+
+BY021 [*] `@property` can be written as `var name` with accessors
+  --> BY021.by:46:5
+   |
+44 |   class Widening:
+45 |       # the setter's parameter would gain the getter's return type: unsafe
+46 | /     @property
+47 | |     def name(self) -> str:
+48 | |         return self._name
+49 | |
+50 | |     @name.setter
+51 | |     def name(self, value):
+52 | |         self._name = value
+   | |__________________________^
+help: Replace with a `var name` declaration
+   |
+45 |     # the setter's parameter would gain the getter's return type: unsafe
+   -     @property
+   -     def name(self) -> str:
+   -         return self._name
+   -
+   -     @name.setter
+   -     def name(self, value):
+   -         self._name = value
+46 +     var name: str
+47 +         get() = self._name
+48 +         set(value):
+49 +             self._name = value
+50 |
+   |
+note: This is an unsafe fix and may change runtime behavior
+
+BY021 [*] `@property` can be written as `let banner` with accessors
+  --> BY021.by:57:5
+   |
+55 |   class Blocks:
+56 |       # a getter that is more than a `return`
+57 | /     @property
+58 | |     def banner(self) -> str:
+59 | |         base = self._name
+60 | |         return base.upper()
+   | |___________________________^
+help: Replace with a `let banner` declaration
+   |
+56 |     # a getter that is more than a `return`
+   -     @property
+   -     def banner(self) -> str:
+   -         base = self._name
+   -         return base.upper()
+57 +     let banner: str
+58 +         get():
+59 +             base = self._name
+60 +             return base.upper()
+61 |
+   |
+
+BY021 `@property` can be written as `let commented` with accessors
+   --> BY021.by:107:5
+    |
+105 |   # OK: reported, but with no fix to offer
+106 |   class Delicate:
+107 | /     @property
+108 | |     def commented(self) -> int:
+109 | |         # the accessor body would not keep this
+110 | |         return 0
+    | |________________^
+111 |
+112 |       @property
+    |
+help: Replace with a `let commented` declaration
+
+BY021 `@property` can be written as `let spanning` with accessors
+   --> BY021.by:112:5
+    |
+110 |           return 0
+111 |
+112 | /     @property
+113 | |     def spanning(self) -> str:
+114 | |         text = """
+115 | |         many lines
+116 | |         """
+117 | |         return text
+    | |___________________^
+118 |
+119 |       @property
+    |
+help: Replace with a `let spanning` declaration
+
+BY021 `@property` can be written as `let one_liner` with accessors
+   --> BY021.by:119:5
+    |
+117 |           return text
+118 |
+119 | /     @property
+120 | |     def one_liner(self) -> int: x = 0; return x
+    | |_______________________________________________^
+help: Replace with a `let one_liner` declaration
