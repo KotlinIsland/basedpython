@@ -469,6 +469,12 @@ impl PlaceTableBuilder {
         }
     }
 
+    /// basedpython: records that a `let` / `var` declaration binds `id`.
+    #[track_caller]
+    pub(super) fn mark_keyword_declared(&mut self, id: ScopedSymbolId) {
+        self.symbol_mut(id).mark_keyword_declared();
+    }
+
     #[track_caller]
     pub(super) fn mark_declared(&mut self, id: ScopedPlaceId) {
         match id {

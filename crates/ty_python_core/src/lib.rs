@@ -10,8 +10,9 @@ use ruff_db::parsed::parsed_module;
 
 use ruff_index::{FrozenIndexVec, IndexSlice};
 use ruff_python_ast::NodeIndex;
+use ruff_python_ast::helpers::BindingKeyword;
 use ruff_python_parser::semantic_errors::SemanticSyntaxError;
-use ruff_text_size::TextRange;
+use ruff_text_size::{TextRange, TextSize};
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::plumbing::AsId;
 use smallvec::SmallVec;
@@ -372,6 +373,28 @@ pub struct SemanticIndex<'db> {
     /// offered — a bare `case A:` name, keyed by its identifier, and a bare class
     /// pattern's `case Circle(r):` name, keyed by its expression.
     case_names: FrozenMap<NodeKey, CaseNamePredicateKind<'db>>,
+
+    /// basedpython: the block-scoped `let` / `var` declarations of each scope, in
+    /// source order. Scopes with none are absent.
+    block_scoped_declarations: FrozenMap<FileScopeId, Box<[BlockScopedDeclaration]>>,
+}
+
+/// basedpython: a `let` / `var` declaration written inside a block, whose name is
+/// therefore visible only within that block.
+///
+/// The binding itself is unbound at the end of the block, so a use after the block
+/// resolves to nothing on its own. This is what is left to say *why* — which
+/// declaration went out of scope, and where it was in scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
+pub struct BlockScopedDeclaration {
+    /// The symbol the declaration binds.
+    pub symbol: ScopedSymbolId,
+    /// Which keyword made the binding block-scoped.
+    pub keyword: BindingKeyword,
+    /// Where that keyword is written.
+    pub keyword_range: TextRange,
+    /// The block the name is visible in.
+    pub block: TextRange,
 }
 
 /// basedpython: what a destructuring binder — a `let` statement, a `for` target,
@@ -414,6 +437,25 @@ impl<'db> SemanticIndex<'db> {
     /// case-pattern name `key`, if it is one of the names offered to it.
     pub fn case_name(&self, key: impl Into<NodeKey>) -> Option<&CaseNamePredicateKind<'db>> {
         self.case_names.get(&key.into())
+    }
+
+    /// basedpython: the block-scoped `let` / `var` declaration of `symbol` in
+    /// `scope` that is nearest above `offset`, if it has one.
+    ///
+    /// A use that resolves to nothing because the block ended reads this to say so;
+    /// the nearest declaration above the use is the one whose scope it just left.
+    pub fn block_scoped_declaration(
+        &self,
+        scope: FileScopeId,
+        symbol: ScopedSymbolId,
+        offset: TextSize,
+    ) -> Option<&BlockScopedDeclaration> {
+        let declarations = self.block_scoped_declarations.get(&scope)?;
+        declarations
+            .iter()
+            .filter(|declaration| declaration.symbol == symbol)
+            .take_while(|declaration| declaration.keyword_range.start() < offset)
+            .last()
     }
 
     /// basedpython: whether this call expression is made as a bare statement.

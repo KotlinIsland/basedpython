@@ -60,6 +60,10 @@ bitflags! {
         ///
         /// [trailing lambda]: https://basedpython.org/features/trailing-lambdas/
         const IS_BOUND_BY_BLOCK_ASSIGNMENT = 1 << 8;
+        /// basedpython: somewhere in the scope, the symbol is declared with a
+        /// binding keyword — `let x = 1`, `var x: int`. This is narrower than
+        /// `IS_DECLARED`, which any annotation sets.
+        const IS_KEYWORD_DECLARED   = 1 << 9;
     }
 }
 
@@ -130,6 +134,12 @@ impl Symbol {
     /// Is the symbol declared in its containing scope?
     pub fn is_declared(&self) -> bool {
         self.flags.contains(SymbolFlags::IS_DECLARED)
+    }
+
+    /// basedpython: is the symbol declared with a binding keyword — `let` or `var` —
+    /// anywhere in its containing scope?
+    pub fn is_keyword_declared(&self) -> bool {
+        self.flags.contains(SymbolFlags::IS_KEYWORD_DECLARED)
     }
 
     /// Is the symbol `global` its containing scope?
@@ -217,6 +227,10 @@ impl Symbol {
 
     pub(super) fn mark_declared(&mut self) {
         self.insert_flags(SymbolFlags::IS_DECLARED);
+    }
+
+    pub(super) fn mark_keyword_declared(&mut self) {
+        self.insert_flags(SymbolFlags::IS_KEYWORD_DECLARED);
     }
 
     pub(super) fn mark_parameter(&mut self) {

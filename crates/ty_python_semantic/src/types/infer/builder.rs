@@ -4,13 +4,14 @@ use std::rc::Rc;
 
 use compact_str::CompactString;
 use itertools::Itertools;
-use ruff_db::diagnostic::Span;
+use ruff_db::diagnostic::{Annotation, Diagnostic, Span};
 use ruff_db::files::File;
 use ruff_db::parsed::ParsedModuleRef;
 use ruff_db::source::source_text;
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::helpers::{
-    TypeModifier, is_dotted_name, is_untyped_declaration_marker, untyped_declaration_context,
+    BindingKeyword, TypeModifier, is_declaration_marker, is_dotted_name,
+    is_untyped_declaration_marker, untyped_declaration_context,
 };
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{
@@ -73,8 +74,8 @@ use crate::types::deferred::{is_integer_operand, is_symbolic_operand};
 use crate::types::diagnostic::{
     self, AMBIGUOUS_EXTENSION_MEMBER, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS,
     CYCLIC_TYPE_ALIAS_DEFINITION, ERASED_CAST_ARGUMENT, ERASED_TYPE_CHECK, FINAL_ON_VARIABLE,
-    GeneratorMismatchKind, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT,
-    INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_FIELD_LOOKUP,
+    GeneratorMismatchKind, IMPLICIT_DECLARATION, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE,
+    INVALID_ASSIGNMENT, INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_FIELD_LOOKUP,
     INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_REGEX,
     INVALID_REIFIED_TYPE_PARAM, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM,
     INVALID_TYPE_VARIABLE_CONSTRAINTS, INVALID_TYPE_VARIABLE_DEFAULT, INVALID_VARIANCE_DECLARATION,
@@ -163,6 +164,7 @@ use crate::types::{
 };
 use crate::{AnalysisSettings, Db, FxIndexSet, FxOrderSet};
 use fluid::FluidTimeline;
+use ty_python_core::BlockScopedDeclaration;
 use ty_python_core::definition::{
     AnnotatedAssignmentDefinitionKind, AssignmentDefinitionKind, ComprehensionDefinitionKind,
     Definition, DefinitionKind, DefinitionNodeKey, DefinitionState, ExceptHandlerDefinitionKind,
@@ -3418,6 +3420,54 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// basedpython: reports a variable that this scope binds without ever declaring
+    /// it with a keyword.
+    ///
+    /// A class body is left alone: `x: int` there declares a field, which is how a
+    /// dataclass or a protocol is written, and `class x = 1` already has a keyword
+    /// of its own for the class-variable case.
+    fn report_implicit_declaration(&self, target: &ast::Expr) {
+        let ast::Expr::Name(name) = target else {
+            return;
+        };
+        if !self.is_basedpython_file() || self.in_stub() {
+            return;
+        }
+        let db = self.db();
+        let scope = self.scope().file_scope_id(db);
+        if self.index.scope(scope).kind().is_class() {
+            return;
+        }
+        // a bare assignment in a trailing lambda block writes the block receiver's
+        // member, so it declares no variable to begin with
+        if let NodeWithScopeKind::Function(function) = self.index.scope(scope).node()
+            && function.node(self.module()).is_trailing_lambda
+        {
+            return;
+        }
+        let place_table = self.index.place_table(scope);
+        let Some(symbol_id) = place_table.symbol_id(&name.id) else {
+            return;
+        };
+        let symbol = place_table.symbol(symbol_id);
+        // a `global` or `nonlocal` name is declared by the scope that owns it, not
+        // by the one writing to it here
+        if symbol.is_keyword_declared() || symbol.is_global() || symbol.is_nonlocal() {
+            return;
+        }
+        let Some(builder) = self.context.report_lint(&IMPLICIT_DECLARATION, name) else {
+            return;
+        };
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "`{id}` is assigned without being declared",
+            id = name.id
+        ));
+        diagnostic.info(format_args!(
+            "declare it with `let {id} = ...` if it never changes, or `var {id} = ...` if it does",
+            id = name.id
+        ));
+    }
+
     fn infer_assignment_statement(&mut self, assignment: &ast::StmtAssign) {
         let ast::StmtAssign {
             range: _,
@@ -3428,6 +3478,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         } = assignment;
 
         for target in targets {
+            self.report_implicit_declaration(target);
+
             if let Some(unpack) = self.index.try_unpack(target) {
                 // Infer the standalone expression here to include its diagnostics in this region.
                 self.infer_standalone_expression(value, TypeContext::default());
@@ -4861,6 +4913,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let db = self.db();
         let env = self.program_environment();
         if let ast::Expr::Name(target) = &*assignment.target {
+            // a declaration keyword parses to a synthetic marker in annotation
+            // position; an annotation the author actually wrote declares without one
+            if !is_declaration_marker(&assignment.annotation) {
+                self.report_implicit_declaration(&assignment.target);
+            }
             self.report_shadowed_receiver_member(target);
             self.infer_definition(assignment);
         } else {
@@ -13077,7 +13134,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     TypeAndQualifiers::new(Type::unknown(), TypeOrigin::Inferred, qualifiers)
                 }
                 LookupError::PossiblyUndefined(type_when_bound) => {
-                    report_possibly_unresolved_reference(&self.context, name_node);
+                    if let Some(mut diagnostic) =
+                        report_possibly_unresolved_reference(&self.context, name_node)
+                        && let Some(declaration) = self.block_scoped_declaration_for(name_node)
+                    {
+                        self.explain_block_scope(&mut diagnostic, name_node, declaration);
+                    }
                     type_when_bound
                 }
             }
@@ -13351,6 +13413,51 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         })
     }
 
+    /// basedpython: the block-scoped `let` / `var` declaration that put `name` out
+    /// of scope, if that is why it resolves to nothing here.
+    ///
+    /// A declaration written inside a block is unbound when the block ends, so a
+    /// use after it looks exactly like a use of a name that was never declared.
+    /// This is what separates the two.
+    fn block_scoped_declaration_for(
+        &self,
+        name: &ast::ExprName,
+    ) -> Option<&'db BlockScopedDeclaration> {
+        if !self.is_basedpython_file() {
+            return None;
+        }
+        let scope = self.scope().file_scope_id(self.db());
+        let symbol = self.index.place_table(scope).symbol_id(&name.id)?;
+        let declaration = self
+            .index
+            .block_scoped_declaration(scope, symbol, name.start())?;
+        // a use *inside* the block is in scope; only one after it is not
+        (!declaration.block.contains_range(name.range())).then_some(declaration)
+    }
+
+    /// basedpython: says that a name resolves to nothing here because the block its
+    /// declaration was written in has ended.
+    fn explain_block_scope(
+        &self,
+        diagnostic: &mut Diagnostic,
+        name: &ast::ExprName,
+        declaration: &BlockScopedDeclaration,
+    ) {
+        let keyword = match declaration.keyword {
+            BindingKeyword::Let => "let",
+            BindingKeyword::Var => "var",
+        };
+        diagnostic.info(format_args!(
+            "`{id}` is declared with `{keyword}`, so it is in scope only inside the block \
+             that declares it",
+            id = name.id
+        ));
+        diagnostic.annotate(
+            Annotation::secondary(Span::from(self.file()).with_range(declaration.keyword_range))
+                .message(format_args!("`{id}` is declared here", id = name.id)),
+        );
+    }
+
     pub(super) fn report_unresolved_reference(
         &self,
         expr_name_node: &ast::ExprName,
@@ -13368,6 +13475,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let ast::ExprName { id, .. } = expr_name_node;
         let mut diagnostic =
             builder.into_diagnostic(format_args!("Name `{id}` used when not defined"));
+
+        // ===
+        // Subdiagnostic (-1), basedpython only: the name *was* declared, in a block
+        // that has since ended, so it is out of scope rather than unknown
+        // ===
+        if let Some(declaration) = self.block_scoped_declaration_for(expr_name_node) {
+            self.explain_block_scope(&mut diagnostic, expr_name_node, declaration);
+            return;
+        }
 
         // ===
         // Subdiagnostic (0), basedpython only: the expected type declares a member

@@ -39,14 +39,16 @@ pub(crate) fn check_final_without_value<'db>(
         }
 
         // Imports inherit the `Final` qualifier from the source module, but the
-        // import itself provides the value. Don't flag imported `Final` symbols,
-        // even if a later `del` removes the binding at end-of-scope.
+        // import itself provides the value.
         if first_declaration.is_some_and(|decl| decl.kind(db).is_import()) {
             continue;
         }
 
-        // Check if the symbol has any bindings in the current scope.
-        let bindings = use_def.end_of_scope_symbol_bindings(symbol_id);
+        // Whether the scope ever gives the symbol a value, which is not the same
+        // as whether one is still live where the scope ends: a `del`, or a
+        // basedpython `let` that went out of scope with its block, unbinds a value
+        // that was nonetheless assigned.
+        let bindings = use_def.reachable_symbol_bindings(symbol_id);
         let binding_place = place_from_bindings(db, env, bindings);
 
         if !binding_place.place.is_undefined() {

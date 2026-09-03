@@ -9,6 +9,22 @@ use crate::program::{Program, ProgramSettings};
 pub trait Db: ModuleResolverDb {
     /// Returns `true` if the file should be checked.
     fn should_check_file(&self, file: File) -> bool;
+
+    /// basedpython: whether a `let` / `var` declaration written inside a block is
+    /// visible only within that block.
+    ///
+    /// Where a name is visible is decided here, when the semantic index is built,
+    /// but the option that turns this on sits with the rest of the analysis
+    /// settings a crate above. So the answer is handed down rather than reached
+    /// for — the same shape as [`Db::should_check_file`]. A database with no
+    /// settings to consult gets the shipped default.
+    ///
+    /// The implementation is expected to be a Salsa query, so that changing the
+    /// setting invalidates the indexes that read it.
+    fn block_scoped_declarations(&self, file: File) -> bool {
+        let _ = file;
+        true
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]

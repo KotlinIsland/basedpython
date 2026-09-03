@@ -157,6 +157,12 @@ impl ty_python_core::Db for Db {
     fn should_check_file(&self, file: File) -> bool {
         !file.path(self).is_vendored_path()
     }
+
+    fn block_scoped_declarations(&self, file: File) -> bool {
+        file_settings(self, file)
+            .analysis(self)
+            .block_scoped_declarations
+    }
 }
 
 #[salsa::db]
@@ -350,6 +356,7 @@ fn mdtest_analysis_settings(
         respect_type_ignore_comments: respect_type_ignore_comments_default,
         allowed_unresolved_imports: allowed_unresolved_imports_default,
         replace_imports_with_any: replace_imports_with_any_default,
+        block_scoped_declarations: block_scoped_declarations_default,
         strict_float: strict_float_default,
         disable_fluid_specializations: disable_fluid_specializations_default,
         sound_types: sound_types_default,
@@ -404,6 +411,9 @@ fn mdtest_analysis_settings(
             .unwrap_or(respect_type_ignore_comments_default),
         allowed_unresolved_imports,
         replace_imports_with_any,
+        block_scoped_declarations: options
+            .block_scoped_declarations
+            .unwrap_or(block_scoped_declarations_default),
         strict_float: options.strict_float.unwrap_or(strict_float_default),
         disable_fluid_specializations: options
             .disable_fluid_specializations
@@ -478,6 +488,10 @@ fn mdtest_rule_selection(
         // we'll show to our users.
         "unsound-return-statement",
         "unsound-yield",
+        // `implicit-declaration` is an exception for the same reason: it asks every
+        // `.by` test to write `let` or `var` on assignments whose subject is
+        // something else entirely.
+        "implicit-declaration",
     ];
 
     let registry = default_lint_registry();

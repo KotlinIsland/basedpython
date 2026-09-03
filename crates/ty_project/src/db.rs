@@ -625,6 +625,12 @@ impl ty_python_core::Db for ProjectDatabase {
         self.project
             .is_some_and(|_| crate::should_check_file(self, file))
     }
+
+    fn block_scoped_declarations(&self, file: File) -> bool {
+        file_settings(self, file)
+            .analysis(self)
+            .block_scoped_declarations
+    }
 }
 
 #[salsa::db]
@@ -906,6 +912,13 @@ pub(crate) mod testing {
     impl ty_python_core::Db for TestDb {
         fn should_check_file(&self, file: ruff_db::files::File) -> bool {
             crate::should_check_file(self, file)
+        }
+
+        fn block_scoped_declarations(&self, _file: ruff_db::files::File) -> bool {
+            self.project()
+                .settings(self)
+                .analysis()
+                .block_scoped_declarations
         }
     }
 

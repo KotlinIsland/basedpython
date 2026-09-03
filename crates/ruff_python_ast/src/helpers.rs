@@ -1378,25 +1378,95 @@ pub fn declaration_annotation_type(annotation: &Expr) -> Option<&Expr> {
 ///
 /// A plain `x: int` writes its annotation directly; a keyword declaration writes it
 /// inside the marker the parser synthesized, as `let x: int` → `x: __let__[int]`.
-/// The marker is the one annotation nobody typed, which is what
-/// [`ExprContext::Invalid`] records.
-///
 /// `None` means no type was written at all — a bare `let x = 1`, or an assignment
 /// with no annotation — so there is nothing for anything reading a declared type to
 /// attach to.
 pub fn written_annotation_type(annotation: &Expr) -> Option<&Expr> {
-    let synthetic = match annotation {
-        Expr::Name(name) => name.ctx.is_invalid(),
-        Expr::Subscript(subscript) => {
-            matches!(subscript.value.as_ref(), Expr::Name(name) if name.ctx.is_invalid())
-        }
-        _ => false,
-    };
-    if synthetic {
+    if is_declaration_marker(annotation) {
         declaration_annotation_type(annotation)
     } else {
         Some(annotation)
     }
+}
+
+/// basedpython: the keyword a declaration binds its name with.
+///
+/// These are the two keywords that introduce a variable — `let x = 1` and
+/// `var x = 1`. Every other modifier (`final`, `private`, `override`, …) says
+/// something *about* a declaration rather than making one, so a chain that
+/// carries no binding keyword is not a declaration at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub enum BindingKeyword {
+    /// `let x = 1` — the binding is read-only, and lowers to `Final`.
+    Let,
+    /// `var x = 1` — the binding stays writable.
+    Var,
+}
+
+/// basedpython: the binding keyword `stmt` was written with, and the range of
+/// that keyword in `source`.
+///
+/// A declaration reaches the AST as an `AnnAssign` whose annotation is a
+/// synthetic marker: `let x: T` is `x: __let__[T]`, and every other modifier
+/// chain — `var x: T`, `private x = v` — is `x: __modifier_annot__[T]` or
+/// `x: __modifier_assign__`. Every one of those markers spans the whole keyword
+/// prefix ahead of the declared name, not just the word that made the binding, so
+/// the keyword itself is read back out of that source — `private let x = 1` binds
+/// with the `let` in the middle of its prefix.
+///
+/// `source` must be the file the statement was parsed from; a sub-AST parsed out
+/// of a string annotation is ranged against the string's contents instead, and
+/// answers `None` rather than reading the wrong span.
+pub fn binding_keyword(
+    stmt: &ast::StmtAnnAssign,
+    source: &str,
+) -> Option<(BindingKeyword, TextRange)> {
+    let marker = match stmt.annotation.as_ref() {
+        Expr::Name(name) => name,
+        Expr::Subscript(subscript) => subscript.value.as_name_expr()?,
+        _ => return None,
+    };
+
+    if !matches!(
+        marker.id.as_str(),
+        "__let__" | "__modifier_annot__" | "__modifier_assign__"
+    ) {
+        return None;
+    }
+    if source.len() < usize::from(marker.range.end()) {
+        return None;
+    }
+    SimpleTokenizer::new(source, marker.range)
+        .skip_trivia()
+        .filter(|token| token.kind == SimpleTokenKind::Name)
+        .find_map(|token| {
+            let keyword = match &source[token.range] {
+                "let" => BindingKeyword::Let,
+                "var" => BindingKeyword::Var,
+                _ => return None,
+            };
+            Some((keyword, token.range))
+        })
+}
+
+/// basedpython: whether `annotation` is a parser-synthesized declaration marker
+/// rather than a type the author wrote.
+///
+/// Every keyword-prefixed declaration — `let a = 1`, `var a: T`, `final a: T`,
+/// `private a = v` — parses to an `AnnAssign` whose annotation is a marker name
+/// (or that name subscripted by the declared type). The marker is the one
+/// annotation nobody typed, which is what [`ExprContext::Invalid`] records.
+pub fn is_declaration_marker(annotation: &Expr) -> bool {
+    let marker = match annotation {
+        Expr::Name(name) => name,
+        Expr::Subscript(subscript) => match subscript.value.as_ref() {
+            Expr::Name(name) => name,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    marker.ctx.is_invalid()
 }
 
 /// basedpython: detect `local` / `once` modifiers on `param`, read from `source`
