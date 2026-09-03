@@ -27,6 +27,21 @@ empty defs that *are* part of an overload run instead receive
 an `abstract def` with no body is given `: raise NotImplementedError` rather
 than `: ...`
 
+the bodyless form is the same empty body written a shorter way, so it is
+allowed in the same places: a stub file, a `Protocol` member, an abstract
+method, an overload, or an `if TYPE_CHECKING` block. anywhere else a `def`
+that declares a return type but no body is reported (`empty-body`) — the
+`: ...` it lowers to returns `None`:
+
+```by
+def parse(s: str) -> int      # ok — the run below makes this an overload
+def parse(s: bytes) -> int
+def parse(s):
+    return int(s)
+
+def lookup() -> int           # error: implicitly returns `None`
+```
+
 ## interaction with modifiers
 
 modifiers stack as expected:

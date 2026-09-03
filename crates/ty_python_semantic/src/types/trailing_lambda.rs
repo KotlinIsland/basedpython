@@ -189,6 +189,24 @@ fn it_parameter<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<Parameter<'db
     Some(signature.parameters().get_positional(index)?.clone())
 }
 
+/// basedpython: whether the callee's callback passes an argument for the block to
+/// bind as `it`.
+///
+/// `Some(false)` says the callback shape is inspectable and passes nothing, so the
+/// block has no `it`; `Some(true)` that it passes one. `None` is "cannot tell" — an
+/// overloaded, unannotated or non-callable parameter, or a callee with no single
+/// signature.
+///
+/// The semantic index answers the same question while building the block's scope, but
+/// it can only see a `def` in the file it is indexing: a callee reached through an
+/// import is unresolvable there, and it assumes a binding rather than losing one. This
+/// runs after inference, where an imported callee resolves like any other.
+pub(crate) fn trailing_lambda_passes_it<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<bool> {
+    let signature = callback_signature(db, callee)?;
+    let index = usize::from(declares_receiver(signature));
+    Some(signature.parameters().get_positional(index).is_some())
+}
+
 /// the type of the implicit `it` parameter. `None` when the callee's callback
 /// shape is not inspectable — `it` is then left untyped
 pub(crate) fn trailing_lambda_it_type<'db>(

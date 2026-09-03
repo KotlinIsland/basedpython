@@ -1,0 +1,12 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ implicit_parameters: true, ..InlayHintSettings::none() })"
+---
+
+from callees import apply, each
+
+apply:
+    print('hi')
+
+each:[ it: int]
+    print(it)
