@@ -84,24 +84,6 @@ impl ContextLowerer<'_, '_> {
         }
     }
 
-    /// `context s1 [: T] = v` → `s1 [: T] = v`: erase from the statement
-    /// start to the target name
-    fn lower_declaration(&mut self, decl: &ast::StmtAnnAssign) {
-        let is_marker = match &*decl.annotation {
-            Expr::Name(name) => name.id == "__context__",
-            Expr::Subscript(subscript) => {
-                matches!(&*subscript.value, Expr::Name(name) if name.id == "__context__")
-            }
-            _ => false,
-        };
-        if is_marker && decl.target.is_name_expr() {
-            self.edits.push((
-                TextRange::new(decl.range().start(), decl.target.range().start()),
-                String::new(),
-            ));
-        }
-    }
-
     /// append the resolved implicit arguments before the call's closing paren
     fn lower_call(&mut self, call: &ast::ExprCall) {
         // an extension member's call is re-emitted whole by the extension
@@ -140,10 +122,11 @@ impl ContextLowerer<'_, '_> {
 
 impl<'ast> Visitor<'ast> for ContextLowerer<'_, '_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        match stmt {
-            Stmt::FunctionDef(function) => self.strip_parameter_prefixes(&function.parameters),
-            Stmt::AnnAssign(decl) => self.lower_declaration(decl),
-            _ => {}
+        // a `context` declaration needs no lowering of its own: it is an ordinary modifier
+        // declaration, and the `modifiers` pass already erases the whole keyword prefix
+        // ahead of the name it binds
+        if let Stmt::FunctionDef(function) = stmt {
+            self.strip_parameter_prefixes(&function.parameters);
         }
         walk_stmt(self, stmt);
     }
@@ -187,6 +170,27 @@ mod tests {
 
                 s1 = "asdf"
                 f(2, b=s1)
+            "#},
+        );
+    }
+
+    #[test]
+    fn a_composed_declaration_lowers_as_the_declaration_it_is() {
+        // `context` is a prefix on a declaration, not a form of its own, so the rest of
+        // the chain decides what the output looks like — `let` still lowers to `Final`
+        check(
+            indoc! {r#"
+                def f(context b: str): ...
+
+                context let s1: str = "asdf"
+                f()
+            "#},
+            indoc! {r#"
+                from typing import Final
+                def f(b: str): ...
+
+                s1: Final[str] = "asdf"
+                f(b=s1)
             "#},
         );
     }

@@ -162,6 +162,7 @@ fn create_field_assignment_stmt(field: &str, annotation: &Expr) -> Stmt {
         annotation: Box::new(annotation.clone()),
         value: None,
         simple: true,
+        is_context: false,
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
         decorator_list: ruff_python_ast::DecoratorList::new(),

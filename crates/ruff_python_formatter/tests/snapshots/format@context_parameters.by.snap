@@ -9,6 +9,13 @@ context s1 = "asdf"
 context s2: str = "fdsa"
 
 
+# `context` composed with the other declaration modifiers, in either order
+context let s3: str = "immutable"
+context var s4: str = "mutable"
+private context let s5 = "hidden"
+context private let s6 = "hidden too"
+
+
 # `context` parameters: positional-or-keyword (trailing) and keyword-only
 def f(a: int, context b: str) -> str:
     return b
@@ -34,6 +41,13 @@ def local() -> None:
 # `context` declarations, untyped and typed
 context s1      = "asdf"
 context s2: str = "fdsa"
+
+
+# `context` composed with the other declaration modifiers, in either order
+context let s3: str    = "immutable"
+context var s4: str    = "mutable"
+private context let s5 = "hidden"
+context private let s6 = "hidden too"
 
 
 # `context` parameters: positional-or-keyword (trailing) and keyword-only

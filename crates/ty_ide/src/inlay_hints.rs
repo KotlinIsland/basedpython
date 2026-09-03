@@ -2103,12 +2103,9 @@ fn untyped_declaration_value(assign: &ast::StmtAnnAssign) -> Option<&Expr> {
     if !marker.ctx.is_invalid() {
         return None;
     }
-    matches!(
-        marker.id.as_str(),
-        "__let__" | "__modifier_assign__" | "__context__"
-    )
-    .then(|| assign.value.as_deref())
-    .flatten()
+    matches!(marker.id.as_str(), "__let__" | "__modifier_assign__")
+        .then(|| assign.value.as_deref())
+        .flatten()
 }
 
 fn annotations_are_valid_syntax(stmt_assign: &ruff_python_ast::StmtAssign) -> bool {
@@ -10100,10 +10097,11 @@ Source with applied edits:
             let a = foo()
             var b = foo()
             context c = foo()
-            final d = foo()
-            let e: int = foo()
-            var f: int = foo()
-            let g
+            context let d = foo()
+            final e = foo()
+            let f: int = foo()
+            var g: int = foo()
+            let h
             ",
         );
 

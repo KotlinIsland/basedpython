@@ -226,6 +226,7 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
                 value,
                 annotation,
                 simple: _,
+                is_context: _,
                 range: _,
                 node_index: _,
                 decorator_list: _,

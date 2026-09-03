@@ -1,4 +1,4 @@
-use ruff_python_ast::{Expr, PythonVersion, Stmt};
+use ruff_python_ast::{PythonVersion, Stmt};
 use ruff_python_semantic::{Binding, ScopeKind, SemanticModel};
 
 use crate::checkers::ast::Checker;
@@ -275,18 +275,12 @@ pub(crate) fn deferred_scopes(checker: &Checker) {
 }
 
 /// basedpython: whether `binding` comes from a `context NAME [: T] = value`
-/// declaration (an `AnnAssign` carrying the synthetic `__context__` marker).
-/// such a variable is consumed implicitly by context-parameter resolution at
-/// later call sites, so a binding with no explicit reads is expected, not dead
+/// declaration. such a variable is consumed implicitly by context-parameter
+/// resolution at later call sites, so a binding with no explicit reads is
+/// expected, not dead
 fn is_context_declaration(binding: &Binding, semantic: &SemanticModel) -> bool {
     let Some(Stmt::AnnAssign(decl)) = binding.statement(semantic) else {
         return false;
     };
-    match &*decl.annotation {
-        Expr::Name(name) => name.id == "__context__",
-        Expr::Subscript(subscript) => {
-            matches!(&*subscript.value, Expr::Name(name) if name.id == "__context__")
-        }
-        _ => false,
-    }
+    decl.is_context
 }

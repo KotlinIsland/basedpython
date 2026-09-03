@@ -33,6 +33,7 @@ Module(
                     ),
                     value: None,
                     simple: true,
+                    is_context: false,
                 },
             ),
             AnnAssign(
@@ -58,6 +59,7 @@ Module(
                     ),
                     value: None,
                     simple: false,
+                    is_context: false,
                 },
             ),
             AnnAssign(
@@ -96,6 +98,7 @@ Module(
                     ),
                     value: None,
                     simple: false,
+                    is_context: false,
                 },
             ),
             AnnAssign(
@@ -139,6 +142,7 @@ Module(
                     ),
                     value: None,
                     simple: false,
+                    is_context: false,
                 },
             ),
         ],

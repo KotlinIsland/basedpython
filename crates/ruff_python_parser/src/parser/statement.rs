@@ -101,7 +101,25 @@ fn is_modifier_kw(text: &str) -> bool {
             // the keyword strips like any other modifier prefix; validity (only on
             // `var`, never with an initialiser) is checked where the property is lowered
             | "late"
+            // basedpython: `context x = v` declares an implicit-argument candidate for
+            // `context` parameters. it is a prefix on a declaration rather than a form of
+            // its own, so it composes with the rest of the chain (`context let x: T = v`
+            // is a `Final` one) and the declaration under it parses as it would alone. the
+            // keyword is recorded on the statement as `StmtAnnAssign::is_context`
+            | "context"
     )
+}
+
+/// basedpython: records a `context` keyword read off a modifier chain on the declaration
+/// the rest of the chain produced.
+fn mark_context(stmt: Stmt, has_context: bool) -> Stmt {
+    match stmt {
+        Stmt::AnnAssign(mut ann) if has_context => {
+            ann.is_context = true;
+            Stmt::AnnAssign(ann)
+        }
+        other => other,
+    }
 }
 
 /// Whether `kind` can be the name a basedpython declaration declares.
@@ -163,7 +181,10 @@ fn definition_modifier_target(marker: &str) -> ModifierTarget {
 /// combinations are actually valid for the context is a semantic concern the
 /// `init_method` lowering checks, not the parser
 fn is_param_modifier_kw(text: &str) -> bool {
-    is_modifier_kw(text) || matches!(text, "let" | "var")
+    // `context` prefixes a *declaration*, and on a parameter it means something else
+    // entirely — the implicit argument — which the parameter parser reads for itself
+    // into `Parameter::is_context`. reading it here would swallow the keyword first
+    (is_modifier_kw(text) && text != "context") || matches!(text, "let" | "var")
 }
 
 /// True when a parameter's modifier prefix (the source between the parameter
@@ -763,19 +784,6 @@ impl<'src> Parser<'src> {
             return Some(self.parse_sentinel_decl(start));
         }
 
-        // `context NAME = value` / `context NAME: T = value` — a context
-        // declaration: the variable becomes an implicit-argument candidate for
-        // `context` parameters at later call sites
-        if kw == "context"
-            && declares_a_name(self.peek())
-            && matches!(self.peek_nth(1).0, TokenKind::Equal | TokenKind::Colon)
-        {
-            self.error_if_not_basedpython(
-                "`context` declarations are not valid in .py files".to_string(),
-            );
-            return Some(self.parse_context_decl(start));
-        }
-
         // The current token must itself be a modifier or an introducer
         // (`let` / `var` and bare `abstract a: T`) for a chain or introducer to be possible.
         if !is_modifier_kw(kw) && !matches!(kw, "let" | "var") {
@@ -786,6 +794,9 @@ impl<'src> Parser<'src> {
         // `idx` counts how many tokens (current + lookahead) we have classified as
         // modifiers; index 0 is the current token, index >=1 uses peek_nth(idx - 1).
         let mut idx: usize = 0;
+        // basedpython: `context` anywhere in the chain marks the declaration the rest of
+        // the chain produces; it decides nothing about which form that is
+        let mut has_context = false;
         loop {
             let (kind, range) = if idx == 0 {
                 (self.current_token_kind(), self.current_token_range())
@@ -872,7 +883,8 @@ impl<'src> Parser<'src> {
                         for _ in 0..idx {
                             self.bump(TokenKind::Name);
                         }
-                        return Some(self.parse_let_decl(start));
+                        let decl = self.parse_let_decl(start);
+                        return Some(mark_context(decl, has_context));
                     }
                     if text == "var" {
                         // `var` is the mutable counterpart of `let`. it declares
@@ -898,9 +910,8 @@ impl<'src> Parser<'src> {
                             "`var` declarations are not valid in .py files".to_string(),
                         );
                         if following == TokenKind::Colon {
-                            return Some(
-                                self.parse_modifier_annot_decl(start, "__modifier_annot__"),
-                            );
+                            let decl = self.parse_modifier_annot_decl(start, "__modifier_annot__");
+                            return Some(mark_context(decl, has_context));
                         }
                         if following != TokenKind::Equal {
                             // a bare `var x` carries neither a type nor a value,
@@ -916,9 +927,11 @@ impl<'src> Parser<'src> {
                                 range,
                             );
                         }
-                        return Some(self.parse_modifier_assign_decl(start));
+                        let decl = self.parse_modifier_assign_decl(start);
+                        return Some(mark_context(decl, has_context));
                     }
                     if is_modifier_kw(text) {
+                        has_context |= text == "context";
                         idx += 1;
                         continue;
                     }
@@ -946,21 +959,24 @@ impl<'src> Parser<'src> {
                             self.error_if_not_basedpython(format!(
                                 "`{kw}` modifier on assignments is not valid in .py files"
                             ));
-                            Some(self.parse_modifier_assign_decl(start))
+                            let decl = self.parse_modifier_assign_decl(start);
+                            Some(mark_context(decl, has_context))
                         }
                         TokenKind::Colon if idx == 1 && self.is_abstract_modifier_at(0) => {
                             // bare `abstract a: T` — sole `abstract` modifier ahead of name
                             self.error_if_not_basedpython(
                                 "`abstract` annotations are not valid in .py files".to_string(),
                             );
-                            Some(self.parse_abstract_annot_decl(start))
+                            let decl = self.parse_abstract_annot_decl(start);
+                            Some(mark_context(decl, has_context))
                         }
                         TokenKind::Colon if idx == 1 && self.is_visibility_modifier_at(0) => {
                             // bare `private a: T`, `public a: T`, or `export a: T`
                             self.error_if_not_basedpython(format!(
                                 "`{kw}` annotations are not valid in .py files"
                             ));
-                            Some(self.parse_visibility_annot_decl(start))
+                            let decl = self.parse_visibility_annot_decl(start);
+                            Some(mark_context(decl, has_context))
                         }
                         TokenKind::Colon if idx == 1 && self.is_final_modifier_at(0) => {
                             // bare `final a: T` — a `Final` declaration in every
@@ -970,7 +986,8 @@ impl<'src> Parser<'src> {
                             self.error_if_not_basedpython(
                                 "`final` annotations are not valid in .py files".to_string(),
                             );
-                            Some(self.parse_final_annot_decl(start))
+                            let decl = self.parse_final_annot_decl(start);
+                            Some(mark_context(decl, has_context))
                         }
                         TokenKind::Colon if idx >= 1 => {
                             // any other modifier chain on an annotated assignment
@@ -981,7 +998,8 @@ impl<'src> Parser<'src> {
                             self.error_if_not_basedpython(format!(
                                 "`{kw}` modifier on annotated assignments is not valid in .py files"
                             ));
-                            Some(self.parse_modifier_annot_decl(start, "__modifier_annot__"))
+                            let decl = self.parse_modifier_annot_decl(start, "__modifier_annot__");
+                            Some(mark_context(decl, has_context))
                         }
                         _ => None,
                     };
@@ -1259,6 +1277,7 @@ impl<'src> Parser<'src> {
             annotation: Box::new(annotation),
             value: Some(Box::new(value)),
             simple: true,
+            is_context: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             decorator_list: DecoratorList::new(),
@@ -1363,9 +1382,13 @@ impl<'src> Parser<'src> {
     /// Parses `let x = 5` → produces a synthetic `AnnAssign` that the
     /// `modifiers` transform rewrites to `x: Final = 5`.
     fn parse_let_decl(&mut self, start: TextSize) -> Stmt {
-        let let_range = self.current_token_range();
         self.bump(TokenKind::Name); // consume "let"
         let name = self.parse_identifier();
+        // the marker spans the whole keyword prefix, from the statement's start — a
+        // modifier ahead of the `let` (`context let a: T`, `private let a = v`) is part of
+        // what was written, and everything that re-emits or highlights the declaration
+        // reads it from this range
+        let let_range = TextRange::new(start, name.range.start());
         let let_name = Expr::Name(ast::ExprName {
             id: Name::new_static("__let__"),
             ctx: ExprContext::Invalid,
@@ -1412,60 +1435,7 @@ impl<'src> Parser<'src> {
             annotation: Box::new(annotation),
             value,
             simple: true,
-            range: self.node_range(start),
-            node_index: AtomicNodeIndex::NONE,
-            decorator_list: DecoratorList::new(),
-        })
-    }
-
-    /// Parses `context x = v` / `context x: T = v` → produces a synthetic
-    /// `AnnAssign` whose annotation is the `__context__` marker. the declared
-    /// variable becomes an implicit-argument candidate for `context`
-    /// parameters at later call sites; the lowering strips the keyword
-    fn parse_context_decl(&mut self, start: TextSize) -> Stmt {
-        let context_range = self.current_token_range();
-        self.bump(TokenKind::Name); // consume "context"
-        let name = self.parse_identifier();
-        let marker = Expr::Name(ast::ExprName {
-            id: Name::new_static("__context__"),
-            ctx: ExprContext::Invalid,
-            range: context_range,
-            node_index: AtomicNodeIndex::NONE,
-        });
-        // optional `: annotation` before `=`
-        let annotation = if self.eat(TokenKind::Colon) {
-            let type_ann = self
-                .parse_conditional_expression_or_higher_impl(
-                    ExpressionContext::default().with_in_type_expression(),
-                )
-                .expr;
-            let slice_range = type_ann.range();
-            Expr::Subscript(ast::ExprSubscript {
-                value: Box::new(marker),
-                slice: Box::new(type_ann),
-                ctx: ExprContext::Load,
-                range: TextRange::new(context_range.start(), slice_range.end()),
-                node_index: AtomicNodeIndex::NONE,
-                is_typeof: false,
-                is_type_decoration: false,
-            })
-        } else {
-            marker
-        };
-        self.expect(TokenKind::Equal);
-        let value = self.parse_declaration_value();
-        let target = Expr::Name(ast::ExprName {
-            id: name.id.clone(),
-            ctx: ExprContext::Store,
-            range: name.range,
-            node_index: AtomicNodeIndex::NONE,
-        });
-        self.eat_declaration_terminator();
-        Stmt::AnnAssign(ast::StmtAnnAssign {
-            target: Box::new(target),
-            annotation: Box::new(annotation),
-            value: Some(Box::new(value)),
-            simple: true,
+            is_context: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             decorator_list: DecoratorList::new(),
@@ -1524,6 +1494,7 @@ impl<'src> Parser<'src> {
             annotation: Box::new(annotation),
             value: value.map(Box::new),
             simple: true,
+            is_context: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             decorator_list: DecoratorList::new(),
@@ -1558,6 +1529,7 @@ impl<'src> Parser<'src> {
             annotation: Box::new(annotation),
             value: Some(Box::new(value)),
             simple: true,
+            is_context: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             decorator_list: DecoratorList::new(),
@@ -1589,6 +1561,7 @@ impl<'src> Parser<'src> {
             annotation: Box::new(annotation),
             value: None,
             simple: true,
+            is_context: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             decorator_list: DecoratorList::new(),
@@ -1647,6 +1620,7 @@ impl<'src> Parser<'src> {
             annotation: Box::new(annotation),
             value,
             simple: true,
+            is_context: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             decorator_list: DecoratorList::new(),
@@ -1669,14 +1643,14 @@ impl<'src> Parser<'src> {
         // `private` in the chain: unlike the other modifiers (which ty ignores)
         // `final`'s `Final` qualifier and `private`'s invisibility to a widened
         // view of the class must both survive
-        let mut final_range = None;
+        let mut is_final = false;
         let mut is_private = false;
         loop {
             if self.peek() == TokenKind::Colon {
                 break;
             }
             match self.src_text(self.current_token_range()) {
-                "final" => final_range = Some(self.current_token_range()),
+                "final" => is_final = true,
                 "private" => is_private = true,
                 _ => {}
             }
@@ -1707,9 +1681,9 @@ impl<'src> Parser<'src> {
         // the marker spans the whole keyword prefix from the statement's start,
         // which for `class var x: T` is the `class` — the formatter re-emits the
         // prefix from this range, so anything left out of it is dropped
-        let marker_range = final_range.unwrap_or_else(|| TextRange::new(start, name.range.start()));
+        let marker_range = TextRange::new(start, name.range.start());
         let marker = Expr::Name(ast::ExprName {
-            id: Name::new_static(match (final_range.is_some(), is_private) {
+            id: Name::new_static(match (is_final, is_private) {
                 (true, _) => "__final__",
                 (false, true) => "__private_annot__",
                 (false, false) => synthetic_id,
@@ -1734,6 +1708,7 @@ impl<'src> Parser<'src> {
             annotation: Box::new(annotation),
             value,
             simple: true,
+            is_context: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             decorator_list: DecoratorList::new(),
@@ -2295,6 +2270,7 @@ impl<'src> Parser<'src> {
             annotation: Box::new(annotation),
             value,
             simple: true,
+            is_context: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             decorator_list: DecoratorList::new(),
@@ -3895,6 +3871,7 @@ impl<'src> Parser<'src> {
             annotation: Box::new(annotation.expr),
             value,
             simple,
+            is_context: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             decorator_list: DecoratorList::new(),
@@ -5141,6 +5118,7 @@ impl<'src> Parser<'src> {
                 annotation,
                 value: Some(Box::new(value_expr)),
                 simple: false,
+                is_context: false,
                 range: param.range,
                 node_index: AtomicNodeIndex::NONE,
                 decorator_list: DecoratorList::new(),
@@ -5647,6 +5625,7 @@ impl<'src> Parser<'src> {
                         annotation: Box::new(annotation),
                         value: value.map(Box::new),
                         simple: true,
+                        is_context: false,
                         range: field_range,
                         node_index: AtomicNodeIndex::NONE,
                         decorator_list: DecoratorList::new(),
@@ -5677,6 +5656,7 @@ impl<'src> Parser<'src> {
                             })),
                             value: Some(Box::new(value)),
                             simple: true,
+                            is_context: false,
                             range: field_range,
                             node_index: AtomicNodeIndex::NONE,
                             decorator_list: DecoratorList::new(),

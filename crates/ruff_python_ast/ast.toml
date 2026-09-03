@@ -173,6 +173,13 @@ with no value has nothing to decorate, and carrying one there is an error""" },
   { name = "annotation", type = "Expr", is_annotation = true },
   { name = "value", type = "Expr?" },
   { name = "simple", type = "bool" },
+  { name = "is_context", type = "bool", doc = """basedpython: when true, this declaration
+was written with the `context` prefix (`context log: Logger = make_logger()`), which makes
+the variable an implicit-argument candidate for `context` parameters at later call sites.
+
+`context` composes with the other declaration modifiers, so the annotation still carries
+whichever marker the rest of the chain produced — `context let x: T = v` is a `Final`
+declaration — and this flag records the `context` alongside it""" },
 ]
 
 [Stmt.nodes.StmtFor]

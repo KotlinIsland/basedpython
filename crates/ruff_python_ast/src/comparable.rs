@@ -1867,6 +1867,7 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 annotation,
                 value,
                 simple,
+                is_context: _,
                 range: _,
                 node_index: _,
             }) => Self::AnnAssign(StmtAnnAssign {

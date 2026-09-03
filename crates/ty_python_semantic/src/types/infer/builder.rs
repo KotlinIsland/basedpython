@@ -4870,6 +4870,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 target,
                 simple: _,
                 decorator_list: _,
+                is_context: _,
             } = assignment;
             let annotated = self.infer_annotation_expression(
                 annotation,
