@@ -1,0 +1,87 @@
+from abc import abstractmethod
+from dataclasses import dataclass
+from typing import final, overload, override
+
+
+@dataclass(slots=True)
+class Point:
+    x: int = 0
+
+    @staticmethod
+    def origin() -> "Point":
+        return Point()
+
+    @classmethod
+    def of(cls, x: int) -> "Point":
+        return cls(x)
+
+
+@dataclass(frozen=True, slots=True)
+class Frozen:
+    x: int = 0
+
+
+@final
+class Sealed:
+    @final
+    def kept(self) -> int:
+        return 0
+
+    @abstractmethod
+    def missing(self) -> int: ...
+
+
+class Child(Point):
+    @override
+    def origin(self) -> "Point":
+        return Point()
+
+
+class Stacked:
+    # only the last decorator is rewritten; the next run takes the one above it
+    @final
+    @staticmethod
+    def both() -> int:
+        return 0
+
+    @overload
+    @staticmethod
+    def over(x: int) -> int: ...
+
+
+class Commented:
+    @staticmethod
+    # the comment goes with the line the decorator is on
+    def noted() -> int:
+        return 0
+
+
+# OK: a `@dataclass` configured any other way says what the keyword does not
+@dataclass
+class Bare:
+    x: int = 0
+
+
+@dataclass(slots=True, eq=False)
+class Configured:
+    x: int = 0
+
+
+@dataclass(frozen=True)
+class Unslotted:
+    x: int = 0
+
+
+# OK: a decorator with no keyword spelling
+class Plain:
+    @overload
+    def m(self, x: int) -> int: ...
+
+    @property
+    def p(self) -> int:
+        return 0
+
+
+# OK: already written as a modifier
+final class Already:
+    static def m() -> int: return 0

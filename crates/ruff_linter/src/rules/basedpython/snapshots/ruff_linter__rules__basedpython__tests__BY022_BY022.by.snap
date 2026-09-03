@@ -1,0 +1,202 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY022 [*] `@dataclass(slots=True)` can be written as `data`
+ --> BY022.by:6:1
+  |
+6 | @dataclass(slots=True)
+  | ^^^^^^^^^^^^^^^^^^^^^^
+7 | class Point:
+8 |     x: int = 0
+  |
+help: Replace with the `data` modifier
+  |
+5 |
+  - @dataclass(slots=True)
+  - class Point:
+6 + data class Point:
+7 |     x: int = 0
+  |
+
+BY022 [*] `@staticmethod` can be written as `static`
+  --> BY022.by:10:5
+   |
+ 8 |     x: int = 0
+ 9 |
+10 |     @staticmethod
+   |     ^^^^^^^^^^^^^
+11 |     def origin() -> "Point":
+12 |         return Point()
+   |
+help: Replace with the `static` modifier
+   |
+9  |
+   -     @staticmethod
+   -     def origin() -> "Point":
+10 +     static def origin() -> "Point":
+11 |         return Point()
+   |
+
+BY022 [*] `@classmethod` can be written as `class`
+  --> BY022.by:14:5
+   |
+12 |         return Point()
+13 |
+14 |     @classmethod
+   |     ^^^^^^^^^^^^
+15 |     def of(cls, x: int) -> "Point":
+16 |         return cls(x)
+   |
+help: Replace with the `class` modifier
+   |
+13 |
+   -     @classmethod
+   -     def of(cls, x: int) -> "Point":
+14 +     class def of(cls, x: int) -> "Point":
+15 |         return cls(x)
+   |
+
+BY022 [*] `@dataclass(frozen=True, slots=True)` can be written as `frozen data`
+  --> BY022.by:19:1
+   |
+19 | @dataclass(frozen=True, slots=True)
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+20 | class Frozen:
+21 |     x: int = 0
+   |
+help: Replace with the `frozen data` modifier
+   |
+18 |
+   - @dataclass(frozen=True, slots=True)
+   - class Frozen:
+19 + frozen data class Frozen:
+20 |     x: int = 0
+   |
+
+BY022 [*] `@final` can be written as `final`
+  --> BY022.by:24:1
+   |
+24 | @final
+   | ^^^^^^
+25 | class Sealed:
+26 |     @final
+   |
+help: Replace with the `final` modifier
+   |
+23 |
+   - @final
+   - class Sealed:
+24 + final class Sealed:
+25 |     @final
+   |
+
+BY022 [*] `@final` can be written as `final`
+  --> BY022.by:26:5
+   |
+24 | @final
+25 | class Sealed:
+26 |     @final
+   |     ^^^^^^
+27 |     def kept(self) -> int:
+28 |         return 0
+   |
+help: Replace with the `final` modifier
+   |
+25 | class Sealed:
+   -     @final
+   -     def kept(self) -> int:
+26 +     final def kept(self) -> int:
+27 |         return 0
+   |
+
+BY022 [*] `@abstractmethod` can be written as `abstract`
+  --> BY022.by:30:5
+   |
+28 |         return 0
+29 |
+30 |     @abstractmethod
+   |     ^^^^^^^^^^^^^^^
+31 |     def missing(self) -> int: ...
+   |
+help: Replace with the `abstract` modifier
+   |
+29 |
+   -     @abstractmethod
+   -     def missing(self) -> int: ...
+30 +     abstract def missing(self) -> int: ...
+31 |
+   |
+
+BY022 [*] `@override` can be written as `override`
+  --> BY022.by:35:5
+   |
+34 | class Child(Point):
+35 |     @override
+   |     ^^^^^^^^^
+36 |     def origin(self) -> "Point":
+37 |         return Point()
+   |
+help: Replace with the `override` modifier
+   |
+34 | class Child(Point):
+   -     @override
+   -     def origin(self) -> "Point":
+35 +     override def origin(self) -> "Point":
+36 |         return Point()
+   |
+
+BY022 [*] `@staticmethod` can be written as `static`
+  --> BY022.by:43:5
+   |
+41 |     # only the last decorator is rewritten; the next run takes the one above it
+42 |     @final
+43 |     @staticmethod
+   |     ^^^^^^^^^^^^^
+44 |     def both() -> int:
+45 |         return 0
+   |
+help: Replace with the `static` modifier
+   |
+42 |     @final
+   -     @staticmethod
+   -     def both() -> int:
+43 +     static def both() -> int:
+44 |         return 0
+   |
+
+BY022 [*] `@staticmethod` can be written as `static`
+  --> BY022.by:48:5
+   |
+47 |     @overload
+48 |     @staticmethod
+   |     ^^^^^^^^^^^^^
+49 |     def over(x: int) -> int: ...
+   |
+help: Replace with the `static` modifier
+   |
+47 |     @overload
+   -     @staticmethod
+   -     def over(x: int) -> int: ...
+48 +     static def over(x: int) -> int: ...
+49 |
+   |
+
+BY022 [*] `@staticmethod` can be written as `static`
+  --> BY022.by:53:5
+   |
+52 | class Commented:
+53 |     @staticmethod
+   |     ^^^^^^^^^^^^^
+54 |     # the comment goes with the line the decorator is on
+55 |     def noted() -> int:
+   |
+help: Replace with the `static` modifier
+   |
+52 | class Commented:
+   -     @staticmethod
+   -     # the comment goes with the line the decorator is on
+   -     def noted() -> int:
+53 +     static def noted() -> int:
+54 |         return 0
+   |
+note: This is an unsafe fix and may change runtime behavior
