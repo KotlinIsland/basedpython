@@ -105,6 +105,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 34..40,
+                    decorator_list: [],
                     targets: [
                         Name(
                             ExprName {

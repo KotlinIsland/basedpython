@@ -232,6 +232,7 @@ fn create_fix(
         } else {
             literal_elements[0].clone()
         }),
+        is_type_decoration: false,
     });
 
     let fix = match union_kind {

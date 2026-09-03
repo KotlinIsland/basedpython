@@ -492,7 +492,23 @@ impl<'a> Generator<'a> {
                     }
                 });
             }
-            Stmt::Assign(ast::StmtAssign { targets, value, .. }) => {
+            Stmt::Assign(ast::StmtAssign {
+                targets,
+                value,
+                decorator_list,
+                ..
+            }) => {
+                // basedpython: a decorated binding means `x = dec(value)`, and the
+                // transform that rewrites it into that call is what erases the
+                // decorators — so one still here never reached that transform.
+                // Writing `@dec` even into python output makes the transpiler's
+                // reparse reject it, rather than binding the undecorated value
+                for decorator in decorator_list {
+                    statement!({
+                        self.p("@");
+                        self.unparse_expr(&decorator.expression, precedence::MAX);
+                    });
+                }
                 statement!({
                     for target in targets {
                         self.unparse_expr(target, precedence::ASSIGN);
@@ -539,7 +555,19 @@ impl<'a> Generator<'a> {
                 simple,
                 range: _,
                 node_index: _,
+                decorator_list,
             }) => {
+                // basedpython: a decorated binding means `x = dec(value)`, and the
+                // transform that rewrites it into that call is what erases the
+                // decorators — so one still here never reached that transform.
+                // Writing `@dec` even into python output makes the transpiler's
+                // reparse reject it, rather than binding the undecorated value
+                for decorator in decorator_list {
+                    statement!({
+                        self.p("@");
+                        self.unparse_expr(&decorator.expression, precedence::MAX);
+                    });
+                }
                 statement!({
                     let need_parens = matches!(target.as_ref(), Expr::Name(_)) && !simple;
                     self.p_if(need_parens, "(");
@@ -1596,8 +1624,22 @@ impl<'a> Generator<'a> {
                 value,
                 slice,
                 is_typeof,
+                is_type_decoration,
                 ..
             }) => {
+                // basedpython: a decorated type `@meta int` carries no brackets in
+                // the source, and its `value` is the decorator rather than a
+                // generic origin. Written in either mode for the same reason a
+                // decorated binding is: `Annotated[int, meta]` is what it lowers
+                // to, and a decoration that never reached that lowering should
+                // fail the transpiler's reparse rather than become `meta[int]`
+                if *is_type_decoration {
+                    self.p("@");
+                    self.unparse_expr(value, precedence::MAX);
+                    self.p(" ");
+                    self.unparse_expr(slice, precedence::SUBSCRIPT);
+                    return;
+                }
                 // basedpython: `typeof X` is a subscript whose `value` is a synthetic
                 // ellipsis placeholder and whose brackets exist only in the AST, so
                 // unparsing it generically writes `...[X]`

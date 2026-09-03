@@ -3421,6 +3421,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             node_index: _,
             targets,
             value,
+            decorator_list: _,
         } = assignment;
 
         for target in targets {
@@ -4232,6 +4233,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
         };
 
+        // basedpython: a decorator written above the assignment applies to what it
+        // binds — `@foo` above `x = 1` binds `foo(1)`
+        target_ty = self.infer_binding_decorators(assignment.decorators(self.module()), target_ty);
+
         if let Some(special_form) = target.as_name_expr().and_then(|name| {
             let db = self.db();
             let importing_file = ImportingFile::File(
@@ -4864,6 +4869,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 value,
                 target,
                 simple: _,
+                decorator_list: _,
             } = assignment;
             let annotated = self.infer_annotation_expression(
                 annotation,
@@ -5220,6 +5226,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             let target_ty = self
                 .stub_placeholder_binding_type(value)
                 .unwrap_or(value_ty);
+            let target_ty =
+                self.infer_binding_decorators(assignment.decorators(self.module()), target_ty);
             self.store_expression_type(target, target_ty);
             add.insert(self, target_ty);
             return;
@@ -5542,6 +5550,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             } else {
                 inferred_ty
             };
+
+            // basedpython: a decorator written above the declaration applies to what
+            // it binds, so the declared type is checked against what the decorator
+            // returns rather than against the value written under it
+            let inferred_ty =
+                self.infer_binding_decorators(assignment.decorators(self.module()), inferred_ty);
 
             if is_pep_613_type_alias {
                 let inferred_ty =
@@ -6302,6 +6316,25 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
 
         transparent_callable_decorator_result(db, env, &bindings, decorated_ty).unwrap_or(return_ty)
+    }
+
+    /// basedpython: infer the decorators written above a binding.
+    ///
+    /// A decorator on a binding is metadata on its declared type — the lowering puts
+    /// it in the `Annotated` the annotation becomes — so it does not change what the
+    /// binding holds, and the type is handed straight back. What this is for is the
+    /// decorators themselves: each is an ordinary expression, and inferring it is
+    /// where an unresolved name in one is reported, and what gives the decorator node
+    /// a type for the IDE to read.
+    fn infer_binding_decorators(
+        &mut self,
+        decorators: &'ast [ast::Decorator],
+        ty: Type<'db>,
+    ) -> Type<'db> {
+        for decorator in decorators {
+            self.infer_decorator(decorator);
+        }
+        ty
     }
 
     /// Apply a decorator to a function or class type and return the resulting type.

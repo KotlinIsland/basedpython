@@ -107,6 +107,7 @@ pub(crate) fn duplicate_literal_member<'a>(checker: &Checker, expr: &'a Expr) {
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
             ctx: ExprContext::Load,
             is_typeof: false,
+            is_type_decoration: false,
         });
         let fix = Fix::applicable_edit(
             Edit::range_replacement(checker.generator().expr(&subscript), expr.range()),

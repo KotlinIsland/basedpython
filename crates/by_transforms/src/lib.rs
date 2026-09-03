@@ -998,6 +998,8 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     };
     let mut intersection = reverse_transforms::intersection::IntersectionReverse::new(src, &model);
     let mut not_rev = reverse_transforms::not_type::NotTypeReverse::new(src, &model);
+    let mut decorated_type_rev =
+        reverse_transforms::decorated_type::DecoratedTypeReverse::new(src, &model);
     let mut dynamic_keyword_rev =
         reverse_transforms::dynamic_keyword::DynamicKeywordReverse::new(&model);
     let mut literal_string_rev =
@@ -1032,6 +1034,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         type_mapping.visit_stmt(stmt);
         intersection.visit_stmt(stmt);
         not_rev.visit_stmt(stmt);
+        decorated_type_rev.visit_stmt(stmt);
         dynamic_keyword_rev.visit_stmt(stmt);
         literal_string_rev.visit_stmt(stmt);
         type_is_rev.visit_stmt(stmt);
@@ -1085,6 +1088,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(callable.edits);
     fixes.extend(intersection.edits);
     fixes.extend(not_rev.edits);
+    fixes.extend(decorated_type_rev.edits);
     fixes.extend(dynamic_keyword_rev.edits);
     fixes.extend(literal_string_rev.edits);
     fixes.extend(type_is_rev.edits);

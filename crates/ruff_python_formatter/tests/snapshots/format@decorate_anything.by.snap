@@ -1,0 +1,152 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/decorate_anything.by
+---
+## Input
+```bython
+@foo
+x: int = 1
+
+
+@foo
+let a: int = 1
+
+
+@foo
+y: int = 1
+
+
+@a
+@b
+z: int = 1
+
+
+@foo(strict=True)
+w: int = 1
+
+
+@mod.foo
+v: int = 1
+
+
+@foo
+# why
+u: int = 1
+
+
+@foo  # trailing
+t: int = 1
+
+
+b1: @meta int
+
+
+b2: list[@meta int]
+
+
+b3: @meta int | None
+
+
+b4: @x @y int
+
+
+b7: @meta (int | None)
+
+
+b8: @field (gt=0) int
+
+
+b5: @field(gt=0) int
+
+
+let b6: @meta int = 1
+
+
+def f(x: @meta int) -> @meta str: ...
+
+
+class A:
+    @foo
+    let a: int = 1
+
+    let b: @meta int = 1
+
+b9: (@meta int) | str
+
+b10: @meta int?
+```
+
+## Output
+```bython
+@foo
+x: int = 1
+
+
+@foo
+let a: int = 1
+
+
+@foo
+y: int = 1
+
+
+@a
+@b
+z: int = 1
+
+
+@foo(strict=True)
+w: int = 1
+
+
+@mod.foo
+v: int = 1
+
+
+@foo
+# why
+u: int = 1
+
+
+@foo  # trailing
+t: int = 1
+
+
+b1: @meta int
+
+
+b2: list[@meta int]
+
+
+b3: @meta int | None
+
+
+b4: @x @y int
+
+
+b7: @meta (int | None)
+
+
+b8: @field(gt=0) int
+
+
+b5: @field(gt=0) int
+
+
+let b6: @meta int = 1
+
+
+def f(x: @meta int) -> @meta str: ...
+
+
+class A:
+    @foo
+    let a: int = 1
+
+    let b: @meta int = 1
+
+
+b9: (@meta int) | str
+
+b10: @meta int?
+```

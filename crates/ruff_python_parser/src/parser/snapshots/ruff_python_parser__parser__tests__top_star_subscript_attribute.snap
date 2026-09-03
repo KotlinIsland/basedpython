@@ -10,6 +10,7 @@ ModModule {
             StmtAnnAssign {
                 node_index: NodeIndex(None),
                 range: 0..29,
+                decorator_list: [],
                 target: Name(
                     ExprName {
                         node_index: NodeIndex(None),
@@ -73,6 +74,7 @@ ModModule {
                         ),
                         ctx: Load,
                         is_typeof: false,
+                        is_type_decoration: false,
                     },
                 ),
                 value: None,

@@ -1374,6 +1374,31 @@ pub fn declaration_annotation_type(annotation: &Expr) -> Option<&Expr> {
         .then(|| subscript.slice.as_ref())
 }
 
+/// basedpython: the type a declaration writes, wherever it writes it.
+///
+/// A plain `x: int` writes its annotation directly; a keyword declaration writes it
+/// inside the marker the parser synthesized, as `let x: int` → `x: __let__[int]`.
+/// The marker is the one annotation nobody typed, which is what
+/// [`ExprContext::Invalid`] records.
+///
+/// `None` means no type was written at all — a bare `let x = 1`, or an assignment
+/// with no annotation — so there is nothing for anything reading a declared type to
+/// attach to.
+pub fn written_annotation_type(annotation: &Expr) -> Option<&Expr> {
+    let synthetic = match annotation {
+        Expr::Name(name) => name.ctx.is_invalid(),
+        Expr::Subscript(subscript) => {
+            matches!(subscript.value.as_ref(), Expr::Name(name) if name.ctx.is_invalid())
+        }
+        _ => false,
+    };
+    if synthetic {
+        declaration_annotation_type(annotation)
+    } else {
+        Some(annotation)
+    }
+}
+
 /// basedpython: detect `local` / `once` modifiers on `param`, read from `source`
 /// (the file the parameter was parsed from).
 ///
@@ -2682,6 +2707,7 @@ pub fn typing_optional(elt: Expr, binding: Name) -> Expr {
         range: TextRange::default(),
         node_index: AtomicNodeIndex::NONE,
         is_typeof: false,
+        is_type_decoration: false,
     })
 }
 
@@ -2712,6 +2738,7 @@ pub fn typing_union(elts: &[Expr], binding: Name) -> Expr {
         range: TextRange::default(),
         node_index: AtomicNodeIndex::NONE,
         is_typeof: false,
+        is_type_decoration: false,
     })
 }
 

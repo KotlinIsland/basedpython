@@ -38,9 +38,9 @@ use super::source_util::preamble_offset;
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
     coalesce_chain, compat, conformance, context_params, conversion, decl_site_variance,
-    decorator_keyword, dedent_string, destructure, django_lookup, dynamic_keyword,
-    empty_declarations, export_import, extension, float_const, force_unwrap, frameworks,
-    generic_call, generics, grapheme_string, identity_swap, if_let, implicit_receiver,
+    decorated_binding, decorator_keyword, dedent_string, destructure, django_lookup,
+    dynamic_keyword, empty_declarations, export_import, extension, float_const, force_unwrap,
+    frameworks, generic_call, generics, grapheme_string, identity_swap, if_let, implicit_receiver,
     implicit_typing, inferred_annotation, init_method, just_float, kw_subscript, literal_string,
     literal_types, local_once, main_function, match_type, modifiers, mutable_defaults, none_chain,
     optional_type, overload, parametric_is, postfix_await, private_method, propagate, properties,
@@ -488,6 +488,8 @@ pub(crate) fn run_against_source<'a>(
 
     let tuple_index_pass = tuple_index::TupleIndexPass::new();
 
+    let decorated_binding_pass = decorated_binding::DecoratedBindingPass::new(source_ref);
+
     let sentinel_inner = sentinel::Sentinel::new();
     let sentinel_pass = VisitorPass {
         inner: &sentinel_inner,
@@ -647,6 +649,12 @@ pub(crate) fn run_against_source<'a>(
         // replace a match type's `case` blocks with a runtime value, and strip
         // `TypeVarTuple` bounds wherever they appear
         &match_type_pass,
+        // a decorator above a binding: erase the decorator lines and wrap the
+        // value. Before `modifiers`, whose prefix rewrite (`let a = ` →
+        // `a: Final = `) sits immediately after the lines erased here, and early
+        // enough that an equal-span rewrite of the same value from a later pass
+        // is materialized inside the wrap rather than dropped against it
+        &decorated_binding_pass,
         &modifiers_pass,
         // after modifiers so the entry-point guard follows any `__all__` it
         // emits, and before the AST-mutation passes so `main`'s decorator

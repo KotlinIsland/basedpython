@@ -106,6 +106,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 21..57,
+                    decorator_list: [],
                     targets: [
                         Name(
                             ExprName {
@@ -184,6 +185,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                 },
@@ -192,6 +194,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 58..94,
+                    decorator_list: [],
                     targets: [
                         Subscript(
                             ExprSubscript {
@@ -261,6 +264,7 @@ Module(
                                 ),
                                 ctx: Store,
                                 is_typeof: false,
+                                is_type_decoration: false,
                             },
                         ),
                     ],
@@ -336,6 +340,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                 },
@@ -416,6 +421,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                 },

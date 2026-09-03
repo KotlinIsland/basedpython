@@ -1591,8 +1591,15 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 target,
                 annotation,
                 value,
+                decorator_list,
                 ..
             }) => {
+                // basedpython: a decorator may be written above a binding, and
+                // reads the names it names there
+                for decorator in decorator_list {
+                    self.visit_decorator(decorator);
+                }
+
                 match AnnotationContext::from_model(
                     &self.semantic,
                     self.settings(),
@@ -2256,6 +2263,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 range: _,
                 node_index: _,
                 is_typeof: _,
+                is_type_decoration: _,
             }) => {
                 // Only allow annotations in `ExprContext::Load`. If we have, e.g.,
                 // `obj["foo"]["bar"]`, we need to avoid treating the `obj["foo"]`

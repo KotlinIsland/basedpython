@@ -228,6 +228,7 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
                 simple: _,
                 range: _,
                 node_index: _,
+                decorator_list: _,
             }) => {
                 if value.is_some() || self.visiting_stub_file {
                     self.visit_expr(target);

@@ -70,6 +70,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 37..50,
+                    decorator_list: [],
                     targets: [
                         Name(
                             ExprName {
@@ -95,6 +96,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 51..82,
+                    decorator_list: [],
                     targets: [
                         Tuple(
                             ExprTuple {

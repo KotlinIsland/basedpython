@@ -153,6 +153,7 @@ pub(crate) fn unnecessary_literal_union<'a>(checker: &Checker, expr: &'a Expr) {
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
             ctx: ExprContext::Load,
             is_typeof: false,
+            is_type_decoration: false,
         });
 
         let edit = if other_exprs.is_empty() {
@@ -182,6 +183,7 @@ pub(crate) fn unnecessary_literal_union<'a>(checker: &Checker, expr: &'a Expr) {
                         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                         ctx: ExprContext::Load,
                         is_typeof: false,
+                        is_type_decoration: false,
                     }))
             } else {
                 checker.generator().expr(&pep_604_union(&elts))

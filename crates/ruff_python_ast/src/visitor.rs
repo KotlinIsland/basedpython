@@ -211,7 +211,15 @@ pub fn walk_stmt<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, stmt: &'a Stmt) {
                 visitor.visit_match_case(match_case);
             }
         }
-        Stmt::Assign(ast::StmtAssign { targets, value, .. }) => {
+        Stmt::Assign(ast::StmtAssign {
+            targets,
+            value,
+            decorator_list,
+            ..
+        }) => {
+            for decorator in decorator_list {
+                visitor.visit_decorator(decorator);
+            }
             visitor.visit_expr(value);
             for expr in targets {
                 visitor.visit_expr(expr);
@@ -232,8 +240,12 @@ pub fn walk_stmt<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, stmt: &'a Stmt) {
             target,
             annotation,
             value,
+            decorator_list,
             ..
         }) => {
+            for decorator in decorator_list {
+                visitor.visit_decorator(decorator);
+            }
             if let Some(expr) = value {
                 visitor.visit_expr(expr);
             }
@@ -619,6 +631,7 @@ pub fn walk_expr<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, expr: &'a Expr) {
             range: _,
             node_index: _,
             is_typeof: _,
+            is_type_decoration: _,
         }) => {
             visitor.visit_expr(value);
             visitor.visit_expr(slice);

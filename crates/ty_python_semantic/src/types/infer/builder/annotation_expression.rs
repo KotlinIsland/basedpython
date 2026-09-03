@@ -192,6 +192,22 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             return TypeAndQualifiers::declared(self.infer_type_expression(annotation));
         }
 
+        // basedpython: a decorated type `@meta T` is what `Annotated[T, meta]`
+        // spells, so it reads the same way — the annotation is the type it
+        // decorates, qualifiers and all, and the decorator is metadata inferred as
+        // the ordinary value expression it is. The type-expression path handles a
+        // decoration written in a nested position; this is the annotation itself,
+        // which never reaches that path when the decorator is a plain name
+        if let ast::Expr::Subscript(subscript) = annotation
+            && subscript.is_type_decoration
+        {
+            self.infer_type_decoration_metadata(&subscript.value);
+            let inner = self.infer_annotation_expression_impl(&subscript.slice, pep_613_policy);
+            self.store_expression_type(annotation, inner.inner_type());
+            self.store_qualifiers(annotation, inner.qualifiers());
+            return inner;
+        }
+
         if let Some(result) = self.synthetic_annotation_marker(annotation) {
             self.store_expression_type(annotation, result.inner_type());
             self.store_qualifiers(annotation, result.qualifiers());

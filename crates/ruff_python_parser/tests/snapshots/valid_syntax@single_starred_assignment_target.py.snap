@@ -14,6 +14,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 0..12,
+                    decorator_list: [],
                     targets: [
                         Tuple(
                             ExprTuple {
@@ -74,6 +75,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 13..23,
+                    decorator_list: [],
                     targets: [
                         Tuple(
                             ExprTuple {
@@ -134,6 +136,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 24..35,
+                    decorator_list: [],
                     targets: [
                         List(
                             ExprList {

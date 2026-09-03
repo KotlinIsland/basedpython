@@ -89,6 +89,7 @@ impl Transformer for Sentinel {
                 range: TextRange::default(),
                 targets: vec![target_expr],
                 value: Box::new(call),
+                decorator_list: ruff_python_ast::DecoratorList::new(),
             });
             self.changed.set(true);
             self.ever_changed.set(true);

@@ -129,6 +129,7 @@ Module(
                             ),
                             ctx: Store,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                     op: Add,

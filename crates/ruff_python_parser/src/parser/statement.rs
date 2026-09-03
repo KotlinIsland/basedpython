@@ -1,5 +1,6 @@
 use std::fmt::{Display, Write};
 
+use ruff_python_ast::helpers::written_annotation_type;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::{
@@ -1260,6 +1261,7 @@ impl<'src> Parser<'src> {
             simple: true,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            decorator_list: DecoratorList::new(),
         })
     }
 
@@ -1373,7 +1375,11 @@ impl<'src> Parser<'src> {
         // optional `: annotation` before `=`
         let typed = self.eat(TokenKind::Colon);
         let annotation = if typed {
-            let type_ann = self.parse_conditional_expression_or_higher().expr;
+            let type_ann = self
+                .parse_conditional_expression_or_higher_impl(
+                    ExpressionContext::default().with_in_type_expression(),
+                )
+                .expr;
             let slice_range = type_ann.range();
             Expr::Subscript(ast::ExprSubscript {
                 value: Box::new(let_name),
@@ -1382,6 +1388,7 @@ impl<'src> Parser<'src> {
                 range: TextRange::new(let_range.start(), slice_range.end()),
                 node_index: AtomicNodeIndex::NONE,
                 is_typeof: false,
+                is_type_decoration: false,
             })
         } else {
             let_name
@@ -1407,6 +1414,7 @@ impl<'src> Parser<'src> {
             simple: true,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            decorator_list: DecoratorList::new(),
         })
     }
 
@@ -1426,7 +1434,11 @@ impl<'src> Parser<'src> {
         });
         // optional `: annotation` before `=`
         let annotation = if self.eat(TokenKind::Colon) {
-            let type_ann = self.parse_conditional_expression_or_higher().expr;
+            let type_ann = self
+                .parse_conditional_expression_or_higher_impl(
+                    ExpressionContext::default().with_in_type_expression(),
+                )
+                .expr;
             let slice_range = type_ann.range();
             Expr::Subscript(ast::ExprSubscript {
                 value: Box::new(marker),
@@ -1435,6 +1447,7 @@ impl<'src> Parser<'src> {
                 range: TextRange::new(context_range.start(), slice_range.end()),
                 node_index: AtomicNodeIndex::NONE,
                 is_typeof: false,
+                is_type_decoration: false,
             })
         } else {
             marker
@@ -1455,6 +1468,7 @@ impl<'src> Parser<'src> {
             simple: true,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            decorator_list: DecoratorList::new(),
         })
     }
 
@@ -1512,6 +1526,7 @@ impl<'src> Parser<'src> {
             simple: true,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            decorator_list: DecoratorList::new(),
         })
     }
 
@@ -1545,6 +1560,7 @@ impl<'src> Parser<'src> {
             simple: true,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            decorator_list: DecoratorList::new(),
         })
     }
 
@@ -1575,6 +1591,7 @@ impl<'src> Parser<'src> {
             simple: true,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            decorator_list: DecoratorList::new(),
         })
     }
 
@@ -1600,7 +1617,11 @@ impl<'src> Parser<'src> {
             node_index: AtomicNodeIndex::NONE,
         });
         self.bump(TokenKind::Colon); // consume ":"
-        let type_ann = self.parse_conditional_expression_or_higher().expr;
+        let type_ann = self
+            .parse_conditional_expression_or_higher_impl(
+                ExpressionContext::default().with_in_type_expression(),
+            )
+            .expr;
         let slice_range = type_ann.range();
         let annotation = Expr::Subscript(ast::ExprSubscript {
             value: Box::new(final_marker),
@@ -1609,6 +1630,7 @@ impl<'src> Parser<'src> {
             range: TextRange::new(final_range.start(), slice_range.end()),
             node_index: AtomicNodeIndex::NONE,
             is_typeof: false,
+            is_type_decoration: false,
         });
         let value = self
             .eat(TokenKind::Equal)
@@ -1627,6 +1649,7 @@ impl<'src> Parser<'src> {
             simple: true,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            decorator_list: DecoratorList::new(),
         })
     }
 
@@ -1702,6 +1725,7 @@ impl<'src> Parser<'src> {
             ctx: ExprContext::Load,
             node_index: AtomicNodeIndex::NONE,
             is_typeof: false,
+            is_type_decoration: false,
         });
         let value = assigned;
         self.eat_declaration_terminator();
@@ -1712,6 +1736,7 @@ impl<'src> Parser<'src> {
             simple: true,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            decorator_list: DecoratorList::new(),
         })
     }
 
@@ -2272,6 +2297,7 @@ impl<'src> Parser<'src> {
             simple: true,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            decorator_list: DecoratorList::new(),
         })
     }
 
@@ -3785,6 +3811,7 @@ impl<'src> Parser<'src> {
             value: Box::new(value.expr),
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            decorator_list: DecoratorList::new(),
         }
     }
 
@@ -3870,6 +3897,7 @@ impl<'src> Parser<'src> {
             simple,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            decorator_list: DecoratorList::new(),
         }
     }
 
@@ -5098,6 +5126,7 @@ impl<'src> Parser<'src> {
                 ctx: ExprContext::Load,
                 node_index: AtomicNodeIndex::NONE,
                 is_typeof: false,
+                is_type_decoration: false,
             }))),
             // `let a` — a bare marker: read-only, with the type left to the value
             (None, Some(let_range)) => Some(Box::new(let_marker(let_range))),
@@ -5114,12 +5143,14 @@ impl<'src> Parser<'src> {
                 simple: false,
                 range: param.range,
                 node_index: AtomicNodeIndex::NONE,
+                decorator_list: DecoratorList::new(),
             }),
             None => Stmt::Assign(ast::StmtAssign {
                 targets: vec![attr_target],
                 value: Box::new(value_expr),
                 range: param.range,
                 node_index: AtomicNodeIndex::NONE,
+                decorator_list: DecoratorList::new(),
             }),
         };
         out.push(stmt);
@@ -5618,6 +5649,7 @@ impl<'src> Parser<'src> {
                         simple: true,
                         range: field_range,
                         node_index: AtomicNodeIndex::NONE,
+                        decorator_list: DecoratorList::new(),
                     }));
                 }
                 (None, Some(value)) => {
@@ -5641,17 +5673,20 @@ impl<'src> Parser<'src> {
                                 range: TextRange::empty(field_range.start()),
                                 node_index: AtomicNodeIndex::NONE,
                                 is_typeof: false,
+                                is_type_decoration: false,
                             })),
                             value: Some(Box::new(value)),
                             simple: true,
                             range: field_range,
                             node_index: AtomicNodeIndex::NONE,
+                            decorator_list: DecoratorList::new(),
                         }),
                         None => Stmt::Assign(ast::StmtAssign {
                             targets: vec![backing_target],
                             value: Box::new(value),
                             range: field_range,
                             node_index: AtomicNodeIndex::NONE,
+                            decorator_list: DecoratorList::new(),
                         }),
                     });
                 }
@@ -5741,6 +5776,7 @@ impl<'src> Parser<'src> {
                             })),
                             range: TextRange::empty(construct_range.end()),
                             node_index: AtomicNodeIndex::NONE,
+                            decorator_list: DecoratorList::new(),
                         })],
                         None,
                         TextRange::empty(construct_range.end()),
@@ -6958,7 +6994,12 @@ impl<'src> Parser<'src> {
         let at_modifier = (self.at(TokenKind::Class) && self.peek() == TokenKind::Def)
             || (self.at(TokenKind::Name)
                 && is_modifier_kw(self.src_text(self.current_token_range())));
-        if at_modifier {
+        // basedpython: a modifier chain also prefixes a *binding* — `export let
+        // a = 1` — which is not what `parse_with_modifier` reads. When the chain
+        // does not end at a definition the statement is parsed as the decorated
+        // binding it is instead
+        if at_modifier && (!self.options.is_basedpython || self.modifier_chain_ends_at_definition())
+        {
             return self.parse_with_modifier(start, decorators);
         }
 
@@ -6976,6 +7017,11 @@ impl<'src> Parser<'src> {
                     ..self.parse_function_definition(decorators, start)
                 })
             }
+            // basedpython: a decorator may also be written above a binding —
+            // `@foo` then `let x = 1`. Gated on the source type so a `.py` file
+            // keeps python's own recovery, which leaves the offending statement
+            // unconsumed for the caller to parse as a statement of its own
+            _ if self.options.is_basedpython => self.parse_decorated_binding(decorators, start),
             _ => {
                 // test_err decorator_unexpected_token
                 // @foo
@@ -7017,6 +7063,114 @@ impl<'src> Parser<'src> {
                 .into()
             }
         }
+    }
+
+    /// basedpython: whether the modifier chain starting at the current token ends
+    /// at a definition — a `def`, an `async def`, a `class`, or the `protocol` /
+    /// `enum class` introducers — rather than at a binding.
+    ///
+    /// [`Parser::parse_with_modifier`] reads a definition and nothing else, so a
+    /// chain that ends at `let a = 1` has to be routed elsewhere. Walks the same
+    /// consecutive modifier keywords that parser does, without consuming any.
+    fn modifier_chain_ends_at_definition(&mut self) -> bool {
+        // index 0 is the current token; index >= 1 is `peek_nth(idx - 1)`
+        let mut idx: usize = 0;
+        loop {
+            let (kind, range) = if idx == 0 {
+                (self.current_token_kind(), self.current_token_range())
+            } else {
+                self.peek_nth(idx - 1)
+            };
+            match kind {
+                TokenKind::Def | TokenKind::Async => return true,
+                // `class def f` continues the chain as the classmethod modifier;
+                // `class Foo` is the definition, and `class let x` is a binding
+                TokenKind::Class => {
+                    let (next, next_range) = self.peek_nth(idx);
+                    if matches!(next, TokenKind::Def | TokenKind::Async) {
+                        idx += 1;
+                        continue;
+                    }
+                    // `class let x` / `class var x` declares a class variable
+                    return !(next == TokenKind::Name
+                        && matches!(self.src_text(next_range), "let" | "var"));
+                }
+                TokenKind::Name => {
+                    let text = self.src_text(range);
+                    // `protocol P:` and `enum class E:` introduce a definition
+                    if text == "protocol" && declares_a_name(self.peek_nth(idx).0) {
+                        return true;
+                    }
+                    if text == "enum" && self.peek_nth(idx).0 == TokenKind::Class {
+                        return true;
+                    }
+                    if is_modifier_kw(text) {
+                        idx += 1;
+                        continue;
+                    }
+                    return false;
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// basedpython: parses the binding a decorator was written above.
+    ///
+    /// ```by
+    /// @foo
+    /// let a = 1
+    /// ```
+    ///
+    /// Python allows a decorator only on a `def` or a `class`; here it may also
+    /// go above a binding, where it attaches metadata to the binding's type —
+    /// `@Field` over `let a: int = 1` declares `a` as `Annotated[int, Field]`,
+    /// exactly as writing the decorator in the type position does.
+    ///
+    /// So a binding needs both halves to carry one: a value to be a binding at all,
+    /// and a written type for the metadata to attach to. `@Field a = 1` has no type
+    /// to annotate, and inferring one would make what the decorator lands on depend
+    /// on what the value happened to be.
+    fn parse_decorated_binding(&mut self, decorators: DecoratorList, start: TextSize) -> Stmt {
+        let mut stmt = self.parse_statement();
+        let range = TextRange::new(start, stmt.range().end());
+        match &mut stmt {
+            Stmt::AnnAssign(declaration)
+                if declaration.value.is_some()
+                    && written_annotation_type(&declaration.annotation).is_some() =>
+            {
+                declaration.decorator_list = decorators;
+                declaration.range = range;
+            }
+            Stmt::AnnAssign(declaration) if declaration.value.is_none() => {
+                let _ = declaration;
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "a declaration with no value binds nothing for a decorator to annotate"
+                            .to_string(),
+                    ),
+                    range,
+                );
+            }
+            Stmt::Assign(_) | Stmt::AnnAssign(_) => {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "a decorator on a binding annotates its type, so the binding needs one"
+                            .to_string(),
+                    ),
+                    range,
+                );
+            }
+            _ => {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "Expected a definition or a binding after decorator".to_string(),
+                    ),
+                    range,
+                );
+            }
+        }
+        stmt
     }
 
     /// Parses the body of the given [`Clause`].

@@ -72,6 +72,7 @@ impl TypeExprVisitor for State {
                 slice: Box::new(new_slice),
                 ctx: ExprContext::Load,
                 is_typeof: false,
+                is_type_decoration: false,
             });
             let outer = Expr::Subscript(ExprSubscript {
                 node_index: AtomicNodeIndex::NONE,
@@ -85,6 +86,7 @@ impl TypeExprVisitor for State {
                 slice: Box::new(inner),
                 ctx: ExprContext::Load,
                 is_typeof: false,
+                is_type_decoration: false,
             });
             self.edits.push((expr.range(), render_expr(&outer)));
             // we just replaced the whole subscript with `Top[…]` — telling

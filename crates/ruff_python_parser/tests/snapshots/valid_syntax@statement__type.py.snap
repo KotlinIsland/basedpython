@@ -219,10 +219,12 @@ Module(
                                             ),
                                             ctx: Load,
                                             is_typeof: false,
+                                            is_type_decoration: false,
                                         },
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                         },
@@ -357,6 +359,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                             op: BitOr,
@@ -382,6 +385,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                         },
@@ -1047,6 +1051,7 @@ Module(
                                                             ),
                                                             ctx: Load,
                                                             is_typeof: false,
+                                                            is_type_decoration: false,
                                                         },
                                                     ),
                                                     ctx: Load,
@@ -1124,6 +1129,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                     cases: [],
@@ -1240,6 +1246,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                     cases: [],
@@ -1837,6 +1844,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                     cases: [],
@@ -1931,6 +1939,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                     cases: [],
@@ -2021,6 +2030,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                     cases: [],
@@ -2118,6 +2128,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                     cases: [],
@@ -2199,6 +2210,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                     cases: [],
@@ -2302,6 +2314,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                     cases: [],
@@ -2880,6 +2893,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                             attr: Identifier {
@@ -2937,6 +2951,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                             attr: Identifier {
@@ -2994,6 +3009,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                             attr: Identifier {
@@ -3066,6 +3082,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                 },
@@ -3113,6 +3130,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 1662..1697,
+                    decorator_list: [],
                     targets: [
                         Name(
                             ExprName {
@@ -3291,6 +3309,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 1725..1743,
+                    decorator_list: [],
                     targets: [
                         Name(
                             ExprName {
@@ -3334,6 +3353,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 1744..1760,
+                    decorator_list: [],
                     targets: [
                         Name(
                             ExprName {
@@ -3429,6 +3449,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 1779..1787,
+                    decorator_list: [],
                     targets: [
                         Name(
                             ExprName {
@@ -3454,6 +3475,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 1788..1800,
+                    decorator_list: [],
                     targets: [
                         Name(
                             ExprName {
@@ -3487,6 +3509,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 1801..1813,
+                    decorator_list: [],
                     targets: [
                         Name(
                             ExprName {

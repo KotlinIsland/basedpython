@@ -194,6 +194,7 @@ fn generate_fix(
             range: TextRange::default(),
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
             is_typeof: false,
+            is_type_decoration: false,
         })
     };
 

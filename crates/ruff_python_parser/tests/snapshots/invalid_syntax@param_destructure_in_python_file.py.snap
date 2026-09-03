@@ -61,6 +61,7 @@ Module(
                 StmtAnnAssign {
                     node_index: NodeIndex(None),
                     range: 13..26,
+                    decorator_list: [],
                     target: Tuple(
                         ExprTuple {
                             node_index: NodeIndex(None),

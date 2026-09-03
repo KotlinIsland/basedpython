@@ -42,6 +42,7 @@ Module(
                 StmtAnnAssign {
                     node_index: NodeIndex(None),
                     range: 72..87,
+                    decorator_list: [],
                     target: Call(
                         ExprCall {
                             node_index: NodeIndex(None),

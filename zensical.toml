@@ -164,6 +164,7 @@ features = [
     { "sentinel declarations" = "features/sentinel.md" },
     { "decorator keyword" = "features/decorator-keyword.md" },
     { "decorated function parameters" = "features/decorated-parameters.md" },
+    { "decorating anything" = "features/decorate-anything.md" },
   ] },
   { "expressions and statements" = [
     { "context-sensitive resolution" = "features/context-sensitive-resolution.md" },

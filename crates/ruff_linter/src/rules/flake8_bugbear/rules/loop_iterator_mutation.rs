@@ -263,6 +263,7 @@ impl<'a> LoopMutationsVisitor<'a> {
                 slice: _,
                 ctx: _,
                 is_typeof: _,
+                is_type_decoration: _,
             }) = target
             {
                 // Find, e.g., `del items[0]`.
@@ -283,6 +284,7 @@ impl<'a> LoopMutationsVisitor<'a> {
                 slice,
                 ctx: _,
                 is_typeof: _,
+                is_type_decoration: _,
             }) = target
             {
                 // Find, e.g., `items[0] = 1`.

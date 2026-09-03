@@ -9968,6 +9968,10 @@ pub struct StmtTypeAlias {
 pub struct StmtAssign {
     pub node_index: crate::AtomicNodeIndex,
     pub range: ruff_text_size::TextRange,
+    /// basedpython: the decorators written above this assignment
+    /// (`@foo` then `x = 1`). Each one is applied to the assigned value, innermost last, so `x = foo(1)`
+    /// is what the assignment means. Empty for every assignment written without one
+    pub decorator_list: thin_vec::ThinVec<crate::Decorator>,
     pub targets: Vec<Expr>,
     pub value: Box<Expr>,
 }
@@ -9989,6 +9993,10 @@ pub struct StmtAugAssign {
 pub struct StmtAnnAssign {
     pub node_index: crate::AtomicNodeIndex,
     pub range: ruff_text_size::TextRange,
+    /// basedpython: the decorators written above this
+    /// declaration (`@foo` then `let x = 1`). Each one is applied to the assigned value, innermost last. A declaration
+    /// with no value has nothing to decorate, and carrying one there is an error
+    pub decorator_list: thin_vec::ThinVec<crate::Decorator>,
     pub target: Box<Expr>,
     pub annotation: Box<Expr>,
     pub value: Option<Box<Expr>>,
@@ -10564,6 +10572,11 @@ pub struct ExprSubscript {
     /// inner expression `X`. The square-bracket tokens are not present in the
     /// source — surface form is `typeof X`. Lowered to `ty_extensions.TypeOf[X]`
     pub is_typeof: bool,
+    /// basedpython: when true, this subscript is a decorated type
+    /// `@meta int`. The `value` holds the decorator expression `meta` — an ordinary value expression, not a type — and the
+    /// `slice` holds the type it decorates. The square-bracket tokens are not present in the source. Lowered to
+    /// `Annotated[<slice>, <value>]`, which is what the decoration means to a type checker
+    pub is_type_decoration: bool,
 }
 
 /// See also [Starred](https://docs.python.org/3/library/ast.html#ast.Starred)
@@ -11075,11 +11088,16 @@ impl StmtAssign {
         V: SourceOrderVisitor<'a> + ?Sized,
     {
         let StmtAssign {
+            decorator_list,
             targets,
             value,
             range: _,
             node_index: _,
         } = self;
+
+        for elm in decorator_list {
+            visitor.visit_decorator(elm);
+        }
 
         for elm in targets {
             visitor.visit_expr(elm);
@@ -11112,6 +11130,7 @@ impl StmtAnnAssign {
         V: SourceOrderVisitor<'a> + ?Sized,
     {
         let StmtAnnAssign {
+            decorator_list,
             target,
             annotation,
             value,
@@ -11119,6 +11138,10 @@ impl StmtAnnAssign {
             range: _,
             node_index: _,
         } = self;
+
+        for elm in decorator_list {
+            visitor.visit_decorator(elm);
+        }
         visitor.visit_expr(target);
         visitor.visit_annotation(annotation);
 
@@ -11803,6 +11826,7 @@ impl ExprSubscript {
             slice,
             ctx: _,
             is_typeof: _,
+            is_type_decoration: _,
             range: _,
             node_index: _,
         } = self;

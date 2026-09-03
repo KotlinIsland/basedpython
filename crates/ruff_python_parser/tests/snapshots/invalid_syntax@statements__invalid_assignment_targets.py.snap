@@ -14,6 +14,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 201..206,
+                    decorator_list: [],
                     targets: [
                         NumberLiteral(
                             ExprNumberLiteral {
@@ -65,6 +66,7 @@ Module(
                 StmtAnnAssign {
                     node_index: NodeIndex(None),
                     range: 216..228,
+                    decorator_list: [],
                     target: NumberLiteral(
                         ExprNumberLiteral {
                             node_index: NodeIndex(None),
@@ -100,6 +102,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 303..314,
+                    decorator_list: [],
                     targets: [
                         BoolOp(
                             ExprBoolOp {
@@ -142,6 +145,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 315..328,
+                    decorator_list: [],
                     targets: [
                         Named(
                             ExprNamed {
@@ -182,6 +186,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 329..339,
+                    decorator_list: [],
                     targets: [
                         BinOp(
                             ExprBinOp {
@@ -222,6 +227,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 340..347,
+                    decorator_list: [],
                     targets: [
                         UnaryOp(
                             ExprUnaryOp {
@@ -254,6 +260,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 348..366,
+                    decorator_list: [],
                     targets: [
                         Lambda(
                             ExprLambda {
@@ -317,6 +324,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 367..385,
+                    decorator_list: [],
                     targets: [
                         If(
                             ExprIf {
@@ -364,6 +372,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 386..399,
+                    decorator_list: [],
                     targets: [
                         Dict(
                             ExprDict {
@@ -423,6 +432,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 400..408,
+                    decorator_list: [],
                     targets: [
                         Set(
                             ExprSet {
@@ -456,6 +466,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 409..429,
+                    decorator_list: [],
                     targets: [
                         ListComp(
                             ExprListComp {
@@ -511,6 +522,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 430..450,
+                    decorator_list: [],
                     targets: [
                         SetComp(
                             ExprSetComp {
@@ -566,6 +578,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 451..478,
+                    decorator_list: [],
                     targets: [
                         DictComp(
                             ExprDictComp {
@@ -647,6 +660,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 479..499,
+                    decorator_list: [],
                     targets: [
                         Generator(
                             ExprGenerator {
@@ -703,6 +717,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 500..512,
+                    decorator_list: [],
                     targets: [
                         Await(
                             ExprAwait {
@@ -735,6 +750,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 513..527,
+                    decorator_list: [],
                     targets: [
                         Yield(
                             ExprYield {
@@ -768,6 +784,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 528..548,
+                    decorator_list: [],
                     targets: [
                         YieldFrom(
                             ExprYieldFrom {
@@ -799,6 +816,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 549..563,
+                    decorator_list: [],
                     targets: [
                         Compare(
                             ExprCompare {
@@ -852,6 +870,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 564..574,
+                    decorator_list: [],
                     targets: [
                         Call(
                             ExprCall {
@@ -891,6 +910,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 576..590,
+                    decorator_list: [],
                     targets: [
                         FString(
                             ExprFString {
@@ -949,6 +969,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 591..614,
+                    decorator_list: [],
                     targets: [
                         FString(
                             ExprFString {
@@ -1031,6 +1052,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 616..626,
+                    decorator_list: [],
                     targets: [
                         StringLiteral(
                             ExprStringLiteral {
@@ -1069,6 +1091,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 627..638,
+                    decorator_list: [],
                     targets: [
                         BytesLiteral(
                             ExprBytesLiteral {
@@ -1111,6 +1134,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 639..647,
+                    decorator_list: [],
                     targets: [
                         NumberLiteral(
                             ExprNumberLiteral {
@@ -1137,6 +1161,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 648..657,
+                    decorator_list: [],
                     targets: [
                         BooleanLiteral(
                             ExprBooleanLiteral {
@@ -1161,6 +1186,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 658..667,
+                    decorator_list: [],
                     targets: [
                         NoneLiteral(
                             ExprNoneLiteral {
@@ -1184,6 +1210,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 668..676,
+                    decorator_list: [],
                     targets: [
                         EllipsisLiteral(
                             ExprEllipsisLiteral {
@@ -1207,6 +1234,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 677..688,
+                    decorator_list: [],
                     targets: [
                         Starred(
                             ExprStarred {
@@ -1253,6 +1281,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 689..717,
+                    decorator_list: [],
                     targets: [
                         List(
                             ExprList {
@@ -1344,6 +1373,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 718..758,
+                    decorator_list: [],
                     targets: [
                         List(
                             ExprList {
@@ -1493,6 +1523,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 759..787,
+                    decorator_list: [],
                     targets: [
                         Tuple(
                             ExprTuple {

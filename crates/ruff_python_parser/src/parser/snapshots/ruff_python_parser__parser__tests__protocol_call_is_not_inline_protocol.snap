@@ -10,6 +10,7 @@ ModModule {
             StmtAssign {
                 node_index: NodeIndex(None),
                 range: 0..15,
+                decorator_list: [],
                 targets: [
                     Name(
                         ExprName {
@@ -57,6 +58,7 @@ ModModule {
             StmtAssign {
                 node_index: NodeIndex(None),
                 range: 16..30,
+                decorator_list: [],
                 targets: [
                     Name(
                         ExprName {
@@ -95,6 +97,7 @@ ModModule {
             StmtAssign {
                 node_index: NodeIndex(None),
                 range: 31..51,
+                decorator_list: [],
                 targets: [
                     Name(
                         ExprName {
@@ -157,6 +160,7 @@ ModModule {
             StmtAssign {
                 node_index: NodeIndex(None),
                 range: 52..72,
+                decorator_list: [],
                 targets: [
                     Name(
                         ExprName {
@@ -226,6 +230,7 @@ ModModule {
                                         ),
                                         ctx: Load,
                                         is_typeof: false,
+                                        is_type_decoration: false,
                                     },
                                 ),
                             ],

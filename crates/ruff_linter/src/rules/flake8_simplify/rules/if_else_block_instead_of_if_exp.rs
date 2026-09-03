@@ -286,6 +286,7 @@ fn assignment_ternary(
         value: Box::new(node.into()),
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+        decorator_list: ruff_python_ast::DecoratorList::new(),
     };
     node1.into()
 }
@@ -302,6 +303,7 @@ fn assignment_binary_and(target_var: &Expr, left_value: &Expr, right_value: &Exp
         value: Box::new(node.into()),
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+        decorator_list: ruff_python_ast::DecoratorList::new(),
     };
     node1.into()
 }
@@ -320,6 +322,7 @@ fn assignment_binary_or(target_var: &Expr, left_value: &Expr, right_value: &Expr
             })
             .into(),
         ),
+        decorator_list: ruff_python_ast::DecoratorList::new(),
     })
     .into()
 }

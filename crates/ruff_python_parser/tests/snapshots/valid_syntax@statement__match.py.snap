@@ -55,6 +55,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 98..103,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -138,6 +139,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 162..167,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -211,6 +213,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 224..229,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -268,6 +271,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 255..260,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -385,6 +389,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 324..332,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -515,6 +520,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 398..403,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -742,6 +748,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 589..594,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1009,6 +1016,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 682..687,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1048,6 +1056,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 709..714,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1128,6 +1137,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 777..782,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1199,6 +1209,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 836..841,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1316,6 +1327,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 905..913,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1386,6 +1398,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 970..975,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1469,6 +1482,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1032..1037,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1536,6 +1550,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1063..1068,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1583,6 +1598,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1093..1098,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1660,6 +1676,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1157..1162,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1723,6 +1740,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1214..1219,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1770,6 +1788,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1240..1245,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -1864,6 +1883,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1308..1315,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2010,6 +2030,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1387..1392,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2081,6 +2102,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1446..1451,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2191,6 +2213,7 @@ Module(
                                                 ),
                                                 ctx: Load,
                                                 is_typeof: false,
+                                                is_type_decoration: false,
                                             },
                                         ),
                                     },
@@ -2201,6 +2224,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1493..1498,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2271,6 +2295,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1524..1529,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2362,6 +2387,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1590..1595,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2449,6 +2475,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1659..1664,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2533,6 +2560,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1721..1726,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2634,6 +2662,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1784..1789,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2689,6 +2718,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1844..1849,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2752,6 +2782,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1901..1906,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2807,6 +2838,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 1962..1967,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2862,6 +2894,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2020..2025,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2929,6 +2962,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2049..2054,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -2988,6 +3022,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2076..2081,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -3050,6 +3085,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2133..2138,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -3147,6 +3183,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2202..2207,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -3337,6 +3374,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2302..2307,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -3452,6 +3490,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2373..2378,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -3719,6 +3758,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2467..2472,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -3758,6 +3798,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2494..2499,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -3875,6 +3916,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2563..2568,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -3992,6 +4034,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2633..2638,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -4076,6 +4119,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2692..2697,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -4182,6 +4226,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2755..2760,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -4295,6 +4340,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 2824..2829,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -4754,6 +4800,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 3165..3170,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -4840,6 +4887,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 3206..3211,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -4911,6 +4959,7 @@ Module(
                                     StmtAssign {
                                         node_index: NodeIndex(None),
                                         range: 3244..3249,
+                                        decorator_list: [],
                                         targets: [
                                             Name(
                                                 ExprName {
@@ -8621,6 +8670,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                             attr: Identifier {
@@ -8678,6 +8728,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                             attr: Identifier {
@@ -8735,6 +8786,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                             attr: Identifier {
@@ -8807,6 +8859,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                 },
@@ -8926,6 +8979,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 5716..5752,
+                    decorator_list: [],
                     targets: [
                         Name(
                             ExprName {

@@ -131,6 +131,7 @@ pub(crate) fn unnecessary_nested_literal<'a>(checker: &Checker, literal_expr: &'
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
             ctx: ExprContext::Load,
             is_typeof: false,
+            is_type_decoration: false,
         });
         let fix = Fix::applicable_edit(
             Edit::range_replacement(checker.generator().expr(&subscript), literal_expr.range()),

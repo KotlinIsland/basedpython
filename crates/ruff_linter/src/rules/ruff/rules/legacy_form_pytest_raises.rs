@@ -290,6 +290,7 @@ fn generate_with_statement(
             range: TextRange::default(),
             targets: assign_targets.to_vec(),
             value: Box::new(func_call.into()),
+            decorator_list: ruff_python_ast::DecoratorList::new(),
         })
     } else {
         Stmt::Expr(StmtExpr {

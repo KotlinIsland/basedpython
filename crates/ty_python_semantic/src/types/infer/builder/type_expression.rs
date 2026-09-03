@@ -393,7 +393,17 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     range: _,
                     node_index: _,
                     is_typeof,
+                    is_type_decoration,
                 } = subscript;
+
+                // basedpython: a decorated type `@meta int` is `Annotated[int, meta]`
+                // — the type is what it decorates, and the decorator is metadata. It
+                // is an ordinary value expression, so it is inferred as one and an
+                // unresolved name in it is reported where it is written
+                if *is_type_decoration {
+                    self.infer_type_decoration_metadata(value);
+                    return self.infer_type_expression(slice);
+                }
 
                 // basedpython use-site variance — `Container[out T]` /
                 // `Container[in T]` / `Container[in out T]`. The parser
@@ -2923,6 +2933,22 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         )
     }
 
+    /// basedpython: infer the decorator of a decorated type `@meta T`.
+    ///
+    /// It is metadata, not a type — the same thing `Annotated`'s trailing arguments
+    /// are — so it is inferred as the ordinary value expression it is, and outside
+    /// any type alias the decoration itself may sit in.
+    pub(super) fn infer_type_decoration_metadata(&mut self, decorator: &ast::Expr) {
+        let previously_in_type_alias = self
+            .context
+            .inference_flags
+            .replace(InferenceFlags::IN_TYPE_ALIAS, false);
+        self.infer_expression(decorator, TypeContext::default());
+        self.context
+            .inference_flags
+            .set(InferenceFlags::IN_TYPE_ALIAS, previously_in_type_alias);
+    }
+
     fn infer_subscript_type_expression(
         &mut self,
         subscript: &ast::ExprSubscript,
@@ -2937,6 +2963,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             slice,
             ctx: _,
             is_typeof: _,
+            is_type_decoration: _,
         } = subscript;
 
         // basedpython use-site variance: catch here too — this is the

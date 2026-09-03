@@ -144,6 +144,7 @@ pub(crate) fn unnecessary_default_type_args(checker: &Checker, expr: &Expr) {
                     range: TextRange::default(),
                     node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                     is_typeof: false,
+                    is_type_decoration: false,
                 })),
             expr.range(),
         ),
