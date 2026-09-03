@@ -41,6 +41,7 @@ Module(
                                                 node_index: NodeIndex(None),
                                             },
                                         ),
+                                        key: Bare,
                                         value: NumberLiteral(
                                             ExprNumberLiteral {
                                                 node_index: NodeIndex(None),
@@ -61,6 +62,7 @@ Module(
                                                 node_index: NodeIndex(None),
                                             },
                                         ),
+                                        key: Bare,
                                         value: NumberLiteral(
                                             ExprNumberLiteral {
                                                 node_index: NodeIndex(None),
@@ -81,6 +83,7 @@ Module(
                                                 node_index: NodeIndex(None),
                                             },
                                         ),
+                                        key: Bare,
                                         value: NumberLiteral(
                                             ExprNumberLiteral {
                                                 node_index: NodeIndex(None),
@@ -101,6 +104,7 @@ Module(
                                                 node_index: NodeIndex(None),
                                             },
                                         ),
+                                        key: Bare,
                                         value: NumberLiteral(
                                             ExprNumberLiteral {
                                                 node_index: NodeIndex(None),
@@ -121,6 +125,7 @@ Module(
                                                 node_index: NodeIndex(None),
                                             },
                                         ),
+                                        key: Bare,
                                         value: NumberLiteral(
                                             ExprNumberLiteral {
                                                 node_index: NodeIndex(None),

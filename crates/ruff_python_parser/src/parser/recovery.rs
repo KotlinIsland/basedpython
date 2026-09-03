@@ -116,6 +116,7 @@ pub(super) fn pattern_to_expr(pattern: Pattern) -> Expr {
                             range: keyword_pattern.range,
                             node_index: node_index.clone(),
                             arg: Some(keyword_pattern.attr),
+                            key: ast::KeywordKey::Bare,
                             value: pattern_to_expr(keyword_pattern.pattern),
                         })
                         .collect(),

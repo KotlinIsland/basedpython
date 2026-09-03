@@ -3249,6 +3249,30 @@ impl ParameterBorrow {
     }
 }
 
+/// How a keyword argument's name was spelled in the source.
+///
+/// Python only lets a keyword argument be named by a bare identifier, so the
+/// name and its spelling are the same thing. basedpython also accepts a string
+/// literal (`f("content-type"=1)`), where the name is the string's *value* and
+/// the quotes are surface syntax that has to be put back to re-render it
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub enum KeywordKey {
+    /// the name was written bare — `f(a=1)`, or in basedpython the dotted form
+    /// `f(a.b=1)`. It is spelled exactly as it is named
+    #[default]
+    Bare,
+    /// basedpython: the name was written as a string literal, `f("a b"=1)`
+    Quoted,
+}
+
+impl KeywordKey {
+    /// whether the name was written as a string literal
+    pub const fn is_quoted(self) -> bool {
+        matches!(self, Self::Quoted)
+    }
+}
+
 /// See also [keyword](https://docs.python.org/3/library/ast.html#ast.keyword)
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
@@ -3256,6 +3280,9 @@ pub struct Keyword {
     pub range: TextRange,
     pub node_index: AtomicNodeIndex,
     pub arg: Option<Identifier>,
+    /// basedpython: how [`arg`](Self::arg) was spelled. Always
+    /// [`KeywordKey::Bare`] for a `**kwargs` unpacking, which names nothing
+    pub key: KeywordKey,
     pub value: Expr,
 }
 

@@ -8,8 +8,8 @@ use ruff_python_ast::str::Quote;
 use ruff_python_ast::{
     self as ast, Alias, AnyStringFlags, ArgOrKeyword, BoolOp, BytesLiteralFlags, CmpOp,
     Comprehension, ConversionFlag, DebugText, ExceptHandler, Expr, Identifier, MatchCase, Operator,
-    Parameter, Parameters, Pattern, Singleton, Stmt, StringFlags, Suite, TypeParam,
-    TypeParamParamSpec, TypeParamTypeVar, TypeParamTypeVarTuple, WithItem,
+    Parameter, Parameters, Pattern, Singleton, Stmt, StringFlags, StringLiteralFlags, Suite,
+    TypeParam, TypeParamParamSpec, TypeParamTypeVar, TypeParamTypeVarTuple, WithItem,
 };
 use ruff_python_ast::{ParameterWithDefault, TypeParams};
 use ruff_python_literal::escape::{AsciiEscape, Escape, UnicodeEscape};
@@ -217,6 +217,21 @@ impl<'a> Generator<'a> {
         self.p(s.as_str());
     }
 
+    /// A keyword argument's name, spelled the way it was written.
+    ///
+    /// basedpython lets a keyword argument be named by a string literal
+    /// (`f("content-type"=1)`), where the name is the string's *value* — so it
+    /// need not be a python identifier, and re-rendering it means quoting it
+    /// again. Everything else, including basedpython's dotted `f(a.b=1)`, is
+    /// spelled exactly as it is named
+    fn p_keyword_name(&mut self, name: &Identifier, key: ast::KeywordKey) {
+        if key.is_quoted() {
+            self.p_str_repr(name.as_str(), StringLiteralFlags::empty());
+        } else {
+            self.p_id(name);
+        }
+    }
+
     fn p_bytes_repr(&mut self, s: &[u8], flags: BytesLiteralFlags) {
         // raw bytes are interpreted without escapes and should all be ascii (it's a python syntax
         // error otherwise), but if this assumption is violated, a `Utf8Error` will be returned from
@@ -331,7 +346,7 @@ impl<'a> Generator<'a> {
                                     ArgOrKeyword::Keyword(keyword) => {
                                         self.p_delim(&mut first, ", ");
                                         if let Some(arg) = &keyword.arg {
-                                            self.p_id(arg);
+                                            self.p_keyword_name(arg, keyword.key);
                                             self.p("=");
                                             self.unparse_expr(&keyword.value, precedence::COMMA);
                                         } else {
@@ -446,7 +461,7 @@ impl<'a> Generator<'a> {
                                 ArgOrKeyword::Keyword(keyword) => {
                                     self.p_delim(&mut first, ", ");
                                     if let Some(arg) = &keyword.arg {
-                                        self.p_id(arg);
+                                        self.p_keyword_name(arg, keyword.key);
                                         self.p("=");
                                     } else {
                                         self.p("**");
@@ -1526,7 +1541,7 @@ impl<'a> Generator<'a> {
                             ArgOrKeyword::Keyword(keyword) => {
                                 self.p_delim(&mut first, ", ");
                                 if let Some(arg) = &keyword.arg {
-                                    self.p_id(arg);
+                                    self.p_keyword_name(arg, keyword.key);
                                     self.p("=");
                                     self.unparse_expr(&keyword.value, precedence::COMMA);
                                 } else {

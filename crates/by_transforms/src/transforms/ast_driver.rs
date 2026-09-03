@@ -39,16 +39,16 @@ use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
     coalesce_chain, compat, conformance, context_params, conversion, decl_site_variance,
     decorated_binding, decorator_keyword, dedent_string, destructure, django_lookup,
-    dynamic_keyword, empty_declarations, export_import, extension, float_const, force_unwrap,
-    frameworks, generic_call, generics, grapheme_string, identity_swap, if_let, implicit_receiver,
-    implicit_typing, inferred_annotation, init_method, just_float, kw_subscript, literal_string,
-    literal_types, local_once, main_function, match_type, modifiers, mutable_defaults, none_chain,
-    optional_type, overload, parametric_is, postfix_await, private_method, propagate, properties,
-    protocol_type, raises_clause, reified_generic, repeated_underscore, return_value_use,
-    runtime_union, sentinel, some_ctor, soundness, statement_expression, string_tag, super_keyword,
-    symbolic_type_op, template_type, top_star, trailing_lambda, tuple_index, type_fn, type_is,
-    type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings,
-    unpack, use_site_variance,
+    dynamic_keyword, empty_declarations, export_import, extension, flexible_keyword, float_const,
+    force_unwrap, frameworks, generic_call, generics, grapheme_string, identity_swap, if_let,
+    implicit_receiver, implicit_typing, inferred_annotation, init_method, just_float, kw_subscript,
+    literal_string, literal_types, local_once, main_function, match_type, modifiers,
+    mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await,
+    private_method, propagate, properties, protocol_type, raises_clause, reified_generic,
+    repeated_underscore, return_value_use, runtime_union, sentinel, some_ctor, soundness,
+    statement_expression, string_tag, super_keyword, symbolic_type_op, template_type, top_star,
+    trailing_lambda, tuple_index, type_fn, type_is, type_reification, typed_dict_literal,
+    typed_lambda, typeof_keyword, unique_loop_bindings, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -575,6 +575,7 @@ pub(crate) fn run_against_source<'a>(
     let protocol_type_pass = protocol_type::ProtocolTypePass::new(source_ref, config.clone());
     let coalesce_text_pass = coalesce::NoneCoalescePass::new(source_ref);
     let force_unwrap_pass = force_unwrap::ForceUnwrapPass::new(source_ref);
+    let flexible_keyword_pass = flexible_keyword::FlexibleKeywordPass;
     let some_ctor_pass = some_ctor::SomeCtorPass::new();
     let propagate_pass = propagate::PropagatePass::new(source_ref);
     let none_chain_pass = none_chain::NoneChainPass::new(source_ref);
@@ -815,6 +816,9 @@ pub(crate) fn run_against_source<'a>(
         // `expr!` → `_force_unwrap(expr)`; narrow insert/replace edits that compose
         // with sibling operator lowerings inside the operand
         &force_unwrap_pass,
+        // `f(a.b=1)` → `f(**{"a.b": 1})`; the argument's value passes through as
+        // `Src`, so lowerings inside it still compose
+        &flexible_keyword_pass,
         // `expr.N` → `expr[N]`; a narrow replacement of the `.N` bytes only
         &tuple_index_pass,
         // grapheme string surface (`s.character_count` → `len(_by_graphemes(s))`,

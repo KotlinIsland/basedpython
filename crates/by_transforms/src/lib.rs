@@ -1048,6 +1048,8 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let mut auto_quote_rev = reverse_transforms::auto_quote::AutoQuoteReverse::new(src);
     let mut compat_rev = reverse_transforms::compat::CompatReverse::new();
     let mut none_chain_rev = reverse_transforms::none_chain::NoneChainReverse::new(src);
+    let mut flexible_keyword_rev =
+        reverse_transforms::flexible_keyword::FlexibleKeywordReverse::new(src);
     let mut reified_generic_rev =
         reverse_transforms::reified_generic::ReifiedGenericReverse::new(src);
     let mut string_tag_rev = reverse_transforms::string_tag::StringTagReverse::new(src);
@@ -1079,6 +1081,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         auto_quote_rev.visit_stmt(stmt);
         compat_rev.visit_stmt(stmt);
         none_chain_rev.visit_stmt(stmt);
+        flexible_keyword_rev.visit_stmt(stmt);
         reified_generic_rev.visit_stmt(stmt);
         string_tag_rev.visit_stmt(stmt);
         export_import_rev.visit_stmt(stmt);
@@ -1141,6 +1144,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(auto_quote_rev.edits);
     fixes.extend(compat_rev.edits);
     fixes.extend(none_chain_rev.edits);
+    fixes.extend(flexible_keyword_rev.edits);
     fixes.extend(reified_generic_rev.edits);
     fixes.extend(string_tag_rev.edits);
     fixes.extend(unique_loop_bindings_rev.edits);

@@ -92,6 +92,7 @@ pub(crate) fn lru_cache_with_maxsize_none(checker: &Checker, decorator_list: &[D
         {
             let Keyword {
                 arg,
+                key: _,
                 value,
                 range: _,
                 node_index: _,
