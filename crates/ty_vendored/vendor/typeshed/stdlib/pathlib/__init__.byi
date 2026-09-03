@@ -691,11 +691,13 @@ class Path(PurePath):
         (as returned by os.path.samefile()).
         """
 
+    @ignorable_return_value
     def write_bytes(self, data: ReadableBuffer) -> int:
         """
         Open the file in bytes mode, write to it, and close the file.
         """
 
+    @ignorable_return_value
     def write_text(self, data: str, encoding: str | None = None, errors: str | None = None, newline: str | None = None) -> int:
         """
         Open the file in text mode, write to it, and close the file.

@@ -454,6 +454,7 @@ final class _RLock:
     """
 
     _count: int
+    @ignorable_return_value
     def acquire(self, blocking: bool = True, timeout: int | float = -1) -> bool:
         """Acquire a lock, blocking or non-blocking.
 
@@ -529,6 +530,7 @@ class Condition:
     if sys.version_info >= (3, 14):
         def locked(self) -> bool
 
+    @ignorable_return_value
     def wait(self, timeout: int | float | None = None) -> bool:
         """Wait until notified or until a timeout occurs.
 
@@ -602,6 +604,7 @@ class Semaphore:
     _value: int
     init(self, value: int = 1)
     def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None)
+    @ignorable_return_value
     def acquire(self, blocking: bool = True, timeout: int | float | None = None) -> bool:
         """Acquire a semaphore, decrementing the internal counter by one.
 
@@ -713,6 +716,7 @@ class Event:
 
         """
 
+    @ignorable_return_value
     def wait(self, timeout: int | float | None = None) -> bool:
         """Block until the internal flag is true.
 

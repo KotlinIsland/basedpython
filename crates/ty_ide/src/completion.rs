@@ -11724,6 +11724,28 @@ if foo:
         assert_snapshot!(value_position, @"<No completions found>");
     }
 
+    /// basedpython: the return-value markers are decorators, so they are the
+    /// mirror image of `Character` — offered where a value is written, and
+    /// nowhere in a type.
+    #[test]
+    fn basedpython_implicit_return_value_marker_completion() {
+        let value_position = CursorTest::builder()
+            .source("main.by", "a = ignorable_return_val<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import()
+            .build()
+            .snapshot();
+        assert_snapshot!(value_position, @"ignorable_return_value");
+
+        let type_position = CursorTest::builder()
+            .source("main.by", "a: ignorable_return_val<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import()
+            .build()
+            .snapshot();
+        assert_snapshot!(type_position, @"<No completions found>");
+    }
+
     /// basedpython: what a file binds under one of these names is what the name
     /// means there, so the implicit meaning is not offered beside it — the class
     /// declared here is the only `Mapping` on offer.

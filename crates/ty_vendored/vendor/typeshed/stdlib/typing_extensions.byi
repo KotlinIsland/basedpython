@@ -643,6 +643,7 @@ else:
 
     """
 
+    @ignorable_return_value
     def reveal_type(obj: _T, /) -> _T:
         """Reveal the inferred type of a variable.
 
@@ -681,6 +682,7 @@ else:
 
         """
 
+    @ignorable_return_value
     def assert_type(val: _T, typ: AnnotationForm, /) -> _T:
         """Assert (to the type checker) that the value is of the given type.
 

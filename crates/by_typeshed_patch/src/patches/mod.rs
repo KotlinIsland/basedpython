@@ -15,6 +15,7 @@ pub mod final_annotation;
 pub mod final_modifier;
 pub mod functools_cache;
 pub mod homogeneous_tuple;
+pub mod ignorable_return_value;
 pub mod init_shorthand;
 pub mod literal_unwrap;
 pub mod mapping;

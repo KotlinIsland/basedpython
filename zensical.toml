@@ -104,6 +104,7 @@ features = [
     { "regex group types" = "features/regex-groups.md" },
     { "boolean conditions" = "features/conditions.md" },
     { "refutable unpacking" = "features/refutable-unpacking.md" },
+    { "unused return value" = "features/unused-return-value.md" },
     { "string formatting" = "features/string-formatting.md" },
   ] },
   { "type system" = [

@@ -199,6 +199,12 @@ bitflags! {
         /// member is invisible outside its class, so it neither constrains the class's
         /// variance nor may be reached through a widened view of it
         const PRIVATE = 1 << 10;
+        /// basedpython: `@ignorable_return_value` — a call to this function may
+        /// have its result thrown away
+        const IGNORABLE_RETURN_VALUE = 1 << 11;
+        /// basedpython: `@must_use_return_value` — a call to this function must
+        /// have its result used, even where the enclosing class says otherwise
+        const MUST_USE_RETURN_VALUE = 1 << 12;
     }
 }
 
@@ -214,6 +220,12 @@ impl FunctionDecorators {
                 Some(KnownFunction::Final) => FunctionDecorators::FINAL,
                 Some(KnownFunction::Override) => FunctionDecorators::OVERRIDE,
                 Some(KnownFunction::TypeCheckOnly) => FunctionDecorators::TYPE_CHECK_ONLY,
+                Some(KnownFunction::IgnorableReturnValue) => {
+                    FunctionDecorators::IGNORABLE_RETURN_VALUE
+                }
+                Some(KnownFunction::MustUseReturnValue) => {
+                    FunctionDecorators::MUST_USE_RETURN_VALUE
+                }
                 _ => FunctionDecorators::empty(),
             },
             Type::ClassLiteral(class) => match class.known(db) {
@@ -2162,6 +2174,19 @@ impl<'db> FunctionType<'db> {
         self.literal(db).has_known_decorator(db, decorator)
     }
 
+    /// basedpython: whether this function is one of the two return-value
+    /// markers, `ignorable_return_value` or `must_use_return_value`.
+    ///
+    /// Both are pure declarations — they say how a *caller* may treat a result
+    /// and do nothing themselves — so the transpiler drops the decorator rather
+    /// than emitting a call to a function that only exists as a stub.
+    pub fn is_return_value_marker(self, db: &'db dyn Db) -> bool {
+        matches!(
+            self.known(db),
+            Some(KnownFunction::IgnorableReturnValue | KnownFunction::MustUseReturnValue)
+        )
+    }
+
     /// basedpython: whether this function has reified type parameters (a pep
     /// 695 type parameter referenced in a value position in the body). a
     /// reified generic is structurally a two-step callable — `f[…]` then
@@ -3140,6 +3165,10 @@ pub enum KnownFunction {
 
     /// `ty_extensions.static_assert`
     StaticAssert,
+    /// basedpython: `ty_extensions.ignorable_return_value`
+    IgnorableReturnValue,
+    /// basedpython: `ty_extensions.must_use_return_value`
+    MustUseReturnValue,
     /// `ty_extensions._internal.is_equivalent_to`
     IsEquivalentTo,
     /// `ty_extensions._internal.is_subtype_of`
@@ -3260,7 +3289,9 @@ impl KnownFunction {
             }
             Self::TotalOrdering => module.is_functools(),
             Self::GetattrStatic => module.is_inspect(),
-            Self::StaticAssert => module.is_ty_extensions(),
+            Self::StaticAssert | Self::IgnorableReturnValue | Self::MustUseReturnValue => {
+                module.is_ty_extensions()
+            }
             Self::IsAssignableTo
             | Self::IsConstraintSetAssignableTo
             | Self::IsDisjointFrom
@@ -3852,7 +3883,9 @@ pub(crate) mod tests {
 
                 KnownFunction::TypeCheckOnly => KnownModule::Typing,
 
-                KnownFunction::StaticAssert => KnownModule::TyExtensions,
+                KnownFunction::StaticAssert
+                | KnownFunction::IgnorableReturnValue
+                | KnownFunction::MustUseReturnValue => KnownModule::TyExtensions,
 
                 KnownFunction::IsSingleton
                 | KnownFunction::IsSubtypeOf

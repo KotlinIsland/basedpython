@@ -2057,6 +2057,7 @@ class bytearray(MutableSequence[int]):
         of the original bytearray object and two empty bytearray objects.
         """
 
+    @ignorable_return_value
     override def pop(self, index: int = -1, /) -> int:
         """Remove and return a single item from B.
 
@@ -2662,6 +2663,7 @@ class list[in out Element](MutableSequence[Element]):
     override def extend(self, iterable: Iterable[Element], /):
         """Extend list by appending elements from the iterable."""
 
+    @ignorable_return_value
     override def pop(self, index: SupportsIndex = -1, /) -> Element:
         """Remove and return item at index (default last).
 
@@ -2821,13 +2823,16 @@ class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
     def get(self, key: Overlapping[Key], default: Value, /) -> Value
     def get[Element](self, key: Overlapping[Key], default: Element, /) -> Value | Element
 
+    @ignorable_return_value
     override def pop(self, key: Key, /) -> Value:
         """D.pop(k[,d]) -> v, remove specified key and return the corresponding value.
 
         If the key is not found, return the default if given; otherwise,
         raise a KeyError.
         """
+    @ignorable_return_value
     def pop(self, key: object, default: Value, /) -> Value
+    @ignorable_return_value
     def pop[Element](self, key: object, default: Element, /) -> Value | Element
 
     override def __len__(self) -> int:

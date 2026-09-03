@@ -71,6 +71,7 @@ class RegistryError(Exception):
 def copyfileobj(fsrc: SupportsRead[AnyStr], fdst: SupportsWrite[AnyStr], length: int = 0):
     """copy data from file-like object fsrc to file-like object fdst"""
 
+@ignorable_return_value
 def copyfile[StrOrBytesPathT: StrOrBytesPath](src: StrOrBytesPath, dst: StrOrBytesPathT, *, follow_symlinks: bool = True) -> StrOrBytesPathT:
     """Copy data from src to dst in the most efficient way possible.
 
@@ -101,6 +102,7 @@ def copystat(src: StrOrBytesPath, dst: StrOrBytesPath, *, follow_symlinks: bool 
     followed if and only if both `src` and `dst` are symlinks.
     """
 
+@ignorable_return_value
 def copy[StrPathT: StrPath](src: StrPath, dst: StrPathT, *, follow_symlinks: bool = True) -> StrPathT | str:
     """Copy data and mode bits ("cp src dst"). Return the file's destination.
 
@@ -113,8 +115,10 @@ def copy[StrPathT: StrPath](src: StrPath, dst: StrPathT, *, follow_symlinks: boo
     raised.
 
     """
+@ignorable_return_value
 def copy[BytesPathT: BytesPath](src: BytesPath, dst: BytesPathT, *, follow_symlinks: bool = True) -> BytesPathT | bytes
 
+@ignorable_return_value
 def copy2[StrPathT: StrPath](src: StrPath, dst: StrPathT, *, follow_symlinks: bool = True) -> StrPathT | str:
     """Copy data and metadata. Return the file's destination.
 
@@ -126,6 +130,7 @@ def copy2[StrPathT: StrPath](src: StrPath, dst: StrPathT, *, follow_symlinks: bo
     If follow_symlinks is false, symlinks won't be followed. This
     resembles GNU's "cp -P src dst".
     """
+@ignorable_return_value
 def copy2[BytesPathT: BytesPath](src: BytesPath, dst: BytesPathT, *, follow_symlinks: bool = True) -> BytesPathT | bytes
 
 def ignore_patterns(*patterns: StrPath) -> (dynamic, list[str]) -> set[str]:
@@ -259,6 +264,7 @@ private type CopyFn = ((str, str) -> object) | ((StrPath, StrPath) -> object)
 # N.B. shutil.move appears to take bytes arguments, however,
 # this does not work when dst is (or is within) an existing directory.
 # (#6832)
+@ignorable_return_value
 def move[StrPathT: StrPath](src: StrPath, dst: StrPathT, copy_function: CopyFn = ...) -> StrPathT | str | MaybeNone:
     """Recursively move a file or directory to another location. This is
     similar to the Unix "mv" command. Return the file or directory's

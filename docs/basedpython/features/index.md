@@ -72,6 +72,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [regex group types](regex-groups.md) — type a match from the pattern it came from
 - [boolean conditions](conditions.md) — catch a test that conflates two members, or asks nothing
 - [refutable unpacking](refutable-unpacking.md) — catch `a, b = ...` over a value of unknown length
+- [unused return value](unused-return-value.md) — catch a call whose answer is thrown away
 - [string formatting](string-formatting.md) — check the format spec, and the value that has no
     rendering of its own
 

@@ -348,7 +348,7 @@ mod tests {
         vendored://stdlib/email/headerregistry.byi:698:708 BaseHeader :: email.headerregistry
         vendored://stdlib/enum.byi:17977:17984 StrEnum :: enum
         vendored://stdlib/pdb.byi:38323:38328 _rstr :: pdb
-        vendored://stdlib/ty_extensions/__init__.pyi:8238:8247 Character :: ty_extensions
+        vendored://stdlib/ty_extensions/__init__.pyi:9222:9231 Character :: ty_extensions
         vendored://stdlib/xxlimited.byi:98:101 Str :: xxlimited
         ");
     }
@@ -382,7 +382,7 @@ mod tests {
         vendored://stdlib/enum.byi:17977:17984 StrEnum :: enum
         /main.py:77:89 MyEventTypeA :: main
         vendored://stdlib/pdb.byi:38323:38328 _rstr :: pdb
-        vendored://stdlib/ty_extensions/__init__.pyi:8238:8247 Character :: ty_extensions
+        vendored://stdlib/ty_extensions/__init__.pyi:9222:9231 Character :: ty_extensions
         vendored://stdlib/xxlimited.byi:98:101 Str :: xxlimited
         ");
     }
@@ -505,7 +505,7 @@ mod tests {
         let supertypes = test.supertypes();
         insta::assert_snapshot!(
             snapshot(&test.db, &supertypes),
-            @"vendored://stdlib/builtins.byi:97635:97640 tuple :: builtins",
+            @"vendored://stdlib/builtins.byi:97663:97668 tuple :: builtins",
         );
     }
 

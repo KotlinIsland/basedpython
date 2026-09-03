@@ -1460,14 +1460,18 @@ class IO[in out AnyStr in (str, bytes)]:
     abstract def readable(self) -> bool
     abstract def readline[AnyStr in (str, bytes)](self, limit: int = -1, /) -> AnyStr
     abstract def readlines[AnyStr in (str, bytes)](self, hint: int = -1, /) -> list[AnyStr]
+    @ignorable_return_value
     abstract def seek(self, offset: int, whence: int = 0, /) -> int
     abstract def seekable(self) -> bool
     abstract def tell(self) -> int
+    @ignorable_return_value
     abstract def truncate(self, size: int | None = None, /) -> int
     abstract def writable(self) -> bool
 
+    @ignorable_return_value
     @abstractmethod
     def write(self: IO[bytes], s: ReadableBuffer, /) -> int
+    @ignorable_return_value
     @abstractmethod
     def write[AnyStr in (str, bytes)](self, s: AnyStr, /) -> int
 
@@ -1644,6 +1648,7 @@ def cast(typ: str, val: dynamic) -> dynamic
 def cast(typ: object, val: dynamic) -> dynamic
 
 if sys.version_info >= (3, 11):
+    @ignorable_return_value
     def reveal_type[Element](obj: Element, /) -> Element:
         """Ask a static type checker to reveal the inferred type of an expression.
 
@@ -1680,6 +1685,7 @@ if sys.version_info >= (3, 11):
         At runtime, this throws an exception when called.
         """
 
+    @ignorable_return_value
     def assert_type[Element](val: Element, typ: dynamic, /) -> Element:  # AnnotationForm
         """Ask a static type checker to confirm that the value is of the given type.
 

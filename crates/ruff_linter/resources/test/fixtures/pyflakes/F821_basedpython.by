@@ -98,6 +98,21 @@ overlapping_arg: Overlapping[int]
 # in value position they are ordinary names — still flagged when unbound
 print(Character, Overlapping)
 
+# the return-value markers are decorators, implicitly available where a value is
+# written — the one pair that means its member *outside* a type position
+@ignorable_return_value
+def prime_cache(key: str) -> bytes: ...
+
+
+@ignorable_return_value
+class Query:
+    @must_use_return_value
+    def rows(self) -> list[str]: ...
+
+
+# in a type position they are ordinary names — flagged when unbound
+marker_as_type: ignorable_return_value  # F821
+
 # known gap: an enum member reached by context-sensitive resolution is an
 # arbitrary identifier whose resolution needs the expected type, which ruff has
 # no access to. `by check` accepts it; F821 reports it, and `# noqa: F821` is
