@@ -73,6 +73,9 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
             if checker.is_rule_enabled(Rule::UnnecessaryStubBody) && declares_name {
                 basedpython::rules::unnecessary_stub_body(checker, stmt);
             }
+            if checker.is_rule_enabled(Rule::ManualModifier) {
+                basedpython::rules::manual_modifier(checker, stmt);
+            }
             if checker.is_rule_enabled(Rule::DjangoNonLeadingReceiverDecorator) {
                 flake8_django::rules::non_leading_receiver_decorator(checker, decorator_list);
             }
@@ -408,6 +411,9 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
 
             if checker.is_rule_enabled(Rule::UnnecessaryStubBody) && declares_name {
                 basedpython::rules::unnecessary_stub_body(checker, stmt);
+            }
+            if checker.is_rule_enabled(Rule::ManualModifier) {
+                basedpython::rules::manual_modifier(checker, stmt);
             }
             if checker.is_rule_enabled(Rule::ManualProperty) {
                 basedpython::rules::manual_property(checker, class_def);

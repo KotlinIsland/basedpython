@@ -1,6 +1,7 @@
 pub(crate) use manual_any_annotation::*;
 pub(crate) use manual_cast_call::*;
 pub(crate) use manual_isinstance::*;
+pub(crate) use manual_modifier::*;
 pub(crate) use manual_none_coalesce::*;
 pub(crate) use manual_optional_chain::*;
 pub(crate) use manual_property::*;
@@ -16,6 +17,7 @@ pub(crate) use unnecessary_stub_body::*;
 mod manual_any_annotation;
 mod manual_cast_call;
 mod manual_isinstance;
+mod manual_modifier;
 mod manual_none_coalesce;
 mod manual_optional_chain;
 mod manual_property;

@@ -26,6 +26,7 @@ spelling of something basedpython has syntax for:
 | `BY019` | `manual-sentinel`          | a `Sentinel(…)` assignment, which is [`sentinel`](sentinel.md)             |
 | `BY020` | `manual-cast-call`         | a `typing.cast` call, which is the [`cast`](cast.md) keyword               |
 | `BY021` | `manual-property`          | a `@property`, which is a [declaration with accessors](properties.md)      |
+| `BY022` | `manual-modifier`          | a decorator that is a [modifier keyword](modifiers.md)                     |
 | `BY101` | `redundant-none-coalesce`  | a `??` whose fallback cannot change the result                             |
 
 every one of them is fixable. `BY020`'s fix is the only one that is always
