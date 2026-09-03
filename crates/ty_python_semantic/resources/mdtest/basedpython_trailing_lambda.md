@@ -97,18 +97,35 @@ against:
     reveal_type(it)  # revealed: int
 ```
 
-## a callback that passes nothing declares no `it`
+## a callback that passes nothing never fills `it`
 
-A callback taking no argument is invoked as `a()`, so a block filling it binds nothing to `it`. The
-name is then an ordinary unresolved one, as in kotlin, where `it` exists exactly when the lambda
-takes one parameter.
+A callback taking no argument is invoked as `a()`. The block still has its `it` parameter — the
+lambda the lowering writes always declares one — but nothing ever fills it, so reading it reads the
+`None` default rather than a value the call sent.
 
 ```by
 def f(a: () -> None):
     a()
 
 f:
-    print(it)  # error: [unresolved-reference] "Name `it` used when not defined"
+    # error: [trailing-lambda-parameters] "this block's callback passes no argument, so `it` is never given a value"
+    print(it)
+```
+
+## an outer `it` is shadowed either way
+
+The block's parameter is what `it` means inside the block, whatever the callback passes, exactly as
+it is at runtime — so a name outside is never what the body reads.
+
+```by
+it = 5
+
+def f(a: () -> None):
+    a()
+
+f:
+    # error: [trailing-lambda-parameters] "this block's callback passes no argument, so `it` is never given a value"
+    reveal_type(it)  # revealed: Unknown
 ```
 
 ## a block that never reads `it` is fine
@@ -123,7 +140,7 @@ f:
 
 ## a block may bind `it` itself
 
-Nothing declares the name, so a body is free to use it for its own local.
+A body that writes the name first is reading its own local, not the parameter the call never filled.
 
 ```by
 def f(a: () -> None):
@@ -132,6 +149,32 @@ def f(a: () -> None):
 f:
     it = 1
     reveal_type(it)  # revealed: 1
+```
+
+## an imported callee is read the same way
+
+The semantic index binds the block's `it` before anything resolves across modules, so it cannot
+decide this itself — the callee's type does, and an import is no exception.
+
+`callees.by`:
+
+```by
+def nothing(fn: () -> None) -> None:
+    fn()
+
+def one(fn: (int) -> None) -> None:
+    fn(1)
+```
+
+```by
+from callees import nothing, one
+
+nothing:
+    # error: [trailing-lambda-parameters] "this block's callback passes no argument, so `it` is never given a value"
+    print(it)
+
+one:
+    reveal_type(it)  # revealed: int
 ```
 
 ## a receiver callback with no argument of its own
@@ -147,7 +190,8 @@ against:
     print(upper())
 
 against:
-    print(upper(), it)  # error: [unresolved-reference] "Name `it` used when not defined"
+    # error: [trailing-lambda-parameters] "this block's callback passes no argument, so `it` is never given a value"
+    print(upper(), it)
 ```
 
 ## a callback whose shape cannot be read still declares `it`

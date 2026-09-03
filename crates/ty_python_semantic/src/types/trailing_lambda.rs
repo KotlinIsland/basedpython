@@ -203,8 +203,18 @@ fn it_parameter<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<Parameter<'db
 /// runs after inference, where an imported callee resolves like any other.
 pub(crate) fn trailing_lambda_passes_it<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<bool> {
     let signature = callback_signature(db, callee)?;
+    let parameters = signature.parameters();
+    // the gradual `(...)` form is the deliberately unchecked one, and a variadic stands
+    // for any number of arguments — neither settles whether one arrives
+    if parameters.is_gradual()
+        || parameters
+            .iter()
+            .any(|parameter| parameter.is_variadic() || parameter.is_keyword_variadic())
+    {
+        return None;
+    }
     let index = usize::from(declares_receiver(signature));
-    Some(signature.parameters().get_positional(index).is_some())
+    Some(parameters.get_positional(index).is_some())
 }
 
 /// the type of the implicit `it` parameter. `None` when the callee's callback
