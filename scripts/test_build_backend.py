@@ -142,7 +142,7 @@ def test_an_empty_array_stays_an_array():
 
 def test_a_value_that_cannot_be_carried_over_is_reported():
     with reports("cannot carry over"):
-        _toml({"project": {"name": "thing", "version": object()}})
+        _ = _toml({"project": {"name": "thing", "version": object()}})
 
 
 # ── reading the project's own metadata ───────────────────────────────────────
@@ -178,13 +178,13 @@ def test_the_project_table_is_carried_over_whole(tmp_path: Path):
 
 def test_a_project_without_a_pyproject_is_reported(tmp_path: Path):
     with reports(r"needs a \`pyproject\.toml\`"):
-        _read_project_metadata(tmp_path)
+        _ = _read_project_metadata(tmp_path)
 
 
 def test_a_pyproject_without_a_project_table_is_reported(tmp_path: Path):
     root = write_project(tmp_path, '[build-system]\nrequires = ["basedpython"]\n')
     with reports("no `\\[project\\]` table"):
-        _read_project_metadata(root)
+        _ = _read_project_metadata(root)
 
 
 def test_a_dynamic_version_is_read_from_the_module_it_points_at(tmp_path: Path):
@@ -219,7 +219,7 @@ def test_a_dynamic_version_with_nowhere_to_read_it_from_is_reported(
         '[project]\nname = "thing"\ndynamic = ["version"]\n',
     )
     with reports("version-from"):
-        _read_project_metadata(root)
+        _ = _read_project_metadata(root)
 
 
 def test_a_version_source_without_a_version_is_reported(tmp_path: Path):
@@ -236,7 +236,7 @@ def test_a_version_source_without_a_version_is_reported(tmp_path: Path):
     )
     (root / "empty.by").write_text("x = 1\n", encoding="utf-8")
     with reports("no `__version__`"):
-        _read_project_metadata(root)
+        _ = _read_project_metadata(root)
 
 
 def test_other_dynamic_metadata_is_reported_rather_than_dropped(tmp_path: Path):
@@ -246,7 +246,7 @@ def test_other_dynamic_metadata_is_reported_rather_than_dropped(tmp_path: Path):
         '[project]\nname = "thing"\nversion = "1.0.0"\ndynamic = ["readme"]\n',
     )
     with reports("readme"):
-        _read_project_metadata(root)
+        _ = _read_project_metadata(root)
 
 
 # ── describing the staged tree to the backend that packages it ───────────────
@@ -299,7 +299,7 @@ def test_the_staged_tree_is_its_own_module_root(tmp_path: Path):
 
 def test_a_project_with_no_package_to_ship_is_reported(tmp_path: Path):
     with reports("no package to build a wheel from"):
-        staged_pyproject(tmp_path, PROJECT, Staged(sources=[], packages=[]))
+        _ = staged_pyproject(tmp_path, PROJECT, Staged(sources=[], packages=[]))
 
 
 # ── what lowering needs at run time ──────────────────────────────────────────
@@ -363,7 +363,7 @@ def test_the_target_version_comes_from_the_config_setting():
 def test_a_target_that_is_not_a_python_version_is_reported():
     for bad in ("3", "py312", "3.12.1", "latest", ""):
         with reports("python version"):
-            _target_version({"python-version": bad})
+            _ = _target_version({"python-version": bad})
 
 
 def test_a_version_becomes_the_tag_an_installer_selects_on():
@@ -385,7 +385,7 @@ def test_only_the_python_field_of_the_name_changes():
 
 def test_a_name_that_is_not_a_wheel_is_reported():
     with reports("re-tag"):
-        _retagged_name("nonsense.whl", "py39")
+        _ = _retagged_name("nonsense.whl", "py39")
 
 
 def test_the_tag_line_is_rewritten_and_the_rest_is_left_alone():
@@ -398,7 +398,7 @@ def test_the_tag_line_is_rewritten_and_the_rest_is_left_alone():
 
 def test_a_wheel_with_no_tag_to_rewrite_is_reported():
     with reports("`Tag:`"):
-        _replace_tag(b"Wheel-Version: 1.0\n", "py39")
+        _ = _replace_tag(b"Wheel-Version: 1.0\n", "py39")
 
 
 def test_the_record_restates_the_file_that_changed():
@@ -420,7 +420,7 @@ def test_the_record_restates_the_file_that_changed():
 
 def test_a_record_that_does_not_mention_the_file_is_reported():
     with reports("RECORD"):
-        _rerecord(b"thing/__init__.py,sha256=AAA,0\n", "missing/WHEEL", b"")
+        _ = _rerecord(b"thing/__init__.py,sha256=AAA,0\n", "missing/WHEEL", b"")
 
 
 def build_wheel_fixture(directory: Path) -> Path:

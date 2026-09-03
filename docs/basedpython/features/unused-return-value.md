@@ -65,6 +65,25 @@ q.rows()           # warning: `rows` is marked back
 `@must_use_return_value` is the only way back inside a marked class. on a declaration that carries
 both markers it wins, since it is the more specific of the two
 
+## discarding one result
+
+the markers say what a *declaration* means, so they are the wrong tool for a single call — and for
+a function someone else declared there is nothing to mark. assigning the result to `_` says the
+discard was meant, at the one place it was meant
+
+```python
+import ast
+
+def check(source: str) -> bool:
+    try:
+        _ = ast.parse(source)  # called for the `SyntaxError`, not the tree
+    except SyntaxError:
+        return False
+    return True
+```
+
+nothing is reported for it: the result was used, by a name that says it is going nowhere
+
 ## the standard library
 
 the stdlib is checked like anything else, and the members whose result is idiomatically thrown away

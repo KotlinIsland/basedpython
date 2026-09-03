@@ -137,10 +137,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         if !self.context.is_lint_enabled(&UNUSED_RETURN_VALUE) {
             return;
         }
-        // `None` is the answer of a function that has no answer, so discarding
-        // it discards nothing. `Never` is the answer of a call that does not
-        // come back at all, and a gradual result is not known to be one
-        if result.is_none(self.db()) || result.is_never() || result.is_dynamic() {
+        // `None` is the answer of a function that has no answer, so discarding it discards
+        // nothing, and `Never` is the answer of a call that never comes back. A gradual result
+        // is not known to be anything at all, so nothing is known to have been discarded —
+        // which holds just as much for a gradual result with a `None` in it, the shape a call
+        // on an untyped receiver answers with (`Path.mkdir` reached through an unannotated
+        // path is `Any | None`). The most specific fully static form the result could take
+        // covers all of those at once: when even that carries no value, there is nothing to
+        // report.
+        let discarded = result.bottom_materialization(self.db(), self.program_environment());
+        if discarded.is_none(self.db()) || discarded.is_never() {
             return;
         }
         let Some(call) = discarded_call(value) else {

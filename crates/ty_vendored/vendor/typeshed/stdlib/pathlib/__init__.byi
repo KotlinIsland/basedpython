@@ -465,28 +465,36 @@ class Path(PurePath):
             of this path.
             """
 
+        @ignorable_return_value
         def move_into[PathT: PurePath](self, target_dir: PathT) -> PathT:
             """
             Move this file or directory tree into the given existing directory.
             """
+        @ignorable_return_value
         def move_into(self, target_dir: StrPath) -> Self
 
+        @ignorable_return_value
         def move[PathT: PurePath](self, target: PathT) -> PathT:
             """
             Recursively move this file or directory tree to the given destination.
             """
+        @ignorable_return_value
         def move(self, target: StrPath) -> Self
 
+        @ignorable_return_value
         def copy_into[PathT: PurePath](self, target_dir: PathT, *, follow_symlinks: bool = True, preserve_metadata: bool = False) -> PathT:
             """
             Copy this file or directory tree into the given existing directory.
             """
+        @ignorable_return_value
         def copy_into(self, target_dir: StrPath, *, follow_symlinks: bool = True, preserve_metadata: bool = False) -> Self
 
+        @ignorable_return_value
         def copy[PathT: PurePath](self, target: PathT, *, follow_symlinks: bool = True, preserve_metadata: bool = False) -> PathT:
             """
             Recursively copy this file or directory tree to the given destination.
             """
+        @ignorable_return_value
         def copy(self, target: StrPath, *, follow_symlinks: bool = True, preserve_metadata: bool = False) -> Self
 
     # Adapted from builtins.open
@@ -609,6 +617,7 @@ class Path(PurePath):
         Return the path to which the symbolic link points.
         """
 
+    @ignorable_return_value
     def rename(self, target: StrPath) -> Self:
         """
         Rename this path to the target path.
@@ -620,6 +629,7 @@ class Path(PurePath):
         Returns the new Path instance pointing to the target path.
         """
 
+    @ignorable_return_value
     def replace(self, target: StrPath) -> Self:
         """
         Rename this path to the target path, overwriting if that path exists.
