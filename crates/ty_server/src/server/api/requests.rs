@@ -12,6 +12,7 @@ If request handlers need shared helper functions, they can go in a sibling
 module. For example, see `super::type_hierarchy`.
 */
 
+mod alignment_groups;
 mod call_hierarchy_incoming_calls;
 mod call_hierarchy_outgoing_calls;
 mod code_action;
@@ -51,6 +52,7 @@ mod will_rename_files;
 mod workspace_diagnostic;
 mod workspace_symbols;
 
+pub(super) use alignment_groups::AlignmentGroupsRequestHandler;
 pub(super) use call_hierarchy_incoming_calls::CallHierarchyIncomingCallsRequestHandler;
 pub(super) use call_hierarchy_outgoing_calls::CallHierarchyOutgoingCallsRequestHandler;
 pub(super) use code_action::CodeActionRequestHandler;

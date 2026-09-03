@@ -159,6 +159,64 @@ on
 | `templateBindingTypes`       | a django template `{% for %}` binding's element type           |
 | `resolvedTemplates`          | the file a django `{% extends %}` name resolves to             |
 
+### keeping a hand-aligned block aligned
+
+a hint takes up room. drawn after the name, it pushes the rest of the line along
+and a column of `=` the author lined up by hand stops being one:
+
+```by
+let a     = [1, 2]      # let a: list[int]     = [1, 2]
+let basdf = 1           # unchanged: a hint for a bare literal is suppressed
+```
+
+the editor cannot repair that by narrowing the hint, because the padding the
+author wrote can be narrower than the hint that displaced it. restoring the
+column means widening the other lines too, and `basdf` is the line that has to
+move — the line with no hint to hang the answer off. so the server answers which
+lines were meant to be read together, with `by/alignmentGroups`:
+
+```json
+{
+  "textDocument": { "uri": "file:///src/main.by" },
+  "range": {
+    "start": { "line": 0, "character": 0 },
+    "end": { "line": 1, "character": 13 }
+  }
+}
+```
+
+the reply is the blocks whose lines the range reaches. `gapStart` is where the
+padding before the `=` begins and `gapEnd` is the `=` itself, so the difference
+between them is the room the author left:
+
+```json
+[
+  {
+    "members": [
+      { "gapStart": { "line": 0, "character": 5 }, "gapEnd": { "line": 0, "character": 10 } },
+      { "gapStart": { "line": 1, "character": 9 }, "gapEnd": { "line": 1, "character": 10 } }
+    ]
+  }
+]
+```
+
+a block is a run of assignments that are siblings in one suite, unseparated by a
+blank line, already sharing a column, and padded — at least one of them written
+with two or more spaces before its `=`. that last condition is what keeps
+ordinary code out: `x = 1` over `y = 2` shares a column only because the names
+are the same length, and padding those apart would be injecting space the author
+never wrote
+
+how wide anything ends up is the editor's to decide, because only the editor
+knows which hints are on screen at a given instant — a kind can be switched off,
+and push-to-hint draws a hint only while a key is held. what displaces a line is
+every hint drawn on it at or before `gapEnd` added together, which is more than
+one hint when the line unpacks: `a, b = 1, 2` is hinted after `a` and again
+after `b`
+
+a block is reported whole even when the range reaches only one of its lines,
+since the column is sized against every line at once
+
 ## outline
 
 a [property](properties.md) is one member in the source, so it is one entry in

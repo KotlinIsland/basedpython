@@ -3,6 +3,7 @@
     reason = "Prefer System trait methods over std methods in ty crates"
 )]
 mod add_dependency;
+mod alignment;
 mod all_symbols;
 mod call_hierarchy;
 mod code_action;
@@ -38,6 +39,7 @@ mod type_hierarchy;
 mod workspace_symbols;
 
 pub use add_dependency::{AddDependency, DependencyTarget};
+pub use alignment::{AlignmentGroup, AlignmentMember, alignment_groups};
 pub use all_symbols::{AllSymbolInfo, all_symbols};
 pub use call_hierarchy::incoming_calls::{IncomingCall, incoming_calls};
 pub use call_hierarchy::outgoing_calls::{OutgoingCall, outgoing_calls};
