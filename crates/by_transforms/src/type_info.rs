@@ -93,6 +93,13 @@ pub(crate) trait TypeInfo {
 
     fn is_function(&self, name: &ExprName) -> bool;
 
+    /// basedpython: how many entries the class pattern's class lists in
+    /// `__match_args__`, which is what places the subpatterns written after a
+    /// `*_` — the last of them names the last entry. `None` when the class or
+    /// the count is not statically known; ty reports that as
+    /// `invalid-match-pattern`
+    fn class_pattern_positional_count(&self, cls: &Expr) -> Option<usize>;
+
     /// basedpython: the `isinstance` target for `function`'s declared `raises`
     /// clause (`(TypeError, ValueError)`, `()` for `raises Never`), or `None`
     /// when the clause has no faithful runtime test — a gradual `raises ...`, or
@@ -614,6 +621,10 @@ impl TypeInfo for SemanticModel<'_> {
     fn is_function(&self, name: &ExprName) -> bool {
         name.inferred_type(self)
             .is_some_and(|ty| ty.as_function_literal().is_some())
+    }
+
+    fn class_pattern_positional_count(&self, cls: &Expr) -> Option<usize> {
+        SemanticModel::class_pattern_positional_count(self, cls)
     }
 
     fn declared_raises_runtime_target(

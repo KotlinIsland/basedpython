@@ -294,8 +294,13 @@ fn class_pattern_is_exhaustive(
         return false;
     }
 
-    let positional_sources =
-        class_pattern_positional_sources(db, env, class, kind.positional.len());
+    let positional_sources = class_pattern_positional_sources(
+        db,
+        env,
+        class,
+        kind.positional.len(),
+        kind.positional_from_end,
+    );
     kind.positional
         .iter()
         .zip(positional_sources)
@@ -469,17 +474,39 @@ pub(crate) fn class_pattern_positional_result<'db>(
 ///     case int(_):  # The positional subpattern receives `number` itself.
 ///         pass
 /// ```
+///
+/// `positional_from_end` is how many of the subpatterns were written after a basedpython starred
+/// wildcard, and so read the last entries of `__match_args__` rather than the first:
+///
+/// ```by
+/// class Line:
+///     __match_args__ = ("start", "mid", "end")
+///
+/// match line:
+///     case Line(a, *_, b):  # `a` receives `line.start`, `b` receives `line.end`.
+///         pass
+/// ```
 pub(crate) fn class_pattern_positional_sources(
     db: &dyn Db,
     env: &ProgramEnvironment<'_>,
     class: ClassLiteral<'_>,
     positional_count: usize,
+    positional_from_end: usize,
 ) -> Vec<ClassPatternPositionalSource> {
+    // the subpatterns before the star sit where they are written; the ones after it are pushed
+    // out so that the last of them lands on the last name `__match_args__` has
+    let position = |match_args_len: usize, index: usize| {
+        if index < positional_count - positional_from_end {
+            Some(index)
+        } else {
+            (match_args_len + index).checked_sub(positional_count)
+        }
+    };
     let fixed = match class_match_args_type(db, env, class) {
         ClassMatchArgs::Undefined if class_has_match_self_flag(db, class) => {
             return (0..positional_count)
                 .map(|index| {
-                    if index == 0 {
+                    if position(1, index) == Some(0) {
                         ClassPatternPositionalSource::MatchSelf
                     } else {
                         ClassPatternPositionalSource::Unknown
@@ -500,7 +527,7 @@ pub(crate) fn class_pattern_positional_sources(
         .map(|index| {
             fixed
                 .as_ref()
-                .and_then(|tuple| tuple.elements_slice().get(index))
+                .and_then(|tuple| tuple.elements_slice().get(position(tuple.len(), index)?))
                 .and_then(|ty| ty.as_string_literal())
                 .map(|literal| {
                     ClassPatternPositionalSource::Attribute(Name::new(literal.value(db)))

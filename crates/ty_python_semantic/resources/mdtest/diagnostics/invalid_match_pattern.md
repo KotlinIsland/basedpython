@@ -335,3 +335,43 @@ def describe(value: object) -> None:
         case HasValue(_):
             pass
 ```
+
+## Unplaceable starred wildcards
+
+basedpython's `case A(x, *_, y)` reads `y` from the last name in `A.__match_args__`, so there has to
+be a statically known list of names to count back through. A class that does not offer one leaves
+the subpattern nothing to read.
+
+```by
+class Variadic:
+    __match_args__: tuple[str, ...] = ()
+
+def describe(variadic: Variadic) -> None:
+    match variadic:
+        case Variadic(a, *_, b):  # snapshot: invalid-match-pattern
+            pass
+```
+
+```snapshot
+error[invalid-match-pattern]: Cannot place `*_`: `__match_args__` for `<class 'Variadic'>` is not statically known
+ --> src/mdtest_snippet.by:6:26
+  |
+6 |         case Variadic(a, *_, b):  # snapshot: invalid-match-pattern
+  |                          ^^
+info: A subpattern written after `*_` names one of the last entries of `__match_args__`, so its position depends on how many entries there are
+```
+
+## Starred wildcards that need no placing
+
+A star with nothing after it claims no position, since python already lets a class pattern name
+fewer positions than the class has.
+
+```by
+class Variadic:
+    __match_args__: tuple[str, ...] = ()
+
+def describe(variadic: Variadic) -> None:
+    match variadic:
+        case Variadic(a, *_):
+            pass
+```

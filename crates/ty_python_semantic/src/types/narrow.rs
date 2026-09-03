@@ -2727,6 +2727,7 @@ impl<'db> PatternSuccessAnalyzer<'db> {
                             &self.env,
                             class,
                             kind.positional.len(),
+                            kind.positional_from_end,
                         )
                     },
                 ),

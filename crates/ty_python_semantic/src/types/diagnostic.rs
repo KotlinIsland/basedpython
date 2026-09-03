@@ -4990,6 +4990,24 @@ pub(crate) fn report_too_many_positional_patterns_for_class_pattern<T: Ranged>(
     ));
 }
 
+/// basedpython: `case A(x, *_, y)` where nothing says how many names `A.__match_args__` has.
+pub(crate) fn report_unplaceable_starred_class_pattern<T: Ranged>(
+    context: &InferContext,
+    star: T,
+    class_display: impl std::fmt::Display,
+) {
+    let Some(builder) = context.report_lint(&INVALID_MATCH_PATTERN, star) else {
+        return;
+    };
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "Cannot place `*_`: `__match_args__` for `{class_display}` is not statically known"
+    ));
+    diagnostic.info(
+        "A subpattern written after `*_` names one of the last entries of `__match_args__`, \
+        so its position depends on how many entries there are",
+    );
+}
+
 pub(crate) fn report_invalid_match_args_type<T: Ranged>(
     context: &InferContext,
     pattern: T,

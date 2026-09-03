@@ -224,7 +224,16 @@ impl<'db> SequencePatternPredicateKind<'db> {
 #[derive(Debug, Clone, Hash, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
 pub struct ClassPatternPredicateKind<'db> {
     pub class: Expression<'db>,
+    /// The positional subpatterns, in source order, with any starred wildcard
+    /// left out — it matches nothing itself, it only moves the subpatterns
+    /// written after it to the end of `__match_args__`.
     pub positional: Box<[PatternPredicateKind<'db>]>,
+    /// basedpython `case A(x, *_, y)`: how many of `positional` were written
+    /// after the starred wildcard, and so name the *last* entries of
+    /// `__match_args__` rather than the first. `0` for every python class
+    /// pattern, and for a `*_` written last — `case A(x, *_)` accepts exactly
+    /// what `case A(x)` does
+    pub positional_from_end: usize,
     pub keywords: Box<[ClassPatternKeywordPredicateKind<'db>]>,
 }
 

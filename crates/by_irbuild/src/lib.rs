@@ -8473,10 +8473,26 @@ impl Lowering<'_, '_> {
 
                 // a positional sub-pattern names its attribute through the
                 // class's `__match_args__`, which only exists at runtime
-                let positional = &node.arguments.patterns;
+                //
+                // basedpython's `case Cls(a, *_, b)` leaves the star out of the
+                // count — it names no attribute of its own — and reads what
+                // follows it from the end of `__match_args__` instead, which is
+                // the negative index `By_MatchPositional` resolves
+                let star = node
+                    .arguments
+                    .patterns
+                    .iter()
+                    .position(ast::Pattern::is_match_star);
+                let positional: Vec<&ast::Pattern> = node
+                    .arguments
+                    .patterns
+                    .iter()
+                    .filter(|pattern| !pattern.is_match_star())
+                    .collect();
                 let keywords = &node.arguments.keywords;
                 let count = i64::try_from(positional.len())
                     .map_err(|_| Decline::new("a class pattern with too many sub-patterns"))?;
+                let before_star = star.unwrap_or(positional.len());
                 let total = positional.len() + keywords.len();
                 let mut done = 0;
                 let branch_to_sub = |lowering: &mut Self,
@@ -8496,11 +8512,16 @@ impl Lowering<'_, '_> {
                     Ok::<(), Decline>(())
                 };
                 for (index, sub) in positional.iter().enumerate() {
+                    let position = i64::try_from(index).unwrap_or(0);
                     let read = self.read_match_attr(
                         &subject.clone(),
                         None,
                         Some(class.clone()),
-                        i64::try_from(index).unwrap_or(0),
+                        if index < before_star {
+                            position
+                        } else {
+                            position - count
+                        },
                         count,
                         unmatched,
                     );

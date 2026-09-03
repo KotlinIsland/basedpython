@@ -4308,6 +4308,11 @@ static inline int By_MatchesSelf(PyObject *class_) {
  *
  * `__match_args__` is what a class publishes to say which of its attributes
  * `case Cls(a, b)` means, in order
+ *
+ * a negative `index` counts back from the end of that tuple, the way python's
+ * own list indexing does. that is what a sub-pattern basedpython wrote after a
+ * `*_` needs: `case Cls(a, *_, b)` says `b` is the last of the names, and only
+ * here is it known how many there are
  */
 static inline PyObject *By_MatchPositional(PyObject *subject, PyObject *class_,
                                            Py_ssize_t index, Py_ssize_t count) {
@@ -4345,6 +4350,7 @@ static inline PyObject *By_MatchPositional(PyObject *subject, PyObject *class_,
         Py_DECREF(names);
         return NULL;
     }
+    if (index < 0) index += available;
     PyObject *name = PyTuple_GET_ITEM(names, index);
     if (!PyUnicode_CheckExact(name)) {
         PyErr_Format(PyExc_TypeError,

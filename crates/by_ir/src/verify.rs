@@ -483,8 +483,16 @@ impl Verifier<'_> {
                 self.expect(block, src, &RType::OBJECT, "a mapping-shape test");
                 self.expect_dest(block, *dest, &RType::BIT, "a mapping-shape test");
             }
-            Op::MatchAttr { dest, subject, .. } => {
+            Op::MatchAttr {
+                dest,
+                subject,
+                class,
+                ..
+            } => {
                 self.expect(block, subject, &RType::OBJECT, "a class pattern");
+                if let Some(class) = class {
+                    self.expect(block, class, &RType::OBJECT, "a class pattern");
+                }
                 self.expect_dest(block, *dest, &RType::OBJECT, "a class pattern");
             }
             Op::MethodStands { dest, src, .. } => {

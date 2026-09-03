@@ -764,12 +764,22 @@ impl Parser<'_> {
         let mut keywords = vec![];
         let mut has_seen_pattern = false;
         let mut has_seen_keyword_pattern = false;
+        let mut has_seen_star_pattern = false;
+
+        // basedpython: `case A(x, *_, y)` counts the subpatterns after the star
+        // from the end of `__match_args__`. python has no such form, so a `.py`
+        // file keeps its "Star pattern cannot be used here"
+        let allow_star_pattern = if self.options.is_basedpython {
+            AllowStarPattern::Yes
+        } else {
+            AllowStarPattern::No
+        };
 
         self.parse_comma_separated_list(
             RecoveryContextKind::MatchPatternClassArguments,
             |parser| {
                 let pattern_start = parser.node_start();
-                let pattern = parser.parse_match_pattern(AllowStarPattern::No);
+                let pattern = parser.parse_match_pattern(allow_star_pattern);
 
                 if parser.eat(TokenKind::Equal) {
                     has_seen_pattern = false;
@@ -805,6 +815,31 @@ impl Parser<'_> {
                         node_index: AtomicNodeIndex::NONE,
                     });
                 } else {
+                    if let Pattern::MatchStar(star) = &pattern {
+                        // there is no sequence behind a class pattern's
+                        // positions — only the fixed names `__match_args__`
+                        // lists — so a star here has nothing to capture and
+                        // marks a gap rather than binding one
+                        if star.name.is_some() {
+                            parser.add_error(
+                                ParseErrorType::OtherError(
+                                    "A starred subpattern in a class pattern must be the wildcard `*_`"
+                                        .to_string(),
+                                ),
+                                star,
+                            );
+                        }
+                        if has_seen_star_pattern {
+                            parser.add_error(
+                                ParseErrorType::OtherError(
+                                    "Only one starred subpattern is allowed in a class pattern"
+                                        .to_string(),
+                                ),
+                                star,
+                            );
+                        }
+                        has_seen_star_pattern = true;
+                    }
                     has_seen_pattern = true;
                     patterns.push(pattern);
                 }

@@ -179,6 +179,7 @@ syntax inside a function body
 - [flexible keyword argument names](flexible-keyword-names.md) — `f(a.b=1, "x-y"=2)`
 - [destructuring](destructuring.md) — `let`, and patterns in every binding position
 - [destructuring with `if let`](if-let.md)
+- [starred wildcards in class patterns](class-pattern-star.md) — `case A(x, *_, y)`
 - [statement expressions](statement-expressions.md)
 - [trailing lambda blocks](trailing-lambdas.md)
 - [unpack syntax](unpack-syntax.md)
