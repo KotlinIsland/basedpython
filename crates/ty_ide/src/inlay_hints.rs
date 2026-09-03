@@ -10228,6 +10228,39 @@ Source with applied edits:
         }));
     }
 
+    /// The same, for a callee reached through an import. The semantic index binds
+    /// the block's `it` before anything resolves across modules, so it assumes one
+    /// rather than losing one — the hint has the callee's type and must not.
+    #[test]
+    fn basedpython_implicit_parameters_without_an_argument_across_modules() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            from callees import apply, each
+
+            apply:
+                print('hi')
+
+            each:
+                print(it)
+            ",
+        );
+        test.with_extra_file(
+            "callees.by",
+            "
+def apply(fn: () -> None) -> None:
+    fn()
+
+def each(fn: (int) -> None) -> None:
+    fn(1)
+",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            implicit_parameters: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
     /// A block standing as a statement's value binds the same parameters, and
     /// the variable it binds is hinted with the call's type, not the callee's.
     #[test]

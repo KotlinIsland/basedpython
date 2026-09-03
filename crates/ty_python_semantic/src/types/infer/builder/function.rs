@@ -353,12 +353,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 if self.is_in_type_checking_block(self.scope(), function) {
                     return;
                 }
-                // basedpython: bodyless `def f(...) -> T` is implicit overload
-                // / stub declaration. the transpiler lowers it to `: ...` and
-                // adds `@overload` for consecutive same-name groups. don't
-                // report empty-body on `.by` source — the runtime form
-                // never actually executes
-                if self.file().source_type(db).is_basedpython() && function.body.is_empty() {
+                // basedpython: a bodyless `def f(...) -> T` in a run of same-name defs is
+                // an implicit overload stub — the lowering writes the `@overload`
+                // decorators the source leaves out — so it is exempt for the same reason a
+                // written `@overload` is. one that is *not* in such a run declares an
+                // ordinary function, and the `: ...` the lowering fills in returns `None`
+                // exactly as a written one would
+                if function.body.is_empty()
+                    && enclosing_function_for_return_check.is_some_and(|enclosing| {
+                        enclosing.literal(db).last_definition.is_overload(db)
+                    })
+                {
                     return;
                 }
                 if let Some(class) = self.class_context_of_current_method() {

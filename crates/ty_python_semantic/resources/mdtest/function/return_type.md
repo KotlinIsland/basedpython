@@ -126,6 +126,63 @@ def f(x: int | str):
     return x
 ```
 
+### A basedpython bodyless `def`
+
+basedpython lets a `def` be written with no body at all, which the lowering fills in with `: ...`.
+That is the same empty body written a shorter way, so it is permissible in the same places and
+reported everywhere else.
+
+```by
+def implicitly_returns_none()
+
+# error: [empty-body]
+def f() -> int
+
+class C:
+    # error: [empty-body]
+    def m(self) -> int
+```
+
+### A bodyless `def` in an implicit overload run
+
+A run of same-name bodyless `def`s is an overload group — the lowering writes the `@overload`
+decorators the source leaves out — so its members are stubs like any other overload.
+
+```by
+def parse(s: str) -> int
+def parse(s: bytes) -> int
+def parse(s):
+    return int(s)
+```
+
+### A bodyless `def` a `Protocol` or an abstract class declares
+
+```by
+from abc import ABC, abstractmethod
+from typing import Protocol
+
+class P(Protocol):
+    def m(self) -> int
+
+protocol Q:
+    def m(self) -> int
+
+class A(ABC):
+    @abstractmethod
+    def m(self) -> int
+
+    abstract def n(self) -> int
+```
+
+### A bodyless `def` in a stub file
+
+```byi
+def f() -> int
+
+class C:
+    def m(self) -> str
+```
+
 ### In `if TYPE_CHECKING` block
 
 Inside an `if TYPE_CHECKING` block, we allow "stub" style function definitions with empty bodies,
