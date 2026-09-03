@@ -98,6 +98,19 @@ def f(x: X[int, str]):
     reveal_type(x)  # revealed: X[int, str]
 ```
 
+## a separated list still checks its bounds
+
+separators send the whole subscript through the by-name pipeline even when every argument is
+positional, and a type variable's bound holds there just as it does without them.
+
+```by
+class C[A: int, /, B: str]: ...
+
+# error: [invalid-type-arguments] "Type `bytes` is not assignable to upper bound `int` of type variable `A@C`"
+# error: [invalid-type-arguments] "Type `int` is not assignable to upper bound `str` of type variable `B@C`"
+def f(c: C[bytes, int]): ...
+```
+
 ## the separators only apply in `.by`
 
 the same class written in a `.py` file has no separators — `/` there is a syntax error, so this is a

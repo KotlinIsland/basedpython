@@ -292,6 +292,23 @@ class A[**Kwargs]: ...
 def f(a: A[(*, foo: int)]): ...
 ```
 
+## an ordinary type variable alongside a pack still checks its bound
+
+a pack is specialized by keyword, so it routes the whole subscript through the by-name pipeline. the
+ordinary type variables beside it are filled positionally there, and their bounds hold.
+
+```by
+class A[T: int, **Kwargs]: ...
+
+# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable `T@A`"
+def f(a: A[str, foo=str]): ...
+
+# error: [invalid-type-arguments] "Type `str` is not assignable to upper bound `int` of type variable `T@A`"
+def g(a: A[str]): ...
+
+def ok(a: A[bool, foo=str]): ...
+```
+
 ## a keyword argument that names no type variable
 
 ```by
