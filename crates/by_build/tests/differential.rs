@@ -7731,6 +7731,33 @@ class Snapshots:
 }
 
 #[test]
+fn an_inherited_default_binds_the_same_value_in_both_halves() {
+    // basedpython carries a method's defaults to its overrides, so `Loud.say` may be
+    // called with no argument even though nothing in its own header says so. the
+    // compiled half reads its parameter list out of the source, where the default is
+    // not written — reading only that would make the boundary demand an argument the
+    // interpreted twin supplies for itself
+    agree(
+        "byinheriteddefault",
+        "\
+class Quiet:
+    def say(self, word: str = \"hi\", times: int = 2) -> str:
+        return word * times
+
+class Loud(Quiet):
+    override def say(self, word: str, times: int) -> str:
+        return (word * times).upper()
+",
+        &[
+            "m.Loud().say()",
+            "m.Loud().say('a')",
+            "m.Loud().say('a', 3)",
+            "m.Quiet().say()",
+        ],
+    );
+}
+
+#[test]
 fn a_basedpython_default_that_is_not_an_immediate_is_re_evaluated_at_each_call() {
     // basedpython has no mutable-default gotcha: `mutable_defaults` rewrites such a
     // default to a sentinel and a guard that rebuilds it in the body, so each call gets

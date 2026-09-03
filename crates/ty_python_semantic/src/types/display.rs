@@ -770,6 +770,47 @@ impl<'db> Type<'db> {
         }
     }
 
+    /// basedpython: this value written the way a *parameter default* writes it — `1`, `"a"`,
+    /// `None`, `...`.
+    ///
+    /// A method's defaults are part of what it declares, so an override that leaves one out takes
+    /// the base's. Carrying it that far means writing it into the override's own signature, which
+    /// only a value with a spelling can be: everything [`Type::display_value`] spells, plus the
+    /// two singletons a signature writes that are not literal types.
+    ///
+    /// An expression that is not one of those — a list display, a call, a name — is left behind.
+    /// basedpython re-evaluates such a default on every call, so what it stands for is the
+    /// expression rather than any one value, and there is nothing to carry.
+    pub fn display_default_value(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<String> {
+        if self.is_none(db) {
+            return Some("None".to_string());
+        }
+        if matches!(
+            self,
+            Type::NominalInstance(instance)
+                if instance.has_known_class(db, KnownClass::EllipsisType)
+        ) {
+            return Some("...".to_string());
+        }
+        // an overflowing literal such as `1e400` *is* a float value, but not one python has a
+        // literal for: it is spelled `inf`, and writing that back is a name nothing binds. a
+        // not-a-number is the same, and so is either as part of a complex
+        match self.as_literal_value_kind()? {
+            LiteralValueTypeKind::Float(value) if !value.as_f64().is_finite() => return None,
+            LiteralValueTypeKind::Complex(value)
+                if !value.re(db).is_finite() || !value.im(db).is_finite() =>
+            {
+                return None;
+            }
+            _ => {}
+        }
+        Some(self.display_value(db, env)?.to_string())
+    }
+
     fn representation<'env>(
         self,
         db: &'db dyn Db,

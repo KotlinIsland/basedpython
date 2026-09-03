@@ -23,9 +23,9 @@ use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
     InlayHintCallArgumentDetails, hintable_parameter_type, implicit_enum_member_value,
     inferred_override, inferred_raises, inferred_return_annotation, inferred_type_param_variance,
-    inherited_parameter_annotation, inlay_hint_call_argument_details, is_reveal_type_function,
-    is_union_special_form, numeric_promotion, trailing_lambda_implicit_parameters,
-    type_parameter_names,
+    inherited_parameter_annotation, inherited_parameter_default, inlay_hint_call_argument_details,
+    is_reveal_type_function, is_union_special_form, numeric_promotion,
+    trailing_lambda_implicit_parameters, type_parameter_names,
 };
 use ty_python_semantic::types::{DisplaySettings, Type, TypeDetail};
 use ty_python_semantic::{HasType, SemanticModel, with_display_for_file};
@@ -413,6 +413,31 @@ impl InlayHint {
         }
     }
 
+    /// basedpython: the default a parameter takes from the method its `def` overrides, shown
+    /// where the parameter's own default would be written.
+    ///
+    /// `spaced` follows what the lowering writes into the signature, which follows python style:
+    /// `a=1` for a bare parameter, `a: int = 1` for an annotated one.
+    fn inherited_default(position: TextSize, value: &str, spaced: bool) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::InheritedDefault,
+            label: InlayHintLabel {
+                parts: vec![
+                    if spaced {
+                        format!("= {value}")
+                    } else {
+                        format!("={value}")
+                    }
+                    .into(),
+                ],
+            },
+            padding_left: spaced,
+            padding_right: false,
+            text_edits: vec![],
+        }
+    }
+
     /// The type a `reveal_type` call reveals, shown at the end of its line.
     ///
     /// `declared` is the wider type the revealed place was declared with, when the call read
@@ -558,6 +583,8 @@ pub enum InlayHintKind {
     ImplicitParameter,
     /// basedpython: an argument a call site fills from a `context` declaration
     ImplicitArgument,
+    /// basedpython: the default a parameter takes from the method its `def` overrides
+    InheritedDefault,
 }
 
 #[derive(Debug, Clone)]
@@ -814,6 +841,15 @@ pub struct InlayHintSettings {
     /// ```
     pub inherited_parameter_types: bool,
 
+    /// basedpython: whether to show the default a parameter takes from the method
+    /// its `def` overrides.
+    ///
+    /// ```by
+    /// class B(A):
+    ///     def f(self, a"=1"): ...
+    /// ```
+    pub inherited_parameter_defaults: bool,
+
     /// basedpython: whether to show the return type recovered for a `def` that
     /// leaves its annotation out.
     ///
@@ -879,6 +915,7 @@ impl InlayHintSettings {
             implicit_self: false,
             lambda_parameter_types: false,
             inherited_parameter_types: false,
+            inherited_parameter_defaults: false,
             inferred_return_types: false,
             implicit_arguments: false,
             enum_values: false,
@@ -903,6 +940,7 @@ impl InlayHintSettings {
             implicit_self,
             lambda_parameter_types,
             inherited_parameter_types,
+            inherited_parameter_defaults,
             inferred_return_types,
             implicit_arguments,
             enum_values,
@@ -924,6 +962,7 @@ impl InlayHintSettings {
             || implicit_self
             || lambda_parameter_types
             || inherited_parameter_types
+            || inherited_parameter_defaults
             || inferred_return_types
             || implicit_arguments
             || enum_values
@@ -949,6 +988,7 @@ impl Default for InlayHintSettings {
             implicit_self: true,
             lambda_parameter_types: true,
             inherited_parameter_types: true,
+            inherited_parameter_defaults: true,
             inferred_return_types: true,
             implicit_arguments: true,
             enum_values: true,
@@ -1519,6 +1559,27 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         ));
     }
 
+    /// basedpython: hint the default a parameter takes from the method its `def`
+    /// overrides, where the parameter's own default would be written.
+    fn add_inherited_parameter_default(&mut self, parameter: &ast::ParameterWithDefault) {
+        if !self.settings.inherited_parameter_defaults
+            || self.in_lambda
+            || parameter.parameter.range().is_empty()
+        {
+            return;
+        }
+
+        let Some(value) = inherited_parameter_default(&self.model, parameter) else {
+            return;
+        };
+
+        self.hints.push(InlayHint::inherited_default(
+            parameter.parameter.range().end(),
+            &value,
+            parameter.parameter.annotation.is_some(),
+        ));
+    }
+
     /// basedpython: hint the return type recovered for a `def` that leaves its
     /// annotation out, where the annotation would be written.
     ///
@@ -1729,6 +1790,14 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
 
     fn visit_annotation(&mut self, expr: &'a Expr) {
         self.visit_type_expr(expr);
+    }
+
+    fn visit_parameter_with_default(&mut self, parameter: &'a ast::ParameterWithDefault) {
+        if self.enter_node(parameter.into()).is_traverse() {
+            self.add_inherited_parameter_default(parameter);
+        }
+
+        source_order::walk_parameter_with_default(self, parameter);
     }
 
     fn visit_parameter(&mut self, parameter: &'a ast::Parameter) {
@@ -10665,6 +10734,31 @@ Source with applied edits:
 
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
             inherited_parameter_types: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// A method's defaults are part of what it declares, so an override that leaves one out
+    /// keeps it — and the hint shows the value the call site will bind, where the override
+    /// would have written it. A parameter the base never defaulted has nothing to show, and
+    /// neither has one whose default is an expression rather than a value.
+    #[test]
+    fn basedpython_inherited_parameter_defaults() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A:
+                def f(self, a=1, b: str = 'x', c=None, d=[], e=2) -> None: ...
+
+            class B(A):
+                def f(self, a, b: str, c, d, e=3) -> None: ...
+
+            class C:
+                def f(self, a) -> None: ...
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inherited_parameter_defaults: true,
             ..InlayHintSettings::none()
         }));
     }

@@ -24,10 +24,29 @@
 //! sentinel) and inserts the guard lines at the body start — the rest of the
 //! function, body included, keeps its source bytes, so sibling lowerings
 //! (`??`, `?.`, `int?` annotations, …) anywhere in the function still apply.
+//!
+//! The third thing a parameter list can call for is written here too, because it is
+//! the same question asked of the same list: basedpython carries a method's defaults
+//! to its overrides, so a parameter that writes none of its own may still have one,
+//! and it is written into the signature the override emits:
+//!
+//!   class B(A):         →   class B(A):
+//!       def f(self, a):         def f(self, a=1):
+//!
+//! Deciding that before the two rewrites above is what lets them compose: an inherited
+//! default makes the parameters after it "after a default", exactly as a written one
+//! would, so a required parameter following one still gets its sentinel and its
+//! raising guard.
+//!
+//! There is no reverse transform. Going the other way means *dropping* a default an
+//! override writes because a base declares the same one, and whether that is safe
+//! depends on the whole MRO the reverse direction is reading — including bases it may
+//! not have read yet. A dropped default is silent when the reading is wrong, so the
+//! python → basedpython direction leaves every written default where it is.
 
 use ruff_python_ast::helpers::is_immutable_scalar_default;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, Stmt, StmtFunctionDef};
+use ruff_python_ast::{Expr, ParameterWithDefault, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
@@ -67,6 +86,7 @@ impl Guard {
 
 struct MutableDefaults<'src> {
     source: &'src str,
+    types: &'src dyn TypeInfo,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     /// the guard suites, anchored at the body statement they precede
     guards: Vec<(TextSize, Vec<Fragment>)>,
@@ -93,11 +113,27 @@ fn sentinel_edit(default: TextRange) -> (TextRange, Vec<Fragment>) {
     (default, vec![Fragment::Lit("_MISSING".to_owned())])
 }
 
-/// The signature edits and body guards `f`'s parameter list calls for: a
-/// `_MISSING` sentinel wherever a default would otherwise be shared between
-/// calls, and one wherever python's own parameter order is relaxed.
+/// A default written into the signature at the end of the parameter it belongs to.
+///
+/// `=` spacing mirrors python style: spaced when the parameter is annotated.
+fn written_default(pw: &ParameterWithDefault, value: &str) -> (TextRange, Vec<Fragment>) {
+    let text = if pw.parameter.annotation.is_some() {
+        format!(" = {value}")
+    } else {
+        format!("={value}")
+    };
+    (
+        TextRange::empty(pw.parameter.range().end()),
+        vec![Fragment::Lit(text)],
+    )
+}
+
+/// The signature edits and body guards `f`'s parameter list calls for: the default an override
+/// inherits from the method it overrides, a `_MISSING` sentinel wherever a default would
+/// otherwise be shared between calls, and one wherever python's own parameter order is relaxed.
 pub(crate) fn parameter_guards(
     f: &StmtFunctionDef,
+    types: &dyn TypeInfo,
 ) -> (Vec<(TextRange, Vec<Fragment>)>, Vec<Guard>) {
     let mut sentinels = Vec::new();
     let mut guards = Vec::new();
@@ -119,17 +155,14 @@ pub(crate) fn parameter_guards(
                     });
                 }
             }
+            // an inherited default is a value, so it needs no guard — and it is what makes
+            // the parameters after it "after a default", exactly as a written one would
+            None if let Some(value) = types.inherited_parameter_default(pw) => {
+                seen_default = true;
+                sentinels.push(written_default(pw, &value));
+            }
             None if seen_default => {
-                // `=` spacing mirrors python style: spaced when annotated
-                let sentinel = if pw.parameter.annotation.is_some() {
-                    " = _MISSING"
-                } else {
-                    "=_MISSING"
-                };
-                sentinels.push((
-                    TextRange::empty(pw.parameter.range().end()),
-                    vec![Fragment::Lit(sentinel.to_owned())],
-                ));
+                sentinels.push(written_default(pw, "_MISSING"));
                 guards.push(Guard::Required {
                     name: pw.parameter.name.id.to_string(),
                     function: f.name.id.to_string(),
@@ -139,15 +172,20 @@ pub(crate) fn parameter_guards(
         }
     }
     for pw in &params.kwonlyargs {
-        if let Some(d) = pw.default.as_deref()
-            && !is_immutable_scalar_default(d)
-            && !body_cannot_evaluate(d)
-        {
-            sentinels.push(sentinel_edit(d.range()));
-            guards.push(Guard::Reevaluate {
-                name: pw.parameter.name.id.to_string(),
-                default: d.range(),
-            });
+        match pw.default.as_deref() {
+            Some(d) if !is_immutable_scalar_default(d) && !body_cannot_evaluate(d) => {
+                sentinels.push(sentinel_edit(d.range()));
+                guards.push(Guard::Reevaluate {
+                    name: pw.parameter.name.id.to_string(),
+                    default: d.range(),
+                });
+            }
+            Some(_) => {}
+            None => {
+                if let Some(value) = types.inherited_parameter_default(pw) {
+                    sentinels.push(written_default(pw, &value));
+                }
+            }
         }
     }
     (sentinels, guards)
@@ -254,7 +292,7 @@ impl MutableDefaults<'_> {
         if is_bodyless_init_shorthand(f) {
             return;
         }
-        let (sentinels, guards) = parameter_guards(f);
+        let (sentinels, guards) = parameter_guards(f, self.types);
         self.edits.extend(sentinels);
         if guards.is_empty() {
             return;
@@ -339,9 +377,10 @@ impl<'src> MutableDefaultsPass<'src> {
 }
 
 impl TypeAwarePass for MutableDefaultsPass<'_> {
-    fn run(&self, stmts: &[Stmt], _types: &dyn TypeInfo, ctx: &mut PassContext) {
+    fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = MutableDefaults {
             source: self.source,
+            types,
             edits: Vec::new(),
             guards: Vec::new(),
             used: false,
@@ -387,6 +426,107 @@ mod tests {
         assert_eq!(
             transpile(input, &config).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    /// a method's defaults are part of what it declares, so an override that leaves one out
+    /// writes the base's into its own signature — that is what makes the call site's missing
+    /// argument mean anything at runtime
+    #[test]
+    fn an_override_writes_the_default_it_inherits() {
+        check(
+            indoc! {"
+                class A:
+                    def f(self, a = 1): ...
+
+                class B(A):
+                    def f(self, a):
+                        print(a)
+            "},
+            indoc! {"
+                class A:
+                    def f(self, a = 1): ...
+
+                class B(A):
+                    def f(self, a=1):
+                        print(a)
+            "},
+        );
+    }
+
+    /// `=` spacing follows python style, which spaces it when the parameter is annotated
+    #[test]
+    fn an_annotated_parameter_takes_the_spaced_form() {
+        check(
+            indoc! {"
+                class A:
+                    def f(self, a: int = 1, *, k: str = \"x\"): ...
+
+                class B(A):
+                    def f(self, a: int, *, k: str):
+                        print(a, k)
+            "},
+            indoc! {"
+                class A:
+                    def f(self, a: int = 1, *, k: str = \"x\"): ...
+
+                class B(A):
+                    def f(self, a: int = 1, *, k: str = \"x\"):
+                        print(a, k)
+            "},
+        );
+    }
+
+    /// an inherited default is a default like any other, so a parameter after it is one
+    /// python would reject — the same sentinel and raising guard a written default calls for
+    #[test]
+    fn a_parameter_after_an_inherited_default_gets_its_guard() {
+        check(
+            indoc! {"
+                class A:
+                    def f(self, a = 1, b = 2): ...
+
+                class B(A):
+                    def f(self, a, b):
+                        print(a, b)
+            "},
+            indoc! {"
+                class A:
+                    def f(self, a = 1, b = 2): ...
+
+                class B(A):
+                    def f(self, a=1, b=2):
+                        print(a, b)
+            "},
+        );
+    }
+
+    /// basedpython re-evaluates a non-scalar default on every call, in the scope its own `def`
+    /// was written in — there is no value to write into the override's signature, and the
+    /// parameter stays required
+    #[test]
+    fn an_expression_default_is_not_carried_to_an_override() {
+        check(
+            indoc! {"
+                class A:
+                    def f(self, a = []): ...
+
+                class B(A):
+                    def f(self, a):
+                        print(a)
+            "},
+            indoc! {"
+                _MISSING = object()
+                class A:
+                    def f(self, a = _MISSING): 
+                        if a is _MISSING:
+                            a = []
+                        ...
+
+                class B(A):
+                    def f(self, a):
+                        print(a)
+            "},
         );
     }
 

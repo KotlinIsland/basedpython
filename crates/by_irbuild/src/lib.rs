@@ -6636,7 +6636,9 @@ fn signature(
         // the closure evaluates the default where the `def` stands and parks it in the
         // environment instead, which the boundary reaches through slot zero
         let default = match &parameter.default {
-            None => None,
+            // basedpython carries a method's defaults to its overrides, so a parameter the
+            // source leaves without one can still have one
+            None => inherited_default(model, parameter)?,
             Some(expr) => match literal_value(expr) {
                 Some(value) => Some(value),
                 None => {
@@ -13925,6 +13927,32 @@ fn literal_int(expr: &Expr) -> Option<i64> {
 }
 
 /// an expression that is a literal, as an immediate
+/// the default a parameter takes from the method its `def` overrides, where the `def` writes
+/// none of its own
+///
+/// `Ok(None)` means nothing is inherited. what is inherited is always a value, so anything that
+/// is not an immediate declines: unlike a written default there is no expression in this source
+/// to evaluate at the `def` instead.
+///
+/// what ty answers with is the spelling the transpiler writes into the interpreted twin's
+/// signature, so reading it the same way a written default is read keeps the two halves saying
+/// the same thing
+fn inherited_default(
+    model: &SemanticModel<'_>,
+    parameter: &ast::ParameterWithDefault,
+) -> Lowered<Option<Value>> {
+    let Some(spelling) =
+        ty_python_semantic::types::ide_support::inherited_parameter_default(model, parameter)
+    else {
+        return Ok(None);
+    };
+    ruff_python_parser::parse_expression(&spelling)
+        .ok()
+        .and_then(|parsed| literal_value(parsed.expr()))
+        .map(Some)
+        .ok_or_else(|| Decline::new("a parameter inherits a default that is not an immediate"))
+}
+
 fn literal_value(expr: &Expr) -> Option<Value> {
     Some(match expr {
         Expr::NumberLiteral(node) => match &node.value {

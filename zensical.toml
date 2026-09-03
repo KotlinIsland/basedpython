@@ -165,6 +165,7 @@ features = [
     { "decorator keyword" = "features/decorator-keyword.md" },
     { "decorated function parameters" = "features/decorated-parameters.md" },
     { "decorating anything" = "features/decorate-anything.md" },
+    { "inherited default values" = "features/inherited-defaults.md" },
   ] },
   { "expressions and statements" = [
     { "context-sensitive resolution" = "features/context-sensitive-resolution.md" },

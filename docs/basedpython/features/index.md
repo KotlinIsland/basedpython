@@ -155,6 +155,7 @@ the forms a class, function or binding can take
 - [decorator keyword](decorator-keyword.md)
 - [decorated function parameters](decorated-parameters.md)
 - [decorating anything](decorate-anything.md)
+- [inherited default values](inherited-defaults.md)
 
 </div>
 

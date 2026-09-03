@@ -287,7 +287,7 @@ impl State<'_> {
             // the whole body is written here, so the guards a defaulted or
             // relaxed-order parameter needs are written here too — `mutable_
             // defaults` has no source statement to anchor them before
-            let (sentinels, guards) = parameter_guards(func);
+            let (sentinels, guards) = parameter_guards(func, self.types);
             let header_indent = self.line_indent(func.range.start()).to_owned();
             let body_indent = format!("{header_indent}    ");
             let mut frags = vec![Fragment::Lit(":".to_owned())];
@@ -302,6 +302,9 @@ impl State<'_> {
                     frags.push(Fragment::Lit(format!("\n{body_indent}{line}")));
                 }
             }
+            // an inherited default is a signature edit that needs no guard, so the sentinels
+            // are written whether or not the body gains anything
+            self.templates.borrow_mut().extend(sentinels);
             let pos = func.range.end();
             if guards.is_empty() {
                 // no passthrough to carry, so emit plain text: a template
@@ -318,7 +321,6 @@ impl State<'_> {
                 return;
             }
             *self.needs_missing.borrow_mut() = true;
-            self.templates.borrow_mut().extend(sentinels);
             self.templates
                 .borrow_mut()
                 .push((TextRange::new(pos, pos), frags));

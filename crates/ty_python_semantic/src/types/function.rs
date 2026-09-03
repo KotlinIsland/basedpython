@@ -1116,6 +1116,21 @@ impl<'db> OverloadLiteral<'db> {
             );
         }
 
+        // basedpython: a method's defaults are part of what it declares, so an override that
+        // re-declares a parameter without one takes the base's: `def f(self, a)` over
+        // `def f(self, a=1)` is still callable as `f()`. unlike the annotation inheritance above
+        // this is a language rule rather than a recovery, so it holds whatever
+        // `infer-unannotated-signatures` is set to — but only in a basedpython file, since python
+        // itself does not carry a default across an override and the lowering is what makes it
+        // true at runtime
+        if self.file(db).source_type(db).is_basedpython()
+            && raw_signature.has_inheritable_defaults_to_fill(self.binds_first_parameter(db))
+            && let Some(base) = self.overridden_method(db, env)
+            && base.signature(db).overloads.len() == 1
+        {
+            raw_signature.inherit_defaults_from(db, env, base_raw_signature(db, base));
+        }
+
         // basedpython: an overridden base that could not supply a whole signature can still
         // supply its return type
         if infers_unannotated_signatures(db, self.file(db))
