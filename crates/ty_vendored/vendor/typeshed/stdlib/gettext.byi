@@ -46,7 +46,7 @@ private protocol TranslationsReader:
     # name: str
 
 class NullTranslations:
-    init(self, fp: TranslationsReader | None = None)
+    init(self, fp: TranslationsReader? = None)
     def _parse(self, fp: TranslationsReader)
     def add_fallback(self, fallback: NullTranslations)
     def gettext(self, message: str) -> str
@@ -54,10 +54,10 @@ class NullTranslations:
     def pgettext(self, context: str, message: str) -> str
     def npgettext(self, context: str, msgid1: str, msgid2: str, n: int) -> str
     def info(self) -> dict[str, str]
-    def charset(self) -> str | None
+    def charset(self) -> str?
     if sys.version_info < (3, 11):
         @deprecated("Deprecated since Python 3.8; removed in Python 3.11.")
-        def output_charset(self) -> str | None
+        def output_charset(self) -> str?
         @deprecated("Deprecated since Python 3.8; removed in Python 3.11.")
         def set_output_charset(self, charset: str) -> None
         @deprecated("Deprecated since Python 3.8; removed in Python 3.11. Use `gettext()` instead.")
@@ -65,7 +65,7 @@ class NullTranslations:
         @deprecated("Deprecated since Python 3.8; removed in Python 3.11. Use `ngettext()` instead.")
         def lngettext(self, msgid1: str, msgid2: str, n: int) -> str
 
-    def install(self, names: Container[str] | None = None)
+    def install(self, names: Container[str]? = None)
 
 class GNUTranslations(NullTranslations):
     final LE_MAGIC: int
@@ -74,92 +74,92 @@ class GNUTranslations(NullTranslations):
     VERSIONS: Sequence[int]
 
 def find(
-    domain: str, localedir: StrPath | None = None, languages: Iterable[str] | None = None, all: False = False
-) -> str | None
+    domain: str, localedir: StrPath? = None, languages: Iterable[str]? = None, all: False = False
+) -> str?
 def find(
-    domain: str, localedir: StrPath | None = None, languages: Iterable[str] | None = None, *, all: True
+    domain: str, localedir: StrPath? = None, languages: Iterable[str]? = None, *, all: True
 ) -> list[str]
-def find(domain: str, localedir: StrPath | None, languages: Iterable[str] | None, all: True) -> list[str]
-def find(domain: str, localedir: StrPath | None = None, languages: Iterable[str] | None = None, all: bool = False) -> dynamic
+def find(domain: str, localedir: StrPath?, languages: Iterable[str]?, all: True) -> list[str]
+def find(domain: str, localedir: StrPath? = None, languages: Iterable[str]? = None, all: bool = False) -> dynamic
 
 
 if sys.version_info >= (3, 11):
     def translation(
         domain: str,
-        localedir: StrPath | None = None,
-        languages: Iterable[str] | None = None,
+        localedir: StrPath? = None,
+        languages: Iterable[str]? = None,
         class_: None = None,
         fallback: False = False,
     ) -> GNUTranslations
     def translation[NullTranslationsT: NullTranslations](
         domain: str,
-        localedir: StrPath | None = None,
-        languages: Iterable[str] | None = None,
+        localedir: StrPath? = None,
+        languages: Iterable[str]? = None,
         *,
         class_: (io.BufferedReader) -> NullTranslationsT,
         fallback: False = False,
     ) -> NullTranslationsT
     def translation[NullTranslationsT: NullTranslations](
         domain: str,
-        localedir: StrPath | None,
-        languages: Iterable[str] | None,
+        localedir: StrPath?,
+        languages: Iterable[str]?,
         class_: (io.BufferedReader) -> NullTranslationsT,
         fallback: False = False,
     ) -> NullTranslationsT
     def translation(
         domain: str,
-        localedir: StrPath | None = None,
-        languages: Iterable[str] | None = None,
-        class_: ((io.BufferedReader) -> NullTranslations) | None = None,
+        localedir: StrPath? = None,
+        languages: Iterable[str]? = None,
+        class_: ((io.BufferedReader) -> NullTranslations)? = None,
         fallback: bool = False,
     ) -> NullTranslations
 
-    def install(domain: str, localedir: StrPath | None = None, *, names: Container[str] | None = None) -> None
+    def install(domain: str, localedir: StrPath? = None, *, names: Container[str]? = None) -> None
 else:
     def translation(
         domain: str,
-        localedir: StrPath | None = None,
-        languages: Iterable[str] | None = None,
+        localedir: StrPath? = None,
+        languages: Iterable[str]? = None,
         class_: None = None,
         fallback: False = False,
-        codeset: str | None = ...,
+        codeset: str? = ...,
     ) -> GNUTranslations
     def translation[NullTranslationsT: NullTranslations](
         domain: str,
-        localedir: StrPath | None = None,
-        languages: Iterable[str] | None = None,
+        localedir: StrPath? = None,
+        languages: Iterable[str]? = None,
         *,
         class_: (io.BufferedReader) -> NullTranslationsT,
         fallback: False = False,
-        codeset: str | None = ...,
+        codeset: str? = ...,
     ) -> NullTranslationsT
     def translation[NullTranslationsT: NullTranslations](
         domain: str,
-        localedir: StrPath | None,
-        languages: Iterable[str] | None,
+        localedir: StrPath?,
+        languages: Iterable[str]?,
         class_: (io.BufferedReader) -> NullTranslationsT,
         fallback: False = False,
-        codeset: str | None = ...,
+        codeset: str? = ...,
     ) -> NullTranslationsT
     def translation(
         domain: str,
-        localedir: StrPath | None = None,
-        languages: Iterable[str] | None = None,
-        class_: ((io.BufferedReader) -> NullTranslations) | None = None,
+        localedir: StrPath? = None,
+        languages: Iterable[str]? = None,
+        class_: ((io.BufferedReader) -> NullTranslations)? = None,
         fallback: bool = False,
-        codeset: str | None = ...,
+        codeset: str? = ...,
     ) -> NullTranslations
 
-    def install(domain: str, localedir: StrPath | None = None, names: Container[str] | None = None) -> None
+    def install(domain: str, localedir: StrPath? = None, names: Container[str]? = None) -> None
     @deprecated("The `codeset` parameter is deprecated since Python 3.8; removed in Python 3.11.")
-    def install(domain: str, localedir: StrPath | None, codeset: str | None, /, names: Container[str] | None = None) -> None
+    def install(domain: str, localedir: StrPath?, codeset: str?, /, names: Container[str]? = None) -> None
     @deprecated("The `codeset` parameter is deprecated since Python 3.8; removed in Python 3.11.")
     def install(
-        domain: str, localedir: StrPath | None = None, *, codeset: str | None, names: Container[str] | None = None
+        domain: str, localedir: StrPath? = None, *, codeset: str?, names: Container[str]? = None
     ) -> None
 
-def textdomain(domain: str | None = None) -> str
-def bindtextdomain(domain: str, localedir: StrPath | None = None) -> str
+def textdomain(domain: str? = None) -> str
+def bindtextdomain(domain: str, localedir: StrPath? = None) -> str
 def dgettext(domain: str, message: str) -> str
 def dngettext(domain: str, msgid1: str, msgid2: str, n: int) -> str
 def gettext(message: str) -> str
@@ -179,7 +179,7 @@ if sys.version_info < (3, 11):
     @deprecated("Deprecated since Python 3.8; removed in Python 3.11. Use `dngettext()` instead.")
     def ldngettext(domain: str, msgid1: str, msgid2: str, n: int) -> str
     @deprecated("Deprecated since Python 3.8; removed in Python 3.11. Use `bindtextdomain()` instead.")
-    def bind_textdomain_codeset(domain: str, codeset: str | None = None) -> str
+    def bind_textdomain_codeset(domain: str, codeset: str? = None) -> str
 
 Catalog = translation
 

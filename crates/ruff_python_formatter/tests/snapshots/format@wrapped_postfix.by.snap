@@ -8,6 +8,16 @@ a: int?
 b: int??
 c: list[int?]
 
+# the marker binds looser than every type operator it can stand after, so a
+# reformat that re-groups any of these would silently change the type
+d: str? | int
+e: literal str?
+m: (int, str)?
+n: (*: str)?
+o: dict[str, int?]
+p: ((int) -> str)?
+q: (int) -> str?
+
 
 def f(x: int?) -> None: ...
 
@@ -29,6 +39,16 @@ async def af(g):
 a: int?
 b: int??
 c: list[int?]
+
+# the marker binds looser than every type operator it can stand after, so a
+# reformat that re-groups any of these would silently change the type
+d: str? | int
+e: literal str?
+m: (int, str)?
+n: (*: str)?
+o: dict[str, int?]
+p: ((int) -> str)?
+q: (int) -> str?
 
 
 def f(x: int?) -> None: ...

@@ -102,7 +102,7 @@ if sys.version_info >= (3, 12):
 
         def __enter__(self) -> Self
         def __exit__(
-            self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+            self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
         )
         def close(self):
             """Flush and close the IO object.
@@ -175,7 +175,7 @@ if sys.version_info >= (3, 12):
             """Return current stream position."""
 
         @ignorable_return_value
-        def truncate(self, size: int | None = None, /) -> int:
+        def truncate(self, size: int? = None, /) -> int:
             """Truncate file to size bytes.
 
             File pointer is left unchanged.  Size defaults to the current IO
@@ -196,7 +196,7 @@ if sys.version_info >= (3, 12):
             lines provided to have a line separator at the end.
             """
 
-        def readline(self, size: int | None = -1, /) -> bytes:
+        def readline(self, size: int? = -1, /) -> bytes:
             """Read and return a line from the stream.
 
             If size is specified, at most size bytes will be read.
@@ -253,7 +253,7 @@ else:
 
         def __enter__(self) -> Self
         def __exit__(
-            self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+            self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
         )
         def close(self):
             """Flush and close the IO object.
@@ -324,7 +324,7 @@ else:
             """Return current stream position."""
 
         @ignorable_return_value
-        def truncate(self, size: int | None = None, /) -> int:
+        def truncate(self, size: int? = None, /) -> int:
             """Truncate file to size bytes.
 
             File pointer is left unchanged.  Size defaults to the current IO
@@ -345,7 +345,7 @@ else:
             lines provided to have a line separator at the end.
             """
 
-        def readline(self, size: int | None = -1, /) -> bytes:
+        def readline(self, size: int? = -1, /) -> bytes:
             """Read and return a line from the stream.
 
             If size is specified, at most size bytes will be read.
@@ -408,7 +408,7 @@ class _BufferedIOBase(_IOBase):
         """
 
     def readinto1(self, buffer: WriteableBuffer, /) -> int
-    override def read(self, size: int | None = -1, /) -> bytes:
+    override def read(self, size: int? = -1, /) -> bytes:
         """Read and return up to n bytes.
 
         If the size argument is omitted, None, or negative, read and
@@ -462,7 +462,7 @@ class FileIO(RawIOBase, _RawIOBase, BinaryIO):
     # "name" is a str. In the future, making FileIO generic might help.
     name: dynamic
     init(
-        self, file: FileDescriptorOrPath, mode: str = "r", closefd: bool = True, opener: _Opener | None = None
+        self, file: FileDescriptorOrPath, mode: str = "r", closefd: bool = True, opener: _Opener? = None
     )
     let closefd: bool
 
@@ -479,7 +479,7 @@ class FileIO(RawIOBase, _RawIOBase, BinaryIO):
         Note that not all file objects are seekable.
         """
 
-    override def read(self, size: int | None = -1, /) -> bytes | MaybeNone:
+    override def read(self, size: int? = -1, /) -> bytes | MaybeNone:
         """Read at most size bytes, returned as bytes.
 
         If size is less than 0, read all bytes in the file making multiple
@@ -507,14 +507,14 @@ class BytesIO(BufferedIOBase, _BufferedIOBase, BinaryIO):
     def getbuffer(self) -> memoryview:
         """Get a read-write view over the contents of the BytesIO object."""
 
-    override def read1(self, size: int | None = -1, /) -> bytes:
+    override def read1(self, size: int? = -1, /) -> bytes:
         """Read at most size bytes, returned as a bytes object.
 
         If the size argument is negative or omitted, read until EOF is
         reached.  Return an empty bytes object at EOF.
         """
 
-    override def readlines(self, size: int | None = None, /) -> list[bytes]:
+    override def readlines(self, size: int? = None, /) -> list[bytes]:
         """List of bytes objects, each a line from the file.
 
         Call readline() repeatedly and return a list of the lines so read.
@@ -536,7 +536,7 @@ class BytesIO(BufferedIOBase, _BufferedIOBase, BinaryIO):
 private protocol BufferedReaderStream:
     def read(self, n: int = ..., /) -> bytes
     # Optional: def readall(self) -> bytes: ...
-    def readinto(self, b: memoryview, /) -> int | None
+    def readinto(self, b: memoryview, /) -> int?
     def seek(self, pos: int, whence: int, /) -> int
     def tell(self) -> int
     def truncate(self, size: int, /) -> int
@@ -570,11 +570,11 @@ class BufferedReader[in out BufferedReaderStreamT: BufferedReaderStream = Buffer
 
     def peek(self, size: int = 0, /) -> bytes
     override def seek(self, target: int, whence: int = 0, /) -> int
-    override def truncate(self, pos: int | None = None, /) -> int
+    override def truncate(self, pos: int? = None, /) -> int
 
 @type_check_only
 private protocol BufferedWriterStream:
-    def write(self, b: WriteableBuffer, /) -> int | None
+    def write(self, b: WriteableBuffer, /) -> int?
     def seek(self, pos: int, whence: int, /) -> int
     def tell(self) -> int
     def truncate(self, size: int, /) -> int
@@ -615,7 +615,7 @@ class BufferedWriter[in out BufferedWriterStreamT: BufferedWriterStream = Buffer
     override def write(self, buffer: ReadableBuffer, /) -> int
     @ignorable_return_value
     override def seek(self, target: int, whence: int = 0, /) -> int
-    override def truncate(self, pos: int | None = None, /) -> int
+    override def truncate(self, pos: int? = None, /) -> int
 
 @disjoint_base
 class BufferedRandom(BufferedIOBase, _BufferedIOBase, BinaryIO):
@@ -636,7 +636,7 @@ class BufferedRandom(BufferedIOBase, _BufferedIOBase, BinaryIO):
 
     override def seek(self, target: int, whence: int = 0, /) -> int  # stubtest needs this
     def peek(self, size: int = 0, /) -> bytes
-    override def truncate(self, pos: int | None = None, /) -> int
+    override def truncate(self, pos: int? = None, /) -> int
 
 @disjoint_base
 class BufferedRWPair[in out BufferedReaderStreamT: BufferedReaderStream = BufferedReaderStream, in out BufferedWriterStreamT: BufferedWriterStream = BufferedWriterStream](BufferedIOBase, _BufferedIOBase):
@@ -676,7 +676,7 @@ class _TextIOBase(_IOBase):
     Subclasses should override.
     """
 
-    errors: str | None
+    errors: str?
     """The error setting of the decoder or encoder.
 
     Subclasses should override.
@@ -733,7 +733,7 @@ class _TextIOBase(_IOBase):
         lines so far exceeds hint.
         """
 
-    override def read(self, size: int | None = -1, /) -> str:
+    override def read(self, size: int? = -1, /) -> str:
         """Read at most size characters from stream.
 
         Read from underlying buffer until we have size characters or we hit
@@ -797,9 +797,9 @@ class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _T
     init(
         self,
         buffer: BufferT,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
+        encoding: str? = None,
+        errors: str? = None,
+        newline: str? = None,
         line_buffering: bool = False,
         write_through: bool = False,
     )
@@ -810,11 +810,11 @@ class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _T
     def reconfigure(
         self,
         *,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
-        line_buffering: bool | None = None,
-        write_through: bool | None = None,
+        encoding: str? = None,
+        errors: str? = None,
+        newline: str? = None,
+        line_buffering: bool? = None,
+        write_through: bool? = None,
     ):
         """Reconfigure the text stream with new parameters.
 
@@ -848,7 +848,7 @@ class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _T
         and may raise exceptions.
         """
 
-    override def truncate(self, pos: int | None = None, /) -> int
+    override def truncate(self, pos: int? = None, /) -> int
 
 @disjoint_base
 class StringIO(TextIOBase, _TextIOBase, TextIO):
@@ -858,7 +858,7 @@ class StringIO(TextIOBase, _TextIOBase, TextIO):
     argument is like the one of TextIOWrapper's constructor.
     """
 
-    init(self, initial_value: str | None = "", newline: str | None = "\n")
+    init(self, initial_value: str? = "", newline: str? = "\n")
     # StringIO does not contain a "name" field. This workaround is necessary
     # to allow StringIO sub-classes to add this field, as it is defined
     # as a read-only property on IO[].
@@ -878,7 +878,7 @@ class StringIO(TextIOBase, _TextIOBase, TextIO):
         Returns the new absolute position.
         """
 
-    override def truncate(self, pos: int | None = None, /) -> int:
+    override def truncate(self, pos: int? = None, /) -> int:
         """Truncate size to pos.
 
         The pos argument defaults to the current file position, as
@@ -898,7 +898,7 @@ class IncrementalNewlineDecoder:
     decoder.
     """
 
-    init(self, decoder: codecs.IncrementalDecoder | None, translate: bool, errors: str = "strict")
+    init(self, decoder: codecs.IncrementalDecoder?, translate: bool, errors: str = "strict")
     def decode(self, input: ReadableBuffer | str, final: bool = False) -> str
     let newlines: str | (*: str) | None
     def getstate(self) -> (bytes, int)

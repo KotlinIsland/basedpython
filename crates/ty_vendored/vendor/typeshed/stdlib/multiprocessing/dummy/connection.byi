@@ -16,20 +16,20 @@ class Connection:
     send_bytes: dynamic
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, exc_tb: TracebackType?
     )
     init(self, _in: dynamic, _out: dynamic)
     def close(self)
     def poll(self, timeout: int | float = 0.0) -> bool
 
 class Listener:
-    _backlog_queue: Queue[dynamic] | None
-    let address: Queue[dynamic] | None
+    _backlog_queue: Queue[dynamic]?
+    let address: Queue[dynamic]?
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, exc_tb: TracebackType?
     )
-    init(self, address: _Address | None = None, family: int | None = None, backlog: int = 1)
+    init(self, address: _Address? = None, family: int? = None, backlog: int = 1)
     def accept(self) -> Connection
     def close(self)
 

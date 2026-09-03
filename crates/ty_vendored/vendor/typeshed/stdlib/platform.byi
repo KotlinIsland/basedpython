@@ -11,7 +11,7 @@ import sys
 from typing import NamedTuple, type_check_only
 from typing_extensions import Self, deprecated, disjoint_base
 
-def libc_ver(executable: str | None = None, lib: str = "", version: str = "", chunksize: int = 16384) -> (str, str):
+def libc_ver(executable: str? = None, lib: str = "", version: str = "", chunksize: int = 16384) -> (str, str):
     """Tries to determine the libc version that the file executable
     (which defaults to the Python interpreter) is linked against.
 

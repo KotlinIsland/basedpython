@@ -15,21 +15,21 @@ DEVNULL: int
 class SubprocessStreamProtocol(streams.FlowControlMixin, protocols.SubprocessProtocol):
     """Like StreamReaderProtocol, but for a subprocess."""
 
-    stdin: streams.StreamWriter | None
-    stdout: streams.StreamReader | None
-    stderr: streams.StreamReader | None
+    stdin: streams.StreamWriter?
+    stdout: streams.StreamReader?
+    stderr: streams.StreamReader?
     init(self, limit: int, loop: events.AbstractEventLoop)
     override def pipe_data_received(self, fd: int, data: bytes | str)
 
 class Process:
-    stdin: streams.StreamWriter | None
-    stdout: streams.StreamReader | None
-    stderr: streams.StreamReader | None
+    stdin: streams.StreamWriter?
+    stdout: streams.StreamReader?
+    stderr: streams.StreamReader?
     pid: int
     init(
         self, transport: transports.BaseTransport, protocol: protocols.BaseProtocol, loop: events.AbstractEventLoop
     )
-    let returncode: int | None
+    let returncode: int?
     async def wait(self) -> int:
         """Wait until the process exit and return the process return code."""
 
@@ -52,14 +52,14 @@ if sys.version_info >= (3, 11):
         bufsize: 0 = 0,
         encoding: None = None,
         errors: None = None,
-        text: False | None = None,
+        text: False? = None,
         # These parameters are taken by subprocess.Popen, which this ultimately delegates to
-        executable: StrOrBytesPath | None = None,
-        preexec_fn: (() -> dynamic) | None = None,
+        executable: StrOrBytesPath? = None,
+        preexec_fn: (() -> dynamic)? = None,
         close_fds: bool = True,
-        cwd: StrOrBytesPath | None = None,
-        env: subprocess._ENV | None = None,
-        startupinfo: dynamic | None = None,
+        cwd: StrOrBytesPath? = None,
+        env: subprocess._ENV? = None,
+        startupinfo: dynamic? = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -68,7 +68,7 @@ if sys.version_info >= (3, 11):
         extra_groups: None | Collection[str | int] = None,
         user: None | str | int = None,
         umask: int = -1,
-        process_group: int | None = None,
+        process_group: int? = None,
         pipesize: int = -1,
     ) -> Process
     async def create_subprocess_exec(
@@ -84,14 +84,14 @@ if sys.version_info >= (3, 11):
         bufsize: 0 = 0,
         encoding: None = None,
         errors: None = None,
-        text: False | None = None,
+        text: False? = None,
         # These parameters are taken by subprocess.Popen, which this ultimately delegates to
-        executable: StrOrBytesPath | None = None,
-        preexec_fn: (() -> dynamic) | None = None,
+        executable: StrOrBytesPath? = None,
+        preexec_fn: (() -> dynamic)? = None,
         close_fds: bool = True,
-        cwd: StrOrBytesPath | None = None,
-        env: subprocess._ENV | None = None,
-        startupinfo: dynamic | None = None,
+        cwd: StrOrBytesPath? = None,
+        env: subprocess._ENV? = None,
+        startupinfo: dynamic? = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -100,7 +100,7 @@ if sys.version_info >= (3, 11):
         extra_groups: None | Collection[str | int] = None,
         user: None | str | int = None,
         umask: int = -1,
-        process_group: int | None = None,
+        process_group: int? = None,
         pipesize: int = -1,
     ) -> Process
 
@@ -118,14 +118,14 @@ else:
         bufsize: 0 = 0,
         encoding: None = None,
         errors: None = None,
-        text: False | None = None,
+        text: False? = None,
         # These parameters are taken by subprocess.Popen, which this ultimately delegates to
-        executable: StrOrBytesPath | None = None,
-        preexec_fn: (() -> dynamic) | None = None,
+        executable: StrOrBytesPath? = None,
+        preexec_fn: (() -> dynamic)? = None,
         close_fds: bool = True,
-        cwd: StrOrBytesPath | None = None,
-        env: subprocess._ENV | None = None,
-        startupinfo: dynamic | None = None,
+        cwd: StrOrBytesPath? = None,
+        env: subprocess._ENV? = None,
+        startupinfo: dynamic? = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -149,14 +149,14 @@ else:
         bufsize: 0 = 0,
         encoding: None = None,
         errors: None = None,
-        text: False | None = None,
+        text: False? = None,
         # These parameters are taken by subprocess.Popen, which this ultimately delegates to
-        executable: StrOrBytesPath | None = None,
-        preexec_fn: (() -> dynamic) | None = None,
+        executable: StrOrBytesPath? = None,
+        preexec_fn: (() -> dynamic)? = None,
         close_fds: bool = True,
-        cwd: StrOrBytesPath | None = None,
-        env: subprocess._ENV | None = None,
-        startupinfo: dynamic | None = None,
+        cwd: StrOrBytesPath? = None,
+        env: subprocess._ENV? = None,
+        startupinfo: dynamic? = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,

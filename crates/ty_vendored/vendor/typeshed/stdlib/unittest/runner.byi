@@ -18,7 +18,7 @@ private protocol SupportsWriteAndFlush(SupportsWrite[str], SupportsFlush)
 # All methods used by unittest.runner.TextTestResult's stream
 @type_check_only
 private protocol TextTestStream(SupportsWriteAndFlush):
-    def writeln(self, arg: str | None = None, /)
+    def writeln(self, arg: str? = None, /)
 
 # _WritelnDecorator should have all the same attrs as its stream param.
 # But that's not feasible to do Generically
@@ -27,7 +27,7 @@ class _WritelnDecorator:
     """Used to decorate file-like objects with a handy 'writeln' method"""
 
     init(self, stream: SupportsWriteAndFlush)
-    def writeln(self, arg: str | None = None)
+    def writeln(self, arg: str? = None)
     def __getattr__(self, attr: str) -> dynamic  # Any attribute from the stream type passed to __init__
     # These attributes are prevented by __getattr__
     stream: Never
@@ -52,8 +52,8 @@ class TextTestResult[in out StreamT: TextTestStream = _WritelnDecorator](unittes
     showAll: bool  # undocumented
     stream: StreamT  # undocumented
     if sys.version_info >= (3, 12):
-        durations: int | None
-        def __init__(self, stream: StreamT, descriptions: bool, verbosity: int, *, durations: int | None = None) -> None:
+        durations: int?
+        def __init__(self, stream: StreamT, descriptions: bool, verbosity: int, *, durations: int? = None) -> None:
             """Construct a TextTestResult. Subclasses should accept **kwargs
             to ensure compatibility as the interface changes.
             """
@@ -82,23 +82,23 @@ class TextTestRunner:
     verbosity: int
     failfast: bool
     buffer: bool
-    warnings: _ActionKind | None
+    warnings: _ActionKind?
     tb_locals: bool
 
     if sys.version_info >= (3, 12):
-        durations: int | None
+        durations: int?
         def __init__(
             self,
-            stream: SupportsWriteAndFlush | None = None,
+            stream: SupportsWriteAndFlush? = None,
             descriptions: bool = True,
             verbosity: int = 1,
             failfast: bool = False,
             buffer: bool = False,
-            resultclass: ResultClassType | None = None,
-            warnings: _ActionKind | None = None,
+            resultclass: ResultClassType? = None,
+            warnings: _ActionKind? = None,
             *,
             tb_locals: bool = False,
-            durations: int | None = None,
+            durations: int? = None,
         ) -> None:
             """Construct a TextTestRunner.
 
@@ -109,13 +109,13 @@ class TextTestRunner:
     else:
         def __init__(
             self,
-            stream: SupportsWriteAndFlush | None = None,
+            stream: SupportsWriteAndFlush? = None,
             descriptions: bool = True,
             verbosity: int = 1,
             failfast: bool = False,
             buffer: bool = False,
-            resultclass: ResultClassType | None = None,
-            warnings: str | None = None,
+            resultclass: ResultClassType? = None,
+            warnings: str? = None,
             *,
             tb_locals: bool = False,
         ) -> None:

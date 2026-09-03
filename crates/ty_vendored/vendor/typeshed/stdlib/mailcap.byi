@@ -9,7 +9,7 @@ __all__ = ["getcaps", "findmatch"]
 
 def findmatch(
     caps: Mapping[str, list[Cap]], MIMEtype: str, key: str = "view", filename: str = "/dev/null", plist: Sequence[str] = []
-) -> (str | None, Cap | None):
+) -> (str?, Cap?):
     """Find a match for a mailcap entry.
 
     Return a tuple containing the command line, and the mailcap entry

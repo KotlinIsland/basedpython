@@ -14,7 +14,7 @@ use ruff_diagnostics::{Edit, Fix, IsolationLevel, SourceMap};
 use ruff_python_ast::Stmt;
 use ruff_python_ast::visitor::Visitor;
 use ruff_source_file::LineRanges;
-use ruff_text_size::{Ranged, TextSize};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 use salsa::Setter as _;
 use ty_project::{ProjectMetadata, TestDb};
 
@@ -963,6 +963,35 @@ fn run_lowering_phase(source: &str, stmts: &[Stmt], config: &Config) -> Lowering
     }
 }
 
+/// The `T | None` → `T?` rewrite of [`reverse_transpile`], on its own, as
+/// `(range, replacement)` text edits over `source`.
+///
+/// The vendored typeshed is committed already reverse-transpiled, so a fresh
+/// sync's reverse pass never reaches it again — and replaying the whole pass
+/// over the committed `.byi` would have the rest of the transforms read
+/// basedpython as if it were the python they invert. `by_typeshed_patch`
+/// replays just this rewrite instead, which is what keeps the rule in one
+/// place rather than in a second copy written against the stub form.
+pub fn optional_marker_edits(source: &str) -> Vec<(TextRange, String)> {
+    let (db, file) = make_in_memory_db(source);
+    let source_ref = ruff_db::source::source_text(&db, file);
+    let module = ruff_db::parsed::parsed_module(
+        &db,
+        ty_python_semantic::Db::program_file(&db, file).python_file(&db),
+    )
+    .load(&db);
+    let model = ty_python_semantic::SemanticModel::new(
+        &db,
+        ty_python_semantic::Db::program_file(&db, file),
+    );
+    let mut pass =
+        reverse_transforms::optional_type::OptionalTypeReverse::new(source_ref.as_str(), &model);
+    for stmt in module.suite() {
+        pass.visit_stmt(stmt);
+    }
+    pass.edits
+}
+
 /// Rewrite standard Python source into idiomatic basedpython.
 ///
 /// Counterpart to [`transpile`]: detects polyfill output patterns and
@@ -1000,6 +1029,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let mut not_rev = reverse_transforms::not_type::NotTypeReverse::new(src, &model);
     let mut decorated_type_rev =
         reverse_transforms::decorated_type::DecoratedTypeReverse::new(src, &model);
+    let mut optional_rev = reverse_transforms::optional_type::OptionalTypeReverse::new(src, &model);
     let mut dynamic_keyword_rev =
         reverse_transforms::dynamic_keyword::DynamicKeywordReverse::new(&model);
     let mut literal_string_rev =
@@ -1035,6 +1065,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         intersection.visit_stmt(stmt);
         not_rev.visit_stmt(stmt);
         decorated_type_rev.visit_stmt(stmt);
+        optional_rev.visit_stmt(stmt);
         dynamic_keyword_rev.visit_stmt(stmt);
         literal_string_rev.visit_stmt(stmt);
         type_is_rev.visit_stmt(stmt);
@@ -1089,6 +1120,12 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(intersection.edits);
     fixes.extend(not_rev.edits);
     fixes.extend(decorated_type_rev.edits);
+    fixes.extend(
+        optional_rev
+            .edits
+            .into_iter()
+            .map(|(range, text)| Fix::safe_edit(Edit::range_replacement(text, range))),
+    );
     fixes.extend(dynamic_keyword_rev.edits);
     fixes.extend(literal_string_rev.edits);
     fixes.extend(type_is_rev.edits);

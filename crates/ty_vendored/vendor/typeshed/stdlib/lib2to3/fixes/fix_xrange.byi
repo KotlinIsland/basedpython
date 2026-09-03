@@ -9,7 +9,7 @@ from ..pytree import Node
 class FixXrange(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
-    transformed_xranges: set[Incomplete] | None
+    transformed_xranges: set[Incomplete]?
     override def start_tree(self, tree: Node, filename: StrPath)
     override def finish_tree(self, tree: Node, filename: StrPath)
     override def transform(self, node, results)

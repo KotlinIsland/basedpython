@@ -104,9 +104,9 @@ def input(
     backup: str = "",
     *,
     mode: _TextMode = "r",
-    openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[str]) | None = None,
-    encoding: str | None = None,
-    errors: str | None = None,
+    openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[str])? = None,
+    encoding: str? = None,
+    errors: str? = None,
 ) -> FileInput[str]:
     """Return an instance of the FileInput class, which can be iterated.
 
@@ -120,7 +120,7 @@ def input(
     backup: str = "",
     *,
     mode: "rb",
-    openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[bytes]) | None = None,
+    openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[bytes])? = None,
     encoding: None = None,
     errors: None = None,
 ) -> FileInput[bytes]
@@ -130,9 +130,9 @@ def input(
     backup: str = "",
     *,
     mode: str,
-    openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[dynamic]) | None = None,
-    encoding: str | None = None,
-    errors: str | None = None,
+    openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[dynamic])? = None,
+    encoding: str? = None,
+    errors: str? = None,
 ) -> FileInput[dynamic]
 
 def close():
@@ -208,9 +208,9 @@ class FileInput(Generic[AnyStr]):
         backup: str = "",
         *,
         mode: _TextMode = "r",
-        openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[str]) | None = None,
-        encoding: str | None = None,
-        errors: str | None = None,
+        openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[str])? = None,
+        encoding: str? = None,
+        errors: str? = None,
     )
     init(
         self: FileInput[bytes],
@@ -219,7 +219,7 @@ class FileInput(Generic[AnyStr]):
         backup: str = "",
         *,
         mode: "rb",
-        openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[bytes]) | None = None,
+        openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[bytes])? = None,
         encoding: None = None,
         errors: None = None,
     )
@@ -230,16 +230,16 @@ class FileInput(Generic[AnyStr]):
         backup: str = "",
         *,
         mode: str,
-        openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[dynamic]) | None = None,
-        encoding: str | None = None,
-        errors: str | None = None,
+        openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[dynamic])? = None,
+        encoding: str? = None,
+        errors: str? = None,
     )
 
     def __del__(self)
     def close(self)
     def __enter__(self) -> Self
     def __exit__(
-        self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
+        self, type: type[BaseException]?, value: BaseException?, traceback: TracebackType?
     )
     def __iter__(self) -> Self
     def __next__(self) -> AnyStr
@@ -262,7 +262,7 @@ class FileInput(Generic[AnyStr]):
         """
 
 def hook_compressed(
-    filename: StrOrBytesPath, mode: str, *, encoding: str | None = None, errors: str | None = None
+    filename: StrOrBytesPath, mode: str, *, encoding: str? = None, errors: str? = None
 ) -> IO[dynamic]
 @deprecated("Deprecated since Python 3.10. Use `fileinput.input` or `fileinput.FileInput` instead.")
-def hook_encoded(encoding: str, errors: str | None = None) -> (StrOrBytesPath, str) -> IO[dynamic]
+def hook_encoded(encoding: str, errors: str? = None) -> (StrOrBytesPath, str) -> IO[dynamic]

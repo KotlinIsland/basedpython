@@ -12,9 +12,9 @@ from _typeshed import ReadableBuffer
 
 class Codec(codecs.Codec):
     # At runtime, this is codecs.latin_1_encode
-    override static def encode(str: str, errors: str | None = None, /) -> (bytes, int)
+    override static def encode(str: str, errors: str? = None, /) -> (bytes, int)
     # At runtime, this is codecs.latin_1_decode
-    override static def decode(data: ReadableBuffer, errors: str | None = None, /) -> (str, int)
+    override static def decode(data: ReadableBuffer, errors: str? = None, /) -> (str, int)
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
     override def encode(self, input: str, final: bool = False) -> bytes
@@ -28,8 +28,8 @@ class StreamReader(Codec, codecs.StreamReader)
 # Note: encode being a decode function and decode being an encode function is accurate to runtime.
 class StreamConverter(StreamWriter, StreamReader):
     # At runtime, this is codecs.latin_1_decode
-    override static def encode(data: ReadableBuffer, errors: str | None = None, /) -> (str, int)
+    override static def encode(data: ReadableBuffer, errors: str? = None, /) -> (str, int)
     # At runtime, this is codecs.latin_1_encode
-    override static def decode(str: str, errors: str | None = None, /) -> (bytes, int)
+    override static def decode(str: str, errors: str? = None, /) -> (bytes, int)
 
 def getregentry() -> codecs.CodecInfo

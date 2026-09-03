@@ -90,16 +90,16 @@ if sys.version_info >= (3, 12):
         def __new__(
             cls,
             value: CallValue = (),
-            name: str | None = "",
-            parent: _Call | None = None,
+            name: str? = "",
+            parent: _Call? = None,
             two: bool = False,
             from_kall: bool = True,
         ) -> Self
         init(
             self,
             value: CallValue = (),
-            name: str | None = None,
-            parent: _Call | None = None,
+            name: str? = None,
+            parent: _Call? = None,
             two: bool = False,
             from_kall: bool = True,
         )
@@ -142,16 +142,16 @@ else:
         def __new__(
             cls,
             value: CallValue = (),
-            name: str | None = "",
-            parent: _Call | None = None,
+            name: str? = "",
+            parent: _Call? = None,
             two: bool = False,
             from_kall: bool = True,
         ) -> Self
         init(
             self,
             value: CallValue = (),
-            name: str | None = None,
-            parent: _Call | None = None,
+            name: str? = None,
+            parent: _Call? = None,
             two: bool = False,
             from_kall: bool = True,
         )
@@ -186,15 +186,15 @@ class NonCallableMock(Base, dynamic):
         def __new__(
             cls,
             spec: list[str] | object | type[object] | None = None,
-            wraps: dynamic | None = None,
-            name: str | None = None,
+            wraps: dynamic? = None,
+            name: str? = None,
             spec_set: list[str] | object | type[object] | None = None,
-            parent: NonCallableMock | None = None,
-            _spec_state: dynamic | None = None,
+            parent: NonCallableMock? = None,
+            _spec_state: dynamic? = None,
             _new_name: str = "",
-            _new_parent: NonCallableMock | None = None,
+            _new_parent: NonCallableMock? = None,
             _spec_as_instance: bool = False,
-            _eat_self: bool | None = None,
+            _eat_self: bool? = None,
             unsafe: bool = False,
             **kwargs: dynamic,
         ) -> Self
@@ -204,15 +204,15 @@ class NonCallableMock(Base, dynamic):
     init(
         self,
         spec: list[str] | object | type[object] | None = None,
-        wraps: dynamic | None = None,
-        name: str | None = None,
+        wraps: dynamic? = None,
+        name: str? = None,
         spec_set: list[str] | object | type[object] | None = None,
-        parent: NonCallableMock | None = None,
-        _spec_state: dynamic | None = None,
+        parent: NonCallableMock? = None,
+        _spec_state: dynamic? = None,
         _new_name: str = "",
-        _new_parent: NonCallableMock | None = None,
+        _new_parent: NonCallableMock? = None,
         _spec_as_instance: bool = False,
-        _eat_self: bool | None = None,
+        _eat_self: bool? = None,
         unsafe: bool = False,
         **kwargs: dynamic,
     )
@@ -360,16 +360,16 @@ class CallableMixin(Base):
     side_effect: dynamic
     init(
         self,
-        spec: dynamic | None = None,
-        side_effect: dynamic | None = None,
+        spec: dynamic? = None,
+        side_effect: dynamic? = None,
         return_value: dynamic = ...,
-        wraps: dynamic | None = None,
-        name: dynamic | None = None,
-        spec_set: dynamic | None = None,
-        parent: dynamic | None = None,
-        _spec_state: dynamic | None = None,
+        wraps: dynamic? = None,
+        name: dynamic? = None,
+        spec_set: dynamic? = None,
+        parent: dynamic? = None,
+        _spec_state: dynamic? = None,
         _new_name: dynamic = "",
-        _new_parent: dynamic | None = None,
+        _new_parent: dynamic? = None,
         **kwargs: dynamic,
     )
     def __call__(self, *args: dynamic, **kwargs: dynamic) -> dynamic
@@ -452,11 +452,11 @@ class _patch[in out Element]:
         getter: () -> dynamic,
         attribute: str,
         new: Element,
-        spec: dynamic | None,
+        spec: dynamic?,
         create: bool,
-        spec_set: dynamic | None,
-        autospec: dynamic | None,
-        new_callable: dynamic | None,
+        spec_set: dynamic?,
+        autospec: dynamic?,
+        new_callable: dynamic?,
         kwargs: Mapping[str, dynamic],
         *,
         unsafe: bool = False,
@@ -482,7 +482,7 @@ class _patch[in out Element]:
         """Perform the patch."""
 
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None, /
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, traceback: TracebackType?, /
     ):
         """Undo the patch."""
 
@@ -566,10 +566,10 @@ class _patcher:
         self,
         target: str,
         new: Element,
-        spec: False | None = None,
+        spec: False? = None,
         create: bool = False,
-        spec_set: False | None = None,
-        autospec: False | None = None,
+        spec_set: False? = None,
+        autospec: False? = None,
         new_callable: None = None,
         *,
         unsafe: bool = False,
@@ -583,7 +583,7 @@ class _patcher:
         create: bool = False,
         # If not False or None, this is passed to new_callable
         spec_set: dynamic | False | None = None,
-        autospec: False | None = None,
+        autospec: False? = None,
         new_callable: (...) -> Element,
         unsafe: bool = False,
         # kwargs are passed to new_callable
@@ -610,10 +610,10 @@ class _patcher:
         target: dynamic,
         attribute: str,
         new: Element,
-        spec: False | None = None,
+        spec: False? = None,
         create: bool = False,
-        spec_set: False | None = None,
-        autospec: False | None = None,
+        spec_set: False? = None,
+        autospec: False? = None,
         new_callable: None = None,
         *,
         unsafe: bool = False,
@@ -627,7 +627,7 @@ class _patcher:
         create: bool = False,
         # If not False or None, this is passed to new_callable
         spec_set: dynamic | False | None = None,
-        autospec: False | None = None,
+        autospec: False? = None,
         new_callable: (...) -> Element,
         unsafe: bool = False,
         # kwargs are passed to new_callable
@@ -654,7 +654,7 @@ class _patcher:
         create: bool = False,
         # If not False or None, this is passed to new_callable
         spec_set: dynamic | False | None = None,
-        autospec: False | None = None,
+        autospec: False? = None,
         *,
         new_callable: (...) -> Element,
         # The kwargs must be DEFAULT
@@ -667,7 +667,7 @@ class _patcher:
         create: bool,
         # If not False or None, this is passed to new_callable
         spec_set: dynamic | False | None,
-        autospec: False | None,
+        autospec: False?,
         new_callable: (...) -> Element,
         # The kwargs must be DEFAULT
         **kwargs: dynamic,
@@ -829,7 +829,7 @@ class AsyncMockMixin(Base):
         """
 
     await_count: int
-    await_args: _Call | None
+    await_args: _Call?
     await_args_list: _CallList
 
 class AsyncMagicMixin(MagicMixin):
@@ -890,7 +890,7 @@ class MagicProxy(Base):
     parent: dynamic
     init(self, name: str, parent: dynamic)
     def create_mock(self) -> dynamic
-    def __get__(self, obj: dynamic, _type: dynamic | None = None) -> dynamic
+    def __get__(self, obj: dynamic, _type: dynamic? = None) -> dynamic
 
 # See https://github.com/python/typeshed/issues/14701
 class _ANY(dynamic):
@@ -906,8 +906,8 @@ def create_autospec(
     spec: dynamic,
     spec_set: dynamic = False,
     instance: dynamic = False,
-    _parent: dynamic | None = None,
-    _name: dynamic | None = None,
+    _parent: dynamic? = None,
+    _name: dynamic? = None,
     *,
     unsafe: bool = False,
     **kwargs: dynamic,
@@ -946,13 +946,13 @@ class _SpecState:
         self,
         spec: dynamic,
         spec_set: dynamic = False,
-        parent: dynamic | None = None,
-        name: dynamic | None = None,
-        ids: dynamic | None = None,
+        parent: dynamic? = None,
+        name: dynamic? = None,
+        ids: dynamic? = None,
         instance: dynamic = False,
     )
 
-def mock_open(mock: dynamic | None = None, read_data: dynamic = "") -> dynamic:
+def mock_open(mock: dynamic? = None, read_data: dynamic = "") -> dynamic:
     """
     A helper function to create a mock to replace the use of `open`. It works
     for `open` called directly or used as a context manager.
@@ -975,7 +975,7 @@ class PropertyMock(Mock):
     no args. Setting it calls the mock with the value being set.
     """
 
-    def __get__[Element](self, obj: Element, obj_type: type[Element] | None = None) -> Self
+    def __get__[Element](self, obj: Element, obj_type: type[Element]? = None) -> Self
     def __set__(self, obj: dynamic, val: dynamic)
 
 if sys.version_info >= (3, 13):

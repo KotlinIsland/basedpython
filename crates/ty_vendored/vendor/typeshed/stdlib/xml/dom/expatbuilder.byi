@@ -11,7 +11,7 @@ from xml.dom.minidom import Document, DocumentFragment, DOMImplementation, Eleme
 from xml.dom.xmlbuilder import DOMBuilderFilter, Options
 from xml.parsers.expat import XMLParserType
 
-private type Model = (int, int, str | None, (*: dynamic))  # same as in pyexpat
+private type Model = (int, int, str?, (*: dynamic))  # same as in pyexpat
 
 TEXT_NODE: Final = Node.TEXT_NODE
 CDATA_SECTION_NODE: Final = Node.CDATA_SECTION_NODE
@@ -25,9 +25,9 @@ theDOMImplementation: DOMImplementation
 class ElementInfo:
     __slots__ = ("_attr_info", "_model", "tagName")
     tagName: str
-    init(self, tagName: str, model: Model | None = None)
+    init(self, tagName: str, model: Model? = None)
     def getAttributeType(self, aname: str) -> TypeInfo
-    def getAttributeTypeNS(self, namespaceURI: str | None, localName: str) -> TypeInfo
+    def getAttributeTypeNS(self, namespaceURI: str?, localName: str) -> TypeInfo
     def isElementContent(self) -> bool
     def isEmpty(self) -> bool
     def isId(self, aname: str) -> bool
@@ -40,7 +40,7 @@ class ExpatBuilder:
 
     document: Document  # Created in self.reset()
     curNode: DocumentFragment | Element | Document  # Created in self.reset()
-    init(self, options: Options | None = None)
+    init(self, options: Options? = None)
     def createParser(self) -> XMLParserType:
         """Create a new parser object."""
 
@@ -62,7 +62,7 @@ class ExpatBuilder:
         """Parse a document from a string, returning the document node."""
 
     def start_doctype_decl_handler(
-        self, doctypeName: str, systemId: str | None, publicId: str | None, has_internal_subset: bool
+        self, doctypeName: str, systemId: str?, publicId: str?, has_internal_subset: bool
     )
     def end_doctype_decl_handler(self)
     def pi_handler(self, target: str, data: str)
@@ -74,21 +74,21 @@ class ExpatBuilder:
         self,
         entityName: str,
         is_parameter_entity: bool,
-        value: str | None,
-        base: str | None,
+        value: str?,
+        base: str?,
         systemId: str,
-        publicId: str | None,
-        notationName: str | None,
+        publicId: str?,
+        notationName: str?,
     )
-    def notation_decl_handler(self, notationName: str, base: str | None, systemId: str, publicId: str | None)
+    def notation_decl_handler(self, notationName: str, base: str?, systemId: str, publicId: str?)
     def comment_handler(self, data: str)
-    def external_entity_ref_handler(self, context: str, base: str | None, systemId: str | None, publicId: str | None) -> int
+    def external_entity_ref_handler(self, context: str, base: str?, systemId: str?, publicId: str?) -> int
     def first_element_handler(self, name: str, attributes: list[str])
     def start_element_handler(self, name: str, attributes: list[str])
     def end_element_handler(self, name: str)
     def element_decl_handler(self, name: str, model: Model)
-    def attlist_decl_handler(self, elem: str, name: str, type: str, default: str | None, required: bool)
-    def xml_decl_handler(self, version: str, encoding: str | None, standalone: int)
+    def attlist_decl_handler(self, elem: str, name: str, type: str, default: str?, required: bool)
+    def xml_decl_handler(self, version: str, encoding: str?, standalone: int)
 
 class FilterVisibilityController:
     """Wrapper around a DOMBuilderFilter which implements the checks
@@ -124,10 +124,10 @@ class FragmentBuilder(ExpatBuilder):
     fragment.
     """
 
-    fragment: DocumentFragment | None
+    fragment: DocumentFragment?
     originalDocument: Document
     context: Node
-    init(self, context: Node, options: Options | None = None)
+    init(self, context: Node, options: Options? = None)
     override def reset(self)
     override def parseFile(self, file: SupportsRead[ReadableBuffer | str]) -> DocumentFragment:
         """Parse a document fragment from a file object, returning the
@@ -139,7 +139,7 @@ class FragmentBuilder(ExpatBuilder):
         fragment node.
         """
 
-    override def external_entity_ref_handler(self, context: str, base: str | None, systemId: str | None, publicId: str | None) -> int
+    override def external_entity_ref_handler(self, context: str, base: str?, systemId: str?, publicId: str?) -> int
 
 class Namespaces:
     """Mix-in class for builders; adds support for namespaces."""
@@ -150,7 +150,7 @@ class Namespaces:
     def install(self, parser: XMLParserType):
         """Insert the namespace-handlers onto the parser."""
 
-    def start_namespace_decl_handler(self, prefix: str | None, uri: str):
+    def start_namespace_decl_handler(self, prefix: str?, uri: str):
         """Push this namespace declaration on our storage."""
 
     def start_element_handler(self, name: str, attributes: list[str])
@@ -175,7 +175,7 @@ class InternalSubsetExtractor(ExpatBuilder):
     override def parseFile(self, file: SupportsRead[ReadableBuffer | str])
     override def parseString(self, string: str | ReadableBuffer)
     override def start_doctype_decl_handler(
-        self, name: str, publicId: str | None, systemId: str | None, has_internal_subset: bool
+        self, name: str, publicId: str?, systemId: str?, has_internal_subset: bool
     )
     override def end_doctype_decl_handler(self) -> Never
     override def start_element_handler(self, name: str, attrs: list[str]) -> Never

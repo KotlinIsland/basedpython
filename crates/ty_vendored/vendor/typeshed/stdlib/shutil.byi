@@ -200,10 +200,10 @@ private protocol RmtreeType:
             self,
             path: StrOrBytesPath,
             ignore_errors: bool,
-            onerror: OnErrorCallback | None,
+            onerror: OnErrorCallback?,
             *,
             onexc: None = None,
-            dir_fd: int | None = None,
+            dir_fd: int? = None,
         ) -> None
         @deprecated("The `onerror` parameter is deprecated. Use `onexc` instead.")
         def __call__(
@@ -211,31 +211,31 @@ private protocol RmtreeType:
             path: StrOrBytesPath,
             ignore_errors: bool = False,
             *,
-            onerror: OnErrorCallback | None,
+            onerror: OnErrorCallback?,
             onexc: None = None,
-            dir_fd: int | None = None,
+            dir_fd: int? = None,
         ) -> None
         def __call__(
             self,
             path: StrOrBytesPath,
             ignore_errors: bool = False,
             *,
-            onexc: OnExcCallback | None = None,
-            dir_fd: int | None = None,
+            onexc: OnExcCallback? = None,
+            dir_fd: int? = None,
         ) -> None
     elif sys.version_info >= (3, 11):
         def __call__(
             self,
             path: StrOrBytesPath,
             ignore_errors: bool = False,
-            onerror: OnErrorCallback | None = None,
+            onerror: OnErrorCallback? = None,
             *,
-            dir_fd: int | None = None,
+            dir_fd: int? = None,
         ) -> None
 
     else:
         def __call__(
-            self, path: StrOrBytesPath, ignore_errors: bool = False, onerror: OnErrorCallback | None = None
+            self, path: StrOrBytesPath, ignore_errors: bool = False, onerror: OnErrorCallback? = None
         ) -> None
 
 rmtree: RmtreeType
@@ -319,7 +319,7 @@ if sys.version_info >= (3, 13):
         user: str | int,
         group: None = None,
         *,
-        dir_fd: int | None = None,
+        dir_fd: int? = None,
         follow_symlinks: bool = True,
     ) -> None:
         """Change owner user and group of the given path.
@@ -339,14 +339,14 @@ if sys.version_info >= (3, 13):
         user: None = None,
         *,
         group: str | int,
-        dir_fd: int | None = None,
+        dir_fd: int? = None,
         follow_symlinks: bool = True,
     ) -> None
     def chown(
-        path: FileDescriptorOrPath, user: None, group: str | int, *, dir_fd: int | None = None, follow_symlinks: bool = True
+        path: FileDescriptorOrPath, user: None, group: str | int, *, dir_fd: int? = None, follow_symlinks: bool = True
     ) -> None
     def chown(
-        path: FileDescriptorOrPath, user: str | int, group: str | int, *, dir_fd: int | None = None, follow_symlinks: bool = True
+        path: FileDescriptorOrPath, user: str | int, group: str | int, *, dir_fd: int? = None, follow_symlinks: bool = True
     ) -> None
 else:
     def chown(path: FileDescriptorOrPath, user: str | int, group: None = None) -> None:
@@ -361,7 +361,7 @@ else:
 
 if sys.platform == "win32" and sys.version_info < (3, 12):
     @deprecated("On Windows before Python 3.12, using a PathLike as `cmd` would always fail or return `None`.")
-    def which(cmd: os.PathLike[str], mode: int = 1, path: StrPath | None = None) -> Never:
+    def which(cmd: os.PathLike[str], mode: int = 1, path: StrPath? = None) -> Never:
         """Given a command, mode, and a PATH string, return the path which
         conforms to the given mode on the PATH, or None if there is no such
         file.
@@ -372,7 +372,7 @@ if sys.platform == "win32" and sys.version_info < (3, 12):
 
         """
 
-def which(cmd: StrPath, mode: int = 1, path: StrPath | None = None) -> str | None:
+def which(cmd: StrPath, mode: int = 1, path: StrPath? = None) -> str?:
     """Given a command, mode, and a PATH string, return the path which
     conforms to the given mode on the PATH, or None if there is no such
     file.
@@ -382,18 +382,18 @@ def which(cmd: StrPath, mode: int = 1, path: StrPath | None = None) -> str | Non
     path.
 
     """
-def which(cmd: bytes, mode: int = 1, path: StrPath | None = None) -> bytes | None
+def which(cmd: bytes, mode: int = 1, path: StrPath? = None) -> bytes?
 
 def make_archive(
     base_name: str,
     format: str,
-    root_dir: StrPath | None = None,
-    base_dir: StrPath | None = None,
+    root_dir: StrPath? = None,
+    base_dir: StrPath? = None,
     verbose: bool = ...,
     dry_run: bool = ...,
-    owner: str | None = None,
-    group: str | None = None,
-    logger: dynamic | None = None,
+    owner: str? = None,
+    group: str? = None,
+    logger: dynamic? = None,
 ) -> str:
     """Create an archive file (eg. zip or tar).
 
@@ -435,7 +435,7 @@ def register_archive_format(
 
 def unregister_archive_format(name: str)
 def unpack_archive(
-    filename: StrPath, extract_dir: StrPath | None = None, format: str | None = None, *, filter: _TarfileFilter | None = None
+    filename: StrPath, extract_dir: StrPath? = None, format: str? = None, *, filter: _TarfileFilter? = None
 ):
     """Unpack an archive.
 

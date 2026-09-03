@@ -11,20 +11,20 @@ protocol _ReadableFileobj:
     def read(self, n: int, /) -> bytes
     def readline(self) -> bytes
 
-type _BufferCallback = ((PickleBuffer) -> dynamic) | None
+type _BufferCallback = ((PickleBuffer) -> dynamic)?
 
 type _ReducedType = (
     str
     | ((...) -> dynamic, (*: dynamic))
     | ((...) -> dynamic, (*: dynamic), dynamic)
-    | ((...) -> dynamic, (*: dynamic), dynamic, Iterator[dynamic] | None)
-    | ((...) -> dynamic, (*: dynamic), dynamic, Iterator[dynamic] | None, Iterator[dynamic] | None)
+    | ((...) -> dynamic, (*: dynamic), dynamic, Iterator[dynamic]?)
+    | ((...) -> dynamic, (*: dynamic), dynamic, Iterator[dynamic]?, Iterator[dynamic]?)
 )
 
 def dump(
     obj: dynamic,
     file: SupportsWrite[bytes],
-    protocol: int | None = None,
+    protocol: int? = None,
     *,
     fix_imports: bool = True,
     buffer_callback: _BufferCallback = None,
@@ -57,7 +57,7 @@ def dump(
     *buffer_callback* is not None and *protocol* is None or smaller than 5.
     """
 
-def dumps(obj: dynamic, protocol: int | None = None, *, fix_imports: bool = True, buffer_callback: _BufferCallback = None) -> bytes:
+def dumps(obj: dynamic, protocol: int? = None, *, fix_imports: bool = True, buffer_callback: _BufferCallback = None) -> bytes:
     """Return the pickled representation of the object as a bytes object.
 
     The optional *protocol* argument tells the pickler to use the given
@@ -84,7 +84,7 @@ def load(
     fix_imports: bool = True,
     encoding: str = "ASCII",
     errors: str = "strict",
-    buffers: Iterable[dynamic] | None = (),
+    buffers: Iterable[dynamic]? = (),
 ) -> dynamic:
     """Read and return an object from the pickle data stored in a file.
 
@@ -118,7 +118,7 @@ def loads(
     fix_imports: bool = True,
     encoding: str = "ASCII",
     errors: str = "strict",
-    buffers: Iterable[dynamic] | None = (),
+    buffers: Iterable[dynamic]? = (),
 ) -> dynamic:
     """Read and return an object from the given pickle data.
 
@@ -185,7 +185,7 @@ class Pickler:
     init(
         self,
         file: SupportsWrite[bytes],
-        protocol: int | None = None,
+        protocol: int? = None,
         fix_imports: bool = True,
         buffer_callback: _BufferCallback = None,
     )
@@ -250,7 +250,7 @@ class Unpickler:
         fix_imports: bool = True,
         encoding: str = "ASCII",
         errors: str = "strict",
-        buffers: Iterable[dynamic] | None = (),
+        buffers: Iterable[dynamic]? = (),
     )
 
     @property

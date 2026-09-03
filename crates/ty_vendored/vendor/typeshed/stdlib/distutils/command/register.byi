@@ -11,7 +11,7 @@ from ..config import PyPIRCCommand
 class register(PyPIRCCommand):
     description: str
     # Any to work around variance issues
-    sub_commands: ClassVar[list[(str, ((dynamic) -> bool) | None)]]
+    sub_commands: ClassVar[list[(str, ((dynamic) -> bool)?)]]
     list_classifiers: int
     strict: int
     override def initialize_options(self)

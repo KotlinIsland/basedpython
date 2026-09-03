@@ -26,8 +26,8 @@ if sys.platform != "win32":
     # Actual typename gdbm, not exposed by the implementation
     @type_check_only
     class _gdbm:
-        def firstkey(self) -> bytes | None
-        def nextkey(self, key: _KeyType) -> bytes | None
+        def firstkey(self) -> bytes?
+        def nextkey(self, key: _KeyType) -> bytes?
         def reorganize(self)
         def sync(self)
         def close(self)
@@ -41,10 +41,10 @@ if sys.platform != "win32":
         def __len__(self) -> int
         def __enter__(self) -> Self
         def __exit__(
-            self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+            self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
         )
 
-        def get(self, k: _KeyType) -> bytes | None
+        def get(self, k: _KeyType) -> bytes?
         def get[Element](self, k: _KeyType, default: Element) -> bytes | Element
 
         def keys(self) -> list[bytes]

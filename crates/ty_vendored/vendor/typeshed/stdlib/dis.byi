@@ -49,10 +49,10 @@ if sys.version_info >= (3, 11):
     class Positions(NamedTuple):
         """Positions(lineno, end_lineno, col_offset, end_col_offset)"""
 
-        lineno: int | None = None
-        end_lineno: int | None = None
-        col_offset: int | None = None
-        end_col_offset: int | None = None
+        lineno: int? = None
+        end_lineno: int? = None
+        col_offset: int? = None
+        end_col_offset: int? = None
 
 if sys.version_info >= (3, 13):
     class _Instruction(NamedTuple):
@@ -60,16 +60,16 @@ if sys.version_info >= (3, 13):
 
         opname: str
         opcode: int
-        arg: int | None
+        arg: int?
         argval: dynamic
         argrepr: str
         offset: int
         start_offset: int
         starts_line: bool
-        line_number: int | None
-        label: int | None = None
-        positions: Positions | None = None
-        cache_info: list[(str, int, dynamic)] | None = None
+        line_number: int?
+        label: int? = None
+        positions: Positions? = None
+        cache_info: list[(str, int, dynamic)]? = None
 
 elif sys.version_info >= (3, 11):
     class _Instruction(NamedTuple):
@@ -77,13 +77,13 @@ elif sys.version_info >= (3, 11):
 
         opname: str
         opcode: int
-        arg: int | None
+        arg: int?
         argval: dynamic
         argrepr: str
         offset: int
-        starts_line: int | None
+        starts_line: int?
         is_jump_target: bool
-        positions: Positions | None = None
+        positions: Positions? = None
 
 else:
     class _Instruction(NamedTuple):
@@ -91,11 +91,11 @@ else:
 
         opname: str
         opcode: int
-        arg: int | None
+        arg: int?
         argval: dynamic
         argrepr: str
         offset: int
-        starts_line: int | None
+        starts_line: int?
         is_jump_target: bool
 
 if sys.version_info >= (3, 12):
@@ -170,16 +170,16 @@ if sys.version_info >= (3, 12):
         if sys.version_info >= (3, 14):
             static def make(
                 opname: str,
-                arg: int | None,
+                arg: int?,
                 argval: dynamic,
                 argrepr: str,
                 offset: int,
                 start_offset: int,
                 starts_line: bool,
-                line_number: int | None,
-                label: int | None = None,
-                positions: Positions | None = None,
-                cache_info: list[(str, int, dynamic)] | None = None,
+                line_number: int?,
+                label: int? = None,
+                positions: Positions? = None,
+                cache_info: list[(str, int, dynamic)]? = None,
             ) -> Instruction
 
 else:
@@ -226,8 +226,8 @@ class Bytecode:
             self,
             x: HaveCodeType | str,
             *,
-            first_line: int | None = None,
-            current_offset: int | None = None,
+            first_line: int? = None,
+            current_offset: int? = None,
             show_caches: bool = False,
             adaptive: bool = False,
             show_offsets: bool = False,
@@ -240,8 +240,8 @@ class Bytecode:
             self,
             x: HaveCodeType | str,
             *,
-            first_line: int | None = None,
-            current_offset: int | None = None,
+            first_line: int? = None,
+            current_offset: int? = None,
             show_caches: bool = False,
             adaptive: bool = False,
             show_offsets: bool = False,
@@ -251,14 +251,14 @@ class Bytecode:
             self,
             x: HaveCodeType | str,
             *,
-            first_line: int | None = None,
-            current_offset: int | None = None,
+            first_line: int? = None,
+            current_offset: int? = None,
             show_caches: bool = False,
             adaptive: bool = False,
         ) -> None
     else:
         def __init__(
-            self, x: HaveCodeType | str, *, first_line: int | None = None, current_offset: int | None = None
+            self, x: HaveCodeType | str, *, first_line: int? = None, current_offset: int? = None
         ) -> None
 
     if sys.version_info >= (3, 11):
@@ -302,8 +302,8 @@ if sys.version_info >= (3, 14):
     def dis(
         x: HaveCodeType | str | bytes | bytearray | None = None,
         *,
-        file: IO[str] | None = None,
-        depth: int | None = None,
+        file: IO[str]? = None,
+        depth: int? = None,
         show_caches: bool = False,
         adaptive: bool = False,
         show_offsets: bool = False,
@@ -322,7 +322,7 @@ if sys.version_info >= (3, 14):
         co: HaveCodeType,
         lasti: int = -1,
         *,
-        file: IO[str] | None = None,
+        file: IO[str]? = None,
         show_caches: bool = False,
         adaptive: bool = False,
         show_offsets: bool = False,
@@ -331,9 +331,9 @@ if sys.version_info >= (3, 14):
         """Disassemble a code object."""
 
     def distb(
-        tb: types.TracebackType | None = None,
+        tb: types.TracebackType? = None,
         *,
-        file: IO[str] | None = None,
+        file: IO[str]? = None,
         show_caches: bool = False,
         adaptive: bool = False,
         show_offsets: bool = False,
@@ -346,8 +346,8 @@ elif sys.version_info >= (3, 13):
     def dis(
         x: HaveCodeType | str | bytes | bytearray | None = None,
         *,
-        file: IO[str] | None = None,
-        depth: int | None = None,
+        file: IO[str]? = None,
+        depth: int? = None,
         show_caches: bool = False,
         adaptive: bool = False,
         show_offsets: bool = False,
@@ -365,7 +365,7 @@ elif sys.version_info >= (3, 13):
         co: HaveCodeType,
         lasti: int = -1,
         *,
-        file: IO[str] | None = None,
+        file: IO[str]? = None,
         show_caches: bool = False,
         adaptive: bool = False,
         show_offsets: bool = False,
@@ -373,9 +373,9 @@ elif sys.version_info >= (3, 13):
         """Disassemble a code object."""
 
     def distb(
-        tb: types.TracebackType | None = None,
+        tb: types.TracebackType? = None,
         *,
-        file: IO[str] | None = None,
+        file: IO[str]? = None,
         show_caches: bool = False,
         adaptive: bool = False,
         show_offsets: bool = False,
@@ -387,8 +387,8 @@ elif sys.version_info >= (3, 11):
     def dis(
         x: HaveCodeType | str | bytes | bytearray | None = None,
         *,
-        file: IO[str] | None = None,
-        depth: int | None = None,
+        file: IO[str]? = None,
+        depth: int? = None,
         show_caches: bool = False,
         adaptive: bool = False,
     ) -> None:
@@ -402,18 +402,18 @@ elif sys.version_info >= (3, 11):
         """
 
     def disassemble(
-        co: HaveCodeType, lasti: int = -1, *, file: IO[str] | None = None, show_caches: bool = False, adaptive: bool = False
+        co: HaveCodeType, lasti: int = -1, *, file: IO[str]? = None, show_caches: bool = False, adaptive: bool = False
     ) -> None:
         """Disassemble a code object."""
 
     def distb(
-        tb: types.TracebackType | None = None, *, file: IO[str] | None = None, show_caches: bool = False, adaptive: bool = False
+        tb: types.TracebackType? = None, *, file: IO[str]? = None, show_caches: bool = False, adaptive: bool = False
     ) -> None:
         """Disassemble a traceback (default: last traceback)."""
 
 else:
     def dis(
-        x: HaveCodeType | str | bytes | bytearray | None = None, *, file: IO[str] | None = None, depth: int | None = None
+        x: HaveCodeType | str | bytes | bytearray | None = None, *, file: IO[str]? = None, depth: int? = None
     ) -> None:
         """Disassemble classes, methods, functions, and other compiled objects.
 
@@ -424,15 +424,15 @@ else:
         in a special attribute.
         """
 
-    def disassemble(co: HaveCodeType, lasti: int = -1, *, file: IO[str] | None = None) -> None:
+    def disassemble(co: HaveCodeType, lasti: int = -1, *, file: IO[str]? = None) -> None:
         """Disassemble a code object."""
 
-    def distb(tb: types.TracebackType | None = None, *, file: IO[str] | None = None) -> None:
+    def distb(tb: types.TracebackType? = None, *, file: IO[str]? = None) -> None:
         """Disassemble a traceback (default: last traceback)."""
 
 if sys.version_info >= (3, 13):
     # 3.13 made `show_caches` `None` by default and has no effect
-    def get_instructions(x: HaveCodeType, *, first_line: int | None = None, adaptive: bool = False) -> Iterator[Instruction]:
+    def get_instructions(x: HaveCodeType, *, first_line: int? = None, adaptive: bool = False) -> Iterator[Instruction]:
         """Iterator for the opcodes in methods, functions or code
 
         Generates a series of Instruction named tuples giving the details of
@@ -448,12 +448,12 @@ if sys.version_info >= (3, 13):
         "The iterator generates the `Instruction` instances with the `cache_info` field populated."
     )
     def get_instructions(
-        x: HaveCodeType, *, first_line: int | None = None, show_caches: bool | None = None, adaptive: bool = False
+        x: HaveCodeType, *, first_line: int? = None, show_caches: bool? = None, adaptive: bool = False
     ) -> Iterator[Instruction]
 
 elif sys.version_info >= (3, 11):
     def get_instructions(
-        x: HaveCodeType, *, first_line: int | None = None, show_caches: bool = False, adaptive: bool = False
+        x: HaveCodeType, *, first_line: int? = None, show_caches: bool = False, adaptive: bool = False
     ) -> Iterator[Instruction]:
         """Iterator for the opcodes in methods, functions or code
 
@@ -467,7 +467,7 @@ elif sys.version_info >= (3, 11):
         """
 
 else:
-    def get_instructions(x: HaveCodeType, *, first_line: int | None = None) -> Iterator[Instruction]:
+    def get_instructions(x: HaveCodeType, *, first_line: int? = None) -> Iterator[Instruction]:
         """Iterator for the opcodes in methods, functions or code
 
         Generates a series of Instruction named tuples giving the details of
@@ -479,7 +479,7 @@ else:
         the disassembled code object.
         """
 
-def show_code(co: HaveCodeType, *, file: IO[str] | None = None):
+def show_code(co: HaveCodeType, *, file: IO[str]? = None):
     """Print details of methods, functions, or code to *file*.
 
     If *file* is not provided, the output is printed on stdout.

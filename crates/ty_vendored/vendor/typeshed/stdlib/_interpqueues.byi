@@ -45,7 +45,7 @@ def destroy(qid: SupportsIndex):
     existed.
     """
 
-def get(qid: SupportsIndex) -> (dynamic, int, _UnboundOp | None):
+def get(qid: SupportsIndex) -> (dynamic, int, _UnboundOp?):
     """Return the (object, unbound op) from the front of the queue.
 
     If there is nothing to receive then raise QueueEmpty.

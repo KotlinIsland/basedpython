@@ -4,10 +4,10 @@
 from collections.abc import Mapping, Sequence
 from typing import Protocol, TypeAlias
 
-type DBAPITypeCode = dynamic | None
+type DBAPITypeCode = dynamic?
 # Strictly speaking, this should be a Sequence, but the type system does
 # not support fixed-length sequences.
-type DBAPIColumnDescription = (str, DBAPITypeCode, int | None, int | None, int | None, int | None, bool | None)
+type DBAPIColumnDescription = (str, DBAPITypeCode, int?, int?, int?, int?, bool?)
 
 protocol DBAPIConnection:
     def close(self) -> object
@@ -17,14 +17,14 @@ protocol DBAPIConnection:
     def cursor(self) -> DBAPICursor
 
 protocol DBAPICursor:
-    let description: Sequence[DBAPIColumnDescription] | None
+    let description: Sequence[DBAPIColumnDescription]?
     let rowcount: int
     # optional:
     # def callproc(self, procname: str, parameters: Sequence[Any] = ..., /) -> Sequence[Any]: ...
     def close(self) -> object
     def execute(self, operation: str, parameters: Sequence[dynamic] | Mapping[str, dynamic] = ..., /) -> object
     def executemany(self, operation: str, seq_of_parameters: Sequence[Sequence[dynamic]], /) -> object
-    def fetchone(self) -> Sequence[dynamic] | None
+    def fetchone(self) -> Sequence[dynamic]?
     def fetchmany(self, size: int = ..., /) -> Sequence[Sequence[dynamic]]
     def fetchall(self) -> Sequence[Sequence[dynamic]]
     # optional:

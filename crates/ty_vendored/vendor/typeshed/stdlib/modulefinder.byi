@@ -22,7 +22,7 @@ replacePackageMap: dict[str, str]  # undocumented
 def ReplacePackage(oldname: str, newname: str)
 
 class Module:  # undocumented
-    init(self, name: str, file: str | None = None, path: str | None = None)
+    init(self, name: str, file: str? = None, path: str? = None)
 
 class ModuleFinder:
     modules: dict[str, Module]
@@ -35,10 +35,10 @@ class ModuleFinder:
 
     init(
         self,
-        path: list[str] | None = None,
+        path: list[str]? = None,
         debug: int = 0,
-        excludes: Container[str] | None = None,
-        replace_paths: Sequence[(str, str)] | None = None,
+        excludes: Container[str]? = None,
+        replace_paths: Sequence[(str, str)]? = None,
     )
     def msg(self, level: int, str: str, *args: dynamic)  # undocumented
     def msgin(self, *args: dynamic)  # undocumented
@@ -46,22 +46,22 @@ class ModuleFinder:
     def run_script(self, pathname: str)
     def load_file(self, pathname: str)  # undocumented
     def import_hook(
-        self, name: str, caller: Module | None = None, fromlist: list[str] | None = None, level: int = -1
-    ) -> Module | None  # undocumented
-    def determine_parent(self, caller: Module | None, level: int = -1) -> Module | None  # undocumented
+        self, name: str, caller: Module? = None, fromlist: list[str]? = None, level: int = -1
+    ) -> Module?  # undocumented
+    def determine_parent(self, caller: Module?, level: int = -1) -> Module?  # undocumented
     def find_head_package(self, parent: Module, name: str) -> (Module, str)  # undocumented
     def load_tail(self, q: Module, tail: str) -> Module  # undocumented
     def ensure_fromlist(self, m: Module, fromlist: Iterable[str], recursive: int = 0)  # undocumented
     def find_all_submodules(self, m: Module) -> Iterable[str]  # undocumented
-    def import_module(self, partname: str, fqname: str, parent: Module) -> Module | None  # undocumented
+    def import_module(self, partname: str, fqname: str, parent: Module) -> Module?  # undocumented
     def load_module(self, fqname: str, fp: IO[str], pathname: str, file_info: (str, str, str)) -> Module  # undocumented
     def scan_opcodes(self, co: CodeType) -> Iterator[(str, (*: dynamic))]  # undocumented
     def scan_code(self, co: CodeType, m: Module)  # undocumented
     def load_package(self, fqname: str, pathname: str) -> Module  # undocumented
     def add_module(self, fqname: str) -> Module  # undocumented
     def find_module(
-        self, name: str, path: str | None, parent: Module | None = None
-    ) -> (IO[dynamic] | None, str | None, (str, str, int))  # undocumented
+        self, name: str, path: str?, parent: Module? = None
+    ) -> (IO[dynamic]?, str?, (str, str, int))  # undocumented
     def report(self):
         """Print a report to stdout, listing the found modules with their
         paths, as well as modules that are missing, or seem to be missing.
@@ -85,4 +85,4 @@ class ModuleFinder:
 
     def replace_paths_in_code(self, co: CodeType) -> CodeType  # undocumented
 
-def test() -> ModuleFinder | None  # undocumented
+def test() -> ModuleFinder?  # undocumented

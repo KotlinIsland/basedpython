@@ -204,13 +204,13 @@ class array[in out Element in (int, float, str)](MutableSequence[Element]):
 
     override def __getitem__(self, key: SupportsIndex, /) -> Element:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> array[Element]
+    def __getitem__(self, key: slice[SupportsIndex?], /) -> array[Element]
 
     override def __setitem__(self, key: SupportsIndex, value: Element, /) -> None:
         """Set self[key] to value."""
-    def __setitem__(self, key: slice[SupportsIndex | None], value: array[Element], /) -> None
+    def __setitem__(self, key: slice[SupportsIndex?], value: array[Element], /) -> None
 
-    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /):
+    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex?], /):
         """Delete self[key]."""
 
     def __add__(self, value: array[Element], /) -> array[Element]:

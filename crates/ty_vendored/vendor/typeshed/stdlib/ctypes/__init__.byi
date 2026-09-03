@@ -83,9 +83,9 @@ class _NamedFuncPointer(_CDLLFuncPointer):
     __name__: str
 
 if sys.version_info >= (3, 12):
-    type _NameTypes = StrPath | None
+    type _NameTypes = StrPath?
 else:
-    type _NameTypes = str | None
+    type _NameTypes = str?
 
 class CDLL:
     """An instance of this class represents a loaded dll/shared
@@ -111,10 +111,10 @@ class CDLL:
         self,
         name: _NameTypes,
         mode: int = ...,
-        handle: int | None = None,
+        handle: int? = None,
         use_errno: bool = False,
         use_last_error: bool = False,
-        winmode: int | None = None,
+        winmode: int? = None,
     )
     def __getattr__(self, name: str) -> _NamedFuncPointer
     def __getitem__(self, name_or_ordinal: str) -> _NamedFuncPointer
@@ -165,14 +165,14 @@ pythonapi: PyDLL
 @type_check_only
 class _CFunctionType(_CFuncPtr):
     _argtypes_: ClassVar[list[type[_CData | _CDataType]]]
-    _restype_: ClassVar[type[_CData | _CDataType] | None]
+    _restype_: ClassVar[type[_CData | _CDataType]?]
     _flags_: ClassVar[int]
 
 # Alias for either function pointer type
 private type FuncPointer = _CDLLFuncPointer | _CFunctionType  # noqa: Y047  # not used here
 
 def CFUNCTYPE(
-    restype: type[_CData | _CDataType] | None,
+    restype: type[_CData | _CDataType]?,
     *argtypes: type[_CData | _CDataType],
     use_errno: bool = False,
     use_last_error: bool = False,
@@ -195,13 +195,13 @@ def CFUNCTYPE(
 
 if sys.platform == "win32":
     def WINFUNCTYPE(
-        restype: type[_CData | _CDataType] | None,
+        restype: type[_CData | _CDataType]?,
         *argtypes: type[_CData | _CDataType],
         use_errno: bool = False,
         use_last_error: bool = False,
     ) -> type[_CFunctionType]
 
-def PYFUNCTYPE(restype: type[_CData | _CDataType] | None, *argtypes: type[_CData | _CDataType]) -> type[_CFunctionType]
+def PYFUNCTYPE(restype: type[_CData | _CDataType]?, *argtypes: type[_CData | _CDataType]) -> type[_CFunctionType]
 
 # Any type that can be implicitly converted to c_void_p when passed as a C function argument.
 # (bytes is not included here, see below.)
@@ -214,7 +214,7 @@ private type CVoidConstPLike = CVoidPLike | bytes
 
 
 def cast[CastT: _CanCastTo](obj: _CData | _CDataType | _CArgObject | int, typ: type[CastT]) -> CastT
-def create_string_buffer(init: int | bytes, size: int | None = None) -> Array[c_char]:
+def create_string_buffer(init: int | bytes, size: int? = None) -> Array[c_char]:
     """create_string_buffer(aBytes) -> character array
     create_string_buffer(anInteger) -> character array
     create_string_buffer(aBytes, anInteger) -> character array
@@ -222,7 +222,7 @@ def create_string_buffer(init: int | bytes, size: int | None = None) -> Array[c_
 
 c_buffer = create_string_buffer
 
-def create_unicode_buffer(init: int | str, size: int | None = None) -> Array[c_wchar]:
+def create_unicode_buffer(init: int | str, size: int? = None) -> Array[c_wchar]:
     """create_unicode_buffer(aString) -> character array
     create_unicode_buffer(anInteger) -> character array
     create_unicode_buffer(aString, anInteger) -> character array
@@ -270,7 +270,7 @@ def string_at(ptr: CVoidConstPLike, size: int = -1) -> bytes:
     """
 
 if sys.platform == "win32":
-    def WinError(code: int | None = None, descr: str | None = None) -> OSError
+    def WinError(code: int? = None, descr: str? = None) -> OSError
 
 def wstring_at(ptr: CVoidConstPLike, size: int = -1) -> str:
     """wstring_at(ptr[, size]) -> string

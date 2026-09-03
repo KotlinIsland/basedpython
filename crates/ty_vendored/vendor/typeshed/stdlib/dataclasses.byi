@@ -229,13 +229,13 @@ class Field[in out Element]:
     default: Element | _MISSING_TYPE.MISSING
     default_factory: DefaultFactory[Element] | _MISSING_TYPE.MISSING
     repr: bool
-    hash: bool | None
+    hash: bool?
     init: bool
     compare: bool
     metadata: types.MappingProxyType[dynamic, dynamic]
 
     if sys.version_info >= (3, 14):
-        doc: str | None
+        doc: str?
 
     kw_only: bool | _MISSING_TYPE.MISSING
 
@@ -246,11 +246,11 @@ class Field[in out Element]:
             default_factory: () -> Element,
             init: bool,
             repr: bool,
-            hash: bool | None,
+            hash: bool?,
             compare: bool,
             metadata: Mapping[dynamic, dynamic],
             kw_only: bool,
-            doc: str | None,
+            doc: str?,
         ) -> None
     else:
         def __init__(
@@ -259,7 +259,7 @@ class Field[in out Element]:
             default_factory: () -> Element,
             init: bool,
             repr: bool,
-            hash: bool | None,
+            hash: bool?,
             compare: bool,
             metadata: Mapping[dynamic, dynamic],
             kw_only: bool,
@@ -282,11 +282,11 @@ if sys.version_info >= (3, 14):
         default_factory: _MISSING_TYPE.MISSING = ...,
         init: bool = True,
         repr: bool = True,
-        hash: bool | None = None,
+        hash: bool? = None,
         compare: bool = True,
-        metadata: Mapping[dynamic, dynamic] | None = None,
+        metadata: Mapping[dynamic, dynamic]? = None,
         kw_only: bool | _MISSING_TYPE.MISSING = ...,
-        doc: str | None = None,
+        doc: str? = None,
     ) -> Element:
         """Return an object to identify dataclass fields.
 
@@ -309,11 +309,11 @@ if sys.version_info >= (3, 14):
         default_factory: () -> Element,
         init: bool = True,
         repr: bool = True,
-        hash: bool | None = None,
+        hash: bool? = None,
         compare: bool = True,
-        metadata: Mapping[dynamic, dynamic] | None = None,
+        metadata: Mapping[dynamic, dynamic]? = None,
         kw_only: bool | _MISSING_TYPE.MISSING = ...,
-        doc: str | None = None,
+        doc: str? = None,
     ) -> Element
     def field(
         *,
@@ -321,11 +321,11 @@ if sys.version_info >= (3, 14):
         default_factory: _MISSING_TYPE.MISSING = ...,
         init: bool = True,
         repr: bool = True,
-        hash: bool | None = None,
+        hash: bool? = None,
         compare: bool = True,
-        metadata: Mapping[dynamic, dynamic] | None = None,
+        metadata: Mapping[dynamic, dynamic]? = None,
         kw_only: bool | _MISSING_TYPE.MISSING = ...,
-        doc: str | None = None,
+        doc: str? = None,
     ) -> dynamic
 else:
     def field[Element](
@@ -334,9 +334,9 @@ else:
         default_factory: _MISSING_TYPE.MISSING = ...,
         init: bool = True,
         repr: bool = True,
-        hash: bool | None = None,
+        hash: bool? = None,
         compare: bool = True,
-        metadata: Mapping[dynamic, dynamic] | None = None,
+        metadata: Mapping[dynamic, dynamic]? = None,
         kw_only: bool | _MISSING_TYPE.MISSING = ...,
     ) -> Element:
         """Return an object to identify dataclass fields.
@@ -360,9 +360,9 @@ else:
         default_factory: () -> Element,
         init: bool = True,
         repr: bool = True,
-        hash: bool | None = None,
+        hash: bool? = None,
         compare: bool = True,
-        metadata: Mapping[dynamic, dynamic] | None = None,
+        metadata: Mapping[dynamic, dynamic]? = None,
         kw_only: bool | _MISSING_TYPE.MISSING = ...,
     ) -> Element
     def field(
@@ -371,9 +371,9 @@ else:
         default_factory: _MISSING_TYPE.MISSING = ...,
         init: bool = True,
         repr: bool = True,
-        hash: bool | None = None,
+        hash: bool? = None,
         compare: bool = True,
-        metadata: Mapping[dynamic, dynamic] | None = None,
+        metadata: Mapping[dynamic, dynamic]? = None,
         kw_only: bool | _MISSING_TYPE.MISSING = ...,
     ) -> dynamic
 
@@ -412,7 +412,7 @@ if sys.version_info >= (3, 14):
         fields: Iterable[str | (str, dynamic) | (str, dynamic, dynamic)],
         *,
         bases: (*: type) = (),
-        namespace: dict[str, dynamic] | None = None,
+        namespace: dict[str, dynamic]? = None,
         init: bool = True,
         repr: bool = True,
         eq: bool = True,
@@ -423,7 +423,7 @@ if sys.version_info >= (3, 14):
         kw_only: bool = False,
         slots: bool = False,
         weakref_slot: bool = False,
-        module: str | None = None,
+        module: str? = None,
         decorator: DataclassFactory = ...,
     ) -> type:
         """Return a new dynamically created dataclass.
@@ -458,7 +458,7 @@ elif sys.version_info >= (3, 12):
         fields: Iterable[str | (str, dynamic) | (str, dynamic, dynamic)],
         *,
         bases: (*: type) = (),
-        namespace: dict[str, dynamic] | None = None,
+        namespace: dict[str, dynamic]? = None,
         init: bool = True,
         repr: bool = True,
         eq: bool = True,
@@ -469,7 +469,7 @@ elif sys.version_info >= (3, 12):
         kw_only: bool = False,
         slots: bool = False,
         weakref_slot: bool = False,
-        module: str | None = None,
+        module: str? = None,
     ) -> type:
         """Return a new dynamically created dataclass.
 
@@ -503,7 +503,7 @@ elif sys.version_info >= (3, 11):
         fields: Iterable[str | (str, dynamic) | (str, dynamic, dynamic)],
         *,
         bases: (*: type) = (),
-        namespace: dict[str, dynamic] | None = None,
+        namespace: dict[str, dynamic]? = None,
         init: bool = True,
         repr: bool = True,
         eq: bool = True,
@@ -544,7 +544,7 @@ else:
         fields: Iterable[str | (str, dynamic) | (str, dynamic, dynamic)],
         *,
         bases: (*: type) = (),
-        namespace: dict[str, dynamic] | None = None,
+        namespace: dict[str, dynamic]? = None,
         init: bool = True,
         repr: bool = True,
         eq: bool = True,

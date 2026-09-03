@@ -12,8 +12,8 @@ private protocol ReadableBinary:
     def read(self, size: int, /) -> bytes
     def seek(self, offset: int, /) -> dynamic
 
-def what(file: StrPath | ReadableBinary, h: None = None) -> str | None:
+def what(file: StrPath | ReadableBinary, h: None = None) -> str?:
     """Return the type of image contained in a file or byte stream."""
-def what(file: dynamic, h: bytes) -> str | None
+def what(file: dynamic, h: bytes) -> str?
 
-tests: list[(bytes, BinaryIO | None) -> (str | None)]
+tests: list[(bytes, BinaryIO?) -> (str?)]

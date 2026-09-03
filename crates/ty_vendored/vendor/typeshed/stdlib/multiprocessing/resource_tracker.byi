@@ -5,7 +5,7 @@ from collections.abc import Sized
 __all__ = ["ensure_running", "register", "unregister"]
 
 class ResourceTracker:
-    def getfd(self) -> int | None
+    def getfd(self) -> int?
     def ensure_running(self):
         """Make sure that resource tracker process is running.
 

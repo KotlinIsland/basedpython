@@ -4,7 +4,7 @@ from typing import Final, TypeAlias, final
 from typing_extensions import Self
 
 private type Location = (int, int, int, int) | LocationInfo | None
-type _Frame = (str, Location, str, int | None) | FrameInfo
+type _Frame = (str, Location, str, int?) | FrameInfo
 private type Stats = dict[str, int | float]
 
 final PROCESS_VM_READV_SUPPORTED: int
@@ -37,7 +37,7 @@ final class FrameInfo(structseq[object], tuple[str, Location, str, int | None]):
 
     let funcname: str
 
-    let opcode: int | None
+    let opcode: int?
 
 final class CoroInfo(structseq[object], tuple[list[_Frame], int | str]):
     """Information about a coroutine"""
@@ -415,7 +415,7 @@ final class BinaryReader:
 
     let sample_interval_us: int
 
-    def replay(self, collector: object, progress_callback: ((int, int) -> object) | None = None) -> int:
+    def replay(self, collector: object, progress_callback: ((int, int) -> object)? = None) -> int:
         """Replay samples through a collector.
 
         Arguments:

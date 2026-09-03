@@ -72,7 +72,7 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
         i.e. .close(), .prepare_main(), .exec(), and .call()
         """
 
-        def __new__(cls, id: int, /, _whence: _Whence | None = None, _ownsref: bool | None = None) -> Self
+        def __new__(cls, id: int, /, _whence: _Whence? = None, _ownsref: bool? = None) -> Self
         def __reduce__(self) -> (type[Self], int)
         def __hash__(self) -> int
         def __del__(self)
@@ -89,7 +89,7 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
             """
 
         def prepare_main(
-            self, ns: _SharedDict | None = None, /, **kwargs: dynamic
+            self, ns: _SharedDict? = None, /, **kwargs: dynamic
         ):  # kwargs has same value restrictions as _SharedDict
             """Bind the given values into the interpreter's __main__.
 

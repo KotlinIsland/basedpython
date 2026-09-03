@@ -12,5 +12,5 @@ if sys.version_info >= (3, 13):
 elif sys.version_info >= (3, 11):
     def _task_repr(self: Task[dynamic]) -> str  # undocumented
 
-def _task_get_stack(task: Task[dynamic], limit: int | None) -> list[FrameType]  # undocumented
-def _task_print_stack(task: Task[dynamic], limit: int | None, file: StrOrBytesPath)  # undocumented
+def _task_get_stack(task: Task[dynamic], limit: int?) -> list[FrameType]  # undocumented
+def _task_print_stack(task: Task[dynamic], limit: int?, file: StrOrBytesPath)  # undocumented

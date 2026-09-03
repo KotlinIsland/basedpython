@@ -92,4 +92,4 @@ if sys.platform == "win32":
 
     final tables: list[Table]
 
-    _Validation_records: list[(str, str, str, int | None, int | None, str | None, int | None, str | None, str | None, str)]
+    _Validation_records: list[(str, str, str, int?, int?, str?, int?, str?, str?, str)]

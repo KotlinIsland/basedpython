@@ -51,7 +51,7 @@ def make_parser(parser_list: Iterable[str] = ()) -> XMLReader:
     """
 
 def parse(source: _Source, handler: ContentHandler, errorHandler: ErrorHandler = ...)
-def parseString(string: ReadableBuffer | str, handler: ContentHandler, errorHandler: ErrorHandler | None = ...)
+def parseString(string: ReadableBuffer | str, handler: ContentHandler, errorHandler: ErrorHandler? = ...)
 def _create_parser(parser_name: str) -> XMLReader
 
 if sys.version_info >= (3, 14):

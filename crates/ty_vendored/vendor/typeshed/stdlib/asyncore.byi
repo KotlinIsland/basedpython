@@ -35,12 +35,12 @@ class ExitNow(Exception)
 def read(obj: dynamic)
 def write(obj: dynamic)
 def readwrite(obj: dynamic, flags: int)
-def poll(timeout: int | float = 0.0, map: _MapType | None = None)
-def poll2(timeout: int | float = 0.0, map: _MapType | None = None)
+def poll(timeout: int | float = 0.0, map: _MapType? = None)
+def poll2(timeout: int | float = 0.0, map: _MapType? = None)
 
 poll3 = poll2
 
-def loop(timeout: int | float = 30.0, use_poll: bool = False, map: _MapType | None = None, count: int | None = None)
+def loop(timeout: int | float = 30.0, use_poll: bool = False, map: _MapType? = None, count: int? = None)
 
 # Not really subclass of socket.socket; it's only delegation.
 # It is not covariant to it.
@@ -51,19 +51,19 @@ class dispatcher:
     connecting: bool
     closing: bool
     ignore_log_types: frozenset[str]
-    socket: Socket | None
-    init(self, sock: Socket | None = None, map: _MapType | None = None)
-    def add_channel(self, map: _MapType | None = None)
-    def del_channel(self, map: _MapType | None = None)
+    socket: Socket?
+    init(self, sock: Socket? = None, map: _MapType? = None)
+    def add_channel(self, map: _MapType? = None)
+    def del_channel(self, map: _MapType? = None)
     def create_socket(self, family: int = ..., type: int = ...)
-    def set_socket(self, sock: Socket, map: _MapType | None = None)
+    def set_socket(self, sock: Socket, map: _MapType? = None)
     def set_reuse_addr(self)
     def readable(self) -> bool
     def writable(self) -> bool
     def listen(self, num: int)
     def bind(self, addr: (*: dynamic) | str)
     def connect(self, address: (*: dynamic) | str)
-    def accept(self) -> (Socket, dynamic) | None
+    def accept(self) -> (Socket, dynamic)?
     def send(self, data: ReadableBuffer) -> int
     def recv(self, buffer_size: int) -> bytes
     def close(self)
@@ -87,7 +87,7 @@ class dispatcher_with_send(dispatcher):
     # def send(self, data: bytes) -> int | None: ...
 
 def compact_traceback() -> ((str, str, str), type, type, str)
-def close_all(map: _MapType | None = None, ignore_all: bool = False)
+def close_all(map: _MapType? = None, ignore_all: bool = False)
 
 if sys.platform != "win32":
     class file_wrapper:
@@ -106,5 +106,5 @@ if sys.platform != "win32":
         def __del__(self)
 
     class file_dispatcher(dispatcher):
-        init(self, fd: FileDescriptorLike, map: _MapType | None = None)
+        init(self, fd: FileDescriptorLike, map: _MapType? = None)
         def set_file(self, fd: int)

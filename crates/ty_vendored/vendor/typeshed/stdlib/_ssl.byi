@@ -30,7 +30,7 @@ class _Cipher(TypedDict):
     alg_bits: int
     auth: str
     description: str
-    digest: str | None
+    digest: str?
     id: int
     kea: str
     name: str
@@ -46,10 +46,10 @@ class _CertInfo(TypedDict):
     serialNumber: str
     notBefore: str
     notAfter: str
-    subjectAltName: NotRequired[(*: (str, str)) | None]
-    OCSP: NotRequired[(*: str) | None]
-    caIssuers: NotRequired[(*: str) | None]
-    crlDistributionPoints: NotRequired[(*: str) | None]
+    subjectAltName: NotRequired[(*: (str, str))?]
+    OCSP: NotRequired[(*: str)?]
+    caIssuers: NotRequired[(*: str)?]
+    crlDistributionPoints: NotRequired[(*: str)?]
 
 def RAND_add(string: str | ReadableBuffer, entropy: int | float, /):
     """Mix string into the OpenSSL PRNG state.
@@ -120,7 +120,7 @@ def nid2obj(nid: int, /) -> (int, str, str, str):
 @disjoint_base
 class _SSLContext:
     check_hostname: bool
-    keylog_filename: str | None
+    keylog_filename: str?
     maximum_version: int
     minimum_version: int
     num_tickets: int
@@ -132,7 +132,7 @@ class _SSLContext:
     security_level: int
     """The current security level."""
 
-    sni_callback: ((SSLObject, str, SSLContext) -> (None | int)) | None
+    sni_callback: ((SSLObject, str, SSLContext) -> (None | int))?
     """Set a callback that will be called when a server name is provided by the SSL/TLS client in the SNI extension.
 
     If the argument is None then the callback is disabled.  The method
@@ -169,13 +169,13 @@ class _SSLContext:
 
     def get_ciphers(self) -> list[_Cipher]
     def load_cert_chain(
-        self, certfile: StrOrBytesPath, keyfile: StrOrBytesPath | None = None, password: _PasswordType | None = None
+        self, certfile: StrOrBytesPath, keyfile: StrOrBytesPath? = None, password: _PasswordType? = None
     )
     def load_dh_params(self, path: str, /)
     def load_verify_locations(
         self,
-        cafile: StrOrBytesPath | None = None,
-        capath: StrOrBytesPath | None = None,
+        cafile: StrOrBytesPath? = None,
+        capath: StrOrBytesPath? = None,
         cadata: str | ReadableBuffer | None = None,
     )
     def session_stats(self) -> dict[str, int]
@@ -189,9 +189,9 @@ class _SSLContext:
         def set_groups(self, grouplist: str, /)
         def set_server_sigalgs(self, sigalgslist: str, /)
     if sys.version_info >= (3, 13):
-        def set_psk_client_callback(self, callback: ((str | None) -> (str | None, bytes)) | None)
+        def set_psk_client_callback(self, callback: ((str?) -> (str?, bytes))?)
         def set_psk_server_callback(
-            self, callback: ((str | None) -> bytes) | None, identity_hint: str | None = None
+            self, callback: ((str?) -> bytes)?, identity_hint: str? = None
         )
 
 final class MemoryBIO:

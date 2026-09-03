@@ -82,7 +82,7 @@ from typing import Final, Literal, Protocol, TypeAlias, TypeVar, final, type_che
 from typing_extensions import Never, deprecated
 
 private type LazyImportMode = "normal" | "all" | "none"
-private type LazyImportFilter = (str | None, str, (*: str) | None) -> bool
+private type LazyImportFilter = (str?, str, (*: str)?) -> bool
 
 # see https://github.com/python/typeshed/issues/8513#issue-1333671093 for the rationale behind this alias
 type _ExitCode = str | int | None
@@ -112,16 +112,16 @@ dont_write_bytecode: bool
 displayhook: (object) -> dynamic
 """Print an object to sys.stdout and also save it in builtins._"""
 
-excepthook: (type[BaseException], BaseException, TracebackType | None) -> dynamic
+excepthook: (type[BaseException], BaseException, TracebackType?) -> dynamic
 """Handle an exception by displaying it with a traceback on sys.stderr."""
 
 exec_prefix: str
 executable: str
 float_repr_style: "short" | "legacy"
 hexversion: int
-last_type: type[BaseException] | None
-last_value: BaseException | None
-last_traceback: TracebackType | None
+last_type: type[BaseException]?
+last_value: BaseException?
+last_traceback: TracebackType?
 if sys.version_info >= (3, 12):
     last_exc: BaseException  # or undefined.
 maxsize: int
@@ -133,11 +133,11 @@ if sys.version_info >= (3, 15):
 orig_argv: list[str]
 path: list[str]
 path_hooks: list[(str) -> PathEntryFinderProtocol]
-path_importer_cache: dict[str, PathEntryFinderProtocol | None]
+path_importer_cache: dict[str, PathEntryFinderProtocol?]
 platform: literal str
 platlibdir: str
 prefix: str
-pycache_prefix: str | None
+pycache_prefix: str?
 ps1: object
 ps2: object
 
@@ -156,10 +156,10 @@ stdout: TextIO | MaybeNone
 stderr: TextIO | MaybeNone
 stdlib_module_names: frozenset[str]
 
-final __stdin__: TextIOWrapper | None  # Contains the original value of stdin
-final __stdout__: TextIOWrapper | None  # Contains the original value of stdout
-final __stderr__: TextIOWrapper | None  # Contains the original value of stderr
-tracebacklimit: int | None
+final __stdin__: TextIOWrapper?  # Contains the original value of stdin
+final __stdout__: TextIOWrapper?  # Contains the original value of stdout
+final __stderr__: TextIOWrapper?  # Contains the original value of stderr
+tracebacklimit: int?
 version: str
 api_version: int
 warnoptions: dynamic
@@ -446,7 +446,7 @@ final class _thread_info(_UninstantiableStructseq, tuple[ThreadInfoName, ThreadI
 
     let lock: ThreadInfoLock
 
-    let version: str | None
+    let version: str?
 
 thread_info: _thread_info
 """sys.thread_info
@@ -519,7 +519,7 @@ def _getframe(depth: int = 0, /) -> FrameType:
 
 # documented -- see https://docs.python.org/3/library/sys.html#sys._current_exceptions
 if sys.version_info >= (3, 12):
-    def _current_exceptions() -> dict[int, BaseException | None]:
+    def _current_exceptions() -> dict[int, BaseException?]:
         """Return a dict mapping each thread's identifier to its current raised exception.
 
         This function should be used for specialized purposes only.
@@ -533,7 +533,7 @@ else:
         """
 
 if sys.version_info >= (3, 12):
-    def _getframemodulename(depth: int = 0) -> str | None:
+    def _getframemodulename(depth: int = 0) -> str?:
         """Return the name of the module for a calling frame.
 
         The default depth returns the module containing the call to this API.
@@ -553,7 +553,7 @@ def _debugmallocstats():
 def __displayhook__(object: object, /):
     """Print an object to sys.stdout and also save it in builtins._"""
 
-def __excepthook__(exctype: type[BaseException], value: BaseException, traceback: TracebackType | None, /):
+def __excepthook__(exctype: type[BaseException], value: BaseException, traceback: TracebackType?, /):
     """Handle an exception by displaying it with a traceback on sys.stderr."""
 
 def exc_info() -> OptExcInfo:
@@ -564,7 +564,7 @@ def exc_info() -> OptExcInfo:
     """
 
 if sys.version_info >= (3, 11):
-    def exception() -> BaseException | None:
+    def exception() -> BaseException?:
         """Return the current exception.
 
         Return the most recent exception caught by an except clause
@@ -611,7 +611,7 @@ if sys.version_info >= (3, 15):
         Returns "normal" if only explicitly marked imports are lazy.
         """
 
-    def get_lazy_imports_filter() -> LazyImportFilter | None:
+    def get_lazy_imports_filter() -> LazyImportFilter?:
         """Get the current lazy imports filter callback.
 
         Returns the filter callable or None if no filter is set.
@@ -642,26 +642,26 @@ def getsizeof(obj: object, default: int = ...) -> int:
 def getswitchinterval() -> float:
     """Return the current thread switch interval; see sys.setswitchinterval()."""
 
-def getprofile() -> ProfileFunction | None:
+def getprofile() -> ProfileFunction?:
     """Return the profiling function set with sys.setprofile.
 
     See the profiler chapter in the library manual.
     """
 
-def setprofile(function: ProfileFunction | None, /):
+def setprofile(function: ProfileFunction?, /):
     """Set the profiling function.
 
     It will be called on each function call and return.  See the profiler
     chapter in the library manual.
     """
 
-def gettrace() -> TraceFunction | None:
+def gettrace() -> TraceFunction?:
     """Return the global debug tracing function set with sys.settrace.
 
     See the debugger chapter in the library manual.
     """
 
-def settrace(function: TraceFunction | None, /):
+def settrace(function: TraceFunction?, /):
     """Set the global debug tracing function.
 
     It will be called on each function call.  See the debugger chapter
@@ -764,9 +764,9 @@ def gettotalrefcount() -> int  # Debug builds only
 @type_check_only
 protocol UnraisableHookArgs:
     exc_type: type[BaseException]
-    exc_value: BaseException | None
-    exc_traceback: TracebackType | None
-    err_msg: str | None
+    exc_value: BaseException?
+    exc_traceback: TracebackType?
+    err_msg: str?
     object: _object
 
 unraisablehook: (UnraisableHookArgs) -> dynamic
@@ -799,7 +799,7 @@ def addaudithook(hook: (str, (*: dynamic)) -> dynamic):
 def audit(event: str, /, *args: dynamic):
     """Passes the event to any audit hooks that are attached."""
 
-private type AsyncgenHook = ((AsyncGenerator[dynamic, dynamic]) -> None) | None
+private type AsyncgenHook = ((AsyncGenerator[dynamic, dynamic]) -> None)?
 
 # This class is not exposed at runtime. It calls itself builtins.asyncgen_hooks.
 @type_check_only
@@ -881,7 +881,7 @@ if sys.version_info >= (3, 15):
         provided to sys.set_lazy_imports_filter
         """
 
-    def set_lazy_imports_filter(filter: LazyImportFilter | None):
+    def set_lazy_imports_filter(filter: LazyImportFilter?):
         """Set the lazy imports filter callback.
 
         The filter is a callable which disables lazy imports when they

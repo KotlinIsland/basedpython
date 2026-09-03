@@ -12,7 +12,7 @@ class _HasWrapper:
 private type FuncType = FunctionType | _HasWrapper | functools.partial[dynamic] | functools.partialmethod[dynamic]
 
 def _get_function_source(func: FuncType) -> (str, int)
-def _get_function_source(func: object) -> (str, int) | None
+def _get_function_source(func: object) -> (str, int)?
 
 if sys.version_info >= (3, 13):
     def _format_callback_source(func: object, args: Iterable[dynamic], *, debug: bool = False) -> str
@@ -40,7 +40,7 @@ else:
 
     def _format_callback(func: object, args: Iterable[dynamic], kwargs: dict[str, dynamic], suffix: str = "") -> str
 
-def extract_stack(f: FrameType | None = None, limit: int | None = None) -> traceback.StackSummary:
+def extract_stack(f: FrameType? = None, limit: int? = None) -> traceback.StackSummary:
     """Replacement for traceback.extract_stack() that only does the
     necessary work for asyncio debug mode.
     """

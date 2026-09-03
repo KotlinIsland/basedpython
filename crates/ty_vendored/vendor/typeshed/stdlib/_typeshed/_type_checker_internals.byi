@@ -30,7 +30,7 @@ class TypedDictFallback(Mapping[str, object], metaclass=ABCMeta):
         __mutable_keys__: ClassVar[frozenset[str]]
     if sys.version_info >= (3, 15):
         # PEP 728
-        __closed__: ClassVar[bool | None]
+        __closed__: ClassVar[bool?]
         __extra_items__: ClassVar[AnnotationForm]
 
     def copy(self) -> typing_extensions.Self

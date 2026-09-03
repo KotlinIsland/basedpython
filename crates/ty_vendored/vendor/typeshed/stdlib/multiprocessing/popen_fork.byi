@@ -8,16 +8,16 @@ if sys.platform != "win32":
     __all__ = ["Popen"]
 
     class Popen:
-        finalizer: Finalize | None
+        finalizer: Finalize?
         method: ClassVar[str]
         pid: int
-        returncode: int | None
+        returncode: int?
         sentinel: int  # doesn't exist if os.fork in _launch returns 0
 
         init(self, process_obj: BaseProcess)
         def duplicate_for_child(self, fd: int) -> int
-        def poll(self, flag: int = 1) -> int | None
-        def wait(self, timeout: int | float | None = None) -> int | None
+        def poll(self, flag: int = 1) -> int?
+        def wait(self, timeout: int | float | None = None) -> int?
         if sys.version_info >= (3, 14):
             def interrupt(self)
 

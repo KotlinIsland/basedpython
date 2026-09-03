@@ -71,7 +71,7 @@ class object:
     instance that has no instance attributes and cannot be given any.
     """
 
-    __doc__: str | None
+    __doc__: str?
     __dict__: dict[str, dynamic]
     __module__: str
     __annotations__: dict[str, dynamic]
@@ -137,7 +137,7 @@ class staticmethod[Parameters: (*: *, **: *), out R]:
 
     def __get__(self, instance: None, owner: type, /) -> (**Parameters) -> R:
         """Return an attribute of instance, which is of type owner."""
-    def __get__[Element](self, instance: Element, owner: type[Element] | None = None, /) -> (**Parameters) -> R
+    def __get__[Element](self, instance: Element, owner: type[Element]? = None, /) -> (**Parameters) -> R
 
     let __wrapped__: (**Parameters) -> R
     def __call__(self, *args: *Parameters, **kwargs: **Parameters) -> R:
@@ -145,7 +145,7 @@ class staticmethod[Parameters: (*: *, **: *), out R]:
 
     if sys.version_info >= (3, 14):
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias
-        __annotate__: AnnotateFunc | None
+        __annotate__: AnnotateFunc?
 
 @disjoint_base
 class classmethod[in out Element, Parameters: (*: *, **: *), out R]:
@@ -175,14 +175,14 @@ class classmethod[in out Element, Parameters: (*: *, **: *), out R]:
     let __isabstractmethod__: bool
     init(self, f: (type[Element], **Parameters) -> R, /)
 
-    def __get__(self, instance: Element, owner: type[Element] | None = None, /) -> (**Parameters) -> R:
+    def __get__(self, instance: Element, owner: type[Element]? = None, /) -> (**Parameters) -> R:
         """Return an attribute of instance, which is of type owner."""
     def __get__(self, instance: None, owner: type[Element], /) -> (**Parameters) -> R
 
     let __wrapped__: (type[Element], **Parameters) -> R
     if sys.version_info >= (3, 14):
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias
-        __annotate__: AnnotateFunc | None
+        __annotate__: AnnotateFunc?
 
 @disjoint_base
 class type:
@@ -191,7 +191,7 @@ class type:
     """
 
     # object.__base__ is None. Otherwise, it would be a type.
-    let __base__: type | None
+    let __base__: type?
     __bases__: (*: type)
     let __basicsize__: int
     final let __dict__: types.MappingProxyType[str, out dynamic]
@@ -204,7 +204,7 @@ class type:
     def __mro__(self) -> (*: type)
     __name__: str
     __qualname__: str
-    let __text_signature__: str | None
+    let __text_signature__: str?
     let __weakrefoffset__: int
 
     init(self, o: object, /)
@@ -247,7 +247,7 @@ class type:
         __type_params__: (*: TypeVar | ParamSpec | TypeVarTuple)
     __annotations__: dict[str, AnnotationForm]
     if sys.version_info >= (3, 14):
-        __annotate__: AnnotateFunc | None
+        __annotate__: AnnotateFunc?
 
 @disjoint_base
 class super:
@@ -489,7 +489,7 @@ class int:
     def __pow__(self, value: int, mod: None = None, /) -> dynamic
     def __pow__(self, value: int, mod: int, /) -> int
 
-    def __rpow__(self, value: int, mod: int | None = None, /) -> dynamic:
+    def __rpow__(self, value: int, mod: int? = None, /) -> dynamic:
         """Return pow(value, self, mod)."""
 
     def __and__(self, value: int, /) -> int:
@@ -541,7 +541,7 @@ class int:
         """Flooring an Integral returns itself."""
 
     if sys.version_info >= (3, 14):
-        def __round__(self, ndigits: SupportsIndex | None = None, /) -> int:
+        def __round__(self, ndigits: SupportsIndex? = None, /) -> int:
             """Rounding an Integral returns itself.
 
             Rounding with an ndigits argument also returns an integer.
@@ -856,7 +856,7 @@ class str(Sequence[str]):
         """
     def center(self, width: SupportsIndex, fillchar: str = " ", /) -> str
 
-    override def count(self, sub: str, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /) -> int:
+    override def count(self, sub: str, start: SupportsIndex? = None, end: SupportsIndex? = None, /) -> int:
         """Return the number of non-overlapping occurrences of substring sub in string S[start:end].
 
         Optional arguments start and end are interpreted as in slice
@@ -877,7 +877,7 @@ class str(Sequence[str]):
         """
 
     def endswith(
-        self, suffix: str | (*: str), start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
+        self, suffix: str | (*: str), start: SupportsIndex? = None, end: SupportsIndex? = None, /
     ) -> bool:
         """Return True if the string ends with the specified suffix, False otherwise.
 
@@ -896,7 +896,7 @@ class str(Sequence[str]):
         """
     def expandtabs(self, tabsize: SupportsIndex = 8) -> str
 
-    def find(self, sub: str, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /) -> int:
+    def find(self, sub: str, start: SupportsIndex? = None, end: SupportsIndex? = None, /) -> int:
         """Return the lowest index in S where substring sub is found, such that sub is contained within S[start:end].
 
         Optional arguments start and end are interpreted as in slice
@@ -914,7 +914,7 @@ class str(Sequence[str]):
         The substitutions are identified by braces ('{' and '}').
         """
 
-    override def index(self, sub: str, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /) -> int:
+    override def index(self, sub: str, start: SupportsIndex? = None, end: SupportsIndex? = None, /) -> int:
         """Return the lowest index in S where substring sub is found, such that sub is contained within S[start:end].
 
         Optional arguments start and end are interpreted as in slice
@@ -1026,12 +1026,12 @@ class str(Sequence[str]):
         """Return a copy of the string converted to lowercase."""
     def lower(self) -> str
 
-    def lstrip(self: literal str, chars: literal str | None = None, /) -> literal str:
+    def lstrip(self: literal str, chars: literal str? = None, /) -> literal str:
         """Return a copy of the string with leading whitespace removed.
 
         If chars is given and not None, remove characters in chars instead.
         """
-    def lstrip(self, chars: str | None = None, /) -> str
+    def lstrip(self, chars: str? = None, /) -> str
 
     def partition(self: literal str, sep: literal str, /) -> (literal str, literal str, literal str):
         """Partition the string into three parts using the given separator.
@@ -1088,14 +1088,14 @@ class str(Sequence[str]):
         """
     def removesuffix(self, suffix: str, /) -> str
 
-    def rfind(self, sub: str, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /) -> int:
+    def rfind(self, sub: str, start: SupportsIndex? = None, end: SupportsIndex? = None, /) -> int:
         """Return the highest index in S where substring sub is found, such that sub is contained within S[start:end].
 
         Optional arguments start and end are interpreted as in slice
         notation.  Return -1 on failure.
         """
 
-    def rindex(self, sub: str, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /) -> int:
+    def rindex(self, sub: str, start: SupportsIndex? = None, end: SupportsIndex? = None, /) -> int:
         """Return the highest index in S where substring sub is found, such that sub is contained within S[start:end].
 
         Optional arguments start and end are interpreted as in slice
@@ -1123,7 +1123,7 @@ class str(Sequence[str]):
         """
     def rpartition(self, sep: str, /) -> (str, str, str)
 
-    def rsplit(self: literal str, sep: literal str | None = None, maxsplit: SupportsIndex = -1) -> list[literal str]:
+    def rsplit(self: literal str, sep: literal str? = None, maxsplit: SupportsIndex = -1) -> list[literal str]:
         """Return a list of the substrings in the string, using sep as the separator string.
 
           sep
@@ -1138,16 +1138,16 @@ class str(Sequence[str]):
 
         Splitting starts at the end of the string and works to the front.
         """
-    def rsplit(self, sep: str | None = None, maxsplit: SupportsIndex = -1) -> list[str]
+    def rsplit(self, sep: str? = None, maxsplit: SupportsIndex = -1) -> list[str]
 
-    def rstrip(self: literal str, chars: literal str | None = None, /) -> literal str:
+    def rstrip(self: literal str, chars: literal str? = None, /) -> literal str:
         """Return a copy of the string with trailing whitespace removed.
 
         If chars is given and not None, remove characters in chars instead.
         """
-    def rstrip(self, chars: str | None = None, /) -> str
+    def rstrip(self, chars: str? = None, /) -> str
 
-    def split(self: literal str, sep: literal str | None = None, maxsplit: SupportsIndex = -1) -> list[literal str]:
+    def split(self: literal str, sep: literal str? = None, maxsplit: SupportsIndex = -1) -> list[literal str]:
         """Return a list of the substrings in the string, using sep as the separator string.
 
           sep
@@ -1166,7 +1166,7 @@ class str(Sequence[str]):
         intentionally delimited.  With natural text that includes
         punctuation, consider using the regular expression module.
         """
-    def split(self, sep: str | None = None, maxsplit: SupportsIndex = -1) -> list[str]
+    def split(self, sep: str? = None, maxsplit: SupportsIndex = -1) -> list[str]
 
     def splitlines(self: literal str, keepends: bool = False) -> list[literal str]:
         """Return a list of the lines in the string, breaking at line boundaries.
@@ -1177,7 +1177,7 @@ class str(Sequence[str]):
     def splitlines(self, keepends: bool = False) -> list[str]
 
     def startswith(
-        self, prefix: str | (*: str), start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
+        self, prefix: str | (*: str), start: SupportsIndex? = None, end: SupportsIndex? = None, /
     ) -> bool:
         """Return True if the string starts with the specified prefix, False otherwise.
 
@@ -1189,12 +1189,12 @@ class str(Sequence[str]):
           Optional stop position. Default: end of the string.
         """
 
-    def strip(self: literal str, chars: literal str | None = None, /) -> literal str:
+    def strip(self: literal str, chars: literal str? = None, /) -> literal str:
         """Return a copy of the string with leading and trailing whitespace removed.
 
         If chars is given and not None, remove characters in chars instead.
         """
-    def strip(self, chars: str | None = None, /) -> str
+    def strip(self, chars: str? = None, /) -> str
 
     def swapcase(self: literal str) -> literal str:
         """Convert uppercase characters to lowercase and lowercase characters to uppercase."""
@@ -1285,7 +1285,7 @@ class str(Sequence[str]):
         None in the result.
         """
     @staticmethod
-    def maketrans(x: str, y: str, z: str, /) -> dict[int, int | None]
+    def maketrans(x: str, y: str, z: str, /) -> dict[int, int?]
 
     def __add__(self: literal str, value: literal str, /) -> literal str:
         """Return self+value."""
@@ -1298,9 +1298,9 @@ class str(Sequence[str]):
     override def __eq__(self, value: object, /) -> bool
     def __ge__(self, value: str, /) -> bool
 
-    override def __getitem__(self: literal str, key: SupportsIndex | slice[SupportsIndex | None], /) -> literal str:
+    override def __getitem__(self: literal str, key: SupportsIndex | slice[SupportsIndex?], /) -> literal str:
         """Return self[key]."""
-    def __getitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> str
+    def __getitem__(self, key: SupportsIndex | slice[SupportsIndex?], /) -> str
 
     def __gt__(self, value: str, /) -> bool
     override def __hash__(self) -> int
@@ -1366,7 +1366,7 @@ class bytes(Sequence[int]):
         """
 
     override def count(
-        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
+        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex? = None, end: SupportsIndex? = None, /
     ) -> int:
         """Return the number of non-overlapping occurrences of subsection 'sub' in bytes B[start:end].
 
@@ -1392,8 +1392,8 @@ class bytes(Sequence[int]):
     def endswith(
         self,
         suffix: ReadableBuffer | (*: ReadableBuffer),
-        start: SupportsIndex | None = None,
-        end: SupportsIndex | None = None,
+        start: SupportsIndex? = None,
+        end: SupportsIndex? = None,
         /,
     ) -> bool:
         """Return True if the bytes ends with the specified suffix, False otherwise.
@@ -1413,7 +1413,7 @@ class bytes(Sequence[int]):
         """
 
     def find(
-        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
+        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex? = None, end: SupportsIndex? = None, /
     ) -> int:
         """Return the lowest index in B where subsection 'sub' is found, such that 'sub' is contained within B[start,end].
 
@@ -1447,7 +1447,7 @@ class bytes(Sequence[int]):
         """
 
     override def index(
-        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
+        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex? = None, end: SupportsIndex? = None, /
     ) -> int:
         """Return the lowest index in B where subsection 'sub' is found, such that 'sub' is contained within B[start,end].
 
@@ -1539,7 +1539,7 @@ class bytes(Sequence[int]):
         Return a copy of B with all ASCII characters converted to lowercase.
         """
 
-    def lstrip(self, bytes: ReadableBuffer | None = None, /) -> bytes:
+    def lstrip(self, bytes: ReadableBuffer? = None, /) -> bytes:
         """Strip leading bytes contained in the argument.
 
         If the argument is omitted or None, strip leading  ASCII whitespace.
@@ -1597,7 +1597,7 @@ class bytes(Sequence[int]):
         """
 
     def rfind(
-        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
+        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex? = None, end: SupportsIndex? = None, /
     ) -> int:
         """Return the highest index in B where subsection 'sub' is found, such that 'sub' is contained within B[start,end].
 
@@ -1610,7 +1610,7 @@ class bytes(Sequence[int]):
         """
 
     def rindex(
-        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
+        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex? = None, end: SupportsIndex? = None, /
     ) -> int:
         """Return the highest index in B where subsection 'sub' is found, such that 'sub' is contained within B[start,end].
 
@@ -1640,7 +1640,7 @@ class bytes(Sequence[int]):
         empty bytes objects and the original bytes object.
         """
 
-    def rsplit(self, sep: ReadableBuffer | None = None, maxsplit: SupportsIndex = -1) -> list[bytes]:
+    def rsplit(self, sep: ReadableBuffer? = None, maxsplit: SupportsIndex = -1) -> list[bytes]:
         """Return a list of the sections in the bytes, using sep as the delimiter.
 
           sep
@@ -1655,13 +1655,13 @@ class bytes(Sequence[int]):
         the front.
         """
 
-    def rstrip(self, bytes: ReadableBuffer | None = None, /) -> bytes:
+    def rstrip(self, bytes: ReadableBuffer? = None, /) -> bytes:
         """Strip trailing bytes contained in the argument.
 
         If the argument is omitted or None, strip trailing ASCII whitespace.
         """
 
-    def split(self, sep: ReadableBuffer | None = None, maxsplit: SupportsIndex = -1) -> list[bytes]:
+    def split(self, sep: ReadableBuffer? = None, maxsplit: SupportsIndex = -1) -> list[bytes]:
         """Return a list of the sections in the bytes, using sep as the delimiter.
 
         sep
@@ -1683,8 +1683,8 @@ class bytes(Sequence[int]):
     def startswith(
         self,
         prefix: ReadableBuffer | (*: ReadableBuffer),
-        start: SupportsIndex | None = None,
-        end: SupportsIndex | None = None,
+        start: SupportsIndex? = None,
+        end: SupportsIndex? = None,
         /,
     ) -> bool:
         """Return True if the bytes starts with the specified prefix, False otherwise.
@@ -1697,7 +1697,7 @@ class bytes(Sequence[int]):
           Optional stop position. Default: end of the bytes.
         """
 
-    def strip(self, bytes: ReadableBuffer | None = None, /) -> bytes:
+    def strip(self, bytes: ReadableBuffer? = None, /) -> bytes:
         """Strip leading and trailing bytes contained in the argument.
 
         If the argument is omitted or None, strip leading and trailing ASCII
@@ -1718,7 +1718,7 @@ class bytes(Sequence[int]):
         uppercase characters, all remaining cased characters have lowercase.
         """
 
-    def translate(self, table: ReadableBuffer | None, /, delete: ReadableBuffer = b"") -> bytes:
+    def translate(self, table: ReadableBuffer?, /, delete: ReadableBuffer = b"") -> bytes:
         """Return a copy with each character mapped by the given translation table.
 
           table
@@ -1775,7 +1775,7 @@ class bytes(Sequence[int]):
 
     override def __getitem__(self, key: SupportsIndex, /) -> int:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> bytes
+    def __getitem__(self, key: slice[SupportsIndex?], /) -> bytes
 
     def __add__(self, value: ReadableBuffer, /) -> bytes:
         """Return self+value."""
@@ -1848,7 +1848,7 @@ class bytearray(MutableSequence[int]):
         """
 
     override def count(
-        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
+        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex? = None, end: SupportsIndex? = None, /
     ) -> int:
         """Return the number of non-overlapping occurrences of subsection 'sub' in bytes B[start:end].
 
@@ -1877,8 +1877,8 @@ class bytearray(MutableSequence[int]):
     def endswith(
         self,
         suffix: ReadableBuffer | (*: ReadableBuffer),
-        start: SupportsIndex | None = None,
-        end: SupportsIndex | None = None,
+        start: SupportsIndex? = None,
+        end: SupportsIndex? = None,
         /,
     ) -> bool:
         """Return True if the bytearray ends with the specified suffix, False otherwise.
@@ -1905,7 +1905,7 @@ class bytearray(MutableSequence[int]):
         """
 
     def find(
-        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
+        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex? = None, end: SupportsIndex? = None, /
     ) -> int:
         """Return the lowest index in B where subsection 'sub' is found, such that 'sub' is contained within B[start:end].
 
@@ -1939,7 +1939,7 @@ class bytearray(MutableSequence[int]):
         """
 
     override def index(
-        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
+        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex? = None, end: SupportsIndex? = None, /
     ) -> int:
         """Return the lowest index in B where subsection 'sub' is found, such that 'sub' is contained within B[start:end].
 
@@ -2039,7 +2039,7 @@ class bytearray(MutableSequence[int]):
         Return a copy of B with all ASCII characters converted to lowercase.
         """
 
-    def lstrip(self, bytes: ReadableBuffer | None = None, /) -> bytearray:
+    def lstrip(self, bytes: ReadableBuffer? = None, /) -> bytearray:
         """Strip leading bytes contained in the argument.
 
         If the argument is omitted or None, strip leading ASCII whitespace.
@@ -2116,7 +2116,7 @@ class bytearray(MutableSequence[int]):
             """
 
     def rfind(
-        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
+        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex? = None, end: SupportsIndex? = None, /
     ) -> int:
         """Return the highest index in B where subsection 'sub' is found, such that 'sub' is contained within B[start:end].
 
@@ -2129,7 +2129,7 @@ class bytearray(MutableSequence[int]):
         """
 
     def rindex(
-        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
+        self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex? = None, end: SupportsIndex? = None, /
     ) -> int:
         """Return the highest index in B where subsection 'sub' is found, such that 'sub' is contained within B[start:end].
 
@@ -2160,7 +2160,7 @@ class bytearray(MutableSequence[int]):
         object.
         """
 
-    def rsplit(self, sep: ReadableBuffer | None = None, maxsplit: SupportsIndex = -1) -> list[bytearray]:
+    def rsplit(self, sep: ReadableBuffer? = None, maxsplit: SupportsIndex = -1) -> list[bytearray]:
         """Return a list of the sections in the bytearray, using sep as the delimiter.
 
           sep
@@ -2175,13 +2175,13 @@ class bytearray(MutableSequence[int]):
         to the front.
         """
 
-    def rstrip(self, bytes: ReadableBuffer | None = None, /) -> bytearray:
+    def rstrip(self, bytes: ReadableBuffer? = None, /) -> bytearray:
         """Strip trailing bytes contained in the argument.
 
         If the argument is omitted or None, strip trailing ASCII whitespace.
         """
 
-    def split(self, sep: ReadableBuffer | None = None, maxsplit: SupportsIndex = -1) -> list[bytearray]:
+    def split(self, sep: ReadableBuffer? = None, maxsplit: SupportsIndex = -1) -> list[bytearray]:
         """Return a list of the sections in the bytearray, using sep as the delimiter.
 
         sep
@@ -2203,8 +2203,8 @@ class bytearray(MutableSequence[int]):
     def startswith(
         self,
         prefix: ReadableBuffer | (*: ReadableBuffer),
-        start: SupportsIndex | None = None,
-        end: SupportsIndex | None = None,
+        start: SupportsIndex? = None,
+        end: SupportsIndex? = None,
         /,
     ) -> bool:
         """Return True if the bytearray starts with the specified prefix, False otherwise.
@@ -2217,7 +2217,7 @@ class bytearray(MutableSequence[int]):
           Optional stop position. Default: end of the bytearray.
         """
 
-    def strip(self, bytes: ReadableBuffer | None = None, /) -> bytearray:
+    def strip(self, bytes: ReadableBuffer? = None, /) -> bytearray:
         """Strip leading and trailing bytes contained in the argument.
 
         If the argument is omitted or None, strip leading and trailing ASCII
@@ -2238,7 +2238,7 @@ class bytearray(MutableSequence[int]):
         uppercase characters, all remaining cased characters have lowercase.
         """
 
-    def translate(self, table: ReadableBuffer | None, /, delete: bytes = b"") -> bytearray:
+    def translate(self, table: ReadableBuffer?, /, delete: bytes = b"") -> bytearray:
         """Return a copy with each character mapped by the given translation table.
 
           table
@@ -2250,7 +2250,7 @@ class bytearray(MutableSequence[int]):
         """
 
     if sys.version_info >= (3, 15):
-        def take_bytes(self, n: int | None = None, /) -> bytes:
+        def take_bytes(self, n: int? = None, /) -> bytes:
             """Take *n* bytes from the bytearray and return them as a bytes object.
 
             n
@@ -2305,13 +2305,13 @@ class bytearray(MutableSequence[int]):
 
     override def __getitem__(self, key: SupportsIndex, /) -> int:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> bytearray
+    def __getitem__(self, key: slice[SupportsIndex?], /) -> bytearray
 
     override def __setitem__(self, key: SupportsIndex, value: SupportsIndex, /) -> None:
         """Set self[key] to value."""
-    def __setitem__(self, key: slice[SupportsIndex | None], value: Iterable[SupportsIndex] | bytes, /) -> None
+    def __setitem__(self, key: slice[SupportsIndex?], value: Iterable[SupportsIndex] | bytes, /) -> None
 
-    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /):
+    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex?], /):
         """Delete self[key]."""
 
     def __add__(self, value: ReadableBuffer, /) -> bytearray:
@@ -2372,11 +2372,11 @@ final class memoryview[in out I = int](Sequence[I]):
 
     let itemsize: int
 
-    let shape: (*: int) | None
+    let shape: (*: int)?
 
-    let strides: (*: int) | None
+    let strides: (*: int)?
 
-    let suboffsets: (*: int) | None
+    let suboffsets: (*: int)?
 
     let readonly: bool
 
@@ -2396,9 +2396,9 @@ final class memoryview[in out I = int](Sequence[I]):
     def __enter__(self) -> Self
     def __exit__(
         self,
-        exc_type: type[BaseException] | None,  # noqa: PYI036 # This is the module declaring BaseException
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
+        exc_type: type[BaseException]?,  # noqa: PYI036 # This is the module declaring BaseException
+        exc_val: BaseException?,
+        exc_tb: TracebackType?,
         /,
     ):
         """Release the underlying buffer exposed by the memoryview object."""
@@ -2411,7 +2411,7 @@ final class memoryview[in out I = int](Sequence[I]):
 
     override def __getitem__(self, key: SupportsIndex | (*: SupportsIndex), /) -> I:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> memoryview[I]
+    def __getitem__(self, key: slice[SupportsIndex?], /) -> memoryview[I]
 
     override def __contains__(self, x: object, /) -> bool
     override def __iter__(self) -> Iterator[I]:
@@ -2423,7 +2423,7 @@ final class memoryview[in out I = int](Sequence[I]):
     override def __eq__(self, value: object, /) -> bool
     override def __hash__(self) -> int
 
-    def __setitem__(self, key: slice[SupportsIndex | None], value: ReadableBuffer, /) -> None:
+    def __setitem__(self, key: slice[SupportsIndex?], value: ReadableBuffer, /) -> None:
         """Set self[key] to value."""
     def __setitem__(self, key: SupportsIndex | (*: SupportsIndex), value: I, /) -> None
 
@@ -2601,7 +2601,7 @@ class tuple[out Element](Sequence[Element]):
 
     override def __getitem__(self, key: SupportsIndex, /) -> Element:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> (*: Element)
+    def __getitem__(self, key: slice[SupportsIndex?], /) -> (*: Element)
 
     override def __iter__(self) -> Iterator[Element]:
         """Implement iter(self)."""
@@ -2718,13 +2718,13 @@ class list[in out Element](MutableSequence[Element]):
 
     override def __getitem__(self, i: SupportsIndex, /) -> Element:
         """Return self[index]."""
-    def __getitem__[WidenElement = Never](self, s: slice[SupportsIndex | None], /) -> list[Element | WidenElement]
+    def __getitem__[WidenElement = Never](self, s: slice[SupportsIndex?], /) -> list[Element | WidenElement]
 
     override def __setitem__(self, key: SupportsIndex, value: Element, /) -> None:
         """Set self[key] to value."""
-    def __setitem__(self, key: slice[SupportsIndex | None], value: Iterable[Element], /) -> None
+    def __setitem__(self, key: slice[SupportsIndex?], value: Iterable[Element], /) -> None
 
-    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /):
+    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex?], /):
         """Delete self[key]."""
 
     # Overloading looks unnecessary, but is needed to work around complex mypy problems
@@ -2812,7 +2812,7 @@ class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
     # TODO: the true signature of `dict.fromkeys` is not expressible in the current type system.
     # See #3800 & https://github.com/python/typing/issues/548#issuecomment-683336963.
     @classmethod
-    def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None, /) -> dict[Element, dynamic | None]:
+    def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None, /) -> dict[Element, dynamic?]:
         """Create a new dictionary with keys from iterable and values set to value."""
     @classmethod
     def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other, /) -> dict[Element, Other]
@@ -2906,7 +2906,7 @@ if sys.version_info >= (3, 15):
         def copy(self) -> frozendict[Key, Value]:
             """Return a shallow copy of the frozendict."""
 
-        class def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None, /) -> frozendict[Element, dynamic | None]:
+        class def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None, /) -> frozendict[Element, dynamic?]:
             """Create a new dictionary with keys from iterable and values set to value."""
         class def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other, /) -> frozendict[Element, Other]
 
@@ -3175,7 +3175,7 @@ final class range(Sequence[int]):
 
     override def __getitem__(self, key: SupportsIndex, /) -> int:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> range
+    def __getitem__(self, key: slice[SupportsIndex?], /) -> range
 
     override def __reversed__(self) -> Iterator[int]:
         """Return a reverse iterator."""
@@ -3216,19 +3216,19 @@ class property:
             del self._x
     """
 
-    fget: ((dynamic) -> dynamic) | None
-    fset: ((dynamic, dynamic) -> None) | None
-    fdel: ((dynamic) -> None) | None
+    fget: ((dynamic) -> dynamic)?
+    fset: ((dynamic, dynamic) -> None)?
+    fdel: ((dynamic) -> None)?
     __isabstractmethod__: bool
     if sys.version_info >= (3, 13):
         __name__: str
 
     init(
         self,
-        fget: ((dynamic) -> dynamic) | None = None,
-        fset: ((dynamic, dynamic) -> None) | None = None,
-        fdel: ((dynamic) -> None) | None = None,
-        doc: str | None = None,
+        fget: ((dynamic) -> dynamic)? = None,
+        fset: ((dynamic, dynamic) -> None)? = None,
+        fdel: ((dynamic) -> None)? = None,
+        doc: str? = None,
     )
     def getter(self, fget: (dynamic) -> dynamic, /) -> property:
         """Descriptor to obtain a copy of the property with a different getter."""
@@ -3241,7 +3241,7 @@ class property:
 
     def __get__(self, instance: None, owner: type, /) -> Self:
         """Return an attribute of instance, which is of type owner."""
-    def __get__(self, instance: dynamic, owner: type | None = None, /) -> dynamic
+    def __get__(self, instance: dynamic, owner: type? = None, /) -> dynamic
 
     def __set__(self, instance: dynamic, value: dynamic, /):
         """Set an attribute of instance to value."""
@@ -3333,7 +3333,7 @@ if sys.version_info >= (3, 15):
         dont_inherit: bool = False,
         optimize: int = -1,
         *,
-        module: str | None = None,
+        module: str? = None,
         _feature_version: int = -1,
     ) -> CodeType:
         """Compile source into a code object that can be executed by exec() or eval().
@@ -3357,7 +3357,7 @@ if sys.version_info >= (3, 15):
         *,
         dont_inherit: bool = False,
         optimize: int = -1,
-        module: str | None = None,
+        module: str? = None,
         _feature_version: int = -1,
     ) -> CodeType
     def compile(
@@ -3368,7 +3368,7 @@ if sys.version_info >= (3, 15):
         dont_inherit: bool = False,
         optimize: int = -1,
         *,
-        module: str | None = None,
+        module: str? = None,
         _feature_version: int = -1,
     ) -> _ast.AST
     def compile(
@@ -3379,7 +3379,7 @@ if sys.version_info >= (3, 15):
         dont_inherit: bool = False,
         optimize: int = -1,
         *,
-        module: str | None = None,
+        module: str? = None,
         _feature_version: int = -1,
     ) -> dynamic
 else:
@@ -3472,7 +3472,7 @@ if sys.version_info >= (3, 15):
         source: str | ReadableBuffer | CodeType,
         /,
         globals: dict[str, dynamic] | frozendict[str, dynamic] | None = None,
-        locals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object]? = None,
     ) -> dynamic:
         """Evaluate the given source in the context of globals and locals.
 
@@ -3487,8 +3487,8 @@ elif sys.version_info >= (3, 13):
     def eval(
         source: str | ReadableBuffer | CodeType,
         /,
-        globals: dict[str, dynamic] | None = None,
-        locals: Mapping[str, object] | None = None,
+        globals: dict[str, dynamic]? = None,
+        locals: Mapping[str, object]? = None,
     ) -> dynamic:
         """Evaluate the given source in the context of globals and locals.
 
@@ -3502,8 +3502,8 @@ elif sys.version_info >= (3, 13):
 else:
     def eval(
         source: str | ReadableBuffer | CodeType,
-        globals: dict[str, dynamic] | None = None,
-        locals: Mapping[str, object] | None = None,
+        globals: dict[str, dynamic]? = None,
+        locals: Mapping[str, object]? = None,
         /,
     ) -> dynamic:
         """Evaluate the given source in the context of globals and locals.
@@ -3521,9 +3521,9 @@ if sys.version_info >= (3, 15):
         source: str | ReadableBuffer | CodeType,
         /,
         globals: dict[str, dynamic] | frozendict[str, dynamic] | None = None,
-        locals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object]? = None,
         *,
-        closure: (*: CellType) | None = None,
+        closure: (*: CellType)? = None,
     ) -> None:
         """Execute the given source in the context of globals and locals.
 
@@ -3540,10 +3540,10 @@ elif sys.version_info >= (3, 13):
     def exec(
         source: str | ReadableBuffer | CodeType,
         /,
-        globals: dict[str, dynamic] | None = None,
-        locals: Mapping[str, object] | None = None,
+        globals: dict[str, dynamic]? = None,
+        locals: Mapping[str, object]? = None,
         *,
-        closure: (*: CellType) | None = None,
+        closure: (*: CellType)? = None,
     ) -> None:
         """Execute the given source in the context of globals and locals.
 
@@ -3559,11 +3559,11 @@ elif sys.version_info >= (3, 13):
 elif sys.version_info >= (3, 11):
     def exec(
         source: str | ReadableBuffer | CodeType,
-        globals: dict[str, dynamic] | None = None,
-        locals: Mapping[str, object] | None = None,
+        globals: dict[str, dynamic]? = None,
+        locals: Mapping[str, object]? = None,
         /,
         *,
-        closure: (*: CellType) | None = None,
+        closure: (*: CellType)? = None,
     ) -> None:
         """Execute the given source in the context of globals and locals.
 
@@ -3579,8 +3579,8 @@ elif sys.version_info >= (3, 11):
 else:
     def exec(
         source: str | ReadableBuffer | CodeType,
-        globals: dict[str, dynamic] | None = None,
-        locals: Mapping[str, object] | None = None,
+        globals: dict[str, dynamic]? = None,
+        locals: Mapping[str, object]? = None,
         /,
     ) -> None:
         """Execute the given source in the context of globals and locals.
@@ -3912,11 +3912,11 @@ def open(
     file: FileDescriptorOrPath,
     mode: OpenTextMode = "r",
     buffering: int = -1,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> TextIOWrapper:
     """Open file and return a stream.  Raise OSError upon failure.
 
@@ -4043,7 +4043,7 @@ def open(
     errors: None = None,
     newline: None = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> FileIO
 
 # Buffering is on: return BufferedRandom, BufferedReader, or BufferedWriter
@@ -4055,7 +4055,7 @@ def open(
     errors: None = None,
     newline: None = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> BufferedRandom
 def open(
     file: FileDescriptorOrPath,
@@ -4065,7 +4065,7 @@ def open(
     errors: None = None,
     newline: None = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> BufferedWriter
 def open(
     file: FileDescriptorOrPath,
@@ -4075,7 +4075,7 @@ def open(
     errors: None = None,
     newline: None = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> BufferedReader
 
 # Buffering cannot be determined: fall back to BinaryIO
@@ -4087,7 +4087,7 @@ def open(
     errors: None = None,
     newline: None = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> BinaryIO
 
 # Fallback if mode is not specified
@@ -4095,11 +4095,11 @@ def open(
     file: FileDescriptorOrPath,
     mode: str,
     buffering: int = -1,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> IO[dynamic]
 
 def ord(c: str | bytes | bytearray, /) -> int:
@@ -4117,9 +4117,9 @@ private protocol SupportsWriteAndFlush[in Input](SupportsWrite[Input], SupportsF
 
 def print(
     *values: object,
-    sep: str | None = " ",
-    end: str | None = "\n",
-    file: SupportsWrite[str] | None = None,
+    sep: str? = " ",
+    end: str? = "\n",
+    file: SupportsWrite[str]? = None,
     flush: False = False,
 ) -> None:
     """Prints the values to a stream, or to sys.stdout by default.
@@ -4134,7 +4134,7 @@ def print(
       whether to forcibly flush the stream.
     """
 def print(
-    *values: object, sep: str | None = " ", end: str | None = "\n", file: SupportsWriteAndFlush[str] | None = None, flush: bool
+    *values: object, sep: str? = " ", end: str? = "\n", file: SupportsWriteAndFlush[str]? = None, flush: bool
 ) -> None
 
 
@@ -4247,7 +4247,7 @@ if sys.version_info >= (3, 15):
 
         __name__: str
         __module__: str
-        def __new__(cls, name: str, /, *, repr: str | None = None) -> sentinel
+        def __new__(cls, name: str, /, *, repr: str? = None) -> sentinel
         def __copy__(self, /) -> sentinel
         def __deepcopy__(self, memo: dynamic, /) -> sentinel
         # `other` can be any legal form for unions.
@@ -4354,9 +4354,9 @@ class zip[out Element]:
 # Return type of `__import__` should be kept the same as return type of `importlib.import_module`
 def __import__(
     name: str,
-    globals: Mapping[str, object] | None = None,
-    locals: Mapping[str, object] | None = None,
-    fromlist: Sequence[str] | None = (),
+    globals: Mapping[str, object]? = None,
+    locals: Mapping[str, object]? = None,
+    fromlist: Sequence[str]? = (),
     level: int = 0,
 ) -> types.ModuleType:
     """Import a module.
@@ -4380,9 +4380,9 @@ def __import__(
 if sys.version_info >= (3, 15):
     def __lazy_import__(
         name: str,
-        globals: Mapping[str, object] | None = None,
-        locals: Mapping[str, object] | None = None,
-        fromlist: Sequence[str] | None = (),
+        globals: Mapping[str, object]? = None,
+        locals: Mapping[str, object]? = None,
+        fromlist: Sequence[str]? = (),
         level: int = 0,
     ) -> dynamic:
         """Lazily imports a module.
@@ -4409,18 +4409,18 @@ class BaseException:
     """Common base class for all exceptions"""
 
     args: (*: dynamic)
-    __cause__: BaseException | None
+    __cause__: BaseException?
     """exception cause"""
 
-    __context__: BaseException | None
+    __context__: BaseException?
     """exception context"""
 
     __suppress_context__: bool
-    __traceback__: TracebackType | None
+    __traceback__: TracebackType?
     init(self, *args: object)
     def __new__(cls, /, *args: dynamic, **kwds: dynamic) -> Self
-    def __setstate__(self, state: dict[str, dynamic] | None, /)
-    def with_traceback(self, tb: TracebackType | None, /) -> Self:
+    def __setstate__(self, state: dict[str, dynamic]?, /)
+    def with_traceback(self, tb: TracebackType?, /) -> Self:
         """Set self.__traceback__ to tb and return self."""
 
     # Necessary for security-focused static analyzers (e.g, pysa)
@@ -4460,10 +4460,10 @@ class StopIteration(Exception):
 class OSError(Exception):
     """Base class for I/O related errors."""
 
-    errno: int | None
+    errno: int?
     """POSIX exception code"""
 
-    strerror: str | None
+    strerror: str?
     """exception strerror"""
 
     # filename, filename2 are actually str | bytes | None
@@ -4492,8 +4492,8 @@ class AssertionError(Exception):
 class AttributeError(Exception):
     """Attribute not found."""
 
-    init(self, *args: object, name: str | None = None, obj: object = None)
-    name: str | None
+    init(self, *args: object, name: str? = None, obj: object = None)
+    name: str?
     """attribute name"""
 
     obj: object
@@ -4509,18 +4509,18 @@ class EOFError(Exception):
 class ImportError(Exception):
     """Import can't find module, or can't find name in module."""
 
-    init(self, *args: object, name: str | None = None, path: str | None = None)
-    name: str | None
+    init(self, *args: object, name: str? = None, path: str? = None)
+    name: str?
     """module name"""
 
-    path: str | None
+    path: str?
     """module path"""
 
     msg: str  # undocumented
     """exception message"""
 
     if sys.version_info >= (3, 12):
-        name_from: str | None  # undocumented
+        name_from: str?  # undocumented
         """name imported from module"""
 
 if sys.version_info >= (3, 15):
@@ -4537,8 +4537,8 @@ class MemoryError(Exception):
 class NameError(Exception):
     """Name not found globally."""
 
-    init(self, *args: object, name: str | None = None)
-    name: str | None
+    init(self, *args: object, name: str? = None)
+    name: str?
     """name"""
 
 class ReferenceError(Exception):
@@ -4557,16 +4557,16 @@ class SyntaxError(Exception):
     msg: str
     """exception msg"""
 
-    filename: str | None
+    filename: str?
     """exception filename"""
 
-    lineno: int | None
+    lineno: int?
     """exception lineno"""
 
-    offset: int | None
+    offset: int?
     """exception offset"""
 
-    text: str | None
+    text: str?
     """exception text"""
 
     # Errors are displayed differently if this attribute exists on the exception.
@@ -4574,19 +4574,19 @@ class SyntaxError(Exception):
     print_file_and_line: None
     """exception print_file_and_line"""
 
-    end_lineno: int | None
+    end_lineno: int?
     """exception end lineno"""
 
-    end_offset: int | None
+    end_offset: int?
     """exception end offset"""
 
     init(self)
     init(self, msg: object, /)
     # Second argument is the tuple (filename, lineno, offset, text)
-    init(self, msg: str, info: (str | None, int | None, int | None, str | None), /)
+    init(self, msg: str, info: (str?, int?, int?, str?), /)
     # end_lineno and end_offset must both be provided if one is.
     init(
-        self, msg: str, info: (str | None, int | None, int | None, str | None, int | None, int | None), /
+        self, msg: str, info: (str?, int?, int?, str?, int?, int?), /
     )
     # If you provide more than two arguments, it still creates the SyntaxError, but
     # the arguments from the info tuple are not parsed. This form is omitted.
@@ -4809,23 +4809,23 @@ if sys.version_info >= (3, 11):
 
         def subgroup[ExceptionT: Exception](
             self, matcher_value: type[ExceptionT] | (*: type[ExceptionT]), /
-        ) -> ExceptionGroup[ExceptionT] | None
+        ) -> ExceptionGroup[ExceptionT]?
         def subgroup[BaseExceptionT2: BaseException](
             self, matcher_value: type[BaseExceptionT2] | (*: type[BaseExceptionT2]), /
-        ) -> BaseExceptionGroup[BaseExceptionT2] | None
+        ) -> BaseExceptionGroup[BaseExceptionT2]?
         def subgroup(
             self, matcher_value: (BaseExceptionT | Self) -> bool, /
-        ) -> BaseExceptionGroup[BaseExceptionT] | None
+        ) -> BaseExceptionGroup[BaseExceptionT]?
 
         def split[ExceptionT: Exception](
             self, matcher_value: type[ExceptionT] | (*: type[ExceptionT]), /
-        ) -> (ExceptionGroup[ExceptionT] | None, BaseExceptionGroup[BaseExceptionT] | None)
+        ) -> (ExceptionGroup[ExceptionT]?, BaseExceptionGroup[BaseExceptionT]?)
         def split[BaseExceptionT2: BaseException](
             self, matcher_value: type[BaseExceptionT2] | (*: type[BaseExceptionT2]), /
-        ) -> (BaseExceptionGroup[BaseExceptionT2] | None, BaseExceptionGroup[BaseExceptionT] | None)
+        ) -> (BaseExceptionGroup[BaseExceptionT2]?, BaseExceptionGroup[BaseExceptionT]?)
         def split(
             self, matcher_value: (BaseExceptionT | Self) -> bool, /
-        ) -> (BaseExceptionGroup[BaseExceptionT] | None, BaseExceptionGroup[BaseExceptionT] | None)
+        ) -> (BaseExceptionGroup[BaseExceptionT]?, BaseExceptionGroup[BaseExceptionT]?)
 
         # In reality it is `NonEmptySequence`:
         def derive[ExceptionT: Exception](self, excs: Sequence[ExceptionT], /) -> ExceptionGroup[ExceptionT]
@@ -4842,17 +4842,17 @@ if sys.version_info >= (3, 11):
         # We accept a narrower type, but that's OK.
         def subgroup[ExceptionT2: Exception](
             self, matcher_value: type[ExceptionT2] | (*: type[ExceptionT2]), /
-        ) -> ExceptionGroup[ExceptionT2] | None
+        ) -> ExceptionGroup[ExceptionT2]?
         def subgroup(
             self, matcher_value: (ExceptionT | Self) -> bool, /
-        ) -> ExceptionGroup[ExceptionT] | None
+        ) -> ExceptionGroup[ExceptionT]?
 
         def split[ExceptionT2: Exception](
             self, matcher_value: type[ExceptionT2] | (*: type[ExceptionT2]), /
-        ) -> (ExceptionGroup[ExceptionT2] | None, ExceptionGroup[ExceptionT] | None)
+        ) -> (ExceptionGroup[ExceptionT2]?, ExceptionGroup[ExceptionT]?)
         def split(
             self, matcher_value: (ExceptionT | Self) -> bool, /
-        ) -> (ExceptionGroup[ExceptionT] | None, ExceptionGroup[ExceptionT] | None)
+        ) -> (ExceptionGroup[ExceptionT]?, ExceptionGroup[ExceptionT]?)
 
 if sys.version_info >= (3, 13):
     class PythonFinalizationError(RuntimeError):

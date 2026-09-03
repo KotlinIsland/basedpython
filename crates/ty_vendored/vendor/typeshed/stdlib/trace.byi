@@ -27,22 +27,22 @@ from typing import ParamSpec, TypeAlias, TypeVar
 
 __all__ = ["Trace", "CoverageResults"]
 
-private type FileModuleFunction = (str, str | None, str)
+private type FileModuleFunction = (str, str?, str)
 
 class CoverageResults:
     counts: dict[(str, int), int]
     counter: dict[(str, int), int]
     calledfuncs: dict[FileModuleFunction, int]
     callers: dict[(FileModuleFunction, FileModuleFunction), int]
-    inifile: StrPath | None
-    outfile: StrPath | None
+    inifile: StrPath?
+    outfile: StrPath?
     init(
         self,
-        counts: dict[(str, int), int] | None = None,
-        calledfuncs: dict[FileModuleFunction, int] | None = None,
-        infile: StrPath | None = None,
-        callers: dict[(FileModuleFunction, FileModuleFunction), int] | None = None,
-        outfile: StrPath | None = None,
+        counts: dict[(str, int), int]? = None,
+        calledfuncs: dict[FileModuleFunction, int]? = None,
+        infile: StrPath? = None,
+        callers: dict[(FileModuleFunction, FileModuleFunction), int]? = None,
+        outfile: StrPath? = None,
     )  # undocumented
     def update(self, other: CoverageResults):
         """Merge in the data from another CoverageResults"""
@@ -52,7 +52,7 @@ class CoverageResults:
             self,
             show_missing: bool = True,
             summary: bool = False,
-            coverdir: StrPath | None = None,
+            coverdir: StrPath? = None,
             *,
             ignore_missing_files: bool = False,
         ) -> None:
@@ -70,7 +70,7 @@ class CoverageResults:
             """
 
     else:
-        def write_results(self, show_missing: bool = True, summary: bool = False, coverdir: StrPath | None = None) -> None:
+        def write_results(self, show_missing: bool = True, summary: bool = False, coverdir: StrPath? = None) -> None:
             """
             Write the coverage results.
 
@@ -82,7 +82,7 @@ class CoverageResults:
             """
 
     def write_results_file(
-        self, path: StrPath, lines: Sequence[str], lnotab: dynamic, lines_hit: Mapping[int, int], encoding: str | None = None
+        self, path: StrPath, lines: Sequence[str], lnotab: dynamic, lines_hit: Mapping[int, int], encoding: str? = None
     ) -> (int, int):
         """Return a coverage results file in path."""
 
@@ -92,18 +92,18 @@ class CoverageResults:
         """
 
 class _Ignore:
-    init(self, modules: Iterable[str] | None = None, dirs: Iterable[StrPath] | None = None)
+    init(self, modules: Iterable[str]? = None, dirs: Iterable[StrPath]? = None)
     def names(self, filename: str, modulename: str) -> int
 
 class Trace:
-    inifile: StrPath | None
-    outfile: StrPath | None
+    inifile: StrPath?
+    outfile: StrPath?
     ignore: _Ignore
     counts: dict[str, int]
     pathtobasename: dict[Incomplete, Incomplete]
     donothing: int
     trace: int
-    start_time: int | None
+    start_time: int?
     globaltrace: TraceFunction
     localtrace: TraceFunction
     init(
@@ -114,8 +114,8 @@ class Trace:
         countcallers: int = 0,
         ignoremods: Sequence[str] = (),
         ignoredirs: Sequence[str] = (),
-        infile: StrPath | None = None,
-        outfile: StrPath | None = None,
+        infile: StrPath? = None,
+        outfile: StrPath? = None,
         timing: bool = False,
     ):
         """
@@ -138,7 +138,7 @@ class Trace:
 
     def run(self, cmd: str | types.CodeType)
     def runctx(
-        self, cmd: str | types.CodeType, globals: Mapping[str, dynamic] | None = None, locals: Mapping[str, dynamic] | None = None
+        self, cmd: str | types.CodeType, globals: Mapping[str, dynamic]? = None, locals: Mapping[str, dynamic]? = None
     )
     def runfunc[Parameters: (*: *, **: *), Element](self, func: (**Parameters) -> Element, /, *args: *Parameters, **kw: **Parameters) -> Element
     def file_module_function_of(self, frame: types.FrameType) -> FileModuleFunction

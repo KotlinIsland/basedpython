@@ -42,7 +42,7 @@ class TransportSocket:
     def getsockname(self) -> _RetAddress
     def getsockbyname(self) -> Never  # This method doesn't exist on socket, yet is passed through?
     def settimeout(self, value: int | float | None)
-    def gettimeout(self) -> float | None
+    def gettimeout(self) -> float?
     def setblocking(self, flag: bool)
     if sys.version_info < (3, 11):
         def _na(self, what: str)
@@ -67,7 +67,7 @@ class TransportSocket:
         @deprecated("Removed in Python 3.11")
         def makefile(self) -> BinaryIO
         @deprecated("Removed in Python 3.11")
-        def sendfile(self, file: BinaryIO, offset: int = 0, count: int | None = None) -> int
+        def sendfile(self, file: BinaryIO, offset: int = 0, count: int? = None) -> int
         @deprecated("Removed in Python 3.11")
         def close(self) -> None
         @deprecated("Removed in Python 3.11")
@@ -90,7 +90,7 @@ class TransportSocket:
             buffers: Iterable[ReadableBuffer],
             ancdata: Iterable[CMSG] = ...,
             flags: int = 0,
-            address: _Address | None = None,
+            address: _Address? = None,
             /,
         ) -> int
 
@@ -131,5 +131,5 @@ class TransportSocket:
         def __enter__(self) -> socket.socket
         @deprecated("Removed in Python 3.11.")
         def __exit__(
-            self, exc_type: Type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+            self, exc_type: Type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
         ) -> None

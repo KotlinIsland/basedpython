@@ -25,7 +25,7 @@ class ForkServer:
         def set_forkserver_preload(self, modules_names: list[str]) -> None:
             """Set list of module names to try to load in forkserver process."""
 
-    def get_inherited_fds(self) -> list[int] | None:
+    def get_inherited_fds(self) -> list[int]?:
         """Return list of fds inherited from parent process.
 
         This returns None if the current process was not started by fork
@@ -51,14 +51,14 @@ class ForkServer:
 
 if sys.version_info >= (3, 15):
     def main(
-        listener_fd: int | None,
+        listener_fd: int?,
         alive_r: FileDescriptorLike,
         preload: Sequence[str],
-        main_path: str | None = None,
-        sys_path: list[str] | None = None,
+        main_path: str? = None,
+        sys_path: list[str]? = None,
         *,
-        sys_argv: list[str] | None = None,
-        authkey_r: int | None = None,
+        sys_argv: list[str]? = None,
+        authkey_r: int? = None,
         on_error: str = "ignore",
     ) -> None:
         """Run forkserver."""
@@ -66,36 +66,36 @@ if sys.version_info >= (3, 15):
 elif sys.version_info >= (3, 14):
     # `sys_argv` parameter added in Python 3.14.3
     def main(
-        listener_fd: int | None,
+        listener_fd: int?,
         alive_r: FileDescriptorLike,
         preload: Sequence[str],
-        main_path: str | None = None,
-        sys_path: list[str] | None = None,
+        main_path: str? = None,
+        sys_path: list[str]? = None,
         *,
-        sys_argv: list[str] | None = None,
-        authkey_r: int | None = None,
+        sys_argv: list[str]? = None,
+        authkey_r: int? = None,
     ) -> None:
         """Run forkserver."""
 
 elif sys.version_info >= (3, 13):
     # `sys_argv` parameter added in Python 3.13.12
     def main(
-        listener_fd: int | None,
+        listener_fd: int?,
         alive_r: FileDescriptorLike,
         preload: Sequence[str],
-        main_path: str | None = None,
-        sys_path: list[str] | None = None,
+        main_path: str? = None,
+        sys_path: list[str]? = None,
         *,
-        sys_argv: list[str] | None = None,
+        sys_argv: list[str]? = None,
     ) -> None:
         """Run forkserver."""
 
 else:
     def main(
-        listener_fd: int | None,
+        listener_fd: int?,
         alive_r: FileDescriptorLike,
         preload: Sequence[str],
-        main_path: str | None = None,
+        main_path: str? = None,
         sys_path: Unused = None,
     ) -> None:
         """Run forkserver."""

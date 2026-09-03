@@ -54,7 +54,7 @@ class JSONDecoder:
     """
 
     if sys.version_info >= (3, 15):
-        array_hook: ((list[dynamic]) -> dynamic) | None
+        array_hook: ((list[dynamic]) -> dynamic)?
     object_hook: (dict[str, dynamic]) -> dynamic
     parse_float: (str) -> dynamic
     parse_int: (str) -> dynamic
@@ -65,13 +65,13 @@ class JSONDecoder:
         def __init__(
             self,
             *,
-            object_hook: ((dict[str, dynamic]) -> dynamic) | None = None,
-            parse_float: ((str) -> dynamic) | None = None,
-            parse_int: ((str) -> dynamic) | None = None,
-            parse_constant: ((str) -> dynamic) | None = None,
+            object_hook: ((dict[str, dynamic]) -> dynamic)? = None,
+            parse_float: ((str) -> dynamic)? = None,
+            parse_int: ((str) -> dynamic)? = None,
+            parse_constant: ((str) -> dynamic)? = None,
             strict: bool = True,
-            object_pairs_hook: ((list[(str, dynamic)]) -> dynamic) | None = None,
-            array_hook: ((list[dynamic]) -> dynamic) | None = None,
+            object_pairs_hook: ((list[(str, dynamic)]) -> dynamic)? = None,
+            array_hook: ((list[dynamic]) -> dynamic)? = None,
         ) -> None:
             """``object_hook``, if specified, will be called with the result
             of every JSON object decoded and its return value will be used in
@@ -118,12 +118,12 @@ class JSONDecoder:
         def __init__(
             self,
             *,
-            object_hook: ((dict[str, dynamic]) -> dynamic) | None = None,
-            parse_float: ((str) -> dynamic) | None = None,
-            parse_int: ((str) -> dynamic) | None = None,
-            parse_constant: ((str) -> dynamic) | None = None,
+            object_hook: ((dict[str, dynamic]) -> dynamic)? = None,
+            parse_float: ((str) -> dynamic)? = None,
+            parse_int: ((str) -> dynamic)? = None,
+            parse_constant: ((str) -> dynamic)? = None,
             strict: bool = True,
-            object_pairs_hook: ((list[(str, dynamic)]) -> dynamic) | None = None,
+            object_pairs_hook: ((list[(str, dynamic)]) -> dynamic)? = None,
         ) -> None:
             """``object_hook``, if specified, will be called with the result
             of every JSON object decoded and its return value will be used in

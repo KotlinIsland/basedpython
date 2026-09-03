@@ -135,7 +135,7 @@ class Random(_random.Random):
     override def setstate(self, state: (*: dynamic)):
         """Restore internal state from object returned by getstate()."""
 
-    def randrange(self, start: int, stop: int | None = None, step: int = 1) -> int:
+    def randrange(self, start: int, stop: int? = None, step: int = 1) -> int:
         """Choose a random item from range(stop) or range(start, stop[, step]).
 
         Roughly equivalent to ``choice(range(start, stop, step))`` but
@@ -155,9 +155,9 @@ class Random(_random.Random):
     def choices[Element](
         self,
         population: SupportsLenAndGetItem[Element],
-        weights: Sequence[int | float | Fraction] | None = None,
+        weights: Sequence[int | float | Fraction]? = None,
         *,
-        cum_weights: Sequence[int | float | Fraction] | None = None,
+        cum_weights: Sequence[int | float | Fraction]? = None,
         k: int = 1,
     ) -> list[Element]:
         """Return a k sized list of population elements chosen with replacement.
@@ -181,10 +181,10 @@ class Random(_random.Random):
 
             """
         @deprecated("The `random` parameter is deprecated since Python 3.9; removed in Python 3.11.")
-        def shuffle(self, x: MutableSequence[dynamic], random: (() -> (int | float)) | None = None) -> None
+        def shuffle(self, x: MutableSequence[dynamic], random: (() -> (int | float))? = None) -> None
 
     if sys.version_info >= (3, 11):
-        def sample[Element](self, population: Sequence[Element], k: int, *, counts: Iterable[int] | None = None) -> list[Element]:
+        def sample[Element](self, population: Sequence[Element], k: int, *, counts: Iterable[int]? = None) -> list[Element]:
             """Chooses k unique random elements from a population sequence.
 
             Returns a new list containing elements from the population while
@@ -215,7 +215,7 @@ class Random(_random.Random):
             """
 
     else:
-        def sample[Element](self, population: Sequence[Element] | AbstractSet[Element], k: int, *, counts: Iterable[int] | None = None) -> list[Element]:
+        def sample[Element](self, population: Sequence[Element] | AbstractSet[Element], k: int, *, counts: Iterable[int]? = None) -> list[Element]:
             """Chooses k unique random elements from a population sequence or set.
 
             Returns a new list containing elements from the population while

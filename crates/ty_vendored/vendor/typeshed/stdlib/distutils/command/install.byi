@@ -16,20 +16,20 @@ final INSTALL_SCHEMES: dict[str, dict[str, str]]
 
 class install(Command):
     description: str
-    user_options: ClassVar[list[(str, str | None, str)]]
+    user_options: ClassVar[list[(str, str?, str)]]
     boolean_options: ClassVar[list[str]]
     negative_opt: ClassVar[dict[str, str]]
-    prefix: str | None
+    prefix: str?
     exec_prefix: Incomplete
-    home: str | None
+    home: str?
     user: bool
     install_base: Incomplete
     install_platbase: Incomplete
-    root: str | None
+    root: str?
     install_purelib: Incomplete
     install_platlib: Incomplete
     install_headers: Incomplete
-    install_lib: str | None
+    install_lib: str?
     install_scripts: Incomplete
     install_data: Incomplete
     install_userbase: Incomplete
@@ -119,4 +119,4 @@ class install(Command):
         """
 
     # Any to work around variance issues
-    sub_commands: ClassVar[list[(str, ((dynamic) -> bool) | None)]]
+    sub_commands: ClassVar[list[(str, ((dynamic) -> bool)?)]]

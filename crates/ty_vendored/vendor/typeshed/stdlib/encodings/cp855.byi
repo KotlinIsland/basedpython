@@ -18,6 +18,6 @@ class StreamReader(Codec, codecs.StreamReader)
 
 def getregentry() -> codecs.CodecInfo
 
-decoding_map: dict[int, int | None]
+decoding_map: dict[int, int?]
 decoding_table: str
 encoding_map: dict[int, int]

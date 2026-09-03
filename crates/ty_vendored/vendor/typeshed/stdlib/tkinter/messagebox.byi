@@ -29,8 +29,8 @@ class Message(Dialog):
     command: ClassVar[str]
 
 def showinfo(
-    title: str | None = None,
-    message: str | None = None,
+    title: str? = None,
+    message: str? = None,
     *,
     detail: str = ...,
     icon: "error" | "info" | "question" | "warning" = ...,
@@ -40,8 +40,8 @@ def showinfo(
     """Show an info message"""
 
 def showwarning(
-    title: str | None = None,
-    message: str | None = None,
+    title: str? = None,
+    message: str? = None,
     *,
     detail: str = ...,
     icon: "error" | "info" | "question" | "warning" = ...,
@@ -51,8 +51,8 @@ def showwarning(
     """Show a warning message"""
 
 def showerror(
-    title: str | None = None,
-    message: str | None = None,
+    title: str? = None,
+    message: str? = None,
     *,
     detail: str = ...,
     icon: "error" | "info" | "question" | "warning" = ...,
@@ -62,8 +62,8 @@ def showerror(
     """Show an error message"""
 
 def askquestion(
-    title: str | None = None,
-    message: str | None = None,
+    title: str? = None,
+    message: str? = None,
     *,
     detail: str = ...,
     icon: "error" | "info" | "question" | "warning" = ...,
@@ -73,8 +73,8 @@ def askquestion(
     """Ask a question; return the symbolic name of the selected button"""
 
 def askokcancel(
-    title: str | None = None,
-    message: str | None = None,
+    title: str? = None,
+    message: str? = None,
     *,
     detail: str = ...,
     icon: "error" | "info" | "question" | "warning" = ...,
@@ -84,8 +84,8 @@ def askokcancel(
     """Ask if operation should proceed; return True if the answer is ok"""
 
 def askyesno(
-    title: str | None = None,
-    message: str | None = None,
+    title: str? = None,
+    message: str? = None,
     *,
     detail: str = ...,
     icon: "error" | "info" | "question" | "warning" = ...,
@@ -95,19 +95,19 @@ def askyesno(
     """Ask a question; return True if the answer is yes"""
 
 def askyesnocancel(
-    title: str | None = None,
-    message: str | None = None,
+    title: str? = None,
+    message: str? = None,
     *,
     detail: str = ...,
     icon: "error" | "info" | "question" | "warning" = ...,
     default: "cancel" | "yes" | "no" = ...,
     parent: Misc = ...,
-) -> bool | None:
+) -> bool?:
     """Ask a question; return True if the answer is yes, None if cancelled"""
 
 def askretrycancel(
-    title: str | None = None,
-    message: str | None = None,
+    title: str? = None,
+    message: str? = None,
     *,
     detail: str = ...,
     icon: "error" | "info" | "question" | "warning" = ...,

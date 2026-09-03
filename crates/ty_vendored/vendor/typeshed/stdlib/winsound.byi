@@ -59,7 +59,7 @@ if sys.platform == "win32":
         """
 
     # Can actually accept anything ORed with 4, and if not it's definitely str, but that's inexpressible
-    def PlaySound(sound: ReadableBuffer | None, flags: 4) -> None:
+    def PlaySound(sound: ReadableBuffer?, flags: 4) -> None:
         """A wrapper around the Windows PlaySound API.
 
         sound

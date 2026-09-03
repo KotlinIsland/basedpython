@@ -178,9 +178,9 @@ class Marshaller:
     dispatch: dict[type[_Marshallable] | "_arbitrary_instance", (Marshaller, dynamic, WriteCallback) -> None]
     memo: dict[dynamic, None]
     data: None
-    encoding: str | None
+    encoding: str?
     allow_none: bool
-    init(self, encoding: str | None = None, allow_none: bool = False)
+    init(self, encoding: str? = None, allow_none: bool = False)
     def dumps(self, values: Fault | Iterable[_Marshallable]) -> str
     def __dump(self, value: _Marshallable, write: WriteCallback)  # undocumented
     def dump_nil(self, value: None, write: WriteCallback)
@@ -208,19 +208,19 @@ class Unmarshaller:
 
     dispatch: dict[str, (Unmarshaller, str) -> None]
 
-    _type: str | None
+    _type: str?
     _stack: list[_Marshallable]
     _marks: list[int]
     _data: list[str]
     _value: bool
-    _methodname: str | None
+    _methodname: str?
     _encoding: str
     append: (dynamic) -> None
     _use_datetime: bool
     _use_builtin_types: bool
     init(self, use_datetime: bool = False, use_builtin_types: bool = False)
     def close(self) -> (*: _Marshallable)
-    def getmethodname(self) -> str | None
+    def getmethodname(self) -> str?
     def xml(self, encoding: str, standalone: dynamic)  # Standalone is ignored
     def start(self, tag: str, attrs: dict[str, str])
     def data(self, text: str)
@@ -281,9 +281,9 @@ class MultiCall:
     def __call__(self) -> MultiCallIterator
 
 # A little white lie
-FastMarshaller: Marshaller | None
-FastParser: ExpatParser | None
-FastUnmarshaller: Unmarshaller | None
+FastMarshaller: Marshaller?
+FastParser: ExpatParser?
+FastUnmarshaller: Unmarshaller?
 
 def getparser(use_datetime: bool = False, use_builtin_types: bool = False) -> (ExpatParser, Unmarshaller):
     """getparser() -> parser, unmarshaller
@@ -294,9 +294,9 @@ def getparser(use_datetime: bool = False, use_builtin_types: bool = False) -> (E
 
 def dumps(
     params: Fault | (*: _Marshallable),
-    methodname: str | None = None,
-    methodresponse: bool | None = None,
-    encoding: str | None = None,
+    methodname: str? = None,
+    methodresponse: bool? = None,
+    encoding: str? = None,
     allow_none: bool = False,
 ) -> str:
     """data [,options] -> marshalled data
@@ -322,7 +322,7 @@ def dumps(
 
 def loads(
     data: str | ReadableBuffer, use_datetime: bool = False, use_builtin_types: bool = False
-) -> ((*: _Marshallable), str | None):
+) -> ((*: _Marshallable), str?):
     """data -> unmarshalled data, method name
 
     Convert an XML-RPC packet to unmarshalled data plus a method
@@ -364,11 +364,11 @@ class Transport:
 
     user_agent: str
     accept_gzip_encoding: bool
-    encode_threshold: int | None
+    encode_threshold: int?
 
     _use_datetime: bool
     _use_builtin_types: bool
-    _connection: (HostType | None, http.client.HTTPConnection | None)
+    _connection: (HostType?, http.client.HTTPConnection?)
     _headers: list[(str, str)]
     _extra_headers: list[(str, str)]
 
@@ -401,7 +401,7 @@ class SafeTransport(Transport):
         use_builtin_types: bool = False,
         *,
         headers: Iterable[(str, str)] = (),
-        context: dynamic | None = None,
+        context: dynamic? = None,
     )
     override def make_connection(self, host: HostType) -> http.client.HTTPSConnection
 
@@ -437,15 +437,15 @@ class ServerProxy:
     init(
         self,
         uri: str,
-        transport: Transport | None = None,
-        encoding: str | None = None,
+        transport: Transport? = None,
+        encoding: str? = None,
         verbose: bool = False,
         allow_none: bool = False,
         use_datetime: bool = False,
         use_builtin_types: bool = False,
         *,
         headers: Iterable[(str, str)] = (),
-        context: dynamic | None = None,
+        context: dynamic? = None,
     )
     def __getattr__(self, name: str) -> _Method
 
@@ -458,7 +458,7 @@ class ServerProxy:
 
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
     )
     def __close(self)  # undocumented
     def __request(self, methodname: str, params: (*: _Marshallable)) -> (*: _Marshallable)  # undocumented

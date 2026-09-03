@@ -35,7 +35,7 @@ __all__ = ("BaseEventLoop", "Server")
 type _Context = dict[str, dynamic]
 private type ExceptionHandler = (AbstractEventLoop, _Context) -> object
 type _ProtocolFactory = () -> BaseProtocol
-type _SSLContext = bool | None | ssl.SSLContext
+type _SSLContext = bool? | ssl.SSLContext
 
 class Server(AbstractServer):
     if sys.version_info >= (3, 11):
@@ -130,7 +130,7 @@ class BaseEventLoop(AbstractEventLoop):
         """Shutdown all active asynchronous generators."""
 
     # Methods scheduling callbacks.  All these return Handles.
-    override def call_soon[*Args](self, callback: (*Args) -> object, *args: *Args, context: Context | None = None) -> Handle:
+    override def call_soon[*Args](self, callback: (*Args) -> object, *args: *Args, context: Context? = None) -> Handle:
         """Arrange for a callback to be called as soon as possible.
 
         This operates as a FIFO queue: callbacks are called in the
@@ -142,7 +142,7 @@ class BaseEventLoop(AbstractEventLoop):
         """
 
     override def call_later[*Args](
-        self, delay: int | float, callback: (*Args) -> object, *args: *Args, context: Context | None = None
+        self, delay: int | float, callback: (*Args) -> object, *args: *Args, context: Context? = None
     ) -> TimerHandle:
         """Arrange for a callback to be called at a given time.
 
@@ -161,7 +161,7 @@ class BaseEventLoop(AbstractEventLoop):
         """
 
     override def call_at[*Args](
-        self, when: int | float, callback: (*Args) -> object, *args: *Args, context: Context | None = None
+        self, when: int | float, callback: (*Args) -> object, *args: *Args, context: Context? = None
     ) -> TimerHandle:
         """Like call_later(), but uses an absolute time.
 
@@ -187,8 +187,8 @@ class BaseEventLoop(AbstractEventLoop):
             coro: _CoroutineLike[Element],
             *,
             name: object = None,
-            context: Context | None = None,
-            eager_start: bool | None = None,
+            context: Context? = None,
+            eager_start: bool? = None,
         ) -> Task[Element]:
             """Schedule or begin executing a coroutine object.
 
@@ -196,7 +196,7 @@ class BaseEventLoop(AbstractEventLoop):
             """
 
     elif sys.version_info >= (3, 11):
-        def create_task[Element](self, coro: _CoroutineLike[Element], *, name: object = None, context: Context | None = None) -> Task[Element]:
+        def create_task[Element](self, coro: _CoroutineLike[Element], *, name: object = None, context: Context? = None) -> Task[Element]:
             """Schedule a coroutine object.
 
             Return a task object.
@@ -209,7 +209,7 @@ class BaseEventLoop(AbstractEventLoop):
             Return a task object.
             """
 
-    override def set_task_factory(self, factory: _TaskFactory | None):
+    override def set_task_factory(self, factory: _TaskFactory?):
         """Set a task factory that will be used by loop.create_task().
 
         If factory is None the default task factory will be set.
@@ -221,16 +221,16 @@ class BaseEventLoop(AbstractEventLoop):
         Task.  The callable must return a Task.
         """
 
-    override def get_task_factory(self) -> _TaskFactory | None:
+    override def get_task_factory(self) -> _TaskFactory?:
         """Return a task factory, or None if the default one is in use."""
 
     # Methods for interacting with threads
     override def call_soon_threadsafe[*Args](
-        self, callback: (*Args) -> object, *args: *Args, context: Context | None = None
+        self, callback: (*Args) -> object, *args: *Args, context: Context? = None
     ) -> Handle:
         """Like call_soon(), but thread-safe."""
 
-    override def run_in_executor[*Args, Element](self, executor: Executor | None, func: (*Args) -> Element, *args: *Args) -> Future[Element]
+    override def run_in_executor[*Args, Element](self, executor: Executor?, func: (*Args) -> Element, *args: *Args) -> Future[Element]
     override def set_default_executor(self, executor: ThreadPoolExecutor)
     # Network I/O methods returning Futures.
     override async def getaddrinfo(
@@ -257,12 +257,12 @@ class BaseEventLoop(AbstractEventLoop):
             proto: int = 0,
             flags: int = 0,
             sock: None = None,
-            local_addr: (str, int) | None = None,
-            server_hostname: str | None = None,
+            local_addr: (str, int)? = None,
+            server_hostname: str? = None,
             ssl_handshake_timeout: int | float | None = None,
             ssl_shutdown_timeout: int | float | None = None,
             happy_eyeballs_delay: int | float | None = None,
-            interleave: int | None = None,
+            interleave: int? = None,
             all_errors: bool = False,
         ) -> (Transport, ProtocolT):
             """Connect to a TCP server.
@@ -288,11 +288,11 @@ class BaseEventLoop(AbstractEventLoop):
             flags: int = 0,
             sock: socket,
             local_addr: None = None,
-            server_hostname: str | None = None,
+            server_hostname: str? = None,
             ssl_handshake_timeout: int | float | None = None,
             ssl_shutdown_timeout: int | float | None = None,
             happy_eyeballs_delay: int | float | None = None,
-            interleave: int | None = None,
+            interleave: int? = None,
             all_errors: bool = False,
         ) -> (Transport, ProtocolT)
     elif sys.version_info >= (3, 11):
@@ -307,12 +307,12 @@ class BaseEventLoop(AbstractEventLoop):
             proto: int = 0,
             flags: int = 0,
             sock: None = None,
-            local_addr: (str, int) | None = None,
-            server_hostname: str | None = None,
+            local_addr: (str, int)? = None,
+            server_hostname: str? = None,
             ssl_handshake_timeout: int | float | None = None,
             ssl_shutdown_timeout: int | float | None = None,
             happy_eyeballs_delay: int | float | None = None,
-            interleave: int | None = None,
+            interleave: int? = None,
         ) -> (Transport, ProtocolT):
             """Connect to a TCP server.
 
@@ -337,11 +337,11 @@ class BaseEventLoop(AbstractEventLoop):
             flags: int = 0,
             sock: socket,
             local_addr: None = None,
-            server_hostname: str | None = None,
+            server_hostname: str? = None,
             ssl_handshake_timeout: int | float | None = None,
             ssl_shutdown_timeout: int | float | None = None,
             happy_eyeballs_delay: int | float | None = None,
-            interleave: int | None = None,
+            interleave: int? = None,
         ) -> (Transport, ProtocolT)
     else:
         override async def create_connection[ProtocolT: BaseProtocol](
@@ -355,11 +355,11 @@ class BaseEventLoop(AbstractEventLoop):
             proto: int = 0,
             flags: int = 0,
             sock: None = None,
-            local_addr: (str, int) | None = None,
-            server_hostname: str | None = None,
+            local_addr: (str, int)? = None,
+            server_hostname: str? = None,
             ssl_handshake_timeout: int | float | None = None,
             happy_eyeballs_delay: int | float | None = None,
-            interleave: int | None = None,
+            interleave: int? = None,
         ) -> (Transport, ProtocolT):
             """Connect to a TCP server.
 
@@ -384,10 +384,10 @@ class BaseEventLoop(AbstractEventLoop):
             flags: int = 0,
             sock: socket,
             local_addr: None = None,
-            server_hostname: str | None = None,
+            server_hostname: str? = None,
             ssl_handshake_timeout: int | float | None = None,
             happy_eyeballs_delay: int | float | None = None,
-            interleave: int | None = None,
+            interleave: int? = None,
         ) -> (Transport, ProtocolT)
 
     if sys.version_info >= (3, 13):
@@ -403,9 +403,9 @@ class BaseEventLoop(AbstractEventLoop):
             sock: None = None,
             backlog: int = 100,
             ssl: _SSLContext = None,
-            reuse_address: bool | None = None,
-            reuse_port: bool | None = None,
-            keep_alive: bool | None = None,
+            reuse_address: bool? = None,
+            reuse_port: bool? = None,
+            keep_alive: bool? = None,
             ssl_handshake_timeout: int | float | None = None,
             ssl_shutdown_timeout: int | float | None = None,
             start_serving: bool = True,
@@ -436,9 +436,9 @@ class BaseEventLoop(AbstractEventLoop):
             sock: socket = ...,
             backlog: int = 100,
             ssl: _SSLContext = None,
-            reuse_address: bool | None = None,
-            reuse_port: bool | None = None,
-            keep_alive: bool | None = None,
+            reuse_address: bool? = None,
+            reuse_port: bool? = None,
+            keep_alive: bool? = None,
             ssl_handshake_timeout: int | float | None = None,
             ssl_shutdown_timeout: int | float | None = None,
             start_serving: bool = True,
@@ -455,8 +455,8 @@ class BaseEventLoop(AbstractEventLoop):
             sock: None = None,
             backlog: int = 100,
             ssl: _SSLContext = None,
-            reuse_address: bool | None = None,
-            reuse_port: bool | None = None,
+            reuse_address: bool? = None,
+            reuse_port: bool? = None,
             ssl_handshake_timeout: int | float | None = None,
             ssl_shutdown_timeout: int | float | None = None,
             start_serving: bool = True,
@@ -487,8 +487,8 @@ class BaseEventLoop(AbstractEventLoop):
             sock: socket = ...,
             backlog: int = 100,
             ssl: _SSLContext = None,
-            reuse_address: bool | None = None,
-            reuse_port: bool | None = None,
+            reuse_address: bool? = None,
+            reuse_port: bool? = None,
             ssl_handshake_timeout: int | float | None = None,
             ssl_shutdown_timeout: int | float | None = None,
             start_serving: bool = True,
@@ -505,8 +505,8 @@ class BaseEventLoop(AbstractEventLoop):
             sock: None = None,
             backlog: int = 100,
             ssl: _SSLContext = None,
-            reuse_address: bool | None = None,
-            reuse_port: bool | None = None,
+            reuse_address: bool? = None,
+            reuse_port: bool? = None,
             ssl_handshake_timeout: int | float | None = None,
             start_serving: bool = True,
         ) -> Server:
@@ -536,8 +536,8 @@ class BaseEventLoop(AbstractEventLoop):
             sock: socket = ...,
             backlog: int = 100,
             ssl: _SSLContext = None,
-            reuse_address: bool | None = None,
-            reuse_port: bool | None = None,
+            reuse_address: bool? = None,
+            reuse_port: bool? = None,
             ssl_handshake_timeout: int | float | None = None,
             start_serving: bool = True,
         ) -> Server
@@ -550,10 +550,10 @@ class BaseEventLoop(AbstractEventLoop):
             sslcontext: ssl.SSLContext,
             *,
             server_side: bool = False,
-            server_hostname: str | None = None,
+            server_hostname: str? = None,
             ssl_handshake_timeout: int | float | None = None,
             ssl_shutdown_timeout: int | float | None = None,
-        ) -> Transport | None:
+        ) -> Transport?:
             """Upgrade transport to TLS.
 
             Return a new transport that *protocol* should start using
@@ -577,9 +577,9 @@ class BaseEventLoop(AbstractEventLoop):
             sslcontext: ssl.SSLContext,
             *,
             server_side: bool = False,
-            server_hostname: str | None = None,
+            server_hostname: str? = None,
             ssl_handshake_timeout: int | float | None = None,
-        ) -> Transport | None:
+        ) -> Transport?:
             """Upgrade transport to TLS.
 
             Return a new transport that *protocol* should start using
@@ -596,10 +596,10 @@ class BaseEventLoop(AbstractEventLoop):
         ) -> (Transport, ProtocolT)
 
     override async def sock_sendfile(
-        self, sock: socket, file: IO[bytes], offset: int = 0, count: int | None = None, *, fallback: bool | None = True
+        self, sock: socket, file: IO[bytes], offset: int = 0, count: int? = None, *, fallback: bool? = True
     ) -> int
     override async def sendfile(
-        self, transport: WriteTransport, file: IO[bytes], offset: int = 0, count: int | None = None, *, fallback: bool = True
+        self, transport: WriteTransport, file: IO[bytes], offset: int = 0, count: int? = None, *, fallback: bool = True
     ) -> int:
         """Send a file to transport.
 
@@ -634,9 +634,9 @@ class BaseEventLoop(AbstractEventLoop):
             family: int = 0,
             proto: int = 0,
             flags: int = 0,
-            reuse_port: bool | None = None,
-            allow_broadcast: bool | None = None,
-            sock: socket | None = None,
+            reuse_port: bool? = None,
+            allow_broadcast: bool? = None,
+            sock: socket? = None,
         ) -> (DatagramTransport, ProtocolT):
             """Create datagram connection."""
 
@@ -650,10 +650,10 @@ class BaseEventLoop(AbstractEventLoop):
             family: int = 0,
             proto: int = 0,
             flags: int = 0,
-            reuse_address: bool | None = ...,
-            reuse_port: bool | None = None,
-            allow_broadcast: bool | None = None,
-            sock: socket | None = None,
+            reuse_address: bool? = ...,
+            reuse_port: bool? = None,
+            allow_broadcast: bool? = None,
+            sock: socket? = None,
         ) -> (DatagramTransport, ProtocolT):
             """Create datagram connection."""
 
@@ -677,7 +677,7 @@ class BaseEventLoop(AbstractEventLoop):
         bufsize: 0 = 0,
         encoding: None = None,
         errors: None = None,
-        text: False | None = None,
+        text: False? = None,
         **kwargs: dynamic,
     ) -> (SubprocessTransport, ProtocolT)
     override async def subprocess_exec[ProtocolT: BaseProtocol](
@@ -693,7 +693,7 @@ class BaseEventLoop(AbstractEventLoop):
         bufsize: 0 = 0,
         encoding: None = None,
         errors: None = None,
-        text: False | None = None,
+        text: False? = None,
         **kwargs: dynamic,
     ) -> (SubprocessTransport, ProtocolT)
     override def add_reader[*Args](self, fd: FileDescriptorLike, callback: (*Args) -> dynamic, *args: *Args)
@@ -715,7 +715,7 @@ class BaseEventLoop(AbstractEventLoop):
     override def add_signal_handler[*Args](self, sig: int, callback: (*Args) -> dynamic, *args: *Args)
     override def remove_signal_handler(self, sig: int) -> bool
     # Error handlers.
-    override def set_exception_handler(self, handler: ExceptionHandler | None):
+    override def set_exception_handler(self, handler: ExceptionHandler?):
         """Set handler as the new event loop exception handler.
 
         If handler is None, the default exception handler will
@@ -728,7 +728,7 @@ class BaseEventLoop(AbstractEventLoop):
         documentation for details about context).
         """
 
-    override def get_exception_handler(self) -> ExceptionHandler | None:
+    override def get_exception_handler(self) -> ExceptionHandler?:
         """Return an exception handler, or None if the default one is in use."""
 
     override def default_exception_handler(self, context: _Context):

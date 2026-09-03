@@ -25,7 +25,7 @@ if sys.platform == "win32":
         init(self, handle: int)
         def __del__(self)
         def __enter__(self) -> Self
-        def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None)
+        def __exit__(self, t: type[BaseException]?, v: BaseException?, tb: TracebackType?)
         let handle: int
         def fileno(self) -> int
         def close(self, *, CloseHandle: (int) -> object = ...)
@@ -36,9 +36,9 @@ if sys.platform == "win32":
         The stdin, stdout, stderr are None or instances of PipeHandle.
         """
 
-        stdin: PipeHandle | None
-        stdout: PipeHandle | None
-        stderr: PipeHandle | None
+        stdin: PipeHandle?
+        stdout: PipeHandle?
+        stderr: PipeHandle?
         # For simplicity we omit the full overloaded __new__ signature of
         # subprocess.Popen. The arguments are mostly the same, but
         # subprocess.Popen takes other positional-or-keyword arguments before
@@ -46,16 +46,16 @@ if sys.platform == "win32":
         def __new__(
             cls,
             args: subprocess._CMD,
-            stdin: subprocess._FILE | None = None,
-            stdout: subprocess._FILE | None = None,
-            stderr: subprocess._FILE | None = None,
+            stdin: subprocess._FILE? = None,
+            stdout: subprocess._FILE? = None,
+            stderr: subprocess._FILE? = None,
             **kwds: dynamic,
         ) -> Self
         init(
             self,
             args: subprocess._CMD,
-            stdin: subprocess._FILE | None = None,
-            stdout: subprocess._FILE | None = None,
-            stderr: subprocess._FILE | None = None,
+            stdin: subprocess._FILE? = None,
+            stdout: subprocess._FILE? = None,
+            stderr: subprocess._FILE? = None,
             **kwds: dynamic,
         )

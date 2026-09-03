@@ -32,7 +32,7 @@ class Version:
     def __le__(self, other: Self | str) -> bool
     def __gt__(self, other: Self | str) -> bool
     def __ge__(self, other: Self | str) -> bool
-    abstract def __init__(self, vstring: str | None = None) -> None
+    abstract def __init__(self, vstring: str? = None) -> None
     abstract def parse(self, vstring: str) -> Self
     override abstract def __str__(self) -> str
     abstract def _cmp(self, other: Self | str) -> bool
@@ -75,8 +75,8 @@ class StrictVersion(Version):
 
     version_re: Pattern[str]
     version: (int, int, int)
-    prerelease: (str, int) | None
-    init(self, vstring: str | None = None)
+    prerelease: (str, int)?
+    init(self, vstring: str? = None)
     override def parse(self, vstring: str) -> Self
     override def __str__(self) -> str  # noqa: Y029
     override def _cmp(self, other: Self | str) -> bool
@@ -116,7 +116,7 @@ class LooseVersion(Version):
     component_re: Pattern[str]
     vstring: str
     version: (*: str | int)
-    init(self, vstring: str | None = None)
+    init(self, vstring: str? = None)
     override def parse(self, vstring: str) -> Self
     override def __str__(self) -> str  # noqa: Y029
     override def _cmp(self, other: Self | str) -> bool

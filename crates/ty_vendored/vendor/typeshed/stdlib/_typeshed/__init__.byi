@@ -232,7 +232,7 @@ type WriteableBuffer = Buffer
 type ReadableBuffer = Buffer  # stable
 
 protocol SliceableBuffer(Buffer):
-    def __getitem__(self, slice: slice[SupportsIndex | None], /) -> Sequence[int]
+    def __getitem__(self, slice: slice[SupportsIndex?], /) -> Sequence[int]
 
 protocol IndexableBuffer(Buffer):
     def __getitem__(self, i: int, /) -> int
@@ -240,7 +240,7 @@ protocol IndexableBuffer(Buffer):
 protocol SupportsGetItemBuffer(SliceableBuffer, IndexableBuffer):
     def __contains__(self, x: dynamic, /) -> bool
 
-    override def __getitem__(self, slice: slice[SupportsIndex | None], /) -> Sequence[int]
+    override def __getitem__(self, slice: slice[SupportsIndex?], /) -> Sequence[int]
     def __getitem__(self, i: int, /) -> int
 
 protocol SizedBuffer(Sized, Buffer)
@@ -278,7 +278,7 @@ StrOrLiteralStr = TypeVar("StrOrLiteralStr", LiteralString, str)  # noqa: Y001
 type ProfileFunction = (FrameType, Literal["call", "return", "c_call", "c_return", "c_exception"], dynamic) -> object
 
 # Objects suitable to be passed to sys.settrace, threading.settrace, and similar
-type TraceFunction = (FrameType, Literal["call", "line", "return", "exception", "opcode"], dynamic) -> (TraceFunction | None)
+type TraceFunction = (FrameType, Literal["call", "line", "return", "exception", "opcode"], dynamic) -> (TraceFunction?)
 
 # experimental
 # Might not work as expected for pyright, see

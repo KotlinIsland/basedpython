@@ -58,7 +58,7 @@ def release_lock():
     """
 
 if sys.version_info >= (3, 11):
-    def find_frozen(name: str, /, *, withdata: bool = False) -> (memoryview | None, bool, str | None) | None:
+    def find_frozen(name: str, /, *, withdata: bool = False) -> (memoryview?, bool, str?)?:
         """Return info about the corresponding frozen module (if there is one) or None.
 
         The returned info (a 2-tuple):
@@ -70,7 +70,7 @@ if sys.version_info >= (3, 11):
                         the module's current name)
         """
 
-    def get_frozen_object(name: str, data: ReadableBuffer | None = None, /) -> types.CodeType:
+    def get_frozen_object(name: str, data: ReadableBuffer? = None, /) -> types.CodeType:
         """Create a code object for a frozen module."""
 
 else:

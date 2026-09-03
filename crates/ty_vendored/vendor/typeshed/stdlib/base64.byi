@@ -30,7 +30,7 @@ if sys.version_info >= (3, 13):
     __all__ += ["z85decode", "z85encode"]
 
 if sys.version_info >= (3, 15):
-    def b64encode(s: ReadableBuffer, altchars: ReadableBuffer | None = None, *, padded: bool = True, wrapcol: int = 0) -> bytes:
+    def b64encode(s: ReadableBuffer, altchars: ReadableBuffer? = None, *, padded: bool = True, wrapcol: int = 0) -> bytes:
         """Encode the bytes-like object s using Base64 and return a bytes object.
 
         Optional altchars should be a byte string of length 2 which specifies an
@@ -77,7 +77,7 @@ if sys.version_info >= (3, 15):
         """
 
 else:
-    def b64encode(s: ReadableBuffer, altchars: ReadableBuffer | None = None) -> bytes:
+    def b64encode(s: ReadableBuffer, altchars: ReadableBuffer? = None) -> bytes:
         """Encode the bytes-like object s using Base64 and return a bytes object.
 
         Optional altchars should be a byte string of length 2 which specifies an

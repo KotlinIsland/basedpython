@@ -16,7 +16,7 @@ class MIMEApplication(MIMENonMultipart):
         _subtype: str = "octet-stream",
         _encoder: (MIMEApplication) -> object = ...,
         *,
-        policy: Policy | None = None,
+        policy: Policy? = None,
         **_params: _ParamsType,
     ):
         """Create an application/* type MIME document.

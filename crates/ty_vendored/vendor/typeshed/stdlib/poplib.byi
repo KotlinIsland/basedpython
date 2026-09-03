@@ -98,7 +98,7 @@ class POP3:
         Result is tuple of 2 ints (message count, mailbox size)
         """
 
-    def list(self, which: dynamic | None = None) -> LongResp:
+    def list(self, which: dynamic? = None) -> LongResp:
         """Request listing, return result.
 
         Result without a message number argument is in form
@@ -184,7 +184,7 @@ class POP3:
         having the implementation split into multiple arguments...
         """
 
-    def stls(self, context: ssl.SSLContext | None = None) -> bytes:
+    def stls(self, context: ssl.SSLContext? = None) -> bytes:
         """Start a TLS session on the active connection as specified in RFC 2595.
 
         context - a ssl.SSLContext
@@ -204,7 +204,7 @@ class POP3_SSL(POP3):
 
     if sys.version_info >= (3, 12):
         def __init__(
-            self, host: str, port: int = 995, *, timeout: int | float = ..., context: ssl.SSLContext | None = None
+            self, host: str, port: int = 995, *, timeout: int | float = ..., context: ssl.SSLContext? = None
         ) -> None
         def stls(self, context: dynamic = None) -> Never:
             """The method unconditionally raises an exception since the
@@ -220,7 +220,7 @@ class POP3_SSL(POP3):
             keyfile: None = None,
             certfile: None = None,
             timeout: int | float = ...,
-            context: ssl.SSLContext | None = None,
+            context: ssl.SSLContext? = None,
         ) -> None
         @deprecated(
             "The `keyfile`, `certfile` parameters are deprecated since Python 3.6; "
@@ -230,14 +230,14 @@ class POP3_SSL(POP3):
             self,
             host: str,
             port: int = 995,
-            keyfile: StrOrBytesPath | None = None,
-            certfile: StrOrBytesPath | None = None,
+            keyfile: StrOrBytesPath? = None,
+            certfile: StrOrBytesPath? = None,
             timeout: int | float = ...,
             context: None = None,
         ) -> None
 
-        keyfile: StrOrBytesPath | None
-        certfile: StrOrBytesPath | None
+        keyfile: StrOrBytesPath?
+        certfile: StrOrBytesPath?
         # "context" is actually the last argument,
         # but that breaks LSP and it doesn't really matter because all the arguments are ignored
         override def stls(self, context: dynamic = None, keyfile: dynamic = None, certfile: dynamic = None) -> Never:

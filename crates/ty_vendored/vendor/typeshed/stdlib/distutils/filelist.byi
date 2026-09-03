@@ -24,7 +24,7 @@ class FileList:
         filtering applied)
     """
 
-    allfiles: Iterable[str] | None
+    allfiles: Iterable[str]?
     files: list[str]
     init(self, warn: None = None, debug_print: None = None)
     def set_allfiles(self, allfiles: Iterable[str])
@@ -41,7 +41,7 @@ class FileList:
     def process_template_line(self, line: str)
 
     def include_pattern(
-        self, pattern: str, anchor: bool | 0 | 1 = 1, prefix: str | None = None, is_regex: 0 | False = 0
+        self, pattern: str, anchor: bool | 0 | 1 = 1, prefix: str? = None, is_regex: 0 | False = 0
     ) -> bool:
         """Select strings (presumably filenames) from 'self.files' that
         match 'pattern', a Unix-style wildcard (glob) pattern.  Patterns
@@ -72,12 +72,12 @@ class FileList:
         self,
         pattern: str | Pattern[str],
         anchor: bool | 0 | 1 = 1,
-        prefix: str | None = None,
+        prefix: str? = None,
         is_regex: bool | 0 | 1 = 0,
     ) -> bool
 
     def exclude_pattern(
-        self, pattern: str, anchor: bool | 0 | 1 = 1, prefix: str | None = None, is_regex: 0 | False = 0
+        self, pattern: str, anchor: bool | 0 | 1 = 1, prefix: str? = None, is_regex: 0 | False = 0
     ) -> bool:
         """Remove strings (presumably filenames) from 'files' that match
         'pattern'.  Other parameters are the same as for
@@ -90,7 +90,7 @@ class FileList:
         self,
         pattern: str | Pattern[str],
         anchor: bool | 0 | 1 = 1,
-        prefix: str | None = None,
+        prefix: str? = None,
         is_regex: bool | 0 | 1 = 0,
     ) -> bool
 
@@ -108,7 +108,7 @@ def glob_to_re(pattern: str) -> str:
     """
 
 def translate_pattern(
-    pattern: str, anchor: bool | 0 | 1 = 1, prefix: str | None = None, is_regex: False | 0 = 0
+    pattern: str, anchor: bool | 0 | 1 = 1, prefix: str? = None, is_regex: False | 0 = 0
 ) -> Pattern[str]:
     """Translate a shell-like wildcard pattern to a compiled regular
     expression.  Return the compiled regex.  If 'is_regex' true,
@@ -117,5 +117,5 @@ def translate_pattern(
     """
 def translate_pattern(pattern: str | Pattern[str], *, is_regex: True | 1) -> Pattern[str]
 def translate_pattern(
-    pattern: str | Pattern[str], anchor: bool | 0 | 1 = 1, prefix: str | None = None, is_regex: bool | 0 | 1 = 0
+    pattern: str | Pattern[str], anchor: bool | 0 | 1 = 1, prefix: str? = None, is_regex: bool | 0 | 1 = 0
 ) -> Pattern[str]

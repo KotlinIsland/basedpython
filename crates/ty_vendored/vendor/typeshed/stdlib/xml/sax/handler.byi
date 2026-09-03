@@ -46,12 +46,12 @@ protocol _ContentHandlerProtocol:  # noqa: Y046  # Protocol is not used
     def setDocumentLocator(self, locator: xmlreader.Locator)
     def startDocument(self)
     def endDocument(self)
-    def startPrefixMapping(self, prefix: str | None, uri: str)
-    def endPrefixMapping(self, prefix: str | None)
+    def startPrefixMapping(self, prefix: str?, uri: str)
+    def endPrefixMapping(self, prefix: str?)
     def startElement(self, name: str, attrs: xmlreader.AttributesImpl)
     def endElement(self, name: str)
-    def startElementNS(self, name: (str | None, str), qname: str | None, attrs: xmlreader.AttributesNSImpl)
-    def endElementNS(self, name: (str | None, str), qname: str | None)
+    def startElementNS(self, name: (str?, str), qname: str?, attrs: xmlreader.AttributesNSImpl)
+    def endElementNS(self, name: (str?, str), qname: str?)
     def characters(self, content: str)
     def ignorableWhitespace(self, whitespace: str)
     def processingInstruction(self, target: str, data: str)
@@ -106,7 +106,7 @@ class ContentHandler:
         input.
         """
 
-    def startPrefixMapping(self, prefix: str | None, uri: str):
+    def startPrefixMapping(self, prefix: str?, uri: str):
         """Begin the scope of a prefix-URI Namespace mapping.
 
         The information from this event is not necessary for normal
@@ -130,7 +130,7 @@ class ContentHandler:
         not guaranteed.
         """
 
-    def endPrefixMapping(self, prefix: str | None):
+    def endPrefixMapping(self, prefix: str?):
         """End the scope of a prefix-URI mapping.
 
         See startPrefixMapping for details. This event will always
@@ -154,7 +154,7 @@ class ContentHandler:
         as with the startElement event.
         """
 
-    def startElementNS(self, name: (str | None, str), qname: str | None, attrs: xmlreader.AttributesNSImpl):
+    def startElementNS(self, name: (str?, str), qname: str?, attrs: xmlreader.AttributesNSImpl):
         """Signals the start of an element in namespace mode.
 
         The name parameter contains the name of the element type as a
@@ -167,7 +167,7 @@ class ContentHandler:
         no namespace.
         """
 
-    def endElementNS(self, name: (str | None, str), qname: str | None):
+    def endElementNS(self, name: (str?, str), qname: str?):
         """Signals the end of an element in namespace mode.
 
         The name parameter contains the name of the element type, just
@@ -227,8 +227,8 @@ class ContentHandler:
 
 @type_check_only
 protocol _DTDHandlerProtocol:  # noqa: Y046  # Protocol is not used
-    def notationDecl(self, name: str, publicId: str | None, systemId: str)
-    def unparsedEntityDecl(self, name: str, publicId: str | None, systemId: str, ndata: str)
+    def notationDecl(self, name: str, publicId: str?, systemId: str)
+    def unparsedEntityDecl(self, name: str, publicId: str?, systemId: str, ndata: str)
 
 class DTDHandler:
     """Handle DTD events.
@@ -237,15 +237,15 @@ class DTDHandler:
     parsing (unparsed entities and attributes).
     """
 
-    def notationDecl(self, name: str, publicId: str | None, systemId: str):
+    def notationDecl(self, name: str, publicId: str?, systemId: str):
         """Handle a notation declaration event."""
 
-    def unparsedEntityDecl(self, name: str, publicId: str | None, systemId: str, ndata: str):
+    def unparsedEntityDecl(self, name: str, publicId: str?, systemId: str, ndata: str):
         """Handle an unparsed entity declaration event."""
 
 @type_check_only
 protocol _EntityResolverProtocol:  # noqa: Y046  # Protocol is not used
-    def resolveEntity(self, publicId: str | None, systemId: str) -> str
+    def resolveEntity(self, publicId: str?, systemId: str) -> str
 
 class EntityResolver:
     """Basic interface for resolving entities. If you create an object
@@ -255,7 +255,7 @@ class EntityResolver:
     this interface with the default behaviour.
     """
 
-    def resolveEntity(self, publicId: str | None, systemId: str) -> str:
+    def resolveEntity(self, publicId: str?, systemId: str) -> str:
         """Resolve the system identifier of an entity and return either
         the system identifier to read from as a string, or an InputSource
         to read from.
@@ -297,7 +297,7 @@ class LexicalHandler:
         content is a string that holds the contents of the comment.
         """
 
-    def startDTD(self, name: str, public_id: str | None, system_id: str | None):
+    def startDTD(self, name: str, public_id: str?, system_id: str?):
         """Report the start of the DTD declarations, if the document
         has an associated DTD.
 

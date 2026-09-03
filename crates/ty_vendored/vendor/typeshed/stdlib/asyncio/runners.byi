@@ -41,7 +41,7 @@ if sys.version_info >= (3, 11):
 
         """
 
-        init(self, *, debug: bool | None = None, loop_factory: (() -> AbstractEventLoop) | None = None)
+        init(self, *, debug: bool? = None, loop_factory: (() -> AbstractEventLoop)? = None)
         def __enter__(self) -> Self
         def __exit__(self, exc_type: Unused, exc_val: Unused, exc_tb: Unused)
         def close(self):
@@ -51,15 +51,15 @@ if sys.version_info >= (3, 11):
             """Return embedded event loop."""
 
         if sys.version_info >= (3, 14):
-            def run[Element](self, coro: Awaitable[Element], *, context: Context | None = None) -> Element:
+            def run[Element](self, coro: Awaitable[Element], *, context: Context? = None) -> Element:
                 """Run code in the embedded event loop."""
 
         else:
-            def run[Element](self, coro: Coroutine[dynamic, dynamic, Element], *, context: Context | None = None) -> Element:
+            def run[Element](self, coro: Coroutine[dynamic, dynamic, Element], *, context: Context? = None) -> Element:
                 """Run a coroutine inside the embedded event loop."""
 
 if sys.version_info >= (3, 14):
-    def run[Element](main: Awaitable[Element], *, debug: bool | None = None, loop_factory: (() -> AbstractEventLoop) | None = None) -> Element:
+    def run[Element](main: Awaitable[Element], *, debug: bool? = None, loop_factory: (() -> AbstractEventLoop)? = None) -> Element:
         """Execute the coroutine and return the result.
 
         This function runs the passed coroutine, taking care of
@@ -91,7 +91,7 @@ if sys.version_info >= (3, 14):
 
 elif sys.version_info >= (3, 12):
     def run[Element](
-        main: Coroutine[dynamic, dynamic, Element], *, debug: bool | None = None, loop_factory: (() -> AbstractEventLoop) | None = None
+        main: Coroutine[dynamic, dynamic, Element], *, debug: bool? = None, loop_factory: (() -> AbstractEventLoop)? = None
     ) -> Element:
         """Execute the coroutine and return the result.
 
@@ -123,7 +123,7 @@ elif sys.version_info >= (3, 12):
         """
 
 else:
-    def run[Element](main: Coroutine[dynamic, dynamic, Element], *, debug: bool | None = None) -> Element:
+    def run[Element](main: Coroutine[dynamic, dynamic, Element], *, debug: bool? = None) -> Element:
         """Execute the coroutine and return the result.
 
         This function runs the passed coroutine, taking care of

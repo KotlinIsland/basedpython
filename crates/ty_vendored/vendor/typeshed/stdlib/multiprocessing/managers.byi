@@ -41,9 +41,9 @@ class Token:
 
     __slots__ = ("typeid", "address", "id")
     typeid: str | bytes | None
-    address: _Address | None
+    address: _Address?
     id: str | bytes | int | None
-    init(self, typeid: bytes | str | None, address: _Address | None, id: str | bytes | int | None)
+    init(self, typeid: bytes | str | None, address: _Address?, id: str | bytes | int | None)
     def __getstate__(self) -> (str | bytes | None, (str | bytes, int), str | bytes | int | None)
     def __setstate__(self, state: (str | bytes | None, (str | bytes, int), str | bytes | int | None))
 
@@ -64,7 +64,7 @@ class BaseProxy:
         incref: bool = True,
         manager_owned: bool = False,
     )
-    def __deepcopy__(self, memo: dynamic | None) -> dynamic
+    def __deepcopy__(self, memo: dynamic?) -> dynamic
     def _callmethod(self, methodname: str, args: (*: dynamic) = (), kwds: dict[dynamic, dynamic] = {}):
         """
         Try to call a method of the referent and return a copy of the result
@@ -111,7 +111,7 @@ if sys.version_info >= (3, 13):
         def values(self) -> list[Value]
         if sys.version_info >= (3, 14):
             # Next methods are copied from builtins.dict
-            def fromkeys[Element](self, iterable: Iterable[Element], value: None = None, /) -> dict[Element, dynamic | None]
+            def fromkeys[Element](self, iterable: Iterable[Element], value: None = None, /) -> dict[Element, dynamic?]
             def fromkeys[Element, Other](self, iterable: Iterable[Element], value: Other, /) -> dict[Element, Other]
 
             def __reversed__(self) -> Iterator[Key]
@@ -204,13 +204,13 @@ class BaseListProxy[in out Element](BaseProxy, MutableSequence[Element]):
     __builtins__: ClassVar[dict[str, dynamic]]
     override def __len__(self) -> int
     def __add__(self, x: list[Element], /) -> list[Element]
-    override def __delitem__(self, i: SupportsIndex | slice[SupportsIndex | None], /)
+    override def __delitem__(self, i: SupportsIndex | slice[SupportsIndex?], /)
 
     override def __getitem__(self, i: SupportsIndex, /) -> Element
-    def __getitem__(self, s: slice[SupportsIndex | None], /) -> list[Element]
+    def __getitem__(self, s: slice[SupportsIndex?], /) -> list[Element]
 
     override def __setitem__(self, i: SupportsIndex, o: Element, /) -> None
-    def __setitem__(self, s: slice[SupportsIndex | None], o: Iterable[Element], /) -> None
+    def __setitem__(self, s: slice[SupportsIndex?], o: Iterable[Element], /) -> None
 
     def __mul__(self, n: SupportsIndex, /) -> list[Element]
     def __rmul__(self, n: SupportsIndex, /) -> list[Element]
@@ -254,7 +254,7 @@ class Server:
     Server class which runs in a process controlled by a manager object
     """
 
-    address: _Address | None
+    address: _Address?
     id_to_obj: dict[str, (dynamic, set[str], dict[str, str])]
     fallback_mapping: dict[str, (ServerConnection, str, dynamic) -> dynamic]
     public: list[str]
@@ -262,7 +262,7 @@ class Server:
     init(
         self,
         registry: dict[str, ((...) -> dynamic, Iterable[str], dict[str, str], dynamic)],
-        address: _Address | None,
+        address: _Address?,
         authkey: bytes,
         serializer: str,
     )
@@ -327,20 +327,20 @@ class BaseManager:
     if sys.version_info >= (3, 11):
         def __init__(
             self,
-            address: _Address | None = None,
-            authkey: bytes | None = None,
+            address: _Address? = None,
+            authkey: bytes? = None,
             serializer: str = "pickle",
-            ctx: BaseContext | None = None,
+            ctx: BaseContext? = None,
             *,
             shutdown_timeout: int | float = 1.0,
         ) -> None
     else:
         def __init__(
             self,
-            address: _Address | None = None,
-            authkey: bytes | None = None,
+            address: _Address? = None,
+            authkey: bytes? = None,
             serializer: str = "pickle",
-            ctx: BaseContext | None = None,
+            ctx: BaseContext? = None,
         ) -> None
 
     def get_server(self) -> Server:
@@ -353,7 +353,7 @@ class BaseManager:
         Connect manager object to the server process
         """
 
-    def start(self, initializer: (...) -> object | None = None, initargs: Iterable[dynamic] = ()):
+    def start(self, initializer: (...) -> object? = None, initargs: Iterable[dynamic] = ()):
         """
         Spawn a server process for this manager object
         """
@@ -364,14 +364,14 @@ class BaseManager:
         Join the manager process (if it has been spawned)
         """
 
-    let address: _Address | None
+    let address: _Address?
     class def register(
         cls,
         typeid: str,
-        callable: (...) -> object | None = None,
+        callable: (...) -> object? = None,
         proxytype: dynamic = None,
-        exposed: Sequence[str] | None = None,
-        method_to_typeid: Mapping[str, str] | None = None,
+        exposed: Sequence[str]? = None,
+        method_to_typeid: Mapping[str, str]? = None,
         create_method: bool = True,
     ):
         """
@@ -380,7 +380,7 @@ class BaseManager:
 
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
     )
 
 class SyncManager(BaseManager):
@@ -395,7 +395,7 @@ class SyncManager(BaseManager):
     """
 
     def Barrier(
-        self, parties: int, action: (() -> None) | None = None, timeout: int | float | None = None
+        self, parties: int, action: (() -> None)? = None, timeout: int | float | None = None
     ) -> threading.Barrier
     def BoundedSemaphore(self, value: int = 1) -> threading.BoundedSemaphore
     def Condition(self, lock: threading.Lock | threading._RLock | None = None) -> threading.Condition
@@ -404,11 +404,11 @@ class SyncManager(BaseManager):
     def Namespace(self) -> _Namespace
     def Pool(
         self,
-        processes: int | None = None,
-        initializer: (...) -> object | None = None,
+        processes: int? = None,
+        initializer: (...) -> object? = None,
         initargs: Iterable[dynamic] = (),
-        maxtasksperchild: int | None = None,
-        context: dynamic | None = None,
+        maxtasksperchild: int? = None,
+        context: dynamic? = None,
     ) -> pool.Pool
     def Queue(self, maxsize: int = ...) -> queue.Queue[dynamic]
     def JoinableQueue(self, maxsize: int = ...) -> queue.Queue[dynamic]
@@ -469,7 +469,7 @@ class SharedMemoryManager(BaseManager):
         bytes, to be tracked by the manager.
         """
 
-    def ShareableList(self, sequence: Iterable[_SLT] | None) -> _ShareableList[_SLT]:
+    def ShareableList(self, sequence: Iterable[_SLT]?) -> _ShareableList[_SLT]:
         """Returns a new ShareableList instance populated with the values
         from the input sequence, to be tracked by the manager.
         """

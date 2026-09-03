@@ -55,5 +55,5 @@ else:
 final HAVE_ARGUMENT: int
 final EXTENDED_ARG: int
 
-def stack_effect(opcode: int, oparg: int | None = None, /, *, jump: bool | None = None) -> int:
+def stack_effect(opcode: int, oparg: int? = None, /, *, jump: bool? = None) -> int:
     """Compute the stack effect of the opcode."""

@@ -59,7 +59,7 @@ final class RLock:
     __enter__ = acquire
     """Lock the lock."""
 
-    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None):
+    def __exit__(self, t: type[BaseException]?, v: BaseException?, tb: TracebackType?):
         """Release the lock."""
 
     if sys.version_info >= (3, 14):
@@ -75,7 +75,7 @@ if sys.version_info >= (3, 13):
         def _set_done(self)
 
     def start_joinable_thread(
-        function: () -> object, handle: _ThreadHandle | None = None, daemon: bool = True
+        function: () -> object, handle: _ThreadHandle? = None, daemon: bool = True
     ) -> _ThreadHandle:
         """*For internal use only*: start a new thread.
 
@@ -140,7 +140,7 @@ if sys.version_info >= (3, 13):
             """Lock the lock."""
 
         def __exit__(
-            self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
+            self, type: type[BaseException]?, value: BaseException?, traceback: TracebackType?
         ):
             """Release the lock."""
 
@@ -232,7 +232,7 @@ else:
             """
 
         def __exit__(
-            self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
+            self, type: type[BaseException]?, value: BaseException?, traceback: TracebackType?
         ):
             """release()
             (release_lock() is an obsolete synonym)
@@ -334,11 +334,11 @@ final class _ExceptHookArgs(structseq[dynamic], tuple[type[BaseException], BaseE
 
     let exc_type: type[BaseException]
 
-    let exc_value: BaseException | None
+    let exc_value: BaseException?
 
-    let exc_traceback: TracebackType | None
+    let exc_traceback: TracebackType?
 
-    let thread: Thread | None
+    let thread: Thread?
 
 _excepthook: (_ExceptHookArgs) -> dynamic
 """Handle uncaught Thread.run() exception."""

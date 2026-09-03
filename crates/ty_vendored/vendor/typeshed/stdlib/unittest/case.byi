@@ -23,9 +23,9 @@ class _BaseTestCaseContext:
 
 class _AssertRaisesBaseContext(_BaseTestCaseContext):
     expected: type[BaseException] | (*: type[BaseException])
-    expected_regex: Pattern[str] | None
-    obj_name: str | None
-    msg: str | None
+    expected_regex: Pattern[str]?
+    obj_name: str?
+    msg: str?
 
     init(
         self,
@@ -122,7 +122,7 @@ class TestCase:
 
     failureException: type[BaseException]
     longMessage: bool
-    maxDiff: int | None
+    maxDiff: int?
     # undocumented
     _testMethodName: str
     # undocumented
@@ -147,8 +147,8 @@ class TestCase:
     class def tearDownClass(cls):
         """Hook method for deconstructing the class fixture after running all tests in the class."""
 
-    def run(self, result: unittest.result.TestResult | None = None) -> unittest.result.TestResult | None
-    def __call__(self, result: unittest.result.TestResult | None = ...) -> unittest.result.TestResult | None
+    def run(self, result: unittest.result.TestResult? = None) -> unittest.result.TestResult?
+    def __call__(self, result: unittest.result.TestResult? = ...) -> unittest.result.TestResult?
     def skipTest(self, reason: dynamic) -> Never:
         """Skip this test."""
 
@@ -355,7 +355,7 @@ class TestCase:
             self,
             logger: str | logging.Logger | None = None,
             level: int | str | None = None,
-            formatter: logging.Formatter | None = None,
+            formatter: logging.Formatter? = None,
         ) -> _AssertLogsContext[_LoggingWatcher]:
             """Fail unless a log message of level *level* or higher is emitted
             on *logger_name* or its children.  If omitted, *level* defaults to
@@ -432,7 +432,7 @@ class TestCase:
         self,
         first: SupportsSub[Element, SupportsAbs[SupportsRound[object]]],
         second: Element,
-        places: int | None = None,
+        places: int? = None,
         msg: dynamic = None,
         delta: None = None,
     ) -> None
@@ -440,7 +440,7 @@ class TestCase:
         self,
         first: Element,
         second: SupportsRSub[Element, SupportsAbs[SupportsRound[object]]],
-        places: int | None = None,
+        places: int? = None,
         msg: dynamic = None,
         delta: None = None,
     ) -> None
@@ -463,7 +463,7 @@ class TestCase:
         self,
         first: SupportsSub[Element, SupportsAbs[SupportsRound[object]]],
         second: Element,
-        places: int | None = None,
+        places: int? = None,
         msg: dynamic = None,
         delta: None = None,
     ) -> None
@@ -471,7 +471,7 @@ class TestCase:
         self,
         first: Element,
         second: SupportsRSub[Element, SupportsAbs[SupportsRound[object]]],
-        places: int | None = None,
+        places: int? = None,
         msg: dynamic = None,
         delta: None = None,
     ) -> None
@@ -513,7 +513,7 @@ class TestCase:
         """Assert that two multi-line strings are equal."""
 
     def assertSequenceEqual(
-        self, seq1: Sequence[dynamic], seq2: Sequence[dynamic], msg: dynamic = None, seq_type: type[Sequence[dynamic]] | None = None
+        self, seq1: Sequence[dynamic], seq2: Sequence[dynamic], msg: dynamic = None, seq_type: type[Sequence[dynamic]]? = None
     ):
         """An equality assertion for ordered sequences (like lists and tuples).
 
@@ -573,7 +573,7 @@ class TestCase:
     def countTestCases(self) -> int
     def defaultTestResult(self) -> unittest.result.TestResult
     def id(self) -> str
-    def shortDescription(self) -> str | None:
+    def shortDescription(self) -> str?:
         """Returns a one-line description of the test, or None if no
         description has been provided.
 
@@ -616,7 +616,7 @@ class TestCase:
         class def enterClassContext[Element](cls, cm: AbstractContextManager[Element]) -> Element:
             """Same as enterContext, but class-wide."""
 
-    def _formatMessage(self, msg: str | None, standardMsg: str) -> str:  # undocumented
+    def _formatMessage(self, msg: str?, standardMsg: str) -> str:  # undocumented
         """Honour the longMessage attribute when generating failure messages.
         If longMessage is False this means:
         * Use only an explicit message if it is provided
@@ -679,9 +679,9 @@ class FunctionTestCase(TestCase):
     init(
         self,
         testFunc: () -> object,
-        setUp: (() -> object) | None = None,
-        tearDown: (() -> object) | None = None,
-        description: str | None = None,
+        setUp: (() -> object)? = None,
+        tearDown: (() -> object)? = None,
+        description: str? = None,
     )
     def runTest(self)
     override def __hash__(self) -> int
@@ -693,7 +693,7 @@ class _AssertRaisesContext[in out E: BaseException](_AssertRaisesBaseContext):
     exception: E
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, tb: TracebackType?
     ) -> bool
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
@@ -711,5 +711,5 @@ class _AssertWarnsContext(_AssertRaisesBaseContext):
     warnings: list[WarningMessage]
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, tb: TracebackType?
     )

@@ -64,7 +64,7 @@ class TextWrapper:
     break_long_words: bool
     break_on_hyphens: bool
     tabsize: int
-    max_lines: int | None
+    max_lines: int?
     placeholder: str
 
     # Attributes not present in documentation
@@ -88,7 +88,7 @@ class TextWrapper:
         break_on_hyphens: bool = True,
         tabsize: int = 8,
         *,
-        max_lines: int | None = None,
+        max_lines: int? = None,
         placeholder: str = " [...]",
     )
     # Private methods *are* part of the documented API for subclasses.
@@ -181,7 +181,7 @@ def wrap(
     break_long_words: bool = True,
     break_on_hyphens: bool = True,
     drop_whitespace: bool = True,
-    max_lines: int | None = None,
+    max_lines: int? = None,
     placeholder: str = " [...]",
 ) -> list[str]:
     """Wrap a single paragraph of text, returning a list of wrapped lines.
@@ -207,7 +207,7 @@ def fill(
     break_long_words: bool = True,
     break_on_hyphens: bool = True,
     drop_whitespace: bool = True,
-    max_lines: int | None = None,
+    max_lines: int? = None,
     placeholder: str = " [...]",
 ) -> str:
     """Fill a single paragraph of text, returning a new string.
@@ -261,7 +261,7 @@ def dedent(text: str) -> str:
     Entirely blank lines are normalized to a newline character.
     """
 
-def indent(text: str, prefix: str, predicate: ((str) -> bool) | None = None) -> str:
+def indent(text: str, prefix: str, predicate: ((str) -> bool)? = None) -> str:
     """Adds 'prefix' to the beginning of selected lines in 'text'.
 
     If 'predicate' is provided, 'prefix' will only be added to the lines

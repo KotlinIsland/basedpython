@@ -30,13 +30,13 @@ if sys.version_info >= (3, 11):
 
 
 
-private type ExitFunc = (type[BaseException] | None, BaseException | None, TracebackType | None) -> (bool | None)
+private type ExitFunc = (type[BaseException]?, BaseException?, TracebackType?) -> (bool?)
 
 # mypy and pyright object to this being both ABC and Protocol.
 # At runtime it inherits from ABC and is not a Protocol, but it is on the
 # allowlist for use as a Protocol.
 @runtime_checkable
-protocol AbstractContextManager[out Element, out ExitT: bool | None = bool | None](ABC):
+protocol AbstractContextManager[out Element, out ExitT: bool? = bool?](ABC):
     """An abstract base class for context managers."""
 
     __slots__ = ()
@@ -44,7 +44,7 @@ protocol AbstractContextManager[out Element, out ExitT: bool | None = bool | Non
         """Return `self` upon entering the runtime context."""
 
     abstract def __exit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None, /
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, traceback: TracebackType?, /
     ) -> ExitT:
         """Raise any exception triggered within the runtime context."""
 
@@ -52,7 +52,7 @@ protocol AbstractContextManager[out Element, out ExitT: bool | None = bool | Non
 # At runtime it inherits from ABC and is not a Protocol, but it is on the
 # allowlist for use as a Protocol.
 @runtime_checkable
-protocol AbstractAsyncContextManager[out Element, out ExitT: bool | None = bool | None](ABC):
+protocol AbstractAsyncContextManager[out Element, out ExitT: bool? = bool?](ABC):
     """An abstract base class for asynchronous context managers."""
 
     __slots__ = ()
@@ -60,7 +60,7 @@ protocol AbstractAsyncContextManager[out Element, out ExitT: bool | None = bool 
         """Return `self` upon entering the runtime context."""
 
     abstract async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None, /
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, traceback: TracebackType?, /
     ) -> ExitT:
         """Raise any exception triggered within the runtime context."""
 
@@ -95,8 +95,8 @@ class _GeneratorContextManager[out Element, in Send = None, out Return = None](_
 
     override def __enter__(self) -> Element
     override def __exit__(
-        self, typ: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
-    ) -> bool | None
+        self, typ: type[BaseException]?, value: BaseException?, traceback: TracebackType?
+    ) -> bool?
 
 def contextmanager[Parameters: (*: *, **: *), Element](func: (**Parameters) -> Generator[Element, None, object]) -> (**Parameters) -> _GeneratorContextManager[Element]:
     """@contextmanager decorator.
@@ -144,8 +144,8 @@ class _AsyncGeneratorContextManager[out Element, in Send = None](_GeneratorConte
 
     override async def __aenter__(self) -> Element
     override async def __aexit__(
-        self, typ: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
-    ) -> bool | None
+        self, typ: type[BaseException]?, value: BaseException?, traceback: TracebackType?
+    ) -> bool?
 
 def asynccontextmanager[Parameters: (*: *, **: *), Element](func: (**Parameters) -> AsyncGenerator[Element]) -> (**Parameters) -> _AsyncGeneratorContextManager[Element]:
     """@asynccontextmanager decorator.
@@ -249,7 +249,7 @@ class suppress(AbstractContextManager[None, bool]):
     init(self, *exceptions: type[BaseException])
     override def __enter__(self)
     override def __exit__(
-        self, exctype: type[BaseException] | None, excinst: BaseException | None, exctb: TracebackType | None
+        self, exctype: type[BaseException]?, excinst: BaseException?, exctb: TracebackType?
     ) -> bool
 
 # This is trying to describe what is needed for (most?) uses
@@ -261,14 +261,14 @@ private protocol SupportsRedirect:
     def flush(self)
 
 
-class _RedirectStream[in out SupportsRedirectT: SupportsRedirect | None](AbstractContextManager[SupportsRedirectT, None]):
+class _RedirectStream[in out SupportsRedirectT: SupportsRedirect?](AbstractContextManager[SupportsRedirectT, None]):
     init(self, new_target: SupportsRedirectT)
     override def __enter__(self) -> SupportsRedirectT
     override def __exit__(
-        self, exctype: type[BaseException] | None, excinst: BaseException | None, exctb: TracebackType | None
+        self, exctype: type[BaseException]?, excinst: BaseException?, exctb: TracebackType?
     )
 
-class redirect_stdout[in out SupportsRedirectT: SupportsRedirect | None](_RedirectStream[SupportsRedirectT]):
+class redirect_stdout[in out SupportsRedirectT: SupportsRedirect?](_RedirectStream[SupportsRedirectT]):
     """Context manager for temporarily redirecting stdout to another file.
 
     # How to send help() to stderr
@@ -281,10 +281,10 @@ class redirect_stdout[in out SupportsRedirectT: SupportsRedirect | None](_Redire
             help(pow)
     """
 
-class redirect_stderr[in out SupportsRedirectT: SupportsRedirect | None](_RedirectStream[SupportsRedirectT]):
+class redirect_stderr[in out SupportsRedirectT: SupportsRedirect?](_RedirectStream[SupportsRedirectT]):
     """Context manager for temporarily redirecting stderr to another file."""
 
-class _BaseExitStack[out ExitT: bool | None = bool | None]:
+class _BaseExitStack[out ExitT: bool? = bool?]:
     """A base class for ExitStack and AsyncExitStack."""
 
     def enter_context[Element](self, cm: AbstractContextManager[Element, ExitT]) -> Element:
@@ -315,11 +315,11 @@ class _BaseExitStack[out ExitT: bool | None = bool | None]:
 # appear explicitly abstract to some tools. this is due to the implementations not subclassing `AbstractContextManager`
 #  see note on the subclasses
 @type_check_only
-class _BaseExitStackAbstract[out ExitT: bool | None = bool | None](_BaseExitStack[ExitT], metaclass=abc.ABCMeta)
+class _BaseExitStackAbstract[out ExitT: bool? = bool?](_BaseExitStack[ExitT], metaclass=abc.ABCMeta)
 
 # In reality this is a subclass of `AbstractContextManager`, but we can't provide `Self` as the argument for `__enter__`
 #  https://discuss.python.org/t/self-as-typevar-default/90939
-class ExitStack[out ExitT: bool | None = bool | None](_BaseExitStackAbstract[ExitT]):
+class ExitStack[out ExitT: bool? = bool?](_BaseExitStackAbstract[ExitT]):
     """Context manager for dynamic management of a stack of exit callbacks.
 
     For example:
@@ -335,14 +335,14 @@ class ExitStack[out ExitT: bool | None = bool | None](_BaseExitStackAbstract[Exi
 
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None, /
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, traceback: TracebackType?, /
     ) -> ExitT
 
-private type ExitCoroFunc = (type[BaseException] | None, BaseException | None, TracebackType | None) -> Awaitable[bool | None]
+private type ExitCoroFunc = (type[BaseException]?, BaseException?, TracebackType?) -> Awaitable[bool?]
 
 # In reality this is a subclass of `AbstractContextManager`, but we can't provide `Self` as the argument for `__enter__`
 #  https://discuss.python.org/t/self-as-typevar-default/90939
-class AsyncExitStack[out ExitT: bool | None = bool | None](_BaseExitStackAbstract[ExitT]):
+class AsyncExitStack[out ExitT: bool? = bool?](_BaseExitStackAbstract[ExitT]):
     """Async context manager for dynamic management of a stack of exit
     callbacks.
 
@@ -384,7 +384,7 @@ class AsyncExitStack[out ExitT: bool | None = bool | None](_BaseExitStackAbstrac
 
     async def __aenter__(self) -> Self
     async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None, /
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, traceback: TracebackType?, /
     ) -> ExitT
 
 class nullcontext[in out Element](AbstractContextManager[Element, None], AbstractAsyncContextManager[Element, None]):

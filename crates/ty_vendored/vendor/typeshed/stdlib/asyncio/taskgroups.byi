@@ -32,19 +32,19 @@ class TaskGroup:
     The exceptions are then combined and raised as an `ExceptionGroup`.
     """
 
-    _loop: AbstractEventLoop | None
+    _loop: AbstractEventLoop?
     _tasks: set[Task[dynamic]]
 
     async def __aenter__(self) -> Self
-    async def __aexit__(self, et: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None) -> None
+    async def __aexit__(self, et: type[BaseException]?, exc: BaseException?, tb: TracebackType?) -> None
     if sys.version_info >= (3, 14):
         def create_task[Element](
             self,
             coro: _CoroutineLike[Element],
             *,
-            name: str | None = None,
-            context: Context | None = None,
-            eager_start: bool | None = None,
+            name: str? = None,
+            context: Context? = None,
+            eager_start: bool? = None,
         ) -> Task[Element]:
             """Create a new task in this group and return it.
 
@@ -52,7 +52,7 @@ class TaskGroup:
             """
 
     else:
-        def create_task[Element](self, coro: _CoroutineLike[Element], *, name: str | None = None, context: Context | None = None) -> Task[Element]:
+        def create_task[Element](self, coro: _CoroutineLike[Element], *, name: str? = None, context: Context? = None) -> Task[Element]:
             """Create a new task in this group and return it.
 
             Similar to `asyncio.create_task`.

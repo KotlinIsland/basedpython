@@ -14,7 +14,7 @@ from typing_extensions import Self
 
 __all__ = ["run", "runctx", "Profile"]
 
-def run(statement: str, filename: str | None = None, sort: str | int = -1):
+def run(statement: str, filename: str? = None, sort: str | int = -1):
     """Run statement under profiler optionally saving results in filename
 
     This function takes a single argument that can be passed to the
@@ -27,7 +27,7 @@ def run(statement: str, filename: str | None = None, sort: str | int = -1):
     """
 
 def runctx(
-    statement: str, globals: dict[str, dynamic], locals: Mapping[str, dynamic], filename: str | None = None, sort: str | int = -1
+    statement: str, globals: dict[str, dynamic], locals: Mapping[str, dynamic], filename: str? = None, sort: str | int = -1
 ):
     """Run statement under profiler, supplying your own globals and locals,
     optionally saving results in filename.

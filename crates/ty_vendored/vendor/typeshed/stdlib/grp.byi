@@ -31,7 +31,7 @@ if sys.platform != "win32":
 
         let gr_name: str
 
-        let gr_passwd: str | None
+        let gr_passwd: str?
 
         let gr_gid: int
 

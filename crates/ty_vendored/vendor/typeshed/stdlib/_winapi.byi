@@ -139,7 +139,7 @@ if sys.platform == "win32":
     final LOCALE_NAME_INVARIANT: str
     final LOCALE_NAME_MAX_LENGTH: int
     final LOCALE_NAME_SYSTEM_DEFAULT: str
-    final LOCALE_NAME_USER_DEFAULT: str | None
+    final LOCALE_NAME_USER_DEFAULT: str?
 
     final LCMAP_FULLWIDTH: int
     final LCMAP_HALFWIDTH: int
@@ -188,7 +188,7 @@ if sys.platform == "win32":
 
     def ConnectNamedPipe(handle: int, overlapped: True) -> Overlapped
     def ConnectNamedPipe(handle: int, overlapped: False = False) -> None
-    def ConnectNamedPipe(handle: int, overlapped: bool) -> Overlapped | None
+    def ConnectNamedPipe(handle: int, overlapped: bool) -> Overlapped?
 
     def CreateFile(
         file_name: str,
@@ -225,14 +225,14 @@ if sys.platform == "win32":
         """
 
     def CreateProcess(
-        application_name: str | None,
-        command_line: str | None,
+        application_name: str?,
+        command_line: str?,
         proc_attrs: dynamic,
         thread_attrs: dynamic,
         inherit_handles: bool,
         creation_flags: int,
         env_mapping: dict[str, str],
-        current_directory: str | None,
+        current_directory: str?,
         startup_info: dynamic,
         /,
     ) -> (int, int, int, int):
@@ -318,7 +318,7 @@ if sys.platform == "win32":
     def PeekNamedPipe(handle: int, size: int = 0, /) -> (int, int) | (bytes, int, int)
     def LCMapStringEx(locale: str, flags: int, src: str) -> str
     if sys.version_info >= (3, 15):
-        def RegisterEventSource(unc_server_name: str | None, source_name: str, /) -> int:
+        def RegisterEventSource(unc_server_name: str?, source_name: str, /) -> int:
             """Retrieves a registered handle to the specified event log.
 
             unc_server_name
@@ -350,7 +350,7 @@ if sys.platform == "win32":
     def ReadFile(handle: int, size: int, overlapped: int | bool) -> (dynamic, int)
 
     def SetNamedPipeHandleState(
-        named_pipe: int, mode: int | None, max_collection_count: int | None, collect_data_timeout: int | None, /
+        named_pipe: int, mode: int?, max_collection_count: int?, collect_data_timeout: int?, /
     )
     def TerminateProcess(handle: int, exit_code: int, /):
         """Terminate the specified process and all of its threads."""
@@ -379,7 +379,7 @@ if sys.platform == "win32":
 
         def GetOverlappedResult(self, wait: bool, /) -> (int, int)
         def cancel(self)
-        def getbuffer(self) -> bytes | None
+        def getbuffer(self) -> bytes?
 
     if sys.version_info >= (3, 13):
         def BatchedWaitForMultipleObjects(handle_seq: Sequence[int], wait_all: bool, milliseconds: int = 0xFFFFFFFF) -> list[int]:
@@ -399,7 +399,7 @@ if sys.platform == "win32":
             Overlapped handles returned from this module use manual reset events.
             """
 
-        def CreateEventW(security_attributes: int, manual_reset: bool, initial_state: bool, name: str | None) -> int
+        def CreateEventW(security_attributes: int, manual_reset: bool, initial_state: bool, name: str?) -> int
         def CreateMutexW(security_attributes: int, initial_owner: bool, name: str) -> int
         def GetLongPathName(path: str) -> str:
             """Return the long version of the provided path.
@@ -428,7 +428,7 @@ if sys.platform == "win32":
     def OpenFileMapping(desired_access: int, inherit_handle: bool, name: str, /) -> int
 
     if sys.version_info >= (3, 12):
-        def CopyFile2(existing_file_name: str, new_file_name: str, flags: int, progress_routine: int | None = None) -> int:
+        def CopyFile2(existing_file_name: str, new_file_name: str, flags: int, progress_routine: int? = None) -> int:
             """Copies a file from one name to a new name.
 
             This is implemented using the CopyFile2 API, which preserves all stat

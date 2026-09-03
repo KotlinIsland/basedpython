@@ -74,7 +74,7 @@ if sys.version_info >= (3, 12):
 else:
     _FutureLike: TypeAlias = Future[_T] | Generator[dynamic, None, _T] | Awaitable[_T]
 
-private type TaskYieldType = Future[object] | None
+private type TaskYieldType = Future[object]?
 
 FIRST_COMPLETED: Final = concurrent.futures.FIRST_COMPLETED
 FIRST_EXCEPTION: Final = concurrent.futures.FIRST_EXCEPTION
@@ -153,12 +153,12 @@ else:
         Note: The futures 'f' are not necessarily members of fs.
         """
 
-def ensure_future[FT: Future[dynamic]](coro_or_future: FT, *, loop: AbstractEventLoop | None = None) -> FT:
+def ensure_future[FT: Future[dynamic]](coro_or_future: FT, *, loop: AbstractEventLoop? = None) -> FT:
     """Wrap a coroutine or an awaitable in a future.
 
     If the argument is a Future, it is returned directly.
     """
-def ensure_future[Element](coro_or_future: Awaitable[Element], *, loop: AbstractEventLoop | None = None) -> Task[Element]
+def ensure_future[Element](coro_or_future: Awaitable[Element], *, loop: AbstractEventLoop? = None) -> Task[Element]
 
 # `gather()` actually returns a list with length equal to the number
 # of tasks passed; however, Tuple is used similar to the annotation for
@@ -399,12 +399,12 @@ if sys.version_info >= (3, 12):
 else:
     _TaskCompatibleCoro: TypeAlias = Generator[TaskYieldType, None, _T_co] | Coroutine[dynamic, dynamic, _T_co]
 
-def all_tasks(loop: AbstractEventLoop | None = None) -> set[Task[dynamic]]:
+def all_tasks(loop: AbstractEventLoop? = None) -> set[Task[dynamic]]:
     """Return a set of all tasks for the loop."""
 
 if sys.version_info >= (3, 14):
     def create_task[Element](
-        coro: _CoroutineLike[Element], *, name: str | None = None, context: Context | None = None, eager_start: bool | None = None
+        coro: _CoroutineLike[Element], *, name: str? = None, context: Context? = None, eager_start: bool? = None
     ) -> Task[Element]:
         """Schedule the execution of a coroutine object in a spawn task.
 
@@ -412,14 +412,14 @@ if sys.version_info >= (3, 14):
         """
 
 elif sys.version_info >= (3, 11):
-    def create_task[Element](coro: _CoroutineLike[Element], *, name: str | None = None, context: Context | None = None) -> Task[Element]:
+    def create_task[Element](coro: _CoroutineLike[Element], *, name: str? = None, context: Context? = None) -> Task[Element]:
         """Schedule the execution of a coroutine object in a spawn task.
 
         Return a Task object.
         """
 
 else:
-    def create_task[Element](coro: _CoroutineLike[Element], *, name: str | None = None) -> Task[Element]:
+    def create_task[Element](coro: _CoroutineLike[Element], *, name: str? = None) -> Task[Element]:
         """Schedule the execution of a coroutine object in a spawn task.
 
         Return a Task object.
@@ -428,26 +428,26 @@ else:
 if sys.version_info >= (3, 12):
     from _asyncio export current_task
 else:
-    def current_task(loop: AbstractEventLoop | None = None) -> Task[dynamic] | None:
+    def current_task(loop: AbstractEventLoop? = None) -> Task[dynamic]?:
         """Return a currently executed task."""
 
 if sys.version_info >= (3, 14):
     def eager_task_factory[Element](
-        loop: AbstractEventLoop | None,
+        loop: AbstractEventLoop?,
         coro: _TaskCompatibleCoro[Element],
         *,
-        name: str | None = None,
-        context: Context | None = None,
+        name: str? = None,
+        context: Context? = None,
         eager_start: bool = True,
     ) -> Task[Element]
 
 elif sys.version_info >= (3, 12):
     def eager_task_factory[Element](
-        loop: AbstractEventLoop | None,
+        loop: AbstractEventLoop?,
         coro: _TaskCompatibleCoro[Element],
         *,
-        name: str | None = None,
-        context: Context | None = None,
+        name: str? = None,
+        context: Context? = None,
     ) -> Task[Element]
 
 if sys.version_info >= (3, 12):
@@ -460,8 +460,8 @@ if sys.version_info >= (3, 12):
             /,
             *,
             loop: AbstractEventLoop,
-            name: str | None,
-            context: Context | None,
+            name: str?,
+            context: Context?,
             eager_start: bool,
         ) -> TaskT
 
@@ -472,8 +472,8 @@ if sys.version_info >= (3, 12):
             loop: AbstractEventLoop,
             coro: _TaskCompatibleCoro[dynamic],
             *,
-            name: str | None = None,
-            context: Context | None = None,
+            name: str? = None,
+            context: Context? = None,
         ) -> TaskT
 
     def create_eager_task_factory[TaskT: Task[dynamic]](custom_task_constructor: CustomTaskConstructor[TaskT]) -> EagerTaskFactoryType[TaskT]:

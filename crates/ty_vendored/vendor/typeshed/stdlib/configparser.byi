@@ -328,96 +328,96 @@ class RawConfigParser(_Parser):
     if sys.version_info >= (3, 13):
         def __init__(
             self,
-            defaults: Mapping[str, str | None] | None = None,
+            defaults: Mapping[str, str?]? = None,
             dict_type: type[Mapping[str, str]] = ...,
             *,
             allow_no_value: True,
             delimiters: Sequence[str] = ("=", ":"),
             comment_prefixes: Sequence[str] = ("#", ";"),
-            inline_comment_prefixes: Sequence[str] | None = None,
+            inline_comment_prefixes: Sequence[str]? = None,
             strict: bool = True,
             empty_lines_in_values: bool = True,
             default_section: str = "DEFAULT",
-            interpolation: Interpolation | None = ...,
+            interpolation: Interpolation? = ...,
             converters: ConvertersMap = ...,
             allow_unnamed_section: bool = False,
         ) -> None
         def __init__(
             self,
-            defaults: Mapping[str, str | None] | None,
+            defaults: Mapping[str, str?]?,
             dict_type: type[Mapping[str, str]],
             allow_no_value: True,
             *,
             delimiters: Sequence[str] = ("=", ":"),
             comment_prefixes: Sequence[str] = ("#", ";"),
-            inline_comment_prefixes: Sequence[str] | None = None,
+            inline_comment_prefixes: Sequence[str]? = None,
             strict: bool = True,
             empty_lines_in_values: bool = True,
             default_section: str = "DEFAULT",
-            interpolation: Interpolation | None = ...,
+            interpolation: Interpolation? = ...,
             converters: ConvertersMap = ...,
             allow_unnamed_section: bool = False,
         ) -> None
         def __init__(
             self,
-            defaults: _Section | None = None,
+            defaults: _Section? = None,
             dict_type: type[Mapping[str, str]] = ...,
             allow_no_value: bool = False,
             *,
             delimiters: Sequence[str] = ("=", ":"),
             comment_prefixes: Sequence[str] = ("#", ";"),
-            inline_comment_prefixes: Sequence[str] | None = None,
+            inline_comment_prefixes: Sequence[str]? = None,
             strict: bool = True,
             empty_lines_in_values: bool = True,
             default_section: str = "DEFAULT",
-            interpolation: Interpolation | None = ...,
+            interpolation: Interpolation? = ...,
             converters: ConvertersMap = ...,
             allow_unnamed_section: bool = False,
         ) -> None
     else:
         def __init__(
             self,
-            defaults: Mapping[str, str | None] | None = None,
+            defaults: Mapping[str, str?]? = None,
             dict_type: type[Mapping[str, str]] = ...,
             *,
             allow_no_value: True,
             delimiters: Sequence[str] = ("=", ":"),
             comment_prefixes: Sequence[str] = ("#", ";"),
-            inline_comment_prefixes: Sequence[str] | None = None,
+            inline_comment_prefixes: Sequence[str]? = None,
             strict: bool = True,
             empty_lines_in_values: bool = True,
             default_section: str = "DEFAULT",
-            interpolation: Interpolation | None = ...,
+            interpolation: Interpolation? = ...,
             converters: ConvertersMap = ...,
         ) -> None
         def __init__(
             self,
-            defaults: Mapping[str, str | None] | None,
+            defaults: Mapping[str, str?]?,
             dict_type: type[Mapping[str, str]],
             allow_no_value: True,
             *,
             delimiters: Sequence[str] = ("=", ":"),
             comment_prefixes: Sequence[str] = ("#", ";"),
-            inline_comment_prefixes: Sequence[str] | None = None,
+            inline_comment_prefixes: Sequence[str]? = None,
             strict: bool = True,
             empty_lines_in_values: bool = True,
             default_section: str = "DEFAULT",
-            interpolation: Interpolation | None = ...,
+            interpolation: Interpolation? = ...,
             converters: ConvertersMap = ...,
         ) -> None
         def __init__(
             self,
-            defaults: _Section | None = None,
+            defaults: _Section? = None,
             dict_type: type[Mapping[str, str]] = ...,
             allow_no_value: bool = False,
             *,
             delimiters: Sequence[str] = ("=", ":"),
             comment_prefixes: Sequence[str] = ("#", ";"),
-            inline_comment_prefixes: Sequence[str] | None = None,
+            inline_comment_prefixes: Sequence[str]? = None,
             strict: bool = True,
             empty_lines_in_values: bool = True,
             default_section: str = "DEFAULT",
-            interpolation: Interpolation | None = ...,
+            interpolation: Interpolation? = ...,
             converters: ConvertersMap = ...,
         ) -> None
 
@@ -453,7 +453,7 @@ class RawConfigParser(_Parser):
         assumed. If the specified `section` does not exist, returns False.
         """
 
-    def read(self, filenames: GenericPath[AnyStr], encoding: str | None = None) -> list[AnyStr]:
+    def read(self, filenames: GenericPath[AnyStr], encoding: str? = None) -> list[AnyStr]:
         """Read and parse a filename or an iterable of filenames.
 
         Files that cannot be opened are silently ignored; this is
@@ -465,11 +465,11 @@ class RawConfigParser(_Parser):
 
         Return list of successfully read files.
         """
-    def read(self, filenames: Iterable[StrPath], encoding: str | None = None) -> list[str]
-    def read(self, filenames: Iterable[BytesPath], encoding: str | None = None) -> list[bytes]
-    def read(self, filenames: Iterable[StrOrBytesPath], encoding: str | None = None) -> list[str | bytes]
+    def read(self, filenames: Iterable[StrPath], encoding: str? = None) -> list[str]
+    def read(self, filenames: Iterable[BytesPath], encoding: str? = None) -> list[bytes]
+    def read(self, filenames: Iterable[StrOrBytesPath], encoding: str? = None) -> list[str | bytes]
 
-    def read_file(self, f: Iterable[str], source: str | None = None):
+    def read_file(self, f: Iterable[str], source: str? = None):
         """Like read() but the argument must be a file-like object.
 
         The `f` argument must be iterable, returning one line at a time.
@@ -497,24 +497,24 @@ class RawConfigParser(_Parser):
 
     if sys.version_info < (3, 12):
         @deprecated("Deprecated since Python 3.2; removed in Python 3.12. Use `parser.read_file()` instead.")
-        def readfp(self, fp: Iterable[str], filename: str | None = None) -> None:
+        def readfp(self, fp: Iterable[str], filename: str? = None) -> None:
             """Deprecated, use read_file instead."""
 
     # These get* methods are partially applied (with the same names) in
     # SectionProxy; the stubs should be kept updated together
-    def getint(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None) -> int
+    def getint(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section? = None) -> int
     def getint[Element](
-        self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None, fallback: Element
+        self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section? = None, fallback: Element
     ) -> int | Element
 
-    def getfloat(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None) -> float
+    def getfloat(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section? = None) -> float
     def getfloat[Element](
-        self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None, fallback: Element
+        self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section? = None, fallback: Element
     ) -> float | Element
 
-    def getboolean(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None) -> bool
+    def getboolean(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section? = None) -> bool
     def getboolean[Element](
-        self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None, fallback: Element
+        self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section? = None, fallback: Element
     ) -> bool | Element
 
     def _get_conv[Element](
@@ -524,12 +524,12 @@ class RawConfigParser(_Parser):
         conv: (str) -> Element,
         *,
         raw: bool = False,
-        vars: _Section | None = None,
+        vars: _Section? = None,
         fallback: Element = ...,
     ) -> Element
 
     # This is incompatible with MutableMapping so we ignore the type
-    override def get(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None) -> str | MaybeNone:
+    override def get(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section? = None) -> str | MaybeNone:
         """Get an option value for a given section.
 
         If `vars` is provided, it must be a dictionary. The option is looked up
@@ -545,10 +545,10 @@ class RawConfigParser(_Parser):
         The section DEFAULT is special.
         """
     def get[Element](
-        self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None, fallback: Element
+        self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section? = None, fallback: Element
     ) -> str | Element | MaybeNone
 
-    override def items(self, *, raw: bool = False, vars: _Section | None = None) -> ItemsView[str, SectionProxy]:
+    override def items(self, *, raw: bool = False, vars: _Section? = None) -> ItemsView[str, SectionProxy]:
         """Return a list of (name, value) tuples for each option in a section.
 
         All % interpolations are expanded in the return values, based on the
@@ -559,9 +559,9 @@ class RawConfigParser(_Parser):
 
         The section DEFAULT is special.
         """
-    def items(self, section: _SectionName, raw: bool = False, vars: _Section | None = None) -> list[(str, str)]
+    def items(self, section: _SectionName, raw: bool = False, vars: _Section? = None) -> list[(str, str)]
 
-    def set(self, section: _SectionName, option: str, value: str | None = None):
+    def set(self, section: _SectionName, option: str, value: str? = None):
         """Set an option."""
 
     def write(self, fp: SupportsWrite[str], space_around_delimiters: bool = True):
@@ -587,7 +587,7 @@ class ConfigParser(RawConfigParser):
     """ConfigParser implementing interpolation."""
 
     # This is incompatible with MutableMapping so we ignore the type
-    override def get(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None) -> str:
+    override def get(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section? = None) -> str:
         """Get an option value for a given section.
 
         If `vars` is provided, it must be a dictionary. The option is looked up
@@ -603,7 +603,7 @@ class ConfigParser(RawConfigParser):
         The section DEFAULT is special.
         """
     def get[Element](
-        self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None, fallback: Element
+        self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section? = None, fallback: Element
     ) -> str | Element
 
 if sys.version_info < (3, 12):
@@ -633,10 +633,10 @@ class SectionProxy(MutableMapping[str, str]):
         fallback: None = None,
         *,
         raw: bool = False,
-        vars: _Section | None = None,
-        _impl: dynamic | None = None,
+        vars: _Section? = None,
+        _impl: dynamic? = None,
         **kwargs: dynamic,  # passed to the underlying parser's get() method
-    ) -> str | None:
+    ) -> str?:
         """Get an option value.
 
         Unless `fallback` is provided, `None` will be returned if the option
@@ -649,21 +649,21 @@ class SectionProxy(MutableMapping[str, str]):
         fallback: Element,
         *,
         raw: bool = False,
-        vars: _Section | None = None,
-        _impl: dynamic | None = None,
+        vars: _Section? = None,
+        _impl: dynamic? = None,
         **kwargs: dynamic,  # passed to the underlying parser's get() method
     ) -> str | Element
 
     # These are partially-applied version of the methods with the same names in
     # RawConfigParser; the stubs should be kept updated together
-    def getint(self, option: str, *, raw: bool = False, vars: _Section | None = None) -> int | None
-    def getint[Element](self, option: str, fallback: Element = ..., *, raw: bool = False, vars: _Section | None = None) -> int | Element
+    def getint(self, option: str, *, raw: bool = False, vars: _Section? = None) -> int?
+    def getint[Element](self, option: str, fallback: Element = ..., *, raw: bool = False, vars: _Section? = None) -> int | Element
 
-    def getfloat(self, option: str, *, raw: bool = False, vars: _Section | None = None) -> float | None
-    def getfloat[Element](self, option: str, fallback: Element = ..., *, raw: bool = False, vars: _Section | None = None) -> float | Element
+    def getfloat(self, option: str, *, raw: bool = False, vars: _Section? = None) -> float?
+    def getfloat[Element](self, option: str, fallback: Element = ..., *, raw: bool = False, vars: _Section? = None) -> float | Element
 
-    def getboolean(self, option: str, *, raw: bool = False, vars: _Section | None = None) -> bool | None
-    def getboolean[Element](self, option: str, fallback: Element = ..., *, raw: bool = False, vars: _Section | None = None) -> bool | Element
+    def getboolean(self, option: str, *, raw: bool = False, vars: _Section? = None) -> bool?
+    def getboolean[Element](self, option: str, fallback: Element = ..., *, raw: bool = False, vars: _Section? = None) -> bool | Element
 
     # SectionProxy can have arbitrary attributes when custom converters are used
     def __getattr__(self, key: str) -> (...) -> dynamic
@@ -679,7 +679,7 @@ class ConverterMapping(MutableMapping[str, ConverterCallback | None]):
     GETTERCRE: ClassVar[Pattern[dynamic]]
     init(self, parser: RawConfigParser)
     override def __getitem__(self, key: str) -> ConverterCallback
-    override def __setitem__(self, key: str, value: ConverterCallback | None)
+    override def __setitem__(self, key: str, value: ConverterCallback?)
     override def __delitem__(self, key: str)
     override def __iter__(self) -> Iterator[str]
     override def __len__(self) -> int
@@ -705,9 +705,9 @@ class DuplicateSectionError(Error):
     """
 
     section: _SectionName
-    source: str | None
-    lineno: int | None
-    init(self, section: _SectionName, source: str | None = None, lineno: int | None = None)
+    source: str?
+    lineno: int?
+    init(self, section: _SectionName, source: str? = None, lineno: int? = None)
 
 class DuplicateOptionError(Error):
     """Raised by strict parsers when an option is repeated in an input source.
@@ -718,9 +718,9 @@ class DuplicateOptionError(Error):
 
     section: _SectionName
     option: str
-    source: str | None
-    lineno: int | None
-    init(self, section: _SectionName, option: str, source: str | None = None, lineno: int | None = None)
+    source: str?
+    lineno: int?
+    init(self, section: _SectionName, option: str, source: str? = None, lineno: int? = None)
 
 class NoOptionError(Error):
     """A requested option was not found."""
@@ -767,9 +767,9 @@ class ParsingError(Error):
     else:
         def __init__(self, source: str) -> None
         @deprecated("The `filename` parameter removed in Python 3.12. Use `source` instead.")
-        def __init__(self, source: None, filename: str | None) -> None
+        def __init__(self, source: None, filename: str?) -> None
         @deprecated("The `filename` parameter removed in Python 3.12. Use `source` instead.")
-        def __init__(self, source: None = None, *, filename: str | None) -> None
+        def __init__(self, source: None = None, *, filename: str?) -> None
 
     def append(self, lineno: int, line: str)
 

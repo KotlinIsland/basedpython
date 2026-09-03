@@ -173,9 +173,9 @@ class Telnet:
 
     """
 
-    host: str | None  # undocumented
-    sock: socket.socket | None  # undocumented
-    init(self, host: str | None = None, port: int = 0, timeout: int | float = ...):
+    host: str?  # undocumented
+    sock: socket.socket?  # undocumented
+    init(self, host: str? = None, port: int = 0, timeout: int | float = ...):
         """Constructor.
 
         When called without arguments, create an unconnected instance.
@@ -288,7 +288,7 @@ class Telnet:
 
         """
 
-    def set_option_negotiation_callback(self, callback: ((socket.socket, bytes, bytes) -> object) | None):
+    def set_option_negotiation_callback(self, callback: ((socket.socket, bytes, bytes) -> object)?):
         """Provide a callback function called after each receipt of a telnet option."""
 
     def process_rawq(self):
@@ -329,7 +329,7 @@ class Telnet:
 
     def expect(
         self, list: MutableSequence[Pattern[bytes] | bytes] | Sequence[Pattern[bytes]], timeout: int | float | None = None
-    ) -> (int, Match[bytes] | None, bytes):
+    ) -> (int, Match[bytes]?, bytes):
         """Read until one from a list of a regular expressions matches.
 
         The first argument is a list of regular expressions, either
@@ -354,7 +354,7 @@ class Telnet:
 
     def __enter__(self) -> Self
     def __exit__(
-        self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
+        self, type: type[BaseException]?, value: BaseException?, traceback: TracebackType?
     )
     def __del__(self):
         """Destructor -- close the connection."""

@@ -56,7 +56,7 @@ if sys.platform == "win32":
 
     class bdist_msi(Command):
         description: str
-        user_options: ClassVar[list[(str, str | None, str)]]
+        user_options: ClassVar[list[(str, str?, str)]]
         boolean_options: ClassVar[list[str]]
         all_versions: Incomplete
         other_version: str

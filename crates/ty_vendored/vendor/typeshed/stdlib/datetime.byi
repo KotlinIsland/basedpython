@@ -23,13 +23,13 @@ class tzinfo:
     Subclasses must override the tzname(), utcoffset() and dst() methods.
     """
 
-    abstract def tzname(self, dt: datetime | None, /) -> str | None:
+    abstract def tzname(self, dt: datetime?, /) -> str?:
         """datetime -> string name of time zone."""
 
-    abstract def utcoffset(self, dt: datetime | None, /) -> timedelta | None:
+    abstract def utcoffset(self, dt: datetime?, /) -> timedelta?:
         """datetime -> timedelta showing offset from UTC, negative values indicating West of UTC"""
 
-    abstract def dst(self, dt: datetime | None, /) -> timedelta | None:
+    abstract def dst(self, dt: datetime?, /) -> timedelta?:
         """datetime -> DST offset as timedelta positive east of UTC."""
 
     def fromutc(self, dt: datetime, /) -> datetime:
@@ -45,13 +45,13 @@ final class timezone(tzinfo):
     min: ClassVar[timezone]
     max: ClassVar[timezone]
     def __new__(cls, offset: timedelta, name: str = ...) -> Self
-    override def tzname(self, dt: datetime | None, /) -> str:
+    override def tzname(self, dt: datetime?, /) -> str:
         """If name is specified when timezone is created, returns the name.  Otherwise returns offset as 'UTC(+|-)HH:MM'."""
 
-    override def utcoffset(self, dt: datetime | None, /) -> timedelta:
+    override def utcoffset(self, dt: datetime?, /) -> timedelta:
         """Return fixed offset."""
 
-    override def dst(self, dt: datetime | None, /):
+    override def dst(self, dt: datetime?, /):
         """Return None."""
 
     override def __hash__(self) -> int
@@ -210,7 +210,7 @@ class time:
         minute: SupportsIndex = 0,
         second: SupportsIndex = 0,
         microsecond: SupportsIndex = 0,
-        tzinfo: TzInfo | None = None,
+        tzinfo: TzInfo? = None,
         *,
         fold: int = 0,
     ) -> Self
@@ -218,7 +218,7 @@ class time:
     let minute: int
     let second: int
     let microsecond: int
-    let tzinfo: TzInfo | None
+    let tzinfo: TzInfo?
     let fold: int
     def __le__(self, value: time, /) -> bool
     def __lt__(self, value: time, /) -> bool
@@ -277,13 +277,13 @@ class time:
     override def __format__(self, fmt: str, /) -> str:
         """Formats self with strftime."""
 
-    def utcoffset(self) -> timedelta | None:
+    def utcoffset(self) -> timedelta?:
         """Return self.tzinfo.utcoffset(self)."""
 
-    def tzname(self) -> str | None:
+    def tzname(self) -> str?:
         """Return self.tzinfo.tzname(self)."""
 
-    def dst(self) -> timedelta | None:
+    def dst(self) -> timedelta?:
         """Return self.tzinfo.dst(self)."""
 
     if sys.version_info >= (3, 13):
@@ -295,7 +295,7 @@ class time:
             minute: SupportsIndex = ...,
             second: SupportsIndex = ...,
             microsecond: SupportsIndex = ...,
-            tzinfo: TzInfo | None = ...,
+            tzinfo: TzInfo? = ...,
             fold: int = ...,
         ) -> Self:
             """The same as replace()."""
@@ -306,7 +306,7 @@ class time:
         minute: SupportsIndex = ...,
         second: SupportsIndex = ...,
         microsecond: SupportsIndex = ...,
-        tzinfo: TzInfo | None = ...,
+        tzinfo: TzInfo? = ...,
         *,
         fold: int = ...,
     ) -> Self:
@@ -415,7 +415,7 @@ class datetime(date):
         minute: SupportsIndex = 0,
         second: SupportsIndex = 0,
         microsecond: SupportsIndex = 0,
-        tzinfo: TzInfo | None = None,
+        tzinfo: TzInfo? = None,
         *,
         fold: int = 0,
     ) -> Self
@@ -423,20 +423,20 @@ class datetime(date):
     let minute: int
     let second: int
     let microsecond: int
-    let tzinfo: TzInfo | None
+    let tzinfo: TzInfo?
     let fold: int
     # On <3.12, the name of the first parameter in the pure-Python implementation
     # didn't match the name in the C implementation,
     # meaning it is only *safe* to pass it as a keyword argument on 3.12+
     if sys.version_info >= (3, 12):
-        class def fromtimestamp(cls, timestamp: int | float, tz: TzInfo | None = None) -> Self:
+        class def fromtimestamp(cls, timestamp: int | float, tz: TzInfo? = None) -> Self:
             """Create a datetime from a POSIX timestamp.
 
             The timestamp is a number, e.g. created via time.time(), that is
             interpreted as local time.
             """
     else:
-        override class def fromtimestamp(cls, timestamp: int | float, /, tz: TzInfo | None = None) -> Self:
+        override class def fromtimestamp(cls, timestamp: int | float, /, tz: TzInfo? = None) -> Self:
             """timestamp[, tz] -> tz's local time from POSIX timestamp."""
 
     @classmethod
@@ -444,7 +444,7 @@ class datetime(date):
     def utcfromtimestamp(cls, t: int | float, /) -> Self:
         """Create a naive UTC datetime from a POSIX timestamp."""
 
-    class def now(cls, tz: TzInfo | None = None) -> Self:
+    class def now(cls, tz: TzInfo? = None) -> Self:
         """Returns new datetime object representing current time local to tz.
 
           tz
@@ -458,7 +458,7 @@ class datetime(date):
     def utcnow(cls) -> Self:
         """Return a new datetime representing UTC day and time."""
 
-    class def combine(cls, date: Date, time: _Time, tzinfo: TzInfo | None = ...) -> Self:
+    class def combine(cls, date: Date, time: _Time, tzinfo: TzInfo? = ...) -> Self:
         """Construct a datetime from a given date and a given time."""
 
     if sys.version_info >= (3, 15):
@@ -492,7 +492,7 @@ class datetime(date):
             minute: SupportsIndex = ...,
             second: SupportsIndex = ...,
             microsecond: SupportsIndex = ...,
-            tzinfo: TzInfo | None = ...,
+            tzinfo: TzInfo? = ...,
             fold: int = ...,
         ) -> Self:
             """The same as replace()."""
@@ -506,13 +506,13 @@ class datetime(date):
         minute: SupportsIndex = ...,
         second: SupportsIndex = ...,
         microsecond: SupportsIndex = ...,
-        tzinfo: TzInfo | None = ...,
+        tzinfo: TzInfo? = ...,
         *,
         fold: int = ...,
     ) -> Self:
         """Return datetime with new specified fields."""
 
-    def astimezone(self, tz: TzInfo | None = None) -> Self:
+    def astimezone(self, tz: TzInfo? = None) -> Self:
         """Convert to local time in new timezone tz."""
 
     override def isoformat(self, sep: str = "T", timespec: str = "auto") -> str:
@@ -543,13 +543,13 @@ class datetime(date):
         class def strptime(cls, date_string: str, format: str, /) -> Self:
             """string, format -> new datetime parsed from a string (like time.strptime())."""
 
-    def utcoffset(self) -> timedelta | None:
+    def utcoffset(self) -> timedelta?:
         """Return self.tzinfo.utcoffset(self)."""
 
-    def tzname(self) -> str | None:
+    def tzname(self) -> str?:
         """Return self.tzinfo.tzname(self)."""
 
-    def dst(self) -> timedelta | None:
+    def dst(self) -> timedelta?:
         """Return self.tzinfo.dst(self)."""
 
     override def __le__(self, value: datetime, /) -> bool

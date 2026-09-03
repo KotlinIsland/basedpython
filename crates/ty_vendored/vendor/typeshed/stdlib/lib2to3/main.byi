@@ -27,8 +27,8 @@ class StdoutRefactoringTool(refactor.MultiprocessRefactoringTool):
     init(
         self,
         fixers: Iterable[str],
-        options: Mapping[str, object] | None,
-        explicit: Container[str] | None,
+        options: Mapping[str, object]?,
+        explicit: Container[str]?,
         nobackups: bool,
         show_diffs: bool,
         input_base_dir: str = "",
@@ -62,17 +62,17 @@ class StdoutRefactoringTool(refactor.MultiprocessRefactoringTool):
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
     )
     # Same as super.write_file but without default values
     override def write_file(
-        self, new_text: str, filename: FileDescriptorOrPath, old_text: str, encoding: str | None
+        self, new_text: str, filename: FileDescriptorOrPath, old_text: str, encoding: str?
     )
     # filename has to be str
     override def print_output(self, old: str, new: str, filename: str, equal: bool)
 
 def warn(msg: object)
-def main(fixer_pkg: str, args: Sequence[AnyStr] | None = None) -> 0 | 1 | 2:
+def main(fixer_pkg: str, args: Sequence[AnyStr]? = None) -> 0 | 1 | 2:
     """Main program.
 
     Args:

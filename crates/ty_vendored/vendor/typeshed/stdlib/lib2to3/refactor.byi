@@ -50,7 +50,7 @@ class RefactoringTool:
     bmi_pre_order: list[BaseFix]
     bmi_post_order: list[BaseFix]
     init(
-        self, fixer_names: Iterable[str], options: Mapping[str, object] | None = None, explicit: Container[str] | None = None
+        self, fixer_names: Iterable[str], options: Mapping[str, object]? = None, explicit: Container[str]? = None
     ):
         """Initializer.
 
@@ -103,7 +103,7 @@ class RefactoringTool:
     def refactor_file(self, filename: StrPath, write: bool = False, doctests_only: bool = False):
         """Refactors a file."""
 
-    def refactor_string(self, data: str, name: str) -> Node | None:
+    def refactor_string(self, data: str, name: str) -> Node?:
         """Refactor a given input string.
 
         Args:
@@ -132,7 +132,7 @@ class RefactoringTool:
             True if the tree was modified, False otherwise.
         """
 
-    def traverse_by(self, fixers: SupportsGetItem[int, Iterable[BaseFix]] | None, traversal: Iterable[Node]):
+    def traverse_by(self, fixers: SupportsGetItem[int, Iterable[BaseFix]]?, traversal: Iterable[Node]):
         """Traverse an AST, applying a set of fixers to each node.
 
         This is a helper method for refactor_tree().
@@ -146,13 +146,13 @@ class RefactoringTool:
         """
 
     def processed_file(
-        self, new_text: str, filename: StrPath, old_text: str | None = None, write: bool = False, encoding: str | None = None
+        self, new_text: str, filename: StrPath, old_text: str? = None, write: bool = False, encoding: str? = None
     ):
         """
         Called when a file has been refactored and there may be changes.
         """
 
-    def write_file(self, new_text: str, filename: FileDescriptorOrPath, old_text: str, encoding: str | None = None):
+    def write_file(self, new_text: str, filename: FileDescriptorOrPath, old_text: str, encoding: str? = None):
         """Writes a string to a file.
 
         It first shows a unified diff between the old text and the new text, and
@@ -206,8 +206,8 @@ class RefactoringTool:
 class MultiprocessingUnsupported(Exception)
 
 class MultiprocessRefactoringTool(RefactoringTool):
-    queue: JoinableQueue[None | (Iterable[str], bool | int)] | None
-    output_lock: Lock | None
+    queue: JoinableQueue[None | (Iterable[str], bool | int)]?
+    output_lock: Lock?
     override def refactor(
         self, items: Iterable[str], write: bool = False, doctests_only: bool = False, num_processes: int = 1
     )

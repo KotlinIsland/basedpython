@@ -39,7 +39,7 @@ class ABCMeta(type):
     override def __subclasscheck__(cls: ABCMeta, subclass: type, /) -> bool:
         """Override for issubclass(subclass, cls)."""
 
-    def _dump_registry(cls: ABCMeta, file: SupportsWrite[str] | None = None):
+    def _dump_registry(cls: ABCMeta, file: SupportsWrite[str]? = None):
         """Debug helper to print the ABC registry."""
 
     def register[Element](cls: ABCMeta, subclass: type[Element]) -> type[Element]:

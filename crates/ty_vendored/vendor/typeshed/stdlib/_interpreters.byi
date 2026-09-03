@@ -140,7 +140,7 @@ def capture_exception(exc: BaseException) -> types.SimpleNamespace:
     cleared).  The returned snapshot is the same as what
     _interpreters.exec() returns.
     """
-def capture_exception(exc: None = None) -> types.SimpleNamespace | None
+def capture_exception(exc: None = None) -> types.SimpleNamespace?
 
 type _Whence = 0 | 1 | 2 | 3 | 4 | 5
 WHENCE_UNKNOWN: Final = 0

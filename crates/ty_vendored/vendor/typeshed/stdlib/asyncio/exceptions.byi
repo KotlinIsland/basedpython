@@ -50,9 +50,9 @@ class IncompleteReadError(EOFError):
     - expected: total number of expected bytes (or None if unknown)
     """
 
-    expected: int | None
+    expected: int?
     partial: bytes
-    init(self, partial: bytes, expected: int | None)
+    init(self, partial: bytes, expected: int?)
 
 class LimitOverrunError(Exception):
     """Reached the buffer limit while looking for a separator.

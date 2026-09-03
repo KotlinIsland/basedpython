@@ -9,7 +9,7 @@ __all__ = ["MIMEMessage"]
 class MIMEMessage(MIMENonMultipart):
     """Class representing message/* MIME documents."""
 
-    init(self, _msg: _MessageT, _subtype: str = "rfc822", *, policy: Policy[_MessageT] | None = None):
+    init(self, _msg: _MessageT, _subtype: str = "rfc822", *, policy: Policy[_MessageT]? = None):
         """Create a message/* type MIME document.
 
         _msg is a message object and must be an instance of Message, or a

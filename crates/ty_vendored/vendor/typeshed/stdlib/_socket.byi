@@ -893,14 +893,14 @@ class socket:
     let proto: int
 
     # F811: "Redefinition of unused `timeout`"
-    let timeout: float | None
+    let timeout: float?
 
     if sys.platform == "win32":
         def __init__(
             self, family: int = ..., type: int = ..., proto: int = ..., fileno: SupportsIndex | bytes | None = None
         ) -> None
     else:
-        def __init__(self, family: int = ..., type: int = ..., proto: int = ..., fileno: SupportsIndex | None = None) -> None
+        def __init__(self, family: int = ..., type: int = ..., proto: int = ..., fileno: SupportsIndex? = None) -> None
 
     def bind(self, address: _Address, /):
         """bind(address)
@@ -976,7 +976,7 @@ class socket:
         is in non-blocking mode.
         """
 
-    def gettimeout(self) -> float | None:
+    def gettimeout(self) -> float?:
         """gettimeout() -> timeout
 
         Returns the timeout in seconds (float) associated with socket
@@ -1132,7 +1132,7 @@ class socket:
             buffers: Iterable[ReadableBuffer],
             ancdata: Iterable[CMSGArg] = ...,
             flags: int = 0,
-            address: _Address | None = None,
+            address: _Address? = None,
             /,
         ) -> int:
             """Send normal and ancillary data to the socket.
@@ -1320,7 +1320,7 @@ def inet_ntop(address_family: int, packed_ip: ReadableBuffer, /) -> str:
     Convert a packed IP address of the given family to string format.
     """
 
-def getdefaulttimeout() -> float | None:
+def getdefaulttimeout() -> float?:
     """getdefaulttimeout() -> timeout
 
     Returns the default timeout in seconds (float) for new socket objects.

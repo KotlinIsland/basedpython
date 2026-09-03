@@ -17,11 +17,11 @@ class BaseFix:
     FixHasKey.
     """
 
-    PATTERN: ClassVar[str | None]
-    pattern: Incomplete | None
-    pattern_tree: Incomplete | None
-    options: Incomplete | None
-    filename: Incomplete | None
+    PATTERN: ClassVar[str?]
+    pattern: Incomplete?
+    pattern_tree: Incomplete?
+    options: Incomplete?
+    filename: Incomplete?
     numbers: Incomplete
     used_names: Incomplete
     order: ClassVar["post" | "pre"]
@@ -86,7 +86,7 @@ class BaseFix:
 
     first_log: bool
     def log_message(self, message: str)
-    def cannot_convert(self, node: Base, reason: str | None = None):
+    def cannot_convert(self, node: Base, reason: str? = None):
         """Warn the user that a given chunk of code is not valid Python 3,
         but that it cannot be converted automatically.
 
@@ -121,6 +121,6 @@ class BaseFix:
 class ConditionalFix(BaseFix, metaclass=ABCMeta):
     """Base class for fixers which not execute if an import is found."""
 
-    skip_on: ClassVar[str | None]
+    skip_on: ClassVar[str?]
     override def start_tree(self, tree: Node, filename: StrPath, /)
     def should_skip(self, node: Base) -> bool

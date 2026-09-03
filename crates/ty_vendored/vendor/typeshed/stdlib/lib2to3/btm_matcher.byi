@@ -41,7 +41,7 @@ class BottomMatcher:
         reached
         """
 
-    def add(self, pattern: SupportsGetItem[int | slice, Incomplete] | None, start: BMNode) -> list[BMNode]:
+    def add(self, pattern: SupportsGetItem[int | slice, Incomplete]?, start: BMNode) -> list[BMNode]:
         """Recursively adds a linear pattern to the AC automaton"""
 
     def run(self, leaves: Iterable[Leaf]) -> defaultdict[BaseFix, list[Node | Leaf]]:

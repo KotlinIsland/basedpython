@@ -9,7 +9,7 @@ __all__ = ["Pool", "ThreadPool"]
 
 class ApplyResult[in out Element]:
     init(
-        self, pool: Pool, callback: ((Element) -> object) | None, error_callback: ((BaseException) -> object) | None
+        self, pool: Pool, callback: ((Element) -> object)?, error_callback: ((BaseException) -> object)?
     )
     def get(self, timeout: int | float | None = None) -> Element
     def wait(self, timeout: int | float | None = None)
@@ -31,8 +31,8 @@ class MapResult[in out Element](ApplyResult[list[Element]]):
         pool: Pool,
         chunksize: int,
         length: int,
-        callback: ((list[Element]) -> object) | None,
-        error_callback: ((BaseException) -> object) | None,
+        callback: ((list[Element]) -> object)?,
+        error_callback: ((BaseException) -> object)?,
     )
 
 class IMapIterator[in out Element]:
@@ -50,11 +50,11 @@ class Pool:
 
     init(
         self,
-        processes: int | None = None,
-        initializer: (...) -> object | None = None,
+        processes: int? = None,
+        initializer: (...) -> object? = None,
         initargs: Iterable[dynamic] = (),
-        maxtasksperchild: int | None = None,
-        context: dynamic | None = None,
+        maxtasksperchild: int? = None,
+        context: dynamic? = None,
     )
     static def Process(ctx: DefaultContext, *args: dynamic, **kwds: dynamic) -> _Process
     def apply[Element](self, func: (...) -> Element, args: Iterable[dynamic] = (), kwds: Mapping[str, dynamic] = {}) -> Element:
@@ -68,14 +68,14 @@ class Pool:
         func: (...) -> Element,
         args: Iterable[dynamic] = (),
         kwds: Mapping[str, dynamic] = {},
-        callback: ((Element) -> object) | None = None,
-        error_callback: ((BaseException) -> object) | None = None,
+        callback: ((Element) -> object)? = None,
+        error_callback: ((BaseException) -> object)? = None,
     ) -> AsyncResult[Element]:
         """
         Asynchronous version of `apply()` method.
         """
 
-    def map[Other, Element](self, func: (Other) -> Element, iterable: Iterable[Other], chunksize: int | None = None) -> list[Element]:
+    def map[Other, Element](self, func: (Other) -> Element, iterable: Iterable[Other], chunksize: int? = None) -> list[Element]:
         """
         Apply `func` to each element in `iterable`, collecting the results
         in a list that is returned.
@@ -85,25 +85,25 @@ class Pool:
         self,
         func: (Other) -> Element,
         iterable: Iterable[Other],
-        chunksize: int | None = None,
-        callback: ((list[Element]) -> object) | None = None,
-        error_callback: ((BaseException) -> object) | None = None,
+        chunksize: int? = None,
+        callback: ((list[Element]) -> object)? = None,
+        error_callback: ((BaseException) -> object)? = None,
     ) -> MapResult[Element]:
         """
         Asynchronous version of `map()` method.
         """
 
-    def imap[Other, Element](self, func: (Other) -> Element, iterable: Iterable[Other], chunksize: int | None = 1) -> IMapIterator[Element]:
+    def imap[Other, Element](self, func: (Other) -> Element, iterable: Iterable[Other], chunksize: int? = 1) -> IMapIterator[Element]:
         """
         Equivalent of `map()` -- can be MUCH slower than `Pool.map()`.
         """
 
-    def imap_unordered[Other, Element](self, func: (Other) -> Element, iterable: Iterable[Other], chunksize: int | None = 1) -> IMapIterator[Element]:
+    def imap_unordered[Other, Element](self, func: (Other) -> Element, iterable: Iterable[Other], chunksize: int? = 1) -> IMapIterator[Element]:
         """
         Like `imap()` method but ordering of results is arbitrary.
         """
 
-    def starmap[Element](self, func: (...) -> Element, iterable: Iterable[Iterable[dynamic]], chunksize: int | None = None) -> list[Element]:
+    def starmap[Element](self, func: (...) -> Element, iterable: Iterable[Iterable[dynamic]], chunksize: int? = None) -> list[Element]:
         """
         Like `map()` method but the elements of the `iterable` are expected to
         be iterables as well and will be unpacked as arguments. Hence
@@ -114,9 +114,9 @@ class Pool:
         self,
         func: (...) -> Element,
         iterable: Iterable[Iterable[dynamic]],
-        chunksize: int | None = None,
-        callback: ((list[Element]) -> object) | None = None,
-        error_callback: ((BaseException) -> object) | None = None,
+        chunksize: int? = None,
+        callback: ((list[Element]) -> object)? = None,
+        error_callback: ((BaseException) -> object)? = None,
     ) -> AsyncResult[list[Element]]:
         """
         Asynchronous version of `starmap()` method.
@@ -127,13 +127,13 @@ class Pool:
     def join(self)
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
     )
     def __del__(self)
 
 class ThreadPool(Pool):
     init(
-        self, processes: int | None = None, initializer: (...) -> object | None = None, initargs: Iterable[dynamic] = ()
+        self, processes: int? = None, initializer: (...) -> object? = None, initargs: Iterable[dynamic] = ()
     )
 
 # undocumented

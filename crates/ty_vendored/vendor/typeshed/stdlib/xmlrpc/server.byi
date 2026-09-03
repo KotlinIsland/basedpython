@@ -166,11 +166,11 @@ class SimpleXMLRPCDispatcher:  # undocumented
     """
 
     funcs: dict[str, DispatchProtocol]
-    instance: dynamic | None
+    instance: dynamic?
     allow_none: bool
     encoding: str
     use_builtin_types: bool
-    init(self, allow_none: bool = False, encoding: str | None = None, use_builtin_types: bool = False)
+    init(self, allow_none: bool = False, encoding: str? = None, use_builtin_types: bool = False)
     def register_instance(self, instance: dynamic, allow_dotted_names: bool = False):
         """Registers an instance to respond to XML-RPC requests.
 
@@ -204,7 +204,7 @@ class SimpleXMLRPCDispatcher:  # undocumented
 
         """
 
-    def register_function(self, function: DispatchProtocol | None = None, name: str | None = None) -> (...) -> dynamic:
+    def register_function(self, function: DispatchProtocol? = None, name: str? = None) -> (...) -> dynamic:
         """Registers a function to respond to XML-RPC requests.
 
         The optional name argument can be used to set a Unicode name
@@ -228,8 +228,8 @@ class SimpleXMLRPCDispatcher:  # undocumented
     def _marshaled_dispatch(
         self,
         data: str | ReadableBuffer,
-        dispatch_method: ((str, (*: _Marshallable)) -> (Fault | (*: _Marshallable))) | None = None,
-        path: dynamic | None = None,
+        dispatch_method: ((str, (*: _Marshallable)) -> (Fault | (*: _Marshallable)))? = None,
+        path: dynamic? = None,
     ) -> str:  # undocumented
         """Dispatches an XML-RPC method from marshalled (XML) data.
 
@@ -313,7 +313,7 @@ class SimpleXMLRPCRequestHandler(http.server.BaseHTTPRequestHandler):
         which are forwarded to the server's _dispatch method for handling.
         """
 
-    def decode_request_content(self, data: bytes) -> bytes | None
+    def decode_request_content(self, data: bytes) -> bytes?
     def report_404(self)
 
 class SimpleXMLRPCServer(socketserver.TCPServer, SimpleXMLRPCDispatcher):
@@ -333,7 +333,7 @@ class SimpleXMLRPCServer(socketserver.TCPServer, SimpleXMLRPCDispatcher):
         requestHandler: type[SimpleXMLRPCRequestHandler] = ...,
         logRequests: bool = True,
         allow_none: bool = False,
-        encoding: str | None = None,
+        encoding: str? = None,
         bind_and_activate: bool = True,
         use_builtin_types: bool = False,
     )
@@ -354,7 +354,7 @@ class MultiPathXMLRPCServer(SimpleXMLRPCServer):  # undocumented
         requestHandler: type[SimpleXMLRPCRequestHandler] = ...,
         logRequests: bool = True,
         allow_none: bool = False,
-        encoding: str | None = None,
+        encoding: str? = None,
         bind_and_activate: bool = True,
         use_builtin_types: bool = False,
     )
@@ -364,7 +364,7 @@ class MultiPathXMLRPCServer(SimpleXMLRPCServer):  # undocumented
 class CGIXMLRPCRequestHandler(SimpleXMLRPCDispatcher):
     """Simple handler for XML-RPC data passed through CGI."""
 
-    init(self, allow_none: bool = False, encoding: str | None = None, use_builtin_types: bool = False)
+    init(self, allow_none: bool = False, encoding: str? = None, use_builtin_types: bool = False)
     def handle_xmlrpc(self, request_text: str):
         """Handle a single XML-RPC request"""
 
@@ -375,7 +375,7 @@ class CGIXMLRPCRequestHandler(SimpleXMLRPCDispatcher):
         XML-RPC uses the POST method.
         """
 
-    def handle_request(self, request_text: str | None = None):
+    def handle_request(self, request_text: str? = None):
         """Handle a single XML-RPC request passed through a CGI post method.
 
         If no XML data is given then it is read from stdin. The resulting
@@ -390,11 +390,11 @@ class ServerHTMLDoc(pydoc.HTMLDoc):  # undocumented
         self,
         object: object,
         name: str,
-        mod: str | None = None,
+        mod: str? = None,
         funcs: Mapping[str, str] = {},
         classes: Mapping[str, str] = {},
         methods: Mapping[str, str] = {},
-        cl: type | None = None,
+        cl: type? = None,
     ) -> str:
         """Produce HTML documentation for a function or method object."""
 
@@ -462,7 +462,7 @@ class DocXMLRPCServer(SimpleXMLRPCServer, XMLRPCDocGenerator):
         requestHandler: type[SimpleXMLRPCRequestHandler] = ...,
         logRequests: bool = True,
         allow_none: bool = False,
-        encoding: str | None = None,
+        encoding: str? = None,
         bind_and_activate: bool = True,
         use_builtin_types: bool = False,
     )

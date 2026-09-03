@@ -167,7 +167,7 @@ class filterfalse[in out Element]:
     If function is None, return the items that are false.
     """
 
-    def __new__(cls, function: _Predicate[Element] | None, iterable: Iterable[Element], /) -> Self
+    def __new__(cls, function: _Predicate[Element]?, iterable: Iterable[Element], /) -> Self
     def __iter__(self) -> Self:
         """Implement iter(self)."""
 
@@ -208,8 +208,8 @@ class islice[in out Element]:
     but returns an iterator.
     """
 
-    def __new__(cls, iterable: Iterable[Element], stop: int | None, /) -> Self
-    def __new__(cls, iterable: Iterable[Element], start: int | None, stop: int | None, step: int | None = 1, /) -> Self
+    def __new__(cls, iterable: Iterable[Element], stop: int?, /) -> Self
+    def __new__(cls, iterable: Iterable[Element], start: int?, stop: int?, step: int? = 1, /) -> Self
 
     def __iter__(self) -> Self:
         """Implement iter(self)."""
@@ -424,7 +424,7 @@ class permutations[out Element]:
     def __new__[T](cls, iterable: Iterable[T], r: 3) -> permutations[(T, T, T)]
     def __new__[T](cls, iterable: Iterable[T], r: 4) -> permutations[(T, T, T, T)]
     def __new__[T](cls, iterable: Iterable[T], r: 5) -> permutations[(T, T, T, T, T)]
-    def __new__[T](cls, iterable: Iterable[T], r: int | None = None) -> permutations[(*: T)]
+    def __new__[T](cls, iterable: Iterable[T], r: int? = None) -> permutations[(*: T)]
 
     def __iter__(self) -> Self:
         """Implement iter(self)."""

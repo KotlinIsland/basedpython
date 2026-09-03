@@ -130,7 +130,7 @@ class SequenceMatcher[in out Element]:
     elements the sequences have in common; best case time is linear.
     """
 
-    init(self, isjunk: ((Element) -> bool) | None, a: Sequence[Element], b: Sequence[Element], autojunk: bool = True):
+    init(self, isjunk: ((Element) -> bool)?, a: Sequence[Element], b: Sequence[Element], autojunk: bool = True):
         """Construct a SequenceMatcher.
 
         Optional arg isjunk is None (the default), or a one-argument
@@ -156,7 +156,7 @@ class SequenceMatcher[in out Element]:
     init(self, *, a: Sequence[Element], b: Sequence[Element], autojunk: bool = True)
     init(
         self: SequenceMatcher[str],
-        isjunk: ((str) -> bool) | None = None,
+        isjunk: ((str) -> bool)? = None,
         a: Sequence[str] = "",
         b: Sequence[str] = "",
         autojunk: bool = True,
@@ -213,7 +213,7 @@ class SequenceMatcher[in out Element]:
         See also set_seqs() and set_seq1().
         """
 
-    def find_longest_match(self, alo: int = 0, ahi: int | None = None, blo: int = 0, bhi: int | None = None) -> Match:
+    def find_longest_match(self, alo: int = 0, ahi: int? = None, blo: int = 0, bhi: int? = None) -> Match:
         """Find longest matching block in a[alo:ahi] and b[blo:bhi].
 
         By default it will find the longest match in the entirety of a and b.
@@ -493,7 +493,7 @@ class Differ:
     +   5. Flat is better than nested.
     """
 
-    init(self, linejunk: ((str) -> bool) | None = None, charjunk: ((str) -> bool) | None = None):
+    init(self, linejunk: ((str) -> bool)? = None, charjunk: ((str) -> bool)? = None):
         """
         Construct a text differencer, with optional filters.
 
@@ -540,7 +540,7 @@ class Differ:
         """
 
 if sys.version_info >= (3, 14):
-    def IS_LINE_JUNK(line: str, pat: ((str) -> (re.Match[str] | None)) | None = None) -> bool:
+    def IS_LINE_JUNK(line: str, pat: ((str) -> (re.Match[str]?))? = None) -> bool:
         """
         Return True for ignorable line: if `line` is blank or contains a single '#'.
 
@@ -555,7 +555,7 @@ if sys.version_info >= (3, 14):
         """
 
 else:
-    def IS_LINE_JUNK(line: str, pat: (str) -> (re.Match[str] | None) = ...) -> bool:
+    def IS_LINE_JUNK(line: str, pat: (str) -> (re.Match[str]?) = ...) -> bool:
         """
         Return True for ignorable line: iff `line` is blank or contains a single '#'.
 
@@ -746,8 +746,8 @@ def context_diff(
 def ndiff(
     a: Sequence[str],
     b: Sequence[str],
-    linejunk: ((str) -> bool) | None = None,
-    charjunk: ((str) -> bool) | None = ...,
+    linejunk: ((str) -> bool)? = None,
+    charjunk: ((str) -> bool)? = ...,
 ) -> Iterator[str]:
     """
     Compare `a` and `b` (lists of strings); return a `Differ`-style delta.
@@ -803,9 +803,9 @@ class HtmlDiff:
     init(
         self,
         tabsize: int = 8,
-        wrapcolumn: int | None = None,
-        linejunk: ((str) -> bool) | None = None,
-        charjunk: ((str) -> bool) | None = ...,
+        wrapcolumn: int? = None,
+        linejunk: ((str) -> bool)? = None,
+        charjunk: ((str) -> bool)? = ...,
     ):
         """HtmlDiff instance initializer
 

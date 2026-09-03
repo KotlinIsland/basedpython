@@ -58,18 +58,18 @@ if sys.version_info >= (3, 14):
         )
         __forward_is_argument__: bool
         __forward_is_class__: bool
-        __forward_module__: str | None
-        __resolved_str_cache__: str | None
+        __forward_module__: str?
+        __resolved_str_cache__: str?
         init(
-            self, arg: str, *, module: str | None = None, owner: object = None, is_argument: bool = True, is_class: bool = False
+            self, arg: str, *, module: str? = None, owner: object = None, is_argument: bool = True, is_class: bool = False
         )
 
         def evaluate(
             self,
             *,
-            globals: dict[str, dynamic] | None = None,
-            locals: Mapping[str, dynamic] | None = None,
-            type_params: (*: TypeVar | ParamSpec | TypeVarTuple) | None = None,
+            globals: dict[str, dynamic]? = None,
+            locals: Mapping[str, dynamic]? = None,
+            type_params: (*: TypeVar | ParamSpec | TypeVarTuple)? = None,
             owner: object = None,
             format: Format.STRING,
         ) -> str:
@@ -80,18 +80,18 @@ if sys.version_info >= (3, 14):
         def evaluate(
             self,
             *,
-            globals: dict[str, dynamic] | None = None,
-            locals: Mapping[str, dynamic] | None = None,
-            type_params: (*: TypeVar | ParamSpec | TypeVarTuple) | None = None,
+            globals: dict[str, dynamic]? = None,
+            locals: Mapping[str, dynamic]? = None,
+            type_params: (*: TypeVar | ParamSpec | TypeVarTuple)? = None,
             owner: object = None,
             format: Format.FORWARDREF,
         ) -> AnnotationForm | ForwardRef
         def evaluate(
             self,
             *,
-            globals: dict[str, dynamic] | None = None,
-            locals: Mapping[str, dynamic] | None = None,
-            type_params: (*: TypeVar | ParamSpec | TypeVarTuple) | None = None,
+            globals: dict[str, dynamic]? = None,
+            locals: Mapping[str, dynamic]? = None,
+            type_params: (*: TypeVar | ParamSpec | TypeVarTuple)? = None,
             owner: object = None,
             format: Format = Format.VALUE,  # noqa: Y011
         ) -> AnnotationForm
@@ -99,8 +99,8 @@ if sys.version_info >= (3, 14):
         @deprecated("Use `ForwardRef.evaluate()` or `typing.evaluate_forward_ref()` instead.")
         def _evaluate(
             self,
-            globalns: dict[str, dynamic] | None,
-            localns: Mapping[str, dynamic] | None,
+            globalns: dict[str, dynamic]?,
+            localns: Mapping[str, dynamic]?,
             type_params: (*: TypeVar | ParamSpec | TypeVarTuple) = ...,
             *,
             recursive_guard: frozenset[str],
@@ -148,7 +148,7 @@ if sys.version_info >= (3, 14):
     ) -> dict[str, AnnotationForm | ForwardRef]
     def call_annotate_function(annotate: AnnotateFunc, format: Format, *, owner: object = None) -> dict[str, AnnotationForm]
 
-    def get_annotate_from_class_namespace(obj: Mapping[str, object]) -> AnnotateFunc | None:
+    def get_annotate_from_class_namespace(obj: Mapping[str, object]) -> AnnotateFunc?:
         """Retrieve the annotate function from a class namespace dictionary.
 
         Return None if the namespace does not contain an annotate function.
@@ -158,8 +158,8 @@ if sys.version_info >= (3, 14):
     def get_annotations(
         obj: dynamic,  # any object with __annotations__ or __annotate__
         *,
-        globals: dict[str, object] | None = None,
-        locals: Mapping[str, object] | None = None,
+        globals: dict[str, object]? = None,
+        locals: Mapping[str, object]? = None,
         eval_str: bool = False,
         format: Format.STRING,
     ) -> dict[str, str]:
@@ -216,16 +216,16 @@ if sys.version_info >= (3, 14):
     def get_annotations(
         obj: dynamic,
         *,
-        globals: dict[str, object] | None = None,
-        locals: Mapping[str, object] | None = None,
+        globals: dict[str, object]? = None,
+        locals: Mapping[str, object]? = None,
         eval_str: bool = False,
         format: Format.FORWARDREF,
     ) -> dict[str, AnnotationForm | ForwardRef]
     def get_annotations(
         obj: dynamic,
         *,
-        globals: dict[str, object] | None = None,
-        locals: Mapping[str, object] | None = None,
+        globals: dict[str, object]? = None,
+        locals: Mapping[str, object]? = None,
         eval_str: bool = False,
         format: Format = Format.VALUE,  # noqa: Y011
     ) -> dict[str, AnnotationForm]

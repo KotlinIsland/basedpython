@@ -35,12 +35,12 @@ def reset() -> str:  # undocumented
 def small(text: str) -> str  # undocumented
 def strong(text: str) -> str  # undocumented
 def grey(text: str) -> str  # undocumented
-def lookup(name: str, frame: FrameType, locals: dict[str, dynamic]) -> (str | None, dynamic):  # undocumented
+def lookup(name: str, frame: FrameType, locals: dict[str, dynamic]) -> (str?, dynamic):  # undocumented
     """Find the value for a given name in the given environment."""
 
 def scanvars(
     reader: () -> bytes, frame: FrameType, locals: dict[str, dynamic]
-) -> list[(str, str | None, dynamic)]:  # undocumented
+) -> list[(str, str?, dynamic)]:  # undocumented
     """Scan one logical line of Python and look up values of variables used."""
 
 def html(einfo: OptExcInfo, context: int = 5) -> str:
@@ -55,16 +55,16 @@ class Hook:  # undocumented
     init(
         self,
         display: int = 1,
-        logdir: StrOrBytesPath | None = None,
+        logdir: StrOrBytesPath? = None,
         context: int = 5,
-        file: IO[str] | None = None,
+        file: IO[str]? = None,
         format: str = "html",
     )
-    def __call__(self, etype: type[BaseException] | None, evalue: BaseException | None, etb: TracebackType | None)
-    def handle(self, info: OptExcInfo | None = None)
+    def __call__(self, etype: type[BaseException]?, evalue: BaseException?, etb: TracebackType?)
+    def handle(self, info: OptExcInfo? = None)
 
-def handler(info: OptExcInfo | None = None)
-def enable(display: int = 1, logdir: StrOrBytesPath | None = None, context: int = 5, format: str = "html"):
+def handler(info: OptExcInfo? = None)
+def enable(display: int = 1, logdir: StrOrBytesPath? = None, context: int = 5, format: str = "html"):
     """Install an exception handler that formats tracebacks as HTML.
 
     The optional argument 'display' can be set to 0 to suppress sending the

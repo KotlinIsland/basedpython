@@ -91,7 +91,7 @@ class _NetlocResultMixinBase(Generic[AnyStr]):
     let username: AnyStr | None
     let password: AnyStr | None
     let hostname: AnyStr | None
-    let port: int | None
+    let port: int?
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
@@ -108,7 +108,7 @@ class _NetlocResultMixinBytes(_NetlocResultMixinBase[bytes], _ResultMixinBytes):
 # Need to duplicate the whole class because mypy rejects version-specific
 # branches in namedtuple bodies.
 if sys.version_info >= (3, 15):
-    class _DefragResultBase[in out ResultStrT in (str, bytes), in out ResultComponentT in (str, bytes, str | None, bytes | None)](NamedTuple):
+    class _DefragResultBase[in out ResultStrT in (str, bytes), in out ResultComponentT in (str, bytes, str?, bytes?)](NamedTuple):
         """
         DefragResult(url, fragment)
 
@@ -122,7 +122,7 @@ if sys.version_info >= (3, 15):
         def geturl(self) -> ResultStrT
 
 else:
-    class _DefragResultBase[in out ResultStrT in (str, bytes), in out ResultComponentT in (str, bytes, str | None, bytes | None)](NamedTuple):
+    class _DefragResultBase[in out ResultStrT in (str, bytes), in out ResultComponentT in (str, bytes, str?, bytes?)](NamedTuple):
         """
         DefragResult(url, fragment)
 
@@ -134,7 +134,7 @@ else:
         fragment: ResultComponentT
 
 if sys.version_info >= (3, 15):
-    class _SplitResultBase[in out ResultStrT in (str, bytes), in out ResultComponentT in (str, bytes, str | None, bytes | None)](NamedTuple):
+    class _SplitResultBase[in out ResultStrT in (str, bytes), in out ResultComponentT in (str, bytes, str?, bytes?)](NamedTuple):
         """
         SplitResult(scheme, netloc, path, query, fragment)
 
@@ -151,7 +151,7 @@ if sys.version_info >= (3, 15):
         def geturl(self) -> ResultStrT
 
 else:
-    class _SplitResultBase[in out ResultStrT in (str, bytes), in out ResultComponentT in (str, bytes, str | None, bytes | None)](NamedTuple):
+    class _SplitResultBase[in out ResultStrT in (str, bytes), in out ResultComponentT in (str, bytes, str?, bytes?)](NamedTuple):
         """
         SplitResult(scheme, netloc, path, query, fragment)
 
@@ -166,7 +166,7 @@ else:
         fragment: ResultComponentT
 
 if sys.version_info >= (3, 15):
-    class _ParseResultBase[in out ResultStrT in (str, bytes), in out ResultComponentT in (str, bytes, str | None, bytes | None)](NamedTuple):
+    class _ParseResultBase[in out ResultStrT in (str, bytes), in out ResultComponentT in (str, bytes, str?, bytes?)](NamedTuple):
         """
         ParseResult(scheme, netloc, path, params, query, fragment)
 
@@ -183,7 +183,7 @@ if sys.version_info >= (3, 15):
         def geturl(self) -> ResultStrT
 
 else:
-    class _ParseResultBase[in out ResultStrT in (str, bytes), in out ResultComponentT in (str, bytes, str | None, bytes | None)](NamedTuple):
+    class _ParseResultBase[in out ResultStrT in (str, bytes), in out ResultComponentT in (str, bytes, str?, bytes?)](NamedTuple):
         """
         ParseResult(scheme, netloc, path, params, query, fragment)
 
@@ -199,13 +199,13 @@ else:
 
 if sys.version_info >= (3, 15):
     # Structured result objects for string data
-    class DefragResult[in out StrComponentT in (str, str | None) = str](_DefragResultBase[str, StrComponentT], _ResultMixinStr)
-    class SplitResult[in out StrComponentT in (str, str | None) = str](_SplitResultBase[str, StrComponentT], _NetlocResultMixinStr)
-    class ParseResult[in out StrComponentT in (str, str | None) = str](_ParseResultBase[str, StrComponentT], _NetlocResultMixinStr)
+    class DefragResult[in out StrComponentT in (str, str?) = str](_DefragResultBase[str, StrComponentT], _ResultMixinStr)
+    class SplitResult[in out StrComponentT in (str, str?) = str](_SplitResultBase[str, StrComponentT], _NetlocResultMixinStr)
+    class ParseResult[in out StrComponentT in (str, str?) = str](_ParseResultBase[str, StrComponentT], _NetlocResultMixinStr)
     # Structured result objects for bytes data
-    class DefragResultBytes[in out BytesComponentT in (bytes, bytes | None) = bytes](_DefragResultBase[bytes, BytesComponentT], _ResultMixinBytes)
-    class SplitResultBytes[in out BytesComponentT in (bytes, bytes | None) = bytes](_SplitResultBase[bytes, BytesComponentT], _NetlocResultMixinBytes)
-    class ParseResultBytes[in out BytesComponentT in (bytes, bytes | None) = bytes](_ParseResultBase[bytes, BytesComponentT], _NetlocResultMixinBytes)
+    class DefragResultBytes[in out BytesComponentT in (bytes, bytes?) = bytes](_DefragResultBase[bytes, BytesComponentT], _ResultMixinBytes)
+    class SplitResultBytes[in out BytesComponentT in (bytes, bytes?) = bytes](_SplitResultBase[bytes, BytesComponentT], _NetlocResultMixinBytes)
+    class ParseResultBytes[in out BytesComponentT in (bytes, bytes?) = bytes](_ParseResultBase[bytes, BytesComponentT], _NetlocResultMixinBytes)
 
 else:
     # Structured result objects for string data
@@ -234,7 +234,7 @@ def parse_qs(
     strict_parsing: bool = False,
     encoding: str = "utf-8",
     errors: str = "replace",
-    max_num_fields: int | None = None,
+    max_num_fields: int? = None,
     separator: str = "&",
 ) -> dict[AnyStr, list[AnyStr]]:
     """Parse a query given as a string argument.
@@ -272,7 +272,7 @@ def parse_qsl(
     strict_parsing: bool = False,
     encoding: str = "utf-8",
     errors: str = "replace",
-    max_num_fields: int | None = None,
+    max_num_fields: int? = None,
     separator: str = "&",
 ) -> list[(AnyStr, AnyStr)]:
     """Parse a query given as a string argument.
@@ -303,7 +303,7 @@ def parse_qsl(
     Returns a list, as G-d intended.
     """
 
-def quote(string: str, safe: str | Iterable[int] = "/", encoding: str | None = None, errors: str | None = None) -> str:
+def quote(string: str, safe: str | Iterable[int] = "/", encoding: str? = None, errors: str? = None) -> str:
     """quote('abc def') -> 'abc%20def'
 
     Each part of a URL, e.g. the path info, the query, etc., has a
@@ -350,7 +350,7 @@ def quote_from_bytes(bs: bytes | bytearray, safe: str | Iterable[int] = "/") -> 
     quote_from_bytes(b'abc def?') -> 'abc%20def%3f'
     """
 
-def quote_plus(string: str, safe: str | Iterable[int] = "", encoding: str | None = None, errors: str | None = None) -> str:
+def quote_plus(string: str, safe: str | Iterable[int] = "", encoding: str? = None, errors: str? = None) -> str:
     """Like quote(), but also replace ' ' with '+', as required for quoting
     HTML form values. Plus signs in the original string are escaped unless
     they are included in safe. It also does not have safe default to '/'.
@@ -387,7 +387,7 @@ def urldefrag(url: str) -> DefragResult:
     """
 def urldefrag(url: bytes | bytearray | None) -> DefragResultBytes
 if sys.version_info >= (3, 15):
-    def urldefrag(url: str, *, missing_as_none: True) -> DefragResult[str | None]:
+    def urldefrag(url: str, *, missing_as_none: True) -> DefragResult[str?]:
         """Removes any existing fragment from URL.
 
         Returns a tuple of the defragmented URL and the fragment.  If
@@ -395,10 +395,10 @@ if sys.version_info >= (3, 15):
         empty string or None if missing_as_none is True.
         """
     def urldefrag(url: str, *, missing_as_none: False = False) -> DefragResult[str]
-    def urldefrag(url: bytes | bytearray | None, *, missing_as_none: True) -> DefragResultBytes[bytes | None]
+    def urldefrag(url: bytes | bytearray | None, *, missing_as_none: True) -> DefragResultBytes[bytes?]
     def urldefrag(url: bytes | bytearray | None, *, missing_as_none: False = False) -> DefragResultBytes[bytes]
-    def urldefrag(url: str, *, missing_as_none: bool) -> DefragResult[str | None]
-    def urldefrag(url: bytes | bytearray | None, *, missing_as_none: bool) -> DefragResultBytes[bytes | None]
+    def urldefrag(url: str, *, missing_as_none: bool) -> DefragResult[str?]
+    def urldefrag(url: bytes | bytearray | None, *, missing_as_none: bool) -> DefragResultBytes[bytes?]
 
 # The values are passed through `str()` (unless they are bytes), so anything is valid.
 private type QueryType = (
@@ -421,8 +421,8 @@ def urlencode(
     query: QueryType,
     doseq: bool = False,
     safe: str | bytes = "",
-    encoding: str | None = None,
-    errors: str | None = None,
+    encoding: str? = None,
+    errors: str? = None,
     quote_via: QuoteVia = ...,
 ) -> str:
     """Encode a dict or sequence of two-element tuples into a URL query string.
@@ -473,7 +473,7 @@ def urlparse(
 if sys.version_info >= (3, 15):
     def urlparse(
         url: str, scheme: str = "", allow_fragments: bool = True, *, missing_as_none: True
-    ) -> ParseResult[str | None]:
+    ) -> ParseResult[str?]:
         """Parse a URL into 6 components:
         <scheme>://<netloc>/<path>;<params>?<query>#<fragment>
 
@@ -504,7 +504,7 @@ if sys.version_info >= (3, 15):
         allow_fragments: bool = True,
         *,
         missing_as_none: True,
-    ) -> ParseResultBytes[bytes | None]
+    ) -> ParseResultBytes[bytes?]
     def urlparse(
         url: bytes | bytearray | None,
         scheme: bytes | bytearray | None | "" = "",
@@ -514,14 +514,14 @@ if sys.version_info >= (3, 15):
     ) -> ParseResultBytes[bytes]
     def urlparse(
         url: str, scheme: str = "", allow_fragments: bool = True, *, missing_as_none: bool
-    ) -> ParseResult[str | None]
+    ) -> ParseResult[str?]
     def urlparse(
         url: bytes | bytearray | None,
         scheme: bytes | bytearray | None | "" = "",
         allow_fragments: bool = True,
         *,
         missing_as_none: bool,
-    ) -> ParseResultBytes[bytes | None]
+    ) -> ParseResultBytes[bytes?]
 
 def urlsplit(url: str, scheme: str = "", allow_fragments: bool = True) -> SplitResult:
     """Parse a URL into 5 components:
@@ -545,7 +545,7 @@ def urlsplit(url: str, scheme: str = "", allow_fragments: bool = True) -> SplitR
     """
 
 if sys.version_info >= (3, 11):
-    def urlsplit(url: bytes | None, scheme: bytes | None | "" = "", allow_fragments: bool = True) -> SplitResultBytes:
+    def urlsplit(url: bytes?, scheme: bytes? | "" = "", allow_fragments: bool = True) -> SplitResultBytes:
         """Parse a URL into 5 components:
         <scheme>://<netloc>/<path>?<query>#<fragment>
 
@@ -591,7 +591,7 @@ else:
 if sys.version_info >= (3, 15):
     def urlsplit(
         url: str, scheme: str = "", allow_fragments: bool = True, *, missing_as_none: True
-    ) -> SplitResult[str | None]:
+    ) -> SplitResult[str?]:
         """Parse a URL into 5 components:
         <scheme>://<netloc>/<path>?<query>#<fragment>
 
@@ -615,25 +615,25 @@ if sys.version_info >= (3, 15):
         url: str, scheme: str = "", allow_fragments: bool = True, *, missing_as_none: False = False
     ) -> SplitResult[str]
     def urlsplit(
-        url: bytes | None,
-        scheme: bytes | None | "" = "",
+        url: bytes?,
+        scheme: bytes? | "" = "",
         allow_fragments: bool = True,
         *,
         missing_as_none: True,
-    ) -> SplitResultBytes[bytes | None]
+    ) -> SplitResultBytes[bytes?]
     def urlsplit(
-        url: bytes | None,
-        scheme: bytes | None | "" = "",
+        url: bytes?,
+        scheme: bytes? | "" = "",
         allow_fragments: bool = True,
         *,
         missing_as_none: False = False,
     ) -> SplitResultBytes[bytes]
     def urlsplit(
         url: str, scheme: str = "", allow_fragments: bool = True, *, missing_as_none: bool
-    ) -> SplitResult[str | None]
+    ) -> SplitResult[str?]
     def urlsplit(
-        url: bytes | None, scheme: bytes | None | "" = "", allow_fragments: bool = True, *, missing_as_none: bool
-    ) -> SplitResultBytes[bytes | None]
+        url: bytes?, scheme: bytes? | "" = "", allow_fragments: bool = True, *, missing_as_none: bool
+    ) -> SplitResultBytes[bytes?]
 
 if sys.version_info >= (3, 15):
     # Requires an iterable of length 6

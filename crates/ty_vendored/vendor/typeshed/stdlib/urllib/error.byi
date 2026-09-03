@@ -22,7 +22,7 @@ class URLError(OSError):
     filename: str
     """exception filename"""
 
-    init(self, reason: str | BaseException, filename: str | None = None)
+    init(self, reason: str | BaseException, filename: str? = None)
 
 class HTTPError(URLError, addinfourl):
     """Raised when HTTP error occurs, but also acts like non-error return"""
@@ -37,7 +37,7 @@ class HTTPError(URLError, addinfourl):
     msg: str
     hdrs: Message
     fp: IO[bytes]
-    init(self, url: str, code: int, msg: str, hdrs: Message, fp: IO[bytes] | None)
+    init(self, url: str, code: int, msg: str, hdrs: Message, fp: IO[bytes]?)
 
 class ContentTooShortError(URLError):
     """Exception raised when downloaded size does not match content-length."""

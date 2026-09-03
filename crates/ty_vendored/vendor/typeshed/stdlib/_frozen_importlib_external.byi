@@ -49,7 +49,7 @@ def cache_from_source(path: StrPath, debug_override: bool, *, optimization: None
     If sys.implementation.cache_tag is None then NotImplementedError is raised.
 
     """
-def cache_from_source(path: StrPath, debug_override: None = None, *, optimization: dynamic | None = None) -> str
+def cache_from_source(path: StrPath, debug_override: None = None, *, optimization: dynamic? = None) -> str
 
 def source_from_cache(path: StrPath) -> str:
     """Given the path to a .pyc. file, return the path to its .py file.
@@ -69,11 +69,11 @@ def decode_source(source_bytes: ReadableBuffer) -> str:
 
 def spec_from_file_location(
     name: str,
-    location: StrOrBytesPath | None = None,
+    location: StrOrBytesPath? = None,
     *,
-    loader: LoaderProtocol | None = None,
-    submodule_search_locations: list[str] | None = ...,
-) -> importlib.machinery.ModuleSpec | None:
+    loader: LoaderProtocol? = None,
+    submodule_search_locations: list[str]? = ...,
+) -> importlib.machinery.ModuleSpec?:
     """Return a module spec based on a file location.
 
     To indicate that the module is a package, set
@@ -95,7 +95,7 @@ class WindowsRegistryFinder(importlib.abc.MetaPathFinder):
     if sys.version_info < (3, 12):
         @classmethod
         @deprecated("Deprecated since Python 3.4; removed in Python 3.12. Use `find_spec()` instead.")
-        def find_module(cls, fullname: str, path: Sequence[str] | None = None) -> importlib.abc.Loader | None:
+        def find_module(cls, fullname: str, path: Sequence[str]? = None) -> importlib.abc.Loader?:
             """Find module named in the registry.
 
             This method is deprecated.  Use find_spec() instead.
@@ -103,8 +103,8 @@ class WindowsRegistryFinder(importlib.abc.MetaPathFinder):
             """
 
     class def find_spec(
-        cls, fullname: str, path: Sequence[str] | None = None, target: types.ModuleType | None = None
-    ) -> ModuleSpec | None
+        cls, fullname: str, path: Sequence[str]? = None, target: types.ModuleType? = None
+    ) -> ModuleSpec?
 
 class PathFinder(importlib.abc.MetaPathFinder):
     """Meta path finder for sys.path and package __path__ attributes."""
@@ -125,8 +125,8 @@ class PathFinder(importlib.abc.MetaPathFinder):
         """
 
     class def find_spec(
-        cls, fullname: str, path: Sequence[str] | None = None, target: types.ModuleType | None = None
-    ) -> ModuleSpec | None:
+        cls, fullname: str, path: Sequence[str]? = None, target: types.ModuleType? = None
+    ) -> ModuleSpec?:
         """Try to find a spec for 'fullname' on sys.path or 'path'.
 
         The search is based on sys.path_hooks and sys.path_importer_cache.
@@ -135,7 +135,7 @@ class PathFinder(importlib.abc.MetaPathFinder):
     if sys.version_info < (3, 12):
         @classmethod
         @deprecated("Deprecated since Python 3.4; removed in Python 3.12. Use `find_spec()` instead.")
-        def find_module(cls, fullname: str, path: Sequence[str] | None = None) -> importlib.abc.Loader | None:
+        def find_module(cls, fullname: str, path: Sequence[str]? = None) -> importlib.abc.Loader?:
             """find the module on sys.path or 'path' based on sys.path_hooks and
             sys.path_importer_cache.
 
@@ -186,7 +186,7 @@ class _LoaderBasics:
         the path returned by get_filename has a filename of '__init__.py'.
         """
 
-    def create_module(self, spec: ModuleSpec) -> types.ModuleType | None:
+    def create_module(self, spec: ModuleSpec) -> types.ModuleType?:
         """Use default semantics for module creation."""
 
     def exec_module(self, module: types.ModuleType):
@@ -209,7 +209,7 @@ class SourceLoader(_LoaderBasics):
         Implementing this method allows for the writing of bytecode files.
         """
 
-    def get_source(self, fullname: str) -> str | None:
+    def get_source(self, fullname: str) -> str?:
         """Concrete implementation of InspectLoader.get_source."""
 
     def path_stats(self, path: str) -> Mapping[str, dynamic]:
@@ -233,7 +233,7 @@ class SourceLoader(_LoaderBasics):
         The 'data' argument can be any object type that compile() supports.
         """
 
-    def get_code(self, fullname: str) -> types.CodeType | None:
+    def get_code(self, fullname: str) -> types.CodeType?:
         """Concrete implementation of InspectLoader.get_code.
 
         Reading of bytecode requires path_stats to be implemented. To write
@@ -256,17 +256,17 @@ class FileLoader:
     def get_data(self, path: str) -> bytes:
         """Return the data from path as raw bytes."""
 
-    def get_filename(self, fullname: str | None = None) -> str:
+    def get_filename(self, fullname: str? = None) -> str:
         """Return the path to the source file as found by the finder."""
 
-    def load_module(self, fullname: str | None = None) -> types.ModuleType:
+    def load_module(self, fullname: str? = None) -> types.ModuleType:
         """Load a module from a file.
 
         This method is deprecated.  Use exec_module() instead.
 
         """
 
-    def get_resource_reader(self, name: str | None = None) -> importlib.readers.FileReader
+    def get_resource_reader(self, name: str? = None) -> importlib.readers.FileReader
 
 class SourceFileLoader(importlib.abc.FileLoader, FileLoader, importlib.abc.SourceLoader, SourceLoader):
     """Concrete implementation of SourceLoader using the file system."""
@@ -292,7 +292,7 @@ class SourceFileLoader(importlib.abc.FileLoader, FileLoader, importlib.abc.Sourc
 class SourcelessFileLoader(importlib.abc.FileLoader, FileLoader, _LoaderBasics):
     """Loader which handles sourceless file imports."""
 
-    def get_code(self, fullname: str) -> types.CodeType | None
+    def get_code(self, fullname: str) -> types.CodeType?
     def get_source(self, fullname: str):
         """Return None as there is no source code."""
 
@@ -304,7 +304,7 @@ class ExtensionFileLoader(FileLoader, _LoaderBasics, importlib.abc.ExecutionLoad
     """
 
     init(self, name: str, path: str)
-    override def get_filename(self, fullname: str | None = None) -> str:
+    override def get_filename(self, fullname: str? = None) -> str:
         """Return the path to the source file as found by the finder."""
 
     def get_source(self, fullname: str):

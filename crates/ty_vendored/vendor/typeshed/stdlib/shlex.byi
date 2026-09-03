@@ -42,39 +42,39 @@ class shlex:
     quotes: str
     escapedquotes: str
     whitespace_split: bool
-    infile: str | None
+    infile: str?
     instream: ShlexInstream
     source: str
     debug: int
     lineno: int
     token: str
-    filestack: deque[(str | None, ShlexInstream, int)]
-    eof: str | None
+    filestack: deque[(str?, ShlexInstream, int)]
+    eof: str?
     let punctuation_chars: str
     init(
         self,
         instream: str | ShlexInstream | None = None,
-        infile: str | None = None,
+        infile: str? = None,
         posix: bool = False,
         punctuation_chars: bool | str = False,
     )
-    def get_token(self) -> str | None:
+    def get_token(self) -> str?:
         """Get a token from the input stream (or from stack if it's nonempty)"""
 
     def push_token(self, tok: str):
         """Push a token onto the stack popped by the get_token method"""
 
-    def read_token(self) -> str | None
-    def sourcehook(self, newfile: str) -> (str, TextIOWrapper) | None:
+    def read_token(self) -> str?
+    def sourcehook(self, newfile: str) -> (str, TextIOWrapper)?:
         """Hook called on a filename to be sourced."""
 
-    def push_source(self, newstream: str | ShlexInstream, newfile: str | None = None):
+    def push_source(self, newstream: str | ShlexInstream, newfile: str? = None):
         """Push an input source onto the lexer's input source stack."""
 
     def pop_source(self):
         """Pop the input source stack."""
 
-    def error_leader(self, infile: str | None = None, lineno: int | None = None) -> str:
+    def error_leader(self, infile: str? = None, lineno: int? = None) -> str:
         """Emit a C-compiler-like, Emacs-friendly error-message leader."""
 
     def __iter__(self) -> Self

@@ -59,7 +59,7 @@ class CookieJar:
     domain_re: ClassVar[Pattern[str]]  # undocumented
     dots_re: ClassVar[Pattern[str]]  # undocumented
     magic_re: ClassVar[Pattern[str]]  # undocumented
-    init(self, policy: CookiePolicy | None = None)
+    init(self, policy: CookiePolicy? = None)
     def add_cookie_header(self, request: Request):
         """Add correct Cookie: header to request (urllib.request.Request object).
 
@@ -80,7 +80,7 @@ class CookieJar:
     def set_cookie_if_ok(self, cookie: Cookie, request: Request):
         """Set a cookie if policy says it's OK to do so."""
 
-    def clear(self, domain: str | None = None, path: str | None = None, name: str | None = None):
+    def clear(self, domain: str? = None, path: str? = None, name: str? = None):
         """Clear some cookies.
 
         Invoking this method without arguments will clear all cookies.  If
@@ -119,22 +119,22 @@ class CookieJar:
 class FileCookieJar(CookieJar):
     """CookieJar that can be loaded from and saved to a file."""
 
-    filename: str | None
+    filename: str?
     delayload: bool
-    init(self, filename: StrPath | None = None, delayload: bool = False, policy: CookiePolicy | None = None):
+    init(self, filename: StrPath? = None, delayload: bool = False, policy: CookiePolicy? = None):
         """
         Cookies are NOT loaded from the named file until either the .load() or
         .revert() method is called.
 
         """
 
-    def save(self, filename: str | None = None, ignore_discard: bool = False, ignore_expires: bool = False):
+    def save(self, filename: str? = None, ignore_discard: bool = False, ignore_expires: bool = False):
         """Save cookies to a file."""
 
-    def load(self, filename: str | None = None, ignore_discard: bool = False, ignore_expires: bool = False):
+    def load(self, filename: str? = None, ignore_discard: bool = False, ignore_expires: bool = False):
         """Load cookies from a file."""
 
-    def revert(self, filename: str | None = None, ignore_discard: bool = False, ignore_expires: bool = False):
+    def revert(self, filename: str? = None, ignore_discard: bool = False, ignore_expires: bool = False):
         """Clear all cookies and reload cookies from a saved file.
 
         Raises LoadError (or OSError) if reversion is not successful; the
@@ -241,11 +241,11 @@ class DefaultCookiePolicy(CookiePolicy):
     DomainStrict: ClassVar[int]
     init(
         self,
-        blocked_domains: Sequence[str] | None = None,
-        allowed_domains: Sequence[str] | None = None,
+        blocked_domains: Sequence[str]? = None,
+        allowed_domains: Sequence[str]? = None,
         netscape: bool = True,
         rfc2965: bool = False,
-        rfc2109_as_netscape: bool | None = None,
+        rfc2109_as_netscape: bool? = None,
         hide_cookie2: bool = False,
         strict_domain: bool = False,
         strict_rfc2965_unverifiable: bool = True,
@@ -264,10 +264,10 @@ class DefaultCookiePolicy(CookiePolicy):
         """Set the sequence of blocked domains."""
 
     def is_blocked(self, domain: str) -> bool
-    def allowed_domains(self) -> (*: str) | None:
+    def allowed_domains(self) -> (*: str)?:
         """Return None, or the sequence of allowed domains (as a tuple)."""
 
-    def set_allowed_domains(self, allowed_domains: Sequence[str] | None):
+    def set_allowed_domains(self, allowed_domains: Sequence[str]?):
         """Set the sequence of allowed domains, or None."""
 
     def is_not_allowed(self, domain: str) -> bool
@@ -302,17 +302,17 @@ class Cookie:
 
     """
 
-    version: int | None
+    version: int?
     name: str
-    value: str | None
-    port: str | None
+    value: str?
+    port: str?
     path: str
     path_specified: bool
     secure: bool
-    expires: int | None
+    expires: int?
     discard: bool
-    comment: str | None
-    comment_url: str | None
+    comment: str?
+    comment_url: str?
     rfc2109: bool
     port_specified: bool
     domain: str  # undocumented
@@ -322,8 +322,8 @@ class Cookie:
         self,
         version: int | str | None,
         name: str,
-        value: str | None,  # undocumented
-        port: str | None,
+        value: str?,  # undocumented
+        port: str?,
         port_specified: bool,
         domain: str,
         domain_specified: bool,
@@ -333,15 +333,15 @@ class Cookie:
         secure: bool,
         expires: int | float | str | None,
         discard: bool,
-        comment: str | None,
-        comment_url: str | None,
+        comment: str?,
+        comment_url: str?,
         rest: dict[str, str],
         rfc2109: bool = False,
     )
     def has_nonstandard_attr(self, name: str) -> bool
 
-    def get_nonstandard_attr(self, name: str) -> str | None
+    def get_nonstandard_attr(self, name: str) -> str?
     def get_nonstandard_attr[Element](self, name: str, default: Element) -> str | Element
 
     def set_nonstandard_attr(self, name: str, value: str)
-    def is_expired(self, now: int | None = None) -> bool
+    def is_expired(self, now: int? = None) -> bool

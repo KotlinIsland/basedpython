@@ -87,17 +87,17 @@ def open(
     filename: StrOrBytesPath | _ReadableFileobj | _WritableFileobj,
     mode: OpenTextMode,
     compresslevel: int = 9,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
 ) -> TextIOWrapper
 def open(
     filename: StrOrBytesPath | _ReadableFileobj | _WritableFileobj,
     mode: str,
     compresslevel: int = 9,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
 ) -> GzipFile | TextIOWrapper
 
 class _PaddedFile:
@@ -125,7 +125,7 @@ class GzipFile(BaseStream):
 
     """
 
-    myfileobj: FileIO | None
+    myfileobj: FileIO?
     mode: object
     name: str
     compress: zlib._Compress
@@ -133,10 +133,10 @@ class GzipFile(BaseStream):
 
     init(
         self,
-        filename: StrOrBytesPath | None,
+        filename: StrOrBytesPath?,
         mode: ReadBinaryMode,
         compresslevel: int = 9,
-        fileobj: _ReadableFileobj | None = None,
+        fileobj: _ReadableFileobj? = None,
         mtime: int | float | None = None,
     ):
         """Constructor for the GzipFile class.
@@ -180,15 +180,15 @@ class GzipFile(BaseStream):
         *,
         mode: ReadBinaryMode,
         compresslevel: int = 9,
-        fileobj: _ReadableFileobj | None = None,
+        fileobj: _ReadableFileobj? = None,
         mtime: int | float | None = None,
     )
     init(
         self,
-        filename: StrOrBytesPath | None,
+        filename: StrOrBytesPath?,
         mode: WriteBinaryMode,
         compresslevel: int = 9,
-        fileobj: _WritableFileobj | None = None,
+        fileobj: _WritableFileobj? = None,
         mtime: int | float | None = None,
     )
     init(
@@ -196,13 +196,13 @@ class GzipFile(BaseStream):
         *,
         mode: WriteBinaryMode,
         compresslevel: int = 9,
-        fileobj: _WritableFileobj | None = None,
+        fileobj: _WritableFileobj? = None,
         mtime: int | float | None = None,
     )
     init(
         self,
-        filename: StrOrBytesPath | None = None,
-        mode: str | None = None,
+        filename: StrOrBytesPath? = None,
+        mode: str? = None,
         compresslevel: int = 9,
         fileobj: _ReadableFileobj | _WritableFileobj | None = None,
         mtime: int | float | None = None,
@@ -213,11 +213,11 @@ class GzipFile(BaseStream):
         @deprecated("Deprecated since Python 2.6; removed in Python 3.12. Use `name` attribute instead.")
         def filename(self) -> str
 
-    let mtime: int | None
+    let mtime: int?
 
     crc: int
     override def write(self, data: ReadableBuffer) -> int
-    override def read(self, size: int | None = -1) -> bytes
+    override def read(self, size: int? = -1) -> bytes
     override def read1(self, size: int = -1) -> bytes:
         """Implements BufferedIOBase.read1()
 
@@ -240,7 +240,7 @@ class GzipFile(BaseStream):
         """
 
     override def seek(self, offset: int, whence: int = 0) -> int
-    override def readline(self, size: int | None = -1) -> bytes
+    override def readline(self, size: int? = -1) -> bytes
 
     if sys.version_info >= (3, 14):
         def readinto(self, b: WriteableBuffer) -> int

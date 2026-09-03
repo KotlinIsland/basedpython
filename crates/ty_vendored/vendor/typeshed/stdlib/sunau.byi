@@ -141,7 +141,7 @@ class Au_read:
     def __enter__(self) -> Self
     def __exit__(self, *args: Unused)
     def __del__(self)
-    def getfp(self) -> IO[bytes] | None
+    def getfp(self) -> IO[bytes]?
     def rewind(self)
     def close(self)
     def tell(self) -> int
@@ -155,7 +155,7 @@ class Au_read:
     def getmarkers(self)
     def getmark(self, id: dynamic) -> Never
     def setpos(self, pos: int)
-    def readframes(self, nframes: int) -> bytes | None
+    def readframes(self, nframes: int) -> bytes?
 
 class Au_write:
     init(self, f: _File)
@@ -183,4 +183,4 @@ class Au_write:
 
 def open(f: _File, mode: "r" | "rb") -> Au_read
 def open(f: _File, mode: "w" | "wb") -> Au_write
-def open(f: _File, mode: str | None = None) -> dynamic
+def open(f: _File, mode: str? = None) -> dynamic

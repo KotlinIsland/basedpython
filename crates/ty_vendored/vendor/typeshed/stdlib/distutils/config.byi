@@ -16,7 +16,7 @@ class PyPIRCCommand(Command):
     DEFAULT_REALM: ClassVar[str]
     repository: None
     realm: None
-    user_options: ClassVar[list[(str, str | None, str)]]
+    user_options: ClassVar[list[(str, str?, str)]]
     boolean_options: ClassVar[list[str]]
     override def initialize_options(self):
         """Initialize options."""

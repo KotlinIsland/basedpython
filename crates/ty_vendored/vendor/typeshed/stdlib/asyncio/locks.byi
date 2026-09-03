@@ -22,7 +22,7 @@ else:
 class _ContextManagerMixin:
     async def __aenter__(self) -> None
     async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc: BaseException?, tb: TracebackType?
     ) -> None
 
 class Lock(_ContextManagerMixin, _LoopBoundMixin):
@@ -77,7 +77,7 @@ class Lock(_ContextManagerMixin, _LoopBoundMixin):
 
     """
 
-    _waiters: deque[Future[dynamic]] | None
+    _waiters: deque[Future[dynamic]]?
     init(self)
     def locked(self) -> bool:
         """Return True if lock is acquired."""
@@ -146,7 +146,7 @@ class Condition(_ContextManagerMixin, _LoopBoundMixin):
     """
 
     _waiters: deque[Future[dynamic]]
-    init(self, lock: Lock | None = None)
+    init(self, lock: Lock? = None)
     def locked(self) -> bool
     async def acquire(self) -> True
     def release(self)
@@ -211,7 +211,7 @@ class Semaphore(_ContextManagerMixin, _LoopBoundMixin):
     """
 
     _value: int
-    _waiters: deque[Future[dynamic]] | None
+    _waiters: deque[Future[dynamic]]?
     init(self, value: int = 1)
     def locked(self) -> bool:
         """Returns True if semaphore cannot be acquired immediately."""

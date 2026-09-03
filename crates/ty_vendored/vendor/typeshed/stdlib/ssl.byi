@@ -142,7 +142,7 @@ private type PCTRTT = (*: (str, str))
 private type PCTRTTT = (*: PCTRTT)
 private type PeerCertRetDictType = dict[str, str | PCTRTTT | PCTRTT]
 private type PeerCertRetType = PeerCertRetDictType | bytes | None
-private type SrvnmeCbType = (SSLSocket | SSLObject, str | None, SSLSocket) -> (int | None)
+private type SrvnmeCbType = (SSLSocket | SSLObject, str?, SSLSocket) -> (int?)
 
 socket_error = OSError
 
@@ -152,7 +152,7 @@ class _Cipher(TypedDict):
     alg_bits: int
     auth: str
     description: str
-    digest: str | None
+    digest: str?
     id: int
     kea: str
     name: str
@@ -413,11 +413,11 @@ class SSLSocket(socket.socket):
     """The SSLContext that is currently in use."""
 
     server_side: bool
-    server_hostname: str | None
-    session: SSLSession | None
+    server_hostname: str?
+    session: SSLSession?
     """The SSLSession for client socket."""
 
-    let session_reused: bool | None
+    let session_reused: bool?
 
     init(self, *args: dynamic, **kwargs: dynamic)
     override def connect(self, addr: socket._Address):
@@ -431,10 +431,10 @@ class SSLSocket(socket.socket):
         """
 
     override def recv(self, buflen: int = 1024, flags: int = 0) -> bytes
-    override def recv_into(self, buffer: WriteableBuffer, nbytes: int | None = None, flags: int = 0) -> int
+    override def recv_into(self, buffer: WriteableBuffer, nbytes: int? = None, flags: int = 0) -> int
     override def recvfrom(self, buflen: int = 1024, flags: int = 0) -> (bytes, socket._RetAddress)
     override def recvfrom_into(
-        self, buffer: WriteableBuffer, nbytes: int | None = None, flags: int = 0
+        self, buffer: WriteableBuffer, nbytes: int? = None, flags: int = 0
     ) -> (int, socket._RetAddress)
     override def send(self, data: ReadableBuffer, flags: int = 0) -> int
     override def sendall(self, data: ReadableBuffer, flags: int = 0)
@@ -444,7 +444,7 @@ class SSLSocket(socket.socket):
 
     override def shutdown(self, how: int)
     @deprecated("Deprecated since Python 3.6. Use `SSLSocket.recv` method instead.")
-    def read(self, len: int = 1024, buffer: WriteableBuffer | None = None) -> bytes:
+    def read(self, len: int = 1024, buffer: WriteableBuffer? = None) -> bytes:
         """Read up to LEN bytes and return them.
         Return zero-length string on EOF.
         """
@@ -458,55 +458,55 @@ class SSLSocket(socket.socket):
     def do_handshake(self, block: bool = False):  # block is undocumented
         """Start the SSL/TLS handshake."""
 
-    def getpeercert(self, binary_form: False = False) -> PeerCertRetDictType | None:
+    def getpeercert(self, binary_form: False = False) -> PeerCertRetDictType?:
         """Returns a formatted version of the data in the certificate provided
         by the other end of the SSL channel.
 
         Return None if no certificate was provided, {} if a certificate was
         provided, but not validated.
         """
-    def getpeercert(self, binary_form: True) -> bytes | None
+    def getpeercert(self, binary_form: True) -> bytes?
     def getpeercert(self, binary_form: bool) -> PeerCertRetType
 
-    def cipher(self) -> (str, str, int) | None:
+    def cipher(self) -> (str, str, int)?:
         """Return the currently selected cipher as a 3-tuple ``(name,
         ssl_version, secret_bits)``.
         """
 
-    def shared_ciphers(self) -> list[(str, str, int)] | None:
+    def shared_ciphers(self) -> list[(str, str, int)]?:
         """Return a list of ciphers shared by the client during the handshake or
         None if this is not a valid server connection.
         """
 
-    def compression(self) -> str | None:
+    def compression(self) -> str?:
         """Return the current compression algorithm in use, or ``None`` if
         compression was not negotiated or not supported by one of the peers.
         """
 
     if sys.version_info >= (3, 15):
-        def group(self) -> str | None:
+        def group(self) -> str?:
             """Return the currently selected key agreement group name."""
 
-        def client_sigalg(self) -> str | None:
+        def client_sigalg(self) -> str?:
             """Return the selected client authentication signature algorithm."""
 
-        def server_sigalg(self) -> str | None:
+        def server_sigalg(self) -> str?:
             """Return the selected server handshake signature algorithm."""
 
-    def get_channel_binding(self, cb_type: str = "tls-unique") -> bytes | None:
+    def get_channel_binding(self, cb_type: str = "tls-unique") -> bytes?:
         """Get channel binding data for current connection.  Raise ValueError
         if the requested `cb_type` is not supported.  Return bytes of the data
         or None if the data is not available (e.g. before the handshake).
         """
 
-    def selected_alpn_protocol(self) -> str | None:
+    def selected_alpn_protocol(self) -> str?:
         """Return the currently selected ALPN protocol as a string, or ``None``
         if a next protocol was not negotiated or if ALPN is not supported by one
         of the peers.
         """
 
     @deprecated("Deprecated since Python 3.10. Use ALPN instead.")
-    def selected_npn_protocol(self) -> str | None:
+    def selected_npn_protocol(self) -> str?:
         """Return the currently selected NPN protocol as a string, or ``None``
         if a next protocol was not negotiated or if NPN is not supported by one
         of the peers.
@@ -521,7 +521,7 @@ class SSLSocket(socket.socket):
     def unwrap(self) -> socket.socket:
         """Start the SSL shutdown handshake."""
 
-    def version(self) -> str | None:
+    def version(self) -> str?:
         """Return a string identifying the protocol version used by the
         current SSL channel.
         """
@@ -552,15 +552,15 @@ if sys.version_info < (3, 12):
     @deprecated("Deprecated since Python 3.7; removed in Python 3.12. Use `SSLContext.wrap_socket()` instead.")
     def wrap_socket(
         sock: socket.socket,
-        keyfile: StrOrBytesPath | None = None,
-        certfile: StrOrBytesPath | None = None,
+        keyfile: StrOrBytesPath? = None,
+        certfile: StrOrBytesPath? = None,
         server_side: bool = False,
         cert_reqs: int = VerifyMode.CERT_NONE,
         ssl_version: int = _SSLMethod.PROTOCOL_TLS,
-        ca_certs: str | None = None,
+        ca_certs: str? = None,
         do_handshake_on_connect: bool = True,
         suppress_ragged_eofs: bool = True,
-        ciphers: str | None = None,
+        ciphers: str? = None,
     ) -> SSLSocket
     @deprecated("Deprecated since Python 3.7; removed in Python 3.12.")
     def match_hostname(cert: PeerCertRetDictType, hostname: str) -> None:
@@ -599,7 +599,7 @@ def PEM_cert_to_DER_cert(pem_cert_string: str) -> bytes:
     """
 
 def get_server_certificate(
-    addr: (str, int), ssl_version: int = _SSLMethod.PROTOCOL_TLS_CLIENT, ca_certs: str | None = None, timeout: int | float = ...
+    addr: (str, int), ssl_version: int = _SSLMethod.PROTOCOL_TLS_CLIENT, ca_certs: str? = None, timeout: int | float = ...
 ) -> str:
     """Retrieve the certificate from the server at the specified address,
     and return it as a PEM-encoded string.
@@ -648,8 +648,8 @@ class SSLContext(_SSLContext):
     def load_default_certs(self, purpose: Purpose = Purpose.SERVER_AUTH)
     override def load_verify_locations(
         self,
-        cafile: StrOrBytesPath | None = None,
-        capath: StrOrBytesPath | None = None,
+        cafile: StrOrBytesPath? = None,
+        capath: StrOrBytesPath? = None,
         cadata: str | ReadableBuffer | None = None,
     )
 
@@ -678,7 +678,7 @@ class SSLContext(_SSLContext):
     def set_alpn_protocols(self, alpn_protocols: Iterable[str])
     @deprecated("Deprecated since Python 3.10. Use ALPN instead.")
     def set_npn_protocols(self, npn_protocols: Iterable[str]) -> None
-    def set_servername_callback(self, server_name_callback: SrvnmeCbType | None)
+    def set_servername_callback(self, server_name_callback: SrvnmeCbType?)
     override def load_dh_params(self, path: str, /)
     override def set_ecdh_curve(self, name: str, /)
     def wrap_socket(
@@ -688,7 +688,7 @@ class SSLContext(_SSLContext):
         do_handshake_on_connect: bool = True,
         suppress_ragged_eofs: bool = True,
         server_hostname: str | bytes | None = None,
-        session: SSLSession | None = None,
+        session: SSLSession? = None,
     ) -> SSLSocket
     def wrap_bio(
         self,
@@ -696,14 +696,14 @@ class SSLContext(_SSLContext):
         outgoing: MemoryBIO,
         server_side: bool = False,
         server_hostname: str | bytes | None = None,
-        session: SSLSession | None = None,
+        session: SSLSession? = None,
     ) -> SSLObject
 
 def create_default_context(
     purpose: Purpose = Purpose.SERVER_AUTH,
     *,
-    cafile: StrOrBytesPath | None = None,
-    capath: StrOrBytesPath | None = None,
+    cafile: StrOrBytesPath? = None,
+    capath: StrOrBytesPath? = None,
     cadata: str | ReadableBuffer | None = None,
 ) -> SSLContext:
     """Create a SSLContext object with default settings.
@@ -714,15 +714,15 @@ def create_default_context(
     """
 
 def _create_unverified_context(
-    protocol: int | None = None,
+    protocol: int? = None,
     *,
     cert_reqs: int = VerifyMode.CERT_NONE,
     check_hostname: bool = False,
     purpose: Purpose = Purpose.SERVER_AUTH,
-    certfile: StrOrBytesPath | None = None,
-    keyfile: StrOrBytesPath | None = None,
-    cafile: StrOrBytesPath | None = None,
-    capath: StrOrBytesPath | None = None,
+    certfile: StrOrBytesPath? = None,
+    keyfile: StrOrBytesPath? = None,
+    cafile: StrOrBytesPath? = None,
+    capath: StrOrBytesPath? = None,
     cadata: str | ReadableBuffer | None = None,
 ) -> SSLContext:
     """Create a SSLContext object for Python stdlib modules
@@ -756,15 +756,15 @@ class SSLObject:
 
     let server_side: bool
 
-    let server_hostname: str | None
+    let server_hostname: str?
 
-    session: SSLSession | None
+    session: SSLSession?
     """The SSLSession for client socket."""
 
     let session_reused: bool
 
     init(self, *args: dynamic, **kwargs: dynamic)
-    def read(self, len: int = 1024, buffer: WriteableBuffer | None = None) -> bytes:
+    def read(self, len: int = 1024, buffer: WriteableBuffer? = None) -> bytes:
         """Read up to 'len' bytes from the SSL object and return them.
 
         If 'buffer' is provided, read into this buffer and return the number of
@@ -778,52 +778,52 @@ class SSLObject:
         The 'data' argument must support the buffer interface.
         """
 
-    def getpeercert(self, binary_form: False = False) -> PeerCertRetDictType | None:
+    def getpeercert(self, binary_form: False = False) -> PeerCertRetDictType?:
         """Returns a formatted version of the data in the certificate provided
         by the other end of the SSL channel.
 
         Return None if no certificate was provided, {} if a certificate was
         provided, but not validated.
         """
-    def getpeercert(self, binary_form: True) -> bytes | None
+    def getpeercert(self, binary_form: True) -> bytes?
     def getpeercert(self, binary_form: bool) -> PeerCertRetType
 
-    def selected_alpn_protocol(self) -> str | None:
+    def selected_alpn_protocol(self) -> str?:
         """Return the currently selected ALPN protocol as a string, or ``None``
         if a next protocol was not negotiated or if ALPN is not supported by one
         of the peers.
         """
 
     @deprecated("Deprecated since Python 3.10. Use ALPN instead.")
-    def selected_npn_protocol(self) -> str | None:
+    def selected_npn_protocol(self) -> str?:
         """Return the currently selected NPN protocol as a string, or ``None``
         if a next protocol was not negotiated or if NPN is not supported by one
         of the peers.
         """
 
-    def cipher(self) -> (str, str, int) | None:
+    def cipher(self) -> (str, str, int)?:
         """Return the currently selected cipher as a 3-tuple ``(name,
         ssl_version, secret_bits)``.
         """
 
-    def shared_ciphers(self) -> list[(str, str, int)] | None:
+    def shared_ciphers(self) -> list[(str, str, int)]?:
         """Return a list of ciphers shared by the client during the handshake or
         None if this is not a valid server connection.
         """
 
-    def compression(self) -> str | None:
+    def compression(self) -> str?:
         """Return the current compression algorithm in use, or ``None`` if
         compression was not negotiated or not supported by one of the peers.
         """
 
     if sys.version_info >= (3, 15):
-        def group(self) -> str | None:
+        def group(self) -> str?:
             """Return the currently selected key agreement group name."""
 
-        def client_sigalg(self) -> str | None:
+        def client_sigalg(self) -> str?:
             """Return the selected client authentication signature algorithm."""
 
-        def server_sigalg(self) -> str | None:
+        def server_sigalg(self) -> str?:
             """Return the selected server handshake signature algorithm."""
 
     def pending(self) -> int:
@@ -835,12 +835,12 @@ class SSLObject:
     def unwrap(self):
         """Start the SSL shutdown handshake."""
 
-    def version(self) -> str | None:
+    def version(self) -> str?:
         """Return a string identifying the protocol version used by the
         current SSL channel.
         """
 
-    def get_channel_binding(self, cb_type: str = "tls-unique") -> bytes | None:
+    def get_channel_binding(self, cb_type: str = "tls-unique") -> bytes?:
         """Get channel binding data for current connection.  Raise ValueError
         if the requested `cb_type` is not supported.  Return bytes of the data
         or None if the data is not available (e.g. before the handshake).

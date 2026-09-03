@@ -51,7 +51,7 @@ class _Database(MutableMapping[_KeyType, bytes]):
     def __del__(self)
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
     )
 
 # This class is not exposed. It calls itself dbm.error.
@@ -61,7 +61,7 @@ class _error(Exception)
 error: (type[_error], type[OSError])
 
 if sys.version_info >= (3, 11):
-    def whichdb(filename: StrOrBytesPath) -> str | None:
+    def whichdb(filename: StrOrBytesPath) -> str?:
         """Guess which db package to use to open a db file.
 
         Return values:
@@ -87,7 +87,7 @@ if sys.version_info >= (3, 11):
         """
 
 else:
-    def whichdb(filename: str) -> str | None:
+    def whichdb(filename: str) -> str?:
         """Guess which db package to use to open a db file.
 
         Return values:

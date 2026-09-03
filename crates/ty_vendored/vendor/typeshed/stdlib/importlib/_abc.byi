@@ -38,7 +38,7 @@ class Loader(metaclass=ABCMeta):
 
             """
 
-    def create_module(self, spec: ModuleSpec) -> types.ModuleType | None:
+    def create_module(self, spec: ModuleSpec) -> types.ModuleType?:
         """Return a module to initialize and into which to load.
 
         This method should raise ImportError if anything prevents it

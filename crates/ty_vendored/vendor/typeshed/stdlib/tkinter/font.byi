@@ -69,9 +69,9 @@ class Font:
         self,
         # In tkinter, 'root' refers to tkinter.Tk by convention, but the code
         # actually works with any tkinter widget so we use tkinter.Misc.
-        root: tkinter.Misc | None = None,
-        font: _FontDescription | None = None,
-        name: str | None = None,
+        root: tkinter.Misc? = None,
+        font: _FontDescription? = None,
+        name: str? = None,
         exists: bool = False,
         *,
         family: str = ...,
@@ -94,14 +94,14 @@ class Font:
 
     __getitem__ = cget
 
-    def actual(self, option: "family", displayof: tkinter.Misc | None = None) -> str:
+    def actual(self, option: "family", displayof: tkinter.Misc? = None) -> str:
         """Return actual font attributes"""
-    def actual(self, option: "size", displayof: tkinter.Misc | None = None) -> int
-    def actual(self, option: "weight", displayof: tkinter.Misc | None = None) -> "normal" | "bold"
-    def actual(self, option: "slant", displayof: tkinter.Misc | None = None) -> "roman" | "italic"
-    def actual(self, option: "underline" | "overstrike", displayof: tkinter.Misc | None = None) -> bool
-    def actual(self, option: None, displayof: tkinter.Misc | None = None) -> _FontDict
-    def actual(self, *, displayof: tkinter.Misc | None = None) -> _FontDict
+    def actual(self, option: "size", displayof: tkinter.Misc? = None) -> int
+    def actual(self, option: "weight", displayof: tkinter.Misc? = None) -> "normal" | "bold"
+    def actual(self, option: "slant", displayof: tkinter.Misc? = None) -> "roman" | "italic"
+    def actual(self, option: "underline" | "overstrike", displayof: tkinter.Misc? = None) -> bool
+    def actual(self, option: None, displayof: tkinter.Misc? = None) -> _FontDict
+    def actual(self, *, displayof: tkinter.Misc? = None) -> _FontDict
 
     def config(
         self,
@@ -112,33 +112,33 @@ class Font:
         slant: "roman" | "italic" = ...,
         underline: bool = ...,
         overstrike: bool = ...,
-    ) -> _FontDict | None:
+    ) -> _FontDict?:
         """Modify font attributes"""
 
     configure = config
     def copy(self) -> Font:
         """Return a distinct copy of the current font"""
 
-    def metrics(self, option: "ascent" | "descent" | "linespace", /, *, displayof: tkinter.Misc | None = ...) -> int:
+    def metrics(self, option: "ascent" | "descent" | "linespace", /, *, displayof: tkinter.Misc? = ...) -> int:
         """Return font metrics.
 
         For best performance, create a dummy widget
         using this font before calling this method.
         """
-    def metrics(self, option: "fixed", /, *, displayof: tkinter.Misc | None = ...) -> bool
-    def metrics(self, *, displayof: tkinter.Misc | None = ...) -> _MetricsDict
+    def metrics(self, option: "fixed", /, *, displayof: tkinter.Misc? = ...) -> bool
+    def metrics(self, *, displayof: tkinter.Misc? = ...) -> _MetricsDict
 
-    def measure(self, text: str, displayof: tkinter.Misc | None = None) -> int:
+    def measure(self, text: str, displayof: tkinter.Misc? = None) -> int:
         """Return text width"""
 
     override def __eq__(self, other: object) -> bool
     def __del__(self)
 
-def families(root: tkinter.Misc | None = None, displayof: tkinter.Misc | None = None) -> (*: str):
+def families(root: tkinter.Misc? = None, displayof: tkinter.Misc? = None) -> (*: str):
     """Get font families (as a tuple)"""
 
-def names(root: tkinter.Misc | None = None) -> (*: str):
+def names(root: tkinter.Misc? = None) -> (*: str):
     """Get names of defined fonts (as a tuple)"""
 
-def nametofont(name: str, root: tkinter.Misc | None = None) -> Font:
+def nametofont(name: str, root: tkinter.Misc? = None) -> Font:
     """Given the name of a tk named font, returns a Font representation."""

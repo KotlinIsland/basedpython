@@ -161,10 +161,10 @@ def countOf(a: Iterable[object], b: object, /) -> int:
 
 def delitem(a: MutableSequence[dynamic], b: int, /) -> None:
     """Same as del a[b]."""
-def delitem(a: MutableSequence[dynamic], b: slice[int | None], /) -> None
+def delitem(a: MutableSequence[dynamic], b: slice[int?], /) -> None
 def delitem[K](a: MutableMapping[K, dynamic], b: K, /) -> None
 
-def getitem[Element](a: Sequence[Element], b: slice[int | None], /) -> Sequence[Element]:
+def getitem[Element](a: Sequence[Element], b: slice[int?], /) -> Sequence[Element]:
     """Same as a[b]."""
 def getitem[K, V](a: SupportsGetItem[K, V], b: K, /) -> V
 
@@ -173,7 +173,7 @@ def indexOf[Element](a: Iterable[Element], b: Element, /) -> int:
 
 def setitem[Element](a: MutableSequence[Element], b: int, c: Element, /) -> None:
     """Same as a[b] = c."""
-def setitem[Element](a: MutableSequence[Element], b: slice[int | None], c: Sequence[Element], /) -> None
+def setitem[Element](a: MutableSequence[Element], b: slice[int?], c: Sequence[Element], /) -> None
 def setitem[K, V](a: MutableMapping[K, V], b: K, c: V, /) -> None
 
 def length_hint(obj: object, default: int = 0, /) -> int:

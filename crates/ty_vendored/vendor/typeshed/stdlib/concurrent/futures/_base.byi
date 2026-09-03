@@ -45,7 +45,7 @@ class Future[in out Element]:
     _condition: threading.Condition
     _state: str
     _result: Element | None
-    _exception: BaseException | None
+    _exception: BaseException?
     _waiters: list[_Waiter]
     def cancel(self) -> bool:
         """Cancel the future if possible.
@@ -126,7 +126,7 @@ class Future[in out Element]:
         Should only be used by Executor implementations and unit tests.
         """
 
-    def exception(self, timeout: int | float | None = None) -> BaseException | None:
+    def exception(self, timeout: int | float | None = None) -> BaseException?:
         """Return the exception raised by the call that the future represents.
 
         Args:
@@ -144,7 +144,7 @@ class Future[in out Element]:
                 given timeout.
         """
 
-    def set_exception(self, exception: BaseException | None):
+    def set_exception(self, exception: BaseException?):
         """Sets the result of the future as being the given exception.
 
         Should only be used by Executor implementations and unit tests.
@@ -178,7 +178,7 @@ class Executor:
             *iterables: Iterable[dynamic],
             timeout: int | float | None = None,
             chunksize: int = 1,
-            buffersize: int | None = None,
+            buffersize: int? = None,
         ) -> Iterator[Element]:
             """Returns an iterator equivalent to map(fn, iter).
 
@@ -250,8 +250,8 @@ class Executor:
 
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> bool | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
+    ) -> bool?
 
 @type_check_only
 private protocol AsCompletedFuture[out Element]:

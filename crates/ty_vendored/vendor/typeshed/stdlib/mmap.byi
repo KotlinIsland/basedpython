@@ -65,14 +65,14 @@ class mmap:
                 cls,
                 fileno: int,
                 length: int,
-                tagname: str | None = None,
+                tagname: str? = None,
                 access: int = 0,
                 offset: int = 0,
                 *,
                 trackfd: bool = True,
             ) -> Self
         else:
-            def __new__(cls, fileno: int, length: int, tagname: str | None = None, access: int = 0, offset: int = 0) -> Self
+            def __new__(cls, fileno: int, length: int, tagname: str? = None, access: int = 0, offset: int = 0) -> Self
     else:
         if sys.version_info >= (3, 13):
             def __new__(
@@ -116,33 +116,33 @@ class mmap:
     closed: bool
     if sys.platform != "win32":
         if sys.version_info >= (3, 15):
-            def madvise(self, option: int, start: int = 0, length: int | None = None, /) -> None
+            def madvise(self, option: int, start: int = 0, length: int? = None, /) -> None
         else:
             def madvise(self, option: int, start: int = 0, length: int = ..., /) -> None
 
     if sys.version_info >= (3, 15):
-        def find(self, view: ReadableBuffer, start: int | None = None, end: int | None = None, /) -> int
-        def rfind(self, view: ReadableBuffer, start: int | None = None, end: int | None = None, /) -> int
+        def find(self, view: ReadableBuffer, start: int? = None, end: int? = None, /) -> int
+        def rfind(self, view: ReadableBuffer, start: int? = None, end: int? = None, /) -> int
 
     else:
         def find(self, view: ReadableBuffer, start: int = ..., end: int = ..., /) -> int
         def rfind(self, view: ReadableBuffer, start: int = ..., end: int = ..., /) -> int
 
-    def read(self, n: int | None = None, /) -> bytes
+    def read(self, n: int? = None, /) -> bytes
     def write(self, bytes: ReadableBuffer, /) -> int
     if sys.version_info >= (3, 15):
         def set_name(self, name: str, /)
 
     def __getitem__(self, key: SupportsIndex, /) -> int:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> bytes
+    def __getitem__(self, key: slice[SupportsIndex?], /) -> bytes
 
-    def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> Never:
+    def __delitem__(self, key: SupportsIndex | slice[SupportsIndex?], /) -> Never:
         """Delete self[key]."""
 
     def __setitem__(self, key: SupportsIndex, value: int, /) -> None:
         """Set self[key] to value."""
-    def __setitem__(self, key: slice[SupportsIndex | None], value: ReadableBuffer, /) -> None
+    def __setitem__(self, key: slice[SupportsIndex?], value: ReadableBuffer, /) -> None
 
     # Doesn't actually exist, but the object actually supports "in" because it has __getitem__,
     # so we claim that there is also a __contains__ to help type checkers.

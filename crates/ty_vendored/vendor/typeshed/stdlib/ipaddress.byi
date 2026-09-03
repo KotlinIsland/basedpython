@@ -279,7 +279,7 @@ class _BaseNetwork[in out A in (IPv4Address, IPv6Address)](_IPAddressBase):
     def supernet_of(self, other: Self) -> bool:
         """Return True if this network is a supernet of other."""
 
-    def subnets(self, prefixlen_diff: int = 1, new_prefix: int | None = None) -> Iterator[Self]:
+    def subnets(self, prefixlen_diff: int = 1, new_prefix: int? = None) -> Iterator[Self]:
         """The subnets which join to make the current subnet.
 
         In the case that self contains only one IP
@@ -306,7 +306,7 @@ class _BaseNetwork[in out A in (IPv4Address, IPv6Address)](_IPAddressBase):
 
         """
 
-    def supernet(self, prefixlen_diff: int = 1, new_prefix: int | None = None) -> Self:
+    def supernet(self, prefixlen_diff: int = 1, new_prefix: int? = None) -> Self:
         """The supernet containing the current network.
 
         Args:
@@ -512,15 +512,15 @@ class IPv6Address(_BaseV6, _BaseAddress):
 
     let packed: bytes
 
-    let ipv4_mapped: IPv4Address | None
+    let ipv4_mapped: IPv4Address?
 
     let is_site_local: bool
 
-    let sixtofour: IPv4Address | None
+    let sixtofour: IPv4Address?
 
-    let teredo: (IPv4Address, IPv4Address) | None
+    let teredo: (IPv4Address, IPv4Address)?
 
-    let scope_id: str | None
+    let scope_id: str?
 
     override def __hash__(self) -> int
     override def __eq__(self, other: object) -> bool

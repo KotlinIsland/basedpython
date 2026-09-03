@@ -9,7 +9,7 @@ class error(Exception)
 def add(fragment1: Buffer, fragment2: Buffer, width: int, /) -> bytes:
     """Return a fragment which is the addition of the two samples passed as parameters."""
 
-def adpcm2lin(fragment: Buffer, width: int, state: AdpcmState | None, /) -> (bytes, AdpcmState):
+def adpcm2lin(fragment: Buffer, width: int, state: AdpcmState?, /) -> (bytes, AdpcmState):
     """Decode an Intel/DVI ADPCM coded fragment to a linear fragment."""
 
 def alaw2lin(fragment: Buffer, width: int, /) -> bytes:
@@ -42,7 +42,7 @@ def findmax(fragment: Buffer, length: int, /) -> int:
 def getsample(fragment: Buffer, width: int, index: int, /) -> int:
     """Return the value of sample index from the fragment."""
 
-def lin2adpcm(fragment: Buffer, width: int, state: AdpcmState | None, /) -> (bytes, AdpcmState):
+def lin2adpcm(fragment: Buffer, width: int, state: AdpcmState?, /) -> (bytes, AdpcmState):
     """Convert samples to 4 bit Intel/DVI ADPCM encoding."""
 
 def lin2alaw(fragment: Buffer, width: int, /) -> bytes:
@@ -72,7 +72,7 @@ def ratecv(
     nchannels: int,
     inrate: int,
     outrate: int,
-    state: RatecvState | None,
+    state: RatecvState?,
     weightA: int = 1,
     weightB: int = 0,
     /,

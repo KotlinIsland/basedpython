@@ -13,7 +13,7 @@ from _typeshed import StrPath
 from typing import TypeAlias
 from typing_extensions import Self
 
-private type Label = (int, str | None)
+private type Label = (int, str?)
 type _DFA = list[list[(int, int)]]
 type _DFAS = (_DFA, dict[int, int])
 

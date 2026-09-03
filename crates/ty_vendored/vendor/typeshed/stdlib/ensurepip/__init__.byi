@@ -7,7 +7,7 @@ def version() -> str:
 
 def bootstrap(
     *,
-    root: str | None = None,
+    root: str? = None,
     upgrade: bool = False,
     user: bool = False,
     altinstall: bool = False,

@@ -99,10 +99,10 @@ final class TkappType:
 
     def willdispatch(self)
     if sys.version_info >= (3, 12):
-        def gettrace(self, /) -> TkinterTraceFunc | None:
+        def gettrace(self, /) -> TkinterTraceFunc?:
             """Get the tracing function."""
 
-        def settrace(self, func: TkinterTraceFunc | None, /):
+        def settrace(self, func: TkinterTraceFunc?, /):
             """Set the tracing function."""
 
 # These should be kept in sync with tkinter.tix constants, except ALL_EVENTS which doesn't match TCL_ALL_EVENTS
@@ -125,14 +125,14 @@ final class TkttType:
 
 if sys.version_info >= (3, 13):
     def create(
-        screenName: str | None = None,
+        screenName: str? = None,
         baseName: str = "",
         className: str = "Tk",
         interactive: bool = False,
         wantobjects: int = 0,
         wantTk: bool = True,
         sync: bool = False,
-        use: str | None = None,
+        use: str? = None,
         /,
     ) -> TkappType:
         """
@@ -147,14 +147,14 @@ if sys.version_info >= (3, 13):
 
 else:
     def create(
-        screenName: str | None = None,
+        screenName: str? = None,
         baseName: str = "",
         className: str = "Tk",
         interactive: bool = False,
         wantobjects: bool = False,
         wantTk: bool = True,
         sync: bool = False,
-        use: str | None = None,
+        use: str? = None,
         /,
     ) -> TkappType:
         """

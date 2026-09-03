@@ -12,8 +12,8 @@ type _File = str | BinaryIO
 
 class Error(Exception)
 
-def encode(in_file: _File, out_file: _File, name: str | None = None, mode: int | None = None, *, backtick: bool = False):
+def encode(in_file: _File, out_file: _File, name: str? = None, mode: int? = None, *, backtick: bool = False):
     """Uuencode file"""
 
-def decode(in_file: _File, out_file: _File | None = None, mode: int | None = None, quiet: bool = False):
+def decode(in_file: _File, out_file: _File? = None, mode: int? = None, quiet: bool = False):
     """Decode uuencoded file"""

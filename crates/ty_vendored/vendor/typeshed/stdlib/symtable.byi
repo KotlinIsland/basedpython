@@ -11,7 +11,7 @@ if sys.version_info >= (3, 13):
     __all__ += ["SymbolTableType"]
 
 if sys.version_info >= (3, 15):
-    def symtable(code: str, filename: str, compile_type: str, *, module: str | None = None) -> SymbolTable:
+    def symtable(code: str, filename: str, compile_type: str, *, module: str? = None) -> SymbolTable:
         """Return the toplevel *SymbolTable* for the source code.
 
         *filename* is the name of the file with the code
@@ -129,7 +129,7 @@ class Class(SymbolTable):
 
 class Symbol:
     init(
-        self, name: str, flags: int, namespaces: Sequence[SymbolTable] | None = None, *, module_scope: bool = False
+        self, name: str, flags: int, namespaces: Sequence[SymbolTable]? = None, *, module_scope: bool = False
     )
     def is_nonlocal(self) -> bool:
         """Return *True* if the symbol is nonlocal."""

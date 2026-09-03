@@ -9,20 +9,20 @@ __all__ = ["netrc", "NetrcParseError"]
 class NetrcParseError(Exception):
     """Exception raised on syntax errors in the .netrc file."""
 
-    filename: str | None
-    lineno: int | None
+    filename: str?
+    lineno: int?
     msg: str
-    init(self, msg: str, filename: StrOrBytesPath | None = None, lineno: int | None = None)
+    init(self, msg: str, filename: StrOrBytesPath? = None, lineno: int? = None)
 
 # (login, account, password) tuple
 if sys.version_info >= (3, 11):
     type _NetrcTuple = (str, str, str)
 else:
-    type _NetrcTuple = (str, str | None, str | None)
+    type _NetrcTuple = (str, str?, str?)
 
 class netrc:
     hosts: dict[str, _NetrcTuple]
     macros: dict[str, list[str]]
-    init(self, file: StrOrBytesPath | None = None)
-    def authenticators(self, host: str) -> _NetrcTuple | None:
+    init(self, file: StrOrBytesPath? = None)
+    def authenticators(self, host: str) -> _NetrcTuple?:
         """Return a (user, account, password) tuple for given host."""

@@ -20,7 +20,7 @@ if sys.version_info >= (3, 14):
         call_stack: (*: FrameCallGraphEntry)
         awaited_by: (*: FutureCallGraph)
 
-    def capture_call_graph(future: None = None, /, *, depth: int = 1, limit: int | None = None) -> FutureCallGraph | None:
+    def capture_call_graph(future: None = None, /, *, depth: int = 1, limit: int? = None) -> FutureCallGraph?:
         """Capture the async call graph for the current task or the provided Future.
 
         The graph is represented with three data structures:
@@ -54,15 +54,15 @@ if sys.version_info >= (3, 14):
         are present.  If 'limit' is 0, the call stack is not captured at all,
         only "awaited by" information is present.
         """
-    def capture_call_graph(future: Future[dynamic], /, *, depth: int = 1, limit: int | None = None) -> FutureCallGraph | None
+    def capture_call_graph(future: Future[dynamic], /, *, depth: int = 1, limit: int? = None) -> FutureCallGraph?
 
-    def format_call_graph(future: Future[dynamic] | None = None, /, *, depth: int = 1, limit: int | None = None) -> str:
+    def format_call_graph(future: Future[dynamic]? = None, /, *, depth: int = 1, limit: int? = None) -> str:
         """Return the async call graph as a string for `future`.
 
         If `future` is not provided, format the call graph for the current task.
         """
 
     def print_call_graph(
-        future: Future[dynamic] | None = None, /, *, file: SupportsWrite[str] | None = None, depth: int = 1, limit: int | None = None
+        future: Future[dynamic]? = None, /, *, file: SupportsWrite[str]? = None, depth: int = 1, limit: int? = None
     ):
         """Print the async call graph for the current task or the provided Future."""

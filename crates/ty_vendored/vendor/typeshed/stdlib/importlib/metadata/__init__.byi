@@ -146,7 +146,7 @@ if sys.version_info >= (3, 11):
         let extras: list[str]
         let module: str
         let attr: str
-        dist: ClassVar[Distribution | None]
+        dist: ClassVar[Distribution?]
         def matches(
             self,
             *,
@@ -216,7 +216,7 @@ else:
         let extras: list[str]
         let module: str
         let attr: str
-        dist: ClassVar[Distribution | None]
+        dist: ClassVar[Distribution?]
         def matches(
             self,
             *,
@@ -417,8 +417,8 @@ class PackagePath(pathlib.PurePosixPath):
         """Return a path-like object for this path"""
 
     # The following attributes are not defined on PackagePath, but are dynamically added by Distribution.files:
-    hash: FileHash | None
-    size: int | None
+    hash: FileHash?
+    size: int?
     dist: Distribution
 
 class FileHash:
@@ -446,7 +446,7 @@ class Distribution(_distribution_parent):
     """
 
     @abc.abstractmethod
-    def read_text(self, filename: str) -> str | None:
+    def read_text(self, filename: str) -> str?:
         """Attempt to load metadata file given by the name.
 
         Python distribution metadata is organized by blobs of text
@@ -508,7 +508,7 @@ class Distribution(_distribution_parent):
           the context.
         """
     class def discover(
-        cls, *, context: None = None, name: str | None = ..., path: list[str] = ..., **kwargs: dynamic
+        cls, *, context: None = None, name: str? = ..., path: list[str] = ..., **kwargs: dynamic
     ) -> Iterable[Distribution]
 
     static def at(path: StrPath) -> PathDistribution:
@@ -524,15 +524,15 @@ class Distribution(_distribution_parent):
 
     let version: str
 
-    let files: list[PackagePath] | None
+    let files: list[PackagePath]?
 
-    let requires: list[str] | None
+    let requires: list[str]?
 
     let name: str
 
     if sys.version_info >= (3, 13):
         @property
-        def origin(self) -> types.SimpleNamespace | None
+        def origin(self) -> types.SimpleNamespace?
 
 class DistributionFinder(MetaPathFinder):
     """
@@ -565,8 +565,8 @@ class DistributionFinder(MetaPathFinder):
         realm.
         """
 
-        name: str | None
-        init(self, *, name: str | None = ..., path: list[str] = ..., **kwargs: dynamic)
+        name: str?
+        init(self, *, name: str? = ..., path: list[str] = ..., **kwargs: dynamic)
         let path: list[str]
 
     @abc.abstractmethod
@@ -604,7 +604,7 @@ class PathDistribution(Distribution):
         :param path: SimplePath indicating the metadata directory.
         """
 
-    override def read_text(self, filename: StrPath) -> str | None:
+    override def read_text(self, filename: StrPath) -> str?:
         """Attempt to load metadata file given by the name.
 
         Python distribution metadata is organized by blobs of text
@@ -641,7 +641,7 @@ def distributions(*, context: DistributionFinder.Context) -> Iterable[Distributi
     :return: An iterable of ``Distribution`` instances.
     """
 def distributions(
-    *, context: None = None, name: str | None = ..., path: list[str] = ..., **kwargs: dynamic
+    *, context: None = None, name: str? = ..., path: list[str] = ..., **kwargs: dynamic
 ) -> Iterable[Distribution]
 
 def metadata(distribution_name: str) -> PackageMetadata:
@@ -695,14 +695,14 @@ def version(distribution_name: str) -> str:
         "Version" metadata key.
     """
 
-def files(distribution_name: str) -> list[PackagePath] | None:
+def files(distribution_name: str) -> list[PackagePath]?:
     """Return a list of files for the named package.
 
     :param distribution_name: The name of the distribution package to query.
     :return: List of files composing the distribution.
     """
 
-def requires(distribution_name: str) -> list[str] | None:
+def requires(distribution_name: str) -> list[str]?:
     """
     Return a list of requirements for the named package.
 

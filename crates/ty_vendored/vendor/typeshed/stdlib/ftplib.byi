@@ -81,19 +81,19 @@ class FTP:
     host: str
     port: int
     maxline: int
-    sock: socket | None
-    welcome: str | None
+    sock: socket?
+    welcome: str?
     passiveserver: int
     timeout: int | float | None
     af: int
     lastresp: str
-    file: TextIO | None
+    file: TextIO?
     encoding: str
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
     )
-    source_address: (str, int) | None
+    source_address: (str, int)?
     init(
         self,
         host: str = "",
@@ -101,7 +101,7 @@ class FTP:
         passwd: str = "",
         acct: str = "",
         timeout: int | float | None = ...,
-        source_address: (str, int) | None = None,
+        source_address: (str, int)? = None,
         *,
         encoding: str = "utf-8",
     ):
@@ -111,7 +111,7 @@ class FTP:
         and user, passwd, acct (for login()).
         """
 
-    def connect(self, host: str = "", port: int = 0, timeout: int | float = -999, source_address: (str, int) | None = None) -> str:
+    def connect(self, host: str = "", port: int = 0, timeout: int | float = -999, source_address: (str, int)? = None) -> str:
         """Connect to host.  Arguments are:
         - host: hostname to connect to (string, default previous host)
         - port: port to connect to (integer, default previous port)
@@ -187,7 +187,7 @@ class FTP:
         """Login, default anonymous."""
 
     # In practice, `rest` can actually be anything whose str() is an integer sequence, so to make it simple we allow integers
-    def ntransfercmd(self, cmd: str, rest: int | str | None = None) -> (socket, int | None):
+    def ntransfercmd(self, cmd: str, rest: int | str | None = None) -> (socket, int?):
         """Initiate a transfer over the data connection.
 
         If the transfer is active, send a port command and the
@@ -228,7 +228,7 @@ class FTP:
         cmd: str,
         fp: SupportsRead[bytes],
         blocksize: int = 8192,
-        callback: ((bytes) -> object) | None = None,
+        callback: ((bytes) -> object)? = None,
         rest: int | str | None = None,
     ) -> str:
         """Store a file in binary mode.  A new port is created for you.
@@ -246,7 +246,7 @@ class FTP:
           The response code.
         """
 
-    def retrlines(self, cmd: str, callback: ((str) -> object) | None = None) -> str:
+    def retrlines(self, cmd: str, callback: ((str) -> object)? = None) -> str:
         """Retrieve data in line mode.  A new port is created for you.
 
         Args:
@@ -259,7 +259,7 @@ class FTP:
           The response code.
         """
 
-    def storlines(self, cmd: str, fp: SupportsReadline[bytes], callback: ((bytes) -> object) | None = None) -> str:
+    def storlines(self, cmd: str, fp: SupportsReadline[bytes], callback: ((bytes) -> object)? = None) -> str:
         """Store a file in line mode.  A new port is created for you.
 
         Args:
@@ -309,7 +309,7 @@ class FTP:
     def cwd(self, dirname: str) -> str:
         """Change to a directory."""
 
-    def size(self, filename: str) -> int | None:
+    def size(self, filename: str) -> int?:
         """Retrieve the size of a file."""
 
     def mkd(self, dirname: str) -> str:
@@ -369,9 +369,9 @@ class FTP_TLS(FTP):
             passwd: str = "",
             acct: str = "",
             *,
-            context: SSLContext | None = None,
+            context: SSLContext? = None,
             timeout: int | float | None = ...,
-            source_address: (str, int) | None = None,
+            source_address: (str, int)? = None,
             encoding: str = "utf-8",
         ) -> None
     else:
@@ -383,9 +383,9 @@ class FTP_TLS(FTP):
             acct: str = "",
             keyfile: None = None,
             certfile: None = None,
-            context: SSLContext | None = None,
+            context: SSLContext? = None,
             timeout: int | float | None = ...,
-            source_address: (str, int) | None = None,
+            source_address: (str, int)? = None,
             *,
             encoding: str = "utf-8",
         ) -> None
@@ -399,18 +399,18 @@ class FTP_TLS(FTP):
             user: str = "",
             passwd: str = "",
             acct: str = "",
-            keyfile: StrOrBytesPath | None = None,
-            certfile: StrOrBytesPath | None = None,
+            keyfile: StrOrBytesPath? = None,
+            certfile: StrOrBytesPath? = None,
             context: None = None,
             timeout: int | float | None = ...,
-            source_address: (str, int) | None = None,
+            source_address: (str, int)? = None,
             *,
             encoding: str = "utf-8",
         ) -> None
 
         ssl_version: int
-        keyfile: StrOrBytesPath | None
-        certfile: StrOrBytesPath | None
+        keyfile: StrOrBytesPath?
+        certfile: StrOrBytesPath?
     context: SSLContext
     override def login(self, user: str = "", passwd: str = "", acct: str = "", secure: bool = True) -> str
     def auth(self) -> str:
@@ -425,7 +425,7 @@ class FTP_TLS(FTP):
     def ccc(self) -> str:
         """Switch back to a clear-text control connection."""
 
-def parse150(resp: str) -> int | None:  # undocumented
+def parse150(resp: str) -> int?:  # undocumented
     """Parse the '150' response for a RETR request.
     Returns the expected transfer size or None; size is not guaranteed to
     be present in the 150 message.

@@ -134,13 +134,13 @@ if sys.version_info >= (3, 12):
             cls,
             encode: Encoder,
             decode: Decoder,
-            streamreader: _StreamReader | None = None,
-            streamwriter: _StreamWriter | None = None,
-            incrementalencoder: _IncrementalEncoder | None = None,
-            incrementaldecoder: _IncrementalDecoder | None = None,
-            name: str | None = None,
+            streamreader: _StreamReader? = None,
+            streamwriter: _StreamWriter? = None,
+            incrementalencoder: _IncrementalEncoder? = None,
+            incrementaldecoder: _IncrementalDecoder? = None,
+            name: str? = None,
             *,
-            _is_text_encoding: bool | None = None,
+            _is_text_encoding: bool? = None,
         ) -> Self
 
 else:
@@ -160,13 +160,13 @@ else:
             cls,
             encode: Encoder,
             decode: Decoder,
-            streamreader: _StreamReader | None = None,
-            streamwriter: _StreamWriter | None = None,
-            incrementalencoder: _IncrementalEncoder | None = None,
-            incrementaldecoder: _IncrementalDecoder | None = None,
-            name: str | None = None,
+            streamreader: _StreamReader? = None,
+            streamwriter: _StreamWriter? = None,
+            incrementalencoder: _IncrementalEncoder? = None,
+            incrementaldecoder: _IncrementalDecoder? = None,
+            name: str? = None,
             *,
-            _is_text_encoding: bool | None = None,
+            _is_text_encoding: bool? = None,
         ) -> Self
 
 def getencoder(encoding: str) -> Encoder:
@@ -222,7 +222,7 @@ def getwriter(encoding: str) -> _StreamWriter:
 
 @deprecated("Deprecated. Use `open()` instead.")
 def open(
-    filename: str, mode: str = "r", encoding: str | None = None, errors: str = "strict", buffering: int = -1
+    filename: str, mode: str = "r", encoding: str? = None, errors: str = "strict", buffering: int = -1
 ) -> StreamReaderWriter:
     """Open an encoded file using the given mode and return
     a wrapped version providing transparent encoding/decoding.
@@ -253,7 +253,7 @@ def open(
     parameter.
     """
 
-def EncodedFile(file: _Stream, data_encoding: str, file_encoding: str | None = None, errors: str = "strict") -> StreamRecoder:
+def EncodedFile(file: _Stream, data_encoding: str, file_encoding: str? = None, errors: str = "strict") -> StreamRecoder:
     """Return a wrapped version of file which provides transparent
     encoding translation.
 
@@ -550,7 +550,7 @@ class StreamWriter(Codec):
 
     def seek(self, offset: int, whence: int = 0)
     def __enter__(self) -> Self
-    def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None)
+    def __exit__(self, type: type[BaseException]?, value: BaseException?, tb: types.TracebackType?)
     def __getattr__(self, name: str, getattr: (dynamic, str) -> dynamic = ...) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
@@ -604,7 +604,7 @@ class StreamReader(Codec):
         on the stream, these should be read too.
         """
 
-    def readline(self, size: int | None = None, keepends: bool = True) -> str:
+    def readline(self, size: int? = None, keepends: bool = True) -> str:
         """Read one line from the input stream and return the
         decoded data.
 
@@ -613,7 +613,7 @@ class StreamReader(Codec):
 
         """
 
-    def readlines(self, sizehint: int | None = None, keepends: bool = True) -> list[str]:
+    def readlines(self, sizehint: int? = None, keepends: bool = True) -> list[str]:
         """Read all lines available on the input stream
         and return them as a list.
 
@@ -641,7 +641,7 @@ class StreamReader(Codec):
         """
 
     def __enter__(self) -> Self
-    def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None)
+    def __exit__(self, type: type[BaseException]?, value: BaseException?, tb: types.TracebackType?)
     def __iter__(self) -> Self
     def __next__(self) -> str:
         """Return the next decoded line from the input stream."""
@@ -676,8 +676,8 @@ class StreamReaderWriter(TextIO):
         """
 
     override def read(self, size: int = -1) -> str
-    override def readline(self, size: int | None = None) -> str
-    override def readlines(self, sizehint: int | None = None) -> list[str]
+    override def readline(self, size: int? = None) -> str
+    override def readlines(self, sizehint: int? = None) -> list[str]
     override def __next__(self) -> str:
         """Return the next decoded line from the input stream."""
 
@@ -687,7 +687,7 @@ class StreamReaderWriter(TextIO):
     def reset(self)
     override def seek(self, offset: int, whence: int = 0)
     override def __enter__(self) -> Self
-    override def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None)
+    override def __exit__(self, type: type[BaseException]?, value: BaseException?, tb: types.TracebackType?)
     def __getattr__(self, name: str) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
@@ -698,7 +698,7 @@ class StreamReaderWriter(TextIO):
     override def flush(self)
     override def isatty(self) -> bool
     override def readable(self) -> bool
-    override def truncate(self, size: int | None = ...) -> int
+    override def truncate(self, size: int? = ...) -> int
     override def seekable(self) -> bool
     override def tell(self) -> int
     override def writable(self) -> bool
@@ -750,8 +750,8 @@ class StreamRecoder(BinaryIO):
         """
 
     override def read(self, size: int = -1) -> bytes
-    override def readline(self, size: int | None = None) -> bytes
-    override def readlines(self, sizehint: int | None = None) -> list[bytes]
+    override def readline(self, size: int? = None) -> bytes
+    override def readlines(self, sizehint: int? = None) -> list[bytes]
     override def __next__(self) -> bytes:
         """Return the next decoded line from the input stream."""
 
@@ -764,7 +764,7 @@ class StreamRecoder(BinaryIO):
         """Inherit all other methods from the underlying stream."""
 
     override def __enter__(self) -> Self
-    override def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None)
+    override def __exit__(self, type: type[BaseException]?, value: BaseException?, tb: types.TracebackType?)
     override def seek(self, offset: int, whence: int = 0)
     # These methods don't actually exist directly, but they are needed to satisfy the BinaryIO
     # interface. At runtime, they are delegated through __getattr__.
@@ -773,7 +773,7 @@ class StreamRecoder(BinaryIO):
     override def flush(self)
     override def isatty(self) -> bool
     override def readable(self) -> bool
-    override def truncate(self, size: int | None = ...) -> int
+    override def truncate(self, size: int? = ...) -> int
     override def seekable(self) -> bool
     override def tell(self) -> int
     override def writable(self) -> bool

@@ -23,19 +23,19 @@ private protocol SupportsSearch:
 
 def compile_dir(
     dir: StrPath,
-    maxlevels: int | None = None,
-    ddir: StrPath | None = None,
+    maxlevels: int? = None,
+    ddir: StrPath? = None,
     force: bool = False,
-    rx: SupportsSearch | None = None,
+    rx: SupportsSearch? = None,
     quiet: int = 0,
     legacy: bool = False,
     optimize: int = -1,
     workers: int = 1,
-    invalidation_mode: PycInvalidationMode | None = None,
+    invalidation_mode: PycInvalidationMode? = None,
     *,
-    stripdir: StrPath | None = None,
-    prependdir: StrPath | None = None,
-    limit_sl_dest: StrPath | None = None,
+    stripdir: StrPath? = None,
+    prependdir: StrPath? = None,
+    limit_sl_dest: StrPath? = None,
     hardlink_dupes: bool = False,
 ) -> bool:
     """Byte-compile all modules in the given directory tree.
@@ -65,17 +65,17 @@ def compile_dir(
 
 def compile_file(
     fullname: StrPath,
-    ddir: StrPath | None = None,
+    ddir: StrPath? = None,
     force: bool = False,
-    rx: SupportsSearch | None = None,
+    rx: SupportsSearch? = None,
     quiet: int = 0,
     legacy: bool = False,
     optimize: int = -1,
-    invalidation_mode: PycInvalidationMode | None = None,
+    invalidation_mode: PycInvalidationMode? = None,
     *,
-    stripdir: StrPath | None = None,
-    prependdir: StrPath | None = None,
-    limit_sl_dest: StrPath | None = None,
+    stripdir: StrPath? = None,
+    prependdir: StrPath? = None,
+    limit_sl_dest: StrPath? = None,
     hardlink_dupes: bool = False,
 ) -> bool:
     """Byte-compile one file.
@@ -108,7 +108,7 @@ def compile_path(
     quiet: int = 0,
     legacy: bool = False,
     optimize: int = -1,
-    invalidation_mode: PycInvalidationMode | None = None,
+    invalidation_mode: PycInvalidationMode? = None,
 ) -> bool:
     """Byte-compile all module on sys.path.
 

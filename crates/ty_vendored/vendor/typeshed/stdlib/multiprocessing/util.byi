@@ -51,7 +51,7 @@ def get_logger() -> Logger:
     Returns logger used by multiprocessing
     """
 
-def log_to_stderr(level: _LoggingLevel | None = None) -> Logger:
+def log_to_stderr(level: _LoggingLevel? = None) -> Logger:
     """
     Turn on logging and add a handler which prints to stderr
     """
@@ -75,19 +75,19 @@ class Finalize[out R = dynamic]:
         callback: (...) -> R,
         *,
         args: Sequence[dynamic] = (),
-        kwargs: Mapping[str, dynamic] | None = None,
+        kwargs: Mapping[str, dynamic]? = None,
         exitpriority: int,
     )
     init(
-        self, obj: None, callback: (...) -> R, args: Sequence[dynamic], kwargs: Mapping[str, dynamic] | None, exitpriority: int
+        self, obj: None, callback: (...) -> R, args: Sequence[dynamic], kwargs: Mapping[str, dynamic]?, exitpriority: int
     )
     init(
         self,
         obj: dynamic,
         callback: (...) -> R,
         args: Sequence[dynamic] = (),
-        kwargs: Mapping[str, dynamic] | None = None,
-        exitpriority: int | None = None,
+        kwargs: Mapping[str, dynamic]? = None,
+        exitpriority: int? = None,
     )
 
     def __call__(

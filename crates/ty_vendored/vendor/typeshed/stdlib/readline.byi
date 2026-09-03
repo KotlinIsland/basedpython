@@ -6,13 +6,13 @@ from collections.abc import Callable, Sequence
 from typing import Literal, TypeAlias
 
 if sys.platform != "win32":
-    type _Completer = (str, int) -> (str | None)
+    type _Completer = (str, int) -> (str?)
     type _CompDisp = (str, Sequence[str], int) -> None
 
     def parse_and_bind(string: str, /):
         """Execute the init line provided in the string argument."""
 
-    def read_init_file(filename: StrOrBytesPath | None = None, /):
+    def read_init_file(filename: StrOrBytesPath? = None, /):
         """Execute a readline initialization file.
 
         The default filename is the last filename used.
@@ -27,19 +27,19 @@ if sys.platform != "win32":
     def redisplay():
         """Change what's displayed on the screen to reflect contents of the line buffer."""
 
-    def read_history_file(filename: StrOrBytesPath | None = None, /):
+    def read_history_file(filename: StrOrBytesPath? = None, /):
         """Load a readline history file.
 
         The default filename is ~/.history.
         """
 
-    def write_history_file(filename: StrOrBytesPath | None = None, /):
+    def write_history_file(filename: StrOrBytesPath? = None, /):
         """Save a readline history file.
 
         The default filename is ~/.history.
         """
 
-    def append_history_file(nelements: int, filename: StrOrBytesPath | None = None, /):
+    def append_history_file(nelements: int, filename: StrOrBytesPath? = None, /):
         """Append the last nelements items of the history list to file.
 
         The default filename is ~/.history.
@@ -78,14 +78,14 @@ if sys.platform != "win32":
     def set_auto_history(enabled: bool, /):
         """Enables or disables automatic history."""
 
-    def set_startup_hook(function: (() -> object) | None = None, /):
+    def set_startup_hook(function: (() -> object)? = None, /):
         """Set or remove the function invoked by the rl_startup_hook callback.
 
         The function is called with no arguments just
         before readline prints the first prompt.
         """
 
-    def set_pre_input_hook(function: (() -> object) | None = None, /):
+    def set_pre_input_hook(function: (() -> object)? = None, /):
         """Set or remove the function invoked by the rl_pre_input_hook callback.
 
         The function is called with no arguments after the first prompt
@@ -93,7 +93,7 @@ if sys.platform != "win32":
         characters.
         """
 
-    def set_completer(function: _Completer | None = None, /):
+    def set_completer(function: _Completer? = None, /):
         """Set or remove the completer function.
 
         The function is called as function(text, state),
@@ -101,7 +101,7 @@ if sys.platform != "win32":
         It should return the next possible completion starting with 'text'.
         """
 
-    def get_completer() -> _Completer | None:
+    def get_completer() -> _Completer?:
         """Get the current completer function."""
 
     def get_completion_type() -> int:
@@ -119,7 +119,7 @@ if sys.platform != "win32":
     def get_completer_delims() -> str:
         """Get the word delimiters for completion."""
 
-    def set_completion_display_matches_hook(function: _CompDisp | None = None, /):
+    def set_completion_display_matches_hook(function: _CompDisp? = None, /):
         """Set or remove the completion display function.
 
         The function is called as

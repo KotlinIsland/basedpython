@@ -112,9 +112,9 @@ class NNTP:
         self,
         host: str,
         port: int = 119,
-        user: str | None = None,
-        password: str | None = None,
-        readermode: bool | None = None,
+        user: str? = None,
+        password: str? = None,
+        readermode: bool? = None,
         usenetrc: bool = False,
         timeout: int | float = ...,
     ):
@@ -190,7 +190,7 @@ class NNTP:
         - list: list of message ids
         """
 
-    def list(self, group_pattern: str | None = None, *, file: _File = None) -> (str, _list[str]):
+    def list(self, group_pattern: str? = None, *, file: _File = None) -> (str, _list[str]):
         """Process a LIST or LIST ACTIVE command. Arguments:
         - group_pattern: a pattern indicating which groups to query
         - file: Filename string or file object to store the result in
@@ -351,23 +351,23 @@ class NNTP:
         - resp: server response if successful
         """
 
-    def login(self, user: str | None = None, password: str | None = None, usenetrc: bool = True)
-    def starttls(self, context: ssl.SSLContext | None = None):
+    def login(self, user: str? = None, password: str? = None, usenetrc: bool = True)
+    def starttls(self, context: ssl.SSLContext? = None):
         """Process a STARTTLS command. Arguments:
         - context: SSL context to use for the encrypted connection
         """
 
 class NNTP_SSL(NNTP):
-    ssl_context: ssl.SSLContext | None
+    ssl_context: ssl.SSLContext?
     sock: ssl.SSLSocket
     init(
         self,
         host: str,
         port: int = 563,
-        user: str | None = None,
-        password: str | None = None,
-        ssl_context: ssl.SSLContext | None = None,
-        readermode: bool | None = None,
+        user: str? = None,
+        password: str? = None,
+        ssl_context: ssl.SSLContext? = None,
+        readermode: bool? = None,
         usenetrc: bool = False,
         timeout: int | float = ...,
     ):

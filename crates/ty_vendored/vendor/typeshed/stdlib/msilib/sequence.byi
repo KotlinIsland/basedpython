@@ -2,7 +2,7 @@ import sys
 from typing import Final, TypeAlias
 
 if sys.platform == "win32":
-    type _SequenceType = list[(str, str | None, int)]
+    type _SequenceType = list[(str, str?, int)]
 
     final AdminExecuteSequence: _SequenceType
     final AdminUISequence: _SequenceType

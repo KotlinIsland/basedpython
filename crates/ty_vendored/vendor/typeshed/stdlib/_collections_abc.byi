@@ -93,12 +93,12 @@ protocol Generator[out Yield, in Send = None, out Return = None](Iterator[Yield]
         """
 
     abstract def throw(
-        self, typ: type[BaseException], val: BaseException | object = None, tb: TracebackType | None = None, /
+        self, typ: type[BaseException], val: BaseException | object = None, tb: TracebackType? = None, /
     ) -> Yield:
         """Raise an exception in the generator.
         Return next yielded value or raise StopIteration.
         """
-    abstract def throw(self, typ: BaseException, val: None = None, tb: TracebackType | None = None, /) -> Yield
+    abstract def throw(self, typ: BaseException, val: None = None, tb: TracebackType? = None, /) -> Yield
 
     if sys.version_info >= (3, 13):
         def close(self) -> Return | None:
@@ -126,12 +126,12 @@ class Coroutine[out Yield, in SendT_nd, out ReturnT_nd](Awaitable[ReturnT_nd]):
         """
 
     abstract def throw(
-        self, typ: type[BaseException], val: BaseException | object = None, tb: TracebackType | None = None, /
+        self, typ: type[BaseException], val: BaseException | object = None, tb: TracebackType? = None, /
     ) -> Yield:
         """Raise an exception in the coroutine.
         Return next yielded value or raise StopIteration.
         """
-    abstract def throw(self, typ: BaseException, val: None = None, tb: TracebackType | None = None, /) -> Yield
+    abstract def throw(self, typ: BaseException, val: None = None, tb: TracebackType? = None, /) -> Yield
 
     abstract def close(self):
         """Raise GeneratorExit inside coroutine."""
@@ -161,13 +161,13 @@ protocol AsyncGenerator[out Yield, in Send = None](AsyncIterator[Yield]):
         """
 
     abstract def athrow(
-        self, typ: type[BaseException], val: BaseException | object = None, tb: TracebackType | None = None, /
+        self, typ: type[BaseException], val: BaseException | object = None, tb: TracebackType? = None, /
     ) -> Coroutine[dynamic, dynamic, Yield]:
         """Raise an exception in the asynchronous generator.
         Return next yielded value or raise StopAsyncIteration.
         """
     abstract def athrow(
-        self, typ: BaseException, val: None = None, tb: TracebackType | None = None, /
+        self, typ: BaseException, val: None = None, tb: TracebackType? = None, /
     ) -> Coroutine[dynamic, dynamic, Yield]
 
     def aclose(self) -> Coroutine[dynamic, dynamic, None]:
@@ -190,7 +190,7 @@ class Sequence[out Element](Reversible[Element], Collection[Element]):
     """
 
     abstract def __getitem__(self, index: int, /) -> Element
-    abstract def __getitem__(self, index: slice[int | None], /) -> Sequence[Element]
+    abstract def __getitem__(self, index: slice[int?], /) -> Sequence[Element]
 
     # Mixin methods
     def index(self, value: dynamic, start: int = 0, stop: int = ..., /) -> int:
@@ -219,13 +219,13 @@ class MutableSequence[in out Element](Sequence[Element]):
         """S.insert(index, value) -- insert value before index"""
 
     override abstract def __getitem__(self, index: int, /) -> Element
-    abstract def __getitem__(self, index: slice[int | None], /) -> MutableSequence[Element]
+    abstract def __getitem__(self, index: slice[int?], /) -> MutableSequence[Element]
 
     abstract def __setitem__(self, index: int, value: Element, /) -> None
-    abstract def __setitem__(self, index: slice[int | None], value: Iterable[Element], /) -> None
+    abstract def __setitem__(self, index: slice[int?], value: Iterable[Element], /) -> None
 
     abstract def __delitem__(self, index: int, /) -> None
-    abstract def __delitem__(self, index: slice[int | None], /) -> None
+    abstract def __delitem__(self, index: slice[int?], /) -> None
 
     # Mixin methods
     def append(self, value: Element, /):

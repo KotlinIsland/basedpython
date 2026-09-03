@@ -10,7 +10,7 @@ from distutils.file_util import _BytesPathT, _StrPathT
 from typing import Literal, TypeAlias
 from typing_extensions import TypeVarTuple, Unpack
 
-private type Macro = (str,) | (str, str | None)
+private type Macro = (str,) | (str, str?)
 
 def gen_lib_options(
     compiler: CCompiler, library_dirs: list[str], runtime_library_dirs: list[str], libraries: list[str]
@@ -33,7 +33,7 @@ def gen_preprocess_options(macros: list[Macro], include_dirs: list[str]) -> list
     C++.
     """
 
-def get_default_compiler(osname: str | None = None, platform: str | None = None) -> str:
+def get_default_compiler(osname: str? = None, platform: str? = None) -> str:
     """Determine the default compiler to use for the given platform.
 
     osname should be one of the standard Python OS names (i.e. the
@@ -45,8 +45,8 @@ def get_default_compiler(osname: str | None = None, platform: str | None = None)
     """
 
 def new_compiler(
-    plat: str | None = None,
-    compiler: str | None = None,
+    plat: str? = None,
+    compiler: str? = None,
     verbose: bool | 0 | 1 = 0,
     dry_run: bool | 0 | 1 = 0,
     force: bool | 0 | 1 = 0,
@@ -84,7 +84,7 @@ class CCompiler:
     dry_run: bool
     force: bool
     verbose: bool
-    output_dir: str | None
+    output_dir: str?
     macros: list[Macro]
     include_dirs: list[str]
     libraries: list[str]
@@ -157,7 +157,7 @@ class CCompiler:
         default.
         """
 
-    def define_macro(self, name: str, value: str | None = None):
+    def define_macro(self, name: str, value: str? = None):
         """Define a preprocessor macro for all compilations driven by this
         compiler object.  The optional parameter 'value' should be a
         string; if it is not supplied, then the macro will be defined
@@ -189,12 +189,12 @@ class CCompiler:
         libraries).
         """
 
-    def detect_language(self, sources: str | list[str]) -> str | None:
+    def detect_language(self, sources: str | list[str]) -> str?:
         """Detect the language of a given file, or list of files. Uses
         language_map, and language_order to do the job.
         """
 
-    def find_library_file(self, dirs: list[str], lib: str, debug: bool | 0 | 1 = 0) -> str | None:
+    def find_library_file(self, dirs: list[str], lib: str, debug: bool | 0 | 1 = 0) -> str?:
         """Search the specified list of directories for a static or shared
         library file 'lib' and return the full path to that file.  If
         'debug' true, look for a debugging version (if that makes sense on
@@ -205,10 +205,10 @@ class CCompiler:
     def has_function(
         self,
         funcname: str,
-        includes: list[str] | None = None,
-        include_dirs: list[str] | None = None,
-        libraries: list[str] | None = None,
-        library_dirs: list[str] | None = None,
+        includes: list[str]? = None,
+        include_dirs: list[str]? = None,
+        libraries: list[str]? = None,
+        library_dirs: list[str]? = None,
     ) -> bool:
         """Return a boolean indicating whether funcname is supported on
         the current platform.  The optional arguments can be used to
@@ -251,13 +251,13 @@ class CCompiler:
     def compile(
         self,
         sources: Sequence[StrPath],
-        output_dir: str | None = None,
-        macros: list[Macro] | None = None,
-        include_dirs: list[str] | None = None,
+        output_dir: str? = None,
+        macros: list[Macro]? = None,
+        include_dirs: list[str]? = None,
         debug: bool | 0 | 1 = 0,
-        extra_preargs: list[str] | None = None,
-        extra_postargs: list[str] | None = None,
-        depends: list[str] | None = None,
+        extra_preargs: list[str]? = None,
+        extra_postargs: list[str]? = None,
+        depends: list[str]? = None,
     ) -> list[str]:
         """Compile one or more source files.
 
@@ -312,9 +312,9 @@ class CCompiler:
         self,
         objects: list[str],
         output_libname: str,
-        output_dir: str | None = None,
+        output_dir: str? = None,
         debug: bool | 0 | 1 = 0,
-        target_lang: str | None = None,
+        target_lang: str? = None,
     ):
         """Link a bunch of stuff together to create a static library file.
         The "bunch of stuff" consists of the list of object files supplied
@@ -344,16 +344,16 @@ class CCompiler:
         target_desc: str,
         objects: list[str],
         output_filename: str,
-        output_dir: str | None = None,
-        libraries: list[str] | None = None,
-        library_dirs: list[str] | None = None,
-        runtime_library_dirs: list[str] | None = None,
-        export_symbols: list[str] | None = None,
+        output_dir: str? = None,
+        libraries: list[str]? = None,
+        library_dirs: list[str]? = None,
+        runtime_library_dirs: list[str]? = None,
+        export_symbols: list[str]? = None,
         debug: bool | 0 | 1 = 0,
-        extra_preargs: list[str] | None = None,
-        extra_postargs: list[str] | None = None,
-        build_temp: str | None = None,
-        target_lang: str | None = None,
+        extra_preargs: list[str]? = None,
+        extra_postargs: list[str]? = None,
+        build_temp: str? = None,
+        target_lang: str? = None,
     ):
         """Link a bunch of stuff together to create an executable or
         shared library file.
@@ -403,53 +403,53 @@ class CCompiler:
         self,
         objects: list[str],
         output_progname: str,
-        output_dir: str | None = None,
-        libraries: list[str] | None = None,
-        library_dirs: list[str] | None = None,
-        runtime_library_dirs: list[str] | None = None,
+        output_dir: str? = None,
+        libraries: list[str]? = None,
+        library_dirs: list[str]? = None,
+        runtime_library_dirs: list[str]? = None,
         debug: bool | 0 | 1 = 0,
-        extra_preargs: list[str] | None = None,
-        extra_postargs: list[str] | None = None,
-        target_lang: str | None = None,
+        extra_preargs: list[str]? = None,
+        extra_postargs: list[str]? = None,
+        target_lang: str? = None,
     )
     def link_shared_lib(
         self,
         objects: list[str],
         output_libname: str,
-        output_dir: str | None = None,
-        libraries: list[str] | None = None,
-        library_dirs: list[str] | None = None,
-        runtime_library_dirs: list[str] | None = None,
-        export_symbols: list[str] | None = None,
+        output_dir: str? = None,
+        libraries: list[str]? = None,
+        library_dirs: list[str]? = None,
+        runtime_library_dirs: list[str]? = None,
+        export_symbols: list[str]? = None,
         debug: bool | 0 | 1 = 0,
-        extra_preargs: list[str] | None = None,
-        extra_postargs: list[str] | None = None,
-        build_temp: str | None = None,
-        target_lang: str | None = None,
+        extra_preargs: list[str]? = None,
+        extra_postargs: list[str]? = None,
+        build_temp: str? = None,
+        target_lang: str? = None,
     )
     def link_shared_object(
         self,
         objects: list[str],
         output_filename: str,
-        output_dir: str | None = None,
-        libraries: list[str] | None = None,
-        library_dirs: list[str] | None = None,
-        runtime_library_dirs: list[str] | None = None,
-        export_symbols: list[str] | None = None,
+        output_dir: str? = None,
+        libraries: list[str]? = None,
+        library_dirs: list[str]? = None,
+        runtime_library_dirs: list[str]? = None,
+        export_symbols: list[str]? = None,
         debug: bool | 0 | 1 = 0,
-        extra_preargs: list[str] | None = None,
-        extra_postargs: list[str] | None = None,
-        build_temp: str | None = None,
-        target_lang: str | None = None,
+        extra_preargs: list[str]? = None,
+        extra_postargs: list[str]? = None,
+        build_temp: str? = None,
+        target_lang: str? = None,
     )
     def preprocess(
         self,
         source: str,
-        output_file: str | None = None,
-        macros: list[Macro] | None = None,
-        include_dirs: list[str] | None = None,
-        extra_preargs: list[str] | None = None,
-        extra_postargs: list[str] | None = None,
+        output_file: str? = None,
+        macros: list[Macro]? = None,
+        include_dirs: list[str]? = None,
+        extra_preargs: list[str]? = None,
+        extra_postargs: list[str]? = None,
     ):
         """Preprocess a single C/C++ source file, named in 'source'.
         Output will be written to file named 'output_file', or stdout if
@@ -468,14 +468,14 @@ class CCompiler:
         self, libname: str, lib_type: str = "static", strip_dir: bool | 0 | 1 = 0, output_dir: StrPath = ""
     ) -> str
     def object_filenames(
-        self, source_filenames: Iterable[StrPath], strip_dir: bool | 0 | 1 = 0, output_dir: StrPath | None = ""
+        self, source_filenames: Iterable[StrPath], strip_dir: bool | 0 | 1 = 0, output_dir: StrPath? = ""
     ) -> list[str]
 
     def shared_object_filename(self, basename: str, strip_dir: 0 | False = 0, output_dir: StrPath = "") -> str
     def shared_object_filename(self, basename: StrPath, strip_dir: 1 | True, output_dir: StrPath = "") -> str
 
     def execute[*Args](
-        self, func: (*Args) -> Unused, args: (Unpack[Args],), msg: str | None = None, level: int = 1
+        self, func: (*Args) -> Unused, args: (Unpack[Args],), msg: str? = None, level: int = 1
     )
     def spawn(self, cmd: Iterable[str])
     def mkpath(self, name: str, mode: int = 0o777)

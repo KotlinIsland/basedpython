@@ -18,7 +18,7 @@ from .pgen2.grammar import Grammar
 type _NL = Node | Leaf
 private type Context = (str, int, int)
 private type Results = dict[str, _NL]
-type _RawNode = (int, str, Context, list[_NL] | None)
+type _RawNode = (int, str, Context, list[_NL]?)
 
 HUGE: Final = 0x7FFFFFFF
 
@@ -35,7 +35,7 @@ class Base:
     """
 
     type: int
-    parent: Node | None
+    parent: Node?
     prefix: str
     children: list[_NL]
     was_changed: bool
@@ -86,15 +86,15 @@ class Base:
         """Return the line number which generated the invocant node."""
 
     def changed(self)
-    def remove(self) -> int | None:
+    def remove(self) -> int?:
         """
         Remove the node from the tree. Returns the position of the node in its
         parent's children before it was removed.
         """
 
-    let next_sibling: _NL | None
+    let next_sibling: _NL?
 
-    let prev_sibling: _NL | None
+    let prev_sibling: _NL?
 
     def leaves(self) -> Iterator[Leaf]
     def depth(self) -> int
@@ -107,7 +107,7 @@ class Base:
 class Node(Base):
     """Concrete implementation for interior nodes."""
 
-    fixers_applied: MutableSequence[BaseFix] | None
+    fixers_applied: MutableSequence[BaseFix]?
     # Is Unbound until set in refactor.RefactoringTool
     future_features: frozenset[str]
     # Is Unbound until set in pgen2.parse.Parser.pop
@@ -117,8 +117,8 @@ class Node(Base):
         type: int,
         children: Iterable[_NL],
         context: Unused = None,
-        prefix: str | None = None,
-        fixers_applied: MutableSequence[BaseFix] | None = None,
+        prefix: str? = None,
+        fixers_applied: MutableSequence[BaseFix]? = None,
     ):
         """
         Initializer.
@@ -177,8 +177,8 @@ class Leaf(Base):
         self,
         type: int,
         value: str,
-        context: Context | None = None,
-        prefix: str | None = None,
+        context: Context? = None,
+        prefix: str? = None,
         fixers_applied: MutableSequence[BaseFix] = [],
     ):
         """
@@ -232,8 +232,8 @@ class BasePattern:
     """
 
     type: int
-    content: str | None
-    name: str | None
+    content: str?
+    name: str?
     def optimize(self) -> BasePattern:  # sic, subclasses are free to optimize themselves into different patterns
         """
         A subclass can define this as a hook for optimizations.
@@ -241,7 +241,7 @@ class BasePattern:
         Returns either self or another node with the same effect.
         """
 
-    def match(self, node: _NL, results: Results | None = None) -> bool:
+    def match(self, node: _NL, results: Results? = None) -> bool:
         """
         Does this pattern exactly match a node?
 
@@ -253,7 +253,7 @@ class BasePattern:
         Default implementation for non-wildcard patterns.
         """
 
-    def match_seq(self, nodes: SupportsLenAndGetItem[_NL], results: Results | None = None) -> bool:
+    def match_seq(self, nodes: SupportsLenAndGetItem[_NL], results: Results? = None) -> bool:
         """
         Does this pattern exactly match a sequence of nodes?
 
@@ -268,7 +268,7 @@ class BasePattern:
         """
 
 class LeafPattern(BasePattern):
-    init(self, type: int | None = None, content: str | None = None, name: str | None = None):
+    init(self, type: int? = None, content: str? = None, name: str? = None):
         """
         Initializer.  Takes optional type, content, and name.
 
@@ -283,7 +283,7 @@ class LeafPattern(BasePattern):
 
 class NodePattern(BasePattern):
     wildcards: bool
-    init(self, type: int | None = None, content: str | None = None, name: str | None = None):
+    init(self, type: int? = None, content: str? = None, name: str? = None):
         """
         Initializer.  Takes optional type, content, and name.
 
@@ -315,7 +315,7 @@ class WildcardPattern(BasePattern):
 
     min: int
     max: int
-    init(self, content: str | None = None, min: int = 0, max: int = 0x7FFFFFFF, name: str | None = None):
+    init(self, content: str? = None, min: int = 0, max: int = 0x7FFFFFFF, name: str? = None):
         """
         Initializer.
 
@@ -340,7 +340,7 @@ class WildcardPattern(BasePattern):
         """
 
 class NegatedPattern(BasePattern):
-    init(self, content: str | None = None):
+    init(self, content: str? = None):
         """
         Initializer.
 
@@ -351,7 +351,7 @@ class NegatedPattern(BasePattern):
         """
 
 def generate_matches(
-    patterns: SupportsGetItem[int | slice, BasePattern] | None, nodes: SupportsGetItem[int | slice, _NL]
+    patterns: SupportsGetItem[int | slice, BasePattern]?, nodes: SupportsGetItem[int | slice, _NL]
 ) -> Iterator[(int, Results)]:
     """
     Generator yielding matches for a sequence of patterns and nodes.

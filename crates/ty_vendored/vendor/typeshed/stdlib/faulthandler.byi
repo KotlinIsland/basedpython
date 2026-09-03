@@ -11,7 +11,7 @@ def disable():
 
 if sys.version_info >= (3, 15):
     def dump_traceback(
-        file: FileDescriptorLike = sys.stderr, all_threads: bool = True, *, max_threads: int | None = None
+        file: FileDescriptorLike = sys.stderr, all_threads: bool = True, *, max_threads: int? = None
     ) -> None:
         """Dump the traceback of the current thread into file.
 
@@ -34,7 +34,7 @@ if sys.version_info >= (3, 15):
         file: FileDescriptorLike = sys.stderr,
         exit: bool = False,
         *,
-        max_threads: int | None = None,
+        max_threads: int? = None,
     ) -> None:
         """Dump the traceback of all threads in timeout seconds.
 
@@ -53,7 +53,7 @@ else:
 
 if sys.version_info >= (3, 15):
     def enable(
-        file: FileDescriptorLike = sys.stderr, all_threads: bool = True, c_stack: bool = True, *, max_threads: int | None = None
+        file: FileDescriptorLike = sys.stderr, all_threads: bool = True, c_stack: bool = True, *, max_threads: int? = None
     ) -> None:
         """Enable the fault handler."""
 
@@ -76,7 +76,7 @@ if sys.platform != "win32":
             all_threads: bool = True,
             chain: bool = False,
             *,
-            max_threads: int | None = None,
+            max_threads: int? = None,
         ) -> None:
             """Register a handler for the signal 'signum'.
 

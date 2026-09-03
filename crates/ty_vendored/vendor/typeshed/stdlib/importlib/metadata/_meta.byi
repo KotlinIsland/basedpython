@@ -13,12 +13,12 @@ protocol PackageMetadata:
     def __iter__(self) -> Iterator[str]
     let json: dict[str, str | list[str]]
 
-    def get_all(self, name: str, failobj: None = None) -> list[dynamic] | None:
+    def get_all(self, name: str, failobj: None = None) -> list[dynamic]?:
         """Helper for @overload to raise when called."""
     def get_all[Element](self, name: str, failobj: Element) -> list[dynamic] | Element
 
     if sys.version_info >= (3, 12):
-        def get(self, name: str, failobj: None = None) -> str | None:
+        def get(self, name: str, failobj: None = None) -> str?:
             """Helper for @overload to raise when called."""
         def get[Element](self, name: str, failobj: Element) -> Element | str
 
@@ -32,7 +32,7 @@ if sys.version_info >= (3, 13):
         def __truediv__(self, other: StrPath, /) -> SimplePath
         # Incorrect at runtime
         let parent: PathLike[str]
-        def read_text(self, encoding: str | None = None) -> str
+        def read_text(self, encoding: str? = None) -> str
         def read_bytes(self) -> bytes
         def exists(self) -> bool
 

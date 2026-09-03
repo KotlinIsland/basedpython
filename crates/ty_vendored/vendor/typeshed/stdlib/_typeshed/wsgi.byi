@@ -19,7 +19,7 @@ else:
     # stable
     protocol StartResponse:
         def __call__(
-            self, status: str, headers: list[(str, str)], exc_info: OptExcInfo | None = ..., /
+            self, status: str, headers: list[(str, str)], exc_info: OptExcInfo? = ..., /
         ) -> (bytes) -> object
 
     type WSGIEnvironment = dict[str, dynamic]  # stable

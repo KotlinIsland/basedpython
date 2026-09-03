@@ -89,14 +89,14 @@ def canonicalize(
     xml_data: str | ReadableBuffer | None = None,
     *,
     out: None = None,
-    from_file: FileRead | None = None,
+    from_file: FileRead? = None,
     with_comments: bool = False,
     strip_text: bool = False,
     rewrite_prefixes: bool = False,
-    qname_aware_tags: Iterable[str] | None = None,
-    qname_aware_attrs: Iterable[str] | None = None,
-    exclude_attrs: Iterable[str] | None = None,
-    exclude_tags: Iterable[str] | None = None,
+    qname_aware_tags: Iterable[str]? = None,
+    qname_aware_attrs: Iterable[str]? = None,
+    exclude_attrs: Iterable[str]? = None,
+    exclude_tags: Iterable[str]? = None,
 ) -> str:
     """Convert XML to its C14N 2.0 serialised form.
 
@@ -115,14 +115,14 @@ def canonicalize(
     xml_data: str | ReadableBuffer | None = None,
     *,
     out: SupportsWrite[str],
-    from_file: FileRead | None = None,
+    from_file: FileRead? = None,
     with_comments: bool = False,
     strip_text: bool = False,
     rewrite_prefixes: bool = False,
-    qname_aware_tags: Iterable[str] | None = None,
-    qname_aware_attrs: Iterable[str] | None = None,
-    exclude_attrs: Iterable[str] | None = None,
-    exclude_tags: Iterable[str] | None = None,
+    qname_aware_tags: Iterable[str]? = None,
+    qname_aware_attrs: Iterable[str]? = None,
+    exclude_attrs: Iterable[str]? = None,
+    exclude_tags: Iterable[str]? = None,
 ) -> None
 
 # The tag for Element can be set to the Comment or ProcessingInstruction
@@ -138,31 +138,31 @@ class Element[in out Tag: str | ElementCallable = str]:
     attrib: dict[str, str]
     """A dictionary containing the element's attributes"""
 
-    text: str | None
+    text: str?
     """A string of text directly after the start tag, or None"""
 
-    tail: str | None
+    tail: str?
     """A string of text directly after the end tag, or None"""
 
     init(self, tag: Tag, attrib: dict[str, str] = {}, **extra: str)
     def append(self, subelement: Element[dynamic], /)
     def clear(self)
     def extend(self, elements: Iterable[Element[dynamic]], /)
-    def find(self, path: str, namespaces: dict[str, str] | None = None) -> Element | None
-    def findall(self, path: str, namespaces: dict[str, str] | None = None) -> list[Element]
+    def find(self, path: str, namespaces: dict[str, str]? = None) -> Element?
+    def findall(self, path: str, namespaces: dict[str, str]? = None) -> list[Element]
 
-    def findtext(self, path: str, default: None = None, namespaces: dict[str, str] | None = None) -> str | None
-    def findtext[T](self, path: str, default: T, namespaces: dict[str, str] | None = None) -> T | str
+    def findtext(self, path: str, default: None = None, namespaces: dict[str, str]? = None) -> str?
+    def findtext[T](self, path: str, default: T, namespaces: dict[str, str]? = None) -> T | str
 
-    def get(self, key: str, default: None = None) -> str | None
+    def get(self, key: str, default: None = None) -> str?
     def get[T](self, key: str, default: T) -> str | T
 
     def insert(self, index: int, subelement: Element[dynamic], /)
     def items(self) -> ItemsView[str, str]
-    def iter(self, tag: str | None = None) -> Generator[Element]
+    def iter(self, tag: str? = None) -> Generator[Element]
 
-    def iterfind(self, path: "", namespaces: dict[str, str] | None = None) -> None
-    def iterfind(self, path: str, namespaces: dict[str, str] | None = None) -> Generator[Element]
+    def iterfind(self, path: "", namespaces: dict[str, str]? = None) -> None
+    def iterfind(self, path: str, namespaces: dict[str, str]? = None) -> Generator[Element]
 
     def itertext(self) -> Generator[str]
     def keys(self) -> dict_keys[str, str]
@@ -177,7 +177,7 @@ class Element[in out Tag: str | ElementCallable = str]:
 
     def __getitem__(self, key: SupportsIndex, /) -> Element:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> list[Element]
+    def __getitem__(self, key: slice[SupportsIndex?], /) -> list[Element]
 
     def __len__(self) -> int:
         """Return len(self)."""
@@ -187,7 +187,7 @@ class Element[in out Tag: str | ElementCallable = str]:
 
     def __setitem__(self, key: SupportsIndex, value: Element[dynamic], /) -> None:
         """Set self[key] to value."""
-    def __setitem__(self, key: slice[SupportsIndex | None], value: Iterable[Element[dynamic]], /) -> None
+    def __setitem__(self, key: slice[SupportsIndex?], value: Iterable[Element[dynamic]], /) -> None
 
     # Doesn't really exist in earlier versions, where __len__ is called implicitly instead
     @deprecated("Testing an element's truth value is deprecated.")
@@ -195,7 +195,7 @@ class Element[in out Tag: str | ElementCallable = str]:
         """True if self else False"""
 
 def SubElement(parent: Element[dynamic], tag: str, attrib: dict[str, str] = ..., **extra: str) -> Element
-def Comment(text: str | None = None) -> Element[ElementCallable]:
+def Comment(text: str? = None) -> Element[ElementCallable]:
     """Comment element factory.
 
     This function creates a special element which the standard serializer
@@ -205,7 +205,7 @@ def Comment(text: str | None = None) -> Element[ElementCallable]:
 
     """
 
-def ProcessingInstruction(target: str, text: str | None = None) -> Element[ElementCallable]:
+def ProcessingInstruction(target: str, text: str? = None) -> Element[ElementCallable]:
     """Processing Instruction element factory.
 
     This function creates a special element which the standard serializer
@@ -234,7 +234,7 @@ class QName:
     """
 
     text: str
-    init(self, text_or_uri: str, tag: str | None = None)
+    init(self, text_or_uri: str, tag: str? = None)
     def __lt__(self, other: QName | str) -> bool
     def __le__(self, other: QName | str) -> bool
     def __gt__(self, other: QName | str) -> bool
@@ -243,7 +243,7 @@ class QName:
     override def __hash__(self) -> int
 
 
-class ElementTree[in out Root in (Element, Element | None) = Element | None]:
+class ElementTree[in out Root in (Element, Element?) = Element?]:
     """An XML element hierarchy.
 
     This class also provides support for serialization to and from
@@ -255,7 +255,7 @@ class ElementTree[in out Root in (Element, Element | None) = Element | None]:
 
     """
 
-    init(self, element: Element[dynamic] | None = None, file: FileRead | None = None)
+    init(self, element: Element[dynamic]? = None, file: FileRead? = None)
     def getroot(self) -> Root:
         """Return root element of this tree."""
 
@@ -267,7 +267,7 @@ class ElementTree[in out Root in (Element, Element | None) = Element | None]:
 
         """
 
-    def parse(self, source: FileRead, parser: XMLParser | None = None) -> Element:
+    def parse(self, source: FileRead, parser: XMLParser? = None) -> Element:
         """Load external XML document into element tree.
 
         *source* is a file name or file object, *parser* is an optional
@@ -279,7 +279,7 @@ class ElementTree[in out Root in (Element, Element | None) = Element | None]:
 
         """
 
-    def iter(self, tag: str | None = None) -> Generator[Element]:
+    def iter(self, tag: str? = None) -> Generator[Element]:
         """Create and return tree iterator for the root element.
 
         The iterator loops over all elements in this tree, in document
@@ -290,7 +290,7 @@ class ElementTree[in out Root in (Element, Element | None) = Element | None]:
 
         """
 
-    def find(self, path: str, namespaces: dict[str, str] | None = None) -> Element | None:
+    def find(self, path: str, namespaces: dict[str, str]? = None) -> Element?:
         """Find first matching element by tag name or path.
 
         Same as getroot().find(path), which is Element.find()
@@ -303,7 +303,7 @@ class ElementTree[in out Root in (Element, Element | None) = Element | None]:
 
         """
 
-    def findtext(self, path: str, default: None = None, namespaces: dict[str, str] | None = None) -> str | None:
+    def findtext(self, path: str, default: None = None, namespaces: dict[str, str]? = None) -> str?:
         """Find first matching element by tag name or path.
 
         Same as getroot().findtext(path),  which is Element.findtext()
@@ -315,9 +315,9 @@ class ElementTree[in out Root in (Element, Element | None) = Element | None]:
         Return the first matching element, or None if no element was found.
 
         """
-    def findtext[T](self, path: str, default: T, namespaces: dict[str, str] | None = None) -> T | str
+    def findtext[T](self, path: str, default: T, namespaces: dict[str, str]? = None) -> T | str
 
-    def findall(self, path: str, namespaces: dict[str, str] | None = None) -> list[Element]:
+    def findall(self, path: str, namespaces: dict[str, str]? = None) -> list[Element]:
         """Find all matching subelements by tag name or path.
 
         Same as getroot().findall(path), which is Element.findall().
@@ -330,7 +330,7 @@ class ElementTree[in out Root in (Element, Element | None) = Element | None]:
 
         """
 
-    def iterfind(self, path: "", namespaces: dict[str, str] | None = None) -> None:
+    def iterfind(self, path: "", namespaces: dict[str, str]? = None) -> None:
         """Find all matching subelements by tag name or path.
 
         Same as getroot().iterfind(path), which is element.iterfind()
@@ -341,14 +341,14 @@ class ElementTree[in out Root in (Element, Element | None) = Element | None]:
         Return an iterable yielding all matching elements in document order.
 
         """
-    def iterfind(self, path: str, namespaces: dict[str, str] | None = None) -> Generator[Element]
+    def iterfind(self, path: str, namespaces: dict[str, str]? = None) -> Generator[Element]
 
     def write(
         self,
         file_or_filename: FileWrite,
-        encoding: str | None = None,
-        xml_declaration: bool | None = None,
-        default_namespace: str | None = None,
+        encoding: str? = None,
+        xml_declaration: bool? = None,
+        default_namespace: str? = None,
         method: "xml" | "html" | "text" | "c14n" | None = None,
         *,
         short_empty_elements: bool = True,
@@ -401,8 +401,8 @@ def tostring(
     encoding: None = None,
     method: "xml" | "html" | "text" | "c14n" | None = None,
     *,
-    xml_declaration: bool | None = None,
-    default_namespace: str | None = None,
+    xml_declaration: bool? = None,
+    default_namespace: str? = None,
     short_empty_elements: bool = True,
 ) -> bytes:
     """Generate string representation of XML element.
@@ -423,8 +423,8 @@ def tostring(
     encoding: "unicode",
     method: "xml" | "html" | "text" | "c14n" | None = None,
     *,
-    xml_declaration: bool | None = None,
-    default_namespace: str | None = None,
+    xml_declaration: bool? = None,
+    default_namespace: str? = None,
     short_empty_elements: bool = True,
 ) -> str
 def tostring(
@@ -432,8 +432,8 @@ def tostring(
     encoding: str,
     method: "xml" | "html" | "text" | "c14n" | None = None,
     *,
-    xml_declaration: bool | None = None,
-    default_namespace: str | None = None,
+    xml_declaration: bool? = None,
+    default_namespace: str? = None,
     short_empty_elements: bool = True,
 ) -> dynamic
 
@@ -442,8 +442,8 @@ def tostringlist(
     encoding: None = None,
     method: "xml" | "html" | "text" | "c14n" | None = None,
     *,
-    xml_declaration: bool | None = None,
-    default_namespace: str | None = None,
+    xml_declaration: bool? = None,
+    default_namespace: str? = None,
     short_empty_elements: bool = True,
 ) -> list[bytes]
 def tostringlist(
@@ -451,8 +451,8 @@ def tostringlist(
     encoding: "unicode",
     method: "xml" | "html" | "text" | "c14n" | None = None,
     *,
-    xml_declaration: bool | None = None,
-    default_namespace: str | None = None,
+    xml_declaration: bool? = None,
+    default_namespace: str? = None,
     short_empty_elements: bool = True,
 ) -> list[str]
 def tostringlist(
@@ -460,8 +460,8 @@ def tostringlist(
     encoding: str,
     method: "xml" | "html" | "text" | "c14n" | None = None,
     *,
-    xml_declaration: bool | None = None,
-    default_namespace: str | None = None,
+    xml_declaration: bool? = None,
+    default_namespace: str? = None,
     short_empty_elements: bool = True,
 ) -> list[dynamic]
 
@@ -492,7 +492,7 @@ def indent(tree: Element[dynamic] | ElementTree[dynamic], space: str = "  ", lev
     nested inside of a document.
     """
 
-def parse(source: FileRead, parser: XMLParser[dynamic] | None = None) -> ElementTree[Element]:
+def parse(source: FileRead, parser: XMLParser[dynamic]? = None) -> ElementTree[Element]:
     """Parse XML document into element tree.
 
     *source* is a filename or file object containing XML data,
@@ -540,12 +540,12 @@ def iterparse(source: FileRead, events: None = None) -> IterParseIterator[Elemen
 # In case a custom parser is passed, the type of the second element of the tuple
 # yielded by iterparse depends on the parser.
 @deprecated("The `parser` parameter is deprecated since Python 3.4.")
-def iterparse(source: FileRead, events: Iterable[EventType], parser: XMLParser | None = None) -> IterParseIterator[dynamic]
+def iterparse(source: FileRead, events: Iterable[EventType], parser: XMLParser? = None) -> IterParseIterator[dynamic]
 
 private type EventQueue = (str,) | (str, (str, str)) | (str, None)
 
 class XMLPullParser[out EventT: Element[str] | Element[ElementCallable] | tuple[str, str] | None]:
-    init(self, events: Iterable[EventType] | None = None, *, _parser: XMLParser[EventT] | None = None)
+    init(self, events: Iterable[EventType]? = None, *, _parser: XMLParser[EventT]? = None)
     def feed(self, data: str | ReadableBuffer):
         """Feed encoded data to parser."""
 
@@ -565,7 +565,7 @@ class XMLPullParser[out EventT: Element[str] | Element[ElementCallable] | tuple[
 
     def flush(self)
 
-def XML(text: str | ReadableBuffer, parser: XMLParser | None = None) -> Element:
+def XML(text: str | ReadableBuffer, parser: XMLParser? = None) -> Element:
     """Parse XML document from string constant.
 
     This function can be used to embed "XML Literals" in Python code.
@@ -577,7 +577,7 @@ def XML(text: str | ReadableBuffer, parser: XMLParser | None = None) -> Element:
 
     """
 
-def XMLID(text: str | ReadableBuffer, parser: XMLParser | None = None) -> (Element, dict[str, Element]):
+def XMLID(text: str | ReadableBuffer, parser: XMLParser? = None) -> (Element, dict[str, Element]):
     """Parse XML document from string constant for its IDs.
 
     *text* is a string containing XML data, *parser* is an
@@ -591,7 +591,7 @@ def XMLID(text: str | ReadableBuffer, parser: XMLParser | None = None) -> (Eleme
 # This is aliased to XML in the source.
 fromstring = XML
 
-def fromstringlist(sequence: Sequence[str | ReadableBuffer], parser: XMLParser | None = None) -> Element:
+def fromstringlist(sequence: Sequence[str | ReadableBuffer], parser: XMLParser? = None) -> Element:
     """Parse XML document from sequence of string fragments.
 
     *sequence* is a list of other sequence, *parser* is an optional parser
@@ -617,10 +617,10 @@ class TreeBuilder:
     # comment_factory can take None because passing None to Comment is not an error
     init(
         self,
-        element_factory: _ElementFactory | None = None,
+        element_factory: _ElementFactory? = None,
         *,
-        comment_factory: ((str | None) -> Element[dynamic]) | None = None,
-        pi_factory: ((str, str | None) -> Element[dynamic]) | None = None,
+        comment_factory: ((str?) -> Element[dynamic])? = None,
+        pi_factory: ((str, str?) -> Element[dynamic])? = None,
         insert_comments: bool = False,
         insert_pis: bool = False,
     )
@@ -634,8 +634,8 @@ class TreeBuilder:
     def start(self, tag: dynamic, attrs: dict[dynamic, dynamic], /) -> Element
     def end(self, tag: str, /) -> Element
     # These two methods have pos-only parameters in the C implementation
-    def comment(self, text: str | None, /) -> Element[dynamic]
-    def pi(self, target: str, text: str | None = None, /) -> Element[dynamic]
+    def comment(self, text: str?, /) -> Element[dynamic]
+    def pi(self, target: str, text: str? = None, /) -> Element[dynamic]
 
 class C14NWriterTarget:
     """
@@ -670,10 +670,10 @@ class C14NWriterTarget:
         with_comments: bool = False,
         strip_text: bool = False,
         rewrite_prefixes: bool = False,
-        qname_aware_tags: Iterable[str] | None = None,
-        qname_aware_attrs: Iterable[str] | None = None,
-        exclude_attrs: Iterable[str] | None = None,
-        exclude_tags: Iterable[str] | None = None,
+        qname_aware_tags: Iterable[str]? = None,
+        qname_aware_attrs: Iterable[str]? = None,
+        exclude_attrs: Iterable[str]? = None,
+        exclude_tags: Iterable[str]? = None,
     )
     def data(self, data: str)
     def start_ns(self, prefix: str, uri: str)
@@ -700,7 +700,7 @@ class XMLParser[in out E = Element]:
     # TODO: what is entity used for???
     entity: dict[str, str]
     version: str
-    init(self, *, target: Target | None = None, encoding: str | None = None)
+    init(self, *, target: Target? = None, encoding: str? = None)
     def close(self) -> E
     def feed(self, data: str | ReadableBuffer, /)
     def flush(self)

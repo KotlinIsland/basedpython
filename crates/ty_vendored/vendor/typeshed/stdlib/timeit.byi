@@ -52,11 +52,11 @@ class Timer:
         stmt: Stmt = "pass",
         setup: Stmt = "pass",
         timer: _Timer = time.perf_counter,
-        globals: dict[str, dynamic] | None = None,
+        globals: dict[str, dynamic]? = None,
     ):
         """Constructor.  See class doc string."""
 
-    def print_exc(self, file: IO[str] | None = None):
+    def print_exc(self, file: IO[str]? = None):
         """Helper to print a traceback from the timed code.
 
         Typical use:
@@ -113,7 +113,7 @@ class Timer:
 
     if sys.version_info >= (3, 15):
         def autorange(
-            self, callback: ((int, float) -> object) | None = None, target_time: int | float = 0.2
+            self, callback: ((int, float) -> object)? = None, target_time: int | float = 0.2
         ) -> (int, float):
             """Return the number of loops and time taken so that
             total time >= target_time (default is 0.2 seconds).
@@ -127,7 +127,7 @@ class Timer:
             """
 
     else:
-        def autorange(self, callback: ((int, float) -> object) | None = None) -> (int, float):
+        def autorange(self, callback: ((int, float) -> object)? = None) -> (int, float):
             """Return the number of loops and time taken so that total time >= 0.2.
 
             Calls the timeit method with increasing numbers from the sequence
@@ -143,7 +143,7 @@ def timeit(
     setup: Stmt = "pass",
     timer: _Timer = time.perf_counter,
     number: int = 1000000,
-    globals: dict[str, dynamic] | None = None,
+    globals: dict[str, dynamic]? = None,
 ) -> float:
     """Convenience function to create Timer object and call timeit method."""
 
@@ -153,11 +153,11 @@ def repeat(
     timer: _Timer = time.perf_counter,
     repeat: int = 5,
     number: int = 1000000,
-    globals: dict[str, dynamic] | None = None,
+    globals: dict[str, dynamic]? = None,
 ) -> list[float]:
     """Convenience function to create Timer object and call repeat method."""
 
-def main(args: Sequence[str] | None = None, *, _wrap_timer: ((_Timer) -> _Timer) | None = None):
+def main(args: Sequence[str]? = None, *, _wrap_timer: ((_Timer) -> _Timer)? = None):
     """Main program, used when run as a script.
 
     The optional 'args' argument specifies the command line to be parsed,

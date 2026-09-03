@@ -156,7 +156,7 @@ class Untokenizer:
     tokens: list[str]
     prev_row: int
     prev_col: int
-    encoding: str | None
+    encoding: str?
     def add_whitespace(self, start: Position)
     if sys.version_info >= (3, 12):
         def add_backslash_continuation(self, start: Position):

@@ -8,7 +8,7 @@ if sys.platform == "win32":
     # Actual typename View, not exposed by the implementation
     @type_check_only
     class _View:
-        def Execute(self, params: _Record | None = ...)
+        def Execute(self, params: _Record? = ...)
         def GetColumnInfo(self, kind: int) -> _Record
         def Fetch(self) -> _Record
         def Modify(self, mode: int, record: _Record)

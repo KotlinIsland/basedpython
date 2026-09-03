@@ -1309,6 +1309,10 @@ impl<'db> BoundTypeVarInstance<'db> {
         self.kind(db).is_typevartuple()
     }
 
+    pub fn is_typing_self(self, db: &'db dyn Db) -> bool {
+        self.kind(db).is_typing_self()
+    }
+
     /// Returns a new bound typevar instance with the given `ParamSpec` attribute set.
     ///
     /// This method will also set an appropriate upper bound on the typevar, based on the
@@ -2037,6 +2041,10 @@ impl TypeVarKind {
 
     pub(super) const fn is_typevartuple(self) -> bool {
         matches!(self, Self::LegacyTypeVarTuple | Self::Pep695TypeVarTuple)
+    }
+
+    pub const fn is_typing_self(self) -> bool {
+        matches!(self, Self::TypingSelf)
     }
 }
 

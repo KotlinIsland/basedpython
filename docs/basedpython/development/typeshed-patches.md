@@ -88,6 +88,32 @@ the node, then emit an edit over its range. that keeps a patch precise (exact
 identifier matches, correct scoping) and idempotent (re-running over
 already-patched source produces no edits)
 
+## a patch that replays a reverse transform
+
+reverse-transpile and the patches divide the work by *when* they can run, not by
+what they know: a reverse transform sees the upstream `.pyi`, a patch sees the
+committed `.byi`. so a rewrite that belongs in the reverse pass, written after
+the tree has already been converted, has nowhere to land — the reverse pass will
+never look at those files again, and replaying the whole pass over them would
+have the rest of the transforms read basedpython as if it were the python they
+invert (`Iterable[(Key, Value)]`, a tuple type, would lose its parentheses to
+the transform that strips python's redundant grouping)
+
+`optional-marker` is that case: `T | None` → `T?` is an ordinary reverse
+transform, and it is written once, in `by_transforms`. the patch is a four-line
+adapter over
+[`by_transforms::optional_marker_edits`](../../../crates/by_transforms/src/lib.rs),
+which runs that single transform and hands back its edits. it ignores the
+`parsed` module it is given and works from `source` alone, because the transform
+does its own parse — and it needs to, since the rule turns on a question the
+syntax cannot answer: `?` over a bare *type variable* is the wrapped optional,
+so a stub's `Value | None` has to stay a union
+
+reach for this shape whenever the rule already exists in `by_transforms`. write a
+patch of its own when the rule is about the stub form specifically — the legacy
+`TypeVar` declarations, the explicit variance keywords, an upstream convention —
+which is what every other patch here is about
+
 ## worked example: `mapping-key-covariance`
 
 upstream typeshed declares `Mapping` with an invariant key typevar:

@@ -54,12 +54,12 @@ class HTMLParser(ParserBase):
     def close(self):
         """Handle any buffered data."""
 
-    def get_starttag_text(self) -> str | None:
+    def get_starttag_text(self) -> str?:
         """Return full source of start tag: '<...>'."""
 
-    def handle_starttag(self, tag: str, attrs: list[(str, str | None)])
+    def handle_starttag(self, tag: str, attrs: list[(str, str?)])
     def handle_endtag(self, tag: str)
-    def handle_startendtag(self, tag: str, attrs: list[(str, str | None)])
+    def handle_startendtag(self, tag: str, attrs: list[(str, str?)])
     def handle_data(self, data: str)
     def handle_entityref(self, name: str)
     def handle_charref(self, name: str)
@@ -77,7 +77,7 @@ class HTMLParser(ParserBase):
     # `escapable` parameter added in Python 3.9.23, 3.10.18, 3.11.13, 3.12.11, 3.13.6
     def set_cdata_mode(self, elem: str, *, escapable: bool = False)  # undocumented
     rawdata: str  # undocumented
-    cdata_elem: str | None  # undocumented
+    cdata_elem: str?  # undocumented
     convert_charrefs: bool  # undocumented
     interesting: Pattern[str]  # undocumented
     lasttag: str  # undocumented

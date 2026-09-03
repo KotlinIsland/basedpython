@@ -62,7 +62,7 @@ class tixCommand:
         options described in the CONFIGURATION OPTIONS section.
         """
 
-    def tix_configure(self, cnf: dict[str, dynamic] | None = None, **kw: dynamic) -> dynamic:
+    def tix_configure(self, cnf: dict[str, dynamic]? = None, **kw: dynamic) -> dynamic:
         """Query or modify the configuration options of the Tix application
         context. If no option is specified, returns a dictionary all of the
         available options.  If option is specified with no value, then the
@@ -74,7 +74,7 @@ class tixCommand:
         empty string. Option may be any of the configuration options.
         """
 
-    def tix_filedialog(self, dlgclass: str | None = None) -> str:
+    def tix_filedialog(self, dlgclass: str? = None) -> str:
         """Returns the file selection dialog that may be shared among
         different calls from this application.  This command will create a
         file selection dialog widget when it is called the first time. This
@@ -122,7 +122,7 @@ class tixCommand:
             select_bg       select_fg      selector
         """
 
-    def tix_resetoptions(self, newScheme: str, newFontSet: str, newScmPrio: str | None = None):
+    def tix_resetoptions(self, newScheme: str, newFontSet: str, newScmPrio: str? = None):
         """Resets the scheme and fontset of the Tix application to
         newScheme and newFontSet, respectively.  This affects only those
         widgets created after this call. Therefore, it is best to call the
@@ -143,7 +143,7 @@ class Tk(tkinter.Tk, tixCommand):
     of an application. It has an associated Tcl interpreter.
     """
 
-    init(self, screenName: str | None = None, baseName: str | None = None, className: str = "Tix")
+    init(self, screenName: str? = None, baseName: str? = None, className: str = "Tix")
 
 class TixWidget(tkinter.Widget):
     """A TixWidget class is used to package all (or most) Tix widgets.
@@ -161,9 +161,9 @@ class TixWidget(tkinter.Widget):
 
     init(
         self,
-        master: tkinter.Misc | None = None,
-        widgetName: str | None = None,
-        static_options: list[str] | None = None,
+        master: tkinter.Misc? = None,
+        widgetName: str? = None,
+        static_options: list[str]? = None,
         cnf: dict[str, dynamic] = {},
         kw: dict[str, dynamic] = {},
     )
@@ -182,7 +182,7 @@ class TixWidget(tkinter.Widget):
     def config_all(self, option: dynamic, value: dynamic):
         """Set configuration options for all subwidgets (and self)."""
 
-    def image_create(self, imgtype: str, cnf: dict[str, dynamic] = {}, master: tkinter.Widget | None = None, **kw)
+    def image_create(self, imgtype: str, cnf: dict[str, dynamic] = {}, master: tkinter.Widget? = None, **kw)
     def image_delete(self, imgname: str)
 
 class TixSubWidget(TixWidget):
@@ -200,7 +200,7 @@ class DisplayStyle:
     (multiple) Display Items
     """
 
-    init(self, itemtype: str, cnf: dict[str, dynamic] = {}, *, master: tkinter.Widget | None = None, **kw)
+    init(self, itemtype: str, cnf: dict[str, dynamic] = {}, *, master: tkinter.Widget? = None, **kw)
     def __getitem__(self, key: str)
     def __setitem__(self, key: str, value: dynamic)
     def delete(self)
@@ -215,7 +215,7 @@ class Balloon(TixWidget):
     message         Message
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
     def bind_widget(self, widget: tkinter.Widget, cnf: dict[str, dynamic] = {}, **kw):
         """Bind balloon widget to another.
         One balloon widget may be bound to several widgets at the same time
@@ -228,7 +228,7 @@ class ButtonBox(TixWidget):
     Subwidgets are the buttons added with the add method.
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
     def add(self, name: str, cnf: dict[str, dynamic] = {}, **kw) -> tkinter.Widget:
         """Add a button with given name to box."""
 
@@ -248,7 +248,7 @@ class ComboBox(TixWidget):
     cross       Button : present if created with the fancy option
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
     def add_history(self, str: str)
     def append_history(self, str: str)
     def insert(self, index: int, str: str)
@@ -268,7 +268,7 @@ class Control(TixWidget):
     label       Label
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
     def decrement(self)
     def increment(self)
     def invoke(self)
@@ -284,7 +284,7 @@ class LabelEntry(TixWidget):
     entry       Entry
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
 
 class LabelFrame(TixWidget):
     """LabelFrame - Labelled Frame container. Packages a frame widget
@@ -298,14 +298,14 @@ class LabelFrame(TixWidget):
     frame       Frame
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
 
 class Meter(TixWidget):
     """The Meter widget can be used to show the progress of a background
     job which may take a long time to execute.
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
 
 class OptionMenu(TixWidget):
     """OptionMenu - creates a menu button of options.
@@ -316,7 +316,7 @@ class OptionMenu(TixWidget):
     menu            Menu
     """
 
-    init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget?, cnf: dict[str, dynamic] = {}, **kw)
     def add_command(self, name: str, cnf: dict[str, dynamic] = {}, **kw)
     def add_separator(self, name: str, cnf: dict[str, dynamic] = {}, **kw)
     def delete(self, name: str)
@@ -335,7 +335,7 @@ class PopupMenu(TixWidget):
     menu       Menu
     """
 
-    init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget?, cnf: dict[str, dynamic] = {}, **kw)
     def bind_widget(self, widget: tkinter.Widget)
     def unbind_widget(self, widget: tkinter.Widget)
     def post_widget(self, widget: tkinter.Widget, x: int, y: int)
@@ -347,14 +347,14 @@ class Select(TixWidget):
     Subwidgets are buttons added dynamically using the add method.
     """
 
-    init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget?, cnf: dict[str, dynamic] = {}, **kw)
     def add(self, name: str, cnf: dict[str, dynamic] = {}, **kw) -> tkinter.Widget
     def invoke(self, name: str)
 
 class StdButtonBox(TixWidget):
     """StdButtonBox - Standard Button Box (OK, Apply, Cancel and Help)"""
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
     def invoke(self, name: str)
 
 class DirList(TixWidget):
@@ -369,7 +369,7 @@ class DirList(TixWidget):
     vsb              Scrollbar
     """
 
-    init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget?, cnf: dict[str, dynamic] = {}, **kw)
     def chdir(self, dir: str)
 
 class DirTree(TixWidget):
@@ -385,7 +385,7 @@ class DirTree(TixWidget):
     vsb             Scrollbar
     """
 
-    init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget?, cnf: dict[str, dynamic] = {}, **kw)
     def chdir(self, dir: str)
 
 class DirSelectDialog(TixWidget):
@@ -398,7 +398,7 @@ class DirSelectDialog(TixWidget):
     dirbox       DirSelectDialog
     """
 
-    init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget?, cnf: dict[str, dynamic] = {}, **kw)
     def popup(self)
     def popdown(self)
 
@@ -417,7 +417,7 @@ class DirSelectBox(TixWidget):
     filelist        ScrolledListBox
     """
 
-    init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget?, cnf: dict[str, dynamic] = {}, **kw)
 
 class ExFileSelectBox(TixWidget):
     """ExFileSelectBox - MS Windows style file select box.
@@ -435,7 +435,7 @@ class ExFileSelectBox(TixWidget):
     filelist       ScrolledListBox
     """
 
-    init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget?, cnf: dict[str, dynamic] = {}, **kw)
     def filter(self)
     def invoke(self)
 
@@ -454,7 +454,7 @@ class FileSelectBox(TixWidget):
     filelist        ScrolledListBox
     """
 
-    init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget?, cnf: dict[str, dynamic] = {}, **kw)
     def apply_filter(self)
     def invoke(self)
 
@@ -470,7 +470,7 @@ class FileEntry(TixWidget):
     entry       Entry
     """
 
-    init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget?, cnf: dict[str, dynamic] = {}, **kw)
     def invoke(self)
     def file_dialog(self)
 
@@ -483,13 +483,13 @@ class HList(TixWidget, tkinter.XView, tkinter.YView):
     Subwidgets - None
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
     def add(self, entry: str, cnf: dict[str, dynamic] = {}, **kw) -> tkinter.Widget
-    def add_child(self, parent: str | None = None, cnf: dict[str, dynamic] = {}, **kw) -> tkinter.Widget
+    def add_child(self, parent: str? = None, cnf: dict[str, dynamic] = {}, **kw) -> tkinter.Widget
     def anchor_set(self, entry: str)
     def anchor_clear(self)
     # FIXME: Overload, certain combos return, others don't
-    def column_width(self, col: int = 0, width: int | None = None, chars: int | None = None) -> int | None
+    def column_width(self, col: int = 0, width: int? = None, chars: int? = None) -> int?
     def delete_all(self)
     def delete_entry(self, entry: str)
     def delete_offsprings(self, entry: str)
@@ -499,7 +499,7 @@ class HList(TixWidget, tkinter.XView, tkinter.YView):
     def dropsite_set(self, index: int)
     def dropsite_clear(self)
     def header_create(self, col: int, cnf: dict[str, dynamic] = {}, **kw)
-    def header_configure(self, col: int, cnf: dict[str, dynamic] = {}, **kw) -> Incomplete | None
+    def header_configure(self, col: int, cnf: dict[str, dynamic] = {}, **kw) -> Incomplete?
     def header_cget(self, col: int, opt)
     def header_exists(self, col: int) -> bool
     def header_exist(self, col: int) -> bool
@@ -507,14 +507,14 @@ class HList(TixWidget, tkinter.XView, tkinter.YView):
     def header_size(self, col: int) -> int
     def hide_entry(self, entry: str)
     def indicator_create(self, entry: str, cnf: dict[str, dynamic] = {}, **kw)
-    def indicator_configure(self, entry: str, cnf: dict[str, dynamic] = {}, **kw) -> Incomplete | None
+    def indicator_configure(self, entry: str, cnf: dict[str, dynamic] = {}, **kw) -> Incomplete?
     def indicator_cget(self, entry: str, opt)
     def indicator_exists(self, entry: str) -> bool
     def indicator_delete(self, entry: str)
     def indicator_size(self, entry: str) -> int
     def info_anchor(self) -> str
     def info_bbox(self, entry: str) -> (int, int, int, int)
-    def info_children(self, entry: str | None = None) -> (*: str)
+    def info_children(self, entry: str? = None) -> (*: str)
     def info_data(self, entry: str) -> dynamic
     def info_dragsite(self) -> str
     def info_dropsite(self) -> str
@@ -525,17 +525,17 @@ class HList(TixWidget, tkinter.XView, tkinter.YView):
     def info_prev(self, entry: str) -> str
     def info_selection(self) -> (*: str)
     def item_cget(self, entry: str, col: int, opt)
-    def item_configure(self, entry: str, col: int, cnf: dict[str, dynamic] = {}, **kw) -> Incomplete | None
+    def item_configure(self, entry: str, col: int, cnf: dict[str, dynamic] = {}, **kw) -> Incomplete?
     def item_create(self, entry: str, col: int, cnf: dict[str, dynamic] = {}, **kw)
     def item_exists(self, entry: str, col: int) -> bool
     def item_delete(self, entry: str, col: int)
     def entrycget(self, entry: str, opt)
-    def entryconfigure(self, entry: str, cnf: dict[str, dynamic] = {}, **kw) -> Incomplete | None
+    def entryconfigure(self, entry: str, cnf: dict[str, dynamic] = {}, **kw) -> Incomplete?
     def nearest(self, y: int) -> str
     def see(self, entry: str)
     override def selection_clear(self, cnf: dict[str, dynamic] = {}, **kw)
     def selection_includes(self, entry: str) -> bool
-    def selection_set(self, first: str, last: str | None = None)
+    def selection_set(self, first: str, last: str? = None)
     def show_entry(self, entry: str)
 
 class CheckList(TixWidget):
@@ -545,7 +545,7 @@ class CheckList(TixWidget):
     capable of handling many more items than checkbuttons or radiobuttons.
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
     def autosetmode(self):
         """This command calls the setmode method for all the entries in this
         Tree widget: if an entry has no child entries, its mode is set to
@@ -582,7 +582,7 @@ class Tree(TixWidget):
     the view of the tree by opening or closing parts of the tree.
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
     def autosetmode(self):
         """This command calls the setmode method for all the entries in this
         Tree widget: if an entry has no child entries, its mode is set to
@@ -622,12 +622,12 @@ class TList(TixWidget, tkinter.XView, tkinter.YView):
     Subwidgets - None
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
     def active_set(self, index: int)
     def active_clear(self)
     def anchor_set(self, index: int)
     def anchor_clear(self)
-    def delete(self, from_: int, to: int | None = None)
+    def delete(self, from_: int, to: int? = None)
     def dragsite_set(self, index: int)
     def dragsite_clear(self)
     def dropsite_set(self, index: int)
@@ -645,7 +645,7 @@ class TList(TixWidget, tkinter.XView, tkinter.YView):
     def see(self, index: int)
     override def selection_clear(self, cnf: dict[str, dynamic] = {}, **kw)
     def selection_includes(self, index: int) -> bool
-    def selection_set(self, first: int, last: int | None = None)
+    def selection_set(self, first: int, last: int? = None)
 
 class PanedWindow(TixWidget):
     """PanedWindow - Multi-pane container widget
@@ -659,12 +659,12 @@ class PanedWindow(TixWidget):
     <panes>       g/p widgets added dynamically with the add method.
     """
 
-    init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget?, cnf: dict[str, dynamic] = {}, **kw)
     def add(self, name: str, cnf: dict[str, dynamic] = {}, **kw)
     def delete(self, name: str)
     override def forget(self, name: str)
     def panecget(self, entry: str, opt)
-    def paneconfigure(self, entry: str, cnf: dict[str, dynamic] = {}, **kw) -> Incomplete | None
+    def paneconfigure(self, entry: str, cnf: dict[str, dynamic] = {}, **kw) -> Incomplete?
     def panes(self) -> list[tkinter.Widget]
 
 class ListNoteBook(TixWidget):
@@ -676,7 +676,7 @@ class ListNoteBook(TixWidget):
     choosing the name of the desired page in the hlist subwidget.
     """
 
-    init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget?, cnf: dict[str, dynamic] = {}, **kw)
     def add(self, name: str, cnf: dict[str, dynamic] = {}, **kw)
     def page(self, name: str) -> tkinter.Widget
     def pages(self) -> list[tkinter.Widget]
@@ -691,7 +691,7 @@ class NoteBook(TixWidget):
     <pages>       page widgets added dynamically with the add method
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
     def add(self, name: str, cnf: dict[str, dynamic] = {}, **kw)
     def delete(self, name: str)
     def page(self, name: str) -> tkinter.Widget
@@ -705,7 +705,7 @@ class InputOnly(TixWidget):
     Subwidgets - None
     """
 
-    init(self, master: tkinter.Widget | None = None, cnf: dict[str, dynamic] = {}, **kw)
+    init(self, master: tkinter.Widget? = None, cnf: dict[str, dynamic] = {}, **kw)
 
 class Form:
     """The Tix Form geometry manager
@@ -719,6 +719,6 @@ class Form:
     def form(self, cnf: dict[str, dynamic] = {}, **kw)
     def check(self) -> bool
     def forget(self)
-    def grid(self, xsize: int = 0, ysize: int = 0) -> (int, int) | None
-    def info(self, option: str | None = None)
+    def grid(self, xsize: int = 0, ysize: int = 0) -> (int, int)?
+    def info(self, option: str? = None)
     def slaves(self) -> list[tkinter.Widget]

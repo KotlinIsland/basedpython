@@ -51,7 +51,7 @@ class Command:
     dry_run: bool | 0 | 1  # Exposed from __getattr_. Same as Distribution.dry_run
     distribution: Distribution
     # Any to work around variance issues
-    sub_commands: ClassVar[list[(str, ((dynamic) -> bool) | None)]]
+    sub_commands: ClassVar[list[(str, ((dynamic) -> bool)?)]]
     init(self, dist: Distribution):
         """Create and initialize a new Command object.  Most importantly,
         invokes the 'initialize_options()' method, which is the real
@@ -103,7 +103,7 @@ class Command:
         DISTUTILS_DEBUG environment variable) flag is true.
         """
 
-    def ensure_string(self, option: str, default: str | None = None):
+    def ensure_string(self, option: str, default: str? = None):
         """Ensure that 'option' is a string; if not defined, set it to
         'default'.
         """
@@ -220,7 +220,7 @@ class Command:
 
     def warn(self, msg: str)
     def execute[*Args](
-        self, func: (*Args) -> Unused, args: (Unpack[Args],), msg: str | None = None, level: int = 1
+        self, func: (*Args) -> Unused, args: (Unpack[Args],), msg: str? = None, level: int = 1
     )
     def mkpath(self, name: str, mode: int = 0o777)
 
@@ -230,7 +230,7 @@ class Command:
         outfile: _StrPathT,
         preserve_mode: bool | 0 | 1 = 1,
         preserve_times: bool | 0 | 1 = 1,
-        link: str | None = None,
+        link: str? = None,
         level: Unused = 1,
     ) -> (_StrPathT | str, bool):
         """Copy a file respecting verbose, dry-run and force flags.  (The
@@ -243,7 +243,7 @@ class Command:
         outfile: _BytesPathT,
         preserve_mode: bool | 0 | 1 = 1,
         preserve_times: bool | 0 | 1 = 1,
-        link: str | None = None,
+        link: str? = None,
         level: Unused = 1,
     ) -> (_BytesPathT | bytes, bool)
 
@@ -271,19 +271,19 @@ class Command:
         self,
         base_name: str,
         format: str,
-        root_dir: StrOrBytesPath | None = None,
-        base_dir: str | None = None,
-        owner: str | None = None,
-        group: str | None = None,
+        root_dir: StrOrBytesPath? = None,
+        base_dir: str? = None,
+        owner: str? = None,
+        group: str? = None,
     ) -> str
     def make_archive(
         self,
         base_name: StrPath,
         format: str,
         root_dir: StrOrBytesPath,
-        base_dir: str | None = None,
-        owner: str | None = None,
-        group: str | None = None,
+        base_dir: str? = None,
+        owner: str? = None,
+        group: str? = None,
     ) -> str
 
     def make_file[*Args](
@@ -292,8 +292,8 @@ class Command:
         outfile: StrOrBytesPath,
         func: (*Args) -> Unused,
         args: (Unpack[Args],),
-        exec_msg: str | None = None,
-        skip_msg: str | None = None,
+        exec_msg: str? = None,
+        skip_msg: str? = None,
         level: Unused = 1,
     ):
         """Special case of 'execute()' for operations that process one or

@@ -45,9 +45,9 @@ from _typeshed import StrPath
 from collections.abc import Iterable
 
 PREFIXES: list[str]
-ENABLE_USER_SITE: bool | None
-USER_SITE: str | None
-USER_BASE: str | None
+ENABLE_USER_SITE: bool?
+USER_SITE: str?
+USER_BASE: str?
 
 def main():
     """Add standard site-specific directories to the module search path.
@@ -59,7 +59,7 @@ def main():
 def abs_paths():  # undocumented
     """Set __file__ to an absolute path."""
 
-def addpackage(sitedir: StrPath, name: StrPath, known_paths: set[str] | None) -> set[str] | None:  # undocumented
+def addpackage(sitedir: StrPath, name: StrPath, known_paths: set[str]?) -> set[str]?:  # undocumented
     """Process a .pth file within the site-packages directory."""
 
 if sys.version_info >= (3, 15):
@@ -85,7 +85,7 @@ if sys.version_info >= (3, 15):
         """
 
         __slots__ = ("_known_paths", "_processed_sitedirs", "_path_entries", "_importexecs", "_entrypoints")
-        init(self, known_paths: set[str] | None = None):
+        init(self, known_paths: set[str]? = None):
             """Create an independent startup state.
 
             *known_paths* is a set of case-normalized paths already present
@@ -121,7 +121,7 @@ if sys.version_info >= (3, 15):
             for later processing by process().
             """
 
-        def addsitepackages(self, prefixes: Iterable[str] | None = None):
+        def addsitepackages(self, prefixes: Iterable[str]? = None):
             """Add global site-packages directories, if they exist.
 
             Site-packages directories are computed from *prefixes*, or from the
@@ -138,7 +138,7 @@ if sys.version_info >= (3, 15):
             .pth-extended path.
             """
 
-def addsitedir(sitedir: str, known_paths: set[str] | None = None):
+def addsitedir(sitedir: str, known_paths: set[str]? = None):
     """Add a site directory and process its startup files.
 
     For batched processing across multiple site directories, build a
@@ -146,7 +146,7 @@ def addsitedir(sitedir: str, known_paths: set[str] | None = None):
     defers .pth/.start processing until a single StartupState.process() call.
     """
 
-def addsitepackages(known_paths: set[str] | None, prefixes: Iterable[str] | None = None) -> set[str] | None:  # undocumented
+def addsitepackages(known_paths: set[str]?, prefixes: Iterable[str]? = None) -> set[str]?:  # undocumented
     """Add global site-packages directories, if they exist.
 
     Site-packages directories are computed from *prefixes*, or from the global
@@ -154,7 +154,7 @@ def addsitepackages(known_paths: set[str] | None, prefixes: Iterable[str] | None
     paths added by addsitedir().
     """
 
-def addusersitepackages(known_paths: set[str] | None) -> set[str] | None:  # undocumented
+def addusersitepackages(known_paths: set[str]?) -> set[str]?:  # undocumented
     """Add the per-user site-packages directory, if enabled.
 
     The user site directory is added only when user site-packages are enabled
@@ -162,7 +162,7 @@ def addusersitepackages(known_paths: set[str] | None) -> set[str] | None:  # und
     added by addsitedir().
     """
 
-def check_enableusersite() -> bool | None:  # undocumented
+def check_enableusersite() -> bool?:  # undocumented
     """Check if user site directory is safe for inclusion
 
     The function tests for the command line flag (including environment var),
@@ -201,7 +201,7 @@ def execsitecustomize():  # undocumented
 def execusercustomize():  # undocumented
     """Run custom user specific code, if available."""
 
-def getsitepackages(prefixes: Iterable[str] | None = None) -> list[str]:
+def getsitepackages(prefixes: Iterable[str]? = None) -> list[str]:
     """Returns a list containing all global site-packages directories.
 
     For each directory present in ``prefixes`` (or the global ``PREFIXES``),
@@ -242,5 +242,5 @@ def setquit():  # undocumented
 
     """
 
-def venv(known_paths: set[str] | None) -> set[str] | None:  # undocumented
+def venv(known_paths: set[str]?) -> set[str]?:  # undocumented
     """Process pyvenv.cfg and add the venv site-packages, if applicable."""

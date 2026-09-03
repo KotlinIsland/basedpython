@@ -13,10 +13,10 @@ class MIMEImage(MIMENonMultipart):
     init(
         self,
         _imagedata: str | bytes | bytearray,
-        _subtype: str | None = None,
+        _subtype: str? = None,
         _encoder: (MIMEImage) -> object = ...,
         *,
-        policy: Policy | None = None,
+        policy: Policy? = None,
         **_params: _ParamsType,
     ):
         """Create an image/* type MIME document.

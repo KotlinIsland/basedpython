@@ -280,7 +280,7 @@ class BaseServer:
 
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: types.TracebackType | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: types.TracebackType?
     )
     def service_actions(self):
         """Called by the serve_forever() loop.
@@ -411,7 +411,7 @@ if sys.platform != "win32":
         """Mix-in class to handle each request in a new process."""
 
         timeout: int | float | None  # undocumented
-        active_children: set[int] | None  # undocumented
+        active_children: set[int]?  # undocumented
         max_children: int  # undocumented
         block_on_close: bool
         def collect_children(self, *, blocking: bool = False):  # undocumented

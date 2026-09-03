@@ -104,7 +104,7 @@ def make_parenthesis_pairs(value: dynamic) -> str:
 final rfc2047_matcher: Pattern[str]
 
 class TokenList(list[TokenList | Terminal]):
-    token_type: str | None
+    token_type: str?
     syntactic_break: bool
     ew_combine_allowed: bool
     defects: list[MessageDefect]
@@ -142,9 +142,9 @@ class Token(TokenList):
 
 class EncodedWord(TokenList):
     token_type: str
-    cte: str | None
-    charset: str | None
-    lang: str | None
+    cte: str?
+    charset: str?
+    lang: str?
 
 class QuotedString(TokenList):
     token_type: str
@@ -193,14 +193,14 @@ class NameAddr(TokenList):
     let display_name: str
     let local_part: str
     let domain: str
-    let route: list[Domain] | None
+    let route: list[Domain]?
     let addr_spec: str
 
 class AngleAddr(TokenList):
     token_type: str
     let local_part: str
     let domain: str
-    let route: list[Domain] | None
+    let route: list[Domain]?
     let addr_spec: str
 
 class ObsRoute(TokenList):
@@ -267,8 +267,8 @@ class DomainLiteral(TokenList):
 
 class MIMEVersion(TokenList):
     token_type: str
-    major: int | None
-    minor: int | None
+    major: int?
+    minor: int?
 
 class Parameter(TokenList):
     token_type: str
@@ -287,7 +287,7 @@ class Attribute(TokenList):
 
 class Section(TokenList):
     token_type: str
-    number: int | None
+    number: int?
 
 class Value(TokenList):
     token_type: str

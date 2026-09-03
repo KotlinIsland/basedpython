@@ -13,10 +13,10 @@ class MIMEAudio(MIMENonMultipart):
     init(
         self,
         _audiodata: str | bytes | bytearray,
-        _subtype: str | None = None,
+        _subtype: str? = None,
         _encoder: (MIMEAudio) -> object = ...,
         *,
-        policy: Policy | None = None,
+        policy: Policy? = None,
         **_params: _ParamsType,
     ):
         """Create an audio/* type MIME document.

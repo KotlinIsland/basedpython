@@ -8,7 +8,7 @@ __all__ = ["MIMEText"]
 class MIMEText(MIMENonMultipart):
     """Class for generating text/* type MIME documents."""
 
-    init(self, _text: str, _subtype: str = "plain", _charset: str | None = None, *, policy: Policy | None = None):
+    init(self, _text: str, _subtype: str = "plain", _charset: str? = None, *, policy: Policy? = None):
         """Create a text/* type MIME document.
 
         _text is the string for this message object.

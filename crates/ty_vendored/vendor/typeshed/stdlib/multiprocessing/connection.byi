@@ -27,13 +27,13 @@ class _ConnectionBase[in Send = dynamic, out RecvT = dynamic]:
     def close(self):
         """Close the connection"""
 
-    def send_bytes(self, buf: ReadableBuffer, offset: int = 0, size: int | None = None):
+    def send_bytes(self, buf: ReadableBuffer, offset: int = 0, size: int? = None):
         """Send the bytes data from a bytes-like object"""
 
     def send(self, obj: Send):
         """Send a (picklable) object"""
 
-    def recv_bytes(self, maxlength: int | None = None) -> bytes:
+    def recv_bytes(self, maxlength: int? = None) -> bytes:
         """
         Receive bytes data as a bytes object.
         """
@@ -52,7 +52,7 @@ class _ConnectionBase[in Send = dynamic, out RecvT = dynamic]:
 
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, exc_tb: TracebackType?
     )
     def __del__(self)
 
@@ -79,7 +79,7 @@ class Listener:
     """
 
     init(
-        self, address: _Address | None = None, family: str | None = None, backlog: int = 1, authkey: bytes | None = None
+        self, address: _Address? = None, family: str? = None, backlog: int = 1, authkey: bytes? = None
     )
     if sys.platform != "win32":
         def accept(self) -> Connection[Incomplete, Incomplete]:
@@ -103,10 +103,10 @@ class Listener:
         """
 
     let address: _Address
-    let last_accepted: _Address | None
+    let last_accepted: _Address?
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, exc_tb: TracebackType?
     )
 
 # Any: send and recv methods unused
@@ -127,14 +127,14 @@ def wait[Send = dynamic, RecvT = dynamic](
     """
 
 if sys.platform != "win32":
-    def Client(address: _Address, family: str | None = None, authkey: bytes | None = None) -> Connection[dynamic, dynamic]:
+    def Client(address: _Address, family: str? = None, authkey: bytes? = None) -> Connection[dynamic, dynamic]:
         """
         Returns a connection to the address of a `Listener`
         """
 
 else:
     def Client(
-        address: _Address, family: str | None = None, authkey: bytes | None = None
+        address: _Address, family: str? = None, authkey: bytes? = None
     ) -> Connection[dynamic, dynamic] | PipeConnection[dynamic, dynamic]:
         """
         Returns a connection to the address of a `Listener`

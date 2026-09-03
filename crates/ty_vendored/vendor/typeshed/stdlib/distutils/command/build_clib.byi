@@ -17,7 +17,7 @@ class build_clib(Command):
     description: str
     user_options: ClassVar[list[(str, str, str)]]
     boolean_options: ClassVar[list[str]]
-    help_options: ClassVar[list[(str, str | None, str, () -> Unused)]]
+    help_options: ClassVar[list[(str, str?, str, () -> Unused)]]
     build_clib: Incomplete
     build_temp: Incomplete
     libraries: Incomplete

@@ -63,9 +63,9 @@ class Template:
     template: str
     delimiter: ClassVar[str]
     idpattern: ClassVar[str]
-    braceidpattern: ClassVar[str | None]
+    braceidpattern: ClassVar[str?]
     if sys.version_info >= (3, 14):
-        flags: ClassVar[RegexFlag | None]
+        flags: ClassVar[RegexFlag?]
     else:
         flags: ClassVar[RegexFlag]
     pattern: ClassVar[Pattern[str]]
@@ -119,4 +119,4 @@ class Formatter:
     def get_value(self, key: int | str, args: Sequence[dynamic], kwargs: Mapping[str, dynamic]) -> dynamic
     def check_unused_args(self, used_args: set[int | str], args: Sequence[dynamic], kwargs: Mapping[str, dynamic])
     def format_field(self, value: dynamic, format_spec: str) -> dynamic
-    def convert_field(self, value: dynamic, conversion: str | None) -> dynamic
+    def convert_field(self, value: dynamic, conversion: str?) -> dynamic

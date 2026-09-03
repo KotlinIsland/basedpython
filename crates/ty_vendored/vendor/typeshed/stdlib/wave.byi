@@ -142,7 +142,7 @@ class Wave_read:
     def __enter__(self) -> Self
     def __exit__(self, *args: Unused)
     def __del__(self)
-    def getfp(self) -> BinaryIO | None
+    def getfp(self) -> BinaryIO?
     def rewind(self)
     def close(self)
     def tell(self) -> int
@@ -236,4 +236,4 @@ class Wave_write:
 
 def open(f: _File, mode: "r" | "rb") -> Wave_read
 def open(f: _File, mode: "w" | "wb") -> Wave_write
-def open(f: _File, mode: str | None = None) -> dynamic
+def open(f: _File, mode: str? = None) -> dynamic

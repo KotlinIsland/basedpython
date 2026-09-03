@@ -76,7 +76,7 @@ if sys.version_info < (3, 12):
         on sys.meta_path.
         """
 
-        init(self, path: StrOrBytesPath | None = None)
+        init(self, path: StrOrBytesPath? = None)
 
     @deprecated("Deprecated since Python 3.3; removed in Python 3.12. Use the `importlib` module instead.")
     class ImpLoader:
@@ -86,7 +86,7 @@ if sys.version_info < (3, 12):
 
 if sys.version_info < (3, 14):
     @deprecated("Deprecated; removed in Python 3.14. Use `importlib.util.find_spec()` instead.")
-    def find_loader(fullname: str) -> LoaderProtocol | None:
+    def find_loader(fullname: str) -> LoaderProtocol?:
         """Find a "loader" object for fullname
 
         This is a backwards compatibility wrapper around
@@ -95,7 +95,7 @@ if sys.version_info < (3, 14):
         """
 
     @deprecated("Deprecated; removed in Python 3.14. Use `importlib.util.find_spec()` instead.")
-    def get_loader(module_or_name: str) -> LoaderProtocol | None:
+    def get_loader(module_or_name: str) -> LoaderProtocol?:
         """Get a "loader" object for module_or_name
 
         Returns None if the module cannot be found or imported.
@@ -103,7 +103,7 @@ if sys.version_info < (3, 14):
         (if any) is imported, in order to establish the package __path__.
         """
 
-def get_importer(path_item: StrOrBytesPath) -> PathEntryFinderProtocol | None:
+def get_importer(path_item: StrOrBytesPath) -> PathEntryFinderProtocol?:
     """Retrieve a finder for the given path item
 
     The returned finder is cached in sys.path_importer_cache
@@ -126,7 +126,7 @@ def iter_importers(fullname: str = "") -> Iterator[MetaPathFinderProtocol | Path
     If no module name is specified, all top level finders are produced.
     """
 
-def iter_modules(path: Iterable[StrOrBytesPath] | None = None, prefix: str = "") -> Iterator[ModuleInfo]:
+def iter_modules(path: Iterable[StrOrBytesPath]? = None, prefix: str = "") -> Iterator[ModuleInfo]:
     """Yields ModuleInfo for all submodules on path,
     or, if path is None, all top-level modules on sys.path.
 
@@ -139,7 +139,7 @@ def iter_modules(path: Iterable[StrOrBytesPath] | None = None, prefix: str = "")
 
 def read_code(stream: SupportsRead[bytes]) -> dynamic  # undocumented
 def walk_packages(
-    path: Iterable[StrOrBytesPath] | None = None, prefix: str = "", onerror: ((str) -> object) | None = None
+    path: Iterable[StrOrBytesPath]? = None, prefix: str = "", onerror: ((str) -> object)? = None
 ) -> Iterator[ModuleInfo]:
     """Yields ModuleInfo for all modules recursively
     on path, or, if path is None, all accessible modules.
@@ -169,7 +169,7 @@ def walk_packages(
     walk_packages(ctypes.__path__, ctypes.__name__+'.')
     """
 
-def get_data(package: str, resource: str) -> bytes | None:
+def get_data(package: str, resource: str) -> bytes?:
     """Get a resource from a package.
 
     This is a wrapper round the PEP 302 loader get_data API. The package

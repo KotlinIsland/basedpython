@@ -17,8 +17,8 @@ PROCESSING_INSTRUCTION: Final = "PROCESSING_INSTRUCTION"
 IGNORABLE_WHITESPACE: Final = "IGNORABLE_WHITESPACE"
 CHARACTERS: Final = "CHARACTERS"
 
-private type NSName = (str | None, str)
-private type DocumentFactory = DOMImplementation | None
+private type NSName = (str?, str)
+private type DocumentFactory = DOMImplementation?
 
 private type Event = (
     ("START_ELEMENT", Element)
@@ -32,7 +32,7 @@ private type Event = (
 )
 
 class PullDOM(ContentHandler):
-    document: Document | None
+    document: Document?
     documentFactory: DocumentFactory
 
     # firstEvent is a list of length 2
@@ -51,15 +51,15 @@ class PullDOM(ContentHandler):
 
     elementStack: MutableSequence[Element | Document]
     pending_events: (
-        list[Sequence[("COMMENT", str) | ("PROCESSING_INSTRUCTION", str, str) | None]] | None
+        list[Sequence[("COMMENT", str) | ("PROCESSING_INSTRUCTION", str, str) | None]]?
     )
     init(self, documentFactory: DocumentFactory = None)
     def pop(self) -> Element | Document
     override def setDocumentLocator(self, locator: Locator)
-    override def startPrefixMapping(self, prefix: str | None, uri: str)
-    override def endPrefixMapping(self, prefix: str | None)
-    override def startElementNS(self, name: NSName, tagName: str | None, attrs: AttributesNSImpl)
-    override def endElementNS(self, name: NSName, tagName: str | None)
+    override def startPrefixMapping(self, prefix: str?, uri: str)
+    override def endPrefixMapping(self, prefix: str?)
+    override def startElementNS(self, name: NSName, tagName: str?, attrs: AttributesNSImpl)
+    override def endElementNS(self, name: NSName, tagName: str?)
     override def startElement(self, name: str, attrs: AttributesImpl)
     override def endElement(self, name: str)
     def comment(self, s: str)
@@ -67,7 +67,7 @@ class PullDOM(ContentHandler):
     override def ignorableWhitespace(self, chars: str)
     override def characters(self, chars: str)
     override def startDocument(self)
-    def buildDocument(self, uri: str | None, tagname: str | None) -> Element
+    def buildDocument(self, uri: str?, tagname: str?) -> Element
     override def endDocument(self)
     def clear(self):
         """clear(): Explicitly release parsing structures"""
@@ -88,14 +88,14 @@ class DOMEventStream:
 
     def __next__(self) -> Event
     def __iter__(self) -> Self
-    def getEvent(self) -> Event | None
+    def getEvent(self) -> Event?
     def expandNode(self, node: Document)
     def reset(self)
     def clear(self):
         """clear(): Explicitly release parsing objects"""
 
 class SAX2DOM(PullDOM):
-    override def startElementNS(self, name: NSName, tagName: str | None, attrs: AttributesNSImpl)
+    override def startElementNS(self, name: NSName, tagName: str?, attrs: AttributesNSImpl)
     override def startElement(self, name: str, attrs: AttributesImpl)
     override def processingInstruction(self, target: str, data: str)
     override def ignorableWhitespace(self, chars: str)
@@ -105,7 +105,7 @@ final default_bufsize: int
 
 def parse(
     stream_or_string: str | _SupportsReadClose[bytes] | _SupportsReadClose[str],
-    parser: XMLReader | None = None,
-    bufsize: int | None = None,
+    parser: XMLReader? = None,
+    bufsize: int? = None,
 ) -> DOMEventStream
-def parseString(string: str, parser: XMLReader | None = None) -> DOMEventStream
+def parseString(string: str, parser: XMLReader? = None) -> DOMEventStream

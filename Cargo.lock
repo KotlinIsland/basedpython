@@ -447,6 +447,7 @@ name = "by_typeshed_patch"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "by_transforms",
  "ruff_python_ast",
  "ruff_python_parser",
  "ruff_python_stdlib",

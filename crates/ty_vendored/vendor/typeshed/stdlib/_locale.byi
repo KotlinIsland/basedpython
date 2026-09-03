@@ -33,7 +33,7 @@ final LC_NUMERIC: int
 final LC_ALL: int
 CHAR_MAX: Final = 127
 
-def setlocale(category: int, locale: str | None = None, /) -> str:
+def setlocale(category: int, locale: str? = None, /) -> str:
     """Activates/queries locale processing."""
 
 def localeconv() -> _LocaleConv:
@@ -129,20 +129,20 @@ if sys.platform != "win32":
         Return translation of msg.
         """
 
-    def dgettext(domain: str | None, msg: str, /) -> str:
+    def dgettext(domain: str?, msg: str, /) -> str:
         """dgettext(domain, msg) -> string
 
         Return translation of msg in domain.
         """
 
-    def dcgettext(domain: str | None, msg: str, category: int, /) -> str:
+    def dcgettext(domain: str?, msg: str, category: int, /) -> str:
         """Return translation of msg in domain and category."""
 
-    def textdomain(domain: str | None, /) -> str:
+    def textdomain(domain: str?, /) -> str:
         """Set the C library's textdmain to domain, returning the new domain."""
 
-    def bindtextdomain(domain: str, dir: StrPath | None, /) -> str:
+    def bindtextdomain(domain: str, dir: StrPath?, /) -> str:
         """Bind the C library's domain to dir."""
 
-    def bind_textdomain_codeset(domain: str, codeset: str | None, /) -> str | None:
+    def bind_textdomain_codeset(domain: str, codeset: str?, /) -> str?:
         """Bind the C library's domain to codeset."""

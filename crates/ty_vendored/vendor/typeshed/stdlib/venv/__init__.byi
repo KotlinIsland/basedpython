@@ -49,7 +49,7 @@ class EnvBuilder:
     symlinks: bool
     upgrade: bool
     with_pip: bool
-    prompt: str | None
+    prompt: str?
 
     if sys.version_info >= (3, 13):
         def __init__(
@@ -59,7 +59,7 @@ class EnvBuilder:
             symlinks: bool = False,
             upgrade: bool = False,
             with_pip: bool = False,
-            prompt: str | None = None,
+            prompt: str? = None,
             upgrade_deps: bool = False,
             *,
             scm_ignore_files: Iterable[str] = ...,
@@ -72,7 +72,7 @@ class EnvBuilder:
             symlinks: bool = False,
             upgrade: bool = False,
             with_pip: bool = False,
-            prompt: str | None = None,
+            prompt: str? = None,
             upgrade_deps: bool = False,
         ) -> None
 
@@ -187,7 +187,7 @@ if sys.version_info >= (3, 13):
         clear: bool = False,
         symlinks: bool = False,
         with_pip: bool = False,
-        prompt: str | None = None,
+        prompt: str? = None,
         upgrade_deps: bool = False,
         *,
         scm_ignore_files: Iterable[str] = ...,
@@ -201,9 +201,9 @@ else:
         clear: bool = False,
         symlinks: bool = False,
         with_pip: bool = False,
-        prompt: str | None = None,
+        prompt: str? = None,
         upgrade_deps: bool = False,
     ) -> None:
         """Create a virtual environment in a directory."""
 
-def main(args: Sequence[str] | None = None)
+def main(args: Sequence[str]? = None)

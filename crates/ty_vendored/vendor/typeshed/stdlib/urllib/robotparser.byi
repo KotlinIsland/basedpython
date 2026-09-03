@@ -58,6 +58,6 @@ class RobotFileParser:
 
         """
 
-    def crawl_delay(self, useragent: str) -> str | None
-    def request_rate(self, useragent: str) -> RequestRate | None
-    def site_maps(self) -> list[str] | None
+    def crawl_delay(self, useragent: str) -> str?
+    def request_rate(self, useragent: str) -> RequestRate?
+    def site_maps(self) -> list[str]?

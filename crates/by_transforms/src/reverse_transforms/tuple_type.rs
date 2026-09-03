@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn tuple_in_union() {
-        check("a: tuple[int, str] | None\n", "a: (int, str) | None\n");
+        check("a: tuple[int, str] | None\n", "a: (int, str)?\n");
     }
 
     #[test]

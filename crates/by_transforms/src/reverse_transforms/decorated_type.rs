@@ -272,7 +272,9 @@ mod tests {
     }
 
     #[test]
-    fn a_union_with_none_is_the_decorated_union() {
+    fn a_union_with_none_is_the_decorated_optional() {
+        // `int | None` is written back as `int?`, which the decoration covers like
+        // any other type it runs to the end of
         check(
             indoc! {"
                 from typing import Annotated
@@ -282,7 +284,7 @@ mod tests {
             indoc! {"
                 from typing import Annotated
                 meta = 1
-                x: @meta int | None
+                x: @meta int?
             "},
         );
     }
@@ -322,7 +324,9 @@ mod tests {
     }
 
     #[test]
-    fn an_arm_that_is_optional_is_grouped_too() {
+    fn an_arm_that_is_optional_keeps_the_group_the_marker_needs() {
+        // `Annotated[int, meta] | None` is the decorated `int` made optional, so the
+        // group has to hold the decoration apart from the `?` as well
         check(
             indoc! {"
                 from typing import Annotated
@@ -332,7 +336,7 @@ mod tests {
             indoc! {"
                 from typing import Annotated
                 meta = 1
-                x: (@meta int) | None
+                x: (@meta int)?
             "},
         );
     }

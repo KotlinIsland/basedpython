@@ -52,14 +52,14 @@ from typing import TypeAlias
 private type VersionInfo = (int, int, int, str, int)
 
 class _Feature:
-    init(self, optionalRelease: VersionInfo, mandatoryRelease: VersionInfo | None, compiler_flag: int)
+    init(self, optionalRelease: VersionInfo, mandatoryRelease: VersionInfo?, compiler_flag: int)
     def getOptionalRelease(self) -> VersionInfo:
         """Return first release in which this feature was recognized.
 
         This is a 5-tuple, of the same form as sys.version_info.
         """
 
-    def getMandatoryRelease(self) -> VersionInfo | None:
+    def getMandatoryRelease(self) -> VersionInfo?:
         """Return release in which this feature will become mandatory.
 
         This is a 5-tuple, of the same form as sys.version_info, or, if
