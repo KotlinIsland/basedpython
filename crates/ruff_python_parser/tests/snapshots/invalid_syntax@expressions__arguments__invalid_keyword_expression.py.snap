@@ -41,6 +41,7 @@ Module(
                                                 node_index: NodeIndex(None),
                                             },
                                         ),
+                                        key: Bare,
                                         value: Yield(
                                             ExprYield {
                                                 node_index: NodeIndex(None),
@@ -97,6 +98,7 @@ Module(
                                                 node_index: NodeIndex(None),
                                             },
                                         ),
+                                        key: Bare,
                                         value: YieldFrom(
                                             ExprYieldFrom {
                                                 node_index: NodeIndex(None),
@@ -151,6 +153,7 @@ Module(
                                                 node_index: NodeIndex(None),
                                             },
                                         ),
+                                        key: Bare,
                                         value: Starred(
                                             ExprStarred {
                                                 node_index: NodeIndex(None),
@@ -206,6 +209,7 @@ Module(
                                                 node_index: NodeIndex(None),
                                             },
                                         ),
+                                        key: Bare,
                                         value: Starred(
                                             ExprStarred {
                                                 node_index: NodeIndex(None),

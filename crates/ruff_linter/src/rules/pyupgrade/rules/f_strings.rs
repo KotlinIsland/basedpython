@@ -84,6 +84,7 @@ impl<'a> FormatSummaryValues<'a> {
         for keyword in &*call.arguments.keywords {
             let Keyword {
                 arg,
+                key: _,
                 value,
                 range: _,
                 node_index: _,

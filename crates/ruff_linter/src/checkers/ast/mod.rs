@@ -2092,6 +2092,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                         for keyword in &*arguments.keywords {
                             let Keyword {
                                 arg,
+                                key: _,
                                 value,
                                 range: _,
                                 node_index: _,
@@ -2231,6 +2232,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                                 let Keyword {
                                     value,
                                     arg,
+                                    key: _,
                                     range: _,
                                     node_index: _,
                                 } = keyword;

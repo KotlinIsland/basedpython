@@ -175,6 +175,7 @@ syntax inside a function body
 - [`super` keyword](super.md)
 - [tuple member access (`expr.N`)](tuple-index.md)
 - [keyword arguments in subscripts](kw-subscript.md)
+- [flexible keyword argument names](flexible-keyword-names.md) — `f(a.b=1, "x-y"=2)`
 - [destructuring](destructuring.md) — `let`, and patterns in every binding position
 - [destructuring with `if let`](if-let.md)
 - [statement expressions](statement-expressions.md)

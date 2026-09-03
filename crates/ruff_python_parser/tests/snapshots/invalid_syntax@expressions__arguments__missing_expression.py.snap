@@ -79,6 +79,7 @@ Module(
                                                 node_index: NodeIndex(None),
                                             },
                                         ),
+                                        key: Bare,
                                         value: Name(
                                             ExprName {
                                                 node_index: NodeIndex(None),

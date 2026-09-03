@@ -421,6 +421,7 @@ impl ast::Keyword {
             range: _,
             node_index: _,
             arg,
+            key: _,
             value,
         } = self;
 

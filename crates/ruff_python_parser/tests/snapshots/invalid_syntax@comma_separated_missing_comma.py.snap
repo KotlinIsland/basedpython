@@ -45,6 +45,7 @@ Module(
                                         range: 5..8,
                                         node_index: NodeIndex(None),
                                         arg: None,
+                                        key: Bare,
                                         value: Name(
                                             ExprName {
                                                 node_index: NodeIndex(None),

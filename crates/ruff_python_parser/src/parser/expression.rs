@@ -1616,6 +1616,7 @@ impl<'src> Parser<'src> {
 
                     parser.keyword_scratch.push(ast::Keyword {
                         arg: None,
+                        key: ast::KeywordKey::Bare,
                         value: value.expr,
                         range: parser.node_range(argument_start),
                         node_index: AtomicNodeIndex::NONE,
@@ -1660,7 +1661,7 @@ impl<'src> Parser<'src> {
                     let arg_range = parser.node_range(start);
                     if parser.eat(TokenKind::Equal) {
                         seen_keyword_argument = true;
-                        let arg = if let ParsedExpr {
+                        let (arg, key) = if let ParsedExpr {
                             expr: Expr::Name(ident_expr),
                             is_parenthesized,
                             parameter_borrow: _,
@@ -1683,11 +1684,42 @@ impl<'src> Parser<'src> {
                                 );
                             }
 
-                            ast::Identifier {
-                                id: ident_expr.id,
-                                range: ident_expr.range,
-                                node_index: AtomicNodeIndex::NONE,
+                            (
+                                ast::Identifier {
+                                    id: ident_expr.id,
+                                    range: ident_expr.range,
+                                    node_index: AtomicNodeIndex::NONE,
+                                },
+                                ast::KeywordKey::Bare,
+                            )
+                        } else if let Some((id, key)) = flexible_keyword_name(&parsed_expr.expr) {
+                            let name_range = parsed_expr.range();
+                            parser.error_if_not_basedpython_at(
+                                format!(
+                                    "a keyword argument named `{}` is not valid in `.py` files",
+                                    parser.src_text(name_range)
+                                ),
+                                name_range,
+                            );
+                            // the name is re-rendered from this span by anything
+                            // that reprints the source, and a slice spanning lines
+                            // is not something the formatter can lay out
+                            if parser.src_text(name_range).contains(['\n', '\r']) {
+                                parser.add_error(
+                                    ParseErrorType::OtherError(
+                                        "A keyword argument name may not span lines".to_string(),
+                                    ),
+                                    name_range,
+                                );
                             }
+                            (
+                                ast::Identifier {
+                                    id,
+                                    range: name_range,
+                                    node_index: AtomicNodeIndex::NONE,
+                                },
+                                key,
+                            )
                         } else {
                             // TODO(dhruvmanila): Parser shouldn't drop the `parsed_expr` if it's
                             // not a name expression. We could add the expression into `args` but
@@ -1696,17 +1728,21 @@ impl<'src> Parser<'src> {
                                 ParseErrorType::OtherError("Expected a parameter name".to_string()),
                                 &parsed_expr,
                             );
-                            ast::Identifier {
-                                id: Name::empty(),
-                                range: parsed_expr.range(),
-                                node_index: AtomicNodeIndex::NONE,
-                            }
+                            (
+                                ast::Identifier {
+                                    id: Name::empty(),
+                                    range: parsed_expr.range(),
+                                    node_index: AtomicNodeIndex::NONE,
+                                },
+                                ast::KeywordKey::Bare,
+                            )
                         };
 
                         let value = parser.parse_conditional_expression_or_higher();
 
                         parser.keyword_scratch.push(ast::Keyword {
                             arg: Some(arg),
+                            key,
                             value: value.expr,
                             range: parser.node_range(argument_start),
                             node_index: AtomicNodeIndex::NONE,
@@ -5390,6 +5426,51 @@ fn record_parameter_borrow(
     debug_assert!(borrows.len() <= index, "elements are recorded in order");
     borrows.resize(index, ParameterBorrow::None);
     borrows.push(borrow);
+}
+
+/// basedpython: the name a keyword argument written in one of the flexible
+/// forms binds, together with how it was spelled.
+///
+/// Python names a keyword argument with a bare identifier, so `f(a.b=1)` and
+/// `f("content-type"=1)` are both syntax errors there. basedpython accepts a
+/// dotted path and a string literal too, taking the path's text or the string's
+/// *value* as the name — which is the only way a call can reach a `**kwargs`
+/// entry whose key is not spellable as a python identifier.
+///
+/// Returns `None` for anything else, including an f-string, a bytes literal,
+/// and an implicitly concatenated string: those have no single obvious name,
+/// and the caller reports them as a missing parameter name.
+fn flexible_keyword_name(expr: &Expr) -> Option<(Name, ast::KeywordKey)> {
+    match expr {
+        Expr::Attribute(_) => {
+            let mut name = String::new();
+            dotted_name(expr, &mut name).then(|| (Name::new(name), ast::KeywordKey::Bare))
+        }
+        Expr::StringLiteral(string) => (!string.value.is_implicit_concatenated())
+            .then(|| (Name::new(string.value.to_str()), ast::KeywordKey::Quoted)),
+        _ => None,
+    }
+}
+
+/// Writes a dotted path of plain names (`foo.bar.baz`) into `name`, reporting
+/// whether `expr` was one. A partial path may have been written on failure.
+fn dotted_name(expr: &Expr, name: &mut String) -> bool {
+    match expr {
+        Expr::Name(plain) => {
+            name.push_str(&plain.id);
+            true
+        }
+        // `a?.b` is an optional chain, which evaluates something; only a plain
+        // attribute path is just text
+        Expr::Attribute(attribute) if !attribute.optional => {
+            dotted_name(&attribute.value, name) && {
+                name.push('.');
+                name.push_str(&attribute.attr);
+                true
+            }
+        }
+        _ => false,
+    }
 }
 
 impl Deref for ParsedExpr {

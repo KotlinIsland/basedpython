@@ -25,6 +25,7 @@ pub(crate) mod enums;
 pub(crate) mod erased_union;
 pub(crate) mod export_import;
 pub(crate) mod extension;
+pub(crate) mod flexible_keyword;
 pub(crate) mod float_const;
 pub(crate) mod force_unwrap;
 pub(crate) mod frameworks;

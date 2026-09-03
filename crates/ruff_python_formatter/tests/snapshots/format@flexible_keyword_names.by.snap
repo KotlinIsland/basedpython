@@ -1,0 +1,66 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/flexible_keyword_names.by
+---
+## Input
+```bython
+f(foo.bar=1)
+
+f(foo.bar.baz=1, plain=2)
+
+f("content-type"="json")
+
+f("a b"=1, ""=2, "a\tb"=3)
+
+f(r"a\nb"=1)
+
+f('single'=1)
+
+f(   foo.bar   =   1   ,   "x"   =   2   )
+
+f(a, *rest, foo.bar=1, **extra)
+
+class C(Base, "x-y"=1): ...
+
+
+def g(**kwargs: int) -> None: ...
+
+
+g(
+    "a-very-long-flexible-keyword-name"=1,
+    another.dotted.name=2,
+    "and-one-more-long-name-here"=3,
+)
+```
+
+## Output
+```bython
+f(foo.bar=1)
+
+f(foo.bar.baz=1, plain=2)
+
+f("content-type"="json")
+
+f("a b"=1, ""=2, "a\tb"=3)
+
+f(r"a\nb"=1)
+
+f('single'=1)
+
+f(foo.bar=1, "x"=2)
+
+f(a, *rest, foo.bar=1, **extra)
+
+
+class C(Base, "x-y"=1): ...
+
+
+def g(**kwargs: int) -> None: ...
+
+
+g(
+    "a-very-long-flexible-keyword-name"=1,
+    another.dotted.name=2,
+    "and-one-more-long-name-here"=3,
+)
+```

@@ -12,6 +12,12 @@ impl FormatNodeRule<Keyword> for FormatKeyword {
             range: _,
             node_index: _,
             arg,
+            // basedpython lets the name be written as a string (`f("a b"=1)`) or
+            // as a dotted path. `arg` holds the name, and formatting it slices
+            // the source it was written from, so both come back exactly as
+            // spelled — a quoted one keeps its own quote characters rather than
+            // being normalised, the same way an identifier is left alone
+            key: _,
             value,
         } = item;
         // Comments after the `=` or `**` are reassigned as leading comments on the value.

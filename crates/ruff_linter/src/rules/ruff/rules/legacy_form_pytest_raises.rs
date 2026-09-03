@@ -263,6 +263,7 @@ fn generate_with_statement(
                     // argument is generated after positional arguments
                     range: expr.range(),
                     arg: Some(ast::Identifier::new("match", TextRange::default())),
+                    key: ast::KeywordKey::Bare,
                     value: expr.clone(),
                 })
                 .as_slice()

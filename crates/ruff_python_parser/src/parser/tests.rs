@@ -34,6 +34,109 @@ fn parse_basedpython_module_with_errors(source: &str) -> Parsed<ModModule> {
     .unwrap()
 }
 
+/// The keyword-argument names of the single call statement in `source`, each
+/// with the way it was spelled.
+fn keyword_names(source: &str) -> Vec<(String, ruff_python_ast::KeywordKey)> {
+    let parsed = parse_basedpython_module(source);
+    let [Stmt::Expr(statement)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single expression statement: {source}");
+    };
+    let Expr::Call(call) = statement.value.as_ref() else {
+        panic!("expected a call: {source}");
+    };
+    call.arguments
+        .keywords
+        .iter()
+        .map(|keyword| {
+            let name = keyword
+                .arg
+                .as_ref()
+                .unwrap_or_else(|| panic!("expected a named keyword argument: {source}"));
+            (name.to_string(), keyword.key)
+        })
+        .collect()
+}
+
+#[test]
+fn basedpython_flexible_keyword_names() {
+    use ruff_python_ast::KeywordKey::{Bare, Quoted};
+
+    // a dotted path names itself; a string literal names its value, which the
+    // spelling has to be remembered for so it can be written back
+    assert_eq!(
+        keyword_names("f(plain=1, foo.bar.baz=2, \"content-type\"=3)"),
+        [
+            ("plain".to_string(), Bare),
+            ("foo.bar.baz".to_string(), Bare),
+            ("content-type".to_string(), Quoted),
+        ]
+    );
+
+    // the string's *value* is the name, so escapes are decoded and a raw
+    // string's are not
+    assert_eq!(
+        keyword_names("f(\"a\\nb\"=1, r\"a\\nb\"=2, \"\"=3)"),
+        [
+            ("a\nb".to_string(), Quoted),
+            ("a\\nb".to_string(), Quoted),
+            (String::new(), Quoted),
+        ]
+    );
+}
+
+#[test]
+fn basedpython_flexible_keyword_names_are_by_only() {
+    // `.py` gets a message about the feature rather than the generic "Expected
+    // a parameter name" it would report for any other expression
+    for source in ["f(foo.bar=1)", "f(\"a b\"=1)"] {
+        let parsed = parse_module(source).unwrap_err();
+        assert!(
+            parsed.to_string().contains("is not valid in `.py` files"),
+            "{source}: {parsed}"
+        );
+    }
+}
+
+#[test]
+fn basedpython_keyword_names_that_are_not_flexible_keys() {
+    // an f-string, a bytes literal and an implicit concatenation each have no
+    // one obvious name, and anything that has to be evaluated is not a name at
+    // all — all of them stay the pre-existing error
+    for source in [
+        "f(f\"a\"=1)",
+        "f(b\"a\"=1)",
+        "f(\"a\" \"b\"=1)",
+        "f(a[0]=1)",
+        "f(g().b=1)",
+        "f(a?.b=1)",
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert!(
+            parsed
+                .errors()
+                .iter()
+                .any(|error| error.to_string().contains("Expected a parameter name")),
+            "{source}: {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+#[test]
+fn basedpython_flexible_keyword_name_may_not_span_lines() {
+    // the name is re-rendered from its source span, and a slice spanning lines
+    // is not something the formatter can lay out
+    let parsed = parse_basedpython_module_with_errors("f(foo.\n    bar=1)");
+    assert!(
+        parsed
+            .errors()
+            .iter()
+            .any(|error| error.to_string().contains("may not span lines")),
+        "{:?}",
+        parsed.errors()
+    );
+}
+
 #[test]
 fn test_modes() {
     let source = "a[0][1][2][3][4]";

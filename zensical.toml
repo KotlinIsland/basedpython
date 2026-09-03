@@ -178,6 +178,7 @@ features = [
     { "super keyword" = "features/super.md" },
     { "tuple member access" = "features/tuple-index.md" },
     { "keyword arguments in subscripts" = "features/kw-subscript.md" },
+    { "flexible keyword argument names" = "features/flexible-keyword-names.md" },
     { "destructuring" = "features/destructuring.md" },
     { "destructuring with if let" = "features/if-let.md" },
     { "statement expressions" = "features/statement-expressions.md" },

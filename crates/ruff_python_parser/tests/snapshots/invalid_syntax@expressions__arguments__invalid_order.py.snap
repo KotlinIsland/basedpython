@@ -44,6 +44,7 @@ Module(
                                         range: 5..13,
                                         node_index: NodeIndex(None),
                                         arg: None,
+                                        key: Bare,
                                         value: Name(
                                             ExprName {
                                                 node_index: NodeIndex(None),
@@ -101,6 +102,7 @@ Module(
                                                 node_index: NodeIndex(None),
                                             },
                                         ),
+                                        key: Bare,
                                         value: NumberLiteral(
                                             ExprNumberLiteral {
                                                 node_index: NodeIndex(None),
@@ -159,6 +161,7 @@ Module(
                                                 node_index: NodeIndex(None),
                                             },
                                         ),
+                                        key: Bare,
                                         value: NumberLiteral(
                                             ExprNumberLiteral {
                                                 node_index: NodeIndex(None),
@@ -173,6 +176,7 @@ Module(
                                         range: 41..49,
                                         node_index: NodeIndex(None),
                                         arg: None,
+                                        key: Bare,
                                         value: Name(
                                             ExprName {
                                                 node_index: NodeIndex(None),
@@ -231,6 +235,7 @@ Module(
                                         range: 59..67,
                                         node_index: NodeIndex(None),
                                         arg: None,
+                                        key: Bare,
                                         value: Name(
                                             ExprName {
                                                 node_index: NodeIndex(None),
@@ -289,6 +294,7 @@ Module(
                                         range: 81..89,
                                         node_index: NodeIndex(None),
                                         arg: None,
+                                        key: Bare,
                                         value: Name(
                                             ExprName {
                                                 node_index: NodeIndex(None),
