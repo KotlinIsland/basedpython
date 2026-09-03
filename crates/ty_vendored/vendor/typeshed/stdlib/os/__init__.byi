@@ -1394,6 +1394,7 @@ if sys.platform != "win32" and sys.version_info >= (3, 11):
         """
 
 if sys.version_info >= (3, 11):
+    @ignorable_return_value
     def lseek(fd: int, position: int, whence: int, /) -> int:
         """Set the position of a file descriptor.  Return the new position.
 
@@ -1412,6 +1413,7 @@ if sys.version_info >= (3, 11):
         """
 
 else:
+    @ignorable_return_value
     def lseek(fd: int, position: int, how: int, /) -> int:
         """Set the position of a file descriptor.  Return the new position.
 
@@ -1693,6 +1695,7 @@ if sys.platform != "win32":
           Integer file descriptor handle.
         """
 
+@ignorable_return_value
 def write(fd: int, data: ReadableBuffer, /) -> int:
     """Write a bytes object to a file descriptor."""
 
@@ -2577,6 +2580,7 @@ else:
           Dictionary of strings mapping to strings.
         """
 
+@ignorable_return_value
 @deprecated("Soft deprecated. Use the subprocess module instead.")
 def system(command: StrOrBytesPath) -> int:
     """Execute the command in a subshell."""

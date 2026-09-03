@@ -242,6 +242,7 @@ class MutableSequence[in out Element](Sequence[Element]):
     def reverse(self):
         """S.reverse() -- reverse *IN PLACE*"""
 
+    @ignorable_return_value
     def pop(self, index: int = -1, /) -> Element:
         """S.pop([index]) -> item -- remove and return item at index (default
         last).  Raise IndexError if list is empty or index is out of range.
@@ -324,6 +325,7 @@ class MutableSet[in out Element](AbstractSet[Element]):
     def clear(self):
         """This is slow (creates N new iterators!) but effective."""
 
+    @ignorable_return_value
     def pop(self) -> Element:
         """Return the popped value.  Raise KeyError if empty."""
 
@@ -422,12 +424,15 @@ class MutableMapping[in out Key, in out Value](Mapping[Key, Value]):
     def clear(self):
         """D.clear() -> None.  Remove all items from D."""
 
+    @ignorable_return_value
     def pop(self, key: Key, /) -> Value:
         """D.pop(k[,d]) -> v, remove specified key and return the corresponding
         value.  If key is not found, d is returned if given, otherwise
         KeyError is raised.
         """
+    @ignorable_return_value
     def pop(self, key: Key, default: Value, /) -> Value
+    @ignorable_return_value
     def pop[Element](self, key: Key, default: Element, /) -> Value | Element
 
     def popitem(self) -> (Key, Value):
@@ -441,8 +446,10 @@ class MutableMapping[in out Key, in out Value](Mapping[Key, Value]):
     # -- collections.OrderedDict.setdefault
     # -- collections.ChainMap.setdefault
     # -- weakref.WeakKeyDictionary.setdefault
+    @ignorable_return_value
     def setdefault[Element](self: MutableMapping[Key, Element | None], key: Key, default: None = None, /) -> Element | None:
         """D.setdefault(k[,d]) -> D.get(k,d), also set D[k]=d if k not in D"""
+    @ignorable_return_value
     def setdefault(self, key: Key, default: Value, /) -> Value
 
     # 'update' used to take a Union, but using overloading is better.

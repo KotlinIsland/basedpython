@@ -498,6 +498,16 @@ fn mdtest_rule_selection(
         .expect("redundant-return-annotation is a known lint rule");
     selection.disable(redundant_return_annotation);
 
+    // `unused-return-value` is the same case. a test that checks how a call binds writes the
+    // call as a statement of its own and has no use for what it answers with — `Foo(1)` on a
+    // line by itself is the *subject* of hundreds of tests here, and reporting the discarded
+    // result in each of them would say nothing about what any of those tests are for.
+    // `basedpython_unused_return_value.md` turns it back on for the tests that are about it
+    let unused_return_value = registry
+        .get("unused-return-value")
+        .expect("unused-return-value is a known lint rule");
+    selection.disable(unused_return_value);
+
     if let Some(rules) = rules {
         let set_lint_level =
             |selection: &mut RuleSelection, lint, level| match Severity::try_from(level) {

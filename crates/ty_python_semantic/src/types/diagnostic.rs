@@ -174,6 +174,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&NON_OVERLAPPING_TYPE_TEST);
     registry.register_lint(&OPTIONAL_OBJECT_CONVERSION);
     registry.register_lint(&BOOL_AS_INT);
+    registry.register_lint(&UNUSED_RETURN_VALUE);
     registry.register_lint(&MISSING_CONTEXT_ARGUMENT);
     registry.register_lint(&AMBIGUOUS_CONTEXT_ARGUMENT);
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
@@ -2025,6 +2026,45 @@ declare_lint! {
     pub(crate) static BOOL_AS_INT = {
         summary: "detects a `bool` implicitly used as an `int`",
         status: LintStatus::stable("0.0.61"),
+        default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a call, written as a statement of its own, whose result is
+    /// thrown away.
+    ///
+    /// ## Why is this bad?
+    /// A call on a line of its own keeps whatever the call did on the way to its
+    /// answer, and discards the answer. For most functions that is a mistake:
+    /// `text.strip()` on its own line reads as if it strips `text`, and strips
+    /// nothing — `str` is immutable, and the stripped string was the result.
+    ///
+    /// A function whose result really is optional says so with
+    /// `@ignorable_return_value`, and a member of a class that says so says
+    /// otherwise with `@must_use_return_value`. A function returning `None` has
+    /// no result to discard and is never reported.
+    ///
+    /// ## Examples
+    /// ```python
+    /// def parse(text: str) -> int: ...
+    /// def log(message: str) -> None: ...
+    ///
+    /// parse("1")      # warning: the parsed number goes nowhere
+    /// log("started")  # ok — nothing was returned
+    /// ```
+    ///
+    /// ```by
+    /// @ignorable_return_value
+    /// def prime_cache(key: str) -> bytes: ...
+    ///
+    /// prime_cache("k")  # ok — the call was for the caching
+    /// ```
+    pub(crate) static UNUSED_RETURN_VALUE = {
+        summary: "detects a call whose result is thrown away",
+        status: LintStatus::stable("0.0.71"),
         default_level: Level::Warn,
         ty_compat: TyCompat::BasedPython,
     }

@@ -25,6 +25,7 @@ def _count() -> int:
     """
 
 final class RLock:
+    @ignorable_return_value
     def acquire(self, blocking: bool = True, timeout: int | float = -1) -> bool:
         """Lock the lock.
 
@@ -100,6 +101,7 @@ if sys.version_info >= (3, 13):
         will block until another thread unlocks it.  Deadlocks may ensue.
         """
 
+        @ignorable_return_value
         def acquire(self, blocking: bool = True, timeout: int | float = -1) -> bool:
             """Lock the lock.
 
@@ -157,6 +159,7 @@ else:
         will block until another thread unlocks it.  Deadlocks may ensue.
         """
 
+        @ignorable_return_value
         def acquire(self, blocking: bool = True, timeout: int | float = -1) -> bool:
             """acquire(blocking=True, timeout=-1) -> bool
             (acquire_lock() is an obsolete synonym)

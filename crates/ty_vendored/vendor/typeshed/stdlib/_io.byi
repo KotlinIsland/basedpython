@@ -143,6 +143,7 @@ if sys.version_info >= (3, 12):
             lines so far exceeds hint.
             """
 
+        @ignorable_return_value
         def seek(self, offset: int, whence: int = 0, /) -> int:
             """Change the stream position to the given byte offset.
 
@@ -173,6 +174,7 @@ if sys.version_info >= (3, 12):
         def tell(self) -> int:
             """Return current stream position."""
 
+        @ignorable_return_value
         def truncate(self, size: int | None = None, /) -> int:
             """Truncate file to size bytes.
 
@@ -292,6 +294,7 @@ else:
             lines so far exceeds hint.
             """
 
+        @ignorable_return_value
         def seek(self, offset: int, whence: int = 0, /) -> int:
             """Change the stream position to the given byte offset.
 
@@ -320,6 +323,7 @@ else:
         def tell(self) -> int:
             """Return current stream position."""
 
+        @ignorable_return_value
         def truncate(self, size: int | None = None, /) -> int:
             """Truncate file to size bytes.
 
@@ -364,6 +368,7 @@ class _RawIOBase(_IOBase):
     # The following methods can return None if the file is in non-blocking mode
     # and no data is available.
     def readinto(self, buffer: WriteableBuffer, /) -> int | MaybeNone
+    @ignorable_return_value
     override def write(self, b: ReadableBuffer, /) -> int | MaybeNone
     override def read(self, size: int = -1, /) -> bytes | MaybeNone
 
@@ -391,6 +396,7 @@ class _BufferedIOBase(_IOBase):
         """
 
     def readinto(self, buffer: WriteableBuffer, /) -> int
+    @ignorable_return_value
     override def write(self, buffer: ReadableBuffer, /) -> int:
         """Write buffer b to the IO stream.
 
@@ -605,7 +611,9 @@ class BufferedWriter[in out BufferedWriterStreamT: BufferedWriterStream = Buffer
     else:
         def __init__(self, raw: BufferedWriterStreamT, buffer_size: int = 8192) -> None
 
+    @ignorable_return_value
     override def write(self, buffer: ReadableBuffer, /) -> int
+    @ignorable_return_value
     override def seek(self, target: int, whence: int = 0, /) -> int
     override def truncate(self, pos: int | None = None, /) -> int
 
@@ -695,6 +703,7 @@ class _TextIOBase(_IOBase):
         an unusable state.
         """
 
+    @ignorable_return_value
     override def write(self, s: str, /) -> int:
         """Write string s to stream.
 
@@ -817,6 +826,7 @@ class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _T
     override def detach(self) -> BufferT
     # TextIOWrapper's version of seek only supports a limited subset of
     # operations.
+    @ignorable_return_value
     override def seek(self, cookie: int, whence: int = 0, /) -> int:
         """Set the stream position, and return the new stream position.
 

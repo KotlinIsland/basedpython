@@ -25,6 +25,30 @@ from ._internal import TypeOf as _TypeOf, Unknown as Unknown
 
 def static_assert(condition: object, msg: LiteralString | None = None) -> None: ...
 
+# ------------------------------
+# Return value use (basedpython)
+# ------------------------------
+
+def ignorable_return_value[T](declaration: T, /) -> T:
+    """the result of a call to this function may be thrown away.
+
+    basedpython reports a discarded result by default, which is what makes
+    `parse(text)` on a line of its own a mistake worth hearing about. some
+    results genuinely are optional — `list.pop()` called to shorten a list,
+    a fluent method returning `self` — and this marks them.
+
+    on a class it marks every method the class body defines, and constructing
+    the class. `must_use_return_value` puts one member back.
+    """
+
+def must_use_return_value[T](declaration: T, /) -> T:
+    """the result of a call to this function must be used.
+
+    this is already the default, so it says something new only inside a class
+    marked `ignorable_return_value`: the terminal operation of a fluent builder
+    is the result the whole chain was for.
+    """
+
 # -------------
 # Special forms
 # -------------

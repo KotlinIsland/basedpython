@@ -18,7 +18,7 @@ use crate::Db;
 use crate::place::implicit_globals::all_implicit_module_globals;
 use crate::place::imported_symbol;
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
-use crate::types::implicit_names::{ImplicitNamePosition, implicit_name};
+use crate::types::implicit_names::implicit_name;
 use crate::types::list_members::{all_members, all_reachable_members};
 use crate::types::{
     CycleDetector, ProgramEnvironment, SpecialFormType, Type, TypeQualifiers, binding_type,
@@ -1354,7 +1354,7 @@ impl<'db> SemanticModel<'db> {
             return None;
         }
         let implicit = implicit_name(name).filter(|implicit| !implicit.is_keyword)?;
-        if implicit.position == ImplicitNamePosition::TypeExpression && !in_type_expression {
+        if !implicit.position.admits(in_type_expression) {
             return None;
         }
         implicit

@@ -2487,6 +2487,16 @@
             }
           ]
         },
+        "unused-return-value": {
+          "title": "detects a call whose result is thrown away",
+          "description": "## What it does\nChecks for a call, written as a statement of its own, whose result is\nthrown away.\n\n## Why is this bad?\nA call on a line of its own keeps whatever the call did on the way to its\nanswer, and discards the answer. For most functions that is a mistake:\n`text.strip()` on its own line reads as if it strips `text`, and strips\nnothing — `str` is immutable, and the stripped string was the result.\n\nA function whose result really is optional says so with\n`@ignorable_return_value`, and a member of a class that says so says\notherwise with `@must_use_return_value`. A function returning `None` has\nno result to discard and is never reported.\n\n## Examples\n```python\ndef parse(text: str) -> int: ...\ndef log(message: str) -> None: ...\n\nparse(\"1\")      # warning: the parsed number goes nowhere\nlog(\"started\")  # ok — nothing was returned\n```\n\n```by\n@ignorable_return_value\ndef prime_cache(key: str) -> bytes: ...\n\nprime_cache(\"k\")  # ok — the call was for the caching\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "unused-type-ignore-comment": {
           "title": "detects unused `type: ignore` comments",
           "description": "## What it does\n\nChecks for `type: ignore` directives that are no longer applicable.\n\n## Why is this bad?\n\nA `type: ignore` directive that no longer matches any diagnostic violations is likely\nincluded by mistake, and should be removed to avoid confusion.\n\n## Examples\n\n```py\n# error\na = 20 / 2  # type: ignore\n```\n\nUse instead:\n\n```py\na = 20 / 2\n```\n\n## Options\n\nThis rule is skipped if [`analysis.respect-type-ignore-comments`](https://docs.astral.sh/ty/reference/configuration/#respect-type-ignore-comments)\nto `false`.",

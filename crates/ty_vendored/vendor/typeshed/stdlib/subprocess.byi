@@ -139,6 +139,7 @@ class CompletedProcess[in out Element]:
 
 if sys.version_info >= (3, 11):
     # 3.11 adds "process_group" argument
+    @ignorable_return_value
     def run(
         args: _CMD,
         bufsize: int = -1,
@@ -200,6 +201,7 @@ if sys.version_info >= (3, 11):
 
         The other arguments are the same as for the Popen constructor.
         """
+    @ignorable_return_value
     def run(
         args: _CMD,
         bufsize: int = -1,
@@ -233,6 +235,7 @@ if sys.version_info >= (3, 11):
         pipesize: int = -1,
         process_group: int | None = None,
     ) -> CompletedProcess[str]
+    @ignorable_return_value
     def run(
         args: _CMD,
         bufsize: int = -1,
@@ -266,6 +269,7 @@ if sys.version_info >= (3, 11):
         pipesize: int = -1,
         process_group: int | None = None,
     ) -> CompletedProcess[str]
+    @ignorable_return_value
     def run(
         args: _CMD,
         bufsize: int = -1,
@@ -300,6 +304,7 @@ if sys.version_info >= (3, 11):
         pipesize: int = -1,
         process_group: int | None = None,
     ) -> CompletedProcess[str]
+    @ignorable_return_value
     def run(
         args: _CMD,
         bufsize: int = -1,
@@ -333,6 +338,7 @@ if sys.version_info >= (3, 11):
         pipesize: int = -1,
         process_group: int | None = None,
     ) -> CompletedProcess[bytes]
+    @ignorable_return_value
     def run(
         args: _CMD,
         bufsize: int = -1,
@@ -368,6 +374,7 @@ if sys.version_info >= (3, 11):
     ) -> CompletedProcess[dynamic]
 else:
     # 3.10 adds "pipesize" argument
+    @ignorable_return_value
     def run(
         args: _CMD,
         bufsize: int = -1,
@@ -428,6 +435,7 @@ else:
 
         The other arguments are the same as for the Popen constructor.
         """
+    @ignorable_return_value
     def run(
         args: _CMD,
         bufsize: int = -1,
@@ -460,6 +468,7 @@ else:
         umask: int = -1,
         pipesize: int = -1,
     ) -> CompletedProcess[str]
+    @ignorable_return_value
     def run(
         args: _CMD,
         bufsize: int = -1,
@@ -492,6 +501,7 @@ else:
         umask: int = -1,
         pipesize: int = -1,
     ) -> CompletedProcess[str]
+    @ignorable_return_value
     def run(
         args: _CMD,
         bufsize: int = -1,
@@ -525,6 +535,7 @@ else:
         umask: int = -1,
         pipesize: int = -1,
     ) -> CompletedProcess[str]
+    @ignorable_return_value
     def run(
         args: _CMD,
         bufsize: int = -1,
@@ -557,6 +568,7 @@ else:
         umask: int = -1,
         pipesize: int = -1,
     ) -> CompletedProcess[bytes]
+    @ignorable_return_value
     def run(
         args: _CMD,
         bufsize: int = -1,
@@ -593,6 +605,7 @@ else:
 # Same args as Popen.__init__
 if sys.version_info >= (3, 11):
     # 3.11 adds "process_group" argument
+    @ignorable_return_value
     def call(
         args: _CMD,
         bufsize: int = -1,
@@ -632,6 +645,7 @@ if sys.version_info >= (3, 11):
 
 else:
     # 3.10 adds "pipesize" argument
+    @ignorable_return_value
     def call(
         args: _CMD,
         bufsize: int = -1,
@@ -671,6 +685,7 @@ else:
 # Same args as Popen.__init__
 if sys.version_info >= (3, 11):
     # 3.11 adds "process_group" argument
+    @ignorable_return_value
     def check_call(
         args: _CMD,
         bufsize: int = -1,
@@ -712,6 +727,7 @@ if sys.version_info >= (3, 11):
 
 else:
     # 3.10 adds "pipesize" argument
+    @ignorable_return_value
     def check_call(
         args: _CMD,
         bufsize: int = -1,
@@ -1660,6 +1676,7 @@ class Popen(Generic[AnyStr]):
         attribute.
         """
 
+    @ignorable_return_value
     def wait(self, timeout: int | float | None = None) -> int:
         """Wait for child process to terminate; returns self.returncode."""
 

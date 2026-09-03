@@ -111,7 +111,7 @@ use crate::types::function::{
 use crate::types::generics::{
     GenericContext, Specialization, SpecializationBuilder, bind_typevar, enclosing_binding_contexts,
 };
-use crate::types::implicit_names::{ImplicitNamePosition, implicit_name};
+use crate::types::implicit_names::implicit_name;
 use crate::types::infer::builder::named_tuple::NamedTupleKind;
 use crate::types::infer::builder::paramspec_validation::validate_paramspec_components;
 use crate::types::infer::{
@@ -199,6 +199,7 @@ mod named_tuple;
 mod new_class;
 mod paramspec_validation;
 mod post_inference;
+mod return_value_use;
 mod subscript;
 mod type_call;
 mod type_expression;
@@ -2504,15 +2505,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }) = statement
             {
                 let ty = self.expression_type(value);
-                if ty.is_awaitable(self.db()) && !self.is_known_function_call(value) {
-                    if let Some(builder) =
-                        self.context.report_lint(&UNUSED_AWAITABLE, value.as_ref())
+                if ty.is_awaitable(self.db()) {
+                    // an awaitable that reaches the end of a statement is
+                    // `unused-awaitable`'s to report: what went missing is the
+                    // `await`, not the use of what it would have produced
+                    if !self.is_known_function_call(value)
+                        && let Some(builder) =
+                            self.context.report_lint(&UNUSED_AWAITABLE, value.as_ref())
                     {
                         builder.into_diagnostic(format_args!(
                             "Object of type `{}` is not awaited",
                             ty.display(db, self.program_environment()),
                         ));
                     }
+                } else {
+                    self.check_unused_return_value(value, ty);
                 }
             }
         }
@@ -12832,17 +12839,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let resolved_after_fallback = resolved
             // basedpython only: the names that mean a module member the file
             // never imported — `Mapping`, `Character`, the `dynamic` spelling of
-            // `Any`. the transpiler emits the matching import during lowering;
-            // `implicit_names` is what both it and this resolution read. only
-            // reached when the name is otherwise unbound, so a local
+            // `Any`, the return-value markers. the transpiler lowers each of
+            // them; `implicit_names` is what both it and this resolution read,
+            // including which kind of position each one means its member in.
+            // only reached when the name is otherwise unbound, so a local
             // `Character = …` binding still shadows it
             .or_fall_back_to(db, env, || {
                 if self.is_basedpython_file()
                     && let Some(implicit) = implicit_name(symbol_name)
-                    && (implicit.position == ImplicitNamePosition::Anywhere
-                        || self
-                            .inference_flags()
-                            .contains(InferenceFlags::IN_TYPE_EXPRESSION))
+                    && implicit.position.admits(
+                        self.inference_flags()
+                            .contains(InferenceFlags::IN_TYPE_EXPRESSION),
+                    )
                 {
                     implicit.resolve(db, env)
                 } else {

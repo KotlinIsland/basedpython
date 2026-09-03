@@ -100,6 +100,12 @@ pub(crate) trait TypeInfo {
         function: &ruff_python_ast::StmtFunctionDef,
     ) -> Option<String>;
 
+    /// whether `name` resolves to a basedpython return-value marker —
+    /// `ignorable_return_value` or `must_use_return_value`. both are pure
+    /// declarations about how a caller may treat a result, with nothing behind
+    /// them at runtime, so a decorator naming one is erased
+    fn is_return_value_marker(&self, name: &ExprName) -> bool;
+
     /// whether `name` resolves to a basedpython *reified* generic function (a
     /// pep 695 type parameter referenced in a value position). these are
     /// wrapped in the `generic` polyfill, so their specialized call sites
@@ -600,6 +606,12 @@ impl TypeInfo for SemanticModel<'_> {
             self.file(),
             function.inferred_type(self)?,
         )
+    }
+
+    fn is_return_value_marker(&self, name: &ExprName) -> bool {
+        name.inferred_type(self)
+            .and_then(Type::as_function_literal)
+            .is_some_and(|function| function.is_return_value_marker(self.db()))
     }
 
     fn is_reified_function(&self, name: &ExprName) -> bool {

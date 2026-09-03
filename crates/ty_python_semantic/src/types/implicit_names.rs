@@ -35,6 +35,21 @@ pub(crate) enum ImplicitNamePosition {
     /// only where a type is being written, as `dynamic` is: a value-position
     /// `dynamic` stays an ordinary identifier
     TypeExpression,
+    /// only where a value is being written, as the return-value markers are:
+    /// they are decorators, and nothing about them is a type
+    ValueExpression,
+}
+
+impl ImplicitNamePosition {
+    /// whether a name carrying this position means its member where it is
+    /// written.
+    pub(crate) const fn admits(self, in_type_expression: bool) -> bool {
+        match self {
+            Self::Anywhere => true,
+            Self::TypeExpression => in_type_expression,
+            Self::ValueExpression => !in_type_expression,
+        }
+    }
 }
 
 /// the module member a bare basedpython name means
@@ -104,6 +119,9 @@ const TYPING_MODULES: &[KnownModule] = &[KnownModule::Typing, KnownModule::Typin
 /// the implicit names that are not `typing` members.
 const EXTRA_IMPLICIT_NAMES: &[&str] = &["dynamic", "Character", "Overlapping"];
 
+/// the return-value markers, which name themselves
+const RETURN_VALUE_MARKERS: &[&str] = &["ignorable_return_value", "must_use_return_value"];
+
 /// what `name` means where nothing else claims it, if anything.
 ///
 /// callers in a value position must check [`ImplicitName::position`]: a
@@ -114,6 +132,20 @@ pub(crate) fn implicit_name(name: &str) -> Option<ImplicitName> {
             modules: TYPING_MODULES,
             member,
             position: ImplicitNamePosition::Anywhere,
+            is_keyword: false,
+        });
+    }
+    // the return-value markers are decorators, so unlike the rest of this table
+    // they are written where a *value* goes
+    if let Some(member) = RETURN_VALUE_MARKERS
+        .iter()
+        .find(|marker| **marker == name)
+        .copied()
+    {
+        return Some(ImplicitName {
+            modules: &[KnownModule::TyExtensions],
+            member,
+            position: ImplicitNamePosition::ValueExpression,
             is_keyword: false,
         });
     }
@@ -147,11 +179,12 @@ pub fn implicit_names() -> impl Iterator<Item = &'static str> {
         .iter()
         .copied()
         .chain(EXTRA_IMPLICIT_NAMES.iter().copied())
+        .chain(RETURN_VALUE_MARKERS.iter().copied())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ImplicitNamePosition, implicit_name, implicit_names};
+    use super::{implicit_name, implicit_names};
 
     /// every name the iterator yields describes itself, and the one spelling
     /// that means something other than itself keeps meaning it
@@ -166,12 +199,20 @@ mod tests {
 
         let dynamic = implicit_name("dynamic").unwrap();
         assert_eq!(dynamic.member, "Any");
-        assert_eq!(dynamic.position, ImplicitNamePosition::TypeExpression);
+        assert!(dynamic.position.admits(true));
+        assert!(!dynamic.position.admits(false));
         assert!(dynamic.is_keyword);
+
+        let ignorable = implicit_name("ignorable_return_value").unwrap();
+        assert_eq!(ignorable.member, "ignorable_return_value");
+        assert!(ignorable.position.admits(false));
+        assert!(!ignorable.position.admits(true));
+        assert!(!ignorable.is_keyword);
 
         let mapping = implicit_name("Mapping").unwrap();
         assert_eq!(mapping.member, "Mapping");
-        assert_eq!(mapping.position, ImplicitNamePosition::Anywhere);
+        assert!(mapping.position.admits(true));
+        assert!(mapping.position.admits(false));
         assert!(!mapping.is_keyword);
 
         assert_eq!(implicit_name("nonesuch"), None);

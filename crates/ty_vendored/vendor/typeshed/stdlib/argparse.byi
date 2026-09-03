@@ -143,6 +143,7 @@ class _ActionsContainer:
     def _registry_get(self, registry_name: str, value: dynamic, default: dynamic = None) -> dynamic
     def set_defaults(self, **kwargs: dynamic)
     def get_default(self, dest: str) -> dynamic
+    @ignorable_return_value
     def add_argument(
         self,
         *name_or_flags: str,

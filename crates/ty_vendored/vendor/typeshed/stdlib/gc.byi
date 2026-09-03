@@ -34,6 +34,7 @@ private type CallbackType = (Literal["start", "stop"], dict[str, int]) -> object
 callbacks: list[CallbackType]
 garbage: list[dynamic]
 
+@ignorable_return_value
 def collect(generation: int = 2) -> int:
     """Run the garbage collector.
 

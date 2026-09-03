@@ -284,9 +284,11 @@ class deque[in out Element](MutableSequence[Element]):
         Raises ValueError if the value is not present.
         """
 
+    @ignorable_return_value
     override def pop(self) -> Element:
         """Remove and return the rightmost element."""
 
+    @ignorable_return_value
     def popleft(self) -> Element:
         """Remove and return the leftmost element."""
 

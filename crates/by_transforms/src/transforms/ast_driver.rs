@@ -44,11 +44,11 @@ use super::{
     implicit_typing, inferred_annotation, init_method, just_float, kw_subscript, literal_string,
     literal_types, local_once, main_function, match_type, modifiers, mutable_defaults, none_chain,
     optional_type, overload, parametric_is, postfix_await, private_method, propagate, properties,
-    protocol_type, raises_clause, reified_generic, repeated_underscore, runtime_union, sentinel,
-    some_ctor, soundness, statement_expression, string_tag, super_keyword, symbolic_type_op,
-    template_type, top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification,
-    typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings, unpack,
-    use_site_variance,
+    protocol_type, raises_clause, reified_generic, repeated_underscore, return_value_use,
+    runtime_union, sentinel, some_ctor, soundness, statement_expression, string_tag, super_keyword,
+    symbolic_type_op, template_type, top_star, trailing_lambda, tuple_index, type_fn, type_is,
+    type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings,
+    unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -539,6 +539,10 @@ pub(crate) fn run_against_source<'a>(
     let properties_pass = properties::PropertiesPass::new(source_ref, accessor_value_ranges);
     let local_once_pass = local_once::LocalOncePass::new(source_ref);
     let raises_strip_pass = raises_clause::RaisesStripPass::new(source_ref);
+    let return_value_use_pass = return_value_use::ReturnValueUsePass::new(
+        source_ref,
+        return_value_use::collect(parsed_handle.suite(), &semantic_model),
+    );
     let raises_guard_pass =
         raises_clause::RaisesGuardPass::new(source_ref, config.runtime_raises_checks);
     let type_fn_pass = type_fn::TypeFnPass::new(source_ref);
@@ -634,6 +638,9 @@ pub(crate) fn run_against_source<'a>(
         // delete `raises` clauses (a source-span deletion, like `local` / `once`
         // — must read ranges before any AST-mutation pass zeroes them)
         &raises_strip_pass,
+        // delete the return-value markers. it also strips them from the AST, so
+        // it has to run before any pass re-renders a statement one sits on
+        &return_value_use_pass,
         // erase `type def` declarations; their applications were already folded to
         // the resolved type by the symbolic pass above
         &type_fn_pass,

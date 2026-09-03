@@ -30,6 +30,25 @@ expression: diagnostics
       "range": {
         "start": {
           "line": 0,
+          "character": 0
+        },
+        "end": {
+          "line": 2,
+          "character": 7
+        }
+      },
+      "severity": 2,
+      "code": "unused-return-value",
+      "codeDescription": {
+        "href": "https://ty.dev/rules#unused-return-value"
+      },
+      "source": "ty",
+      "message": "The result of this call is unused\n\ninfo: `with_style` returns `str`\nhelp: Decorate `with_style` with `@ignorable_return_value` if discarding its result is expected"
+    },
+    {
+      "range": {
+        "start": {
+          "line": 0,
           "character": 19
         },
         "end": {

@@ -316,15 +316,16 @@ fn implicit_name_definitions<'db>(
         return vec![];
     };
 
-    // Some of these names only mean the member where a type is being written: a
-    // value-position `Character` is an ordinary identifier, which resolves to
-    // nothing, and a click on one should lead nowhere. Rather than re-deriving
-    // the position here, ask whether the name resolved at all — a name that
-    // didn't is `Unknown`, which is never one of these members.
+    // Some of these names only mean the member in one kind of position: a
+    // value-position `Character` is an ordinary identifier, and a type-position
+    // `ignorable_return_value` is one too. Either resolves to nothing, and a
+    // click on one should lead nowhere. Rather than re-deriving the position
+    // here, ask whether the name resolved at all — a name that didn't is
+    // `Unknown`, which is never one of these members.
     let Some(expr) = node.expr_name() else {
         return vec![];
     };
-    if implicit.position == ImplicitNamePosition::TypeExpression
+    if implicit.position != ImplicitNamePosition::Anywhere
         && expr.inferred_type(model).is_none_or(|ty| ty.is_unknown())
     {
         return vec![];

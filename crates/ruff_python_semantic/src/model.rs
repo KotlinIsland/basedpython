@@ -812,6 +812,9 @@ impl<'a> SemanticModel<'a> {
     ///   `Optional(...)` wrapper
     /// - `Character` and `Overlapping`, `ty_extensions` special forms implicitly
     ///   available in a type position
+    /// - `ignorable_return_value` and `must_use_return_value`, the return-value
+    ///   markers, which are decorators: they are the one pair that means its
+    ///   member only *outside* a type position
     /// - the `typing` members basedpython auto-imports (`Optional`, `Sequence`, …)
     ///
     /// the names and their position gates mirror ty's `types::implicit_names`,
@@ -828,6 +831,7 @@ impl<'a> SemanticModel<'a> {
         }
         match name.id.as_str() {
             "Some" => true,
+            "ignorable_return_value" | "must_use_return_value" => !self.in_type_definition(),
             "dynamic" | "Character" | "Overlapping" => self.in_type_definition(),
             other => {
                 ruff_python_stdlib::basedpython::is_implicit_typing_name(other)

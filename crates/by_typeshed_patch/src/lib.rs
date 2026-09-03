@@ -67,6 +67,11 @@ pub fn all_patches(root: &Path) -> Vec<Box<dyn Patch>> {
         Box::new(patches::numeric_promotion::NumericPromotion::new(
             patches::numeric_promotion::scan(root),
         )),
+        // marks the members whose result a caller may throw away. it reads only
+        // class and function names, which the pep 695 conversion leaves alone,
+        // so it belongs in the pass that a re-apply over the committed tree also
+        // runs
+        Box::new(patches::ignorable_return_value::IgnorableReturnValue),
     ]
 }
 
