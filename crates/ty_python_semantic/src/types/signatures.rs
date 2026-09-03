@@ -1348,6 +1348,75 @@ impl<'db> Signature<'db> {
         }
     }
 
+    /// basedpython: whether [`Signature::inherit_defaults_from`] could still fill anything in —
+    /// that is, whether some parameter that a call may leave out is without a default.
+    ///
+    /// Used to avoid an MRO walk for a method whose parameters are all either required of the
+    /// base too or already defaulted here. `binds_receiver` says the first parameter is bound by
+    /// the receiver rather than supplied as an argument, so no call ever leaves it out.
+    pub(crate) fn has_inheritable_defaults_to_fill(&self, binds_receiver: bool) -> bool {
+        self.parameters
+            .iter()
+            .skip(usize::from(binds_receiver))
+            .any(|parameter| {
+                !parameter.is_variadic()
+                    && !parameter.is_keyword_variadic()
+                    && parameter.default_type().is_none()
+            })
+    }
+
+    /// basedpython: give every parameter the override leaves without a default the one the
+    /// overridden method declares for it, so that
+    /// ```by
+    /// class A:
+    ///     def f(self, a=1): ...
+    ///
+    /// class B(A):
+    ///     def f(self, a):
+    ///         print(a)
+    /// ```
+    /// is still callable as `B().f()`.
+    ///
+    /// Parameters correspond by name and kind bucket, the same way an inherited annotation
+    /// matches them: a parameter the override renamed or moved between buckets is not the same
+    /// parameter, and is an invalid override to begin with.
+    ///
+    /// Only a default that [`Type::display_default_value`] can write is inherited, because
+    /// carrying it to the call site means writing it into the override's own signature.
+    pub(crate) fn inherit_defaults_from(
+        &mut self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        base: &Signature<'db>,
+    ) {
+        for parameter in &mut Arc::make_mut(&mut self.parameters.data).value {
+            if parameter.default_type().is_some()
+                || parameter.is_variadic()
+                || parameter.is_keyword_variadic()
+            {
+                continue;
+            }
+            let Some(name) = parameter.name() else {
+                continue;
+            };
+            let kind = parameter_kind_tag(&parameter.kind);
+            let Some(inherited) = base
+                .parameters
+                .iter()
+                .find(|candidate| {
+                    candidate.name() == Some(name) && parameter_kind_tag(&candidate.kind) == kind
+                })
+                .and_then(Parameter::default_type)
+            else {
+                continue;
+            };
+            if inherited.display_default_value(db, env).is_none() {
+                continue;
+            }
+            parameter.set_default_type(inherited);
+        }
+    }
+
     /// basedpython: fill in every parameter still without a type of its own from `expected` — the
     /// callable that something declares the function itself to be.
     ///
@@ -5888,6 +5957,15 @@ impl<'db> Parameter<'db> {
     }
 
     pub(crate) fn with_default_type(mut self, default: Type<'db>) -> Self {
+        self.set_default_type(default);
+        self
+    }
+
+    /// Give this parameter a default in place.
+    ///
+    /// A variadic parameter stands for a run of arguments rather than one, so there is nothing
+    /// for a caller to leave out and nothing a default would mean.
+    pub(crate) fn set_default_type(&mut self, default: Type<'db>) {
         match &mut self.kind {
             ParameterKind::PositionalOnly { default_type, .. }
             | ParameterKind::PositionalOrKeyword { default_type, .. }
@@ -5896,7 +5974,6 @@ impl<'db> Parameter<'db> {
                 panic!("cannot set default value for variadic parameter")
             }
         }
-        self
     }
 
     pub(crate) fn with_optional_default_type(self, default: Option<Type<'db>>) -> Self {

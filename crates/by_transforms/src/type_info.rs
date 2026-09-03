@@ -2,7 +2,9 @@
 
 use crate::transforms::trailing_lambda::RECEIVER_PARAMETER;
 use ruff_python_ast::helpers::is_dotted_name;
-use ruff_python_ast::{Expr, ExprCall, ExprName, ExprRef, Parameter, Stmt, StmtClassDef};
+use ruff_python_ast::{
+    Expr, ExprCall, ExprName, ExprRef, Parameter, ParameterWithDefault, Stmt, StmtClassDef,
+};
 use ruff_python_parser::parse_expression;
 use ruff_python_stdlib::basedpython::IMPLICIT_TYPING_NAMES;
 use ruff_text_size::TextRange;
@@ -520,6 +522,15 @@ pub(crate) trait TypeInfo {
     /// no python type-expression spelling (a module, a callable in arrow form,
     /// a class local to a function)
     fn inferred_annotation(&self, expr: &Expr) -> Option<SynthesizedType>;
+
+    /// basedpython: the default this parameter takes from the method its `def` overrides,
+    /// written the way a signature writes it — `1`, `"a"`, `None`.
+    ///
+    /// A method's defaults are part of what it declares, so a parameter an override re-declares
+    /// without one keeps the base's, and the lowering writes it into the override's own
+    /// signature. `None` when the parameter writes a default of its own, when nothing it
+    /// overrides declares one, or when the base's default is an expression rather than a value
+    fn inherited_parameter_default(&self, parameter: &ParameterWithDefault) -> Option<String>;
 
     /// whether adding a type annotation to a bare `name = value` assignment in
     /// `class_def`'s body would change the class's runtime semantics — true for
@@ -1062,6 +1073,10 @@ impl TypeInfo for SemanticModel<'_> {
             self.file(),
             ty,
         )
+    }
+
+    fn inherited_parameter_default(&self, parameter: &ParameterWithDefault) -> Option<String> {
+        ty_python_semantic::types::ide_support::inherited_parameter_default(self, parameter)
     }
 
     fn parameter_check_plan(&self, parameter: &Parameter) -> Option<SoundnessCheck> {

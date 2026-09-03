@@ -158,7 +158,8 @@ fn inlay_hint_kind(inlay_hint_kind: &InlayHintKind) -> lsp_types::InlayHintKind 
         | InlayHintKind::EnumValue => lsp_types::InlayHintKind::Type,
         InlayHintKind::CallArgumentName
         | InlayHintKind::ImplicitParameter
-        | InlayHintKind::ImplicitArgument => lsp_types::InlayHintKind::Parameter,
+        | InlayHintKind::ImplicitArgument
+        | InlayHintKind::InheritedDefault => lsp_types::InlayHintKind::Parameter,
     }
 }
 

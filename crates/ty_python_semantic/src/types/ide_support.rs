@@ -3755,6 +3755,34 @@ pub fn inherited_parameter_annotation<'db>(
     (!ty.is_unknown() && !ty.is_inferred_parameter_hole(db)).then_some(ty)
 }
 
+/// basedpython: the default a parameter takes from the method its `def` overrides, written the
+/// way a signature writes it.
+///
+/// A method's defaults are part of what it declares, so a parameter an override re-declares
+/// without one keeps the base's. `None` when the parameter writes a default of its own, when
+/// nothing it overrides declares one, or when what the base declares is an expression rather than
+/// a value — see [`Type::display_default_value`].
+pub fn inherited_parameter_default(
+    model: &SemanticModel<'_>,
+    parameter: &ast::ParameterWithDefault,
+) -> Option<String> {
+    if parameter.default.is_some() {
+        return None;
+    }
+    let db = model.db();
+    let index = semantic_index(db, db.program_file(model.file()));
+    let definition = index.try_definition(&parameter.parameter)?;
+    let function = nearest_enclosing_function(db, index, definition.scope(db))?;
+
+    let signature = function.last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public);
+    signature
+        .parameters()
+        .iter()
+        .find(|candidate| candidate.name() == Some(&parameter.parameter.name.id))?
+        .default_type()?
+        .display_default_value(db, &model.program_environment())
+}
+
 /// basedpython: the return type recovered for a `def` that leaves its annotation out.
 ///
 /// `None` is what such a `def` already means, so recovering it says nothing the source did not

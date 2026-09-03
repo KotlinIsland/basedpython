@@ -1470,7 +1470,8 @@ impl From<ty_ide::InlayHintKind> for InlayHintKind {
             | ty_ide::InlayHintKind::EnumValue => Self::Type,
             ty_ide::InlayHintKind::CallArgumentName
             | ty_ide::InlayHintKind::ImplicitParameter
-            | ty_ide::InlayHintKind::ImplicitArgument => Self::Parameter,
+            | ty_ide::InlayHintKind::ImplicitArgument
+            | ty_ide::InlayHintKind::InheritedDefault => Self::Parameter,
         }
     }
 }

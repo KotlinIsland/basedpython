@@ -31,6 +31,7 @@ Settings: WorkspaceSettings {
         implicit_self: true,
         lambda_parameter_types: true,
         inherited_parameter_types: true,
+        inherited_parameter_defaults: true,
         inferred_return_types: true,
         implicit_arguments: true,
         enum_values: true,
