@@ -1,0 +1,126 @@
+class Rect:
+    w: int = 0
+    h: int = 0
+
+    # a computed property: one getter, nothing else
+    @property
+    def area(self) -> int:
+        return self.w * self.h
+
+
+class Person:
+    def __init__(self, age: int) -> None:
+        self._age = age
+
+    # a getter and its setter, both annotated
+    @property
+    def age(self) -> int:
+        return self._age
+
+    @age.setter
+    def age(self, value: int) -> None:
+        assert value >= 0
+        self._age = value
+
+
+class Untyped:
+    # a read-only declaration may leave its type to the getter
+    @property
+    def tag(self):
+        return self._tag
+
+
+class Unannotated:
+    # OK: a mutable declaration may not, and there is no type to give this one
+    @property
+    def count(self):
+        return self._count
+
+    @count.setter
+    def count(self, value):
+        self._count = value
+
+
+class Widening:
+    # the setter's parameter would gain the getter's return type: unsafe
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @name.setter
+    def name(self, value):
+        self._name = value
+
+
+class Blocks:
+    # a getter that is more than a `return`
+    @property
+    def banner(self) -> str:
+        base = self._name
+        return base.upper()
+
+
+# a property under a decorator that is not `property` is not one
+class NotAProperty:
+    @staticmethod
+    def area() -> int:
+        return 0
+
+
+# OK: shapes an accessor block cannot hold
+class Unspellable:
+    @property
+    def deleted(self) -> int:
+        return self._deleted
+
+    @deleted.deleter
+    def deleted(self) -> None:
+        del self._deleted
+
+    @property
+    @override
+    def decorated(self) -> int:
+        return 0
+
+    @property
+    def renamed_receiver(this) -> int:
+        return 0
+
+    @property
+    def stub(self) -> int: ...
+
+    @property
+    async def waited(self) -> int:
+        return 0
+
+    @property
+    def widened(self) -> str:
+        return self._widened
+
+    @widened.setter
+    def widened(self, value: str | int) -> None:
+        self._widened = str(value)
+
+
+# OK: reported, but with no fix to offer
+class Delicate:
+    @property
+    def commented(self) -> int:
+        # the accessor body would not keep this
+        return 0
+
+    @property
+    def spanning(self) -> str:
+        text = """
+        many lines
+        """
+        return text
+
+    @property
+    def one_liner(self) -> int: x = 0; return x
+
+
+# OK: a `@property` in a `.by` file is only reported inside a class
+@property
+def loose() -> int:
+    return 0
