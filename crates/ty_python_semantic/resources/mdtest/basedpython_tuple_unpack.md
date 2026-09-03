@@ -114,6 +114,61 @@ def f(x: (*: int)):
     reveal_type(x)  # revealed: (*: int)
 ```
 
+## a variadic annotated with an unpack names the whole run
+
+`*: *Args` is the variadic whose annotation is itself an unpack, which is the same spelling the
+[callable form](basedpython_callable.md) uses. It names the fields the tuple `Args` stands for
+rather than typing each field with `Args`, so it splices exactly as a bare `*Args` does.
+
+```by
+type Pair = (int, str)
+type Same = (*: *Pair)
+type Named = (*args: *Pair)
+
+def f(x: Same):
+    reveal_type(x)  # revealed: (int, str)
+
+def g(x: Named):
+    reveal_type(x)  # revealed: (int, str)
+```
+
+## an unpacked variadic keeps its prefix and suffix
+
+```by
+type Pair = (int, str)
+type Leading = (bool, *: *Pair)
+type Trailing = (*: *Pair, bool)
+
+def f(x: Leading):
+    reveal_type(x)  # revealed: (bool, int, str)
+
+def g(x: Trailing):
+    reveal_type(x)  # revealed: (int, str, bool)
+```
+
+## an unpacked variadic accepts a tuple of the spliced shape
+
+```by
+type T[*Ts] = (*: *Ts)
+
+a: T[int] = (1,)
+# error: [invalid-assignment]
+b: T[int] = (1, 2)
+```
+
+## a `TypeVarTuple` fills an unpacked variadic
+
+Unpacking a `TypeVarTuple` directly has none of the lazy-evaluation limits a `type` alias brings, so
+the variadic can be written in the annotation itself.
+
+```by
+def f[*Args](x: (*: *Args)) -> None: ...
+
+f[int, str]((1, "a"))
+# error: [invalid-argument-type] "Expected `(int, str)`, found `(1, 2)`"
+f[int, str]((1, 2))
+```
+
 ## a `TypeVarTuple` still unpacks
 
 ```by
