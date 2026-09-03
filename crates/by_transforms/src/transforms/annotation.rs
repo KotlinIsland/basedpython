@@ -18,6 +18,16 @@ fn strip_unpack(element: &str) -> Option<&str> {
     })
 }
 
+/// Whether a parameter-shape tuple element is a `*: *Args` variadic — one whose annotation is
+/// itself an unpack, and so names the whole run of fields rather than typing each one.
+fn is_unpacked_variadic(element: &Expr) -> bool {
+    let Expr::Named(named) = element else {
+        return false;
+    };
+    matches!(named.target.as_ref(), Expr::Starred(starred) if !starred.value.is_starred_expr())
+        && named.value.is_starred_expr()
+}
+
 /// Rewrites tuple literal types in type positions.
 ///
 /// `a: (int, str)` → `a: tuple[int, str]`
@@ -105,9 +115,13 @@ impl<'src> TupleLiteralType<'src> {
                     return Some("tuple[()]".to_owned());
                 }
                 // pure variadic `(*: T)` → `tuple[T, ...]` directly
-                // rather than the wrapped `tuple[*tuple[T, ...]]` form
+                // rather than the wrapped `tuple[*tuple[T, ...]]` form.
+                // `(*: *Args)` is not that shape: its element is already the
+                // unpack, and stripping it would leave a bare `Args` — which
+                // says nothing at all when `Args` is a `TypeVarTuple`
                 if parameter_shape
                     && lowered.len() == 1
+                    && !t.elts.first().is_some_and(is_unpacked_variadic)
                     && let Some(rest) = strip_unpack(&lowered[0])
                 {
                     return Some(rest.to_owned());
@@ -247,6 +261,15 @@ impl<'src> TupleLiteralType<'src> {
                 if let Expr::Starred(starred) = named.target.as_ref() {
                     if matches!(starred.value.as_ref(), Expr::Starred(_)) {
                         return String::new();
+                    }
+                    // `*: *Args` — the annotation is itself an unpack, so it names the
+                    // whole run of fields rather than typing each one. python spells
+                    // that the same way, so it lowers to itself
+                    if let Expr::Starred(unpacked) = named.value.as_ref() {
+                        let inner_src = self
+                            .transform_annotation(&unpacked.value)
+                            .unwrap_or_else(|| self.src(unpacked.value.range()).to_owned());
+                        return self.unpack(&inner_src);
                     }
                     let value_src = self
                         .transform_annotation(&named.value)
@@ -549,6 +572,34 @@ mod tests {
             PythonVersion::PY311,
             "b: (int, *args: str)\n",
             "b: tuple[int, *tuple[str, ...]]\n",
+        );
+    }
+
+    #[test]
+    fn unpacked_variadic_tuple_annotation() {
+        // `*: *A` — the variadic's annotation is itself an unpack, so it names the whole
+        // run of fields rather than typing each one. python spells that the same way
+        check_at(PythonVersion::PY311, "a: (*: *A)\n", "a: tuple[*A]\n");
+        check_at(
+            PythonVersion::PY311,
+            "b: (int, *: *A)\n",
+            "b: tuple[int, *A]\n",
+        );
+        check_at(
+            PythonVersion::PY311,
+            "c: (*args: *A, str)\n",
+            "c: tuple[*A, str]\n",
+        );
+    }
+
+    #[test]
+    fn unpacked_variadic_tuple_annotation_before_pep_646() {
+        check(
+            "a: (*: *A)\n",
+            indoc! {"
+                from typing_extensions import Unpack
+                a: tuple[Unpack[A]]
+            "},
         );
     }
 

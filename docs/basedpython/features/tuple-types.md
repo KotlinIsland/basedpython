@@ -44,6 +44,17 @@ exactly as the tuple it stands for — that holds for python's `tuple[*Pair]` an
 different things: `*: T` annotates every field, while `*A` splices one tuple in.
 what tells them apart is the `:`
 
+a variadic whose annotation is itself an unpack names the whole run of fields
+rather than typing each one, which is the same reading
+[a callable](callable.md#variadic-args) gives it — so it splices exactly as the
+bare form does:
+
+```by
+type Pair = (int, str)
+type Same = (*: *Pair)          # (int, str)
+type Leading = (bool, *: *Pair) # (bool, int, str)
+```
+
 unpacking lowers to python's own `*` spelling, so it inherits python's runtime
 rule: `*` on a `type` alias is only evaluatable lazily. that covers the type
 positions the form is written in — another `type` alias, or any annotation once

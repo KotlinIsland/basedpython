@@ -8010,7 +8010,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         &mut self,
         tuple: &ast::ExprTuple,
     ) -> Option<Type<'db>> {
-        use crate::types::tuple::TupleType;
+        use crate::types::tuple::{Tuple, TupleType};
 
         // detect variadic up-front without inferring — type inference must
         // be performed exactly once per expression, so we only enter the
@@ -8018,14 +8018,25 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         enum Kind {
             Fixed,
             Variadic,
+            /// `(*: *Args)` — the star's annotation is itself an unpack, which names the whole
+            /// run of fields rather than typing each one, exactly as it does for the callable
+            /// form `(*: *Args) -> None`
+            UnpackedVariadic,
             KwVariadic,
         }
         fn classify(elt: &ast::Expr) -> Kind {
+            let variadic = |annotation: &ast::Expr| {
+                if annotation.is_starred_expr() {
+                    Kind::UnpackedVariadic
+                } else {
+                    Kind::Variadic
+                }
+            };
             match elt {
                 ast::Expr::Named(named) => match named.target.as_ref() {
                     ast::Expr::Starred(starred) => match starred.value.as_ref() {
                         ast::Expr::Starred(_) => Kind::KwVariadic,
-                        _ => Kind::Variadic,
+                        _ => variadic(named.value.as_ref()),
                     },
                     _ => Kind::Fixed,
                 },
@@ -8038,7 +8049,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
         let env = self.program_environment();
         let kinds: Vec<Kind> = tuple.elts.iter().map(classify).collect();
-        let has_variadic = kinds.iter().any(|k| matches!(k, Kind::Variadic));
+        let has_variadic = kinds
+            .iter()
+            .any(|k| matches!(k, Kind::Variadic | Kind::UnpackedVariadic));
         if !has_variadic {
             return None;
         }
@@ -8057,49 +8070,38 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             entries.push((kind, ty));
         }
 
-        // split around the variadic. only one variadic supported per tuple
-        // type; subsequent variadics fold into the suffix as fixed `Todo`s
-        // (this matches python's `tuple[*Ts]` constraint of one variable
-        // segment)
-        let mut prefix: Vec<Type<'db>> = Vec::new();
-        let mut variable: Option<Type<'db>> = None;
-        let mut suffix: Vec<Type<'db>> = Vec::new();
+        // a tuple type has one variable-length segment at most, so a second variadic merges
+        // into the first — `concat` unions the two rather than reporting, matching python's
+        // `tuple[*Ts]` constraint without failing the annotation outright
+        let mut builder = TupleSpecBuilder::with_capacity(entries.len());
         for (kind, ty) in entries {
-            match kind {
+            builder = match kind {
                 Kind::Fixed => {
-                    if variable.is_some() {
-                        suffix.push(ty);
-                    } else {
-                        prefix.push(ty);
-                    }
+                    builder.push(ty);
+                    builder
                 }
-                Kind::Variadic => {
-                    if variable.is_some() {
-                        // additional variadic merges into the existing
-                        // variable-length type via union (degraded form)
-                        let existing = variable.take().unwrap();
-                        variable = Some(crate::types::UnionType::from_elements(
-                            db,
-                            env,
-                            [existing, ty],
-                        ));
+                Kind::Variadic => builder.concat(db, env, &Tuple::homogeneous(ty)),
+                Kind::UnpackedVariadic => {
+                    if let Some(unpacked) = ty.exact_tuple_instance_spec(db) {
+                        builder.concat(db, env, &unpacked)
+                    } else if let Type::TypeVar(typevar) = ty
+                        && typevar.is_typevartuple(db)
+                    {
+                        builder.concat_variadic_typevar(db, env, typevar)
                     } else {
-                        variable = Some(ty);
+                        // not something that can be spliced; the unpack itself has already
+                        // reported, so fall back to typing every field with it
+                        builder.concat(db, env, &Tuple::homogeneous(ty))
                     }
                 }
                 Kind::KwVariadic => {
                     // kwargs has no positional tuple equivalent — drop
+                    builder
                 }
-            }
+            };
         }
 
-        let variable = variable.unwrap_or_else(Type::object);
-        let tt = if prefix.is_empty() && suffix.is_empty() {
-            Some(TupleType::homogeneous(db, env, variable))
-        } else {
-            TupleType::mixed(db, env, prefix, variable, suffix)
-        };
-        Some(Type::tuple(tt))
+        Some(Type::tuple(TupleType::new(db, env, &builder.build())))
     }
 
     /// basedpython: the keyword-variadic pack `expr` names, as `{**Kwargs}` does.
