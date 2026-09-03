@@ -46,7 +46,7 @@ if sys.version_info >= (3, 12):
 if sys.version_info >= (3, 15):
     __all__ += ["concurrent_tee", "serialize_iterator", "synchronized_iterator"]
 
-_profile_hook: ProfileFunction | None
+_profile_hook: ProfileFunction?
 
 def active_count() -> int:
     """Return the number of Thread objects currently alive.
@@ -106,14 +106,14 @@ def main_thread() -> Thread:
     Python interpreter was started.
     """
 
-def settrace(func: TraceFunction | None):
+def settrace(func: TraceFunction?):
     """Set a trace function for all threads started from the threading module.
 
     The func will be passed to sys.settrace() for each thread, before its run()
     method is called.
     """
 
-def setprofile(func: ProfileFunction | None):
+def setprofile(func: ProfileFunction?):
     """Set a profile function for all threads started from the threading module.
 
     The func will be passed to sys.setprofile() for each thread, before its
@@ -121,7 +121,7 @@ def setprofile(func: ProfileFunction | None):
     """
 
 if sys.version_info >= (3, 12):
-    def setprofile_all_threads(func: ProfileFunction | None):
+    def setprofile_all_threads(func: ProfileFunction?):
         """Set a profile function for all threads started from the threading module
         and all Python threads that are currently executing.
 
@@ -129,7 +129,7 @@ if sys.version_info >= (3, 12):
         run() method is called.
         """
 
-    def settrace_all_threads(func: TraceFunction | None):
+    def settrace_all_threads(func: TraceFunction?):
         """Set a trace function for all threads started from the threading module
         and all Python threads that are currently executing.
 
@@ -137,10 +137,10 @@ if sys.version_info >= (3, 12):
         method is called.
         """
 
-def gettrace() -> TraceFunction | None:
+def gettrace() -> TraceFunction?:
     """Get the trace function as set by threading.settrace()."""
 
-def getprofile() -> ProfileFunction | None:
+def getprofile() -> ProfileFunction?:
     """Get the profiler function as set by threading.setprofile()."""
 
 if sys.version_info >= (3, 15):
@@ -170,7 +170,7 @@ if sys.version_info >= (3, 15):
             Raises AttributeError if not a generator.
             """
 
-        def throw(self, typ: type[BaseException], val: BaseException | object = ..., tb: TracebackType | None = ...) -> Element:
+        def throw(self, typ: type[BaseException], val: BaseException | object = ..., tb: TracebackType? = ...) -> Element:
             """Call throw() on a generator.
 
             Raises AttributeError if not a generator.
@@ -258,7 +258,7 @@ class Thread:
 
     """
 
-    let ident: int | None
+    let ident: int?
 
     daemon: bool
     """A boolean value indicating whether this thread is a daemon thread.
@@ -276,13 +276,13 @@ class Thread:
         def __init__(
             self,
             group: None = None,
-            target: (...) -> object | None = None,
-            name: str | None = None,
+            target: (...) -> object? = None,
+            name: str? = None,
             args: Iterable[dynamic] = (),
-            kwargs: Mapping[str, dynamic] | None = None,
+            kwargs: Mapping[str, dynamic]? = None,
             *,
-            daemon: bool | None = None,
-            context: Context | None = None,
+            daemon: bool? = None,
+            context: Context? = None,
         ) -> None:
             """This constructor should always be called with keyword arguments. Arguments are:
 
@@ -318,12 +318,12 @@ class Thread:
         def __init__(
             self,
             group: None = None,
-            target: (...) -> object | None = None,
-            name: str | None = None,
+            target: (...) -> object? = None,
+            name: str? = None,
             args: Iterable[dynamic] = (),
-            kwargs: Mapping[str, dynamic] | None = None,
+            kwargs: Mapping[str, dynamic]? = None,
             *,
-            daemon: bool | None = None,
+            daemon: bool? = None,
         ) -> None:
             """This constructor should always be called with keyword arguments. Arguments are:
 
@@ -393,7 +393,7 @@ class Thread:
 
         """
 
-    let native_id: int | None
+    let native_id: int?
 
     def is_alive(self) -> bool:
         """Return whether the thread is alive.
@@ -500,7 +500,7 @@ final class _RLock:
         """
 
     __enter__ = acquire
-    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None)
+    def __exit__(self, t: type[BaseException]?, v: BaseException?, tb: TracebackType?)
 
     if sys.version_info >= (3, 14):
         def locked(self) -> bool:
@@ -523,7 +523,7 @@ class Condition:
     init(self, lock: Lock | _RLock | RLock | None = None)
     def __enter__(self) -> bool
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
     )
     def acquire(self, blocking: bool = True, timeout: int | float = -1) -> bool
     def release(self)
@@ -603,7 +603,7 @@ class Semaphore:
 
     _value: int
     init(self, value: int = 1)
-    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None)
+    def __exit__(self, t: type[BaseException]?, v: BaseException?, tb: TracebackType?)
     @ignorable_return_value
     def acquire(self, blocking: bool = True, timeout: int | float | None = None) -> bool:
         """Acquire a semaphore, decrementing the internal counter by one.
@@ -757,8 +757,8 @@ class Timer(Thread):
         self,
         interval: int | float,
         function: (...) -> object,
-        args: Iterable[dynamic] | None = None,
-        kwargs: Mapping[str, dynamic] | None = None,
+        args: Iterable[dynamic]? = None,
+        kwargs: Mapping[str, dynamic]? = None,
     )
     def cancel(self):
         """Stop the timer if it hasn't finished yet."""
@@ -778,7 +778,7 @@ class Barrier:
 
     let broken: bool
 
-    init(self, parties: int, action: (() -> None) | None = None, timeout: int | float | None = None):
+    init(self, parties: int, action: (() -> None)? = None, timeout: int | float | None = None):
         """Create a barrier, initialised to 'parties' threads.
 
         'action' is a callable which, when supplied, will be called by one of

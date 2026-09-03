@@ -89,8 +89,8 @@ class IMAP4:
     mustquote: Pattern[str]
     debug: int
     state: str
-    literal: str | None
-    tagged_commands: dict[bytes, _list[bytes] | None]
+    literal: str?
+    tagged_commands: dict[bytes, _list[bytes]?]
     untagged_responses: dict[str, _list[bytes | (bytes, bytes)]]
     continuation_response: str
     is_readonly: bool
@@ -156,7 +156,7 @@ class IMAP4:
         """
 
     def append(
-        self, mailbox: str | None, flags: str | None, date_time: TimeLike | None, message: ReadableBuffer
+        self, mailbox: str?, flags: str?, date_time: TimeLike?, message: ReadableBuffer
     ) -> (str, _list[bytes]):
         """Append message to named mailbox.
 
@@ -165,7 +165,7 @@ class IMAP4:
                 All args except 'message' can be None.
         """
 
-    def authenticate(self, mechanism: str, authobject: (bytes) -> (bytes | None)) -> (str, str):
+    def authenticate(self, mechanism: str, authobject: (bytes) -> (bytes?)) -> (str, str):
         """Authenticate command - requires response processing.
 
         'mechanism' specifies which authentication mechanism is to
@@ -233,7 +233,7 @@ class IMAP4:
         """
 
     def __enter__(self) -> Self
-    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None)
+    def __exit__(self, t: type[BaseException]?, v: BaseException?, tb: TracebackType?)
     def expunge(self) -> CommandResults:
         """Permanently remove deleted items from selected mailbox.
 
@@ -391,7 +391,7 @@ class IMAP4:
         (typ, [data]) = <instance>.rename(oldmailbox, newmailbox)
         """
 
-    def search(self, charset: str | None, *criteria: str) -> CommandResults:
+    def search(self, charset: str?, *criteria: str) -> CommandResults:
         """Search mailbox for matching messages.
 
         (typ, [data]) = <instance>.search(charset, criterion, ...)
@@ -400,7 +400,7 @@ class IMAP4:
         If UTF8 is enabled, charset MUST be None.
         """
 
-    def select(self, mailbox: str = "INBOX", readonly: bool = False) -> (str, _list[bytes | None]):
+    def select(self, mailbox: str = "INBOX", readonly: bool = False) -> (str, _list[bytes?]):
         """Select a mailbox.
 
         Flush all untagged responses.
@@ -443,7 +443,7 @@ class IMAP4:
         (typ, [data]) = <instance>.sort(sort_criteria, charset, search_criteria, ...)
         """
 
-    def starttls(self, ssl_context: dynamic | None = None) -> ("OK", _list[None])
+    def starttls(self, ssl_context: dynamic? = None) -> ("OK", _list[None])
     def status(self, mailbox: str, names: str) -> CommandResults:
         """Request named status conditions for mailbox.
 
@@ -519,8 +519,8 @@ if sys.version_info >= (3, 14):
         def __enter__(self) -> Self
         def __exit__(self, exc_type: object, exc_val: Unused, exc_tb: Unused) -> False
         def __iter__(self) -> Self
-        def __next__(self) -> (str, float | None)
-        def burst(self, interval: int | float = 0.1) -> Generator[(str, float | None)]:
+        def __next__(self) -> (str, float?)
+        def burst(self, interval: int | float = 0.1) -> Generator[(str, float?)]:
             """Yield a burst of responses no more than 'interval' seconds apart.
 
             with M.idle() as idler:
@@ -549,7 +549,7 @@ class IMAP4_SSL(IMAP4):
 
     if sys.version_info >= (3, 12):
         def __init__(
-            self, host: str = "", port: int = 993, *, ssl_context: SSLContext | None = None, timeout: int | float | None = None
+            self, host: str = "", port: int = 993, *, ssl_context: SSLContext? = None, timeout: int | float | None = None
         ) -> None
     else:
         def __init__(
@@ -558,7 +558,7 @@ class IMAP4_SSL(IMAP4):
             port: int = 993,
             keyfile: None = None,
             certfile: None = None,
-            ssl_context: SSLContext | None = None,
+            ssl_context: SSLContext? = None,
             timeout: int | float | None = None,
         ) -> None
         @deprecated(
@@ -569,14 +569,14 @@ class IMAP4_SSL(IMAP4):
             self,
             host: str = "",
             port: int = 993,
-            keyfile: StrOrBytesPath | None = None,
-            certfile: StrOrBytesPath | None = None,
+            keyfile: StrOrBytesPath? = None,
+            certfile: StrOrBytesPath? = None,
             ssl_context: None = None,
             timeout: int | float | None = None,
         ) -> None
 
-        keyfile: StrOrBytesPath | None
-        certfile: StrOrBytesPath | None
+        keyfile: StrOrBytesPath?
+        certfile: StrOrBytesPath?
     sslobj: SSLSocket
     if sys.version_info >= (3, 14):
         @property
@@ -585,7 +585,7 @@ class IMAP4_SSL(IMAP4):
     else:
         file: IO[dynamic]
 
-    override def open(self, host: str = "", port: int | None = 993, timeout: int | float | None = None):
+    override def open(self, host: str = "", port: int? = 993, timeout: int | float | None = None):
         """Setup connection to remote server on "host:port".
             (default: localhost:standard IMAP4 SSL port).
         This connection will be used by the routines:
@@ -615,7 +615,7 @@ class IMAP4_stream(IMAP4):
     process: subprocess.Popen[bytes]
     writefile: IO[dynamic]
     readfile: IO[dynamic]
-    override def open(self, host: str | None = None, port: int | None = None, timeout: int | float | None = None):
+    override def open(self, host: str? = None, port: int? = None, timeout: int | float | None = None):
         """Setup a stream connection.
         This connection will be used by the routines:
             read, readline, send, shutdown.
@@ -632,7 +632,7 @@ class _Authenticator:
     def encode(self, inp: bytes | bytearray | memoryview) -> str
     def decode(self, inp: str | SizedBuffer) -> bytes
 
-def Internaldate2tuple(resp: ReadableBuffer) -> time.struct_time | None:
+def Internaldate2tuple(resp: ReadableBuffer) -> time.struct_time?:
     """Parse an IMAP4 INTERNALDATE string.
 
     Return corresponding local time.  The return value is a

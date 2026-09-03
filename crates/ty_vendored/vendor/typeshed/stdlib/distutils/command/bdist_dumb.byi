@@ -12,7 +12,7 @@ from ..cmd import Command
 
 class bdist_dumb(Command):
     description: str
-    user_options: ClassVar[list[(str, str | None, str)]]
+    user_options: ClassVar[list[(str, str?, str)]]
     boolean_options: ClassVar[list[str]]
     default_format: ClassVar[dict[str, str]]
     bdist_dir: Incomplete

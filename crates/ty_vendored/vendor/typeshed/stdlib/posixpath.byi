@@ -89,7 +89,7 @@ supports_unicode_filenames: bool
 curdir: literal str
 pardir: literal str
 sep: literal str
-altsep: literal str | None
+altsep: literal str?
 extsep: literal str
 pathsep: literal str
 defpath: literal str
@@ -172,10 +172,10 @@ else:
         """
     def realpath(filename: AnyStr, *, strict: bool | _AllowMissingType = False) -> AnyStr
 
-def relpath(path: literal str, start: literal str | None = None) -> literal str:
+def relpath(path: literal str, start: literal str? = None) -> literal str:
     """Return a relative version of a path"""
-def relpath(path: BytesPath, start: BytesPath | None = None) -> bytes
-def relpath(path: StrPath, start: StrPath | None = None) -> str
+def relpath(path: BytesPath, start: BytesPath? = None) -> bytes
+def relpath(path: StrPath, start: StrPath? = None) -> str
 
 if sys.version_info >= (3, 15):
     def split(p: PathLike[AnyStr], /) -> (AnyStr, AnyStr):

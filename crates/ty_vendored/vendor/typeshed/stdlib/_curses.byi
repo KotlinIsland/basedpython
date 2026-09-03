@@ -764,7 +764,7 @@ def setsyx(y: int, x: int, /):
     If y and x are both -1, then leaveok is set.
     """
 
-def setupterm(term: str | None = None, fd: int = -1):
+def setupterm(term: str? = None, fd: int = -1):
     """Initialize the terminal.
 
     term
@@ -812,7 +812,7 @@ def tigetnum(capname: str, /) -> int:
     if it is canceled or absent from the terminal description.
     """
 
-def tigetstr(capname: str, /) -> bytes | None:
+def tigetstr(capname: str, /) -> bytes?:
     """Return the value of the string capability.
 
       capname

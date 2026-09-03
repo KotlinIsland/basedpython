@@ -72,7 +72,7 @@ if sys.version_info >= (3, 11):
         # The documentation and runtime protocol allows *args, **kwargs arguments,
         # but this would mean that all implementers would have to support them,
         # which is not the case.
-        abstract def open(self, mode: "r" = "r", *, encoding: str | None = None, errors: str | None = None) -> IO[str]:
+        abstract def open(self, mode: "r" = "r", *, encoding: str? = None, errors: str? = None) -> IO[str]:
             """
             mode may be 'r' or 'rb' to open as text or binary. Return a handle
             suitable for reading (same as pathlib.Path.open).
@@ -99,12 +99,12 @@ if sys.version_info >= (3, 11):
             """
 
         if sys.version_info >= (3, 15):
-            abstract def read_text(self, encoding: str | None = None, errors: str | None = None) -> str:
+            abstract def read_text(self, encoding: str? = None, errors: str? = None) -> str:
                 """
                 Read contents of self as text
                 """
         else:
-            abstract def read_text(self, encoding: str | None = None) -> str:
+            abstract def read_text(self, encoding: str? = None) -> str:
                 """
                 Read contents of self as text
                 """

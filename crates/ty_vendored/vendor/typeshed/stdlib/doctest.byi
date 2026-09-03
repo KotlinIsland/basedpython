@@ -160,7 +160,7 @@ class Example:
 
     source: str
     want: str
-    exc_msg: str | None
+    exc_msg: str?
     lineno: int
     indent: int
     options: dict[int, bool]
@@ -168,10 +168,10 @@ class Example:
         self,
         source: str,
         want: str,
-        exc_msg: str | None = None,
+        exc_msg: str? = None,
         lineno: int = 0,
         indent: int = 0,
-        options: dict[int, bool] | None = None,
+        options: dict[int, bool]? = None,
     )
     override def __hash__(self) -> int
     override def __eq__(self, other: object) -> bool
@@ -204,17 +204,17 @@ class DocTest:
     examples: list[Example]
     globs: dict[str, dynamic]
     name: str
-    filename: str | None
-    lineno: int | None
-    docstring: str | None
+    filename: str?
+    lineno: int?
+    docstring: str?
     init(
         self,
         examples: list[Example],
         globs: dict[str, dynamic],
         name: str,
-        filename: str | None,
-        lineno: int | None,
-        docstring: str | None,
+        filename: str?,
+        lineno: int?,
+        docstring: str?,
     ):
         """
         Create a new DocTest containing the given examples.  The
@@ -239,7 +239,7 @@ class DocTestParser:
         used for error messages.
         """
 
-    def get_doctest(self, string: str, globs: dict[str, dynamic], name: str, filename: str | None, lineno: int | None) -> DocTest:
+    def get_doctest(self, string: str, globs: dict[str, dynamic], name: str, filename: str?, lineno: int?) -> DocTest:
         """
         Extract all doctest examples from the given string, and
         collect them into a `DocTest` object.
@@ -292,10 +292,10 @@ class DocTestFinder:
     def find(
         self,
         obj: object,
-        name: str | None = None,
+        name: str? = None,
         module: None | bool | types.ModuleType = None,
-        globs: dict[str, dynamic] | None = None,
-        extraglobs: dict[str, dynamic] | None = None,
+        globs: dict[str, dynamic]? = None,
+        extraglobs: dict[str, dynamic]? = None,
     ) -> list[DocTest]:
         """
         Return a list of the DocTests that are defined by the given
@@ -405,7 +405,7 @@ class DocTestRunner:
     if sys.version_info >= (3, 13):
         skips: int
     test: DocTest
-    init(self, checker: OutputChecker | None = None, verbose: bool | None = None, optionflags: int = 0):
+    init(self, checker: OutputChecker? = None, verbose: bool? = None, optionflags: int = 0):
         """
         Create a new test runner.
 
@@ -446,7 +446,7 @@ class DocTestRunner:
         """
 
     def run(
-        self, test: DocTest, compileflags: int | None = None, out: Out | None = None, clear_globs: bool = True
+        self, test: DocTest, compileflags: int? = None, out: Out? = None, clear_globs: bool = True
     ) -> TestResults:
         """
         Run the examples in `test`, and display the results using the
@@ -468,7 +468,7 @@ class DocTestRunner:
         the `DocTestRunner.report_*` methods.
         """
 
-    def summarize(self, verbose: bool | None = None) -> TestResults:
+    def summarize(self, verbose: bool? = None) -> TestResults:
         """
         Print a summary of all the test cases that have been run by
         this DocTestRunner, and return a TestResults instance.
@@ -633,16 +633,16 @@ class DebugRunner(DocTestRunner):
 
     """
 
-master: DocTestRunner | None
+master: DocTestRunner?
 
 def testmod(
-    m: types.ModuleType | None = None,
-    name: str | None = None,
-    globs: dict[str, dynamic] | None = None,
-    verbose: bool | None = None,
+    m: types.ModuleType? = None,
+    name: str? = None,
+    globs: dict[str, dynamic]? = None,
+    verbose: bool? = None,
     report: bool = True,
     optionflags: int = 0,
-    extraglobs: dict[str, dynamic] | None = None,
+    extraglobs: dict[str, dynamic]? = None,
     raise_on_error: bool = False,
     exclude_empty: bool = False,
 ) -> TestResults:
@@ -713,16 +713,16 @@ def testmod(
 def testfile(
     filename: str,
     module_relative: bool = True,
-    name: str | None = None,
+    name: str? = None,
     package: None | str | types.ModuleType = None,
-    globs: dict[str, dynamic] | None = None,
-    verbose: bool | None = None,
+    globs: dict[str, dynamic]? = None,
+    verbose: bool? = None,
     report: bool = True,
     optionflags: int = 0,
-    extraglobs: dict[str, dynamic] | None = None,
+    extraglobs: dict[str, dynamic]? = None,
     raise_on_error: bool = False,
     parser: DocTestParser = ...,
-    encoding: str | None = None,
+    encoding: str? = None,
 ) -> TestResults:
     """
     Test examples in the given file.  Return (#failures, #tests).
@@ -806,7 +806,7 @@ def run_docstring_examples(
     globs: dict[str, dynamic],
     verbose: bool = False,
     name: str = "NoName",
-    compileflags: int | None = None,
+    compileflags: int? = None,
     optionflags: int = 0,
 ):
     """
@@ -858,9 +858,9 @@ class DocTestCase(unittest.TestCase):
         self,
         test: DocTest,
         optionflags: int = 0,
-        setUp: ((DocTest) -> object) | None = None,
-        tearDown: ((DocTest) -> object) | None = None,
-        checker: OutputChecker | None = None,
+        setUp: ((DocTest) -> object)? = None,
+        tearDown: ((DocTest) -> object)? = None,
+        checker: OutputChecker? = None,
     )
     def runTest(self)
     def format_failure(self, err: str) -> str
@@ -875,9 +875,9 @@ class _DocTestSuite(unittest.TestSuite)
 
 def DocTestSuite(
     module: None | str | types.ModuleType = None,
-    globs: dict[str, dynamic] | None = None,
-    extraglobs: dict[str, dynamic] | None = None,
-    test_finder: DocTestFinder | None = None,
+    globs: dict[str, dynamic]? = None,
+    extraglobs: dict[str, dynamic]? = None,
+    test_finder: DocTestFinder? = None,
     **options: dynamic,
 ) -> _DocTestSuite:
     """
@@ -921,9 +921,9 @@ def DocFileTest(
     path: str,
     module_relative: bool = True,
     package: None | str | types.ModuleType = None,
-    globs: dict[str, dynamic] | None = None,
+    globs: dict[str, dynamic]? = None,
     parser: DocTestParser = ...,
-    encoding: str | None = None,
+    encoding: str? = None,
     **options: dynamic,
 ) -> DocFileCase
 def DocFileSuite(*paths: str, **kw: dynamic) -> _DocTestSuite:
@@ -1050,10 +1050,10 @@ def testsource(module: None | str | types.ModuleType, name: str) -> str:
     with the doc string with tests to be debugged.
     """
 
-def debug_src(src: str, pm: bool = False, globs: dict[str, dynamic] | None = None):
+def debug_src(src: str, pm: bool = False, globs: dict[str, dynamic]? = None):
     """Debug a single doctest docstring, in argument `src`"""
 
-def debug_script(src: str, pm: bool = False, globs: dict[str, dynamic] | None = None):
+def debug_script(src: str, pm: bool = False, globs: dict[str, dynamic]? = None):
     """Debug a test script.  `src` is the script, as a string."""
 
 def debug(module: None | str | types.ModuleType, name: str, pm: bool = False):

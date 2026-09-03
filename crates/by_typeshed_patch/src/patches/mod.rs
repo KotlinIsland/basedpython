@@ -20,6 +20,7 @@ pub mod init_shorthand;
 pub mod literal_unwrap;
 pub mod mapping;
 pub mod numeric_promotion;
+pub mod optional_marker;
 pub mod output_widening;
 pub(crate) mod private_names;
 pub mod private_protocols;

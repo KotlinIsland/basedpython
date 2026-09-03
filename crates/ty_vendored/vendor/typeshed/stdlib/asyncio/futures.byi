@@ -17,5 +17,5 @@ else:
     __all__ = ("Future", "wrap_future", "isfuture")
 
 
-def wrap_future[Element](future: _ConcurrentFuture[Element] | Future[Element], *, loop: AbstractEventLoop | None = None) -> Future[Element]:
+def wrap_future[Element](future: _ConcurrentFuture[Element] | Future[Element], *, loop: AbstractEventLoop? = None) -> Future[Element]:
     """Wrap concurrent.futures.Future object."""

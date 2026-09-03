@@ -11,9 +11,9 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
     _closed: bool  # undocumented
     _protocol: protocols.SubprocessProtocol  # undocumented
     _loop: events.AbstractEventLoop  # undocumented
-    _proc: subprocess.Popen[dynamic] | None  # undocumented
-    _pid: int | None  # undocumented
-    _returncode: int | None  # undocumented
+    _proc: subprocess.Popen[dynamic]?  # undocumented
+    _pid: int?  # undocumented
+    _returncode: int?  # undocumented
     _exit_waiters: list[futures.Future[dynamic]]  # undocumented
     _pending_calls: deque[((...) -> dynamic, (*: dynamic))]  # undocumented
     _pipes: dict[int, _File]  # undocumented
@@ -28,8 +28,8 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         stdout: _File,
         stderr: _File,
         bufsize: int,
-        waiter: futures.Future[dynamic] | None = None,
-        extra: dynamic | None = None,
+        waiter: futures.Future[dynamic]? = None,
+        extra: dynamic? = None,
         **kwargs: dynamic,
     )
     def _start(
@@ -42,13 +42,13 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         bufsize: int,
         **kwargs: dynamic,
     )  # undocumented
-    override def get_pid(self) -> int | None
+    override def get_pid(self) -> int?
     override def get_pipe_transport(self, fd: int) -> _File
     def _check_proc(self)  # undocumented
     override def send_signal(self, signal: int)
-    async def _connect_pipes(self, waiter: futures.Future[dynamic] | None) -> None  # undocumented
+    async def _connect_pipes(self, waiter: futures.Future[dynamic]?) -> None  # undocumented
     def _call(self, cb: (...) -> object, *data: dynamic)  # undocumented
-    def _pipe_connection_lost(self, fd: int, exc: BaseException | None)  # undocumented
+    def _pipe_connection_lost(self, fd: int, exc: BaseException?)  # undocumented
     def _pipe_data_received(self, fd: int, data: bytes)  # undocumented
     def _process_exited(self, returncode: int)  # undocumented
     async def _wait(self) -> int:  # undocumented
@@ -58,7 +58,7 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         """
 
     def _try_finish(self)  # undocumented
-    def _call_connection_lost(self, exc: BaseException | None)  # undocumented
+    def _call_connection_lost(self, exc: BaseException?)  # undocumented
     def __del__(self)
 
 class WriteSubprocessPipeProto(protocols.BaseProtocol):  # undocumented

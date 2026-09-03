@@ -433,7 +433,7 @@ class _TypedDict(Mapping[str, object], metaclass=abc.ABCMeta):
     __readonly_keys__: ClassVar[frozenset[str]]
     __mutable_keys__: ClassVar[frozenset[str]]
     # PEP 728
-    __closed__: ClassVar[bool | None]
+    __closed__: ClassVar[bool?]
     __extra_items__: ClassVar[AnnotationForm]
     def copy(self) -> Self
     # Using Never so that only calls using mypy plugin hook that specialize the signature
@@ -466,7 +466,7 @@ if sys.version_info >= (3, 13):
     from typing export get_type_hints
 else:
     def get_type_hints(
-        obj: dynamic, globalns: dict[str, dynamic] | None = None, localns: Mapping[str, dynamic] | None = None, include_extras: bool = False
+        obj: dynamic, globalns: dict[str, dynamic]? = None, localns: Mapping[str, dynamic]? = None, include_extras: bool = False
     ) -> dict[str, AnnotationForm]:
         """Return type hints for an object.
 
@@ -535,7 +535,7 @@ def get_origin(tp: UnionType) -> type[UnionType]:
     """
 def get_origin(tp: GenericAlias) -> type
 def get_origin(tp: ParamSpecArgs | ParamSpecKwargs) -> ParamSpec
-def get_origin(tp: AnnotationForm) -> AnnotationForm | None
+def get_origin(tp: AnnotationForm) -> AnnotationForm?
 
 Annotated: _SpecialForm
 """Add context-specific metadata to a type.
@@ -1200,16 +1200,16 @@ else:
         """
 
         message: literal str
-        category: type[Warning] | None
+        category: type[Warning]?
         stacklevel: int
-        init(self, message: literal str, /, *, category: type[Warning] | None = ..., stacklevel: int = 1)
+        init(self, message: literal str, /, *, category: type[Warning]? = ..., stacklevel: int = 1)
         def __call__(self, arg: _T, /) -> _T
 
     final class TypeVar:
         """Type variable."""
 
         let __name__: str
-        let __bound__: AnnotationForm | None
+        let __bound__: AnnotationForm?
         let __constraints__: (*: AnnotationForm)
         let __covariant__: bool
         let __contravariant__: bool
@@ -1219,7 +1219,7 @@ else:
             self,
             name: str,
             *constraints: AnnotationForm,
-            bound: AnnotationForm | None = None,
+            bound: AnnotationForm? = None,
             covariant: bool = False,
             contravariant: bool = False,
             default: AnnotationForm = ...,
@@ -1240,7 +1240,7 @@ else:
         """Parameter specification."""
 
         let __name__: str
-        let __bound__: AnnotationForm | None
+        let __bound__: AnnotationForm?
         let __covariant__: bool
         let __contravariant__: bool
         let __infer_variance__: bool
@@ -1330,7 +1330,7 @@ else:
         """Type variable tuple."""
 
         let __name__: str
-        let __bound__: AnnotationForm | None
+        let __bound__: AnnotationForm?
         let __covariant__: bool
         let __contravariant__: bool
         let __infer_variance__: bool
@@ -1340,7 +1340,7 @@ else:
                 cls,
                 name: str,
                 *,
-                bound: AnnotationForm | None = None,
+                bound: AnnotationForm? = None,
                 covariant: bool = False,
                 contravariant: bool = False,
                 infer_variance: bool = False,
@@ -1351,7 +1351,7 @@ else:
                 self,
                 name: str,
                 *,
-                bound: AnnotationForm | None = None,
+                bound: AnnotationForm? = None,
                 covariant: bool = False,
                 contravariant: bool = False,
                 infer_variance: bool = False,
@@ -1366,7 +1366,7 @@ else:
         def __typing_prepare_subst__(self, alias: dynamic, args: dynamic, /) -> (*: dynamic)
         if sys.version_info >= (3, 14):
             @property
-            def evaluate_default(self) -> EvaluateFunc | None
+            def evaluate_default(self) -> EvaluateFunc?
 
 # TypeAliasType was added in Python 3.12, but had significant changes in 3.14.
 if sys.version_info >= (3, 14):
@@ -1408,7 +1408,7 @@ else:
         let __parameters__: (*: TypeVar | ParamSpec | AnnotationForm)
         let __name__: str
         # It's writable on types, but not on instances of TypeAliasType.
-        let __module__: str | None
+        let __module__: str?
         # Returns typing._GenericAlias, which isn't stubbed.
         def __getitem__(self, parameters: Incomplete | (*: Incomplete)) -> AnnotationForm
         def __init_subclass__(cls, *args: Unused, **kwargs: Unused) -> Never
@@ -1484,8 +1484,8 @@ else:
     def get_annotations(
         obj: dynamic,  # any object with __annotations__ or __annotate__
         *,
-        globals: Mapping[str, dynamic] | None = None,  # value types depend on the key
-        locals: Mapping[str, dynamic] | None = None,  # value types depend on the key
+        globals: Mapping[str, dynamic]? = None,  # value types depend on the key
+        locals: Mapping[str, dynamic]? = None,  # value types depend on the key
         eval_str: bool = False,
         format: Format.STRING,
     ) -> dict[str, str]:
@@ -1527,16 +1527,16 @@ else:
     def get_annotations(
         obj: dynamic,  # any object with __annotations__ or __annotate__
         *,
-        globals: Mapping[str, dynamic] | None = None,  # value types depend on the key
-        locals: Mapping[str, dynamic] | None = None,  # value types depend on the key
+        globals: Mapping[str, dynamic]? = None,  # value types depend on the key
+        locals: Mapping[str, dynamic]? = None,  # value types depend on the key
         eval_str: bool = False,
         format: Format.FORWARDREF,
     ) -> dict[str, AnnotationForm | ForwardRef]
     def get_annotations(
         obj: dynamic,  # any object with __annotations__ or __annotate__
         *,
-        globals: Mapping[str, dynamic] | None = None,  # value types depend on the key
-        locals: Mapping[str, dynamic] | None = None,  # value types depend on the key
+        globals: Mapping[str, dynamic]? = None,  # value types depend on the key
+        locals: Mapping[str, dynamic]? = None,  # value types depend on the key
         eval_str: bool = False,
         format: Format = Format.VALUE,  # noqa: Y011
     ) -> dict[str, AnnotationForm]
@@ -1545,9 +1545,9 @@ else:
         forward_ref: ForwardRef,
         *,
         owner: (...) -> object | type[object] | ModuleType | None = None,  # any callable, class, or module
-        globals: Mapping[str, dynamic] | None = None,  # value types depend on the key
-        locals: Mapping[str, dynamic] | None = None,  # value types depend on the key
-        type_params: Iterable[TypeVar | ParamSpec | TypeVarTuple] | None = None,
+        globals: Mapping[str, dynamic]? = None,  # value types depend on the key
+        locals: Mapping[str, dynamic]? = None,  # value types depend on the key
+        type_params: Iterable[TypeVar | ParamSpec | TypeVarTuple]? = None,
         format: Format.STRING,
         _recursive_guard: Container[str] = ...,
     ) -> str:
@@ -1577,9 +1577,9 @@ else:
         forward_ref: ForwardRef,
         *,
         owner: (...) -> object | type[object] | ModuleType | None = None,  # any callable, class, or module
-        globals: Mapping[str, dynamic] | None = None,  # value types depend on the key
-        locals: Mapping[str, dynamic] | None = None,  # value types depend on the key
-        type_params: Iterable[TypeVar | ParamSpec | TypeVarTuple] | None = None,
+        globals: Mapping[str, dynamic]? = None,  # value types depend on the key
+        locals: Mapping[str, dynamic]? = None,  # value types depend on the key
+        type_params: Iterable[TypeVar | ParamSpec | TypeVarTuple]? = None,
         format: Format.FORWARDREF,
         _recursive_guard: Container[str] = ...,
     ) -> AnnotationForm | ForwardRef
@@ -1587,10 +1587,10 @@ else:
         forward_ref: ForwardRef,
         *,
         owner: (...) -> object | type[object] | ModuleType | None = None,  # any callable, class, or module
-        globals: Mapping[str, dynamic] | None = None,  # value types depend on the key
-        locals: Mapping[str, dynamic] | None = None,  # value types depend on the key
-        type_params: Iterable[TypeVar | ParamSpec | TypeVarTuple] | None = None,
-        format: Format | None = None,
+        globals: Mapping[str, dynamic]? = None,  # value types depend on the key
+        locals: Mapping[str, dynamic]? = None,  # value types depend on the key
+        type_params: Iterable[TypeVar | ParamSpec | TypeVarTuple]? = None,
+        format: Format? = None,
         _recursive_guard: Container[str] = ...,
     ) -> AnnotationForm
 
@@ -1614,7 +1614,7 @@ else:
         shall be assigned.
         """
 
-        init(self, name: str, /, *, repr: str | None = None)
+        init(self, name: str, /, *, repr: str? = None)
         __name__: str
         __module__: str
         if sys.version_info >= (3, 14):

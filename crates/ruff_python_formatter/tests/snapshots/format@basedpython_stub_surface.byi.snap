@@ -34,6 +34,14 @@ class Socket:
     let type: int
     let match: str
     var case: bytes
+
+# the vendored typeshed spells an optional with the postfix marker, in every
+# position a stub writes one
+class Cursor:
+    let description: str?
+    def fetchone(self) -> (int, str)?
+    def execute(self, sql: str, parameters: Sequence[dynamic]? = None) -> Self
+    def setinputsizes(self, sizes: literal str? = None) -> None
 ```
 
 ## Output
@@ -68,4 +76,12 @@ class Socket:
     let type: int
     let match: str
     var case: bytes
+
+# the vendored typeshed spells an optional with the postfix marker, in every
+# position a stub writes one
+class Cursor:
+    let description: str?
+    def fetchone(self) -> (int, str)?
+    def execute(self, sql: str, parameters: Sequence[dynamic]? = None) -> Self
+    def setinputsizes(self, sizes: literal str? = None) -> None
 ```

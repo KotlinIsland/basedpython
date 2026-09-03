@@ -7,8 +7,8 @@ from . import events
 __all__ = ("staggered_race",)
 
 async def staggered_race(
-    coro_fns: Iterable[() -> Awaitable[dynamic]], delay: int | float | None, *, loop: events.AbstractEventLoop | None = None
-) -> (dynamic, int | None, list[Exception | None]):
+    coro_fns: Iterable[() -> Awaitable[dynamic]], delay: int | float | None, *, loop: events.AbstractEventLoop? = None
+) -> (dynamic, int?, list[Exception?]):
     """Run coroutines with staggered start times and take the first to finish.
 
     This method takes an iterable of coroutine functions. The first one is

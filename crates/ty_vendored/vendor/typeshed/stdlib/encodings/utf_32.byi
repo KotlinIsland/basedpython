@@ -7,7 +7,7 @@ from _typeshed import ReadableBuffer
 
 encode = codecs.utf_32_encode
 
-def decode(input: ReadableBuffer, errors: str | None = "strict") -> (str, int)
+def decode(input: ReadableBuffer, errors: str? = "strict") -> (str, int)
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
     override def encode(self, input: str, final: bool = False) -> bytes

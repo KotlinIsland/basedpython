@@ -11,8 +11,8 @@ class Header:
         self,
         s: bytes | bytearray | str | None = None,
         charset: Charset | str | None = None,
-        maxlinelen: int | None = None,
-        header_name: str | None = None,
+        maxlinelen: int? = None,
+        header_name: str? = None,
         continuation_ws: str = " ",
         errors: str = "strict",
     ):
@@ -65,7 +65,7 @@ class Header:
         call if s is a byte string.
         """
 
-    def encode(self, splitchars: str = ";, \t", maxlinelen: int | None = None, linesep: str = "\n") -> str:
+    def encode(self, splitchars: str = ";, \t", maxlinelen: int? = None, linesep: str = "\n") -> str:
         """Encode a message header into an RFC-compliant format.
 
         There are many issues involved in converting a given string for use in
@@ -106,7 +106,7 @@ class Header:
 # decode_header() either returns list[tuple[str, None]] if the header
 # contains no encoded parts, or list[tuple[bytes, str | None]] if the header
 # contains at least one encoded part.
-def decode_header(header: Header | str) -> list[(dynamic, dynamic | None)]:
+def decode_header(header: Header | str) -> list[(dynamic, dynamic?)]:
     """Decode a message header value without converting charset.
 
     For historical reasons, this function may return either:
@@ -128,9 +128,9 @@ def decode_header(header: Header | str) -> list[(dynamic, dynamic | None)]:
     """
 
 def make_header(
-    decoded_seq: Iterable[(bytes | bytearray | str, str | None)],
-    maxlinelen: int | None = None,
-    header_name: str | None = None,
+    decoded_seq: Iterable[(bytes | bytearray | str, str?)],
+    maxlinelen: int? = None,
+    header_name: str? = None,
     continuation_ws: str = " ",
 ) -> Header:
     """Create a Header from a sequence of pairs as returned by decode_header()

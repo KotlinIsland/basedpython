@@ -12,7 +12,7 @@ protocol LoaderProtocol:
     def load_module(self, fullname: str, /) -> ModuleType
 
 protocol MetaPathFinderProtocol:
-    def find_spec(self, fullname: str, path: Sequence[str] | None, target: ModuleType | None = ..., /) -> ModuleSpec | None
+    def find_spec(self, fullname: str, path: Sequence[str]?, target: ModuleType? = ..., /) -> ModuleSpec?
 
 protocol PathEntryFinderProtocol:
-    def find_spec(self, fullname: str, target: ModuleType | None = ..., /) -> ModuleSpec | None
+    def find_spec(self, fullname: str, target: ModuleType? = ..., /) -> ModuleSpec?

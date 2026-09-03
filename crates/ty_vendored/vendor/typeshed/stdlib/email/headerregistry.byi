@@ -57,7 +57,7 @@ class BaseHeader(str):
     """
 
     # max_count is actually more of an abstract ClassVar (not defined on the base class, but expected to be defined in subclasses)
-    max_count: ClassVar[1 | None]
+    max_count: ClassVar[1?]
     let name: str
     let defects: (*: MessageDefect)
     def __new__(cls, name: str, value: dynamic) -> Self
@@ -80,7 +80,7 @@ class BaseHeader(str):
         """
 
 class UnstructuredHeader:
-    max_count: ClassVar[1 | None]
+    max_count: ClassVar[1?]
     static def value_parser(value: str) -> UnstructuredTokenList:
         """unstructured = (*([FWS] vchar) *WSP) / obs-unstruct
            obs-unstruct = *((*LF *CR *(obs-utext) *LF *CR)) / FWS)
@@ -116,9 +116,9 @@ class DateHeader:
     which means it is the output of format_datetime on the datetime.
     """
 
-    max_count: ClassVar[1 | None]
+    max_count: ClassVar[1?]
     def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect], datetime: _datetime)
-    let datetime: _datetime | None
+    let datetime: _datetime?
     static def value_parser(value: str) -> UnstructuredTokenList:
         """unstructured = (*([FWS] vchar) *WSP) / obs-unstruct
            obs-unstruct = *((*LF *CR *(obs-utext) *LF *CR)) / FWS)
@@ -145,7 +145,7 @@ class UniqueDateHeader(DateHeader):
     max_count: ClassVar[1]
 
 class AddressHeader:
-    max_count: ClassVar[1 | None]
+    max_count: ClassVar[1?]
     def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect], groups: Iterable[Group])
     let groups: (*: Group)
     let addresses: (*: Address)
@@ -169,13 +169,13 @@ class MIMEVersionHeader:
         *,
         parse_tree: TokenList,
         defects: Iterable[MessageDefect],
-        version: str | None,
-        major: int | None,
-        minor: int | None,
+        version: str?,
+        major: int?,
+        minor: int?,
     )
-    let version: str | None
-    let major: int | None
-    let minor: int | None
+    let version: str?
+    let major: int?
+    let minor: int?
     static def value_parser(value: str) -> MIMEVersion:
         """mime-version = [CFWS] 1*digit [CFWS] "." [CFWS] 1*digit [CFWS]"""
 
@@ -201,7 +201,7 @@ class ContentTypeHeader(ParameterizedMIMEHeader):
 
 class ContentDispositionHeader(ParameterizedMIMEHeader):
     # init is redefined but has the same signature as parent class, so is omitted from the stub
-    let content_disposition: str | None
+    let content_disposition: str?
     static def value_parser(value: str) -> ContentDisposition:
         """disposition-type *( ";" parameter )"""
 
@@ -233,7 +233,7 @@ if sys.version_info >= (3, 13):
 
 @type_check_only
 private protocol HeaderParser:
-    max_count: ClassVar[1 | None]
+    max_count: ClassVar[1?]
     static def value_parser(value: str, /) -> TokenList
     class def parse(cls, value: str, kwds: dict[str, dynamic], /)
 
@@ -279,7 +279,7 @@ class Address:
     let addr_spec: str
 
     init(
-        self, display_name: str = "", username: str | None = "", domain: str | None = "", addr_spec: str | None = None
+        self, display_name: str = "", username: str? = "", domain: str? = "", addr_spec: str? = None
     ):
         """Create an object representing a full email address.
 
@@ -301,9 +301,9 @@ class Address:
     override def __eq__(self, other: object) -> bool
 
 class Group:
-    let display_name: str | None
+    let display_name: str?
     let addresses: (*: Address)
-    init(self, display_name: str | None = None, addresses: Iterable[Address] | None = None):
+    init(self, display_name: str? = None, addresses: Iterable[Address]? = None):
         """Create an object representing an address group.
 
         An address group consists of a display_name followed by colon and a

@@ -69,7 +69,7 @@ if sys.version_info >= (3, 11):
 if sys.version_info >= (3, 12):
     __all__ += ["getHandlerByName", "getHandlerNames"]
 
-private type SysExcInfoType = (type[BaseException], BaseException, TracebackType | None) | (None, None, None)
+private type SysExcInfoType = (type[BaseException], BaseException, TracebackType?) | (None, None, None)
 type _ExcInfoType = None | bool | SysExcInfoType | BaseException
 private type ArgsType = (*: object) | Mapping[str, object]
 type _Level = int | str
@@ -92,7 +92,7 @@ raiseExceptions: bool
 logThreads: bool
 logMultiprocessing: bool
 logProcesses: bool
-_srcfile: str | None
+_srcfile: str?
 
 def currentframe() -> FrameType
 
@@ -167,8 +167,8 @@ class Manager:  # undocumented
     disable: int
     emittedNoHandlerWarning: bool
     loggerDict: dict[str, Logger | PlaceHolder]
-    loggerClass: type[Logger] | None
-    logRecordFactory: (...) -> LogRecord | None
+    loggerClass: type[Logger]?
+    logRecordFactory: (...) -> LogRecord?
     init(self, rootnode: RootLogger):
         """
         Initialize the manager with the root node of the logger hierarchy.
@@ -215,7 +215,7 @@ class Logger(Filterer):
 
     name: str  # undocumented
     level: int  # undocumented
-    parent: Logger | None  # undocumented
+    parent: Logger?  # undocumented
     propagate: bool
     handlers: list[Handler]  # undocumented
     disabled: bool  # undocumented
@@ -270,7 +270,7 @@ class Logger(Filterer):
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
     ):
         """
         Log 'msg % args' with severity 'DEBUG'.
@@ -288,7 +288,7 @@ class Logger(Filterer):
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
     ):
         """
         Log 'msg % args' with severity 'INFO'.
@@ -306,7 +306,7 @@ class Logger(Filterer):
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
     ):
         """
         Log 'msg % args' with severity 'WARNING'.
@@ -325,7 +325,7 @@ class Logger(Filterer):
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
     ) -> None
     def error(
         self,
@@ -334,7 +334,7 @@ class Logger(Filterer):
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
     ):
         """
         Log 'msg % args' with severity 'ERROR'.
@@ -352,7 +352,7 @@ class Logger(Filterer):
         exc_info: _ExcInfoType = True,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
     ):
         """
         Convenience method for logging an ERROR with exception information.
@@ -365,7 +365,7 @@ class Logger(Filterer):
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
     ):
         """
         Log 'msg % args' with severity 'CRITICAL'.
@@ -384,7 +384,7 @@ class Logger(Filterer):
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
     ):
         """
         Log 'msg % args' with the integer severity 'level'.
@@ -400,8 +400,8 @@ class Logger(Filterer):
         level: int,
         msg: object,
         args: ArgsType,
-        exc_info: _ExcInfoType | None = None,
-        extra: Mapping[str, object] | None = None,
+        exc_info: _ExcInfoType? = None,
+        extra: Mapping[str, object]? = None,
         stack_info: bool = False,
         stacklevel: int = 1,
     ):  # undocumented
@@ -421,7 +421,7 @@ class Logger(Filterer):
         Remove the specified handler from this logger.
         """
 
-    def findCaller(self, stack_info: bool = False, stacklevel: int = 1) -> (str, int, str, str | None):
+    def findCaller(self, stack_info: bool = False, stacklevel: int = 1) -> (str, int, str, str?):
         """
         Find the stack frame of the caller so that we can note the source
         file name, line number and function name.
@@ -443,10 +443,10 @@ class Logger(Filterer):
         lno: int,
         msg: object,
         args: ArgsType,
-        exc_info: SysExcInfoType | None,
-        func: str | None = None,
-        extra: Mapping[str, object] | None = None,
-        sinfo: str | None = None,
+        exc_info: SysExcInfoType?,
+        func: str? = None,
+        extra: Mapping[str, object]? = None,
+        sinfo: str? = None,
     ) -> LogRecord:
         """
         A factory method which can be overridden in subclasses to create
@@ -495,9 +495,9 @@ class Handler(Filterer):
     """
 
     level: int  # undocumented
-    formatter: Formatter | None  # undocumented
-    lock: threading.RLock | None  # undocumented
-    name: str | None  # undocumented
+    formatter: Formatter?  # undocumented
+    lock: threading.RLock?  # undocumented
+    name: str?  # undocumented
     init(self, level: _Level = 0):
         """
         Initializes the instance - basically setting the formatter to None
@@ -526,7 +526,7 @@ class Handler(Filterer):
         Set the logging level of this handler.  level must be an int or a str.
         """
 
-    def setFormatter(self, fmt: Formatter | None):
+    def setFormatter(self, fmt: Formatter?):
         """
         Set the formatter for this handler.
         """
@@ -591,7 +591,7 @@ class Handler(Filterer):
         """
 
 if sys.version_info >= (3, 12):
-    def getHandlerByName(name: str) -> Handler | None:
+    def getHandlerByName(name: str) -> Handler?:
         """
         Get a handler with the specified *name*, or None if there isn't one with
         that name.
@@ -648,20 +648,20 @@ class Formatter:
     """
 
     converter: (int | float | None) -> struct_time
-    _fmt: str | None  # undocumented
-    datefmt: str | None  # undocumented
+    _fmt: str?  # undocumented
+    datefmt: str?  # undocumented
     _style: PercentStyle  # undocumented
     default_time_format: str
-    default_msec_format: str | None
+    default_msec_format: str?
 
     init(
         self,
-        fmt: str | None = None,
-        datefmt: str | None = None,
+        fmt: str? = None,
+        datefmt: str? = None,
         style: _FormatStyle = "%",
         validate: bool = True,
         *,
-        defaults: Mapping[str, dynamic] | None = None,
+        defaults: Mapping[str, dynamic]? = None,
     ):
         """
         Initialize the formatter with specified format strings.
@@ -693,7 +693,7 @@ class Formatter:
         it is formatted using formatException() and appended to the message.
         """
 
-    def formatTime(self, record: LogRecord, datefmt: str | None = None) -> str:
+    def formatTime(self, record: LogRecord, datefmt: str? = None) -> str:
         """
         Return the creation time of the specified LogRecord as formatted text.
 
@@ -744,7 +744,7 @@ class BufferingFormatter:
     """
 
     linefmt: Formatter
-    init(self, linefmt: Formatter | None = None):
+    init(self, linefmt: Formatter? = None):
         """
         Optionally specify a formatter which will be used to format each
         individual record.
@@ -821,11 +821,11 @@ class LogRecord:
 
     # args can be set to None by logging.handlers.QueueHandler
     # (see https://bugs.python.org/issue44473)
-    args: ArgsType | None
+    args: ArgsType?
     asctime: str
     created: float
-    exc_info: SysExcInfoType | None
-    exc_text: str | None
+    exc_info: SysExcInfoType?
+    exc_text: str?
     filename: str
     funcName: str
     levelname: str
@@ -838,14 +838,14 @@ class LogRecord:
     msg: str | dynamic  # The runtime accepts any object, but will be a str in 99% of cases
     name: str
     pathname: str
-    process: int | None
-    processName: str | None
+    process: int?
+    processName: str?
     relativeCreated: float
-    stack_info: str | None
-    thread: int | None
-    threadName: str | None
+    stack_info: str?
+    thread: int?
+    threadName: str?
     if sys.version_info >= (3, 12):
-        taskName: str | None
+        taskName: str?
 
     init(
         self,
@@ -854,10 +854,10 @@ class LogRecord:
         pathname: str,
         lineno: int,
         msg: object,
-        args: ArgsType | None,
-        exc_info: SysExcInfoType | None,
-        func: str | None = None,
-        sinfo: str | None = None,
+        args: ArgsType?,
+        exc_info: SysExcInfoType?,
+        func: str? = None,
+        sinfo: str? = None,
     ):
         """
         Initialize a logging record with interesting information.
@@ -883,10 +883,10 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
 
     logger: L
     manager: Manager  # undocumented
-    extra: Mapping[str, object] | None
+    extra: Mapping[str, object]?
 
     if sys.version_info >= (3, 13):
-        def __init__(self, logger: L, extra: Mapping[str, object] | None = None, merge_extra: bool = False) -> None:
+        def __init__(self, logger: L, extra: Mapping[str, object]? = None, merge_extra: bool = False) -> None:
             """
             Initialize the adapter with a logger and an optional dict-like object
             which provides contextual information. This constructor signature
@@ -909,7 +909,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
             """
 
     else:
-        def __init__(self, logger: L, extra: Mapping[str, object] | None = None) -> None:
+        def __init__(self, logger: L, extra: Mapping[str, object]? = None) -> None:
             """
             Initialize the adapter with a logger and a dict-like object which
             provides contextual information. This constructor signature allows
@@ -942,7 +942,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
         **kwargs: object,
     ):
         """
@@ -956,7 +956,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
         **kwargs: object,
     ):
         """
@@ -970,7 +970,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
         **kwargs: object,
     ):
         """
@@ -985,7 +985,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
         **kwargs: object,
     ) -> None
     def error(
@@ -995,7 +995,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
         **kwargs: object,
     ):
         """
@@ -1009,7 +1009,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         exc_info: _ExcInfoType = True,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
         **kwargs: object,
     ):
         """
@@ -1023,7 +1023,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
         **kwargs: object,
     ):
         """
@@ -1038,7 +1038,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         exc_info: _ExcInfoType = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-        extra: Mapping[str, object] | None = None,
+        extra: Mapping[str, object]? = None,
         **kwargs: object,
     ):
         """
@@ -1073,8 +1073,8 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
             msg: object,
             args: ArgsType,
             *,
-            exc_info: _ExcInfoType | None = None,
-            extra: Mapping[str, object] | None = None,
+            exc_info: _ExcInfoType? = None,
+            extra: Mapping[str, object]? = None,
             stack_info: bool = False,
         ) -> None:  # undocumented
             """
@@ -1087,8 +1087,8 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
             level: int,
             msg: object,
             args: ArgsType,
-            exc_info: _ExcInfoType | None = None,
-            extra: Mapping[str, object] | None = None,
+            exc_info: _ExcInfoType? = None,
+            extra: Mapping[str, object]? = None,
             stack_info: bool = False,
         ) -> None:  # undocumented
             """
@@ -1104,7 +1104,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
             is (int,).
             """
 
-def getLogger(name: str | None = None) -> Logger:
+def getLogger(name: str? = None) -> Logger:
     """
     Return a logger with the specified name, creating it if necessary.
 
@@ -1127,7 +1127,7 @@ def debug(
     exc_info: _ExcInfoType = None,
     stack_info: bool = False,
     stacklevel: int = 1,
-    extra: Mapping[str, object] | None = None,
+    extra: Mapping[str, object]? = None,
 ):
     """
     Log a message with severity 'DEBUG' on the root logger. If the logger has
@@ -1141,7 +1141,7 @@ def info(
     exc_info: _ExcInfoType = None,
     stack_info: bool = False,
     stacklevel: int = 1,
-    extra: Mapping[str, object] | None = None,
+    extra: Mapping[str, object]? = None,
 ):
     """
     Log a message with severity 'INFO' on the root logger. If the logger has
@@ -1155,7 +1155,7 @@ def warning(
     exc_info: _ExcInfoType = None,
     stack_info: bool = False,
     stacklevel: int = 1,
-    extra: Mapping[str, object] | None = None,
+    extra: Mapping[str, object]? = None,
 ):
     """
     Log a message with severity 'WARNING' on the root logger. If the logger has
@@ -1170,7 +1170,7 @@ def warn(
     exc_info: _ExcInfoType = None,
     stack_info: bool = False,
     stacklevel: int = 1,
-    extra: Mapping[str, object] | None = None,
+    extra: Mapping[str, object]? = None,
 ) -> None
 def error(
     msg: object,
@@ -1178,7 +1178,7 @@ def error(
     exc_info: _ExcInfoType = None,
     stack_info: bool = False,
     stacklevel: int = 1,
-    extra: Mapping[str, object] | None = None,
+    extra: Mapping[str, object]? = None,
 ):
     """
     Log a message with severity 'ERROR' on the root logger. If the logger has
@@ -1192,7 +1192,7 @@ def critical(
     exc_info: _ExcInfoType = None,
     stack_info: bool = False,
     stacklevel: int = 1,
-    extra: Mapping[str, object] | None = None,
+    extra: Mapping[str, object]? = None,
 ):
     """
     Log a message with severity 'CRITICAL' on the root logger. If the logger
@@ -1206,7 +1206,7 @@ def exception(
     exc_info: _ExcInfoType = True,
     stack_info: bool = False,
     stacklevel: int = 1,
-    extra: Mapping[str, object] | None = None,
+    extra: Mapping[str, object]? = None,
 ):
     """
     Log a message with severity 'ERROR' on the root logger, with exception
@@ -1221,7 +1221,7 @@ def log(
     exc_info: _ExcInfoType = None,
     stack_info: bool = False,
     stacklevel: int = 1,
-    extra: Mapping[str, object] | None = None,
+    extra: Mapping[str, object]? = None,
 ):
     """
     Log 'msg % args' with the integer severity 'level' on the root logger. If
@@ -1278,11 +1278,11 @@ def makeLogRecord(dict: Mapping[str, object]) -> LogRecord:
 def basicConfig(
     *,
     format: str = ...,  # default value depends on the value of `style`
-    datefmt: str | None = None,
+    datefmt: str? = None,
     style: _FormatStyle = "%",
-    level: _Level | None = None,
+    level: _Level? = None,
     handlers: Iterable[Handler],
-    force: bool | None = False,
+    force: bool? = False,
 ) -> None:
     """
     Do basic configuration for the logging system.
@@ -1365,26 +1365,26 @@ def basicConfig(
     """
 def basicConfig(
     *,
-    filename: StrPath | None,
+    filename: StrPath?,
     filemode: str = "a",
     format: str = ...,  # default value depends on the value of `style`
-    datefmt: str | None = None,
+    datefmt: str? = None,
     style: _FormatStyle = "%",
-    level: _Level | None = None,
+    level: _Level? = None,
     handlers: None = None,
-    force: bool | None = False,
-    encoding: str | None = None,
-    errors: str | None = "backslashreplace",
+    force: bool? = False,
+    encoding: str? = None,
+    errors: str? = "backslashreplace",
 ) -> None
 def basicConfig(
     *,
     format: str = ...,  # default value depends on the value of `style`
-    datefmt: str | None = None,
+    datefmt: str? = None,
     style: _FormatStyle = "%",
-    level: _Level | None = None,
-    stream: SupportsWrite[str] | None = None,
+    level: _Level? = None,
+    stream: SupportsWrite[str]? = None,
     handlers: None = None,
-    force: bool | None = False,
+    force: bool? = False,
 ) -> None
 
 def shutdown(handlerList: Sequence[dynamic] = ...):  # handlerList is undocumented
@@ -1417,7 +1417,7 @@ def setLogRecordFactory(factory: (...) -> LogRecord):
     a log record.
     """
 
-lastResort: Handler | None
+lastResort: Handler?
 
 
 class StreamHandler[in out StreamT: SupportsWrite[str]](Handler):
@@ -1462,12 +1462,12 @@ class FileHandler(StreamHandler[TextIOWrapper]):
 
     baseFilename: str  # undocumented
     mode: str  # undocumented
-    encoding: str | None  # undocumented
+    encoding: str?  # undocumented
     delay: bool  # undocumented
-    errors: str | None  # undocumented
-    stream: TextIOWrapper | None
+    errors: str?  # undocumented
+    stream: TextIOWrapper?
     init(
-        self, filename: StrPath, mode: str = "a", encoding: str | None = None, delay: bool = False, errors: str | None = None
+        self, filename: StrPath, mode: str = "a", encoding: str? = None, delay: bool = False, errors: str? = None
     ):
         """
         Open the specified file and use it as the stream for logging.
@@ -1531,7 +1531,7 @@ class PercentStyle:  # undocumented
     validation_pattern: Pattern[str]
     _fmt: str
 
-    init(self, fmt: str, *, defaults: Mapping[str, dynamic] | None = None)
+    init(self, fmt: str, *, defaults: Mapping[str, dynamic]? = None)
     def usesTime(self) -> bool
     def validate(self):
         """Validate the input format, ensure it matches the correct style"""

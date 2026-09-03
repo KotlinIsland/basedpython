@@ -16,7 +16,7 @@ import sys
 __all__ = ["getpass", "getuser", "GetPassWarning"]
 
 if sys.version_info >= (3, 14):
-    def getpass(prompt: str = "Password: ", stream: TextIO | None = None, *, echo_char: str | None = None) -> str:
+    def getpass(prompt: str = "Password: ", stream: TextIO? = None, *, echo_char: str? = None) -> str:
         """Prompt for a password, with echo turned off.
 
         Args:
@@ -35,7 +35,7 @@ if sys.version_info >= (3, 14):
         """
 
 else:
-    def getpass(prompt: str = "Password: ", stream: TextIO | None = None) -> str:
+    def getpass(prompt: str = "Password: ", stream: TextIO? = None) -> str:
         """Prompt for a password, with echo turned off.
 
         Args:

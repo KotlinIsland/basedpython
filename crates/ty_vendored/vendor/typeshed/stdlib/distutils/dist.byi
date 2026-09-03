@@ -32,31 +32,31 @@ from typing import ClassVar, Literal, TypeAlias, TypeVar
 
 command_re: Pattern[str]
 
-private type OptionsList = list[(str, str | None, str, int) | (str, str | None, str)]
+private type OptionsList = list[(str, str?, str, int) | (str, str?, str)]
 
 class DistributionMetadata:
     """Dummy class to hold the distribution meta-data: name, version,
     author, and so forth.
     """
 
-    init(self, path: StrOrBytesPath | None = None)
-    name: str | None
-    version: str | None
-    author: str | None
-    author_email: str | None
-    maintainer: str | None
-    maintainer_email: str | None
-    url: str | None
-    license: str | None
-    description: str | None
-    long_description: str | None
+    init(self, path: StrOrBytesPath? = None)
+    name: str?
+    version: str?
+    author: str?
+    author_email: str?
+    maintainer: str?
+    maintainer_email: str?
+    url: str?
+    license: str?
+    description: str?
+    long_description: str?
     keywords: str | list[str] | None
     platforms: str | list[str] | None
     classifiers: str | list[str] | None
-    download_url: str | None
-    provides: list[str] | None
-    requires: list[str] | None
-    obsoletes: list[str] | None
+    download_url: str?
+    provides: list[str]?
+    requires: list[str]?
+    obsoletes: list[str]?
     def read_pkg_file(self, file: IO[str]):
         """Reads the metadata values from a file object."""
 
@@ -107,7 +107,7 @@ class Distribution:
 
     cmdclass: dict[str, type[Command]]
     metadata: DistributionMetadata
-    init(self, attrs: MutableMapping[str, Incomplete] | None = None):
+    init(self, attrs: MutableMapping[str, Incomplete]? = None):
         """Construct a new Distribution instance: initialize all the
         attributes of a Distribution, and then use 'attrs' (a dictionary
         mapping attribute names to values) to assign some of those
@@ -125,7 +125,7 @@ class Distribution:
         option dictionary.
         """
 
-    def parse_config_files(self, filenames: Iterable[str] | None = None)
+    def parse_config_files(self, filenames: Iterable[str]? = None)
     global_options: ClassVar[OptionsList]
     common_usage: ClassVar[str]
     display_options: ClassVar[OptionsList]
@@ -134,9 +134,9 @@ class Distribution:
     verbose: bool | 0 | 1
     dry_run: bool | 0 | 1
     help: bool | 0 | 1
-    command_packages: list[str] | None
-    script_name: str | None
-    script_args: list[str] | None
+    command_packages: list[str]?
+    script_name: str?
+    script_args: list[str]?
     command_options: dict[str, dict[str, (str, str)]]
     dist_files: list[(str, str, str)]
     packages: Incomplete
@@ -259,7 +259,7 @@ class Distribution:
     def get_command_obj(self, command: "upload", create: 1 | True = 1) -> upload
     def get_command_obj(self, command: str, create: 1 | True = 1) -> Command
     # Not replicating the overloads for "Command | None", user may use "isinstance"
-    def get_command_obj(self, command: str, create: 0 | False) -> Command | None
+    def get_command_obj(self, command: str, create: 0 | False) -> Command?
 
     def get_command_class(self, command: "bdist") -> type[bdist]:
         """Return the class that implements the Distutils command named by

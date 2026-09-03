@@ -21,12 +21,12 @@ class BaseProcess:
     init(
         self,
         group: None = None,
-        target: (...) -> object | None = None,
-        name: str | None = None,
+        target: (...) -> object? = None,
+        name: str? = None,
         args: Iterable[dynamic] = (),
         kwargs: Mapping[str, dynamic] = {},
         *,
-        daemon: bool | None = None,
+        daemon: bool? = None,
     )
     def run(self):
         """
@@ -72,11 +72,11 @@ class BaseProcess:
         Return whether process is alive
         """
 
-    let exitcode: int | None
+    let exitcode: int?
 
-    let ident: int | None
+    let ident: int?
 
-    let pid: int | None
+    let pid: int?
 
     let sentinel: int
 
@@ -90,7 +90,7 @@ def active_children() -> list[BaseProcess]:
     Return list of process objects corresponding to live child processes
     """
 
-def parent_process() -> BaseProcess | None:
+def parent_process() -> BaseProcess?:
     """
     Return process object representing the parent process
     """

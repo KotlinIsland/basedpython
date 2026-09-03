@@ -66,7 +66,7 @@ if sys.platform == "win32":
     class ProactorEventLoop(proactor_events.BaseProactorEventLoop):
         """Windows version of proactor event loop using IOCP."""
 
-        init(self, proactor: IocpProactor | None = None)
+        init(self, proactor: IocpProactor? = None)
         async def create_pipe_connection(
             self, protocol_factory: () -> streams.StreamReaderProtocol, address: str
         ) -> (proactor_events._ProactorDuplexPipeTransport, streams.StreamReaderProtocol)
@@ -80,14 +80,14 @@ if sys.platform == "win32":
         init(self, concurrency: int = 0xFFFFFFFF)
         def __del__(self)
         def set_loop(self, loop: events.AbstractEventLoop)
-        def select(self, timeout: int | None = None) -> list[futures.Future[dynamic]]
+        def select(self, timeout: int? = None) -> list[futures.Future[dynamic]]
         def recv(self, conn: socket.socket, nbytes: int, flags: int = 0) -> futures.Future[bytes]
         def recv_into(self, conn: socket.socket, buf: WriteableBuffer, flags: int = 0) -> futures.Future[dynamic]
         def recvfrom(
             self, conn: socket.socket, nbytes: int, flags: int = 0
         ) -> futures.Future[tuple[bytes, socket._RetAddress]]
         def sendto(
-            self, conn: socket.socket, buf: ReadableBuffer, flags: int = 0, addr: socket._Address | None = None
+            self, conn: socket.socket, buf: ReadableBuffer, flags: int = 0, addr: socket._Address? = None
         ) -> futures.Future[int]
         def send(self, conn: socket.socket, buf: WriteableBuffer, flags: int = 0) -> futures.Future[dynamic]
         def accept(self, listener: socket.socket) -> futures.Future[dynamic]
@@ -99,7 +99,7 @@ if sys.platform == "win32":
         def sendfile(self, sock: socket.socket, file: IO[bytes], offset: int, count: int) -> futures.Future[dynamic]
         def accept_pipe(self, pipe: socket.socket) -> futures.Future[dynamic]
         async def connect_pipe(self, address: str) -> windows_utils.PipeHandle
-        def wait_for_handle(self, handle: windows_utils.PipeHandle, timeout: int | None = None) -> bool:
+        def wait_for_handle(self, handle: windows_utils.PipeHandle, timeout: int? = None) -> bool:
             """Wait for a handle.
 
             Return a Future object. The result of the future is True if the wait

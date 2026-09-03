@@ -14,7 +14,7 @@ class SAXException(Exception):
     it.
     """
 
-    init(self, msg: str, exception: Exception | None = None):
+    init(self, msg: str, exception: Exception? = None):
         """Creates an exception. The message is required, but the exception
         is optional.
         """
@@ -22,7 +22,7 @@ class SAXException(Exception):
     def getMessage(self) -> str:
         """Return a message for this exception."""
 
-    def getException(self) -> Exception | None:
+    def getException(self) -> Exception?:
         """Return the embedded exception, or None if there was none."""
 
     def __getitem__(self, ix: object) -> Never:
@@ -44,21 +44,21 @@ class SAXParseException(SAXException):
     the ability to wrap another exception.
     """
 
-    init(self, msg: str, exception: Exception | None, locator: Locator):
+    init(self, msg: str, exception: Exception?, locator: Locator):
         """Creates the exception. The exception parameter is allowed to be None."""
 
-    def getColumnNumber(self) -> int | None:
+    def getColumnNumber(self) -> int?:
         """The column number of the end of the text where the exception
         occurred.
         """
 
-    def getLineNumber(self) -> int | None:
+    def getLineNumber(self) -> int?:
         """The line number of the end of the text where the exception occurred."""
 
-    def getPublicId(self) -> str | None:
+    def getPublicId(self) -> str?:
         """Get the public identifier of the entity where the exception occurred."""
 
-    def getSystemId(self) -> str | None:
+    def getSystemId(self) -> str?:
         """Get the system identifier of the entity where the exception occurred."""
 
 class SAXNotRecognizedException(SAXException):

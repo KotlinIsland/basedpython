@@ -10,11 +10,11 @@ __all__ = ["Error", "open", "open_new", "open_new_tab", "get", "register"]
 class Error(Exception)
 
 def register(
-    name: str, klass: (() -> BaseBrowser) | None, instance: BaseBrowser | None = None, *, preferred: bool = False
+    name: str, klass: (() -> BaseBrowser)?, instance: BaseBrowser? = None, *, preferred: bool = False
 ):
     """Register a browser connector."""
 
-def get(using: str | None = None) -> BaseBrowser:
+def get(using: str? = None) -> BaseBrowser:
     """Return a browser launcher instance appropriate for the environment."""
 
 def open(url: str, new: int = 0, autoraise: bool = True) -> bool:
@@ -70,7 +70,7 @@ class UnixBrowser(BaseBrowser):
     """Parent class for all Unix browsers with remote functionality."""
 
     override def open(self, url: str, new: 0 | 1 | 2 = 0, autoraise: bool = True) -> bool
-    raise_opts: list[str] | None
+    raise_opts: list[str]?
     background: bool
     redirect_stdout: bool
     remote_args: list[str]

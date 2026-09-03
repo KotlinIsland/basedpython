@@ -3,7 +3,7 @@ from _tracemalloc import *
 from collections.abc import Sequence
 from typing import TypeAlias
 
-def get_object_traceback(obj: object) -> Traceback | None:
+def get_object_traceback(obj: object) -> Traceback?:
     """
     Get the traceback where the Python object *obj* was allocated.
     Return a Traceback instance.
@@ -26,17 +26,17 @@ class DomainFilter(BaseFilter):
     init(self, inclusive: bool, domain: int)
 
 class Filter(BaseFilter):
-    domain: int | None
-    lineno: int | None
+    domain: int?
+    lineno: int?
     let filename_pattern: str
     all_frames: bool
     init(
         self,
         inclusive: bool,
         filename_pattern: str,
-        lineno: int | None = None,
+        lineno: int? = None,
         all_frames: bool = False,
-        domain: int | None = None,
+        domain: int? = None,
     )
 
 class Statistic:
@@ -102,7 +102,7 @@ class Frame:
         def __le__(self, other: Frame, NotImplemented: dynamic = ...) -> bool:
             """Return a <= b.  Computed by @total_ordering from (a < b) or (a == b)."""
 
-type _TraceTuple = (int, int, Sequence[_FrameTuple], int | None) | (int, int, Sequence[_FrameTuple])
+type _TraceTuple = (int, int, Sequence[_FrameTuple], int?) | (int, int, Sequence[_FrameTuple])
 
 class Trace:
     """
@@ -124,12 +124,12 @@ class Traceback(Sequence[Frame]):
     """
 
     __slots__ = ("_frames", "_total_nframe")
-    let total_nframe: int | None
-    init(self, frames: Sequence[_FrameTuple], total_nframe: int | None = None)
-    def format(self, limit: int | None = None, most_recent_first: bool = False) -> list[str]
+    let total_nframe: int?
+    init(self, frames: Sequence[_FrameTuple], total_nframe: int? = None)
+    def format(self, limit: int? = None, most_recent_first: bool = False) -> list[str]
 
     override def __getitem__(self, index: SupportsIndex) -> Frame
-    def __getitem__(self, index: slice[SupportsIndex | None]) -> Sequence[Frame]
+    def __getitem__(self, index: slice[SupportsIndex?]) -> Sequence[Frame]
 
     override def __contains__(self, frame: Frame) -> bool
     override def __len__(self) -> int

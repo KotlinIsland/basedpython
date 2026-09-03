@@ -8,7 +8,7 @@ if sys.platform != "win32":
     @type_check_only
     class _MethodBase(NamedTuple):
         name: str
-        ident: str | None
+        ident: str?
         salt_chars: int
         total_size: int
 
@@ -31,7 +31,7 @@ if sys.platform != "win32":
     final METHOD_SHA512: _Method
     final METHOD_BLOWFISH: _Method
     methods: list[_Method]
-    def mksalt(method: _Method | None = None, *, rounds: int | None = None) -> str:
+    def mksalt(method: _Method? = None, *, rounds: int? = None) -> str:
         """Generate a salt for the specified method.
 
         If not specified, the strongest available method will be used.

@@ -61,7 +61,7 @@ if sys.platform == "win32":
         closed when the hkey object is destroyed by Python.
         """
 
-    def ConnectRegistry(computer_name: str | None, key: _KeyType, /) -> HKEYType:
+    def ConnectRegistry(computer_name: str?, key: _KeyType, /) -> HKEYType:
         """Establishes a connection to the registry on another computer.
 
           computer_name
@@ -74,7 +74,7 @@ if sys.platform == "win32":
         If the function fails, an OSError exception is raised.
         """
 
-    def CreateKey(key: _KeyType, sub_key: str | None, /) -> HKEYType:
+    def CreateKey(key: _KeyType, sub_key: str?, /) -> HKEYType:
         """Creates or opens the specified key.
 
           key
@@ -91,7 +91,7 @@ if sys.platform == "win32":
         If the function fails, an OSError exception is raised.
         """
 
-    def CreateKeyEx(key: _KeyType, sub_key: str | None, reserved: int = 0, access: int = 131078) -> HKEYType:
+    def CreateKeyEx(key: _KeyType, sub_key: str?, reserved: int = 0, access: int = 131078) -> HKEYType:
         """Creates or opens the specified key.
 
           key
@@ -155,7 +155,7 @@ if sys.platform == "win32":
         """
 
     if sys.version_info >= (3, 15):
-        def DeleteTree(key: _KeyType, sub_key: str | None = None, /):
+        def DeleteTree(key: _KeyType, sub_key: str? = None, /):
             """Deletes the specified key and all its subkeys and values recursively.
 
               key
@@ -258,7 +258,7 @@ if sys.platform == "win32":
         tree.
         """
 
-    def OpenKey(key: _KeyType, sub_key: str | None, reserved: int = 0, access: int = 131097) -> HKEYType:
+    def OpenKey(key: _KeyType, sub_key: str?, reserved: int = 0, access: int = 131097) -> HKEYType:
         """Opens the specified key.
 
           key
@@ -275,7 +275,7 @@ if sys.platform == "win32":
         If the function fails, an OSError exception is raised.
         """
 
-    def OpenKeyEx(key: _KeyType, sub_key: str | None, reserved: int = 0, access: int = 131097) -> HKEYType:
+    def OpenKeyEx(key: _KeyType, sub_key: str?, reserved: int = 0, access: int = 131097) -> HKEYType:
         """Opens the specified key.
 
           key
@@ -305,7 +305,7 @@ if sys.platform == "win32":
         as 100's of nanoseconds since Jan 1, 1600.
         """
 
-    def QueryValue(key: _KeyType, sub_key: str | None, /) -> str:
+    def QueryValue(key: _KeyType, sub_key: str?, /) -> str:
         """Retrieves the unnamed value for a key.
 
           key
@@ -356,7 +356,7 @@ if sys.platform == "win32":
         to the API.
         """
 
-    def SetValue(key: _KeyType, sub_key: str | None, type: int, value: str, /):
+    def SetValue(key: _KeyType, sub_key: str?, type: int, value: str, /):
         """Associates a value with a specified key.
 
           key
@@ -380,7 +380,7 @@ if sys.platform == "win32":
         KEY_SET_VALUE access.
         """
 
-    def SetValueEx(key: _KeyType, value_name: str | None, reserved: Unused, type: 4 | 5, value: int | None, /) -> None:
+    def SetValueEx(key: _KeyType, value_name: str?, reserved: Unused, type: 4 | 5, value: int?, /) -> None:
         """Stores data in the value field of an open registry key.
 
           key
@@ -421,22 +421,22 @@ if sys.platform == "win32":
         the configuration registry to help the registry perform efficiently.
         """
     def SetValueEx(
-        key: _KeyType, value_name: str | None, reserved: Unused, type: 1 | 2, value: str | None, /
+        key: _KeyType, value_name: str?, reserved: Unused, type: 1 | 2, value: str?, /
     ) -> None
     def SetValueEx(
-        key: _KeyType, value_name: str | None, reserved: Unused, type: 7, value: list[str] | None, /
+        key: _KeyType, value_name: str?, reserved: Unused, type: 7, value: list[str]?, /
     ) -> None
     def SetValueEx(
         key: _KeyType,
-        value_name: str | None,
+        value_name: str?,
         reserved: Unused,
         type: 0 | 3 | 8 | 9 | 10 | 11,
-        value: ReadableBuffer | None,
+        value: ReadableBuffer?,
         /,
     ) -> None
     def SetValueEx(
         key: _KeyType,
-        value_name: str | None,
+        value_name: str?,
         reserved: Unused,
         type: int,
         value: int | str | list[str] | ReadableBuffer | None,
@@ -567,8 +567,8 @@ if sys.platform == "win32":
 
         def __enter__(self) -> Self
         def __exit__(
-            self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None, /
-        ) -> bool | None
+            self, exc_type: type[BaseException]?, exc_value: BaseException?, traceback: TracebackType?, /
+        ) -> bool?
         def Close(self):
             """Closes the underlying Windows handle.
 

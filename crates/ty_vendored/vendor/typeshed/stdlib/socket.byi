@@ -1505,7 +1505,7 @@ class socket(_socket.socket):
 
     __slots__ = ["__weakref__", "_io_refs", "_closed"]
     init(
-        self, family: AddressFamily | int = -1, type: SocketKind | int = -1, proto: int = -1, fileno: int | None = None
+        self, family: AddressFamily | int = -1, type: SocketKind | int = -1, proto: int = -1, fileno: int? = None
     )
     def __enter__(self) -> Self
     def __exit__(self, *args: Unused)
@@ -1531,9 +1531,9 @@ class socket(_socket.socket):
         mode: "b" | "rb" | "br" | "wb" | "bw" | "rwb" | "rbw" | "wrb" | "wbr" | "brw" | "bwr",
         buffering: 0,
         *,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
+        encoding: str? = None,
+        errors: str? = None,
+        newline: str? = None,
     ) -> SocketIO:
         """makefile(...) -> an I/O stream connected to the socket
 
@@ -1546,48 +1546,48 @@ class socket(_socket.socket):
         mode: "rwb" | "rbw" | "wrb" | "wbr" | "brw" | "bwr",
         buffering: -1 | 1 | None = None,
         *,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
+        encoding: str? = None,
+        errors: str? = None,
+        newline: str? = None,
     ) -> BufferedRWPair
     def makefile(
         self,
         mode: "rb" | "br",
         buffering: -1 | 1 | None = None,
         *,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
+        encoding: str? = None,
+        errors: str? = None,
+        newline: str? = None,
     ) -> BufferedReader
     def makefile(
         self,
         mode: "wb" | "bw",
         buffering: -1 | 1 | None = None,
         *,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
+        encoding: str? = None,
+        errors: str? = None,
+        newline: str? = None,
     ) -> BufferedWriter
     def makefile(
         self,
         mode: "b" | "rb" | "br" | "wb" | "bw" | "rwb" | "rbw" | "wrb" | "wbr" | "brw" | "bwr",
         buffering: int,
         *,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
+        encoding: str? = None,
+        errors: str? = None,
+        newline: str? = None,
     ) -> IOBase
     def makefile(
         self,
         mode: "r" | "w" | "rw" | "wr" | "" = "r",
-        buffering: int | None = None,
+        buffering: int? = None,
         *,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
+        encoding: str? = None,
+        errors: str? = None,
+        newline: str? = None,
     ) -> TextIOWrapper
 
-    def sendfile(self, file: SendableFile, offset: int = 0, count: int | None = None) -> int:
+    def sendfile(self, file: SendableFile, offset: int = 0, count: int? = None) -> int:
         """sendfile(file[, offset[, count]]) -> sent
 
         Send a file until EOF is reached by using high-performance
@@ -1676,7 +1676,7 @@ class SocketIO(RawIOBase):
     """
 
     init(self, sock: socket, mode: "r" | "w" | "rw" | "rb" | "wb" | "rwb")
-    override def readinto(self, b: WriteableBuffer) -> int | None:
+    override def readinto(self, b: WriteableBuffer) -> int?:
         """Read up to len(b) bytes into the writable buffer *b* and return
         the number of bytes read.  If the socket is non-blocking and no bytes
         are available, None is returned.
@@ -1685,7 +1685,7 @@ class SocketIO(RawIOBase):
         was shutdown at the other end.
         """
 
-    override def write(self, b: ReadableBuffer) -> int | None:
+    override def write(self, b: ReadableBuffer) -> int?:
         """Write the given bytes or bytearray object *b* to the socket
         and return the number of bytes written.  This can be less than
         len(b) if not all data could be written.  If the socket is
@@ -1708,9 +1708,9 @@ def getfqdn(name: str = "") -> str:
 
 if sys.version_info >= (3, 11):
     def create_connection(
-        address: (str | None, bytes | str | int | None),
+        address: (str?, bytes | str | int | None),
         timeout: int | float | None = ...,
-        source_address: _Address | None = None,
+        source_address: _Address? = None,
         *,
         all_errors: bool = False,
     ) -> socket:
@@ -1730,7 +1730,7 @@ if sys.version_info >= (3, 11):
 
 else:
     def create_connection(
-        address: (str | None, int), timeout: int | float | None = ..., source_address: _Address | None = None
+        address: (str?, int), timeout: int | float | None = ..., source_address: _Address? = None
     ) -> socket:
         """Connect to *address* and return the socket object.
 
@@ -1750,7 +1750,7 @@ def has_dualstack_ipv6() -> bool:
     """
 
 def create_server(
-    address: _Address, *, family: int = ..., backlog: int | None = None, reuse_port: bool = False, dualstack_ipv6: bool = False
+    address: _Address, *, family: int = ..., backlog: int? = None, reuse_port: bool = False, dualstack_ipv6: bool = False
 ) -> socket:
     """Convenience function which creates a SOCK_STREAM type socket
     bound to *address* (a 2-tuple (host, port)) and return the socket

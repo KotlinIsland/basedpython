@@ -31,13 +31,13 @@ class Options:
     charset_overrides_xml_encoding: bool
     infoset: bool
     supported_mediatypes_only: bool
-    errorHandler: _DOMErrorHandler | None
-    filter: DOMBuilderFilter | None
+    errorHandler: _DOMErrorHandler?
+    filter: DOMBuilderFilter?
 
 class DOMBuilder:
-    entityResolver: DOMEntityResolver | None
-    errorHandler: _DOMErrorHandler | None
-    filter: DOMBuilderFilter | None
+    entityResolver: DOMEntityResolver?
+    errorHandler: _DOMErrorHandler?
+    filter: DOMBuilderFilter?
     ACTION_REPLACE: Final = 1
     ACTION_APPEND_AS_CHILDREN: Final = 2
     ACTION_INSERT_AFTER: Final = 3
@@ -54,17 +54,17 @@ class DOMBuilder:
 
 class DOMEntityResolver:
     __slots__ = ("_opener",)
-    def resolveEntity(self, publicId: str | None, systemId: str) -> DOMInputSource
+    def resolveEntity(self, publicId: str?, systemId: str) -> DOMInputSource
 
 class DOMInputSource:
     __slots__ = ("byteStream", "characterStream", "stringData", "encoding", "publicId", "systemId", "baseURI")
-    byteStream: SupportsRead[bytes] | None
-    characterStream: SupportsRead[str] | None
-    stringData: str | None
-    encoding: str | None
-    publicId: str | None
-    systemId: str | None
-    baseURI: str | None
+    byteStream: SupportsRead[bytes]?
+    characterStream: SupportsRead[str]?
+    stringData: str?
+    encoding: str?
+    publicId: str?
+    systemId: str?
+    baseURI: str?
 
 class DOMBuilderFilter:
     """Element filter which can be used to tailor construction of
@@ -86,7 +86,7 @@ class DocumentLS:
     def abort(self) -> Never
     def load(self, uri: str) -> Never
     def loadXML(self, source: str) -> Never
-    def saveXML(self, snode: Node | None) -> str
+    def saveXML(self, snode: Node?) -> str
 
 class DOMImplementationLS:
     MODE_SYNCHRONOUS: Final = 1

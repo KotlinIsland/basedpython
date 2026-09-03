@@ -169,7 +169,7 @@ class FILETIME(Structure):
 _FILETIME = FILETIME
 
 class MSG(Structure):
-    hWnd: _CField[HWND, int | None, HWND | int | None]
+    hWnd: _CField[HWND, int?, HWND | int | None]
     message: _CIntLikeField[UINT]
     wParam: _CIntLikeField[WPARAM]
     lParam: _CIntLikeField[LPARAM]

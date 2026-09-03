@@ -311,11 +311,11 @@ class ScrolledCanvas(Canvas, Frame):
     hscroll: Scrollbar
     vscroll: Scrollbar
     init(
-        self, master: Misc | None, width: int = 500, height: int = 350, canvwidth: int = 600, canvheight: int = 500
+        self, master: Misc?, width: int = 500, height: int = 350, canvwidth: int = 600, canvheight: int = 500
     )
     canvwidth: int
     canvheight: int
-    def reset(self, canvwidth: int | None = None, canvheight: int | None = None, bg: str | None = None):
+    def reset(self, canvwidth: int? = None, canvheight: int? = None, bg: str? = None):
         """Adjust canvas and scrollbars according to given canvas size."""
 
 class TurtleScreenBase:
@@ -346,7 +346,7 @@ class TurtleScreenBase:
 
         """
 
-    def textinput(self, title: str, prompt: str) -> str | None:
+    def textinput(self, title: str, prompt: str) -> str?:
         """Pop up a dialog window for input of a string.
 
         Arguments: title is the title of the dialog window,
@@ -362,7 +362,7 @@ class TurtleScreenBase:
 
     def numinput(
         self, title: str, prompt: str, default: int | float | None = None, minval: int | float | None = None, maxval: int | float | None = None
-    ) -> float | None:
+    ) -> float?:
         """Pop up a dialog window for input of a number.
 
         Arguments: title is the title of the dialog window,
@@ -402,7 +402,7 @@ class Shape:
     init(
         self, type_: "polygon" | "image" | "compound", data: PolygonCoords | PhotoImage | None = None
     )
-    def addcomponent(self, poly: PolygonCoords, fill: Color, outline: Color | None = None):
+    def addcomponent(self, poly: PolygonCoords, fill: Color, outline: Color? = None):
         """Add component to a shape of type compound.
 
         Arguments: poly is a polygon, i. e. a tuple of number pairs.
@@ -604,7 +604,7 @@ class TurtleScreen(TurtleScreenBase):
         ...     rt(90)
         ...     dist += 2
         """
-    def tracer(self, n: int, delay: int | None = None) -> None
+    def tracer(self, n: int, delay: int? = None) -> None
 
     def delay(self, delay: None = None) -> int:
         """Return or set the drawing delay in milliseconds.
@@ -674,7 +674,7 @@ class TurtleScreen(TurtleScreenBase):
         ['arrow', 'blank', 'circle', ... , 'turtle']
         """
 
-    def onclick(self, fun: (float, float) -> object, btn: int = 1, add: bool | None = None):
+    def onclick(self, fun: (float, float) -> object, btn: int = 1, add: bool? = None):
         """Bind fun to mouse-click event on canvas.
 
         Arguments:
@@ -782,7 +782,7 @@ class TurtleScreen(TurtleScreenBase):
         >>> # e.g. to search for an erroneously escaped turtle ;-)
         """
     # Looks like if self.cv is not a ScrolledCanvas, this could return a tuple as well
-    def screensize(self, canvwidth: int, canvheight: int, bg: Color | None = None) -> None
+    def screensize(self, canvwidth: int, canvheight: int, bg: Color? = None) -> None
 
     if sys.version_info >= (3, 14):
         def save(self, filename: StrPath, *, overwrite: bool = False):
@@ -803,7 +803,7 @@ class TurtleScreen(TurtleScreenBase):
     resetscreen = reset
     clearscreen = clear
     addshape = register_shape
-    def onkeypress(self, fun: () -> object, key: str | None = None):
+    def onkeypress(self, fun: () -> object, key: str? = None):
         """Bind fun to key-press event of key if key is given,
         or to any key-press-event if no key is given.
 
@@ -1169,7 +1169,7 @@ class TNavigator:
         90
         """
 
-    def circle(self, radius: int | float, extent: int | float | None = None, steps: int | None = None):
+    def circle(self, radius: int | float, extent: int | float | None = None, steps: int? = None):
         """Draw a circle with given radius.
 
         Arguments:
@@ -1200,7 +1200,7 @@ class TNavigator:
         >>> turtle.circle(120, 180)  # semicircle
         """
 
-    def speed(self, s: int | None = 0) -> int | None:
+    def speed(self, s: int? = 0) -> int?:
         """dummy method - to be overwritten by child class"""
 
     fd = forward
@@ -1529,7 +1529,7 @@ class TPen:
         """
     def pen(
         self,
-        pen: _PenState | None = None,
+        pen: _PenState? = None,
         *,
         shown: bool = ...,
         pendown: bool = ...,
@@ -1586,7 +1586,7 @@ class RawTurtle(TPen, TNavigator):
         0.0
         """
 
-    def setundobuffer(self, size: int | None):
+    def setundobuffer(self, size: int?):
         """Set or disable undobuffer.
 
         Argument:
@@ -1731,7 +1731,7 @@ class RawTurtle(TPen, TNavigator):
         self, t11: int | float | None = None, t12: int | float | None = None, t21: int | float | None = None, t22: int | float | None = None
     ) -> None
 
-    def get_shapepoly(self) -> PolygonCoords | None:
+    def get_shapepoly(self) -> PolygonCoords?:
         """Return the current shape polygon as tuple of coordinate pairs.
 
         No argument.
@@ -1848,7 +1848,7 @@ class RawTurtle(TPen, TNavigator):
         >>> turtle.clearstamp(astamp)
         """
 
-    def clearstamps(self, n: int | None = None):
+    def clearstamps(self, n: int? = None):
         """Delete all or first/last n of turtle's stamps.
 
         Optional argument:
@@ -1932,8 +1932,8 @@ class RawTurtle(TPen, TNavigator):
         >>> turtle.dot()
         >>> turtle.fd(50); turtle.dot(20, "blue"); turtle.fd(50)
         """
-    def dot(self, size: int | None, color: Color, /) -> None
-    def dot(self, size: int | None, r: int | float, g: int | float, b: int | float, /) -> None
+    def dot(self, size: int?, color: Color, /) -> None
+    def dot(self, size: int?, r: int | float, g: int | float, b: int | float, /) -> None
 
     def write(
         self, arg: object, move: bool = False, align: str = "left", font: (str, int, str) = ("Arial", 8, "normal")
@@ -1998,7 +1998,7 @@ class RawTurtle(TPen, TNavigator):
         >>> turtle.end_poly()
         """
 
-    def get_poly(self) -> PolygonCoords | None:
+    def get_poly(self) -> PolygonCoords?:
         """Return the lastly recorded polygon.
 
         No argument.
@@ -2040,7 +2040,7 @@ class RawTurtle(TPen, TNavigator):
         """
 
     getpen = getturtle
-    def onclick(self, fun: (float, float) -> object, btn: int = 1, add: bool | None = None):
+    def onclick(self, fun: (float, float) -> object, btn: int = 1, add: bool? = None):
         """Bind fun to mouse-click event on this turtle on canvas.
 
         Arguments:
@@ -2059,7 +2059,7 @@ class RawTurtle(TPen, TNavigator):
         >>> onclick(None)  # event-binding will be removed
         """
 
-    def onrelease(self, fun: (float, float) -> object, btn: int = 1, add: bool | None = None):
+    def onrelease(self, fun: (float, float) -> object, btn: int = 1, add: bool? = None):
         """Bind fun to mouse-button-release event on this turtle on canvas.
 
         Arguments:
@@ -2082,7 +2082,7 @@ class RawTurtle(TPen, TNavigator):
         transparent.
         """
 
-    def ondrag(self, fun: (float, float) -> object, btn: int = 1, add: bool | None = None):
+    def ondrag(self, fun: (float, float) -> object, btn: int = 1, add: bool? = None):
         """Bind fun to mouse-move event on this turtle on canvas.
 
         Arguments:
@@ -2128,8 +2128,8 @@ class _Screen(TurtleScreen):
         self,
         width: int | float = 0.5,  # noqa: Y041
         height: int | float = 0.75,  # noqa: Y041
-        startx: int | None = None,
-        starty: int | None = None,
+        startx: int? = None,
+        starty: int? = None,
     ):
         """Set the size and position of the main window.
 
@@ -2237,7 +2237,7 @@ def mainloop():
 
     """
 
-def textinput(title: str, prompt: str) -> str | None:
+def textinput(title: str, prompt: str) -> str?:
     """Pop up a dialog window for input of a string.
 
     Arguments: title is the title of the dialog window,
@@ -2253,7 +2253,7 @@ def textinput(title: str, prompt: str) -> str | None:
 
 def numinput(
     title: str, prompt: str, default: int | float | None = None, minval: int | float | None = None, maxval: int | float | None = None
-) -> float | None:
+) -> float?:
     """Pop up a dialog window for input of a number.
 
     Arguments: title is the title of the dialog window,
@@ -2458,7 +2458,7 @@ def tracer(n: None = None) -> int:
     ...     rt(90)
     ...     dist += 2
     """
-def tracer(n: int, delay: int | None = None) -> None
+def tracer(n: int, delay: int? = None) -> None
 
 def delay(delay: None = None) -> int:
     """Return or set the drawing delay in milliseconds.
@@ -2528,7 +2528,7 @@ def getshapes() -> list[str]:
     ['arrow', 'blank', 'circle', ... , 'turtle']
     """
 
-def onclick(fun: (float, float) -> object, btn: int = 1, add: bool | None = None):
+def onclick(fun: (float, float) -> object, btn: int = 1, add: bool? = None):
     """Bind fun to mouse-click event on this turtle on canvas.
 
     Arguments:
@@ -2638,7 +2638,7 @@ def screensize(canvwidth: None = None, canvheight: None = None, bg: None = None)
     >>> turtle.screensize(2000,1500)
     >>> # e.g. to search for an erroneously escaped turtle ;-)
     """
-def screensize(canvwidth: int, canvheight: int, bg: Color | None = None) -> None
+def screensize(canvwidth: int, canvheight: int, bg: Color? = None) -> None
 
 if sys.version_info >= (3, 14):
     def save(filename: StrPath, *, overwrite: bool = False):
@@ -2660,7 +2660,7 @@ resetscreen = reset
 clearscreen = clear
 addshape = register_shape
 
-def onkeypress(fun: () -> object, key: str | None = None):
+def onkeypress(fun: () -> object, key: str? = None):
     """Bind fun to key-press event of key if key is given,
     or to any key-press-event if no key is given.
 
@@ -2690,7 +2690,7 @@ onkeyrelease = onkey
 
 # Functions copied from _Screen:
 
-def setup(width: int | float = 0.5, height: int | float = 0.75, startx: int | None = None, starty: int | None = None):
+def setup(width: int | float = 0.5, height: int | float = 0.75, startx: int? = None, starty: int? = None):
     """Set the size and position of the main window.
 
     Arguments:
@@ -3080,7 +3080,7 @@ def setheading(to_angle: int | float):
     90
     """
 
-def circle(radius: int | float, extent: int | float | None = None, steps: int | None = None):
+def circle(radius: int | float, extent: int | float | None = None, steps: int? = None):
     """Draw a circle with given radius.
 
     Arguments:
@@ -3424,7 +3424,7 @@ def pen() -> _PenState:
     'stretchfactor': (1,1), 'speed': 3, 'shearfactor': 0.0}
     """
 def pen(
-    pen: _PenState | None = None,
+    pen: _PenState? = None,
     *,
     shown: bool = ...,
     pendown: bool = ...,
@@ -3448,7 +3448,7 @@ ht = hideturtle
 
 # Functions copied from RawTurtle:
 
-def setundobuffer(size: int | None):
+def setundobuffer(size: int?):
     """Set or disable undobuffer.
 
     Argument:
@@ -3602,7 +3602,7 @@ def shapetransform(
     t11: int | float | None = None, t12: int | float | None = None, t21: int | float | None = None, t22: int | float | None = None
 ) -> None
 
-def get_shapepoly() -> PolygonCoords | None:
+def get_shapepoly() -> PolygonCoords?:
     """Return the current shape polygon as tuple of coordinate pairs.
 
     No argument.
@@ -3719,7 +3719,7 @@ def clearstamp(stampid: int | (*: int)):
     >>> clearstamp(astamp)
     """
 
-def clearstamps(n: int | None = None):
+def clearstamps(n: int? = None):
     """Delete all or first/last n of turtle's stamps.
 
     Optional argument:
@@ -3803,8 +3803,8 @@ def dot(size: int | Color | None = None) -> None:
     >>> dot()
     >>> fd(50); dot(20, "blue"); fd(50)
     """
-def dot(size: int | None, color: Color, /) -> None
-def dot(size: int | None, r: int | float, g: int | float, b: int | float, /) -> None
+def dot(size: int?, color: Color, /) -> None
+def dot(size: int?, r: int | float, g: int | float, b: int | float, /) -> None
 
 def write(arg: object, move: bool = False, align: str = "left", font: (str, int, str) = ("Arial", 8, "normal")):
     """Write text at the current turtle position.
@@ -3867,7 +3867,7 @@ def end_poly():
     >>> end_poly()
     """
 
-def get_poly() -> PolygonCoords | None:
+def get_poly() -> PolygonCoords?:
     """Return the lastly recorded polygon.
 
     No argument.
@@ -3910,7 +3910,7 @@ def getturtle() -> Turtle:
 
 getpen = getturtle
 
-def onrelease(fun: (float, float) -> object, btn: int = 1, add: bool | None = None):
+def onrelease(fun: (float, float) -> object, btn: int = 1, add: bool? = None):
     """Bind fun to mouse-button-release event on this turtle on canvas.
 
     Arguments:
@@ -3933,7 +3933,7 @@ def onrelease(fun: (float, float) -> object, btn: int = 1, add: bool | None = No
     transparent.
     """
 
-def ondrag(fun: (float, float) -> object, btn: int = 1, add: bool | None = None):
+def ondrag(fun: (float, float) -> object, btn: int = 1, add: bool? = None):
     """Bind fun to mouse-move event on this turtle on canvas.
 
     Arguments:

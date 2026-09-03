@@ -48,15 +48,15 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
     # The policy attributes and arguments in this class and its subclasses
     # would ideally use Policy[Self], but this is not possible.
     policy: Policy[dynamic]  # undocumented
-    preamble: str | None
-    epilogue: str | None
+    preamble: str?
+    epilogue: str?
     defects: list[MessageDefect]
     init(self, policy: Policy[dynamic] = ...)
     def is_multipart(self) -> bool:
         """Return True if the message consists of multiple parts."""
 
     def set_unixfrom(self, unixfrom: str)
-    def get_unixfrom(self) -> str | None
+    def get_unixfrom(self) -> str?
     def attach(self, payload: PayloadType):
         """Add the given payload to the current payload.
 
@@ -192,7 +192,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         """
     def get[Element](self, name: str, failobj: Element) -> HeaderT | Element
 
-    def get_all(self, name: str, failobj: None = None) -> list[HeaderT] | None:
+    def get_all(self, name: str, failobj: None = None) -> list[HeaderT]?:
         """Return a list of all the values for the named field.
 
         These will be sorted in the order they appeared in the original
@@ -278,7 +278,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
 
     def get_params(
         self, failobj: None = None, header: str = "content-type", unquote: bool = True
-    ) -> list[(str, str)] | None:
+    ) -> list[(str, str)]?:
         """Return the message's Content-Type parameters, as a list.
 
         The elements of the returned list are 2-tuples of key/value pairs, as
@@ -295,7 +295,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
 
     def get_param(
         self, param: str, failobj: None = None, header: str = "content-type", unquote: bool = True
-    ) -> _ParamType | None:
+    ) -> _ParamType?:
         """Return the parameter value if found in the Content-Type header.
 
         Optional failobj is the object to return if there is no Content-Type
@@ -345,7 +345,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         header.
         """
 
-    def get_filename(self, failobj: None = None) -> str | None:
+    def get_filename(self, failobj: None = None) -> str?:
         """Return the filename associated with the payload if present.
 
         The filename is extracted from the Content-Disposition header's
@@ -355,7 +355,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         """
     def get_filename[Element](self, failobj: Element) -> str | Element
 
-    def get_boundary(self, failobj: None = None) -> str | None:
+    def get_boundary(self, failobj: None = None) -> str?:
         """Return the boundary associated with the payload if present.
 
         The boundary is extracted from the Content-Type header's 'boundary'
@@ -374,7 +374,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         HeaderParseError is raised if the message has no Content-Type header.
         """
 
-    def get_content_charset(self) -> str | None:
+    def get_content_charset(self) -> str?:
         """Return the charset parameter of the Content-Type header.
 
         The returned string is always coerced to lower case.  If there is no
@@ -383,7 +383,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         """
     def get_content_charset[Element](self, failobj: Element) -> str | Element
 
-    def get_charsets(self, failobj: None = None) -> list[str | None]:
+    def get_charsets(self, failobj: None = None) -> list[str?]:
         """Return a list containing the charset(s) used in this message.
 
         The returned list of items describes the Content-Type headers'
@@ -408,14 +408,14 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         generator.
         """
 
-    def get_content_disposition(self) -> str | None:
+    def get_content_disposition(self) -> str?:
         """Return the message's content-disposition if it exists, or None.
 
         The return values can be either 'inline', 'attachment' or None
         according to the rfc2183.
         """
 
-    def as_string(self, unixfrom: bool = False, maxheaderlen: int = 0, policy: Policy[dynamic] | None = None) -> str:
+    def as_string(self, unixfrom: bool = False, maxheaderlen: int = 0, policy: Policy[dynamic]? = None) -> str:
         """Return the entire formatted message as a string.
 
         Optional 'unixfrom', when true, means include the Unix From_ envelope
@@ -430,7 +430,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         unicode "unknown character" code points.
         """
 
-    def as_bytes(self, unixfrom: bool = False, policy: Policy[dynamic] | None = None) -> bytes:
+    def as_bytes(self, unixfrom: bool = False, policy: Policy[dynamic]? = None) -> bytes:
         """Return the entire formatted message as a bytes object.
 
         Optional 'unixfrom', when true, means include the Unix From_ envelope
@@ -448,7 +448,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         value: str,
         header: str = "Content-Type",
         requote: bool = True,
-        charset: str | None = None,
+        charset: str? = None,
         language: str = "",
         replace: bool = False,
     ):
@@ -483,10 +483,10 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         """
 
 class MIMEPart[out HeaderRegistryT = dynamic, in HeaderRegistryParamT = dynamic](Message[HeaderRegistryT, HeaderRegistryParamT]):
-    init(self, policy: Policy[dynamic] | None = None)
+    init(self, policy: Policy[dynamic]? = None)
     def get_body(
         self, preferencelist: Sequence[str] = ("related", "html", "plain")
-    ) -> MIMEPart[HeaderRegistryT, HeaderRegistryParamT] | None:
+    ) -> MIMEPart[HeaderRegistryT, HeaderRegistryParamT]?:
         """Return best candidate mime part for display as 'body' of message.
 
         Do a depth first search, starting with self, looking for the first part
@@ -526,17 +526,17 @@ class MIMEPart[out HeaderRegistryT = dynamic, in HeaderRegistryParamT = dynamic]
         Return an empty iterator for a non-multipart.
         """
 
-    def get_content(self, *args: dynamic, content_manager: ContentManager | None = None, **kw: dynamic) -> dynamic
-    def set_content(self, *args: dynamic, content_manager: ContentManager | None = None, **kw: dynamic)
-    def make_related(self, boundary: str | None = None)
-    def make_alternative(self, boundary: str | None = None)
-    def make_mixed(self, boundary: str | None = None)
-    def add_related(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic)
-    def add_alternative(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic)
-    def add_attachment(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic)
+    def get_content(self, *args: dynamic, content_manager: ContentManager? = None, **kw: dynamic) -> dynamic
+    def set_content(self, *args: dynamic, content_manager: ContentManager? = None, **kw: dynamic)
+    def make_related(self, boundary: str? = None)
+    def make_alternative(self, boundary: str? = None)
+    def make_mixed(self, boundary: str? = None)
+    def add_related(self, *args: dynamic, content_manager: ContentManager? = ..., **kw: dynamic)
+    def add_alternative(self, *args: dynamic, content_manager: ContentManager? = ..., **kw: dynamic)
+    def add_attachment(self, *args: dynamic, content_manager: ContentManager? = ..., **kw: dynamic)
     def clear(self)
     def clear_content(self)
-    override def as_string(self, unixfrom: bool = False, maxheaderlen: int | None = None, policy: Policy[dynamic] | None = None) -> str:
+    override def as_string(self, unixfrom: bool = False, maxheaderlen: int? = None, policy: Policy[dynamic]? = None) -> str:
         """Return the entire formatted message as a string.
 
         Optional 'unixfrom', when true, means include the Unix From_ envelope

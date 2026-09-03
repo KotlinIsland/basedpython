@@ -26,7 +26,7 @@ def isqrt(n: SupportsIndex, /) -> int:
 def lcm(*integers: SupportsIndex) -> int:
     """Least Common Multiple."""
 
-def perm(n: SupportsIndex, k: SupportsIndex | None = None, /) -> int:
+def perm(n: SupportsIndex, k: SupportsIndex? = None, /) -> int:
     """Number of ways to choose k items from n items without repetition and with order.
 
     Evaluates to n! / (n - k)! when k <= n and evaluates

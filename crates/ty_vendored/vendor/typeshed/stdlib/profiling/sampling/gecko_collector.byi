@@ -51,7 +51,7 @@ class SpillColumn:
     path: str
     buffer: bytearray
 
-    init(self, directory: StrPath, basename: StrPath, *, buffer_bytes: int | None = None)
+    init(self, directory: StrPath, basename: StrPath, *, buffer_bytes: int? = None)
     # "value" accepts the same types as json.JSONEncoder.encode()
     def append(self, value: dynamic)
     def flush(self)
@@ -79,7 +79,7 @@ class GeckoCollector(Collector):
     global_string_map: dict[str, int]
 
     threads: dict[int, dict[str, dynamic]]
-    spill_dir: TemporaryDirectory[str] | None
+    spill_dir: TemporaryDirectory[str]?
     exported: bool
 
     libs: list[Incomplete]

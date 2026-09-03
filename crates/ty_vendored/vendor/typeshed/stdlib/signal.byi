@@ -70,9 +70,9 @@ SIG_DFL: Final = Handlers.SIG_DFL
 SIG_IGN: Final = Handlers.SIG_IGN
 
 private type SIGNUM = int | Signals
-private type HANDLER = ((int, FrameType | None) -> dynamic) | int | Handlers | None
+private type HANDLER = ((int, FrameType?) -> dynamic) | int | Handlers | None
 
-def default_int_handler(signalnum: int, frame: FrameType | None, /) -> Never:
+def default_int_handler(signalnum: int, frame: FrameType?, /) -> Never:
     """The default handler for SIGINT installed by Python.
 
     It raises KeyboardInterrupt.
@@ -234,7 +234,7 @@ else:
 
             let si_band: int
 
-        def sigtimedwait(sigset: Iterable[int], timeout: int | float, /) -> struct_siginfo | None:
+        def sigtimedwait(sigset: Iterable[int], timeout: int | float, /) -> struct_siginfo?:
             """Like sigwaitinfo(), but with a timeout.
 
             The timeout is specified in seconds, rounded up to nanoseconds.
@@ -246,7 +246,7 @@ else:
             Returns a struct_siginfo containing information about the signal.
             """
 
-def strsignal(signalnum: SIGNUM, /) -> str | None:
+def strsignal(signalnum: SIGNUM, /) -> str?:
     """Return the system description of the given signal.
 
     Returns the description of signal *signalnum*, such as "Interrupt"

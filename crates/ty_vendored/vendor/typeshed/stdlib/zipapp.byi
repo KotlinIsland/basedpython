@@ -10,10 +10,10 @@ class ZipAppError(ValueError)
 
 def create_archive(
     source: _Path,
-    target: _Path | None = None,
-    interpreter: str | None = None,
-    main: str | None = None,
-    filter: ((Path) -> bool) | None = None,
+    target: _Path? = None,
+    interpreter: str? = None,
+    main: str? = None,
+    filter: ((Path) -> bool)? = None,
     compressed: bool = False,
 ):
     """Create an application archive from SOURCE.

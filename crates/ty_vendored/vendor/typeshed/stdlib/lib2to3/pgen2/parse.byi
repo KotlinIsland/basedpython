@@ -22,9 +22,9 @@ class ParseError(Exception):
 
     msg: str
     type: int
-    value: str | None
+    value: str?
     context: Context
-    init(self, msg: str, type: int, value: str | None, context: Context)
+    init(self, msg: str, type: int, value: str?, context: Context)
 
 class Parser:
     """Parser engine.
@@ -59,9 +59,9 @@ class Parser:
     grammar: Grammar
     convert: _Convert
     stack: list[(_DFAS, int, _RawNode)]
-    rootnode: _NL | None
+    rootnode: _NL?
     used_names: set[str]
-    init(self, grammar: Grammar, convert: _Convert | None = None):
+    init(self, grammar: Grammar, convert: _Convert? = None):
         """Constructor.
 
         The grammar argument is a grammar.Grammar instance; see the
@@ -91,7 +91,7 @@ class Parser:
 
         """
 
-    def setup(self, start: int | None = None):
+    def setup(self, start: int? = None):
         """Prepare for parsing.
 
         This *must* be called before starting to parse.
@@ -105,13 +105,13 @@ class Parser:
 
         """
 
-    def addtoken(self, type: int, value: str | None, context: Context) -> bool:
+    def addtoken(self, type: int, value: str?, context: Context) -> bool:
         """Add a token; return True iff this is the end of the program."""
 
-    def classify(self, type: int, value: str | None, context: Context) -> int:
+    def classify(self, type: int, value: str?, context: Context) -> int:
         """Turn a token into a label.  (Internal)"""
 
-    def shift(self, type: int, value: str | None, newstate: int, context: Context):
+    def shift(self, type: int, value: str?, newstate: int, context: Context):
         """Shift a token.  (Internal)"""
 
     def push(self, type: int, newdfa: _DFAS, newstate: int, context: Context):

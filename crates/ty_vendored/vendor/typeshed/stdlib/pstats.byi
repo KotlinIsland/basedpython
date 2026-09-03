@@ -106,7 +106,7 @@ class Stats:
         arg: None | str | Profile | _cProfile = None,
         /,
         *args: None | str | Profile | _cProfile | Self,
-        stream: IO[dynamic] | None = None,
+        stream: IO[dynamic]? = None,
     )
     def init(self, arg: None | str | Profile | _cProfile)
     def load_stats(self, arg: None | str | Profile | _cProfile)

@@ -22,7 +22,7 @@ if sys.version_info >= (3, 14):
     def clear_tool_id(tool_id: int, /)
 
 def free_tool_id(tool_id: int, /)
-def get_tool(tool_id: int, /) -> str | None
+def get_tool(tool_id: int, /) -> str?
 
 final events: _events
 
@@ -65,4 +65,4 @@ def restart_events()
 final DISABLE: object
 final MISSING: object
 
-def register_callback(tool_id: int, event: int, func: (...) -> object | None, /) -> (...) -> dynamic | None
+def register_callback(tool_id: int, event: int, func: (...) -> object?, /) -> (...) -> dynamic?

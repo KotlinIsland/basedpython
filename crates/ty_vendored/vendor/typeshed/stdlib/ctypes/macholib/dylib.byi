@@ -12,10 +12,10 @@ class _DylibInfo(TypedDict):
     location: str
     name: str
     shortname: str
-    version: str | None
-    suffix: str | None
+    version: str?
+    suffix: str?
 
-def dylib_info(filename: str) -> _DylibInfo | None:
+def dylib_info(filename: str) -> _DylibInfo?:
     """
     A dylib name can take one of the following four forms:
         Location/Name.SomeVersion_Suffix.dylib

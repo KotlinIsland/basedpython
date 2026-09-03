@@ -19,7 +19,7 @@ def registerDOMImplementation(name: str, factory: () -> DOMImplementation):
     customization).
     """
 
-def getDOMImplementation(name: str | None = None, features: str | Iterable[(str, str | None)] = ()) -> DOMImplementation:
+def getDOMImplementation(name: str? = None, features: str | Iterable[(str, str?)] = ()) -> DOMImplementation:
     """getDOMImplementation(name = None, features = ()) -> DOM implementation.
 
     Return a suitable DOM implementation. The name is either

@@ -17,7 +17,7 @@ class Profiler:
     """
 
     init(
-        self, timer: (() -> (int | float)) | None = None, timeunit: int | float = 0.0, subcalls: bool = True, builtins: bool = True
+        self, timer: (() -> (int | float))? = None, timeunit: int | float = 0.0, subcalls: bool = True, builtins: bool = True
     )
     def getstats(self) -> list[profiler_entry]:
         """list of profiler_entry objects.

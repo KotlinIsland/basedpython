@@ -35,7 +35,7 @@ def generate_integers(baselen: int, deltas: list[int]) -> bytes:
     """3.4 Bias adaptation"""
 
 def punycode_encode(text: str) -> bytes
-def decode_generalized_number(extended: bytes, extpos: int, bias: int, errors: str) -> (int, int | None):
+def decode_generalized_number(extended: bytes, extpos: int, bias: int, errors: str) -> (int, int?):
     """3.3 Generalized variable-length integers"""
 
 def insertion_sort(base: str, extended: bytes, errors: str) -> str:

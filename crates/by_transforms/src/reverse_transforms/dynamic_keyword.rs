@@ -124,7 +124,7 @@ mod tests {
     fn in_union() {
         check(
             "from typing import Any\nx: Any | None\n",
-            "from typing import Any\nx: dynamic | None\n",
+            "from typing import Any\nx: dynamic?\n",
         );
     }
 

@@ -33,7 +33,7 @@ Notes:
 __all__ = ["Completer"]
 
 class Completer:
-    init(self, namespace: dict[str, dynamic] | None = None):
+    init(self, namespace: dict[str, dynamic]? = None):
         """Create a new completer for the command line.
 
         Completer([namespace]) -> completer instance.
@@ -48,7 +48,7 @@ class Completer:
         readline.set_completer(Completer(my_namespace).complete)
         """
 
-    def complete(self, text: str, state: int) -> str | None:
+    def complete(self, text: str, state: int) -> str?:
         """Return the next possible completion for 'text'.
 
         This is called successively with state == 0, 1, 2, ... until it

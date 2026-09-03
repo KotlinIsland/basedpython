@@ -67,7 +67,7 @@ class Cmd:
     identchars: str
     ruler: str
     lastcmd: str
-    intro: dynamic | None
+    intro: dynamic?
     doc_leader: str
     doc_header: str
     misc_header: str
@@ -78,7 +78,7 @@ class Cmd:
     stdout: IO[str]
     cmdqueue: list[str]
     completekey: str
-    init(self, completekey: str = "tab", stdin: IO[str] | None = None, stdout: IO[str] | None = None):
+    init(self, completekey: str = "tab", stdin: IO[str]? = None, stdout: IO[str]? = None):
         """Instantiate a line-oriented interpreter framework.
 
         The optional argument 'completekey' is the readline name of a
@@ -90,8 +90,8 @@ class Cmd:
 
         """
 
-    old_completer: ((str, int) -> (str | None)) | None
-    def cmdloop(self, intro: dynamic | None = None):
+    old_completer: ((str, int) -> (str?))?
+    def cmdloop(self, intro: dynamic? = None):
         """Repeatedly issue a prompt, accept input, parse an initial prefix
         off the received input, and dispatch to action methods, passing them
         the remainder of the line as argument.
@@ -116,7 +116,7 @@ class Cmd:
 
         """
 
-    def parseline(self, line: str) -> (str | None, str | None, str):
+    def parseline(self, line: str) -> (str?, str?, str):
         """Parse the line into a command name and a string containing
         the arguments.  Returns a tuple containing (command, args, line).
         'command' and 'args' may be None if the line couldn't be parsed.
@@ -158,8 +158,8 @@ class Cmd:
         """
 
     def completenames(self, text: str, *ignored: dynamic) -> list[str]
-    completion_matches: list[str] | None
-    def complete(self, text: str, state: int) -> list[str] | None:
+    completion_matches: list[str]?
+    def complete(self, text: str, state: int) -> list[str]?:
         """Return the next possible completion for 'text'.
 
         If a command has not been entered, then complete against command list.
@@ -169,11 +169,11 @@ class Cmd:
     def get_names(self) -> list[str]
     # Only the first element of args matters.
     def complete_help(self, *args: dynamic) -> list[str]
-    def do_help(self, arg: str) -> bool | None:
+    def do_help(self, arg: str) -> bool?:
         """List available commands with "help" or detailed help with "help cmd"."""
 
-    def print_topics(self, header: str, cmds: list[str] | None, cmdlen: dynamic, maxcol: int)
-    def columnize(self, list: list[str] | None, displaywidth: int = 80):
+    def print_topics(self, header: str, cmds: list[str]?, cmdlen: dynamic, maxcol: int)
+    def columnize(self, list: list[str]?, displaywidth: int = 80):
         """Display a list of strings as a compact set of columns.
 
         Each column is only as wide as necessary.

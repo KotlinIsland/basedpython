@@ -270,7 +270,7 @@ def modf(x: _SupportsFloatOrIndex, /) -> (float, float):
     """
 
 if sys.version_info >= (3, 12):
-    def nextafter(x: _SupportsFloatOrIndex, y: _SupportsFloatOrIndex, /, *, steps: SupportsIndex | None = None) -> float:
+    def nextafter(x: _SupportsFloatOrIndex, y: _SupportsFloatOrIndex, /, *, steps: SupportsIndex? = None) -> float:
         """Return the floating-point value the given number of steps after x towards y.
 
         If steps is not specified or is None, it defaults to 1.
@@ -283,7 +283,7 @@ else:
     def nextafter(x: _SupportsFloatOrIndex, y: _SupportsFloatOrIndex, /) -> float:
         """Return the next floating-point value after x towards y."""
 
-def perm(n: SupportsIndex, k: SupportsIndex | None = None, /) -> int:
+def perm(n: SupportsIndex, k: SupportsIndex? = None, /) -> int:
     """Number of ways to choose k items from n items without repetition and with order.
 
     Evaluates to n! / (n - k)! when k <= n and evaluates

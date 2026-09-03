@@ -142,7 +142,7 @@ def hmac_new(key: ReadableBuffer, msg: ReadableBuffer = b"", digestmod: DigestMo
     """Return a new hmac object."""
 
 if sys.version_info >= (3, 13):
-    def new(name: str, data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None) -> HASH:
+    def new(name: str, data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None) -> HASH:
         """Return a new hash object using the named algorithm.
 
         An optional string argument may be provided and will be
@@ -151,51 +151,51 @@ if sys.version_info >= (3, 13):
         The MD5 and SHA1 algorithms are always supported.
         """
 
-    def openssl_md5(data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None) -> HASH:
+    def openssl_md5(data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None) -> HASH:
         """Returns a md5 hash object; optionally initialized with a string"""
 
-    def openssl_sha1(data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None) -> HASH:
+    def openssl_sha1(data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None) -> HASH:
         """Returns a sha1 hash object; optionally initialized with a string"""
 
-    def openssl_sha224(data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None) -> HASH:
+    def openssl_sha224(data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None) -> HASH:
         """Returns a sha224 hash object; optionally initialized with a string"""
 
-    def openssl_sha256(data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None) -> HASH:
+    def openssl_sha256(data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None) -> HASH:
         """Returns a sha256 hash object; optionally initialized with a string"""
 
-    def openssl_sha384(data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None) -> HASH:
+    def openssl_sha384(data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None) -> HASH:
         """Returns a sha384 hash object; optionally initialized with a string"""
 
-    def openssl_sha512(data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None) -> HASH:
+    def openssl_sha512(data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None) -> HASH:
         """Returns a sha512 hash object; optionally initialized with a string"""
 
     def openssl_sha3_224(
-        data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None
+        data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None
     ) -> HASH:
         """Returns a sha3-224 hash object; optionally initialized with a string"""
 
     def openssl_sha3_256(
-        data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None
+        data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None
     ) -> HASH:
         """Returns a sha3-256 hash object; optionally initialized with a string"""
 
     def openssl_sha3_384(
-        data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None
+        data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None
     ) -> HASH:
         """Returns a sha3-384 hash object; optionally initialized with a string"""
 
     def openssl_sha3_512(
-        data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None
+        data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None
     ) -> HASH:
         """Returns a sha3-512 hash object; optionally initialized with a string"""
 
     def openssl_shake_128(
-        data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None
+        data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None
     ) -> HASHXOF:
         """Returns a shake-128 variable hash object; optionally initialized with a string"""
 
     def openssl_shake_256(
-        data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer | None = None
+        data: ReadableBuffer = b"", *, usedforsecurity: bool = True, string: ReadableBuffer? = None
     ) -> HASHXOF:
         """Returns a shake-256 variable hash object; optionally initialized with a string"""
 
@@ -249,7 +249,7 @@ def hmac_digest(key: ReadableBuffer, msg: ReadableBuffer, digest: str) -> bytes:
     """Single-shot HMAC."""
 
 def pbkdf2_hmac(
-    hash_name: str, password: ReadableBuffer, salt: ReadableBuffer, iterations: int, dklen: int | None = None
+    hash_name: str, password: ReadableBuffer, salt: ReadableBuffer, iterations: int, dklen: int? = None
 ) -> bytes:
     """Password based key derivation function 2 (PKCS #5 v2.0) with HMAC as pseudorandom function."""
 

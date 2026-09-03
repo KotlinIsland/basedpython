@@ -2,7 +2,7 @@ import sys
 from typing import Final
 
 if sys.platform == "win32":
-    final ActionText: list[(str, str, str | None)]
-    final UIText: list[(str, str | None)]
+    final ActionText: list[(str, str, str?)]
+    final UIText: list[(str, str?)]
     dirname: str
     final tables: list[str]

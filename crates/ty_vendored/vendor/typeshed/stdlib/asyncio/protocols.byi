@@ -25,7 +25,7 @@ class BaseProtocol:
         When the connection is closed, connection_lost() is called.
         """
 
-    def connection_lost(self, exc: Exception | None):
+    def connection_lost(self, exc: Exception?):
         """Called when the connection is lost or closed.
 
         The argument is an exception object or None (the latter
@@ -95,7 +95,7 @@ class Protocol(BaseProtocol):
         The argument is a bytes object.
         """
 
-    def eof_received(self) -> bool | None:
+    def eof_received(self) -> bool?:
         """Called when the other end calls write_eof() or equivalent.
 
         If this returns a false value (including None), the transport
@@ -146,7 +146,7 @@ class BufferedProtocol(BaseProtocol):
         the buffer.
         """
 
-    def eof_received(self) -> bool | None:
+    def eof_received(self) -> bool?:
         """Called when the other end calls write_eof() or equivalent.
 
         If this returns a false value (including None), the transport
@@ -190,7 +190,7 @@ class SubprocessProtocol(BaseProtocol):
         data is bytes object.
         """
 
-    def pipe_connection_lost(self, fd: int, exc: Exception | None):
+    def pipe_connection_lost(self, fd: int, exc: Exception?):
         """Called when a file descriptor associated with the child process is
         closed.
 

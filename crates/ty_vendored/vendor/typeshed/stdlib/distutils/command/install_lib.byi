@@ -13,7 +13,7 @@ PYTHON_SOURCE_EXTENSION: Final = ".py"
 
 class install_lib(Command):
     description: str
-    user_options: ClassVar[list[(str, str | None, str)]]
+    user_options: ClassVar[list[(str, str?, str)]]
     boolean_options: ClassVar[list[str]]
     negative_opt: ClassVar[dict[str, str]]
     install_dir: Incomplete

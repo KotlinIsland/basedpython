@@ -9,7 +9,7 @@ protocol _IOBytes:
 def load_tzdata(key: str) -> io.BufferedReader
 def load_data(
     fobj: _IOBytes,
-) -> ((*: int), (*: int), (*: int), (*: int), (*: str), bytes | None)
+) -> ((*: int), (*: int), (*: int), (*: int), (*: str), bytes?)
 
 class ZoneInfoNotFoundError(KeyError):
     """Exception raised when a ZoneInfo key is not found."""

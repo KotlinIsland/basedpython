@@ -23,14 +23,14 @@ class BaseHandler:
 
     origin_server: bool
     http_version: str
-    server_software: str | None
+    server_software: str?
 
     os_environ: MutableMapping[str, str]
 
-    wsgi_file_wrapper: type[FileWrapper] | None
+    wsgi_file_wrapper: type[FileWrapper]?
     headers_class: type[Headers]  # undocumented
 
-    traceback_limit: int | None
+    traceback_limit: int?
     error_status: str
     error_headers: list[(str, str)]
     error_body: bytes
@@ -62,7 +62,7 @@ class BaseHandler:
         """
 
     def start_response(
-        self, status: str, headers: list[(str, str)], exc_info: OptExcInfo | None = None
+        self, status: str, headers: list[(str, str)], exc_info: OptExcInfo? = None
     ) -> (bytes) -> None:
         """'start_response()' callable as specified by PEP 3333"""
 

@@ -52,7 +52,7 @@ class _Database(MutableMapping[_KeyType, bytes]):
     def __del__(self)
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
     )
 
 if sys.version_info >= (3, 11):

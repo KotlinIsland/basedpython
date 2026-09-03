@@ -26,16 +26,16 @@ if sys.version_info >= (3, 12):
 
 if sys.platform == "win32":
     # Description, Source, HelpFile, HelpContext, scode
-    type _COMError_Details = (str | None, str | None, str | None, int | None, int | None)
+    type _COMError_Details = (str?, str?, str?, int?, int?)
 
     class COMError(Exception):
         """Raised when a COM method call failed."""
 
         hresult: int
-        text: str | None
+        text: str?
         details: _COMError_Details
 
-        init(self, hresult: int, text: str | None, details: _COMError_Details)
+        init(self, hresult: int, text: str?, details: _COMError_Details)
 
     def CopyComPointer(src: _PointerLike, dst: _PointerLike | _CArgObject) -> int:
         """CopyComPointer(src, dst) -> HRESULT value"""
@@ -98,7 +98,7 @@ else:
 class _CData:
     _b_base_: int
     _b_needsfree_: bool
-    _objects: Mapping[dynamic, int] | None
+    _objects: Mapping[dynamic, int]?
     def __buffer__(self, flags: int, /) -> memoryview
     def __ctypes_from_outparam__(self, /) -> Self
     if sys.version_info >= (3, 14):
@@ -165,7 +165,7 @@ class _Pointer[in out CT: _CData](_PointerLike, _CData, metaclass=_PyCPointerTyp
 
     def __getitem__(self, key: int, /) -> dynamic:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> list[dynamic]
+    def __getitem__(self, key: slice[SupportsIndex?], /) -> list[dynamic]
 
     def __setitem__(self, key: int, value: dynamic, /):
         """Set self[key] to value."""
@@ -206,7 +206,7 @@ else:
         """
 
 private type ECT = (_CData | _CDataType | None, CFuncPtr, (*: _CData | _CDataType)) -> _CDataType
-private type PF = (int,) | (int, str | None) | (int, str | None, dynamic)
+private type PF = (int,) | (int, str?) | (int, str?, dynamic)
 
 # This class is not exposed. It calls itself _ctypes.PyCFuncPtrType.
 @type_check_only
@@ -239,10 +239,10 @@ class CFuncPtr(_PointerLike, _CData, metaclass=_PyCFuncPtrType):
     def __new__(cls) -> Self
     def __new__(cls, address: int, /) -> Self
     def __new__(cls, callable: (...) -> dynamic, /) -> Self
-    def __new__(cls, func_spec: (str | int, CDLL), paramflags: (*: PF) | None = ..., /) -> Self
+    def __new__(cls, func_spec: (str | int, CDLL), paramflags: (*: PF)? = ..., /) -> Self
     if sys.platform == "win32":
         def __new__(
-            cls, vtbl_index: int, name: str, paramflags: (*: PF) | None = ..., iid: _CData | _CDataType | None = ..., /
+            cls, vtbl_index: int, name: str, paramflags: (*: PF)? = ..., iid: _CData | _CDataType | None = ..., /
         ) -> Self
 
     def __call__(self, *args: dynamic, **kwargs: dynamic) -> dynamic:
@@ -283,9 +283,9 @@ if sys.version_info >= (3, 14):
         is_anonymous: bool
         """true if this field is anonymous"""
 
-        def __get__(self, instance: None, owner: builtins.type[dynamic] | None = None, /) -> Self:
+        def __get__(self, instance: None, owner: builtins.type[dynamic]? = None, /) -> Self:
             """Return an attribute of instance, which is of type owner."""
-        def __get__(self, instance: dynamic, owner: builtins.type[dynamic] | None = None, /) -> GetT
+        def __get__(self, instance: dynamic, owner: builtins.type[dynamic]? = None, /) -> GetT
 
         def __set__(self, instance: dynamic, value: SetT, /):
             """Set an attribute of instance to value."""
@@ -298,8 +298,8 @@ else:
         offset: int
         size: int
 
-        def __get__(self, instance: None, owner: type[dynamic] | None = None, /) -> Self
-        def __get__(self, instance: dynamic, owner: type[dynamic] | None = None, /) -> GetT
+        def __get__(self, instance: None, owner: type[dynamic]? = None, /) -> Self
+        def __get__(self, instance: dynamic, owner: type[dynamic]? = None, /) -> GetT
 
         def __set__(self, instance: dynamic, value: SetT, /)
 
@@ -423,11 +423,11 @@ class Array[in out CT: _CData](_CData, metaclass=_PyCArrayType):
 
     def __getitem__(self, key: int, /) -> dynamic:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> list[dynamic]
+    def __getitem__(self, key: slice[SupportsIndex?], /) -> list[dynamic]
 
     def __setitem__(self, key: int, value: dynamic, /) -> None:
         """Set self[key] to value."""
-    def __setitem__(self, key: slice[SupportsIndex | None], value: Iterable[dynamic], /) -> None
+    def __setitem__(self, key: slice[SupportsIndex?], value: Iterable[dynamic], /) -> None
 
     def __iter__(self) -> Iterator[dynamic]
     # Can't inherit from Sized because the metaclass conflict between

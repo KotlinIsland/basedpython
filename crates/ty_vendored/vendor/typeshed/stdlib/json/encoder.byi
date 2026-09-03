@@ -70,8 +70,8 @@ class JSONEncoder:
         allow_nan: bool = True,
         sort_keys: bool = False,
         indent: int | str | None = None,
-        separators: (str, str) | None = None,
-        default: (...) -> dynamic | None = None,
+        separators: (str, str)? = None,
+        default: (...) -> dynamic? = None,
     ):
         """Constructor for JSONEncoder, with sensible defaults.
 

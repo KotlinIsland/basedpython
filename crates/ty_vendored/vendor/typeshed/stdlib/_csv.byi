@@ -34,8 +34,8 @@ class Dialect:
     """
 
     delimiter: str
-    quotechar: str | None
-    escapechar: str | None
+    quotechar: str?
+    escapechar: str?
     doublequote: bool
     skipinitialspace: bool
     lineterminator: str
@@ -43,12 +43,12 @@ class Dialect:
     strict: bool
     def __new__(
         cls,
-        dialect: _DialectLike | None = None,
+        dialect: _DialectLike? = None,
         delimiter: str = ",",
         doublequote: bool = True,
-        escapechar: str | None = None,
+        escapechar: str? = None,
         lineterminator: str = "\r\n",
-        quotechar: str | None = '"',
+        quotechar: str? = '"',
         quoting: _QuotingType = 0,
         skipinitialspace: bool = False,
         strict: bool = False,
@@ -115,8 +115,8 @@ def writer(
     dialect: _DialectLike = "excel",
     *,
     delimiter: str = ",",
-    quotechar: str | None = '"',
-    escapechar: str | None = None,
+    quotechar: str? = '"',
+    escapechar: str? = None,
     doublequote: bool = True,
     skipinitialspace: bool = False,
     lineterminator: str = "\r\n",
@@ -137,8 +137,8 @@ def reader(
     dialect: _DialectLike = "excel",
     *,
     delimiter: str = ",",
-    quotechar: str | None = '"',
-    escapechar: str | None = None,
+    quotechar: str? = '"',
+    escapechar: str? = None,
     doublequote: bool = True,
     skipinitialspace: bool = False,
     lineterminator: str = "\r\n",
@@ -163,8 +163,8 @@ def register_dialect(
     dialect: type[Dialect | csv.Dialect] | str = "excel",
     *,
     delimiter: str = ",",
-    quotechar: str | None = '"',
-    escapechar: str | None = None,
+    quotechar: str? = '"',
+    escapechar: str? = None,
     doublequote: bool = True,
     skipinitialspace: bool = False,
     lineterminator: str = "\r\n",

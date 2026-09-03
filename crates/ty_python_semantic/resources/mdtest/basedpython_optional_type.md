@@ -47,6 +47,36 @@ def f(x: int | str?) -> None:
     reveal_type(x)  # revealed: int | str | None
 ```
 
+## the marker after an arrow wraps the whole callable
+
+an arrow's return type is read only as far as the first `|`, so a `?` written after one is over the
+callable, not over what it returns. an optional return needs its own parentheses
+
+```by
+def f(g: (int) -> str?, h: (int) -> (str?)) -> None:
+    reveal_type(g)  # revealed: ((int, /) -> str) | None
+    reveal_type(h)  # revealed: (int, /) -> str | None
+```
+
+## the marker after a use-site type modifier is over the modified type
+
+`literal str` is a single operand, so the `?` stands outside it
+
+```by
+def f(x: literal str?) -> None:
+    reveal_type(x)  # revealed: LiteralString | None
+```
+
+## a `None` written mid-union stays where it was written
+
+`?` takes the union to its left and the union then carries on, so the arms keep the order they were
+written in
+
+```by
+def f(x: str? | int) -> None:
+    reveal_type(x)  # revealed: str | None | int
+```
+
 ## double optional is a distinct wrapped type
 
 a single `T?` is the lossless union `T | None`, but a nested optional cannot collapse that way (the

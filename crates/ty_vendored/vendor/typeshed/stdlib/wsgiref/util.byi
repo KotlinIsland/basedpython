@@ -30,7 +30,7 @@ def application_uri(environ: WSGIEnvironment) -> str:
 def request_uri(environ: WSGIEnvironment, include_query: bool = True) -> str:
     """Return the full request URI, optionally including the query string"""
 
-def shift_path_info(environ: WSGIEnvironment) -> str | None:
+def shift_path_info(environ: WSGIEnvironment) -> str?:
     """Shift a name from PATH_INFO to SCRIPT_NAME, returning it
 
     If there are no remaining path segments in PATH_INFO, return None.

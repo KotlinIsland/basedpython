@@ -154,7 +154,7 @@ private protocol SizedIterable[out Element](Iterable[Element], Sized)
 class StatisticsError(ValueError)
 
 if sys.version_info >= (3, 11):
-    def fmean(data: Iterable[SupportsFloat], weights: Iterable[SupportsFloat] | None = None) -> float:
+    def fmean(data: Iterable[SupportsFloat], weights: Iterable[SupportsFloat]? = None) -> float:
         """Convert data to floats and compute the arithmetic mean.
 
         This runs faster than the mean() function and it always returns a float.
@@ -210,7 +210,7 @@ def mean[NumberT in (int | float, Decimal, Fraction)](data: Iterable[NumberT]) -
 
     """
 
-def harmonic_mean[NumberT in (int | float, Decimal, Fraction)](data: Iterable[NumberT], weights: Iterable[Number] | None = None) -> NumberT:
+def harmonic_mean[NumberT in (int | float, Decimal, Fraction)](data: Iterable[NumberT], weights: Iterable[Number]? = None) -> NumberT:
     """Return the harmonic mean of data.
 
     The harmonic mean is the reciprocal of the arithmetic mean of the
@@ -520,7 +520,7 @@ class NormalDist:
     class def from_samples(cls, data: Iterable[SupportsFloat]) -> Self:
         """Make a normal distribution instance from sample data."""
 
-    def samples(self, n: SupportsIndex, *, seed: Seed | None = None) -> list[float]:
+    def samples(self, n: SupportsIndex, *, seed: Seed? = None) -> list[float]:
         """Generate *n* samples for a given mean and standard deviation."""
 
     def pdf(self, x: int | float) -> float:
@@ -864,7 +864,7 @@ if sys.version_info >= (3, 13):
         """
 
     def kde_random(
-        data: Sequence[int | float], h: int | float, kernel: _Kernel = "normal", *, seed: Seed | None = None
+        data: Sequence[int | float], h: int | float, kernel: _Kernel = "normal", *, seed: Seed? = None
     ) -> () -> float:
         """Return a function that makes a random selection from the estimated
         probability density function created by kde(data, h, kernel).

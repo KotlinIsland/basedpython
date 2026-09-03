@@ -46,7 +46,7 @@ class zipimporter(_LoaderBasics):
 
     if sys.version_info < (3, 12):
         @deprecated("Deprecated since Python 3.10; removed in Python 3.12. Use `find_spec()` instead.")
-        def find_loader(self, fullname: str, path: str | None = None) -> (zipimporter | None, list[str]):
+        def find_loader(self, fullname: str, path: str? = None) -> (zipimporter?, list[str]):
             """find_loader(fullname, path=None) -> self, str or None.
 
             Search for a module specified by 'fullname'. 'fullname' must be the
@@ -60,7 +60,7 @@ class zipimporter(_LoaderBasics):
             """
 
         @deprecated("Deprecated since Python 3.10; removed in Python 3.12. Use `find_spec()` instead.")
-        def find_module(self, fullname: str, path: str | None = None) -> zipimporter | None:
+        def find_module(self, fullname: str, path: str? = None) -> zipimporter?:
             """find_module(fullname, path=None) -> self or None.
 
             Search for a module specified by 'fullname'. 'fullname' must be the
@@ -98,10 +98,10 @@ class zipimporter(_LoaderBasics):
             """Return the ResourceReader for a module in a zip file."""
 
     else:
-        def get_resource_reader(self, fullname: str) -> ZipReader | None:  # undocumented
+        def get_resource_reader(self, fullname: str) -> ZipReader?:  # undocumented
             """Return the ResourceReader for a module in a zip file."""
 
-    def get_source(self, fullname: str) -> str | None:
+    def get_source(self, fullname: str) -> str?:
         """get_source(fullname) -> source string.
 
         Return the source code for the specified module. Raise ZipImportError
@@ -134,7 +134,7 @@ class zipimporter(_LoaderBasics):
     override def create_module(self, spec: ModuleSpec):
         """Use default semantics for module creation."""
 
-    def find_spec(self, fullname: str, target: ModuleType | None = None) -> ModuleSpec | None:
+    def find_spec(self, fullname: str, target: ModuleType? = None) -> ModuleSpec?:
         """Create a ModuleSpec for the specified module.
 
         Returns None if the module cannot be found.

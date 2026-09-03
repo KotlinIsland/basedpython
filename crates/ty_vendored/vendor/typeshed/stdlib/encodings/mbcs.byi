@@ -15,21 +15,21 @@ from _typeshed import ReadableBuffer
 if sys.platform == "win32":
     encode = codecs.mbcs_encode
 
-    def decode(input: ReadableBuffer, errors: str | None = "strict") -> (str, int)
+    def decode(input: ReadableBuffer, errors: str? = "strict") -> (str, int)
 
     class IncrementalEncoder(codecs.IncrementalEncoder):
         def encode(self, input: str, final: bool = False) -> bytes
 
     class IncrementalDecoder(codecs.BufferedIncrementalDecoder):
         # At runtime, this is codecs.mbcs_decode
-        static def _buffer_decode(data: ReadableBuffer, errors: str | None = None, final: bool = False, /) -> (str, int)
+        static def _buffer_decode(data: ReadableBuffer, errors: str? = None, final: bool = False, /) -> (str, int)
 
     class StreamWriter(codecs.StreamWriter):
         # At runtime, this is codecs.mbcs_encode
-        static def encode(str: str, errors: str | None = None, /) -> (bytes, int)
+        static def encode(str: str, errors: str? = None, /) -> (bytes, int)
 
     class StreamReader(codecs.StreamReader):
         # At runtime, this is codecs.mbcs_decode
-        static def decode(data: ReadableBuffer, errors: str | None = None, final: bool = False, /) -> (str, int)
+        static def decode(data: ReadableBuffer, errors: str? = None, final: bool = False, /) -> (str, int)
 
     def getregentry() -> codecs.CodecInfo

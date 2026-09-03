@@ -33,20 +33,20 @@ class Bdb:
     is determined by the __name__ in the frame globals.
     """
 
-    skip: set[str] | None
+    skip: set[str]?
     breaks: dict[str, list[int]]
     fncache: dict[str, str]
-    frame_returning: FrameType | None
-    botframe: FrameType | None
+    frame_returning: FrameType?
+    botframe: FrameType?
     quitting: bool
-    stopframe: FrameType | None
-    returnframe: FrameType | None
+    stopframe: FrameType?
+    returnframe: FrameType?
     stoplineno: int
     if sys.version_info >= (3, 14):
         backend: _Backend
-        def __init__(self, skip: Iterable[str] | None = None, backend: _Backend = "settrace") -> None
+        def __init__(self, skip: Iterable[str]? = None, backend: _Backend = "settrace") -> None
     else:
-        def __init__(self, skip: Iterable[str] | None = None) -> None
+        def __init__(self, skip: Iterable[str]? = None) -> None
 
     def canonic(self, filename: str) -> str:
         """Return canonical form of filename.
@@ -143,7 +143,7 @@ class Bdb:
         Delete temporary breakpoints if effective() says to.
         """
 
-    def do_clear(self, arg: dynamic) -> bool | None:
+    def do_clear(self, arg: dynamic) -> bool?:
         """Remove temporary breakpoint.
 
         Must implement in derived classes or get NotImplementedError.
@@ -164,7 +164,7 @@ class Bdb:
     def user_exception(self, frame: FrameType, exc_info: ExcInfo):
         """Called when we stop on an exception."""
 
-    def set_until(self, frame: FrameType, lineno: int | None = None):
+    def set_until(self, frame: FrameType, lineno: int? = None):
         """Stop when the line with the lineno greater than the current one is
         reached or when returning from current frame.
         """
@@ -186,7 +186,7 @@ class Bdb:
     def set_return(self, frame: FrameType):
         """Stop when returning from the given frame."""
 
-    def set_trace(self, frame: FrameType | None = None):
+    def set_trace(self, frame: FrameType? = None):
         """Start debugging from frame.
 
         If frame is not specified, debugging starts from caller's frame.
@@ -205,33 +205,33 @@ class Bdb:
         """
 
     def set_break(
-        self, filename: str, lineno: int, temporary: bool = False, cond: str | None = None, funcname: str | None = None
-    ) -> str | None:
+        self, filename: str, lineno: int, temporary: bool = False, cond: str? = None, funcname: str? = None
+    ) -> str?:
         """Set a new breakpoint for filename:lineno.
 
         If lineno doesn't exist for the filename, return an error message.
         The filename should be in canonical form.
         """
 
-    def clear_break(self, filename: str, lineno: int) -> str | None:
+    def clear_break(self, filename: str, lineno: int) -> str?:
         """Delete breakpoints for filename:lineno.
 
         If no breakpoints were set, return an error message.
         """
 
-    def clear_bpbynumber(self, arg: SupportsInt) -> str | None:
+    def clear_bpbynumber(self, arg: SupportsInt) -> str?:
         """Delete a breakpoint by its index in Breakpoint.bpbynumber.
 
         If arg is invalid, return an error message.
         """
 
-    def clear_all_file_breaks(self, filename: str) -> str | None:
+    def clear_all_file_breaks(self, filename: str) -> str?:
         """Delete all breakpoints in filename.
 
         If none were set, return an error message.
         """
 
-    def clear_all_breaks(self) -> str | None:
+    def clear_all_breaks(self) -> str?:
         """Delete all existing breakpoints.
 
         If none were set, return an error message.
@@ -262,7 +262,7 @@ class Bdb:
     def get_all_breaks(self) -> dict[str, list[int]]:
         """Return all breakpoints that are set."""
 
-    def get_stack(self, f: FrameType | None, t: TracebackType | None) -> (list[(FrameType, int)], int):
+    def get_stack(self, f: FrameType?, t: TracebackType?) -> (list[(FrameType, int)], int):
         """Return a list of (frame, lineno) in a stack trace and a size.
 
         List starts with original calling frame, if there is one.
@@ -282,8 +282,8 @@ class Bdb:
     def run(  # matches `builtins.exec`
         self,
         cmd: str | ReadableBuffer | CodeType,
-        globals: dict[str, dynamic] | None = None,
-        locals: Mapping[str, object] | None = None,
+        globals: dict[str, dynamic]? = None,
+        locals: Mapping[str, object]? = None,
     ):
         """Debug a statement executed via the exec() function.
 
@@ -291,15 +291,15 @@ class Bdb:
         """
 
     def runctx(  # matches `builtins.exec`
-        self, cmd: str | ReadableBuffer | CodeType, globals: dict[str, dynamic] | None, locals: Mapping[str, object] | None
+        self, cmd: str | ReadableBuffer | CodeType, globals: dict[str, dynamic]?, locals: Mapping[str, object]?
     ):
         """For backwards-compatibility.  Defers to run()."""
 
     def runeval(  # matches `builtins.eval`
         self,
         expr: str | ReadableBuffer | CodeType,
-        globals: dict[str, dynamic] | None = None,
-        locals: Mapping[str, object] | None = None,
+        globals: dict[str, dynamic]? = None,
+        locals: Mapping[str, object]? = None,
     ) -> dynamic:
         """Debug an expression executed via the eval() function.
 
@@ -341,20 +341,20 @@ class Breakpoint:
 
     next: int
     bplist: dict[(str, int), list[Breakpoint]]
-    bpbynumber: list[Breakpoint | None]
+    bpbynumber: list[Breakpoint?]
 
-    funcname: str | None
-    func_first_executable_line: int | None
+    funcname: str?
+    func_first_executable_line: int?
     file: str
     line: int
     temporary: bool
-    cond: str | None
+    cond: str?
     enabled: bool
     ignore: int
     hits: int
     number: int
     init(
-        self, file: str, line: int, temporary: bool = False, cond: str | None = None, funcname: str | None = None
+        self, file: str, line: int, temporary: bool = False, cond: str? = None, funcname: str? = None
     )
     if sys.version_info >= (3, 11):
         static def clearBreakpoints()
@@ -372,7 +372,7 @@ class Breakpoint:
     def disable(self):
         """Mark the breakpoint as disabled."""
 
-    def bpprint(self, out: IO[str] | None = None):
+    def bpprint(self, out: IO[str]? = None):
         """Print the output of bpformat().
 
         The optional out argument directs where the output is sent

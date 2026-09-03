@@ -9,29 +9,29 @@ private type Token = (str, str)
 private type Next = () -> Token
 private type Callback = (_SelectorContext, Iterable[Element]) -> Generator[Element]
 
-def xpath_tokenizer(pattern: str, namespaces: dict[str, str] | None = None) -> Generator[Token]
+def xpath_tokenizer(pattern: str, namespaces: dict[str, str]? = None) -> Generator[Token]
 def get_parent_map(context: _SelectorContext) -> dict[Element, Element]
 def prepare_child(next: Next, token: Token) -> Callback
 def prepare_star(next: Next, token: Token) -> Callback
 def prepare_self(next: Next, token: Token) -> Callback
-def prepare_descendant(next: Next, token: Token) -> Callback | None
+def prepare_descendant(next: Next, token: Token) -> Callback?
 def prepare_parent(next: Next, token: Token) -> Callback
-def prepare_predicate(next: Next, token: Token) -> Callback | None
+def prepare_predicate(next: Next, token: Token) -> Callback?
 
-final ops: dict[str, (Next, Token) -> (Callback | None)]
+final ops: dict[str, (Next, Token) -> (Callback?)]
 
 class _SelectorContext:
-    parent_map: dict[Element, Element] | None
+    parent_map: dict[Element, Element]?
     root: Element
     init(self, root: Element)
 
 def iterfind(
-    elem: Element[dynamic], path: "", namespaces: dict[str, str] | None = None
+    elem: Element[dynamic], path: "", namespaces: dict[str, str]? = None
 ) -> None
-def iterfind(elem: Element[dynamic], path: str, namespaces: dict[str, str] | None = None) -> Generator[Element]
+def iterfind(elem: Element[dynamic], path: str, namespaces: dict[str, str]? = None) -> Generator[Element]
 
-def find(elem: Element[dynamic], path: str, namespaces: dict[str, str] | None = None) -> Element | None
-def findall(elem: Element[dynamic], path: str, namespaces: dict[str, str] | None = None) -> list[Element]
+def find(elem: Element[dynamic], path: str, namespaces: dict[str, str]? = None) -> Element?
+def findall(elem: Element[dynamic], path: str, namespaces: dict[str, str]? = None) -> list[Element]
 
-def findtext(elem: Element[dynamic], path: str, default: None = None, namespaces: dict[str, str] | None = None) -> str | None
-def findtext[T](elem: Element[dynamic], path: str, default: T, namespaces: dict[str, str] | None = None) -> T | str
+def findtext(elem: Element[dynamic], path: str, default: None = None, namespaces: dict[str, str]? = None) -> str?
+def findtext[T](elem: Element[dynamic], path: str, default: T, namespaces: dict[str, str]? = None) -> T | str

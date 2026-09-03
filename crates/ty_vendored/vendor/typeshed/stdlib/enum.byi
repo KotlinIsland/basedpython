@@ -81,7 +81,7 @@ class _EnumDict(dict[str, dynamic]):
     """
 
     if sys.version_info >= (3, 13):
-        def __init__(self, cls_name: str | None = None) -> None
+        def __init__(self, cls_name: str? = None) -> None
     else:
         def __init__(self) -> None
 
@@ -124,7 +124,7 @@ class EnumMeta(type):
             bases: (*: type),
             classdict: _EnumDict,
             *,
-            boundary: FlagBoundary | None = None,
+            boundary: FlagBoundary? = None,
             _simple: bool = False,
             **kwds: dynamic,
         ) -> _typeshed.Self
@@ -230,11 +230,11 @@ class EnumMeta(type):
             value: str,
             names: EnumNames,
             *,
-            module: str | None = None,
-            qualname: str | None = None,
-            type: type | None = None,
+            module: str? = None,
+            qualname: str? = None,
+            type: type? = None,
             start: int = 1,
-            boundary: FlagBoundary | None = None,
+            boundary: FlagBoundary? = None,
         ) -> type[Enum]:
             """
             Either returns an existing member, or creates a new enum class.
@@ -269,9 +269,9 @@ class EnumMeta(type):
             value: str,
             names: EnumNames,
             *,
-            module: str | None = None,
-            qualname: str | None = None,
-            type: type | None = None,
+            module: str? = None,
+            qualname: str? = None,
+            type: type? = None,
             start: int = 1,
         ) -> type[Enum]:
             """
@@ -360,7 +360,7 @@ if sys.version_info >= (3, 11):
         def __set_name__(self, ownerclass: type[Enum], name: str)
         name: str
         clsname: str
-        member: Enum | None
+        member: Enum?
 
     _magic_enum_attr = property
 else:
@@ -509,11 +509,11 @@ class Flag(Enum):
     Support for flags
     """
 
-    _name_: str | None
+    _name_: str?
     _value_: int
     _numeric_repr_: (int) -> str
     @_magic_enum_attr
-    override def name(self) -> str | None:
+    override def name(self) -> str?:
         """The name of the Enum member."""
 
     @_magic_enum_attr
@@ -625,7 +625,7 @@ if sys.version_info >= (3, 11):
         """
 
     def show_flag_values(value: int) -> list[int]
-    def bin(num: SupportsIndex, max_bits: int | None = None) -> str:
+    def bin(num: SupportsIndex, max_bits: int? = None) -> str:
         """
         Like built-in bin(), except negative values are represented in
         twos-complement, and the leading bit always indicates sign

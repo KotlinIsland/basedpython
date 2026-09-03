@@ -45,8 +45,8 @@ def namedtuple(
     field_names: str | Iterable[str],
     *,
     rename: bool = False,
-    module: str | None = None,
-    defaults: Iterable[dynamic] | None = None,
+    module: str? = None,
+    defaults: Iterable[dynamic]? = None,
 ) -> type[(*: dynamic)]:
     """Returns a new subclass of tuple with named fields.
 
@@ -109,7 +109,7 @@ class UserDict[in out Key, in out Value](MutableMapping[Key, Value]):
     # TODO: Much like `dict.fromkeys`, the true signature of `UserDict.fromkeys` is inexpressible in the current type system.
     # See #3800 & https://github.com/python/typing/issues/548#issuecomment-683336963.
     @classmethod
-    def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None) -> UserDict[Element, dynamic | None]
+    def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None) -> UserDict[Element, dynamic?]
     @classmethod
     def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other) -> UserDict[Element, Other]
 
@@ -146,12 +146,12 @@ class UserList[in out Element](MutableSequence[Element]):
     override def __len__(self) -> int
 
     override def __getitem__(self, i: SupportsIndex) -> Element
-    def __getitem__(self, i: slice[SupportsIndex | None]) -> Self
+    def __getitem__(self, i: slice[SupportsIndex?]) -> Self
 
     override def __setitem__(self, i: SupportsIndex, item: Element) -> None
-    def __setitem__(self, i: slice[SupportsIndex | None], item: Iterable[Element]) -> None
+    def __setitem__(self, i: slice[SupportsIndex?], item: Iterable[Element]) -> None
 
-    override def __delitem__(self, i: SupportsIndex | slice[SupportsIndex | None])
+    override def __delitem__(self, i: SupportsIndex | slice[SupportsIndex?])
     def __add__(self, other: Iterable[Element]) -> Self
     def __radd__(self, other: Iterable[Element]) -> Self
     override def __iadd__(self, other: Iterable[Element]) -> Self
@@ -191,7 +191,7 @@ class UserString(Sequence[UserString]):
     override def __hash__(self) -> int
     override def __contains__(self, char: object) -> bool
     override def __len__(self) -> int
-    override def __getitem__(self, index: SupportsIndex | slice[SupportsIndex | None]) -> Self
+    override def __getitem__(self, index: SupportsIndex | slice[SupportsIndex?]) -> Self
     override def __iter__(self) -> Iterator[Self]
     override def __reversed__(self) -> Iterator[Self]
     def __add__(self, other: object) -> Self
@@ -204,8 +204,8 @@ class UserString(Sequence[UserString]):
     def casefold(self) -> Self
     def center(self, width: int, *args: dynamic) -> Self
     override def count(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
-    def encode(self: UserString, encoding: str | None = "utf-8", errors: str | None = "strict") -> bytes
-    def endswith(self, suffix: str | (*: str), start: int | None = 0, end: int | None = sys.maxsize) -> bool
+    def encode(self: UserString, encoding: str? = "utf-8", errors: str? = "strict") -> bytes
+    def endswith(self, suffix: str | (*: str), start: int? = 0, end: int? = sys.maxsize) -> bool
     def expandtabs(self, tabsize: int = 8) -> Self
     def find(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
     def format(self, *args: dynamic, **kwds: dynamic) -> str
@@ -226,7 +226,7 @@ class UserString(Sequence[UserString]):
     def join(self, seq: Iterable[str]) -> str
     def ljust(self, width: int, *args: dynamic) -> Self
     def lower(self) -> Self
-    def lstrip(self, chars: str | None = None) -> Self
+    def lstrip(self, chars: str? = None) -> Self
     maketrans = str.maketrans
     def partition(self, sep: str) -> (str, str, str)
     def removeprefix(self, prefix: str | UserString, /) -> Self
@@ -236,12 +236,12 @@ class UserString(Sequence[UserString]):
     def rindex(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
     def rjust(self, width: int, *args: dynamic) -> Self
     def rpartition(self, sep: str) -> (str, str, str)
-    def rstrip(self, chars: str | None = None) -> Self
-    def split(self, sep: str | None = None, maxsplit: int = -1) -> list[str]
-    def rsplit(self, sep: str | None = None, maxsplit: int = -1) -> list[str]
+    def rstrip(self, chars: str? = None) -> Self
+    def split(self, sep: str? = None, maxsplit: int = -1) -> list[str]
+    def rsplit(self, sep: str? = None, maxsplit: int = -1) -> list[str]
     def splitlines(self, keepends: bool = False) -> list[str]
-    def startswith(self, prefix: str | (*: str), start: int | None = 0, end: int | None = sys.maxsize) -> bool
-    def strip(self, chars: str | None = None) -> Self
+    def startswith(self, prefix: str | (*: str), start: int? = 0, end: int? = sys.maxsize) -> bool
+    def strip(self, chars: str? = None) -> Self
     def swapcase(self) -> Self
     def title(self) -> Self
     def translate(self, *args: dynamic) -> Self
@@ -252,10 +252,10 @@ class UserString(Sequence[UserString]):
 class deque[in out Element](MutableSequence[Element]):
     """A list-like sequence optimized for data accesses near its endpoints."""
 
-    let maxlen: int | None
+    let maxlen: int?
 
-    init(self, *, maxlen: int | None = None)
-    init(self, iterable: Iterable[Element], maxlen: int | None = None)
+    init(self, *, maxlen: int? = None)
+    init(self, iterable: Iterable[Element], maxlen: int? = None)
 
     override def append(self, x: Element, /):
         """Add an element to the right side of the deque."""
@@ -426,7 +426,7 @@ class Counter[in out Element](dict[Element, int]):
 
         """
 
-    def most_common(self, n: int | None = None) -> list[(Element, int)]:
+    def most_common(self, n: int? = None) -> list[(Element, int)]:
         """List the n most common elements and their counts from the most
         common to the least.  If n is None, then list all element counts.
 
@@ -435,7 +435,7 @@ class Counter[in out Element](dict[Element, int]):
 
         """
 
-    override class def fromkeys(cls, iterable: dynamic, v: int | None = None) -> Never
+    override class def fromkeys(cls, iterable: dynamic, v: int? = None) -> Never
 
     def subtract(self, iterable: None = None, /) -> None:
         """Like dict.update() but subtracts counts instead of replacing them.
@@ -673,7 +673,7 @@ class OrderedDict[in out Key, in out Value](dict[Key, Value]):
     # Like dict.fromkeys, its true signature is not expressible in the current type system.
     # See #3800 & https://github.com/python/typing/issues/548#issuecomment-683336963.
     @classmethod
-    override def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None) -> OrderedDict[Element, dynamic | None]:
+    override def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None) -> OrderedDict[Element, dynamic?]:
         """Create a new ordered dictionary with keys from iterable and values set to value."""
     @classmethod
     def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other) -> OrderedDict[Element, Other]
@@ -728,30 +728,30 @@ class defaultdict[in out Key, in out Value](dict[Key, Value]):
     passed to the dict constructor, including keyword arguments.
     """
 
-    default_factory: (() -> Value) | None
+    default_factory: (() -> Value)?
     """Factory for default value called by __missing__()."""
 
     init(self)
     init(self: defaultdict[str, Value], **kwargs: Value)
-    init(self, default_factory: (() -> Value) | None, /)
+    init(self, default_factory: (() -> Value)?, /)
     init(
         self: defaultdict[str, Value],
-        default_factory: (() -> Value) | None,
+        default_factory: (() -> Value)?,
         /,
         **kwargs: Value,
     )
-    init(self, default_factory: (() -> Value) | None, map: SupportsKeysAndGetItem[Key, Value], /)
+    init(self, default_factory: (() -> Value)?, map: SupportsKeysAndGetItem[Key, Value], /)
     init(
         self: defaultdict[str, Value],
-        default_factory: (() -> Value) | None,
+        default_factory: (() -> Value)?,
         map: SupportsKeysAndGetItem[str, Value],
         /,
         **kwargs: Value,
     )
-    init(self, default_factory: (() -> Value) | None, iterable: Iterable[(Key, Value)], /)
+    init(self, default_factory: (() -> Value)?, iterable: Iterable[(Key, Value)], /)
     init(
         self: defaultdict[str, Value],
-        default_factory: (() -> Value) | None,
+        default_factory: (() -> Value)?,
         iterable: Iterable[(str, Value)],
         /,
         **kwargs: Value,
@@ -801,7 +801,7 @@ class ChainMap[in out Key, in out Value](MutableMapping[Key, Value]):
 
         """
 
-    def new_child(self, m: MutableMapping[Key, Value] | None = None) -> Self:
+    def new_child(self, m: MutableMapping[Key, Value]? = None) -> Self:
         """New ChainMap with a new map followed by all previous maps.
         If no map is provided, an empty dict is used.
         Keyword arguments update the map or new empty dict.
@@ -841,15 +841,15 @@ class ChainMap[in out Key, in out Value](MutableMapping[Key, Value]):
     # so the signature should be kept in line with `dict.fromkeys`.
     if sys.version_info >= (3, 13):
         @classmethod
-        def fromkeys[Element](cls, iterable: Iterable[Element], /) -> ChainMap[Element, dynamic | None]:
+        def fromkeys[Element](cls, iterable: Iterable[Element], /) -> ChainMap[Element, dynamic?]:
             """Create a new ChainMap with keys from iterable and values set to value."""
     else:
         @classmethod
-        def fromkeys[Element](cls, iterable: Iterable[Element]) -> ChainMap[Element, dynamic | None]:
+        def fromkeys[Element](cls, iterable: Iterable[Element]) -> ChainMap[Element, dynamic?]:
             """Create a ChainMap with a single dict created from the iterable."""
 
     @classmethod
-    def fromkeys[Element](cls, iterable: Iterable[Element], value: None, /) -> ChainMap[Element, dynamic | None]:
+    def fromkeys[Element](cls, iterable: Iterable[Element], value: None, /) -> ChainMap[Element, dynamic?]:
         """Create a new ChainMap with keys from iterable and values set to value."""
     @classmethod
     def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other, /) -> ChainMap[Element, Other]

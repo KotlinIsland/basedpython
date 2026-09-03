@@ -39,7 +39,7 @@ class TestResult:
     if sys.version_info >= (3, 12):
         collectedDurations: _DurationsType
 
-    init(self, stream: TextIO | None = None, descriptions: bool | None = None, verbosity: int | None = None)
+    init(self, stream: TextIO? = None, descriptions: bool? = None, verbosity: int? = None)
     def printErrors(self):
         """Called by TestRunner after test run"""
 
@@ -89,7 +89,7 @@ class TestResult:
     def addUnexpectedSuccess(self, test: unittest.case.TestCase):
         """Called when a test was expected to fail, but succeed."""
 
-    def addSubTest(self, test: unittest.case.TestCase, subtest: unittest.case.TestCase, err: OptExcInfo | None):
+    def addSubTest(self, test: unittest.case.TestCase, subtest: unittest.case.TestCase, err: OptExcInfo?):
         """Called at the end of a subtest.
         'err' is None if the subtest ended successfully, otherwise it's a
         tuple of values as returned by sys.exc_info().

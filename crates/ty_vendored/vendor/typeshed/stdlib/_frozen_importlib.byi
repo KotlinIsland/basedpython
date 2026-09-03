@@ -20,9 +20,9 @@ from typing_extensions import deprecated
 # Signature of `builtins.__import__` should be kept identical to `importlib.__import__`
 def __import__(
     name: str,
-    globals: Mapping[str, object] | None = None,
-    locals: Mapping[str, object] | None = None,
-    fromlist: Sequence[str] | None = (),
+    globals: Mapping[str, object]? = None,
+    locals: Mapping[str, object]? = None,
+    fromlist: Sequence[str]? = (),
     level: int = 0,
 ) -> ModuleType:
     """Import a module.
@@ -37,8 +37,8 @@ def __import__(
     """
 
 def spec_from_loader(
-    name: str, loader: LoaderProtocol | None, *, origin: str | None = None, is_package: bool | None = None
-) -> importlib.machinery.ModuleSpec | None:
+    name: str, loader: LoaderProtocol?, *, origin: str? = None, is_package: bool? = None
+) -> importlib.machinery.ModuleSpec?:
     """Return a module spec based on various loader methods."""
 
 def module_from_spec(spec: importlib.machinery.ModuleSpec) -> types.ModuleType:
@@ -87,19 +87,19 @@ class ModuleSpec:
     init(
         self,
         name: str,
-        loader: importlib.abc.Loader | None,
+        loader: importlib.abc.Loader?,
         *,
-        origin: str | None = None,
+        origin: str? = None,
         loader_state: dynamic = None,
-        is_package: bool | None = None,
+        is_package: bool? = None,
     )
     name: str
-    loader: importlib.abc.Loader | None
-    origin: str | None
-    submodule_search_locations: list[str] | None
+    loader: importlib.abc.Loader?
+    origin: str?
+    submodule_search_locations: list[str]?
     loader_state: dynamic
-    cached: str | None
-    let parent: str | None
+    cached: str?
+    let parent: str?
 
     has_location: bool
     override def __eq__(self, other: object) -> bool
@@ -117,7 +117,7 @@ class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader)
     if sys.version_info < (3, 12):
         @classmethod
         @deprecated("Deprecated since Python 3.4; removed in Python 3.12. Use `find_spec()` instead.")
-        override def find_module(cls, fullname: str, path: Sequence[str] | None = None) -> importlib.abc.Loader | None:
+        override def find_module(cls, fullname: str, path: Sequence[str]? = None) -> importlib.abc.Loader?:
             """Find the built-in module.
 
             If 'path' is ever specified then the search is considered a failure.
@@ -127,8 +127,8 @@ class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader)
             """
 
     override class def find_spec(
-        cls, fullname: str, path: Sequence[str] | None = None, target: types.ModuleType | None = None
-    ) -> ModuleSpec | None
+        cls, fullname: str, path: Sequence[str]? = None, target: types.ModuleType? = None
+    ) -> ModuleSpec?
     # InspectLoader
     override class def is_package(cls, fullname: str) -> bool:
         """Return False as built-in modules are never packages."""
@@ -160,7 +160,7 @@ class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader)
 
             """
 
-    static def create_module(spec: ModuleSpec) -> types.ModuleType | None:
+    static def create_module(spec: ModuleSpec) -> types.ModuleType?:
         """Create a built-in module"""
 
     override static def exec_module(module: types.ModuleType):
@@ -178,7 +178,7 @@ class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
     if sys.version_info < (3, 12):
         @classmethod
         @deprecated("Deprecated since Python 3.4; removed in Python 3.12. Use `find_spec()` instead.")
-        override def find_module(cls, fullname: str, path: Sequence[str] | None = None) -> importlib.abc.Loader | None:
+        override def find_module(cls, fullname: str, path: Sequence[str]? = None) -> importlib.abc.Loader?:
             """Find a frozen module.
 
             This method is deprecated.  Use find_spec() instead.
@@ -186,8 +186,8 @@ class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
             """
 
     override class def find_spec(
-        cls, fullname: str, path: Sequence[str] | None = None, target: types.ModuleType | None = None
-    ) -> ModuleSpec | None
+        cls, fullname: str, path: Sequence[str]? = None, target: types.ModuleType? = None
+    ) -> ModuleSpec?
     # InspectLoader
     override class def is_package(cls, fullname: str) -> bool:
         """Return True if the frozen module is a package."""
@@ -219,7 +219,7 @@ class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
 
             """
 
-    static def create_module(spec: ModuleSpec) -> types.ModuleType | None:
+    static def create_module(spec: ModuleSpec) -> types.ModuleType?:
         """Set __file__, if able."""
 
     override static def exec_module(module: types.ModuleType)

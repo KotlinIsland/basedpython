@@ -28,11 +28,11 @@ class ServerHandler(SimpleHandler):  # undocumented
 class WSGIServer(HTTPServer):
     """BaseHTTPServer that implements the Python WSGI protocol"""
 
-    application: WSGIApplication | None
+    application: WSGIApplication?
     base_environ: WSGIEnvironment  # only available after call to setup_environ()
     def setup_environ(self)
-    def get_app(self) -> WSGIApplication | None
-    def set_app(self, application: WSGIApplication | None)
+    def get_app(self) -> WSGIApplication?
+    def set_app(self, application: WSGIApplication?)
 
 class WSGIRequestHandler(BaseHTTPRequestHandler):
     server_version: str

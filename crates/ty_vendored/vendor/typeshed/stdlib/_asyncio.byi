@@ -9,7 +9,7 @@ from typing import Literal, TypeAlias, TypeVar
 from typing_extensions import Self, disjoint_base
 
 _T_co = TypeVar("_T_co", covariant=True)
-private type TaskYieldType = Future[object] | None
+private type TaskYieldType = Future[object]?
 
 @disjoint_base
 class Future[in out Element](Awaitable[Element]):
@@ -28,7 +28,7 @@ class Future[in out Element](Awaitable[Element]):
     """
 
     _state: str
-    let _exception: BaseException | None
+    let _exception: BaseException?
     _blocking: bool
 
     @property
@@ -37,7 +37,7 @@ class Future[in out Element](Awaitable[Element]):
     def _log_traceback(self, val: False) -> None
 
     _asyncio_future_blocking: bool  # is a part of duck-typing contract for `Future`
-    init(self, *, loop: AbstractEventLoop | None = None)
+    init(self, *, loop: AbstractEventLoop? = None)
     def __del__(self):
         """Called when the instance is about to be destroyed."""
 
@@ -45,7 +45,7 @@ class Future[in out Element](Awaitable[Element]):
         """Return the event loop the Future is bound to."""
 
     let _callbacks: list[((Self) -> dynamic, Context)]
-    def add_done_callback(self, fn: (Self) -> object, /, *, context: Context | None = None):
+    def add_done_callback(self, fn: (Self) -> object, /, *, context: Context? = None):
         """Add a callback to be run when the future becomes done.
 
         The callback is called with a single argument - the future object.
@@ -53,7 +53,7 @@ class Future[in out Element](Awaitable[Element]):
         scheduled with call_soon.
         """
 
-    def cancel(self, msg: dynamic | None = None) -> bool:
+    def cancel(self, msg: dynamic? = None) -> bool:
         """Cancel the future and schedule callbacks.
 
         If the future is already done or cancelled, return False.
@@ -80,7 +80,7 @@ class Future[in out Element](Awaitable[Element]):
         raised.
         """
 
-    def exception(self) -> BaseException | None:
+    def exception(self) -> BaseException?:
         """Return the exception that was set on this future.
 
         The exception (or None if no exception was set) is returned only if
@@ -137,9 +137,9 @@ class Task[out Element](Future[Element]):
             self,
             coro: _TaskCompatibleCoro[Element],
             *,
-            loop: AbstractEventLoop | None = None,
-            name: str | None = None,
-            context: Context | None = None,
+            loop: AbstractEventLoop? = None,
+            name: str? = None,
+            context: Context? = None,
             eager_start: bool = False,
         ) -> None
     elif sys.version_info >= (3, 11):
@@ -147,17 +147,17 @@ class Task[out Element](Future[Element]):
             self,
             coro: _TaskCompatibleCoro[Element],
             *,
-            loop: AbstractEventLoop | None = None,
-            name: str | None = None,
-            context: Context | None = None,
+            loop: AbstractEventLoop? = None,
+            name: str? = None,
+            context: Context? = None,
         ) -> None
     else:
         def __init__(
-            self, coro: _TaskCompatibleCoro[Element], *, loop: AbstractEventLoop | None = None, name: str | None = None
+            self, coro: _TaskCompatibleCoro[Element], *, loop: AbstractEventLoop? = None, name: str? = None
         ) -> None
 
     if sys.version_info >= (3, 12):
-        def get_coro(self) -> _TaskCompatibleCoro[Element] | None
+        def get_coro(self) -> _TaskCompatibleCoro[Element]?
     else:
         def get_coro(self) -> _TaskCompatibleCoro[Element]
 
@@ -166,7 +166,7 @@ class Task[out Element](Future[Element]):
     if sys.version_info >= (3, 12):
         def get_context(self) -> Context
 
-    def get_stack(self, *, limit: int | None = None) -> list[FrameType]:
+    def get_stack(self, *, limit: int? = None) -> list[FrameType]:
         """Return the list of stack frames for this task's coroutine.
 
         If the coroutine is not done, this returns the stack where it is
@@ -188,7 +188,7 @@ class Task[out Element](Future[Element]):
         returned for a suspended coroutine.
         """
 
-    def print_stack(self, *, limit: int | None = None, file: TextIO | None = None):
+    def print_stack(self, *, limit: int? = None, file: TextIO? = None):
         """Print the stack or traceback for this task's coroutine.
 
         This produces output similar to that of the traceback module,
@@ -235,14 +235,14 @@ def get_running_loop() -> AbstractEventLoop:
     This function is thread-specific.
     """
 
-def _set_running_loop(loop: AbstractEventLoop | None, /):
+def _set_running_loop(loop: AbstractEventLoop?, /):
     """Set the running event loop.
 
     This is a low-level function intended to be used by event loops.
     This function is thread-specific.
     """
 
-def _get_running_loop() -> AbstractEventLoop | None:
+def _get_running_loop() -> AbstractEventLoop?:
     """Return the running event loop or None.
 
     This is a low-level function intended to be used by event loops.
@@ -278,7 +278,7 @@ def _leave_task(loop: AbstractEventLoop, task: Task[dynamic]):
     """
 
 if sys.version_info >= (3, 12):
-    def current_task(loop: AbstractEventLoop | None = None) -> Task[dynamic] | None:
+    def current_task(loop: AbstractEventLoop? = None) -> Task[dynamic]?:
         """Return a currently executed task."""
 
 if sys.version_info >= (3, 14):
@@ -286,5 +286,5 @@ if sys.version_info >= (3, 14):
     def future_add_to_awaited_by(future: Future[dynamic], waiter: Future[dynamic], /):
         """Record that `fut` is awaited on by `waiter`."""
 
-    def all_tasks(loop: AbstractEventLoop | None = None) -> set[Task[dynamic]]:
+    def all_tasks(loop: AbstractEventLoop? = None) -> set[Task[dynamic]]:
         """Return a set of all tasks for the loop."""

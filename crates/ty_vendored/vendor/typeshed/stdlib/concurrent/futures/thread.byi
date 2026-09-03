@@ -95,12 +95,12 @@ class ThreadPoolExecutor(Executor):
     _broken: bool
     _shutdown: bool
     _shutdown_lock: Lock
-    _thread_name_prefix: str | None
+    _thread_name_prefix: str?
     if sys.version_info >= (3, 14):
         _create_worker_context: () -> WorkerContext
         _resolve_work_item_task: ResolveTaskFunc
     else:
-        _initializer: (...) -> None | None
+        _initializer: (...) -> None?
         _initargs: (*: dynamic)
     _work_queue: queue.SimpleQueue[_WorkItem[dynamic]]
 
@@ -114,9 +114,9 @@ class ThreadPoolExecutor(Executor):
 
     init(
         self,
-        max_workers: int | None = None,
+        max_workers: int? = None,
         thread_name_prefix: str = "",
-        initializer: (() -> object) | None = None,
+        initializer: (() -> object)? = None,
         initargs: tuple[()] = (),
     ):
         """Initializes a new ThreadPoolExecutor instance.
@@ -131,7 +131,7 @@ class ThreadPoolExecutor(Executor):
         """
     def __init__[*Args](
         self,
-        max_workers: int | None = None,
+        max_workers: int? = None,
         thread_name_prefix: str = "",
         *,
         initializer: (*Args) -> object,
@@ -139,7 +139,7 @@ class ThreadPoolExecutor(Executor):
     ) -> None
     def __init__[*Args](
         self,
-        max_workers: int | None,
+        max_workers: int?,
         thread_name_prefix: str,
         initializer: (*Args) -> object,
         initargs: (Unpack[Args],),

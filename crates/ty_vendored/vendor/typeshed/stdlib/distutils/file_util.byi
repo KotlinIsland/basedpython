@@ -14,7 +14,7 @@ def copy_file[StrPathT: StrPath](
     preserve_mode: bool | 0 | 1 = 1,
     preserve_times: bool | 0 | 1 = 1,
     update: bool | 0 | 1 = 0,
-    link: str | None = None,
+    link: str? = None,
     verbose: bool | 0 | 1 = 1,
     dry_run: bool | 0 | 1 = 0,
 ) -> (StrPathT | str, bool):
@@ -48,7 +48,7 @@ def copy_file[BytesPathT: BytesPath](
     preserve_mode: bool | 0 | 1 = 1,
     preserve_times: bool | 0 | 1 = 1,
     update: bool | 0 | 1 = 0,
-    link: str | None = None,
+    link: str? = None,
     verbose: bool | 0 | 1 = 1,
     dry_run: bool | 0 | 1 = 0,
 ) -> (BytesPathT | bytes, bool)

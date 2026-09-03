@@ -21,12 +21,12 @@ class _AssertLogsContext[in out L in (None, _LoggingWatcher)](_BaseTestCaseConte
     no_logs: bool
     if sys.version_info >= (3, 15):
         def __init__(
-            self, test_case: TestCase, logger_name: str, level: int, no_logs: bool, formatter: logging.Formatter | None = None
+            self, test_case: TestCase, logger_name: str, level: int, no_logs: bool, formatter: logging.Formatter? = None
         ) -> None
     else:
         def __init__(self, test_case: TestCase, logger_name: str, level: int, no_logs: bool) -> None
 
     def __enter__(self) -> L
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, tb: TracebackType | None
-    ) -> bool | None
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, tb: TracebackType?
+    ) -> bool?

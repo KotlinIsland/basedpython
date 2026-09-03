@@ -12,10 +12,10 @@ def getweakrefs(object: dynamic, /) -> list[dynamic]:
     """Return a list of all weak reference objects pointing to 'object'."""
 
 # Return CallableProxyType if object is callable, ProxyType otherwise
-def proxy[C: (...) -> dynamic](object: C, callback: ((C) -> dynamic) | None = None, /) -> CallableProxyType[C]:
+def proxy[C: (...) -> dynamic](object: C, callback: ((C) -> dynamic)? = None, /) -> CallableProxyType[C]:
     """Create a proxy object that weakly references 'object'.
 
     'callback', if given, is called with a reference to the
     proxy when 'object' is about to be finalized.
     """
-def proxy[Element](object: Element, callback: ((Element) -> dynamic) | None = None, /) -> dynamic
+def proxy[Element](object: Element, callback: ((Element) -> dynamic)? = None, /) -> dynamic

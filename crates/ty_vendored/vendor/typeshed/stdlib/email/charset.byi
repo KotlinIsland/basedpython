@@ -11,9 +11,9 @@ RFC2047_CHROME_LEN: Final = 7  # undocumented
 DEFAULT_CHARSET: Final = "us-ascii"  # undocumented
 UNKNOWN8BIT: Final = "unknown-8bit"  # undocumented
 EMPTYSTRING: Final = ""  # undocumented
-final CHARSETS: dict[str, (int | None, int | None, str | None)]
+final CHARSETS: dict[str, (int?, int?, str?)]
 final ALIASES: dict[str, str]
-final CODEC_MAP: dict[str, str | None]  # undocumented
+final CODEC_MAP: dict[str, str?]  # undocumented
 
 class Charset:
     """Map character sets to their email properties.
@@ -63,9 +63,9 @@ class Charset:
     input_charset: str
     header_encoding: int
     body_encoding: int
-    output_charset: str | None
-    input_codec: str | None
-    output_codec: str | None
+    output_charset: str?
+    input_codec: str?
+    output_codec: str?
     init(self, input_charset: str = "us-ascii")
     def get_body_encoding(self) -> str | ((Message) -> None):
         """Return the content-transfer-encoding used for body encoding.
@@ -81,7 +81,7 @@ class Charset:
         Returns conversion function otherwise.
         """
 
-    def get_output_charset(self) -> str | None:
+    def get_output_charset(self) -> str?:
         """Return the output character set.
 
         This is self.output_charset if that is not None, otherwise it is
@@ -100,7 +100,7 @@ class Charset:
         :return: The encoded string, with RFC 2047 chrome.
         """
 
-    def header_encode_lines(self, string: str, maxlengths: Iterator[int]) -> list[str | None]:
+    def header_encode_lines(self, string: str, maxlengths: Iterator[int]) -> list[str?]:
         """Header-encode a string by converting it first to bytes.
 
         This is similar to `header_encode()` except that the string is fit
@@ -134,7 +134,7 @@ class Charset:
     override def __ne__(self, value: object, /) -> bool
 
 def add_charset(
-    charset: str, header_enc: int | None = None, body_enc: int | None = None, output_charset: str | None = None
+    charset: str, header_enc: int? = None, body_enc: int? = None, output_charset: str? = None
 ):
     """Add character set properties to the global registry.
 

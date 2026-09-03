@@ -56,7 +56,7 @@ if sys.platform == "win32":
         index: int
         init(self, name: str)
         def gen_id(self, file: str) -> str
-        def append(self, full: str, file: str, logical: str | None) -> (int, str) | MaybeNone
+        def append(self, full: str, file: str, logical: str?) -> (int, str) | MaybeNone
         def commit(self, db: _Database)
 
     _directories: set[str]
@@ -64,24 +64,24 @@ if sys.platform == "win32":
     class Directory:
         db: _Database
         cab: CAB
-        basedir: Directory | None
+        basedir: Directory?
         physical: str
         logical: str
-        component: str | None
+        component: str?
         short_names: set[str]
         ids: set[str]
         keyfiles: dict[str, str]
-        componentflags: int | None
+        componentflags: int?
         absolute: str
         init(
             self,
             db: _Database,
             cab: CAB,
-            basedir: Directory | None,
+            basedir: Directory?,
             physical: str,
             _logical: str,
             default: str,
-            componentflags: int | None = None,
+            componentflags: int? = None,
         ):
             """Create a new directory in the Directory table. There is a current component
             at each point in time for the directory, which is either explicitly created
@@ -95,11 +95,11 @@ if sys.platform == "win32":
 
         def start_component(
             self,
-            component: str | None = None,
-            feature: Feature | None = None,
-            flags: int | None = None,
-            keyfile: str | None = None,
-            uuid: str | None = None,
+            component: str? = None,
+            feature: Feature? = None,
+            flags: int? = None,
+            keyfile: str? = None,
+            uuid: str? = None,
         ):
             """Add an entry to the Component table, and make this component the current for this
             directory. If no component name is given, the directory name is used. If no feature
@@ -109,7 +109,7 @@ if sys.platform == "win32":
             """
 
         def make_short(self, file: str) -> str
-        def add_file(self, file: str, src: str | None = None, version: str | None = None, language: str | None = None) -> str:
+        def add_file(self, file: str, src: str? = None, version: str? = None, language: str? = None) -> str:
             """Add a file to the current component of the directory, starting a new one
             if there is no current component. By default, the file name in the source
             and the file table will be identical. If the src file is specified, it is
@@ -117,7 +117,7 @@ if sys.platform == "win32":
             language can be specified for the entry in the File table.
             """
 
-        def glob(self, pattern: str, exclude: Container[str] | None = None) -> list[str]:
+        def glob(self, pattern: str, exclude: Container[str]? = None) -> list[str]:
             """Add a list of files to the current component as specified in the
             glob pattern. Individual files can be excluded in the exclude list.
             """
@@ -139,8 +139,8 @@ if sys.platform == "win32":
             desc: str,
             display: int,
             level: int = 1,
-            parent: Feature | None = None,
-            directory: str | None = None,
+            parent: Feature? = None,
+            directory: str? = None,
             attributes: int = 0,
         )
         def set_current(self)
@@ -149,7 +149,7 @@ if sys.platform == "win32":
         dlg: Dialog
         name: str
         init(self, dlg: Dialog, name: str)
-        def event(self, event: str, argument: str, condition: str = "1", ordering: int | None = None)
+        def event(self, event: str, argument: str, condition: str = "1", ordering: int? = None)
         def mapping(self, event: str, attribute: str)
         def condition(self, action: str, condition: str)
 
@@ -157,7 +157,7 @@ if sys.platform == "win32":
         property: str
         index: int
         init(self, dlg: Dialog, name: str, property: str)
-        def add(self, name: str, x: int, y: int, w: int, h: int, text: str, value: str | None = None)
+        def add(self, name: str, x: int, y: int, w: int, h: int, text: str, value: str? = None)
 
     class Dialog:
         db: _Database
@@ -177,8 +177,8 @@ if sys.platform == "win32":
             attr: int,
             title: str,
             first: str,
-            default: str | None,
-            cancel: str | None,
+            default: str?,
+            cancel: str?,
         )
         def control(
             self,
@@ -189,20 +189,20 @@ if sys.platform == "win32":
             w: int,
             h: int,
             attr: int,
-            prop: str | None,
-            text: str | None,
-            next: str | None,
-            help: str | None,
+            prop: str?,
+            text: str?,
+            next: str?,
+            help: str?,
         ) -> Control
-        def text(self, name: str, x: int, y: int, w: int, h: int, attr: int, text: str | None) -> Control
-        def bitmap(self, name: str, x: int, y: int, w: int, h: int, text: str | None) -> Control
+        def text(self, name: str, x: int, y: int, w: int, h: int, attr: int, text: str?) -> Control
+        def bitmap(self, name: str, x: int, y: int, w: int, h: int, text: str?) -> Control
         def line(self, name: str, x: int, y: int, w: int, h: int) -> Control
         def pushbutton(
-            self, name: str, x: int, y: int, w: int, h: int, attr: int, text: str | None, next: str | None
+            self, name: str, x: int, y: int, w: int, h: int, attr: int, text: str?, next: str?
         ) -> Control
         def radiogroup(
-            self, name: str, x: int, y: int, w: int, h: int, attr: int, prop: str | None, text: str | None, next: str | None
+            self, name: str, x: int, y: int, w: int, h: int, attr: int, prop: str?, text: str?, next: str?
         ) -> RadioButtonGroup
         def checkbox(
-            self, name: str, x: int, y: int, w: int, h: int, attr: int, prop: str | None, text: str | None, next: str | None
+            self, name: str, x: int, y: int, w: int, h: int, attr: int, prop: str?, text: str?, next: str?
         ) -> Control

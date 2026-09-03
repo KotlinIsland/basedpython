@@ -38,7 +38,7 @@ class BaseContext:
         Return process object representing the current process
         """
 
-    static def parent_process() -> BaseProcess | None:
+    static def parent_process() -> BaseProcess?:
         """
         Return process object representing the parent process
         """
@@ -73,14 +73,14 @@ class BaseContext:
             """Returns two connection object connected by a pipe"""
 
     def Barrier(
-        self, parties: int, action: (...) -> object | None = None, timeout: int | float | None = None
+        self, parties: int, action: (...) -> object? = None, timeout: int | float | None = None
     ) -> synchronize.Barrier:
         """Returns a barrier object"""
 
     def BoundedSemaphore(self, value: int = 1) -> synchronize.BoundedSemaphore:
         """Returns a bounded semaphore object"""
 
-    def Condition(self, lock: _LockLike | None = None) -> synchronize.Condition:
+    def Condition(self, lock: _LockLike? = None) -> synchronize.Condition:
         """Returns a condition object"""
 
     def Event(self) -> synchronize.Event:
@@ -106,10 +106,10 @@ class BaseContext:
 
     def Pool(
         self,
-        processes: int | None = None,
-        initializer: (...) -> object | None = None,
+        processes: int? = None,
+        initializer: (...) -> object? = None,
         initargs: Iterable[dynamic] = (),
-        maxtasksperchild: int | None = None,
+        maxtasksperchild: int? = None,
     ) -> _Pool:
         """Returns a process pool object"""
 
@@ -161,7 +161,7 @@ class BaseContext:
         it is created.
         """
 
-    def log_to_stderr(self, level: _LoggingLevel | None = None) -> Logger:
+    def log_to_stderr(self, level: _LoggingLevel? = None) -> Logger:
         """Turn on logging and add a handler which prints to stderr"""
 
     def allow_connection_pickling(self):
@@ -201,9 +201,9 @@ class BaseContext:
     def get_context(self, method: str) -> BaseContext
 
     def get_start_method(self, allow_none: False = False) -> str
-    def get_start_method(self, allow_none: bool) -> str | None
+    def get_start_method(self, allow_none: bool) -> str?
 
-    def set_start_method(self, method: str | None, force: bool = False)
+    def set_start_method(self, method: str?, force: bool = False)
 
     @property
     def reducer(self) -> str:
@@ -216,7 +216,7 @@ class BaseContext:
     def _check_available(self)
 
 class Process(BaseProcess):
-    _start_method: str | None
+    _start_method: str?
     static def _Popen(process_obj: BaseProcess) -> DefaultContext
 
 class DefaultContext(BaseContext):
@@ -263,7 +263,7 @@ if sys.platform != "win32":
     def set_spawning_popen(popen: popen_forkserver.Popen | popen_spawn_posix.Popen | None) -> None
 
 else:
-    def get_spawning_popen() -> popen_spawn_win32.Popen | None
-    def set_spawning_popen(popen: popen_spawn_win32.Popen | None) -> None
+    def get_spawning_popen() -> popen_spawn_win32.Popen?
+    def set_spawning_popen(popen: popen_spawn_win32.Popen?) -> None
 
 def assert_spawning(obj: dynamic)

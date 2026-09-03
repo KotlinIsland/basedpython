@@ -404,7 +404,7 @@ class Variable:
     that constrain the type of the value returned from get().
     """
 
-    init(self, master: Misc | None = None, value=None, name: str | None = None):
+    init(self, master: Misc? = None, value=None, name: str? = None):
         """Construct a variable
 
         MASTER can be given as master widget.
@@ -504,7 +504,7 @@ class Variable:
 class StringVar(Variable):
     """Value holder for strings variables."""
 
-    init(self, master: Misc | None = None, value: str | None = None, name: str | None = None):
+    init(self, master: Misc? = None, value: str? = None, name: str? = None):
         """Construct a string variable.
 
         MASTER can be given as master widget.
@@ -525,7 +525,7 @@ class StringVar(Variable):
 class IntVar(Variable):
     """Value holder for integer variables."""
 
-    init(self, master: Misc | None = None, value: int | None = None, name: str | None = None):
+    init(self, master: Misc? = None, value: int? = None, name: str? = None):
         """Construct an integer variable.
 
         MASTER can be given as master widget.
@@ -546,7 +546,7 @@ class IntVar(Variable):
 class DoubleVar(Variable):
     """Value holder for float variables."""
 
-    init(self, master: Misc | None = None, value: int | float | None = None, name: str | None = None):
+    init(self, master: Misc? = None, value: int | float | None = None, name: str? = None):
         """Construct a float variable.
 
         MASTER can be given as master widget.
@@ -567,7 +567,7 @@ class DoubleVar(Variable):
 class BooleanVar(Variable):
     """Value holder for boolean variables."""
 
-    init(self, master: Misc | None = None, value: bool | None = None, name: str | None = None):
+    init(self, master: Misc? = None, value: bool? = None, name: str? = None):
         """Construct a boolean variable.
 
         MASTER can be given as master widget.
@@ -599,7 +599,7 @@ def getboolean(s) -> bool:
 class _GridIndexInfo(TypedDict, total=False):
     minsize: int | float | str
     pad: int | float | str
-    uniform: str | None
+    uniform: str?
     weight: int
 
 @type_check_only
@@ -612,7 +612,7 @@ class Misc:
     Base class which defines methods common for interior widgets.
     """
 
-    master: Misc | None
+    master: Misc?
     tk: _tkinter.TkappType
     children: dict[str, Widget]
     def destroy(self):
@@ -661,13 +661,13 @@ class Misc:
         """
 
     waitvar = wait_variable
-    def wait_window(self, window: Misc | None = None):
+    def wait_window(self, window: Misc? = None):
         """Wait until a WIDGET is destroyed.
 
         If no parameter is given self is used.
         """
 
-    def wait_visibility(self, window: Misc | None = None):
+    def wait_visibility(self, window: Misc? = None):
         """Wait until the visibility of a WIDGET changes
         (e.g. it appears).
 
@@ -700,7 +700,7 @@ class Misc:
         caution!
         """
 
-    def focus_get(self) -> Misc | None:
+    def focus_get(self) -> Misc?:
         """Return the widget which has currently the focus in the
         application.
 
@@ -709,14 +709,14 @@ class Misc:
         the focus.
         """
 
-    def focus_displayof(self) -> Misc | None:
+    def focus_displayof(self) -> Misc?:
         """Return the widget which has currently the focus on the
         display where this widget is located.
 
         Return None if the application does not have the focus.
         """
 
-    def focus_lastfor(self) -> Misc | None:
+    def focus_lastfor(self) -> Misc?:
         """Return the widget which would have the focus if top level
         for this widget gets the focus from the window manager.
         """
@@ -726,7 +726,7 @@ class Misc:
         be disabled easily.
         """
 
-    def tk_focusNext(self) -> Misc | None:
+    def tk_focusNext(self) -> Misc?:
         """Return the next widget in the focus order which follows
         widget which has currently the focus.
 
@@ -737,7 +737,7 @@ class Misc:
         to 0.
         """
 
-    def tk_focusPrev(self) -> Misc | None:
+    def tk_focusPrev(self) -> Misc?:
         """Return previous widget in the focus order. See tk_focusNext for details."""
 
     if sys.version_info >= (3, 14):
@@ -790,7 +790,7 @@ class Misc:
         """
 
     if sys.version_info >= (3, 13):
-        def after_info(self, id: str | None = None) -> (*: str):
+        def after_info(self, id: str? = None) -> (*: str):
             """Return information about existing event handlers.
 
             With no argument, return a tuple of the identifiers for all existing
@@ -837,7 +837,7 @@ class Misc:
         tk_busy_config = tk_busy_configure
         busy_configure = tk_busy_configure
         busy_config = tk_busy_configure
-        def tk_busy_current(self, pattern: str | None = None) -> list[Misc]:
+        def tk_busy_current(self, pattern: str? = None) -> list[Misc]:
             """Return a list of widgets that are currently busy.
 
             If a pattern is given, only busy widgets whose path names match
@@ -1039,7 +1039,7 @@ class Misc:
     def winfo_colormapfull(self) -> bool:
         """Return True if at the last color request the colormap was full."""
 
-    def winfo_containing(self, rootX: int, rootY: int, displayof: 0 | Misc | None = 0) -> Misc | None:
+    def winfo_containing(self, rootX: int, rootY: int, displayof: 0 | Misc | None = 0) -> Misc?:
         """Return the widget which is at the root coordinates ROOTX, ROOTY."""
 
     def winfo_depth(self) -> int:
@@ -1236,8 +1236,8 @@ class Misc:
     # binds do. The default value of func is not str.
     def bind(
         self,
-        sequence: str | None = None,
-        func: ((Event[Misc]) -> object) | None = None,
+        sequence: str? = None,
+        func: ((Event[Misc]) -> object)? = None,
         add: "" | "+" | bool | None = None,
     ) -> str:
         """Bind to this widget at event SEQUENCE a call to function FUNC.
@@ -1278,15 +1278,15 @@ class Misc:
         If FUNC or SEQUENCE is omitted the bound function or list
         of bound events are returned.
         """
-    def bind(self, sequence: str | None, func: str, add: "" | "+" | bool | None = None) -> None
+    def bind(self, sequence: str?, func: str, add: "" | "+" | bool | None = None) -> None
     def bind(self, *, func: str, add: "" | "+" | bool | None = None) -> None
 
     # There's no way to know what type of widget bind_all and bind_class
     # callbacks will get, so those are Misc.
     def bind_all(
         self,
-        sequence: str | None = None,
-        func: ((Event[Misc]) -> object) | None = None,
+        sequence: str? = None,
+        func: ((Event[Misc]) -> object)? = None,
         add: "" | "+" | bool | None = None,
     ) -> str:
         """Bind to all widgets at an event SEQUENCE a call to function FUNC.
@@ -1294,14 +1294,14 @@ class Misc:
         be called additionally to the other bound function or whether
         it will replace the previous function. See bind for the return value.
         """
-    def bind_all(self, sequence: str | None, func: str, add: "" | "+" | bool | None = None) -> None
+    def bind_all(self, sequence: str?, func: str, add: "" | "+" | bool | None = None) -> None
     def bind_all(self, *, func: str, add: "" | "+" | bool | None = None) -> None
 
     def bind_class(
         self,
         className: str,
-        sequence: str | None = None,
-        func: ((Event[Misc]) -> object) | None = None,
+        sequence: str? = None,
+        func: ((Event[Misc]) -> object)? = None,
         add: "" | "+" | bool | None = None,
     ) -> str:
         """Bind to widgets with bindtag CLASSNAME at event
@@ -1311,10 +1311,10 @@ class Misc:
         whether it will replace the previous function. See bind for
         the return value.
         """
-    def bind_class(self, className: str, sequence: str | None, func: str, add: "" | "+" | bool | None = None) -> None
+    def bind_class(self, className: str, sequence: str?, func: str, add: "" | "+" | bool | None = None) -> None
     def bind_class(self, className: str, *, func: str, add: "" | "+" | bool | None = None) -> None
 
-    def unbind(self, sequence: str, funcid: str | None = None):
+    def unbind(self, sequence: str, funcid: str? = None):
         """Unbind for this widget the event SEQUENCE.
 
         If FUNCID is given, only unbind the function identified with FUNCID
@@ -1346,7 +1346,7 @@ class Misc:
         """
 
     def register(
-        self, func: (...) -> object, subst: (...) -> Sequence[dynamic] | None = None, needcleanup: int = 1
+        self, func: (...) -> object, subst: (...) -> Sequence[dynamic]? = None, needcleanup: int = 1
     ) -> str:
         """Return a newly created Tcl function. If this
         function is called, the Python function FUNC will
@@ -1357,7 +1357,7 @@ class Misc:
     def keys(self) -> list[str]:
         """Return a list of all option names of this widget."""
 
-    def pack_propagate(self, flag: bool) -> bool | None:
+    def pack_propagate(self, flag: bool) -> bool?:
         """Set or get the status for propagation of geometry information.
 
         A boolean argument specifies whether the size of this container will
@@ -1378,7 +1378,7 @@ class Misc:
 
     def grid_bbox(
         self, column: None = None, row: None = None, col2: None = None, row2: None = None
-    ) -> (int, int, int, int) | None:
+    ) -> (int, int, int, int)?:
         """Return a tuple of integer coordinates for the bounding
         box of this widget controlled by the geometry manager grid.
 
@@ -1390,8 +1390,8 @@ class Misc:
         The returned integers specify the offset of the upper left
         corner in the container widget and the width and height.
         """
-    def grid_bbox(self, column: int, row: int, col2: None = None, row2: None = None) -> (int, int, int, int) | None
-    def grid_bbox(self, column: int, row: int, col2: int, row2: int) -> (int, int, int, int) | None
+    def grid_bbox(self, column: int, row: int, col2: None = None, row2: None = None) -> (int, int, int, int)?
+    def grid_bbox(self, column: int, row: int, col2: int, row2: int) -> (int, int, int, int)?
 
     bbox = grid_bbox
     def grid_columnconfigure(
@@ -1453,7 +1453,7 @@ class Misc:
     def pack_slaves(self) -> list[Widget]:
         """Synonym for pack_content()."""
 
-    def grid_slaves(self, row: int | None = None, column: int | None = None) -> list[Widget]:
+    def grid_slaves(self, row: int? = None, column: int? = None) -> list[Widget]:
         """Synonym for grid_content()."""
 
     def place_slaves(self) -> list[Widget]:
@@ -1466,7 +1466,7 @@ class Misc:
             for this container.
             """
 
-        def grid_content(self, row: int | None = None, column: int | None = None) -> list[Widget]:
+        def grid_content(self, row: int? = None, column: int? = None) -> list[Widget]:
             """Returns a list of the content widgets.
 
             If no arguments are supplied, a list of all of the content in this
@@ -1528,7 +1528,7 @@ class Misc:
         (e.g. x, y, rootx, rooty).
         """
 
-    def event_info(self, virtual: str | None = None) -> (*: str):
+    def event_info(self, virtual: str? = None) -> (*: str):
         """Return a list of all virtual events or the information
         about the SEQUENCE bound to the virtual event VIRTUAL.
         """
@@ -1659,7 +1659,7 @@ class Wm:
         """
     def wm_aspect(
         self, minNumer: None = None, minDenom: None = None, maxNumer: None = None, maxDenom: None = None
-    ) -> (int, int, int, int) | None
+    ) -> (int, int, int, int)?
 
     aspect = wm_aspect
 
@@ -1959,7 +1959,7 @@ class Wm:
                 """
 
     attributes = wm_attributes
-    def wm_client(self, name: str | None = None) -> str:
+    def wm_client(self, name: str? = None) -> str:
         """Store NAME in WM_CLIENT_MACHINE property of this widget. Return
         current value.
         """
@@ -1975,7 +1975,7 @@ class Wm:
     def wm_colormapwindows(self, first_wlist_item: Misc, /, *other_wlist_items: Misc) -> None
 
     colormapwindows = wm_colormapwindows
-    def wm_command(self, value: str | None = None) -> str:
+    def wm_command(self, value: str? = None) -> str:
         """Store VALUE in WM_COMMAND property. It is the command
         which shall be used to invoke the application. Return current
         command if VALUE is None.
@@ -2082,7 +2082,7 @@ class Wm:
         """
 
     iconphoto = wm_iconphoto
-    def wm_iconposition(self, x: int | None = None, y: int | None = None) -> (int, int) | None:
+    def wm_iconposition(self, x: int? = None, y: int? = None) -> (int, int)?:
         """Set the position of the icon of this widget to X and Y. Return
         a tuple of the current values of X and Y if None is given.
         """
@@ -2120,7 +2120,7 @@ class Wm:
 
     minsize = wm_minsize
 
-    def wm_overrideredirect(self, boolean: None = None) -> bool | None:  # returns True or None
+    def wm_overrideredirect(self, boolean: None = None) -> bool?:  # returns True or None
         """Instruct the window manager to ignore this widget
         if BOOLEAN is given with 1. Return the current value if None
         is given.
@@ -2200,12 +2200,12 @@ class Tk(Misc, Wm):
         # args.
         # use `git grep screenName` to find them
         self,
-        screenName: str | None = None,
-        baseName: str | None = None,
+        screenName: str? = None,
+        baseName: str? = None,
         className: str = "Tk",
         useTk: bool = True,
         sync: bool = False,
-        use: str | None = None,
+        use: str? = None,
     ):
         """Return a new top level widget on screen SCREENNAME. A new Tcl interpreter will
         be created. BASENAME will be used for the identification of the profile file (see
@@ -2217,7 +2217,7 @@ class Tk(Misc, Wm):
     # Keep this in sync with ttktheme.ThemedTk. See issue #13858
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         background: str = ...,
         bd: int | float | str = ...,
@@ -2233,9 +2233,9 @@ class Tk(Misc, Wm):
         padx: int | float | str = ...,
         pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         width: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -2262,7 +2262,7 @@ class Tk(Misc, Wm):
         .CLASSNAME.py if such a file exists in the home directory.
         """
 
-    report_callback_exception: (type[BaseException], BaseException, TracebackType | None) -> object
+    report_callback_exception: (type[BaseException], BaseException, TracebackType?) -> object
     # Tk has __getattr__ so that tk_instance.foo falls back to tk_instance.tk.foo
     # Please keep in sync with _tkinter.TkappType.
     # Some methods are intentionally missing because they are inherited from Misc instead.
@@ -2304,7 +2304,7 @@ class Tk(Misc, Wm):
 
     def willdispatch(self)
 
-def Tcl(screenName: str | None = None, baseName: str | None = None, className: str = "Tk", useTk: bool = False) -> Tk
+def Tcl(screenName: str? = None, baseName: str? = None, className: str = "Tk", useTk: bool = False) -> Tk
 
 _InMiscTotal = TypedDict("_InMiscTotal", {"in": Misc})
 _InMiscNonTotal = TypedDict("_InMiscNonTotal", {"in": Misc}, total=False)
@@ -2335,7 +2335,7 @@ class Pack:
     # replaced by **kwargs.
     def pack_configure(
         self,
-        cnf: Mapping[str, dynamic] | None = {},
+        cnf: Mapping[str, dynamic]? = {},
         *,
         after: Misc = ...,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
@@ -2399,7 +2399,7 @@ class Place:
 
     def place_configure(
         self,
-        cnf: Mapping[str, dynamic] | None = {},
+        cnf: Mapping[str, dynamic]? = {},
         *,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         bordermode: "inside" | "outside" | "ignore" = ...,
@@ -2474,7 +2474,7 @@ class Grid:
 
     def grid_configure(
         self,
-        cnf: Mapping[str, dynamic] | None = {},
+        cnf: Mapping[str, dynamic]? = {},
         *,
         column: int = ...,
         columnspan: int = ...,
@@ -2546,8 +2546,8 @@ class Widget(BaseWidget, Pack, Place, Grid):
     # widgets don't.
     override def bind[W: Misc](
         self: W,
-        sequence: str | None = None,
-        func: ((Event[W]) -> object) | None = None,
+        sequence: str? = None,
+        func: ((Event[W]) -> object)? = None,
         add: "" | "+" | bool | None = None,
     ) -> str:
         """Bind to this widget at event SEQUENCE a call to function FUNC.
@@ -2588,7 +2588,7 @@ class Widget(BaseWidget, Pack, Place, Grid):
         If FUNC or SEQUENCE is omitted the bound function or list
         of bound events are returned.
         """
-    def bind(self, sequence: str | None, func: str, add: "" | "+" | bool | None = None) -> None
+    def bind(self, sequence: str?, func: str, add: "" | "+" | bool | None = None) -> None
     def bind(self, *, func: str, add: "" | "+" | bool | None = None) -> None
 
 class Toplevel(BaseWidget, Wm):
@@ -2599,8 +2599,8 @@ class Toplevel(BaseWidget, Wm):
     # copy/pasted here instead of aliasing as 'config = Tk.config'.
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         background: str = ...,
         bd: int | float | str = 0,
@@ -2621,7 +2621,7 @@ class Toplevel(BaseWidget, Wm):
         pady: int | float | str = 0,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         screen: str = "",  # can't be changed after creating widget
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = 0,
         use: int = ...,
         visual: str | (str, int) = "",
         width: int | float | str = 0,
@@ -2637,7 +2637,7 @@ class Toplevel(BaseWidget, Wm):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         background: str = ...,
         bd: int | float | str = ...,
@@ -2653,9 +2653,9 @@ class Toplevel(BaseWidget, Wm):
         padx: int | float | str = ...,
         pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         width: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -2677,8 +2677,8 @@ class Button(Widget):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         activebackground: str = ...,
         activeforeground: str = ...,
@@ -2713,7 +2713,7 @@ class Button(Widget):
         repeatdelay: int = ...,
         repeatinterval: int = ...,
         state: "normal" | "active" | "disabled" = "normal",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = "",
         text: int | float | str = "",
         # We allow the textvariable to be any Variable, not necessarily
         # StringVar. This is useful for e.g. a button that displays the value
@@ -2744,7 +2744,7 @@ class Button(Widget):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         activebackground: str = ...,
         activeforeground: str = ...,
@@ -2776,13 +2776,13 @@ class Button(Widget):
         repeatdelay: int = ...,
         repeatinterval: int = ...,
         state: "normal" | "active" | "disabled" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         text: int | float | str = ...,
         textvariable: Variable = ...,
         underline: int = ...,
         width: int | float | str = ...,
         wraplength: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -2823,8 +2823,8 @@ class Canvas(Widget, XView, YView):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         background: str = ...,
         bd: int | float | str = 0,
@@ -2854,7 +2854,7 @@ class Canvas(Widget, XView, YView):
         selectforeground: str = ...,
         # man page says that state can be 'hidden', but it can't
         state: "normal" | "disabled" = "normal",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = "",
         width: int | float | str = ...,
         xscrollcommand: str | ((float, float) -> object) = "",
         xscrollincrement: int | float | str = 0,
@@ -2874,7 +2874,7 @@ class Canvas(Widget, XView, YView):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         background: str = ...,
         bd: int | float | str = ...,
@@ -2900,13 +2900,13 @@ class Canvas(Widget, XView, YView):
         selectborderwidth: int | float | str = ...,
         selectforeground: str = ...,
         state: "normal" | "disabled" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         width: int | float | str = ...,
         xscrollcommand: str | ((float, float) -> object) = ...,
         xscrollincrement: int | float | str = ...,
         yscrollcommand: str | ((float, float) -> object) = ...,
         yscrollincrement: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -2999,8 +2999,8 @@ class Canvas(Widget, XView, YView):
     def tag_bind(
         self,
         tagOrId: str | int,
-        sequence: str | None = None,
-        func: ((Event[Canvas]) -> object) | None = None,
+        sequence: str? = None,
+        func: ((Event[Canvas]) -> object)? = None,
         add: "" | "+" | bool | None = None,
     ) -> str:
         """Bind to all items with TAGORID at event SEQUENCE a call to function FUNC.
@@ -3010,11 +3010,11 @@ class Canvas(Widget, XView, YView):
         replace the previous function. See bind for the return value.
         """
     def tag_bind(
-        self, tagOrId: str | int, sequence: str | None, func: str, add: "" | "+" | bool | None = None
+        self, tagOrId: str | int, sequence: str?, func: str, add: "" | "+" | bool | None = None
     ) -> None
     def tag_bind(self, tagOrId: str | int, *, func: str, add: "" | "+" | bool | None = None) -> None
 
-    def tag_unbind(self, tagOrId: str | int, sequence: str, funcid: str | None = None):
+    def tag_unbind(self, tagOrId: str | int, sequence: str, funcid: str? = None):
         """Unbind for all items with TAGORID for event SEQUENCE  the
         function identified with FUNCID.
         """
@@ -3532,7 +3532,7 @@ class Canvas(Widget, XView, YView):
     def delete(self, *tagsOrCanvasIds: str | int):
         """Delete items identified by all tag or ids contained in ARGS."""
 
-    def dtag(self, tag: str, tag_to_delete: str | None = ..., /) -> None:
+    def dtag(self, tag: str, tag_to_delete: str? = ..., /) -> None:
         """Delete tag or id given as last arguments in ARGS from items
         identified by first argument in ARGS.
         """
@@ -3562,8 +3562,8 @@ class Canvas(Widget, XView, YView):
 
     # itemconfigure kwargs depend on item type, which is not known when type checking
     def itemconfigure(
-        self, tagOrId: str | int, cnf: dict[str, dynamic] | None = None, **kw: dynamic
-    ) -> dict[str, (str, str, str, str, str)] | None:
+        self, tagOrId: str | int, cnf: dict[str, dynamic]? = None, **kw: dynamic
+    ) -> dict[str, (str, str, str, str, str)]?:
         """Query or modify the configuration options of an item TAGORID.
 
         Similar to configure() except that it applies to the specified item.
@@ -3646,7 +3646,7 @@ class Canvas(Widget, XView, YView):
     def select_to(self, tagOrId, index):
         """Set the variable end of a selection in item TAGORID to INDEX."""
 
-    def type(self, tagOrId: str | int) -> int | None:
+    def type(self, tagOrId: str | int) -> int?:
         """Return the type of the item TAGORID."""
 
 class Checkbutton(Widget):
@@ -3654,8 +3654,8 @@ class Checkbutton(Widget):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         activebackground: str = ...,
         activeforeground: str = ...,
@@ -3701,7 +3701,7 @@ class Checkbutton(Widget):
         selectcolor: str = ...,
         selectimage: _Image | str = "",
         state: "normal" | "active" | "disabled" = "normal",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = "",
         text: int | float | str = "",
         textvariable: Variable = ...,
         tristateimage: _Image | str = "",
@@ -3725,7 +3725,7 @@ class Checkbutton(Widget):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         activebackground: str = ...,
         activeforeground: str = ...,
@@ -3760,7 +3760,7 @@ class Checkbutton(Widget):
         selectcolor: str = ...,
         selectimage: _Image | str = ...,
         state: "normal" | "active" | "disabled" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         text: int | float | str = ...,
         textvariable: Variable = ...,
         tristateimage: _Image | str = ...,
@@ -3769,7 +3769,7 @@ class Checkbutton(Widget):
         variable: Variable | "" = ...,
         width: int | float | str = ...,
         wraplength: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -3805,8 +3805,8 @@ class Entry(Widget, XView):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         background: str = ...,
         bd: int | float | str = ...,
@@ -3839,7 +3839,7 @@ class Entry(Widget, XView):
         selectforeground: str = ...,
         show: str = "",
         state: "normal" | "disabled" | "readonly" = "normal",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = "",
         textvariable: Variable = ...,
         validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = "none",
         validatecommand: str | list[str] | (*: str) | (() -> bool) = "",
@@ -3863,7 +3863,7 @@ class Entry(Widget, XView):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         background: str = ...,
         bd: int | float | str = ...,
@@ -3895,14 +3895,14 @@ class Entry(Widget, XView):
         selectforeground: str = ...,
         show: str = ...,
         state: "normal" | "disabled" | "readonly" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         textvariable: Variable = ...,
         validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = ...,
         validatecommand: str | list[str] | (*: str) | (() -> bool) = ...,
         vcmd: str | list[str] | (*: str) | (() -> bool) = ...,
         width: int = ...,
         xscrollcommand: str | ((float, float) -> object) = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -3974,8 +3974,8 @@ class Frame(Widget):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         background: str = ...,
         bd: int | float | str = 0,
@@ -3994,7 +3994,7 @@ class Frame(Widget):
         padx: int | float | str = 0,
         pady: int | float | str = 0,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = 0,
         visual: str | (str, int) = "",  # can't be changed with configure()
         width: int | float | str = 0,
     ):
@@ -4009,7 +4009,7 @@ class Frame(Widget):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         background: str = ...,
         bd: int | float | str = ...,
@@ -4024,9 +4024,9 @@ class Frame(Widget):
         padx: int | float | str = ...,
         pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         width: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -4048,8 +4048,8 @@ class Label(Widget):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         activebackground: str = ...,
         activeforeground: str = ...,
@@ -4077,7 +4077,7 @@ class Label(Widget):
         pady: int | float | str = 1,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         state: "normal" | "active" | "disabled" = "normal",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = 0,
         text: int | float | str = "",
         textvariable: Variable = ...,
         underline: int = -1,
@@ -4105,7 +4105,7 @@ class Label(Widget):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         activebackground: str = ...,
         activeforeground: str = ...,
@@ -4132,13 +4132,13 @@ class Label(Widget):
         pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         state: "normal" | "active" | "disabled" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         text: int | float | str = ...,
         textvariable: Variable = ...,
         underline: int = ...,
         width: int | float | str = ...,
         wraplength: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -4160,8 +4160,8 @@ class Listbox(Widget, XView, YView):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         activestyle: "dotbox" | "none" | "underline" = ...,
         background: str = ...,
@@ -4204,7 +4204,7 @@ class Listbox(Widget, XView, YView):
         selectmode: str | "single" | "browse" | "multiple" | "extended" = "browse",  # noqa: Y051
         setgrid: bool = False,
         state: "normal" | "disabled" = "normal",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = "",
         width: int = 20,
         xscrollcommand: str | ((float, float) -> object) = "",
         yscrollcommand: str | ((float, float) -> object) = "",
@@ -4223,7 +4223,7 @@ class Listbox(Widget, XView, YView):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         activestyle: "dotbox" | "none" | "underline" = ...,
         background: str = ...,
@@ -4250,11 +4250,11 @@ class Listbox(Widget, XView, YView):
         selectmode: str | "single" | "browse" | "multiple" | "extended" = ...,  # noqa: Y051
         setgrid: bool = ...,
         state: "normal" | "disabled" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         width: int = ...,
         xscrollcommand: str | ((float, float) -> object) = ...,
         yscrollcommand: str | ((float, float) -> object) = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -4273,7 +4273,7 @@ class Listbox(Widget, XView, YView):
     def activate(self, index: str | int):
         """Activate item identified by INDEX."""
 
-    override def bbox(self, index: str | int) -> (int, int, int, int) | None:
+    override def bbox(self, index: str | int) -> (int, int, int, int)?:
         """Return a tuple of X1,Y1,X2,Y2 coordinates for a rectangle
         which encloses the item identified by the given index.
         """
@@ -4345,8 +4345,8 @@ class Menu(Widget):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         activebackground: str = ...,
         activeborderwidth: int | float | str = ...,
@@ -4365,7 +4365,7 @@ class Menu(Widget):
         postcommand: (() -> object) | str = "",
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         selectcolor: str = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = 0,
         tearoff: bool | 0 | 1 = 1,
         # I guess tearoffcommand arguments are supposed to be widget objects,
         # but they are widget name strings. Use nametowidget() to handle the
@@ -4385,7 +4385,7 @@ class Menu(Widget):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         activebackground: str = ...,
         activeborderwidth: int | float | str = ...,
@@ -4403,12 +4403,12 @@ class Menu(Widget):
         postcommand: (() -> object) | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         selectcolor: str = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         tearoff: bool = ...,
         tearoffcommand: ((str, str) -> object) | str = ...,
         title: str = ...,
         type: "menubar" | "tearoff" | "normal" = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -4438,7 +4438,7 @@ class Menu(Widget):
 
     def add_cascade(
         self,
-        cnf: dict[str, dynamic] | None = {},
+        cnf: dict[str, dynamic]? = {},
         *,
         accelerator: str = ...,
         activebackground: str = ...,
@@ -4461,7 +4461,7 @@ class Menu(Widget):
 
     def add_checkbutton(
         self,
-        cnf: dict[str, dynamic] | None = {},
+        cnf: dict[str, dynamic]? = {},
         *,
         accelerator: str = ...,
         activebackground: str = ...,
@@ -4489,7 +4489,7 @@ class Menu(Widget):
 
     def add_command(
         self,
-        cnf: dict[str, dynamic] | None = {},
+        cnf: dict[str, dynamic]? = {},
         *,
         accelerator: str = ...,
         activebackground: str = ...,
@@ -4511,7 +4511,7 @@ class Menu(Widget):
 
     def add_radiobutton(
         self,
-        cnf: dict[str, dynamic] | None = {},
+        cnf: dict[str, dynamic]? = {},
         *,
         accelerator: str = ...,
         activebackground: str = ...,
@@ -4536,13 +4536,13 @@ class Menu(Widget):
     ):
         """Add radio menu item."""
 
-    def add_separator(self, cnf: dict[str, dynamic] | None = {}, *, background: str = ...):
+    def add_separator(self, cnf: dict[str, dynamic]? = {}, *, background: str = ...):
         """Add separator."""
 
     def insert_cascade(
         self,
         index: str | int,
-        cnf: dict[str, dynamic] | None = {},
+        cnf: dict[str, dynamic]? = {},
         *,
         accelerator: str = ...,
         activebackground: str = ...,
@@ -4566,7 +4566,7 @@ class Menu(Widget):
     def insert_checkbutton(
         self,
         index: str | int,
-        cnf: dict[str, dynamic] | None = {},
+        cnf: dict[str, dynamic]? = {},
         *,
         accelerator: str = ...,
         activebackground: str = ...,
@@ -4595,7 +4595,7 @@ class Menu(Widget):
     def insert_command(
         self,
         index: str | int,
-        cnf: dict[str, dynamic] | None = {},
+        cnf: dict[str, dynamic]? = {},
         *,
         accelerator: str = ...,
         activebackground: str = ...,
@@ -4618,7 +4618,7 @@ class Menu(Widget):
     def insert_radiobutton(
         self,
         index: str | int,
-        cnf: dict[str, dynamic] | None = {},
+        cnf: dict[str, dynamic]? = {},
         *,
         accelerator: str = ...,
         activebackground: str = ...,
@@ -4643,7 +4643,7 @@ class Menu(Widget):
     ):
         """Add radio menu item at INDEX."""
 
-    def insert_separator(self, index: str | int, cnf: dict[str, dynamic] | None = {}, *, background: str = ...):
+    def insert_separator(self, index: str | int, cnf: dict[str, dynamic]? = {}, *, background: str = ...):
         """Add separator at INDEX."""
 
     def delete(self, index1: str | int, index2: str | int | None = None):
@@ -4653,8 +4653,8 @@ class Menu(Widget):
         """Return the value of OPTION for a menu item at INDEX."""
 
     def entryconfigure(
-        self, index: str | int, cnf: dict[str, dynamic] | None = None, **kw: dynamic
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+        self, index: str | int, cnf: dict[str, dynamic]? = None, **kw: dynamic
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of a menu item at INDEX.
 
         Similar to configure() except that it applies to the specified
@@ -4662,7 +4662,7 @@ class Menu(Widget):
         """
 
     entryconfig = entryconfigure
-    def index(self, index: str | int) -> int | None:
+    def index(self, index: str | int) -> int?:
         """Return the index of a menu item identified by INDEX."""
 
     def invoke(self, index: str | int) -> dynamic:
@@ -4692,8 +4692,8 @@ class Menubutton(Widget):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         activebackground: str = ...,
         activeforeground: str = ...,
@@ -4724,7 +4724,7 @@ class Menubutton(Widget):
         pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
         state: "normal" | "active" | "disabled" = "normal",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = 0,
         text: int | float | str = "",
         textvariable: Variable = ...,
         underline: int = -1,
@@ -4743,7 +4743,7 @@ class Menubutton(Widget):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         activebackground: str = ...,
         activeforeground: str = ...,
@@ -4773,13 +4773,13 @@ class Menubutton(Widget):
         pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         state: "normal" | "active" | "disabled" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         text: int | float | str = ...,
         textvariable: Variable = ...,
         underline: int = ...,
         width: int | float | str = ...,
         wraplength: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -4801,8 +4801,8 @@ class Message(Widget):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = "center",
         aspect: int = 150,
@@ -4823,7 +4823,7 @@ class Message(Widget):
         padx: int | float | str = ...,
         pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "flat",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = 0,
         text: int | float | str = "",
         textvariable: Variable = ...,
         # there's width but no height
@@ -4839,7 +4839,7 @@ class Message(Widget):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         aspect: int = ...,
@@ -4859,11 +4859,11 @@ class Message(Widget):
         padx: int | float | str = ...,
         pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         text: int | float | str = ...,
         textvariable: Variable = ...,
         width: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -4885,8 +4885,8 @@ class Radiobutton(Widget):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         activebackground: str = ...,
         activeforeground: str = ...,
@@ -4920,7 +4920,7 @@ class Radiobutton(Widget):
         selectcolor: str = ...,
         selectimage: _Image | str = "",
         state: "normal" | "active" | "disabled" = "normal",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = "",
         text: int | float | str = "",
         textvariable: Variable = ...,
         tristateimage: _Image | str = "",
@@ -4945,7 +4945,7 @@ class Radiobutton(Widget):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         activebackground: str = ...,
         activeforeground: str = ...,
@@ -4978,7 +4978,7 @@ class Radiobutton(Widget):
         selectcolor: str = ...,
         selectimage: _Image | str = ...,
         state: "normal" | "active" | "disabled" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         text: int | float | str = ...,
         textvariable: Variable = ...,
         tristateimage: _Image | str = ...,
@@ -4988,7 +4988,7 @@ class Radiobutton(Widget):
         variable: Variable | "" = ...,
         width: int | float | str = ...,
         wraplength: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -5021,8 +5021,8 @@ class Scale(Widget):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         activebackground: str = ...,
         background: str = ...,
@@ -5054,7 +5054,7 @@ class Scale(Widget):
         sliderlength: int | float | str = 30,
         sliderrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "raised",
         state: "normal" | "active" | "disabled" = "normal",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = "",
         tickinterval: int | float = 0.0,
         to: int | float = 100.0,
         troughcolor: str = ...,
@@ -5073,7 +5073,7 @@ class Scale(Widget):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         activebackground: str = ...,
         background: str = ...,
@@ -5103,13 +5103,13 @@ class Scale(Widget):
         sliderlength: int | float | str = ...,
         sliderrelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         state: "normal" | "active" | "disabled" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         tickinterval: int | float = ...,
         to: int | float = ...,
         troughcolor: str = ...,
         variable: IntVar | DoubleVar = ...,
         width: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -5147,8 +5147,8 @@ class Scrollbar(Widget):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         activebackground: str = ...,
         activerelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "raised",
@@ -5161,7 +5161,7 @@ class Scrollbar(Widget):
         # 'SCROLLING COMMANDS' in scrollbar man page. There doesn't seem to
         # be any way to specify an overloaded callback function, so we say
         # that it can take any args while it can't in reality.
-        command: (...) -> (int | float, int | float) | None | str = "",
+        command: (...) -> (int | float, int | float)? | str = "",
         cursor: _Cursor = "",
         elementborderwidth: int | float | str = -1,
         highlightbackground: str = ...,
@@ -5173,7 +5173,7 @@ class Scrollbar(Widget):
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         repeatdelay: int = 300,
         repeatinterval: int = 100,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = "",
         troughcolor: str = ...,
         width: int | float | str = ...,
     ):
@@ -5189,7 +5189,7 @@ class Scrollbar(Widget):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         activebackground: str = ...,
         activerelief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
@@ -5198,7 +5198,7 @@ class Scrollbar(Widget):
         bg: str = ...,
         border: int | float | str = ...,
         borderwidth: int | float | str = ...,
-        command: (...) -> (int | float, int | float) | None | str = ...,
+        command: (...) -> (int | float, int | float)? | str = ...,
         cursor: _Cursor = ...,
         elementborderwidth: int | float | str = ...,
         highlightbackground: str = ...,
@@ -5209,10 +5209,10 @@ class Scrollbar(Widget):
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         repeatdelay: int = ...,
         repeatinterval: int = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         troughcolor: str = ...,
         width: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -5269,8 +5269,8 @@ class Text(Widget, XView, YView):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         autoseparators: bool = True,
         background: str = ...,
@@ -5316,7 +5316,7 @@ class Text(Widget, XView, YView):
         # Literal inside Tuple doesn't actually work
         tabs: int | float | str | (*: int | float | str) = "",
         tabstyle: "tabular" | "wordprocessor" = "tabular",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = "",
         undo: bool = False,
         width: int = 80,
         wrap: "none" | "char" | "word" = "char",
@@ -5350,7 +5350,7 @@ class Text(Widget, XView, YView):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         autoseparators: bool = ...,
         background: str = ...,
@@ -5391,13 +5391,13 @@ class Text(Widget, XView, YView):
         state: "normal" | "disabled" = ...,
         tabs: int | float | str | (*: int | float | str) = ...,
         tabstyle: "tabular" | "wordprocessor" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         undo: bool = ...,
         width: int = ...,
         wrap: "none" | "char" | "word" = ...,
         xscrollcommand: str | ((float, float) -> object) = ...,
         yscrollcommand: str | ((float, float) -> object) = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -5413,7 +5413,7 @@ class Text(Widget, XView, YView):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
-    override def bbox(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> (int, int, int, int) | None:
+    override def bbox(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> (int, int, int, int)?:
         """Return a tuple of (x,y,width,height) which gives the bounding
         box of the visible part of the character at the given index.
         """
@@ -5508,7 +5508,7 @@ class Text(Widget, XView, YView):
             index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             *,
             return_ints: False = False,
-        ) -> (int,) | None
+        ) -> (int,)?
         def count(
             self,
             index1: str | int | float | _tkinter.Tcl_Obj | Widget,
@@ -5517,7 +5517,7 @@ class Text(Widget, XView, YView):
             /,
             *,
             return_ints: False = False,
-        ) -> (int,) | None
+        ) -> (int,)?
         def count(
             self,
             index1: str | int | float | _tkinter.Tcl_Obj | Widget,
@@ -5527,7 +5527,7 @@ class Text(Widget, XView, YView):
             /,
             *,
             return_ints: False = False,
-        ) -> int | None
+        ) -> int?
         def count(
             self,
             index1: str | int | float | _tkinter.Tcl_Obj | Widget,
@@ -5537,7 +5537,7 @@ class Text(Widget, XView, YView):
             /,
             *,
             return_ints: False = False,
-        ) -> int | None
+        ) -> int?
         def count(
             self,
             index1: str | int | float | _tkinter.Tcl_Obj | Widget,
@@ -5562,7 +5562,7 @@ class Text(Widget, XView, YView):
     else:
         def count(
             self, index1: str | int | float | _tkinter.Tcl_Obj | Widget, index2: str | int | float | _tkinter.Tcl_Obj | Widget
-        ) -> (int,) | None:
+        ) -> (int,)?:
             """Counts the number of relevant things between the two indices.
             If index1 is after index2, the result will be a negative number
             (and this holds for each of the possible options).
@@ -5581,7 +5581,7 @@ class Text(Widget, XView, YView):
             index2: str | int | float | _tkinter.Tcl_Obj | Widget,
             arg: WhatToCount | "update",
             /,
-        ) -> (int,) | None
+        ) -> (int,)?
         def count(
             self,
             index1: str | int | float | _tkinter.Tcl_Obj | Widget,
@@ -5589,7 +5589,7 @@ class Text(Widget, XView, YView):
             arg1: "update",
             arg2: WhatToCount,
             /,
-        ) -> int | None
+        ) -> int?
         def count(
             self,
             index1: str | int | float | _tkinter.Tcl_Obj | Widget,
@@ -5597,7 +5597,7 @@ class Text(Widget, XView, YView):
             arg1: WhatToCount,
             arg2: "update",
             /,
-        ) -> int | None
+        ) -> int?
         def count(
             self,
             index1: str | int | float | _tkinter.Tcl_Obj | Widget,
@@ -5628,7 +5628,7 @@ class Text(Widget, XView, YView):
     ):
         """Delete the characters between INDEX1 and INDEX2 (not included)."""
 
-    def dlineinfo(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> (int, int, int, int, int) | None:
+    def dlineinfo(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> (int, int, int, int, int)?:
         """Return tuple (x,y,width,height,baseline) giving the bounding box
         and baseline position of the visible part of the line containing
         the character at INDEX.
@@ -5761,19 +5761,19 @@ class Text(Widget, XView, YView):
     def image_configure(
         self,
         index: str | int | float | _tkinter.Tcl_Obj | Widget,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         align: "baseline" | "bottom" | "center" | "top" = ...,
         image: _Image | str = ...,
         name: str = ...,
         padx: int | float | str = ...,
         pady: int | float | str = ...,
-    ) -> dict[str, (str, str, str, str, str | int)] | None
+    ) -> dict[str, (str, str, str, str, str | int)]?
 
     def image_create(
         self,
         index: str | int | float | _tkinter.Tcl_Obj | Widget,
-        cnf: dict[str, dynamic] | None = {},
+        cnf: dict[str, dynamic]? = {},
         *,
         align: "baseline" | "bottom" | "center" | "top" = ...,
         image: _Image | str = ...,
@@ -5811,10 +5811,10 @@ class Text(Widget, XView, YView):
     def mark_unset(self, *markNames: str):
         """Delete all marks in MARKNAMES."""
 
-    def mark_next(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> str | None:
+    def mark_next(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> str?:
         """Return the name of the next mark after INDEX."""
 
-    def mark_previous(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> str | None:
+    def mark_previous(self, index: str | int | float | _tkinter.Tcl_Obj | Widget) -> str?:
         """Return the name of the previous mark before INDEX."""
 
     # **kw of peer_create is same as the kwargs of Text.__init__
@@ -5859,16 +5859,16 @@ class Text(Widget, XView, YView):
             pattern: str,
             index: str | int | float | _tkinter.Tcl_Obj | Widget,
             stopindex: str | int | float | _tkinter.Tcl_Obj | Widget | None = None,
-            forwards: bool | None = None,
-            backwards: bool | None = None,
-            exact: bool | None = None,
-            regexp: bool | None = None,
-            nocase: bool | None = None,
-            count: Variable | None = None,
-            elide: bool | None = None,
+            forwards: bool? = None,
+            backwards: bool? = None,
+            exact: bool? = None,
+            regexp: bool? = None,
+            nocase: bool? = None,
+            count: Variable? = None,
+            elide: bool? = None,
             *,
-            nolinestop: bool | None = None,
-            strictlimits: bool | None = None,
+            nolinestop: bool? = None,
+            strictlimits: bool? = None,
         ) -> str:  # returns empty string for not found
             """Search PATTERN beginning from INDEX until STOPINDEX.
             Return the index of the first character of a match or an
@@ -5881,16 +5881,16 @@ class Text(Widget, XView, YView):
             index: str | int | float | _tkinter.Tcl_Obj | Widget,
             stopindex: str | int | float | _tkinter.Tcl_Obj | Widget | None = None,
             *,
-            forwards: bool | None = None,
-            backwards: bool | None = None,
-            exact: bool | None = None,
-            regexp: bool | None = None,
-            nocase: bool | None = None,
-            count: Variable | None = None,
-            elide: bool | None = None,
-            nolinestop: bool | None = None,
-            overlap: bool | None = None,
-            strictlimits: bool | None = None,
+            forwards: bool? = None,
+            backwards: bool? = None,
+            exact: bool? = None,
+            regexp: bool? = None,
+            nocase: bool? = None,
+            count: Variable? = None,
+            elide: bool? = None,
+            nolinestop: bool? = None,
+            overlap: bool? = None,
+            strictlimits: bool? = None,
         ) -> (*: _tkinter.Tcl_Obj):
             """Search all occurrences of PATTERN from INDEX to STOPINDEX.
             Return a tuple of indices where matches begin.
@@ -5902,13 +5902,13 @@ class Text(Widget, XView, YView):
             pattern: str,
             index: str | int | float | _tkinter.Tcl_Obj | Widget,
             stopindex: str | int | float | _tkinter.Tcl_Obj | Widget | None = None,
-            forwards: bool | None = None,
-            backwards: bool | None = None,
-            exact: bool | None = None,
-            regexp: bool | None = None,
-            nocase: bool | None = None,
-            count: Variable | None = None,
-            elide: bool | None = None,
+            forwards: bool? = None,
+            backwards: bool? = None,
+            exact: bool? = None,
+            regexp: bool? = None,
+            nocase: bool? = None,
+            count: Variable? = None,
+            elide: bool? = None,
         ) -> str:  # returns empty string for not found
             """Search PATTERN beginning from INDEX until STOPINDEX.
             Return the index of the first character of a match or an
@@ -5929,8 +5929,8 @@ class Text(Widget, XView, YView):
     def tag_bind(
         self,
         tagName: str,
-        sequence: str | None,
-        func: ((Event[Text]) -> object) | None,
+        sequence: str?,
+        func: ((Event[Text]) -> object)?,
         add: "" | "+" | bool | None = None,
     ) -> str:
         """Bind to all characters with TAGNAME at event SEQUENCE a call to function FUNC.
@@ -5939,9 +5939,9 @@ class Text(Widget, XView, YView):
         called additionally to the other bound function or whether it will
         replace the previous function. See bind for the return value.
         """
-    def tag_bind(self, tagName: str, sequence: str | None, func: str, add: "" | "+" | bool | None = None) -> None
+    def tag_bind(self, tagName: str, sequence: str?, func: str, add: "" | "+" | bool | None = None) -> None
 
-    def tag_unbind(self, tagName: str, sequence: str, funcid: str | None = None):
+    def tag_unbind(self, tagName: str, sequence: str, funcid: str? = None):
         """Unbind for all characters with TAGNAME for event SEQUENCE  the
         function identified with FUNCID.
         """
@@ -5953,7 +5953,7 @@ class Text(Widget, XView, YView):
     def tag_configure(
         self,
         tagName: str,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         background: str = ...,
         bgstipple: str = ...,
@@ -5983,7 +5983,7 @@ class Text(Widget, XView, YView):
         underline: bool = ...,
         underlinefg: str = ...,
         wrap: "none" | "char" | "word" = ...,  # be careful with "none" vs None
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of a tag TAGNAME.
 
         Similar to configure() except that it applies to the specified tag.
@@ -5994,7 +5994,7 @@ class Text(Widget, XView, YView):
     def tag_delete(self, first_tag_name: str, /, *tagNames: str):  # error if no tag names given
         """Delete all tags in TAGNAMES."""
 
-    def tag_lower(self, tagName: str, belowThis: str | None = None):
+    def tag_lower(self, tagName: str, belowThis: str? = None):
         """Change the priority of tag TAGNAME such that it is lower
         than the priority of BELOWTHIS.
         """
@@ -6024,7 +6024,7 @@ class Text(Widget, XView, YView):
         The text is searched backwards from INDEX1.
         """
 
-    def tag_raise(self, tagName: str, aboveThis: str | None = None):
+    def tag_raise(self, tagName: str, aboveThis: str? = None):
         """Change the priority of tag TAGNAME such that it is higher
         than the priority of ABOVETHIS.
         """
@@ -6061,7 +6061,7 @@ class Text(Widget, XView, YView):
     def window_configure(
         self,
         index: str | int | float | _tkinter.Tcl_Obj | Widget,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         align: "baseline" | "bottom" | "center" | "top" = ...,
         create: str = ...,
@@ -6069,13 +6069,13 @@ class Text(Widget, XView, YView):
         pady: int | float | str = ...,
         stretch: bool | 0 | 1 = ...,
         window: Misc | str = ...,
-    ) -> dict[str, (str, str, str, str, str | int)] | None
+    ) -> dict[str, (str, str, str, str, str | int)]?
 
     window_config = window_configure
     def window_create(
         self,
         index: str | int | float | _tkinter.Tcl_Obj | Widget,
-        cnf: dict[str, dynamic] | None = {},
+        cnf: dict[str, dynamic]? = {},
         *,
         align: "baseline" | "bottom" | "center" | "top" = ...,
         create: str = ...,
@@ -6107,12 +6107,12 @@ class OptionMenu(Menubutton):
         def __init__(
             # differs from other widgets
             self,
-            master: Misc | None,
+            master: Misc?,
             variable: StringVar,
             value: str,
             *values: str,
-            command: ((str) -> object) | None = ...,
-            name: str | None = None,
+            command: ((str) -> object)? = ...,
+            name: str? = None,
         ) -> None:
             """Construct an optionmenu widget with the parent MASTER, with
             the option textvariable set to VARIABLE, the initially selected
@@ -6124,11 +6124,11 @@ class OptionMenu(Menubutton):
         def __init__(
             # differs from other widgets
             self,
-            master: Misc | None,
+            master: Misc?,
             variable: StringVar,
             value: str,
             *values: str,
-            command: ((str) -> object) | None = ...,
+            command: ((str) -> object)? = ...,
         ) -> None:
             """Construct an optionmenu widget with the parent MASTER, with
             the option textvariable set to VARIABLE, the initially selected
@@ -6178,7 +6178,7 @@ class PhotoImage(Image, _PhotoImageLike):
     # This should be kept in sync with PIL.ImageTK.PhotoImage.__init__()
     init(
         self,
-        name: str | None = None,
+        name: str? = None,
         cnf: dict[str, dynamic] = {},
         master: Misc | _tkinter.TkappType | None = None,
         *,
@@ -6221,7 +6221,7 @@ class PhotoImage(Image, _PhotoImageLike):
         def copy(
             self,
             *,
-            from_coords: Iterable[int] | None = None,
+            from_coords: Iterable[int]? = None,
             zoom: int | (int, int) | list[int] | None = None,
             subsample: int | (int, int) | list[int] | None = None,
         ) -> PhotoImage:
@@ -6242,7 +6242,7 @@ class PhotoImage(Image, _PhotoImageLike):
             integer or a pair of integers.
             """
 
-        def subsample(self, x: int, y: int | "" = "", *, from_coords: Iterable[int] | None = None) -> PhotoImage:
+        def subsample(self, x: int, y: int | "" = "", *, from_coords: Iterable[int]? = None) -> PhotoImage:
             """Return a new PhotoImage based on the same image as this widget
             but use only every Xth or Yth pixel.  If Y is not given, the
             default value is the same as X.
@@ -6251,7 +6251,7 @@ class PhotoImage(Image, _PhotoImageLike):
             source image to be copied, as in the copy() method.
             """
 
-        def zoom(self, x: int, y: int | "" = "", *, from_coords: Iterable[int] | None = None) -> PhotoImage:
+        def zoom(self, x: int, y: int | "" = "", *, from_coords: Iterable[int]? = None) -> PhotoImage:
             """Return a new PhotoImage with the same image as this widget
             but zoom it with a factor of X in the X direction and Y in the Y
             direction.  If Y is not given, the default value is the same as X.
@@ -6264,8 +6264,8 @@ class PhotoImage(Image, _PhotoImageLike):
             self,
             sourceImage: PhotoImage | str,
             *,
-            from_coords: Iterable[int] | None = None,
-            to: Iterable[int] | None = None,
+            from_coords: Iterable[int]? = None,
+            to: Iterable[int]? = None,
             shrink: bool = False,
             zoom: int | (int, int) | list[int] | None = None,
             subsample: int | (int, int) | list[int] | None = None,
@@ -6355,10 +6355,10 @@ class PhotoImage(Image, _PhotoImageLike):
         def read(
             self,
             filename: StrOrBytesPath,
-            format: str | None = None,
+            format: str? = None,
             *,
-            from_coords: Iterable[int] | None = None,
-            to: Iterable[int] | None = None,
+            from_coords: Iterable[int]? = None,
+            to: Iterable[int]? = None,
             shrink: bool = False,
         ):
             """Reads image data from the file named FILENAME into the image.
@@ -6386,10 +6386,10 @@ class PhotoImage(Image, _PhotoImageLike):
         def write(
             self,
             filename: StrOrBytesPath,
-            format: str | None = None,
-            from_coords: Iterable[int] | None = None,
+            format: str? = None,
+            from_coords: Iterable[int]? = None,
             *,
-            background: str | None = None,
+            background: str? = None,
             grayscale: bool = False,
         ) -> None:
             """Writes image data from the image to a file named FILENAME.
@@ -6415,7 +6415,7 @@ class PhotoImage(Image, _PhotoImageLike):
             """
 
         def data(
-            self, format: str, *, from_coords: Iterable[int] | None = None, background: str | None = None, grayscale: bool = False
+            self, format: str, *, from_coords: Iterable[int]? = None, background: str? = None, grayscale: bool = False
         ) -> bytes:
             """Returns image data.
 
@@ -6446,13 +6446,13 @@ class PhotoImage(Image, _PhotoImageLike):
             self,
             format: None = None,
             *,
-            from_coords: Iterable[int] | None = None,
-            background: str | None = None,
+            from_coords: Iterable[int]? = None,
+            background: str? = None,
             grayscale: bool = False,
         ) -> (*: str)
 
     else:
-        def write(self, filename: StrOrBytesPath, format: str | None = None, from_coords: (int, int) | None = None) -> None:
+        def write(self, filename: StrOrBytesPath, format: str? = None, from_coords: (int, int)? = None) -> None:
             """Write image to file FILENAME in FORMAT starting from
             position FROM_COORDS.
             """
@@ -6493,8 +6493,8 @@ class Spinbox(Widget, XView):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         activebackground: str = ...,
         background: str = ...,
@@ -6538,7 +6538,7 @@ class Spinbox(Widget, XView):
         selectborderwidth: int | float | str = ...,
         selectforeground: str = ...,
         state: "normal" | "disabled" | "readonly" = "normal",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = "",
         textvariable: Variable = ...,
         to: int | float = 0.0,
         validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = "none",
@@ -6581,7 +6581,7 @@ class Spinbox(Widget, XView):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         activebackground: str = ...,
         background: str = ...,
@@ -6623,7 +6623,7 @@ class Spinbox(Widget, XView):
         selectborderwidth: int | float | str = ...,
         selectforeground: str = ...,
         state: "normal" | "disabled" | "readonly" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         textvariable: Variable = ...,
         to: int | float = ...,
         validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = ...,
@@ -6633,7 +6633,7 @@ class Spinbox(Widget, XView):
         width: int = ...,
         wrap: bool = ...,
         xscrollcommand: str | ((float, float) -> object) = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -6649,7 +6649,7 @@ class Spinbox(Widget, XView):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
-    override def bbox(self, index) -> (int, int, int, int) | None:
+    override def bbox(self, index) -> (int, int, int, int)?:
         """Return a tuple of X1,Y1,X2,Y2 coordinates for a
         rectangle which encloses the character given by index.
 
@@ -6776,8 +6776,8 @@ class LabelFrame(Widget):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         background: str = ...,
         bd: int | float | str = 2,
@@ -6802,7 +6802,7 @@ class LabelFrame(Widget):
         padx: int | float | str = 0,
         pady: int | float | str = 0,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = "groove",
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = 0,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = 0,
         text: int | float | str = "",
         visual: str | (str, int) = "",  # can't be changed with configure()
         width: int | float | str = 0,
@@ -6825,7 +6825,7 @@ class LabelFrame(Widget):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         background: str = ...,
         bd: int | float | str = ...,
@@ -6845,10 +6845,10 @@ class LabelFrame(Widget):
         padx: int | float | str = ...,
         pady: int | float | str = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
-        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool?)) = ...,
         text: int | float | str = ...,
         width: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -6870,8 +6870,8 @@ class PanedWindow(Widget):
 
     init(
         self,
-        master: Misc | None = None,
-        cnf: dict[str, dynamic] | None = {},
+        master: Misc? = None,
+        cnf: dict[str, dynamic]? = {},
         *,
         background: str = ...,
         bd: int | float | str = 1,
@@ -6913,7 +6913,7 @@ class PanedWindow(Widget):
 
     override def configure(
         self,
-        cnf: dict[str, dynamic] | None = None,
+        cnf: dict[str, dynamic]? = None,
         *,
         background: str = ...,
         bd: int | float | str = ...,
@@ -6936,7 +6936,7 @@ class PanedWindow(Widget):
         sashwidth: int | float | str = ...,
         showhandle: bool = ...,
         width: int | float | str = ...,
-    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)]?:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing

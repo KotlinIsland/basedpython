@@ -6,8 +6,8 @@ from typing import ClassVar, TypeAlias
 from _remote_debugging import AwaitedInfo, FrameInfo, InterpreterInfo, LocationInfo
 
 private type Location = int | (int, int, int, int) | LocationInfo | None
-type _Frame = FrameInfo | (str, Location, str, int | None)
-type _Timestamps = Sequence[int] | None
+type _Frame = FrameInfo | (str, Location, str, int?)
+type _Timestamps = Sequence[int]?
 
 def normalize_location(location: Location) -> (int, int, int, int):
     """Normalize location to a 4-tuple format.

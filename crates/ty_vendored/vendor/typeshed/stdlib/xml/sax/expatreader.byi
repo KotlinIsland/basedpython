@@ -27,10 +27,10 @@ class ExpatLocator(xmlreader.Locator):
     """
 
     init(self, parser: ExpatParser)
-    override def getColumnNumber(self) -> int | None
+    override def getColumnNumber(self) -> int?
     override def getLineNumber(self) -> int
-    override def getPublicId(self) -> str | None
-    override def getSystemId(self) -> str | None
+    override def getPublicId(self) -> str?
+    override def getSystemId(self) -> str?
 
 class ExpatParser(xmlreader.IncrementalParser, xmlreader.Locator):
     """SAX driver for the pyexpat C module."""
@@ -44,9 +44,9 @@ class ExpatParser(xmlreader.IncrementalParser, xmlreader.Locator):
     override def getFeature(self, name: str) -> BoolType
     override def setFeature(self, name: str, state: BoolType)
 
-    override def getProperty(self, name: "http://xml.org/sax/properties/lexical-handler") -> LexicalHandler | None
-    def getProperty(self, name: "http://www.python.org/sax/properties/interning-dict") -> dict[str, dynamic] | None
-    def getProperty(self, name: "http://xml.org/sax/properties/xml-string") -> bytes | None
+    override def getProperty(self, name: "http://xml.org/sax/properties/lexical-handler") -> LexicalHandler?
+    def getProperty(self, name: "http://www.python.org/sax/properties/interning-dict") -> dict[str, dynamic]?
+    def getProperty(self, name: "http://xml.org/sax/properties/xml-string") -> bytes?
     def getProperty(self, name: str) -> object
 
     override def setProperty(self, name: "http://xml.org/sax/properties/lexical-handler", value: LexicalHandler) -> None
@@ -59,22 +59,22 @@ class ExpatParser(xmlreader.IncrementalParser, xmlreader.Locator):
     def flush(self)
     override def close(self)
     override def reset(self)
-    override def getColumnNumber(self) -> int | None
+    override def getColumnNumber(self) -> int?
     override def getLineNumber(self) -> int
-    override def getPublicId(self) -> str | None
-    override def getSystemId(self) -> str | None
+    override def getPublicId(self) -> str?
+    override def getSystemId(self) -> str?
     def start_element(self, name: str, attrs: Mapping[str, str])
     def end_element(self, name: str)
     def start_element_ns(self, name: str, attrs: Mapping[str, str])
     def end_element_ns(self, name: str)
     def processing_instruction(self, target: str, data: str)
     def character_data(self, data: str)
-    def start_namespace_decl(self, prefix: str | None, uri: str)
-    def end_namespace_decl(self, prefix: str | None)
-    def start_doctype_decl(self, name: str, sysid: str | None, pubid: str | None, has_internal_subset: bool)
-    def unparsed_entity_decl(self, name: str, base: str | None, sysid: str, pubid: str | None, notation_name: str)
-    def notation_decl(self, name: str, base: str | None, sysid: str, pubid: str | None)
-    def external_entity_ref(self, context: str, base: str | None, sysid: str, pubid: str | None) -> int
+    def start_namespace_decl(self, prefix: str?, uri: str)
+    def end_namespace_decl(self, prefix: str?)
+    def start_doctype_decl(self, name: str, sysid: str?, pubid: str?, has_internal_subset: bool)
+    def unparsed_entity_decl(self, name: str, base: str?, sysid: str, pubid: str?, notation_name: str)
+    def notation_decl(self, name: str, base: str?, sysid: str, pubid: str?)
+    def external_entity_ref(self, context: str, base: str?, sysid: str, pubid: str?) -> int
     def skipped_entity_handler(self, name: str, is_pe: bool)
 
 def create_parser(namespaceHandling: int = 0, bufsize: int = 65516) -> ExpatParser

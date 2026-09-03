@@ -159,7 +159,7 @@ class Aifc_read:
     init(self, f: _File)
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
     )
     def initfp(self, file: IO[bytes])
     def getfp(self) -> IO[bytes]
@@ -173,7 +173,7 @@ class Aifc_read:
     def getcomptype(self) -> bytes
     def getcompname(self) -> bytes
     def getparams(self) -> _aifc_params
-    def getmarkers(self) -> list[Marker] | None
+    def getmarkers(self) -> list[Marker]?
     def getmark(self, id: int) -> Marker
     def setpos(self, pos: int)
     def readframes(self, nframes: int) -> bytes
@@ -183,7 +183,7 @@ class Aifc_write:
     def __del__(self)
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
     )
     def initfp(self, file: IO[bytes])
     def aiff(self)
@@ -203,7 +203,7 @@ class Aifc_write:
     def getparams(self) -> _aifc_params
     def setmark(self, id: int, pos: int, name: bytes)
     def getmark(self, id: int) -> Marker
-    def getmarkers(self) -> list[Marker] | None
+    def getmarkers(self) -> list[Marker]?
     def tell(self) -> int
     def writeframesraw(self, data: dynamic)  # Actual type for data is Buffer Protocol
     def writeframes(self, data: dynamic)
@@ -211,4 +211,4 @@ class Aifc_write:
 
 def open(f: _File, mode: "r" | "rb") -> Aifc_read
 def open(f: _File, mode: "w" | "wb") -> Aifc_write
-def open(f: _File, mode: str | None = None) -> dynamic
+def open(f: _File, mode: str? = None) -> dynamic

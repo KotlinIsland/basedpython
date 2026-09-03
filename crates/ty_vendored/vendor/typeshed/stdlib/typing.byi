@@ -288,7 +288,7 @@ final class TypeVar:
     """
 
     let __name__: str
-    let __bound__: dynamic | None  # AnnotationForm
+    let __bound__: dynamic?  # AnnotationForm
     let __constraints__: (*: dynamic)  # AnnotationForm
     let __covariant__: bool
     let __contravariant__: bool
@@ -303,7 +303,7 @@ final class TypeVar:
             cls,
             name: str,
             *constraints: dynamic,  # AnnotationForm
-            bound: dynamic | None = None,  # AnnotationForm
+            bound: dynamic? = None,  # AnnotationForm
             contravariant: bool = False,
             covariant: bool = False,
             infer_variance: bool = False,
@@ -314,7 +314,7 @@ final class TypeVar:
             cls,
             name: str,
             *constraints: dynamic,  # AnnotationForm
-            bound: dynamic | None = None,  # AnnotationForm
+            bound: dynamic? = None,  # AnnotationForm
             covariant: bool = False,
             contravariant: bool = False,
             infer_variance: bool = False,
@@ -324,7 +324,7 @@ final class TypeVar:
             cls,
             name: str,
             *constraints: dynamic,  # AnnotationForm
-            bound: dynamic | None = None,  # AnnotationForm
+            bound: dynamic? = None,  # AnnotationForm
             covariant: bool = False,
             contravariant: bool = False,
         ) -> Self
@@ -333,7 +333,7 @@ final class TypeVar:
             self,
             name: str,
             *constraints: dynamic,  # AnnotationForm
-            bound: dynamic | None = None,  # AnnotationForm
+            bound: dynamic? = None,  # AnnotationForm
             covariant: bool = False,
             contravariant: bool = False,
         ) -> None
@@ -351,11 +351,11 @@ final class TypeVar:
         def has_default(self) -> bool
     if sys.version_info >= (3, 14):
         @property
-        def evaluate_bound(self) -> EvaluateFunc | None
+        def evaluate_bound(self) -> EvaluateFunc?
         @property
-        def evaluate_constraints(self) -> EvaluateFunc | None
+        def evaluate_constraints(self) -> EvaluateFunc?
         @property
-        def evaluate_default(self) -> EvaluateFunc | None
+        def evaluate_default(self) -> EvaluateFunc?
 
 # N.B. Keep this definition in sync with typing_extensions._SpecialForm
 final class _SpecialForm(_Final):
@@ -789,7 +789,7 @@ if sys.version_info >= (3, 11):
         let __name__: str
         if sys.version_info >= (3, 15):
             @property
-            def __bound__(self) -> dynamic | None  # AnnotationForm
+            def __bound__(self) -> dynamic?  # AnnotationForm
             @property
             def __covariant__(self) -> bool
             @property
@@ -807,7 +807,7 @@ if sys.version_info >= (3, 11):
                 cls,
                 name: str,
                 *,
-                bound: dynamic | None = None,  # AnnotationForm
+                bound: dynamic? = None,  # AnnotationForm
                 covariant: bool = False,
                 contravariant: bool = False,
                 default: dynamic = ...,  # AnnotationForm
@@ -827,7 +827,7 @@ if sys.version_info >= (3, 11):
         def __typing_prepare_subst__(self, alias: dynamic, args: dynamic, /) -> (*: dynamic)
         if sys.version_info >= (3, 14):
             @property
-            def evaluate_default(self) -> EvaluateFunc | None
+            def evaluate_default(self) -> EvaluateFunc?
 
 final class ParamSpecArgs:
     """The args for a ParamSpec object.
@@ -931,7 +931,7 @@ final class ParamSpec:
     """
 
     let __name__: str
-    let __bound__: dynamic | None  # AnnotationForm
+    let __bound__: dynamic?  # AnnotationForm
     let __covariant__: bool
     let __contravariant__: bool
     if sys.version_info >= (3, 12):
@@ -947,7 +947,7 @@ final class ParamSpec:
             cls,
             name: str,
             *,
-            bound: dynamic | None = None,  # AnnotationForm
+            bound: dynamic? = None,  # AnnotationForm
             contravariant: bool = False,
             covariant: bool = False,
             infer_variance: bool = False,
@@ -958,18 +958,18 @@ final class ParamSpec:
             cls,
             name: str,
             *,
-            bound: dynamic | None = None,  # AnnotationForm
+            bound: dynamic? = None,  # AnnotationForm
             contravariant: bool = False,
             covariant: bool = False,
             infer_variance: bool = False,
         ) -> Self
     elif sys.version_info >= (3, 11):
         def __new__(
-            cls, name: str, *, bound: dynamic | None = None, contravariant: bool = False, covariant: bool = False  # AnnotationForm
+            cls, name: str, *, bound: dynamic? = None, contravariant: bool = False, covariant: bool = False  # AnnotationForm
         ) -> Self
     else:
         def __init__(
-            self, name: str, *, bound: dynamic | None = None, contravariant: bool = False, covariant: bool = False  # AnnotationForm
+            self, name: str, *, bound: dynamic? = None, contravariant: bool = False, covariant: bool = False  # AnnotationForm
         ) -> None
 
     # kept as a property: a data descriptor, not a read-only value — ty relies on the descriptor
@@ -996,7 +996,7 @@ final class ParamSpec:
         def has_default(self) -> bool
     if sys.version_info >= (3, 14):
         @property
-        def evaluate_default(self) -> EvaluateFunc | None
+        def evaluate_default(self) -> EvaluateFunc?
 
 Concatenate: _SpecialForm
 """Special form for annotating higher-order functions.
@@ -1465,7 +1465,7 @@ class IO[in out AnyStr in (str, bytes)]:
     abstract def seekable(self) -> bool
     abstract def tell(self) -> int
     @ignorable_return_value
-    abstract def truncate(self, size: int | None = None, /) -> int
+    abstract def truncate(self, size: int? = None, /) -> int
     abstract def writable(self) -> bool
 
     @ignorable_return_value
@@ -1484,7 +1484,7 @@ class IO[in out AnyStr in (str, bytes)]:
     abstract def __iter__[AnyStr in (str, bytes)](self) -> Iterator[AnyStr]
     abstract def __enter__[AnyStr in (str, bytes)](self) -> IO[AnyStr]
     abstract def __exit__(
-        self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None, /
+        self, type: type[BaseException]?, value: BaseException?, traceback: TracebackType?, /
     )
 
 class BinaryIO(IO[bytes]):
@@ -1500,7 +1500,7 @@ class TextIO(IO[str]):
     __slots__ = ()
     let buffer: BinaryIO
     let encoding: str
-    let errors: str | None
+    let errors: str?
     let line_buffering: int  # int on PyPy, bool on CPython
     let newlines: dynamic  # None, str or tuple
     override abstract def __enter__(self) -> TextIO
@@ -1524,11 +1524,11 @@ private type get_type_hints_obj_allowed_types = (  # noqa: Y042
 if sys.version_info >= (3, 14):
     def get_type_hints(
         obj: get_type_hints_obj_allowed_types,
-        globalns: dict[str, dynamic] | None = None,
-        localns: Mapping[str, dynamic] | None = None,
+        globalns: dict[str, dynamic]? = None,
+        localns: Mapping[str, dynamic]? = None,
         include_extras: bool = False,
         *,
-        format: Format | None = None,  # Default: Format.VALUE
+        format: Format? = None,  # Default: Format.VALUE
     ) -> dict[str, dynamic]:  # AnnotationForm
         """Return type hints for an object.
 
@@ -1564,8 +1564,8 @@ if sys.version_info >= (3, 14):
 else:
     def get_type_hints(
         obj: get_type_hints_obj_allowed_types,
-        globalns: dict[str, dynamic] | None = None,
-        localns: Mapping[str, dynamic] | None = None,
+        globalns: dict[str, dynamic]? = None,
+        localns: Mapping[str, dynamic]? = None,
         include_extras: bool = False,
     ) -> dict[str, dynamic]:  # AnnotationForm
         """Return type hints for an object.
@@ -1634,7 +1634,7 @@ def get_origin(tp: ParamSpecArgs | ParamSpecKwargs) -> ParamSpec:
     """
 def get_origin(tp: UnionType) -> type[UnionType]
 def get_origin(tp: GenericAlias) -> type
-def get_origin(tp: dynamic) -> dynamic | None  # AnnotationForm
+def get_origin(tp: dynamic) -> dynamic?  # AnnotationForm
 
 def cast[Element](typ: type[Element], val: dynamic) -> Element:
     """Cast a value to a type.
@@ -1836,7 +1836,7 @@ class _TypedDict(Mapping[str, object], metaclass=ABCMeta):
         __mutable_keys__: ClassVar[frozenset[str]]
     if sys.version_info >= (3, 15):
         # PEP 728
-        __closed__: ClassVar[bool | None]
+        __closed__: ClassVar[bool?]
         __extra_items__: ClassVar[dynamic]  # AnnotationForm
 
     def copy(self) -> typing_extensions.Self
@@ -1869,10 +1869,10 @@ if sys.version_info >= (3, 14):
         forward_ref: ForwardRef,
         *,
         owner: object = None,
-        globals: dict[str, dynamic] | None = None,
-        locals: Mapping[str, dynamic] | None = None,
-        type_params: (TypeVar, ParamSpec, TypeVarTuple) | None = None,
-        format: Format | None = None,
+        globals: dict[str, dynamic]? = None,
+        locals: Mapping[str, dynamic]? = None,
+        type_params: (TypeVar, ParamSpec, TypeVarTuple)? = None,
+        format: Format? = None,
     ) -> dynamic:  # AnnotationForm
         """Evaluate a forward reference as a type hint.
 
@@ -1910,12 +1910,12 @@ else:
         __forward_arg__: str
         __forward_code__: CodeType
         __forward_evaluated__: bool
-        __forward_value__: dynamic | None  # AnnotationForm
+        __forward_value__: dynamic?  # AnnotationForm
         __forward_is_argument__: bool
         __forward_is_class__: bool
-        __forward_module__: dynamic | None
+        __forward_module__: dynamic?
 
-        init(self, arg: str, is_argument: bool = True, module: dynamic | None = None, *, is_class: bool = False)
+        init(self, arg: str, is_argument: bool = True, module: dynamic? = None, *, is_class: bool = False)
 
         if sys.version_info >= (3, 13):
             @deprecated(
@@ -1924,29 +1924,29 @@ else:
                 "that references a PEP 695 type parameter. It will be disallowed in Python 3.15."
             )
             def _evaluate(
-                self, globalns: dict[str, dynamic] | None, localns: Mapping[str, dynamic] | None, *, recursive_guard: frozenset[str]
-            ) -> dynamic | None  # AnnotationForm
+                self, globalns: dict[str, dynamic]?, localns: Mapping[str, dynamic]?, *, recursive_guard: frozenset[str]
+            ) -> dynamic?  # AnnotationForm
             def _evaluate(
                 self,
-                globalns: dict[str, dynamic] | None,
-                localns: Mapping[str, dynamic] | None,
+                globalns: dict[str, dynamic]?,
+                localns: Mapping[str, dynamic]?,
                 type_params: (*: TypeVar | ParamSpec | TypeVarTuple),
                 *,
                 recursive_guard: frozenset[str],
-            ) -> dynamic | None  # AnnotationForm
+            ) -> dynamic?  # AnnotationForm
         elif sys.version_info >= (3, 12):
             def _evaluate(
                 self,
-                globalns: dict[str, dynamic] | None,
-                localns: Mapping[str, dynamic] | None,
-                type_params: (*: TypeVar | ParamSpec | TypeVarTuple) | None = None,
+                globalns: dict[str, dynamic]?,
+                localns: Mapping[str, dynamic]?,
+                type_params: (*: TypeVar | ParamSpec | TypeVarTuple)? = None,
                 *,
                 recursive_guard: frozenset[str],
-            ) -> dynamic | None  # AnnotationForm
+            ) -> dynamic?  # AnnotationForm
         else:
             def _evaluate(
-                self, globalns: dict[str, dynamic] | None, localns: Mapping[str, dynamic] | None, recursive_guard: frozenset[str]
-            ) -> dynamic | None  # AnnotationForm
+                self, globalns: dict[str, dynamic]?, localns: Mapping[str, dynamic]?, recursive_guard: frozenset[str]
+            ) -> dynamic?  # AnnotationForm
 
         override def __eq__(self, other: object) -> bool
         override def __hash__(self) -> int
@@ -2051,7 +2051,7 @@ if sys.version_info >= (3, 12):
             @property
             def __qualname__(self) -> str
         # It's writable on types, but not on instances of TypeAliasType.
-        let __module__: str | None
+        let __module__: str?
         def __getitem__(self, parameters: dynamic, /) -> GenericAlias:  # AnnotationForm
             """Return self[key]."""
 

@@ -86,7 +86,7 @@ class SMTPChannel(asynchat.async_chat):
         conn: socket.socket,
         addr: dynamic,
         data_size_limit: int = 33554432,
-        map: asyncore._MapType | None = None,
+        map: asyncore._MapType? = None,
         enable_SMTPUTF8: bool = False,
         decode_data: bool = False,
     )
@@ -116,12 +116,12 @@ class SMTPServer(asyncore.dispatcher):
         localaddr: _Address,
         remoteaddr: _Address,
         data_size_limit: int = 33554432,
-        map: asyncore._MapType | None = None,
+        map: asyncore._MapType? = None,
         enable_SMTPUTF8: bool = False,
         decode_data: bool = False,
     )
     def handle_accepted(self, conn: socket.socket, addr: dynamic)
-    def process_message(self, peer: _Address, mailfrom: str, rcpttos: list[str], data: bytes | str, **kwargs: dynamic) -> str | None:
+    def process_message(self, peer: _Address, mailfrom: str, rcpttos: list[str], data: bytes | str, **kwargs: dynamic) -> str?:
         """Override this abstract method to handle messages from the client.
 
         peer is a tuple containing (ipaddr, port) of the client that made the
@@ -156,9 +156,9 @@ class SMTPServer(asyncore.dispatcher):
 class DebuggingServer(SMTPServer)
 
 class PureProxy(SMTPServer):
-    override def process_message(self, peer: _Address, mailfrom: str, rcpttos: list[str], data: bytes | str) -> str | None
+    override def process_message(self, peer: _Address, mailfrom: str, rcpttos: list[str], data: bytes | str) -> str?
 
 if sys.version_info < (3, 11):
     @deprecated("Deprecated since Python 3.9; removed in Python 3.11.")
     class MailmanProxy(PureProxy):
-        override def process_message(self, peer: _Address, mailfrom: str, rcpttos: list[str], data: bytes | str) -> str | None
+        override def process_message(self, peer: _Address, mailfrom: str, rcpttos: list[str], data: bytes | str) -> str?

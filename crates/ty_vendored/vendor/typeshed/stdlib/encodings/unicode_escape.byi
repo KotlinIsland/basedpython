@@ -12,15 +12,15 @@ from _typeshed import ReadableBuffer
 
 class Codec(codecs.Codec):
     # At runtime, this is codecs.unicode_escape_encode
-    override static def encode(str: str, errors: str | None = None, /) -> (bytes, int)
+    override static def encode(str: str, errors: str? = None, /) -> (bytes, int)
     # At runtime, this is codecs.unicode_escape_decode
-    override static def decode(data: str | ReadableBuffer, errors: str | None = None, final: bool = True, /) -> (str, int)
+    override static def decode(data: str | ReadableBuffer, errors: str? = None, final: bool = True, /) -> (str, int)
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
     override def encode(self, input: str, final: bool = False) -> bytes
 
 class IncrementalDecoder(codecs.BufferedIncrementalDecoder):
-    override def _buffer_decode(self, input: str | ReadableBuffer, errors: str | None, final: bool) -> (str, int)
+    override def _buffer_decode(self, input: str | ReadableBuffer, errors: str?, final: bool) -> (str, int)
 
 class StreamWriter(Codec, codecs.StreamWriter)
 

@@ -110,13 +110,13 @@ class LZMAFile(BaseStream, IO[bytes]):
 
     init(
         self,
-        filename: PathOrFile | None = None,
+        filename: PathOrFile? = None,
         mode: str = "r",
         *,
-        format: int | None = None,
+        format: int? = None,
         check: int = -1,
-        preset: int | None = None,
-        filters: _FilterChain | None = None,
+        preset: int? = None,
+        filters: _FilterChain? = None,
     ):
         """Open an LZMA-compressed file in binary mode.
 
@@ -169,7 +169,7 @@ class LZMAFile(BaseStream, IO[bytes]):
         The exact number of bytes returned is unspecified.
         """
 
-    override def read(self, size: int | None = -1) -> bytes:
+    override def read(self, size: int? = -1) -> bytes:
         """Read up to size uncompressed bytes from the file.
 
         If size is negative or omitted, read until EOF is reached.
@@ -184,7 +184,7 @@ class LZMAFile(BaseStream, IO[bytes]):
         Returns b"" if the file is at EOF.
         """
 
-    override def readline(self, size: int | None = -1) -> bytes:
+    override def readline(self, size: int? = -1) -> bytes:
         """Read a line of uncompressed bytes from the file.
 
         The terminating newline (if present) is retained. If size is
@@ -221,10 +221,10 @@ def open(
     filename: PathOrFile,
     mode: "r" | "rb" = "rb",
     *,
-    format: int | None = None,
+    format: int? = None,
     check: -1 = -1,
     preset: None = None,
-    filters: _FilterChain | None = None,
+    filters: _FilterChain? = None,
     encoding: None = None,
     errors: None = None,
     newline: None = None,
@@ -256,10 +256,10 @@ def open(
     filename: PathOrFile,
     mode: OpenBinaryWritingMode,
     *,
-    format: int | None = None,
+    format: int? = None,
     check: int = -1,
-    preset: int | None = None,
-    filters: _FilterChain | None = None,
+    preset: int? = None,
+    filters: _FilterChain? = None,
     encoding: None = None,
     errors: None = None,
     newline: None = None,
@@ -268,41 +268,41 @@ def open(
     filename: StrOrBytesPath,
     mode: "rt",
     *,
-    format: int | None = None,
+    format: int? = None,
     check: -1 = -1,
     preset: None = None,
-    filters: _FilterChain | None = None,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    filters: _FilterChain? = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
 ) -> TextIOWrapper
 def open(
     filename: StrOrBytesPath,
     mode: OpenTextWritingMode,
     *,
-    format: int | None = None,
+    format: int? = None,
     check: int = -1,
-    preset: int | None = None,
-    filters: _FilterChain | None = None,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    preset: int? = None,
+    filters: _FilterChain? = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
 ) -> TextIOWrapper
 def open(
     filename: PathOrFile,
     mode: str,
     *,
-    format: int | None = None,
+    format: int? = None,
     check: int = -1,
-    preset: int | None = None,
-    filters: _FilterChain | None = None,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    preset: int? = None,
+    filters: _FilterChain? = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
 ) -> LZMAFile | TextIOWrapper
 
 def compress(
-    data: ReadableBuffer, format: int = 1, check: int = -1, preset: int | None = None, filters: _FilterChain | None = None
+    data: ReadableBuffer, format: int = 1, check: int = -1, preset: int? = None, filters: _FilterChain? = None
 ) -> bytes:
     """Compress a block of data.
 
@@ -312,7 +312,7 @@ def compress(
     For incremental compression, use an LZMACompressor instead.
     """
 
-def decompress(data: ReadableBuffer, format: int = 0, memlimit: int | None = None, filters: _FilterChain | None = None) -> bytes:
+def decompress(data: ReadableBuffer, format: int = 0, memlimit: int? = None, filters: _FilterChain? = None) -> bytes:
     """Decompress a block of data.
 
     Refer to LZMADecompressor's docstring for a description of the

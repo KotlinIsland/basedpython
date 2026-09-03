@@ -77,7 +77,7 @@ if sys.version_info >= (3, 13):
     def load(
         fp: IO[bytes],
         *,
-        fmt: PlistFormat | None = None,
+        fmt: PlistFormat? = None,
         dict_type: type[MutableMapping[str, dynamic]] = ...,
         aware_datetime: bool = False,
     ) -> dynamic:
@@ -88,7 +88,7 @@ if sys.version_info >= (3, 13):
     def loads(
         value: ReadableBuffer | str,
         *,
-        fmt: PlistFormat | None = None,
+        fmt: PlistFormat? = None,
         dict_type: type[MutableMapping[str, dynamic]] = ...,
         aware_datetime: bool = False,
     ) -> dynamic:
@@ -97,12 +97,12 @@ if sys.version_info >= (3, 13):
         """
 
 else:
-    def load(fp: IO[bytes], *, fmt: PlistFormat | None = None, dict_type: type[MutableMapping[str, dynamic]] = ...) -> dynamic:
+    def load(fp: IO[bytes], *, fmt: PlistFormat? = None, dict_type: type[MutableMapping[str, dynamic]] = ...) -> dynamic:
         """Read a .plist file. 'fp' should be a readable and binary file object.
         Return the unpacked root object (which usually is a dictionary).
         """
 
-    def loads(value: ReadableBuffer, *, fmt: PlistFormat | None = None, dict_type: type[MutableMapping[str, dynamic]] = ...) -> dynamic:
+    def loads(value: ReadableBuffer, *, fmt: PlistFormat? = None, dict_type: type[MutableMapping[str, dynamic]] = ...) -> dynamic:
         """Read a .plist file from a bytes object.
         Return the unpacked root object (which usually is a dictionary).
         """

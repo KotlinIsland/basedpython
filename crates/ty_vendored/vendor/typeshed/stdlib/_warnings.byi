@@ -6,14 +6,14 @@ import sys
 
 _defaultaction: str
 _onceregistry: dict[dynamic, dynamic]
-filters: list[(str, str | None, type[Warning], str | None, int)]
+filters: list[(str, str?, type[Warning], str?, int)]
 
 if sys.version_info >= (3, 12):
     def warn(
         message: str,
-        category: type[Warning] | None = None,
+        category: type[Warning]? = None,
         stacklevel: int = 1,
-        source: dynamic | None = None,
+        source: dynamic? = None,
         *,
         skip_file_prefixes: (*: str) = (),
     ) -> None:
@@ -36,24 +36,24 @@ if sys.version_info >= (3, 12):
         message: Warning,
         category: dynamic = None,
         stacklevel: int = 1,
-        source: dynamic | None = None,
+        source: dynamic? = None,
         *,
         skip_file_prefixes: (*: str) = (),
     ) -> None
 else:
-    def warn(message: str, category: type[Warning] | None = None, stacklevel: int = 1, source: dynamic | None = None) -> None:
+    def warn(message: str, category: type[Warning]? = None, stacklevel: int = 1, source: dynamic? = None) -> None:
         """Issue a warning, or maybe ignore it or raise an exception."""
-    def warn(message: Warning, category: dynamic = None, stacklevel: int = 1, source: dynamic | None = None) -> None
+    def warn(message: Warning, category: dynamic = None, stacklevel: int = 1, source: dynamic? = None) -> None
 
 def warn_explicit(
     message: str,
     category: type[Warning],
     filename: str,
     lineno: int,
-    module: str | None = ...,
-    registry: dict[str | (str, type[Warning], int), int] | None = None,
-    module_globals: dict[str, dynamic] | None = None,
-    source: dynamic | None = None,
+    module: str? = ...,
+    registry: dict[str | (str, type[Warning], int), int]? = None,
+    module_globals: dict[str, dynamic]? = None,
+    source: dynamic? = None,
 ) -> None:
     """Issue a warning, or maybe ignore it or raise an exception."""
 def warn_explicit(
@@ -61,8 +61,8 @@ def warn_explicit(
     category: dynamic,
     filename: str,
     lineno: int,
-    module: str | None = None,
-    registry: dict[str | (str, type[Warning], int), int] | None = None,
-    module_globals: dict[str, dynamic] | None = None,
-    source: dynamic | None = None,
+    module: str? = None,
+    registry: dict[str | (str, type[Warning], int), int]? = None,
+    module_globals: dict[str, dynamic]? = None,
+    source: dynamic? = None,
 ) -> None

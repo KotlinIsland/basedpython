@@ -102,7 +102,7 @@ if sys.platform != "win32":
     def setrlimit(resource: int, limits: (int, int), /)
     if sys.platform == "linux":
         if sys.version_info >= (3, 12):
-            def prlimit(pid: int, resource: int, limits: (int, int) | None = None, /) -> (int, int)
+            def prlimit(pid: int, resource: int, limits: (int, int)? = None, /) -> (int, int)
         else:
             def prlimit(pid: int, resource: int, limits: (int, int) = ..., /) -> (int, int):
                 """prlimit(pid, resource, [limits])"""

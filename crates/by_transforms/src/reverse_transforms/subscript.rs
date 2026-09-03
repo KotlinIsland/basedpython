@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn nested_inside_optional() {
-        check("a: dict[(int, str)] | None\n", "a: dict[int, str] | None\n");
+        check("a: dict[(int, str)] | None\n", "a: dict[int, str]?\n");
     }
 
     #[test]

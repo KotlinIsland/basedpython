@@ -38,7 +38,7 @@ class Textbox:
 
     stripspaces: bool
     init(self, win: window, insert_mode: bool = False)
-    def edit(self, validate: ((int) -> int) | None = None) -> str:
+    def edit(self, validate: ((int) -> int)? = None) -> str:
         """Edit in the widget window and collect the results."""
 
     def do_command(self, ch: str | int):

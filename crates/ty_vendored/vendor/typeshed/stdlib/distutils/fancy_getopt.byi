@@ -13,7 +13,7 @@ from getopt import _SliceableT, _StrSequenceT_co
 from re import Pattern
 from typing import Final, TypeAlias
 
-private type Option = (str, str | None, str)
+private type Option = (str, str?, str)
 
 longopt_pat: Final = r"[a-zA-Z](?:[a-zA-Z0-9-]*)"
 final longopt_re: Pattern[str]
@@ -32,11 +32,11 @@ class FancyGetopt:
         on the command line sets 'verbose' to false
     """
 
-    init(self, option_table: list[Option] | None = None)
+    init(self, option_table: list[Option]? = None)
 
     # TODO: kinda wrong, `getopt(object=object())` is invalid
     def getopt(
-        self, args: _SliceableT[_StrSequenceT_co] | None = None, object: None = None
+        self, args: _SliceableT[_StrSequenceT_co]? = None, object: None = None
     ) -> (_StrSequenceT_co, OptionDummy):
         """Parse command-line options in args. Store as attributes on object.
 
@@ -49,7 +49,7 @@ class FancyGetopt:
         is left untouched.
         """
     def getopt(
-        self, args: _SliceableT[_StrSequenceT_co] | None, object: dynamic
+        self, args: _SliceableT[_StrSequenceT_co]?, object: dynamic
     ) -> _StrSequenceT_co  # object is an arbitrary non-slotted object
 
     def get_option_order(self) -> list[(str, str)]:
@@ -58,17 +58,17 @@ class FancyGetopt:
         'getopt()' hasn't been called yet.
         """
 
-    def generate_help(self, header: str | None = None) -> list[str]:
+    def generate_help(self, header: str? = None) -> list[str]:
         """Generate help text (a list of strings, one per suggested line of
         output) from the option table for this FancyGetopt object.
         """
 
 # Same note as FancyGetopt.getopt
 def fancy_getopt(
-    options: list[Option], negative_opt: Mapping[Option, Option], object: None, args: _SliceableT[_StrSequenceT_co] | None
+    options: list[Option], negative_opt: Mapping[Option, Option], object: None, args: _SliceableT[_StrSequenceT_co]?
 ) -> (_StrSequenceT_co, OptionDummy)
 def fancy_getopt(
-    options: list[Option], negative_opt: Mapping[Option, Option], object: dynamic, args: _SliceableT[_StrSequenceT_co] | None
+    options: list[Option], negative_opt: Mapping[Option, Option], object: dynamic, args: _SliceableT[_StrSequenceT_co]?
 ) -> _StrSequenceT_co
 
 final WS_TRANS: dict[int, str]

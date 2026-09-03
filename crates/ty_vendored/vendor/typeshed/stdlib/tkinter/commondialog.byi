@@ -7,10 +7,10 @@ from typing import ClassVar
 __all__ = ["Dialog"]
 
 class Dialog:
-    command: ClassVar[str | None]
-    master: Misc | None
+    command: ClassVar[str?]
+    master: Misc?
     # Types of options are very dynamic. They depend on the command and are
     # sometimes changed to a different type.
     options: Mapping[str, dynamic]
-    init(self, master: Misc | None = None, **options: dynamic)
+    init(self, master: Misc? = None, **options: dynamic)
     def show(self, **options: dynamic) -> dynamic

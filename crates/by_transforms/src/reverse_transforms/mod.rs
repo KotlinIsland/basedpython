@@ -30,6 +30,7 @@ pub(crate) mod literal_types;
 pub(crate) mod modifiers;
 pub(crate) mod none_chain;
 pub(crate) mod not_type;
+pub(crate) mod optional_type;
 pub(crate) mod overload;
 pub(crate) mod prune_imports;
 pub(crate) mod reified_generic;

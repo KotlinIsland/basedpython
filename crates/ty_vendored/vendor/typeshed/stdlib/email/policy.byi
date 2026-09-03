@@ -129,7 +129,7 @@ class EmailPolicy(Policy[_MessageT]):
     init(
         self: EmailPolicy[EmailMessage],
         *,
-        max_line_length: int | None = ...,
+        max_line_length: int? = ...,
         linesep: str = ...,
         cte_type: str = ...,
         raise_on_defect: bool = ...,
@@ -145,12 +145,12 @@ class EmailPolicy(Policy[_MessageT]):
     init(
         self,
         *,
-        max_line_length: int | None = ...,
+        max_line_length: int? = ...,
         linesep: str = ...,
         cte_type: str = ...,
         raise_on_defect: bool = ...,
         mangle_from_: bool = ...,
-        message_factory: _MessageFactory[_MessageT] | None = ...,
+        message_factory: _MessageFactory[_MessageT]? = ...,
         # Added in Python 3.9.20, 3.10.15, 3.11.10, 3.12.5
         verify_generated_headers: bool = ...,
         utf8: bool = ...,
@@ -248,12 +248,12 @@ class EmailPolicy(Policy[_MessageT]):
     override def clone(
         self,
         *,
-        max_line_length: int | None = ...,
+        max_line_length: int? = ...,
         linesep: str = ...,
         cte_type: str = ...,
         raise_on_defect: bool = ...,
         mangle_from_: bool = ...,
-        message_factory: _MessageFactory[_MessageT] | None = ...,
+        message_factory: _MessageFactory[_MessageT]? = ...,
         # Added in Python 3.9.20, 3.10.15, 3.11.10, 3.12.5
         verify_generated_headers: bool = ...,
         utf8: bool = ...,

@@ -18,7 +18,7 @@ digest_size: None
 
 # In reality digestmod has a default value, but the function always throws an error
 # if the argument is not given, so we pretend it is a required argument.
-def new(key: bytes | bytearray, msg: ReadableBuffer | None, digestmod: DigestMod) -> HMAC:
+def new(key: bytes | bytearray, msg: ReadableBuffer?, digestmod: DigestMod) -> HMAC:
     """Create a new hashing object and return it.
 
     key: bytes or buffer, The starting key for the hash.
@@ -47,7 +47,7 @@ class HMAC:
     digest_size: int
     block_size: int
     let name: str
-    init(self, key: bytes | bytearray, msg: ReadableBuffer | None = None, digestmod: DigestMod = ""):
+    init(self, key: bytes | bytearray, msg: ReadableBuffer? = None, digestmod: DigestMod = ""):
         """Create a new HMAC object.
 
         key: bytes or buffer, key for the keyed hash object.

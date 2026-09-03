@@ -109,7 +109,7 @@ mod tests {
     fn in_union() {
         check(
             "from typing import LiteralString\nx: LiteralString | None\n",
-            "from typing import LiteralString\nx: literal str | None\n",
+            "from typing import LiteralString\nx: literal str?\n",
         );
     }
 

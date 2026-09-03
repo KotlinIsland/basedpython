@@ -41,8 +41,8 @@ class SndHeaders(NamedTuple):
     nframes: int
     sampwidth: int | str
 
-def what(filename: StrOrBytesPath) -> SndHeaders | None:
+def what(filename: StrOrBytesPath) -> SndHeaders?:
     """Guess the type of a sound file."""
 
-def whathdr(filename: StrOrBytesPath) -> SndHeaders | None:
+def whathdr(filename: StrOrBytesPath) -> SndHeaders?:
     """Recognize sound headers."""

@@ -161,8 +161,8 @@ class IteratorWrapper:
     original_iterator: Iterator[bytes]
     iterator: Iterator[bytes]
     closed: bool
-    check_start_response: bool | None
-    init(self, wsgi_iterator: Iterator[bytes], check_start_response: bool | None)
+    check_start_response: bool?
+    init(self, wsgi_iterator: Iterator[bytes], check_start_response: bool?)
     def __iter__(self) -> IteratorWrapper
     def __next__(self) -> bytes
     def close(self)

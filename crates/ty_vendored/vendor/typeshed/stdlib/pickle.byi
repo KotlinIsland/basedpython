@@ -283,7 +283,7 @@ class _Pickler:
     init(
         self,
         file: SupportsWrite[bytes],
-        protocol: int | None = None,
+        protocol: int? = None,
         *,
         fix_imports: bool = True,
         buffer_callback: _BufferCallback = None,
@@ -349,7 +349,7 @@ class _Unpickler:
         fix_imports: bool = True,
         encoding: str = "ASCII",
         errors: str = "strict",
-        buffers: Iterable[dynamic] | None = None,
+        buffers: Iterable[dynamic]? = None,
     ):
         """This takes a binary file for reading a pickle data stream.
 

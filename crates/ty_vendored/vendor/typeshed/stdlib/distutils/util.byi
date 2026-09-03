@@ -82,7 +82,7 @@ def split_quoted(s: str) -> list[str]:
 def execute[*Args](
     func: (*Args) -> Unused,
     args: (Unpack[Args],),
-    msg: str | None = None,
+    msg: str? = None,
     verbose: bool | 0 | 1 = 0,
     dry_run: bool | 0 | 1 = 0,
 ):
@@ -107,11 +107,11 @@ def byte_compile(
     py_files: list[str],
     optimize: int = 0,
     force: bool | 0 | 1 = 0,
-    prefix: str | None = None,
-    base_dir: str | None = None,
+    prefix: str? = None,
+    base_dir: str? = None,
     verbose: bool | 0 | 1 = 1,
     dry_run: bool | 0 | 1 = 0,
-    direct: bool | None = None,
+    direct: bool? = None,
 ):
     """Byte-compile a collection of Python source files to .pyc
     files in a __pycache__ subdirectory.  'py_files' is a list
@@ -149,8 +149,8 @@ def rfc822_escape(header: str) -> str:
 
 def run_2to3(
     files: Iterable[str],
-    fixer_names: Iterable[str] | None = None,
-    options: Mapping[str, dynamic] | None = None,
+    fixer_names: Iterable[str]? = None,
+    options: Mapping[str, dynamic]? = None,
     explicit: Unused = None,
 ):
     """Invoke 2to3 on a list of Python files.
@@ -163,10 +163,10 @@ def run_2to3(
 def copydir_run_2to3(
     src: StrPath,
     dest: StrPath,
-    template: str | None = None,
-    fixer_names: Iterable[str] | None = None,
-    options: Mapping[str, dynamic] | None = None,
-    explicit: Container[str] | None = None,
+    template: str? = None,
+    fixer_names: Iterable[str]? = None,
+    options: Mapping[str, dynamic]? = None,
+    explicit: Container[str]? = None,
 ) -> list[str]:
     """Recursively copy a directory, only copying new and changed files,
     running run_2to3 over all newly copied Python modules afterward.
@@ -181,7 +181,7 @@ class Mixin2to3:
     to override how 2to3 is invoked.
     """
 
-    fixer_names: Iterable[str] | None
-    options: Mapping[str, dynamic] | None
-    explicit: Container[str] | None
+    fixer_names: Iterable[str]?
+    options: Mapping[str, dynamic]?
+    explicit: Container[str]?
     def run_2to3(self, files: Iterable[str])

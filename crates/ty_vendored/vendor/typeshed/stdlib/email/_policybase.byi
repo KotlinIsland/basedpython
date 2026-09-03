@@ -42,24 +42,24 @@ class _PolicyBase[out MessageT: Message[dynamic, dynamic] = Message[str, str]]:
 
     """
 
-    max_line_length: int | None
+    max_line_length: int?
     linesep: str
     cte_type: str
     raise_on_defect: bool
     mangle_from_: bool
-    message_factory: _MessageFactory[MessageT] | None
+    message_factory: _MessageFactory[MessageT]?
     # Added in Python 3.9.20, 3.10.15, 3.11.10, 3.12.5
     verify_generated_headers: bool
 
     init(
         self,
         *,
-        max_line_length: int | None = 78,
+        max_line_length: int? = 78,
         linesep: str = "\n",
         cte_type: str = "8bit",
         raise_on_defect: bool = False,
         mangle_from_: bool = ...,  # default depends on sub-class
-        message_factory: _MessageFactory[MessageT] | None = None,
+        message_factory: _MessageFactory[MessageT]? = None,
         # Added in Python 3.9.20, 3.10.15, 3.11.10, 3.12.5
         verify_generated_headers: bool = True,
     ):
@@ -72,12 +72,12 @@ class _PolicyBase[out MessageT: Message[dynamic, dynamic] = Message[str, str]]:
     def clone(
         self,
         *,
-        max_line_length: int | None = ...,
+        max_line_length: int? = ...,
         linesep: str = ...,
         cte_type: str = ...,
         raise_on_defect: bool = ...,
         mangle_from_: bool = ...,
-        message_factory: _MessageFactory[MessageT] | None = ...,
+        message_factory: _MessageFactory[MessageT]? = ...,
         # Added in Python 3.9.20, 3.10.15, 3.11.10, 3.12.5
         verify_generated_headers: bool = ...,
     ) -> Self:
@@ -181,7 +181,7 @@ class Policy[out MessageT: Message[dynamic, dynamic] = Message[str, str]](_Polic
 
         """
 
-    def header_max_count(self, name: str) -> int | None:
+    def header_max_count(self, name: str) -> int?:
         """Return the maximum allowed number of headers named 'name'.
 
         Called when a header is added to a Message object.  If the returned

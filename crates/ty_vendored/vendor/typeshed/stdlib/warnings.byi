@@ -28,7 +28,7 @@ if sys.version_info >= (3, 14):
 else:
     type _ActionKind = "default" | "error" | "ignore" | "always" | "all" | "module" | "once"
 filters: Sequence[
-    (str, re.Pattern[str] | None, type[Warning] | (*: type[Warning]), re.Pattern[str] | None, int)
+    (str, re.Pattern[str]?, type[Warning] | (*: type[Warning]), re.Pattern[str]?, int)
 ]  # undocumented, do not mutate
 
 def showwarning(
@@ -36,12 +36,12 @@ def showwarning(
     category: type[Warning],
     filename: str,
     lineno: int,
-    file: TextIO | None = None,
-    line: str | None = None,
+    file: TextIO? = None,
+    line: str? = None,
 ):
     """Hook to write a warning to a file; replace if you like."""
 
-def formatwarning(message: Warning | str, category: type[Warning], filename: str, lineno: int, line: str | None = None) -> str:
+def formatwarning(message: Warning | str, category: type[Warning], filename: str, lineno: int, line: str? = None) -> str:
     """Function to format a warning the standard way."""
 
 def filterwarnings(
@@ -82,11 +82,11 @@ class WarningMessage:
     category: type[Warning]
     filename: str
     lineno: int
-    file: TextIO | None
-    line: str | None
-    source: dynamic | None
+    file: TextIO?
+    line: str?
+    source: dynamic?
     if sys.version_info >= (3, 15):
-        module: str | None
+        module: str?
     if sys.version_info >= (3, 15):
         def __init__(
             self,
@@ -94,10 +94,10 @@ class WarningMessage:
             category: type[Warning],
             filename: str,
             lineno: int,
-            file: TextIO | None = None,
-            line: str | None = None,
-            source: dynamic | None = None,
-            module: str | None = None,
+            file: TextIO? = None,
+            line: str? = None,
+            source: dynamic? = None,
+            module: str? = None,
         ) -> None
 
     else:
@@ -107,12 +107,12 @@ class WarningMessage:
             category: type[Warning],
             filename: str,
             lineno: int,
-            file: TextIO | None = None,
-            line: str | None = None,
-            source: dynamic | None = None,
+            file: TextIO? = None,
+            line: str? = None,
+            source: dynamic? = None,
         ) -> None
 
-class catch_warnings[out W: list[WarningMessage] | None = list[WarningMessage] | None]:
+class catch_warnings[out W: list[WarningMessage]? = list[WarningMessage]?]:
     """A context manager that copies and restores the warnings filter upon
     exiting the context.
 
@@ -136,8 +136,8 @@ class catch_warnings[out W: list[WarningMessage] | None = list[WarningMessage] |
             self: catch_warnings[None],
             *,
             record: False = False,
-            module: ModuleType | None = None,
-            action: _ActionKind | None = None,
+            module: ModuleType? = None,
+            action: _ActionKind? = None,
             category: type[Warning] | (*: type[Warning]) = ...,
             lineno: int = 0,
             append: bool = False,
@@ -150,8 +150,8 @@ class catch_warnings[out W: list[WarningMessage] | None = list[WarningMessage] |
             self: catch_warnings[list[WarningMessage]],
             *,
             record: True,
-            module: ModuleType | None = None,
-            action: _ActionKind | None = None,
+            module: ModuleType? = None,
+            action: _ActionKind? = None,
             category: type[Warning] | (*: type[Warning]) = ...,
             lineno: int = 0,
             append: bool = False,
@@ -160,14 +160,14 @@ class catch_warnings[out W: list[WarningMessage] | None = list[WarningMessage] |
             self,
             *,
             record: bool,
-            module: ModuleType | None = None,
-            action: _ActionKind | None = None,
+            module: ModuleType? = None,
+            action: _ActionKind? = None,
             category: type[Warning] | (*: type[Warning]) = ...,
             lineno: int = 0,
             append: bool = False,
         ) -> None
     else:
-        def __init__(self: catch_warnings[None], *, record: False = False, module: ModuleType | None = None) -> None:
+        def __init__(self: catch_warnings[None], *, record: False = False, module: ModuleType? = None) -> None:
             """Specify whether to record warnings and if an alternative module
             should be used other than sys.modules['warnings'].
 
@@ -176,13 +176,13 @@ class catch_warnings[out W: list[WarningMessage] | None = list[WarningMessage] |
 
             """
         def __init__(
-            self: catch_warnings[list[WarningMessage]], *, record: True, module: ModuleType | None = None
+            self: catch_warnings[list[WarningMessage]], *, record: True, module: ModuleType? = None
         ) -> None
-        def __init__(self, *, record: bool, module: ModuleType | None = None) -> None
+        def __init__(self, *, record: bool, module: ModuleType? = None) -> None
 
     def __enter__(self) -> W
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
     )
 
 if sys.version_info >= (3, 13):
@@ -230,7 +230,7 @@ if sys.version_info >= (3, 13):
         """
 
         message: literal str
-        category: type[Warning] | None
+        category: type[Warning]?
         stacklevel: int
-        init(self, message: literal str, /, *, category: type[Warning] | None = ..., stacklevel: int = 1)
+        init(self, message: literal str, /, *, category: type[Warning]? = ..., stacklevel: int = 1)
         def __call__[Element](self, arg: Element, /) -> Element

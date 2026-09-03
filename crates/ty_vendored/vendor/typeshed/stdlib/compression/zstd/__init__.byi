@@ -91,8 +91,8 @@ def finalize_dict(zstd_dict: ZstdDict, /, samples: Iterable[ReadableBuffer], dic
 
 def compress(
     data: ReadableBuffer,
-    level: int | None = None,
-    options: Mapping[int, int] | None = None,
+    level: int? = None,
+    options: Mapping[int, int]? = None,
     zstd_dict: ZstdDict | (ZstdDict, int) | None = None,
 ) -> bytes:
     """Return Zstandard compressed *data* as bytes.
@@ -108,7 +108,7 @@ def compress(
     """
 
 def decompress(
-    data: ReadableBuffer, zstd_dict: ZstdDict | (ZstdDict, int) | None = None, options: Mapping[int, int] | None = None
+    data: ReadableBuffer, zstd_dict: ZstdDict | (ZstdDict, int) | None = None, options: Mapping[int, int]? = None
 ) -> bytes:
     """Decompress one or more frames of Zstandard compressed *data*.
 

@@ -25,7 +25,7 @@ class Dialog(Toplevel):
     This class is intended as a base class for custom dialogs
     """
 
-    init(self, parent: Misc | None, title: str | None = None):
+    init(self, parent: Misc?, title: str? = None):
         """Initialize a dialog.
 
         Arguments:
@@ -35,7 +35,7 @@ class Dialog(Toplevel):
             title -- the dialog title
         """
 
-    def body(self, master: Frame) -> Misc | None:
+    def body(self, master: Frame) -> Misc?:
         """create dialog body.
 
         return widget that should have initial focus.
@@ -49,8 +49,8 @@ class Dialog(Toplevel):
         override if you do not want the standard buttons
         """
 
-    def ok(self, event: Event[Misc] | None = None)
-    def cancel(self, event: Event[Misc] | None = None)
+    def ok(self, event: Event[Misc]? = None)
+    def cancel(self, event: Event[Misc]? = None)
     def validate(self) -> bool:
         """validate the data
 
@@ -68,28 +68,28 @@ class Dialog(Toplevel):
 class SimpleDialog:
     init(
         self,
-        master: Misc | None,
+        master: Misc?,
         text: str = "",
         buttons: list[str] = [],
-        default: int | None = None,
-        cancel: int | None = None,
-        title: str | None = None,
-        class_: str | None = None,
+        default: int? = None,
+        cancel: int? = None,
+        title: str? = None,
+        class_: str? = None,
     )
-    def go(self) -> int | None
+    def go(self) -> int?
     def return_event(self, event: Event[Misc])
     def wm_delete_window(self)
     def done(self, num: int)
 
 def askfloat(
-    title: str | None,
+    title: str?,
     prompt: str,
     *,
     initialvalue: int | float | None = ...,
     minvalue: int | float | None = ...,
     maxvalue: int | float | None = ...,
-    parent: Misc | None = ...,
-) -> float | None:
+    parent: Misc? = ...,
+) -> float?:
     """get a float from the user
 
     Arguments:
@@ -102,14 +102,14 @@ def askfloat(
     """
 
 def askinteger(
-    title: str | None,
+    title: str?,
     prompt: str,
     *,
-    initialvalue: int | None = ...,
-    minvalue: int | None = ...,
-    maxvalue: int | None = ...,
-    parent: Misc | None = ...,
-) -> int | None:
+    initialvalue: int? = ...,
+    minvalue: int? = ...,
+    maxvalue: int? = ...,
+    parent: Misc? = ...,
+) -> int?:
     """get an integer from the user
 
     Arguments:
@@ -122,14 +122,14 @@ def askinteger(
     """
 
 def askstring(
-    title: str | None,
+    title: str?,
     prompt: str,
     *,
-    initialvalue: str | None = ...,
-    show: str | None = ...,
+    initialvalue: str? = ...,
+    show: str? = ...,
     # minvalue/maxvalue is accepted but not useful.
-    parent: Misc | None = ...,
-) -> str | None:
+    parent: Misc? = ...,
+) -> str?:
     """get a string from the user
 
     Arguments:

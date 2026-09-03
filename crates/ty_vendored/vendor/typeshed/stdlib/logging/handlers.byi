@@ -52,7 +52,7 @@ class WatchedFileHandler(FileHandler):
     dev: int  # undocumented
     ino: int  # undocumented
     init(
-        self, filename: StrPath, mode: str = "a", encoding: str | None = None, delay: bool = False, errors: str | None = None
+        self, filename: StrPath, mode: str = "a", encoding: str? = None, delay: bool = False, errors: str? = None
     )
     def _statstream(self)  # undocumented
     def reopenIfNeeded(self):
@@ -71,10 +71,10 @@ class BaseRotatingHandler(FileHandler):
     or TimedRotatingFileHandler.
     """
 
-    namer: ((str) -> str) | None
-    rotator: ((str, str) -> None) | None
+    namer: ((str) -> str)?
+    rotator: ((str, str) -> None)?
     init(
-        self, filename: StrPath, mode: str, encoding: str | None = None, delay: bool = False, errors: str | None = None
+        self, filename: StrPath, mode: str, encoding: str? = None, delay: bool = False, errors: str? = None
     ):
         """
         Use the specified filename for streamed logging
@@ -123,9 +123,9 @@ class RotatingFileHandler(BaseRotatingHandler):
         mode: str = "a",
         maxBytes: int = 0,
         backupCount: int = 0,
-        encoding: str | None = None,
+        encoding: str? = None,
         delay: bool = False,
-        errors: str | None = None,
+        errors: str? = None,
     ):
         """
         Open the specified file and use it as the stream for logging.
@@ -173,7 +173,7 @@ class TimedRotatingFileHandler(BaseRotatingHandler):
     when: str  # undocumented
     backupCount: int  # undocumented
     utc: bool  # undocumented
-    atTime: datetime.time | None  # undocumented
+    atTime: datetime.time?  # undocumented
     interval: int  # undocumented
     suffix: str  # undocumented
     dayOfWeek: int  # undocumented
@@ -185,11 +185,11 @@ class TimedRotatingFileHandler(BaseRotatingHandler):
         when: str = "h",
         interval: int = 1,
         backupCount: int = 0,
-        encoding: str | None = None,
+        encoding: str? = None,
         delay: bool = False,
         utc: bool = False,
-        atTime: datetime.time | None = None,
-        errors: str | None = None,
+        atTime: datetime.time? = None,
+        errors: str? = None,
     )
     def doRollover(self):
         """
@@ -234,15 +234,15 @@ class SocketHandler(Handler):
     """
 
     host: str  # undocumented
-    port: int | None  # undocumented
+    port: int?  # undocumented
     address: (str, int) | str  # undocumented
-    sock: socket | None  # undocumented
+    sock: socket?  # undocumented
     closeOnError: bool  # undocumented
-    retryTime: float | None  # undocumented
+    retryTime: float?  # undocumented
     retryStart: int | float  # undocumented
     retryFactor: int | float  # undocumented
     retryMax: int | float  # undocumented
-    init(self, host: str, port: int | None):
+    init(self, host: str, port: int?):
         """
         Initializes the handler with a specific host address and port.
 
@@ -353,7 +353,7 @@ class SysLogHandler(Handler):
             self,
             address: (str, int) | str = ("localhost", 514),
             facility: str | int = 1,
-            socktype: SocketKind | None = None,
+            socktype: SocketKind? = None,
             timeout: int | float | None = None,
         ) -> None:
             """
@@ -370,7 +370,7 @@ class SysLogHandler(Handler):
 
     else:
         def __init__(
-            self, address: (str, int) | str = ("localhost", 514), facility: str | int = 1, socktype: SocketKind | None = None
+            self, address: (str, int) | str = ("localhost", 514), facility: str | int = 1, socktype: SocketKind? = None
         ) -> None:
             """
             Initialize a handler.
@@ -422,7 +422,7 @@ class NTEventLogHandler(Handler):
     which contains the message definitions you want to use in the event log.
     """
 
-    init(self, appname: str, dllname: str | None = None, logtype: str = "Application")
+    init(self, appname: str, dllname: str? = None, logtype: str = "Application")
     def getEventCategory(self, record: LogRecord) -> int:
         """
         Return the event category for the record.
@@ -459,8 +459,8 @@ class SMTPHandler(Handler):
     """
 
     mailhost: str  # undocumented
-    mailport: int | None  # undocumented
-    username: str | None  # undocumented
+    mailport: int?  # undocumented
+    username: str?  # undocumented
     # password only exists as an attribute if passed credentials is a tuple or list
     password: str  # undocumented
     fromaddr: str  # undocumented
@@ -474,7 +474,7 @@ class SMTPHandler(Handler):
         fromaddr: str,
         toaddrs: str | list[str],
         subject: str,
-        credentials: (str, str) | None = None,
+        credentials: (str, str)? = None,
         secure: tuple[()] | (str,) | (str, str) | None = None,
         timeout: int | float = 5.0,
     ):
@@ -534,9 +534,9 @@ class MemoryHandler(BufferingHandler):
     """
 
     flushLevel: int  # undocumented
-    target: Handler | None  # undocumented
+    target: Handler?  # undocumented
     flushOnClose: bool  # undocumented
-    init(self, capacity: int, flushLevel: int = 40, target: Handler | None = None, flushOnClose: bool = True):
+    init(self, capacity: int, flushLevel: int = 40, target: Handler? = None, flushOnClose: bool = True):
         """
         Initialize the handler with the buffer size, the level at which
         flushing should occur and an optional target.
@@ -550,7 +550,7 @@ class MemoryHandler(BufferingHandler):
         capacity exceeded. To prevent this, set ``flushOnClose`` to ``False``.
         """
 
-    def setTarget(self, target: Handler | None):
+    def setTarget(self, target: Handler?):
         """
         Set the target handler for this handler.
         """
@@ -565,16 +565,16 @@ class HTTPHandler(Handler):
     url: str  # undocumented
     method: str  # undocumented
     secure: bool  # undocumented
-    credentials: (str, str) | None  # undocumented
-    context: ssl.SSLContext | None  # undocumented
+    credentials: (str, str)?  # undocumented
+    context: ssl.SSLContext?  # undocumented
     init(
         self,
         host: str,
         url: str,
         method: str = "GET",
         secure: bool = False,
-        credentials: (str, str) | None = None,
-        context: ssl.SSLContext | None = None,
+        credentials: (str, str)? = None,
+        context: ssl.SSLContext? = None,
     ):
         """
         Initialize the instance with the host, the request URL, and the method
@@ -645,7 +645,7 @@ class QueueHandler(Handler):
         """
 
     if sys.version_info >= (3, 12):
-        listener: QueueListener | None
+        listener: QueueListener?
 
 class QueueListener:
     """
@@ -657,7 +657,7 @@ class QueueListener:
     handlers: (*: Handler)  # undocumented
     respect_handler_level: bool  # undocumented
     queue: QueueLike[dynamic]  # undocumented
-    _thread: Thread | None  # undocumented
+    _thread: Thread?  # undocumented
     init(self, queue: QueueLike[dynamic], *handlers: Handler, respect_handler_level: bool = False):
         """
         Initialise an instance with the specified queue and
@@ -722,7 +722,7 @@ class QueueListener:
             """
 
         def __exit__(
-            self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None
+            self, exc_type: type[BaseException]?, exc_value: BaseException?, traceback: TracebackType?
         ):
             """
             For use as a context manager. Stops the listener.

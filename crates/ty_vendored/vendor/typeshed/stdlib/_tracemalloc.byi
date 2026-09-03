@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from tracemalloc import _FrameTuple, _TraceTuple
 
-def _get_object_traceback(obj: object, /) -> Sequence[_FrameTuple] | None:
+def _get_object_traceback(obj: object, /) -> Sequence[_FrameTuple]?:
     """Get the traceback where the Python object obj was allocated.
 
     Return a tuple of (filename: str, lineno: int) tuples.

@@ -218,7 +218,7 @@ def getmembers[Element](object: object, predicate: _GetMembersPredicateTypeGuard
     Optionally, only return members that satisfy a given predicate.
     """
 def getmembers[Element](object: object, predicate: _GetMembersPredicateTypeIs[Element]) -> _GetMembersReturn[Element]
-def getmembers(object: object, predicate: GetMembersPredicate | None = None) -> _GetMembersReturn[dynamic]
+def getmembers(object: object, predicate: GetMembersPredicate? = None) -> _GetMembersReturn[dynamic]
 
 if sys.version_info >= (3, 11):
     def getmembers_static[Element](object: object, predicate: _GetMembersPredicateTypeGuard[Element]) -> _GetMembersReturn[Element]:
@@ -234,9 +234,9 @@ if sys.version_info >= (3, 11):
            instead of instance members in some cases.
         """
     def getmembers_static[Element](object: object, predicate: _GetMembersPredicateTypeIs[Element]) -> _GetMembersReturn[Element]
-    def getmembers_static(object: object, predicate: GetMembersPredicate | None = None) -> _GetMembersReturn[dynamic]
+    def getmembers_static(object: object, predicate: GetMembersPredicate? = None) -> _GetMembersReturn[dynamic]
 
-def getmodulename(path: StrPath) -> str | None:
+def getmodulename(path: StrPath) -> str?:
     """Return the module name for a given file, or None."""
 
 def ismodule(object: object) -> object is ModuleType:
@@ -486,7 +486,7 @@ def findsource(object: SourceObjectType) -> (list[str], int):
     is raised if the source code cannot be retrieved.
     """
 
-def getabsfile(object: SourceObjectType, _filename: str | None = None) -> str:
+def getabsfile(object: SourceObjectType, _filename: str? = None) -> str:
     """Return an absolute path to the source or compiled file for an object.
 
     The idea is for each object to have a unique origin, so this routine
@@ -501,7 +501,7 @@ def getblock(lines: (*: str)) -> (*: str)
 def getblock(lines: Sequence[str]) -> Sequence[str]
 
 if sys.version_info >= (3, 15):
-    def getdoc(object: object, *, inherit_class_doc: bool = True, fallback_to_class_doc: bool = True) -> str | None:
+    def getdoc(object: object, *, inherit_class_doc: bool = True, fallback_to_class_doc: bool = True) -> str?:
         """Get the documentation string for an object.
 
         All tabs are expanded to spaces.  To clean up docstrings that are
@@ -510,7 +510,7 @@ if sys.version_info >= (3, 15):
         """
 
 else:
-    def getdoc(object: object) -> str | None:
+    def getdoc(object: object) -> str?:
         """Get the documentation string for an object.
 
         All tabs are expanded to spaces.  To clean up docstrings that are
@@ -518,7 +518,7 @@ else:
         uniformly removed from the second line onwards is removed.
         """
 
-def getcomments(object: object) -> str | None:
+def getcomments(object: object) -> str?:
     """Get lines of comments immediately preceding an object's source code.
 
     Returns None when source can't be found.
@@ -527,10 +527,10 @@ def getcomments(object: object) -> str | None:
 def getfile(object: SourceObjectType) -> str:
     """Work out which source or compiled file an object was defined in."""
 
-def getmodule(object: object, _filename: str | None = None) -> ModuleType | None:
+def getmodule(object: object, _filename: str? = None) -> ModuleType?:
     """Return the module an object was defined in, or None if not found."""
 
-def getsourcefile(object: SourceObjectType) -> str | None:
+def getsourcefile(object: SourceObjectType) -> str?:
     """Return the filename that can be used to locate an object's source.
     Return None if no way can be identified to get the source.
     """
@@ -573,8 +573,8 @@ if sys.version_info >= (3, 14):
         obj: IntrospectableCallable,
         *,
         follow_wrapped: bool = True,
-        globals: Mapping[str, dynamic] | None = None,
-        locals: Mapping[str, dynamic] | None = None,
+        globals: Mapping[str, dynamic]? = None,
+        locals: Mapping[str, dynamic]? = None,
         eval_str: bool = False,
         annotation_format: Format = Format.VALUE,  # noqa: Y011
     ) -> Signature:
@@ -585,8 +585,8 @@ else:
         obj: IntrospectableCallable,
         *,
         follow_wrapped: bool = True,
-        globals: Mapping[str, dynamic] | None = None,
-        locals: Mapping[str, dynamic] | None = None,
+        globals: Mapping[str, dynamic]? = None,
+        locals: Mapping[str, dynamic]? = None,
         eval_str: bool = False,
     ) -> Signature:
         """Get a signature object for the passed callable."""
@@ -622,7 +622,7 @@ class Signature:
 
     __slots__ = ("_return_annotation", "_parameters")
     init(
-        self, parameters: Sequence[Parameter] | None = None, *, return_annotation: dynamic = ..., __validate_parameters__: bool = True
+        self, parameters: Sequence[Parameter]? = None, *, return_annotation: dynamic = ..., __validate_parameters__: bool = True
     ):
         """Constructs Signature from the given list of Parameter
         objects and 'return_annotation'.  All arguments are optional.
@@ -656,8 +656,8 @@ class Signature:
             obj: IntrospectableCallable,
             *,
             follow_wrapped: bool = True,
-            globals: Mapping[str, dynamic] | None = None,
-            locals: Mapping[str, dynamic] | None = None,
+            globals: Mapping[str, dynamic]? = None,
+            locals: Mapping[str, dynamic]? = None,
             eval_str: bool = False,
             annotation_format: Format = Format.VALUE,  # noqa: Y011
         ) -> Self:
@@ -668,14 +668,14 @@ class Signature:
             obj: IntrospectableCallable,
             *,
             follow_wrapped: bool = True,
-            globals: Mapping[str, dynamic] | None = None,
-            locals: Mapping[str, dynamic] | None = None,
+            globals: Mapping[str, dynamic]? = None,
+            locals: Mapping[str, dynamic]? = None,
             eval_str: bool = False,
         ) -> Self:
             """Constructs Signature for the given callable object."""
 
     if sys.version_info >= (3, 14):
-        def format(self, *, max_width: int | None = None, quote_annotation_strings: bool = True) -> str:
+        def format(self, *, max_width: int? = None, quote_annotation_strings: bool = True) -> str:
             """Create a string representation of the Signature object.
 
             If *max_width* integer is passed,
@@ -690,7 +690,7 @@ class Signature:
             """
 
     elif sys.version_info >= (3, 13):
-        def format(self, *, max_width: int | None = None) -> str:
+        def format(self, *, max_width: int? = None) -> str:
             """Create a string representation of the Signature object.
 
             If *max_width* integer is passed,
@@ -708,8 +708,8 @@ else:
     def get_annotations(
         obj: (...) -> object | type[object] | ModuleType,  # any callable, class, or module
         *,
-        globals: Mapping[str, dynamic] | None = None,  # value types depend on the key
-        locals: Mapping[str, dynamic] | None = None,  # value types depend on the key
+        globals: Mapping[str, dynamic]? = None,  # value types depend on the key
+        locals: Mapping[str, dynamic]? = None,  # value types depend on the key
         eval_str: bool = False,
     ) -> dict[str, AnnotationForm]:  # values are type expressions
         """Compute the annotations dict for an object.
@@ -901,15 +901,15 @@ def getclasstree(classes: list[type], unique: bool = False) -> ClassTreeItem:
     inheritance and their descendants will appear multiple times.
     """
 
-def walktree(classes: list[type], children: Mapping[type[dynamic], list[type]], parent: type[dynamic] | None) -> ClassTreeItem:
+def walktree(classes: list[type], children: Mapping[type[dynamic], list[type]], parent: type[dynamic]?) -> ClassTreeItem:
     """Recursive helper function for getclasstree()."""
 
 class Arguments(NamedTuple):
     """Arguments(args, varargs, varkw)"""
 
     args: list[str]
-    varargs: str | None
-    varkw: str | None
+    varargs: str?
+    varkw: str?
 
 def getargs(co: CodeType) -> Arguments:
     """Get information about the arguments accepted by a code object.
@@ -926,8 +926,8 @@ if sys.version_info < (3, 11):
         """ArgSpec(args, varargs, keywords, defaults)"""
 
         args: list[str]
-        varargs: str | None
-        keywords: str | None
+        varargs: str?
+        keywords: str?
         defaults: (*: dynamic)
 
     @deprecated("Deprecated since Python 3.0; removed in Python 3.11. Use `inspect.signature()` instead.")
@@ -956,11 +956,11 @@ class FullArgSpec(NamedTuple):
     """FullArgSpec(args, varargs, varkw, defaults, kwonlyargs, kwonlydefaults, annotations)"""
 
     args: list[str]
-    varargs: str | None
-    varkw: str | None
-    defaults: (*: dynamic) | None
+    varargs: str?
+    varkw: str?
+    defaults: (*: dynamic)?
     kwonlyargs: list[str]
-    kwonlydefaults: dict[str, dynamic] | None
+    kwonlydefaults: dict[str, dynamic]?
     annotations: dict[str, dynamic]
 
 if sys.version_info >= (3, 15):
@@ -1005,8 +1005,8 @@ class ArgInfo(NamedTuple):
     """ArgInfo(args, varargs, keywords, locals)"""
 
     args: list[str]
-    varargs: str | None
-    keywords: str | None
+    varargs: str?
+    keywords: str?
     locals: dict[str, dynamic]
 
 def getargvalues(frame: FrameType) -> ArgInfo:
@@ -1019,10 +1019,10 @@ def getargvalues(frame: FrameType) -> ArgInfo:
     """
 
 if sys.version_info >= (3, 14):
-    def formatannotation(annotation: object, base_module: str | None = None, *, quote_annotation_strings: bool = True) -> str
+    def formatannotation(annotation: object, base_module: str? = None, *, quote_annotation_strings: bool = True) -> str
 
 else:
-    def formatannotation(annotation: object, base_module: str | None = None) -> str
+    def formatannotation(annotation: object, base_module: str? = None) -> str
 
 def formatannotationrelativeto(object: object) -> (object) -> str
 
@@ -1032,11 +1032,11 @@ if sys.version_info < (3, 11):
     )
     def formatargspec(
         args: list[str],
-        varargs: str | None = None,
-        varkw: str | None = None,
-        defaults: (*: dynamic) | None = None,
-        kwonlyargs: Sequence[str] | None = (),
-        kwonlydefaults: Mapping[str, dynamic] | None = {},
+        varargs: str? = None,
+        varkw: str? = None,
+        defaults: (*: dynamic)? = None,
+        kwonlyargs: Sequence[str]? = (),
+        kwonlydefaults: Mapping[str, dynamic]? = {},
         annotations: Mapping[str, dynamic] = {},
         formatarg: (str) -> str = ...,
         formatvarargs: (str) -> str = ...,
@@ -1059,13 +1059,13 @@ if sys.version_info < (3, 11):
 
 def formatargvalues(
     args: list[str],
-    varargs: str | None,
-    varkw: str | None,
-    locals: Mapping[str, dynamic] | None,
-    formatarg: ((str) -> str) | None = ...,
-    formatvarargs: ((str) -> str) | None = ...,
-    formatvarkw: ((str) -> str) | None = ...,
-    formatvalue: ((dynamic) -> str) | None = ...,
+    varargs: str?,
+    varkw: str?,
+    locals: Mapping[str, dynamic]?,
+    formatarg: ((str) -> str)? = ...,
+    formatvarargs: ((str) -> str)? = ...,
+    formatvarkw: ((str) -> str)? = ...,
+    formatvalue: ((dynamic) -> str)? = ...,
 ) -> str:
     """Format an argument spec from the 4 values returned by getargvalues.
 
@@ -1104,7 +1104,7 @@ def getclosurevars(func: IntrospectableCallable) -> ClosureVars:
     set of unbound names that could not be resolved is also provided.
     """
 
-def unwrap(func: (...) -> dynamic, *, stop: (((...) -> dynamic) -> dynamic) | None = None) -> dynamic:
+def unwrap(func: (...) -> dynamic, *, stop: (((...) -> dynamic) -> dynamic)? = None) -> dynamic:
     """Get the object wrapped by *func*.
 
     Follows the chain of :attr:`__wrapped__` attributes returning the last
@@ -1132,8 +1132,8 @@ if sys.version_info >= (3, 11):
         filename: str
         lineno: int
         function: str
-        code_context: list[str] | None
-        index: int | None
+        code_context: list[str]?
+        index: int?
 
     class _FrameInfo(NamedTuple):
         """_FrameInfo(frame, filename, lineno, function, code_context, index)"""
@@ -1142,65 +1142,65 @@ if sys.version_info >= (3, 11):
         filename: str
         lineno: int
         function: str
-        code_context: list[str] | None
-        index: int | None
+        code_context: list[str]?
+        index: int?
 
     if sys.version_info >= (3, 12):
         class Traceback(_Traceback):
-            positions: dis.Positions | None
+            positions: dis.Positions?
             def __new__(
                 cls,
                 filename: str,
                 lineno: int,
                 function: str,
-                code_context: list[str] | None,
-                index: int | None,
+                code_context: list[str]?,
+                index: int?,
                 *,
-                positions: dis.Positions | None = None,
+                positions: dis.Positions? = None,
             ) -> Self
 
         class FrameInfo(_FrameInfo):
-            positions: dis.Positions | None
+            positions: dis.Positions?
             def __new__(
                 cls,
                 frame: FrameType,
                 filename: str,
                 lineno: int,
                 function: str,
-                code_context: list[str] | None,
-                index: int | None,
+                code_context: list[str]?,
+                index: int?,
                 *,
-                positions: dis.Positions | None = None,
+                positions: dis.Positions? = None,
             ) -> Self
 
     else:
         @disjoint_base
         class Traceback(_Traceback):
-            positions: dis.Positions | None
+            positions: dis.Positions?
             def __new__(
                 cls,
                 filename: str,
                 lineno: int,
                 function: str,
-                code_context: list[str] | None,
-                index: int | None,
+                code_context: list[str]?,
+                index: int?,
                 *,
-                positions: dis.Positions | None = None,
+                positions: dis.Positions? = None,
             ) -> Self
 
         @disjoint_base
         class FrameInfo(_FrameInfo):
-            positions: dis.Positions | None
+            positions: dis.Positions?
             def __new__(
                 cls,
                 frame: FrameType,
                 filename: str,
                 lineno: int,
                 function: str,
-                code_context: list[str] | None,
-                index: int | None,
+                code_context: list[str]?,
+                index: int?,
                 *,
-                positions: dis.Positions | None = None,
+                positions: dis.Positions? = None,
             ) -> Self
 
 else:
@@ -1210,8 +1210,8 @@ else:
         filename: str
         lineno: int
         function: str
-        code_context: list[str] | None
-        index: int | None
+        code_context: list[str]?
+        index: int?
 
     class FrameInfo(NamedTuple):
         """FrameInfo(frame, filename, lineno, function, code_context, index)"""
@@ -1220,8 +1220,8 @@ else:
         filename: str
         lineno: int
         function: str
-        code_context: list[str] | None
-        index: int | None
+        code_context: list[str]?
+        index: int?
 
 def getframeinfo(frame: FrameType | TracebackType, context: int = 1) -> Traceback:
     """Get information about a frame or traceback object.
@@ -1250,7 +1250,7 @@ def getinnerframes(tb: TracebackType, context: int = 1) -> list[FrameInfo]:
 def getlineno(frame: FrameType) -> int:
     """Get the line number from a frame object, allowing for optimization."""
 
-def currentframe() -> FrameType | None:
+def currentframe() -> FrameType?:
     """Return the frame of the caller or None if this is not possible."""
 
 def stack(context: int = 1) -> list[FrameInfo]:
@@ -1263,7 +1263,7 @@ def trace(context: int = 1) -> list[FrameInfo]:
 # Fetching attributes statically
 #
 
-def getattr_static(obj: object, attr: str, default: dynamic | None = ...) -> dynamic:
+def getattr_static(obj: object, attr: str, default: dynamic? = ...) -> dynamic:
     """Retrieve attributes without triggering dynamic lookup via the
     descriptor protocol,  __getattr__ or __getattribute__.
 

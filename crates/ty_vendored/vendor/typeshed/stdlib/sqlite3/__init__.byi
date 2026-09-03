@@ -346,7 +346,7 @@ class Connection:
             detect_types: int = 0,
             isolation_level: _IsolationLevel = "DEFERRED",
             check_same_thread: bool = True,
-            factory: type[Connection] | None = ...,
+            factory: type[Connection]? = ...,
             cached_statements: int = 128,
             uri: bool = False,
             autocommit: bool = ...,
@@ -359,7 +359,7 @@ class Connection:
             detect_types: int = 0,
             isolation_level: _IsolationLevel = "DEFERRED",
             check_same_thread: bool = True,
-            factory: type[Connection] | None = ...,
+            factory: type[Connection]? = ...,
             cached_statements: int = 128,
             uri: bool = False,
         ) -> None
@@ -410,7 +410,7 @@ class Connection:
         # num_params determines how many params will be passed to the aggregate class. We provide an overload
         # for the case where num_params = 1, which is expected to be the common case.
         def create_window_function(
-            self, name: str, num_params: 1, aggregate_class: (() -> SingleParamWindowAggregateClass) | None, /
+            self, name: str, num_params: 1, aggregate_class: (() -> SingleParamWindowAggregateClass)?, /
         ) -> None:
             """Creates or redefines an aggregate window function. Non-standard.
 
@@ -425,24 +425,24 @@ class Connection:
             """
         # And for num_params = -1, which means the aggregate must accept any number of parameters.
         def create_window_function(
-            self, name: str, num_params: -1, aggregate_class: (() -> AnyParamWindowAggregateClass) | None, /
+            self, name: str, num_params: -1, aggregate_class: (() -> AnyParamWindowAggregateClass)?, /
         ) -> None
         def create_window_function(
-            self, name: str, num_params: int, aggregate_class: (() -> WindowAggregateClass) | None, /
+            self, name: str, num_params: int, aggregate_class: (() -> WindowAggregateClass)?, /
         ) -> None
 
-    def create_collation(self, name: str, callback: ((str, str) -> SupportsIndex) | None, /):
+    def create_collation(self, name: str, callback: ((str, str) -> SupportsIndex)?, /):
         """Creates a collation function."""
 
     if sys.version_info >= (3, 15):
         def create_function(
-            self, name: str, narg: int, func: (...) -> SqliteData | None, /, *, deterministic: bool = False
+            self, name: str, narg: int, func: (...) -> SqliteData?, /, *, deterministic: bool = False
         ) -> None:
             """Creates a new function."""
 
     else:
         def create_function(
-            self, name: str, narg: int, func: (...) -> SqliteData | None, *, deterministic: bool = False
+            self, name: str, narg: int, func: (...) -> SqliteData?, *, deterministic: bool = False
         ) -> None:
             """Creates a new function.
 
@@ -468,7 +468,7 @@ class Connection:
         """Abort any pending database operation."""
 
     if sys.version_info >= (3, 13):
-        def iterdump(self, *, filter: str | None = None) -> Generator[str]:
+        def iterdump(self, *, filter: str? = None) -> Generator[str]:
             """Returns iterator to the dump of the database in an SQL text format.
 
             filter
@@ -487,11 +487,11 @@ class Connection:
 
     if sys.version_info >= (3, 15):
         def set_authorizer(
-            self, authorizer_callback: ((int, str | None, str | None, str | None, str | None) -> int) | None, /
+            self, authorizer_callback: ((int, str?, str?, str?, str?) -> int)?, /
         ) -> None:
             """Set authorizer callback."""
 
-        def set_progress_handler(self, progress_handler: (() -> (int | None)) | None, /, n: int) -> None:
+        def set_progress_handler(self, progress_handler: (() -> (int?))?, /, n: int) -> None:
             """Set progress handler callback.
 
               progress_handler
@@ -506,12 +506,12 @@ class Connection:
             disabled.
             """
 
-        def set_trace_callback(self, trace_callback: ((str) -> object) | None, /) -> None:
+        def set_trace_callback(self, trace_callback: ((str) -> object)?, /) -> None:
             """Set a trace callback called for each SQL statement (passed as unicode)."""
 
     else:
         def set_authorizer(
-            self, authorizer_callback: ((int, str | None, str | None, str | None, str | None) -> int) | None
+            self, authorizer_callback: ((int, str?, str?, str?, str?) -> int)?
         ) -> None:
             """Set authorizer callback.
 
@@ -520,7 +520,7 @@ class Connection:
             'authorizer_callback' will become positional-only in Python 3.15.
             """
 
-        def set_progress_handler(self, progress_handler: (() -> (int | None)) | None, n: int) -> None:
+        def set_progress_handler(self, progress_handler: (() -> (int?))?, n: int) -> None:
             """Set progress handler callback.
 
               progress_handler
@@ -539,7 +539,7 @@ class Connection:
             'progress_handler' will become positional-only in Python 3.15.
             """
 
-        def set_trace_callback(self, trace_callback: ((str) -> object) | None) -> None:
+        def set_trace_callback(self, trace_callback: ((str) -> object)?) -> None:
             """Set a trace callback called for each SQL statement (passed as unicode).
 
             Note: Passing keyword argument 'trace_callback' to
@@ -553,7 +553,7 @@ class Connection:
         """Enable dynamic loading of SQLite extension modules."""
 
     if sys.version_info >= (3, 12):
-        def load_extension(self, name: str, /, *, entrypoint: str | None = None) -> None:
+        def load_extension(self, name: str, /, *, entrypoint: str? = None) -> None:
             """Load SQLite extension module."""
 
     else:
@@ -565,7 +565,7 @@ class Connection:
         target: Connection,
         *,
         pages: int = -1,
-        progress: ((int, int, int) -> object) | None = None,
+        progress: ((int, int, int) -> object)? = None,
         name: str = "main",
         sleep: int | float = 0.25,
     ):
@@ -647,7 +647,7 @@ class Connection:
         """
 
     def __exit__(
-        self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None, /
+        self, type: type[BaseException]?, value: BaseException?, traceback: TracebackType?, /
     ) -> False:
         """Called when the connection is used as a context manager.
 
@@ -663,7 +663,7 @@ class Cursor:
     let connection: Connection
     # May be None, but using `| MaybeNone` (`| Any`) instead to avoid slightly annoying false positives.
     let description: (*: (str, None, None, None, None, None, None)) | MaybeNone
-    let lastrowid: int | None
+    let lastrowid: int?
     row_factory: RowFactoryOptions
     let rowcount: int
     init(self, cursor: Connection, /)
@@ -682,7 +682,7 @@ class Cursor:
     def fetchall(self) -> list[dynamic]:
         """Fetches all rows from the resultset."""
 
-    def fetchmany(self, size: int | None = 1) -> list[dynamic]:
+    def fetchmany(self, size: int? = 1) -> list[dynamic]:
         """Fetches several rows from the resultset.
 
         size
@@ -719,7 +719,7 @@ class Row(Sequence[dynamic]):
 
     override def __getitem__(self, key: int | str, /) -> dynamic:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> (*: dynamic)
+    def __getitem__(self, key: slice[SupportsIndex?], /) -> (*: dynamic)
 
     override def __hash__(self) -> int
     override def __iter__(self) -> Iterator[dynamic]:

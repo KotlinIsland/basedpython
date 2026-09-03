@@ -60,9 +60,9 @@ if sys.version_info >= (3, 11):
         def open(
             self,
             mode: "r" = "r",
-            encoding: str | None = None,
-            errors: str | None = None,
-            newline: str | None = None,
+            encoding: str? = None,
+            errors: str? = None,
+            newline: str? = None,
             line_buffering: bool = False,
             write_through: bool = False,
         ) -> TextIOWrapper

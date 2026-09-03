@@ -106,15 +106,15 @@ __all__ = ["dnd_start", "DndHandler"]
 
 @type_check_only
 private protocol DndSource:
-    def dnd_end(self, target: Widget | None, event: Event[Misc] | None, /)
+    def dnd_end(self, target: Widget?, event: Event[Misc]?, /)
 
 class DndHandler:
-    root: ClassVar[Tk | None]
+    root: ClassVar[Tk?]
     init(self, source: DndSource, event: Event[Misc])
-    def cancel(self, event: Event[Misc] | None = None)
-    def finish(self, event: Event[Misc] | None, commit: int = 0)
+    def cancel(self, event: Event[Misc]? = None)
+    def finish(self, event: Event[Misc]?, commit: int = 0)
     def on_motion(self, event: Event[Misc])
     def on_release(self, event: Event[Misc])
     def __del__(self)
 
-def dnd_start(source: DndSource, event: Event[Misc]) -> DndHandler | None
+def dnd_start(source: DndSource, event: Event[Misc]) -> DndHandler?

@@ -129,7 +129,7 @@ private type DataType = ReadableBuffer | SupportsRead[bytes] | Iterable[bytes] |
 
 if sys.version_info >= (3, 13):
     def urlopen(
-        url: str | Request, data: DataType | None = None, timeout: int | float | None = ..., *, context: ssl.SSLContext | None = None
+        url: str | Request, data: DataType? = None, timeout: int | float | None = ..., *, context: ssl.SSLContext? = None
     ) -> UrlopenRet:
         """Open the URL url, which can be either a string or a Request object.
 
@@ -175,13 +175,13 @@ if sys.version_info >= (3, 13):
 else:
     def urlopen(
         url: str | Request,
-        data: DataType | None = None,
+        data: DataType? = None,
         timeout: int | float | None = ...,
         *,
         cafile: None = None,
         capath: None = None,
         cadefault: False = False,
-        context: ssl.SSLContext | None = None,
+        context: ssl.SSLContext? = None,
     ) -> UrlopenRet:
         """Open the URL url, which can be either a string or a Request object.
 
@@ -238,16 +238,16 @@ else:
     )
     def urlopen(
         url: str | Request,
-        data: DataType | None = None,
+        data: DataType? = None,
         timeout: int | float | None = ...,
         *,
-        cafile: StrOrBytesPath | None = None,
-        capath: StrOrBytesPath | None = None,
+        cafile: StrOrBytesPath? = None,
+        capath: StrOrBytesPath? = None,
         cadefault: bool = False,
         context: None = None,
     ) -> UrlopenRet
 
-def install_opener(opener: OpenerDirector | None)
+def install_opener(opener: OpenerDirector?)
 def build_opener(*handlers: BaseHandler | (() -> BaseHandler)) -> OpenerDirector:
     """Create an opener object from a list of handlers.
 
@@ -327,7 +327,7 @@ if sys.platform == "win32" or sys.platform == "darwin":
         """
 
 else:
-    def proxy_bypass(host: str, proxies: Mapping[str, str] | None = None) -> dynamic:  # undocumented
+    def proxy_bypass(host: str, proxies: Mapping[str, str]? = None) -> dynamic:  # undocumented
         """Test if proxies should not be used for a particular host.
 
         Checks the proxy dict for the value of no_proxy, which should
@@ -351,16 +351,16 @@ class Request:
     headers: MutableMapping[str, str]
     unredirected_hdrs: dict[str, str]
     unverifiable: bool
-    method: str | None
+    method: str?
     timeout: int | float | None  # Undocumented, only set after __init__() by OpenerDirector.open()
     init(
         self,
         url: str,
         data: DataType = None,
         headers: MutableMapping[str, str] = {},
-        origin_req_host: str | None = None,
+        origin_req_host: str? = None,
         unverifiable: bool = False,
-        method: str | None = None,
+        method: str? = None,
     )
     def get_method(self) -> str:
         """Return a string indicating the HTTP request method."""
@@ -372,7 +372,7 @@ class Request:
     def get_full_url(self) -> str
     def set_proxy(self, host: str, type: str)
 
-    def get_header(self, header_name: str) -> str | None
+    def get_header(self, header_name: str) -> str?
     def get_header[Element](self, header_name: str, default: Element) -> str | Element
 
     def header_items(self) -> list[(str, str)]
@@ -403,7 +403,7 @@ class HTTPRedirectHandler(BaseHandler):
     inf_msg: ClassVar[str]  # undocumented
     def redirect_request(
         self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage, newurl: str
-    ) -> Request | None:
+    ) -> Request?:
         """Return a Request or None in response to a redirect.
 
         This is called by the http_error_30x methods when a
@@ -414,31 +414,31 @@ class HTTPRedirectHandler(BaseHandler):
         but another Handler might.
         """
 
-    def http_error_301(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet | None
-    def http_error_302(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet | None
-    def http_error_303(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet | None
-    def http_error_307(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet | None
+    def http_error_301(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet?
+    def http_error_302(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet?
+    def http_error_303(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet?
+    def http_error_307(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet?
     if sys.version_info >= (3, 11):
         def http_error_308(
             self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage
-        ) -> UrlopenRet | None
+        ) -> UrlopenRet?
 
 class HTTPCookieProcessor(BaseHandler):
     cookiejar: CookieJar
-    init(self, cookiejar: CookieJar | None = None)
+    init(self, cookiejar: CookieJar? = None)
     def http_request(self, request: Request) -> Request  # undocumented
     def http_response(self, request: Request, response: HTTPResponse) -> HTTPResponse  # undocumented
     def https_request(self, request: Request) -> Request  # undocumented
     def https_response(self, request: Request, response: HTTPResponse) -> HTTPResponse  # undocumented
 
 class ProxyHandler(BaseHandler):
-    init(self, proxies: dict[str, str] | None = None)
-    def proxy_open(self, req: Request, proxy: str, type: str) -> UrlopenRet | None  # undocumented
+    init(self, proxies: dict[str, str]? = None)
+    def proxy_open(self, req: Request, proxy: str, type: str) -> UrlopenRet?  # undocumented
     # TODO: add a method for every (common) proxy protocol
 
 class HTTPPasswordMgr:
     def add_password(self, realm: str, uri: str | Sequence[str], user: str, passwd: str)
-    def find_user_password(self, realm: str, authuri: str) -> (str | None, str | None)
+    def find_user_password(self, realm: str, authuri: str) -> (str?, str?)
     def is_suburi(self, base: str, test: str) -> bool:  # undocumented
         """Check if test is below base in a URI tree
 
@@ -449,45 +449,45 @@ class HTTPPasswordMgr:
         """Accept authority or URI and extract only the authority and path."""
 
 class HTTPPasswordMgrWithDefaultRealm(HTTPPasswordMgr):
-    override def add_password(self, realm: str | None, uri: str | Sequence[str], user: str, passwd: str)
-    override def find_user_password(self, realm: str | None, authuri: str) -> (str | None, str | None)
+    override def add_password(self, realm: str?, uri: str | Sequence[str], user: str, passwd: str)
+    override def find_user_password(self, realm: str?, authuri: str) -> (str?, str?)
 
 class HTTPPasswordMgrWithPriorAuth(HTTPPasswordMgrWithDefaultRealm):
     override def add_password(
-        self, realm: str | None, uri: str | Sequence[str], user: str, passwd: str, is_authenticated: bool = False
+        self, realm: str?, uri: str | Sequence[str], user: str, passwd: str, is_authenticated: bool = False
     )
     def update_authenticated(self, uri: str | Sequence[str], is_authenticated: bool = False)
-    def is_authenticated(self, authuri: str) -> bool | None
+    def is_authenticated(self, authuri: str) -> bool?
 
 class AbstractBasicAuthHandler:
     rx: ClassVar[Pattern[str]]  # undocumented
     passwd: HTTPPasswordMgr
     add_password: (str, str | Sequence[str], str, str) -> None
-    init(self, password_mgr: HTTPPasswordMgr | None = None)
+    init(self, password_mgr: HTTPPasswordMgr? = None)
     def http_error_auth_reqed(self, authreq: str, host: str, req: Request, headers: HTTPMessage)
     def http_request(self, req: Request) -> Request  # undocumented
     def http_response(self, req: Request, response: HTTPResponse) -> HTTPResponse  # undocumented
     def https_request(self, req: Request) -> Request  # undocumented
     def https_response(self, req: Request, response: HTTPResponse) -> HTTPResponse  # undocumented
-    def retry_http_basic_auth(self, host: str, req: Request, realm: str) -> UrlopenRet | None  # undocumented
+    def retry_http_basic_auth(self, host: str, req: Request, realm: str) -> UrlopenRet?  # undocumented
 
 class HTTPBasicAuthHandler(AbstractBasicAuthHandler, BaseHandler):
     auth_header: ClassVar[str]  # undocumented
-    def http_error_401(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet | None
+    def http_error_401(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet?
 
 class ProxyBasicAuthHandler(AbstractBasicAuthHandler, BaseHandler):
     auth_header: ClassVar[str]
-    def http_error_407(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet | None
+    def http_error_407(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet?
 
 class AbstractDigestAuthHandler:
-    init(self, passwd: HTTPPasswordMgr | None = None)
+    init(self, passwd: HTTPPasswordMgr? = None)
     def reset_retry_count(self)
     def http_error_auth_reqed(self, auth_header: str, host: str, req: Request, headers: HTTPMessage)
-    def retry_http_digest_auth(self, req: Request, auth: str) -> UrlopenRet | None
+    def retry_http_digest_auth(self, req: Request, auth: str) -> UrlopenRet?
     def get_cnonce(self, nonce: str) -> str
-    def get_authorization(self, req: Request, chal: Mapping[str, str]) -> str | None
+    def get_authorization(self, req: Request, chal: Mapping[str, str]) -> str?
     def get_algorithm_impls(self, algorithm: str) -> ((str) -> str, (str, str) -> str)
-    def get_entity_digest(self, data: ReadableBuffer | None, chal: Mapping[str, str]) -> str | None
+    def get_entity_digest(self, data: ReadableBuffer?, chal: Mapping[str, str]) -> str?
 
 class HTTPDigestAuthHandler(BaseHandler, AbstractDigestAuthHandler):
     """An authentication protocol defined by RFC 2069
@@ -497,11 +497,11 @@ class HTTPDigestAuthHandler(BaseHandler, AbstractDigestAuthHandler):
     """
 
     auth_header: ClassVar[str]  # undocumented
-    def http_error_401(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet | None
+    def http_error_401(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet?
 
 class ProxyDigestAuthHandler(BaseHandler, AbstractDigestAuthHandler):
     auth_header: ClassVar[str]  # undocumented
-    def http_error_407(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet | None
+    def http_error_407(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet?
 
 @type_check_only
 private protocol HTTPConnectionProtocol:
@@ -510,15 +510,15 @@ private protocol HTTPConnectionProtocol:
         host: str,
         /,
         *,
-        port: int | None = ...,
+        port: int? = ...,
         timeout: int | float = ...,
-        source_address: (str, int) | None = ...,
+        source_address: (str, int)? = ...,
         blocksize: int = ...,
     ) -> HTTPConnection
 
 class AbstractHTTPHandler(BaseHandler):  # undocumented
     if sys.version_info >= (3, 12):
-        def __init__(self, debuglevel: int | None = None) -> None
+        def __init__(self, debuglevel: int? = None) -> None
     else:
         def __init__(self, debuglevel: int = 0) -> None
 
@@ -537,18 +537,18 @@ class HTTPHandler(AbstractHTTPHandler):
 class HTTPSHandler(AbstractHTTPHandler):
     if sys.version_info >= (3, 12):
         def __init__(
-            self, debuglevel: int | None = None, context: ssl.SSLContext | None = None, check_hostname: bool | None = None
+            self, debuglevel: int? = None, context: ssl.SSLContext? = None, check_hostname: bool? = None
         ) -> None
     else:
         def __init__(
-            self, debuglevel: int = 0, context: ssl.SSLContext | None = None, check_hostname: bool | None = None
+            self, debuglevel: int = 0, context: ssl.SSLContext? = None, check_hostname: bool? = None
         ) -> None
 
     def https_open(self, req: Request) -> HTTPResponse
     def https_request(self, request: Request) -> Request  # undocumented
 
 class FileHandler(BaseHandler):
-    names: ClassVar[(*: str) | None]  # undocumented
+    names: ClassVar[(*: str)?]  # undocumented
     def file_open(self, req: Request) -> addinfourl
     def get_names(self) -> (*: str)  # undocumented
     def open_local_file(self, req: Request) -> addinfourl  # undocumented
@@ -567,7 +567,7 @@ class ftpwrapper:  # undocumented
     def file_close(self)
     def init(self)
     def real_close(self)
-    def retrfile(self, file: str, type: str) -> (addclosehook, int | None)
+    def retrfile(self, file: str, type: str) -> (addclosehook, int?)
 
 class FTPHandler(BaseHandler):
     def ftp_open(self, req: Request) -> addinfourl
@@ -592,8 +592,8 @@ class HTTPErrorProcessor(BaseHandler):
 
 def urlretrieve(
     url: str,
-    filename: StrOrBytesPath | None = None,
-    reporthook: ((int, int, int) -> object) | None = None,
+    filename: StrOrBytesPath? = None,
+    reporthook: ((int, int, int) -> object)? = None,
     data: DataType = None,
 ) -> (str, HTTPMessage):
     """
@@ -627,20 +627,20 @@ if sys.version_info < (3, 14):
         """
 
         version: ClassVar[str]
-        init(self, proxies: dict[str, str] | None = None, **x509: str)
-        def open(self, fullurl: str, data: ReadableBuffer | None = None) -> UrlopenRet:
+        init(self, proxies: dict[str, str]? = None, **x509: str)
+        def open(self, fullurl: str, data: ReadableBuffer? = None) -> UrlopenRet:
             """Use URLopener().open(file) instead of open(file, 'r')."""
 
-        def open_unknown(self, fullurl: str, data: ReadableBuffer | None = None) -> UrlopenRet:
+        def open_unknown(self, fullurl: str, data: ReadableBuffer? = None) -> UrlopenRet:
             """Overridable interface to open unknown URL type."""
 
         def retrieve(
             self,
             url: str,
-            filename: str | None = None,
-            reporthook: ((int, int, int) -> object) | None = None,
-            data: ReadableBuffer | None = None,
-        ) -> (str, Message | None):
+            filename: str? = None,
+            reporthook: ((int, int, int) -> object)? = None,
+            data: ReadableBuffer? = None,
+        ) -> (str, Message?):
             """retrieve(url) returns (filename, headers) for a local object
             or (tempfilename, headers) for a remote object.
             """
@@ -653,7 +653,7 @@ if sys.version_info < (3, 14):
         def cleanup(self)  # undocumented
         def close(self)  # undocumented
         def http_error(
-            self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: bytes | None = None
+            self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: bytes? = None
         ) -> UrlopenRet:  # undocumented
             """Handle http errors.
 
@@ -666,7 +666,7 @@ if sys.version_info < (3, 14):
         ) -> UrlopenRet:  # undocumented
             """Default error handler: close the connection and raise OSError."""
 
-        def open_data(self, url: str, data: ReadableBuffer | None = None) -> addinfourl:  # undocumented
+        def open_data(self, url: str, data: ReadableBuffer? = None) -> addinfourl:  # undocumented
             """Use "data" URL."""
 
         def open_file(self, url: str) -> addinfourl:  # undocumented
@@ -675,16 +675,16 @@ if sys.version_info < (3, 14):
         def open_ftp(self, url: str) -> addinfourl:  # undocumented
             """Use FTP protocol."""
 
-        def open_http(self, url: str, data: ReadableBuffer | None = None) -> UrlopenRet:  # undocumented
+        def open_http(self, url: str, data: ReadableBuffer? = None) -> UrlopenRet:  # undocumented
             """Use HTTP protocol."""
 
-        def open_https(self, url: str, data: ReadableBuffer | None = None) -> UrlopenRet:  # undocumented
+        def open_https(self, url: str, data: ReadableBuffer? = None) -> UrlopenRet:  # undocumented
             """Use HTTPS protocol."""
 
         def open_local_file(self, url: str) -> addinfourl:  # undocumented
             """Use local file."""
 
-        def open_unknown_proxy(self, proxy: str, fullurl: str, data: ReadableBuffer | None = None):  # undocumented
+        def open_unknown_proxy(self, proxy: str, fullurl: str, data: ReadableBuffer? = None):  # undocumented
             """Overridable interface to open unknown URL type."""
 
         def __del__(self)
@@ -698,28 +698,28 @@ if sys.version_info < (3, 14):
 
         def get_user_passwd(self, host: str, realm: str, clear_cache: int = 0) -> (str, str)  # undocumented
         def http_error_301(
-            self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer | None = None
+            self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer? = None
         ) -> UrlopenRet | addinfourl | None:  # undocumented
             """Error 301 -- also relocated (permanently)."""
 
         def http_error_302(
-            self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer | None = None
+            self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer? = None
         ) -> UrlopenRet | addinfourl | None:  # undocumented
             """Error 302 -- relocated (temporarily)."""
 
         def http_error_303(
-            self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer | None = None
+            self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer? = None
         ) -> UrlopenRet | addinfourl | None:  # undocumented
             """Error 303 -- also relocated (essentially identical to 302)."""
 
         def http_error_307(
-            self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer | None = None
+            self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer? = None
         ) -> UrlopenRet | addinfourl | None:  # undocumented
             """Error 307 -- relocated, but turn POST into error."""
 
         if sys.version_info >= (3, 11):
             def http_error_308(
-                self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer | None = None
+                self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer? = None
             ) -> UrlopenRet | addinfourl | None:  # undocumented
                 """Error 308 -- relocated, but turn POST into error."""
 
@@ -730,9 +730,9 @@ if sys.version_info < (3, 14):
             errcode: int,
             errmsg: str,
             headers: HTTPMessage,
-            data: ReadableBuffer | None = None,
+            data: ReadableBuffer? = None,
             retry: bool = False,
-        ) -> UrlopenRet | None:  # undocumented
+        ) -> UrlopenRet?:  # undocumented
             """Error 401 -- authentication required.
             This function supports Basic authentication only.
             """
@@ -744,9 +744,9 @@ if sys.version_info < (3, 14):
             errcode: int,
             errmsg: str,
             headers: HTTPMessage,
-            data: ReadableBuffer | None = None,
+            data: ReadableBuffer? = None,
             retry: bool = False,
-        ) -> UrlopenRet | None:  # undocumented
+        ) -> UrlopenRet?:  # undocumented
             """Error 407 -- proxy authentication required.
             This function supports Basic authentication only.
             """
@@ -757,17 +757,17 @@ if sys.version_info < (3, 14):
             """Default error handling -- don't raise an exception."""
 
         def redirect_internal(
-            self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer | None
-        ) -> UrlopenRet | None  # undocumented
+            self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer?
+        ) -> UrlopenRet?  # undocumented
         def retry_http_basic_auth(
-            self, url: str, realm: str, data: ReadableBuffer | None = None
-        ) -> UrlopenRet | None  # undocumented
+            self, url: str, realm: str, data: ReadableBuffer? = None
+        ) -> UrlopenRet?  # undocumented
         def retry_https_basic_auth(
-            self, url: str, realm: str, data: ReadableBuffer | None = None
-        ) -> UrlopenRet | None  # undocumented
+            self, url: str, realm: str, data: ReadableBuffer? = None
+        ) -> UrlopenRet?  # undocumented
         def retry_proxy_http_basic_auth(
-            self, url: str, realm: str, data: ReadableBuffer | None = None
-        ) -> UrlopenRet | None  # undocumented
+            self, url: str, realm: str, data: ReadableBuffer? = None
+        ) -> UrlopenRet?  # undocumented
         def retry_proxy_https_basic_auth(
-            self, url: str, realm: str, data: ReadableBuffer | None = None
-        ) -> UrlopenRet | None  # undocumented
+            self, url: str, realm: str, data: ReadableBuffer? = None
+        ) -> UrlopenRet?  # undocumented

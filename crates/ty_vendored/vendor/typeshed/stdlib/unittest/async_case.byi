@@ -11,7 +11,7 @@ if sys.version_info >= (3, 11):
 
 class IsolatedAsyncioTestCase(TestCase):
     if sys.version_info >= (3, 13):
-        loop_factory: (() -> AbstractEventLoop) | None = None
+        loop_factory: (() -> AbstractEventLoop)? = None
 
     async def asyncSetUp(self) -> None
     async def asyncTearDown(self) -> None

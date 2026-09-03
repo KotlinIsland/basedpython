@@ -31,11 +31,11 @@ class SharedMemory:
     """
 
     if sys.version_info >= (3, 13):
-        def __init__(self, name: str | None = None, create: bool = False, size: int = 0, *, track: bool = True) -> None
+        def __init__(self, name: str? = None, create: bool = False, size: int = 0, *, track: bool = True) -> None
     else:
-        def __init__(self, name: str | None = None, create: bool = False, size: int = 0) -> None
+        def __init__(self, name: str? = None, create: bool = False, size: int = 0) -> None
 
-    let buf: memoryview | None
+    let buf: memoryview?
 
     let name: str
 
@@ -75,8 +75,8 @@ class ShareableList[in out SLT in (int, float, bool, str, bytes, None)]:
 
     shm: SharedMemory
 
-    init(self, sequence: None = None, *, name: str | None = None)
-    init(self, sequence: Iterable[SLT], *, name: str | None = None)
+    init(self, sequence: None = None, *, name: str? = None)
+    init(self, sequence: Iterable[SLT], *, name: str? = None)
 
     def __getitem__(self, position: int) -> SLT
     def __setitem__(self, position: int, value: SLT)

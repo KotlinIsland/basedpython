@@ -118,7 +118,7 @@ else:
         """
 
 def compressobj(
-    level: int = -1, method: int = 8, wbits: int = 15, memLevel: int = 8, strategy: int = 0, zdict: ReadableBuffer | None = None
+    level: int = -1, method: int = 8, wbits: int = 15, memLevel: int = 8, strategy: int = 0, zdict: ReadableBuffer? = None
 ) -> _Compress:
     """Return a compressor object.
 

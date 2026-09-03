@@ -57,7 +57,7 @@ def get_count() -> (int, int, int):
 def get_debug() -> int:
     """Get the garbage collection debugging flags."""
 
-def get_objects(generation: int | None = None) -> list[dynamic]:
+def get_objects(generation: int? = None) -> list[dynamic]:
     """Return a list of objects tracked by the collector (excluding the list returned).
 
       generation

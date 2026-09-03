@@ -398,6 +398,15 @@ pub(crate) trait TypeInfo {
     /// `Optional` wrapper, so consumers unwrap with `.value`
     fn wrapped_optional(&self, expr: &Expr) -> bool;
 
+    /// whether writing `?` after the type expression `expr` would produce the
+    /// *wrapped* optional rather than the plain union `expr | None`.
+    ///
+    /// that is the reading for a bare type variable: specializing a plain
+    /// `T | None` with an optional `T` would flatten the two layers into one,
+    /// so `T?` keeps them apart with a wrapper. `Self` is the exception — it
+    /// stands for the enclosing class and can never bind to an optional
+    fn optional_wraps(&self, expr: &Expr) -> bool;
+
     /// whether a call through `callee` yields a result whose type was
     /// derived by substituting typevars — a generic function's return, or a
     /// method bound to a specialized generic instance. such results rest on
@@ -1042,6 +1051,12 @@ impl TypeInfo for SemanticModel<'_> {
         matches!(
             expr.inferred_type(self),
             Some(Type::KnownInstance(KnownInstanceType::WrappedOptional(_)))
+        )
+    }
+
+    fn optional_wraps(&self, expr: &Expr) -> bool {
+        expr.inferred_type(self).is_some_and(
+            |ty| matches!(ty, Type::TypeVar(typevar) if !typevar.is_typing_self(self.db())),
         )
     }
 

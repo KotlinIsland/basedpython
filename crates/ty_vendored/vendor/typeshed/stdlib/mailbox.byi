@@ -51,12 +51,12 @@ private protocol GetFileReturn:
     def __iter__(self) -> Iterator[bytes]
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None, /
-    ) -> bool | None
-    def read(self, size: int | None = None, /) -> bytes
-    def read1(self, size: int | None = None, /) -> bytes
-    def readline(self, size: int | None = None, /) -> bytes
-    def readlines(self, sizehint: int | None = None, /) -> list[bytes]
+        self, exc_type: type[BaseException]?, exc: BaseException?, tb: TracebackType?, /
+    ) -> bool?
+    def read(self, size: int? = None, /) -> bytes
+    def read1(self, size: int? = None, /) -> bytes
+    def readline(self, size: int? = None, /) -> bytes
+    def readlines(self, sizehint: int? = None, /) -> list[bytes]
     def tell(self) -> int
     def seek(self, offset: int, whence: int = 0, /) -> object
     def close(self) -> object
@@ -70,7 +70,7 @@ class Mailbox[out MessageT: Message = Message]:
     """A group of messages in a particular place."""
 
     _path: str  # undocumented
-    _factory: ((GetFileReturn) -> MessageT) | None  # undocumented
+    _factory: ((GetFileReturn) -> MessageT)?  # undocumented
 
     init(self, path: StrPath, factory: (GetFileReturn) -> MessageT, create: bool = True):
         """Initialize a Mailbox instance."""
@@ -180,7 +180,7 @@ class Maildir(Mailbox[MaildirMessage]):
 
     colon: str
     init(
-        self, dirname: StrPath, factory: ((GetFileReturn) -> MaildirMessage) | None = None, create: bool = True
+        self, dirname: StrPath, factory: ((GetFileReturn) -> MaildirMessage)? = None, create: bool = True
     ):
         """Initialize a Maildir instance."""
 
@@ -257,7 +257,7 @@ class Maildir(Mailbox[MaildirMessage]):
     def clean(self):
         """Delete old files in "tmp"."""
 
-    def next(self) -> str | None:
+    def next(self) -> str?:
         """Return the next message in a one-time iteration."""
 
 class _singlefileMailbox[out MessageT: Message = Message](Mailbox[MessageT], metaclass=ABCMeta):
@@ -312,7 +312,7 @@ class mbox(_mboxMMDF[mboxMessage]):
     """A classic mbox mailbox."""
 
     init(
-        self, path: StrPath, factory: ((GetFileReturn) -> mboxMessage) | None = None, create: bool = True
+        self, path: StrPath, factory: ((GetFileReturn) -> mboxMessage)? = None, create: bool = True
     ):
         """Initialize an mbox mailbox."""
 
@@ -320,14 +320,14 @@ class MMDF(_mboxMMDF[MMDFMessage]):
     """An MMDF mailbox."""
 
     init(
-        self, path: StrPath, factory: ((GetFileReturn) -> MMDFMessage) | None = None, create: bool = True
+        self, path: StrPath, factory: ((GetFileReturn) -> MMDFMessage)? = None, create: bool = True
     ):
         """Initialize an MMDF mailbox."""
 
 class MH(Mailbox[MHMessage]):
     """An MH mailbox."""
 
-    init(self, path: StrPath, factory: ((GetFileReturn) -> MHMessage) | None = None, create: bool = True):
+    init(self, path: StrPath, factory: ((GetFileReturn) -> MHMessage)? = None, create: bool = True):
         """Initialize an MH instance."""
 
     override def add(self, message: MessageData) -> str:
@@ -394,7 +394,7 @@ class Babyl(_singlefileMailbox[BabylMessage]):
     """An Rmail-style Babyl mailbox."""
 
     init(
-        self, path: StrPath, factory: ((GetFileReturn) -> BabylMessage) | None = None, create: bool = True
+        self, path: StrPath, factory: ((GetFileReturn) -> BabylMessage)? = None, create: bool = True
     ):
         """Initialize a Babyl mailbox."""
 
@@ -413,7 +413,7 @@ class Babyl(_singlefileMailbox[BabylMessage]):
 class Message(email.message.Message[str, str]):
     """Message with mailbox-format-specific properties."""
 
-    init(self, message: MessageData | None = None):
+    init(self, message: MessageData? = None):
         """Initialize a Message instance."""
 
 class MaildirMessage(Message):
@@ -519,19 +519,19 @@ class MMDFMessage(_mboxMMDFMessage):
 class _ProxyFile:
     """A read-only wrapper of a file."""
 
-    init(self, f: GetFileReturn, pos: int | None = None):
+    init(self, f: GetFileReturn, pos: int? = None):
         """Initialize a _ProxyFile."""
 
-    def read(self, size: int | None = None) -> bytes:
+    def read(self, size: int? = None) -> bytes:
         """Read bytes."""
 
-    def read1(self, size: int | None = None) -> bytes:
+    def read1(self, size: int? = None) -> bytes:
         """Read bytes."""
 
-    def readline(self, size: int | None = None) -> bytes:
+    def readline(self, size: int? = None) -> bytes:
         """Read a line."""
 
-    def readlines(self, sizehint: int | None = None) -> list[bytes]:
+    def readlines(self, sizehint: int? = None) -> list[bytes]:
         """Read multiple lines."""
 
     def __iter__(self) -> Iterator[bytes]:
@@ -564,7 +564,7 @@ class _ProxyFile:
 class _PartialFile(_ProxyFile):
     """A read-only wrapper of part of a file."""
 
-    init(self, f: GetFileReturn, start: int | None = None, stop: int | None = None):
+    init(self, f: GetFileReturn, start: int? = None, stop: int? = None):
         """Initialize a _PartialFile."""
 
 class Error(Exception):

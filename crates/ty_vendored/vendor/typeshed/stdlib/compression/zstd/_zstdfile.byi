@@ -42,7 +42,7 @@ class ZstdFile(_streams.BaseStream):
         mode: ReadBinaryMode = "r",
         *,
         level: None = None,
-        options: Mapping[int, int] | None = None,
+        options: Mapping[int, int]? = None,
         zstd_dict: ZstdDict | (ZstdDict, int) | None = None,
     ):
         """Open a Zstandard compressed file in binary mode.
@@ -69,8 +69,8 @@ class ZstdFile(_streams.BaseStream):
         /,
         mode: WriteBinaryMode,
         *,
-        level: int | None = None,
-        options: Mapping[int, int] | None = None,
+        level: int? = None,
+        options: Mapping[int, int]? = None,
         zstd_dict: ZstdDict | (ZstdDict, int) | None = None,
     )
 
@@ -95,14 +95,14 @@ class ZstdFile(_streams.BaseStream):
         This method does nothing in reading mode.
         """
 
-    def read(self, size: int | None = -1) -> bytes:
+    def read(self, size: int? = -1) -> bytes:
         """Read up to size uncompressed bytes from the file.
 
         If size is negative or omitted, read until EOF is reached.
         Returns b'' if the file is already at EOF.
         """
 
-    def read1(self, size: int | None = -1) -> bytes:
+    def read1(self, size: int? = -1) -> bytes:
         """Read up to size uncompressed bytes, while trying to avoid
         making multiple reads from the underlying stream. Reads up to a
         buffer's worth of data if size is negative.
@@ -123,7 +123,7 @@ class ZstdFile(_streams.BaseStream):
         Returns the number of bytes read (0 for EOF).
         """
 
-    def readline(self, size: int | None = -1) -> bytes:
+    def readline(self, size: int? = -1) -> bytes:
         """Read a line of uncompressed bytes from the file.
 
         The terminating newline (if present) is retained. If size is
@@ -163,11 +163,11 @@ def open(
     mode: ReadBinaryMode = "rb",
     *,
     level: None = None,
-    options: Mapping[int, int] | None = None,
+    options: Mapping[int, int]? = None,
     zstd_dict: ZstdDict | (ZstdDict, int) | None = None,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
 ) -> ZstdFile:
     """Open a Zstandard compressed file in binary or text mode.
 
@@ -202,12 +202,12 @@ def open(
     /,
     mode: WriteBinaryMode,
     *,
-    level: int | None = None,
-    options: Mapping[int, int] | None = None,
+    level: int? = None,
+    options: Mapping[int, int]? = None,
     zstd_dict: ZstdDict | (ZstdDict, int) | None = None,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
 ) -> ZstdFile
 def open(
     file: StrOrBytesPath | _WrappedBuffer,
@@ -215,21 +215,21 @@ def open(
     mode: ReadTextMode,
     *,
     level: None = None,
-    options: Mapping[int, int] | None = None,
+    options: Mapping[int, int]? = None,
     zstd_dict: ZstdDict | (ZstdDict, int) | None = None,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
 ) -> TextIOWrapper
 def open(
     file: StrOrBytesPath | _WrappedBuffer,
     /,
     mode: WriteTextMode,
     *,
-    level: int | None = None,
-    options: Mapping[int, int] | None = None,
+    level: int? = None,
+    options: Mapping[int, int]? = None,
     zstd_dict: ZstdDict | (ZstdDict, int) | None = None,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
 ) -> TextIOWrapper

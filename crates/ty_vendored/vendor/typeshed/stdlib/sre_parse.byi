@@ -26,7 +26,7 @@ if sys.version_info >= (3, 11):
 if sys.version_info < (3, 11):
     class Verbose(Exception)
 
-private type OpSubpatternType = (int | None, int, int, SubPattern)
+private type OpSubpatternType = (int?, int, int, SubPattern)
 private type OpGroupRefExistsType = (int, SubPattern, SubPattern)
 private type OpInType = list[(_NIC, int)]
 private type OpBranchType = (None, list[SubPattern])
@@ -36,20 +36,20 @@ private type CodeType = (_NIC, AvType)
 class State:
     flags: int
     groupdict: dict[str, int]
-    groupwidths: list[int | None]
-    lookbehindgroups: int | None
+    groupwidths: list[int?]
+    lookbehindgroups: int?
     let groups: int
-    def opengroup(self, name: str | None = None) -> int
+    def opengroup(self, name: str? = None) -> int
     def closegroup(self, gid: int, p: SubPattern)
     def checkgroup(self, gid: int) -> bool
     def checklookbehindgroup(self, gid: int, source: Tokenizer)
 
 class SubPattern:
     data: list[CodeType]
-    width: int | None
+    width: int?
     state: State
 
-    init(self, state: State, data: list[CodeType] | None = None)
+    init(self, state: State, data: list[CodeType]? = None)
     def dump(self, level: int = 0)
     def __len__(self) -> int
     def __delitem__(self, index: int | slice)
@@ -64,10 +64,10 @@ class Tokenizer:
     string: dynamic
     decoded_string: str
     index: int
-    next: str | None
+    next: str?
     init(self, string: dynamic)
     def match(self, char: str) -> bool
-    def get(self) -> str | None
+    def get(self) -> str?
     def getwhile(self, n: int, charset: Iterable[str]) -> str
     def getuntil(self, terminator: str, name: str) -> str
     let pos: int
@@ -82,8 +82,8 @@ class Tokenizer:
 
 def fix_flags(src: str | bytes, flags: int) -> int
 
-private type TemplateType = (list[(int, int)], list[str | None])
-private type TemplateByteType = (list[(int, int)], list[bytes | None])
+private type TemplateType = (list[(int, int)], list[str?])
+private type TemplateByteType = (list[(int, int)], list[bytes?])
 
 if sys.version_info >= (3, 12):
     def parse_template(source: str, pattern: _Pattern[dynamic]) -> TemplateType
@@ -92,7 +92,7 @@ else:
     def parse_template(source: str, state: _Pattern[dynamic]) -> TemplateType
     def parse_template(source: bytes, state: _Pattern[dynamic]) -> TemplateByteType
 
-def parse(str: str, flags: int = 0, state: State | None = None) -> SubPattern
+def parse(str: str, flags: int = 0, state: State? = None) -> SubPattern
 
 if sys.version_info < (3, 12):
     def expand_template(template: TemplateType, match: Match[dynamic]) -> str

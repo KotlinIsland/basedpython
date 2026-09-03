@@ -20,22 +20,22 @@ class ZoneInfo(tzinfo):
         """Get a new instance of ZoneInfo, bypassing the cache."""
 
     if sys.version_info >= (3, 12):
-        class def from_file(cls, file_obj: _IOBytes, /, key: str | None = None) -> Self:
+        class def from_file(cls, file_obj: _IOBytes, /, key: str? = None) -> Self:
             """Create a ZoneInfo file from a file object."""
     else:
-        class def from_file(cls, fobj: _IOBytes, /, key: str | None = None) -> Self:
+        class def from_file(cls, fobj: _IOBytes, /, key: str? = None) -> Self:
             """Create a ZoneInfo file from a file object."""
 
-    class def clear_cache(cls, *, only_keys: Iterable[str] | None = None):
+    class def clear_cache(cls, *, only_keys: Iterable[str]? = None):
         """Clear the ZoneInfo cache."""
 
-    override def tzname(self, dt: datetime | None, /) -> str | None:
+    override def tzname(self, dt: datetime?, /) -> str?:
         """Retrieve a string containing the abbreviation for the time zone that applies in a zone at a given datetime."""
 
-    override def utcoffset(self, dt: datetime | None, /) -> timedelta | None:
+    override def utcoffset(self, dt: datetime?, /) -> timedelta?:
         """Retrieve a timedelta representing the UTC offset in a zone at the given datetime."""
 
-    override def dst(self, dt: datetime | None, /) -> timedelta | None:
+    override def dst(self, dt: datetime?, /) -> timedelta?:
         """Retrieve a timedelta representing the amount of DST applied in a zone at the given datetime."""
 
 def __dir__() -> list[str]

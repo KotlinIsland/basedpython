@@ -19,4 +19,4 @@ __all__ = ["ScrolledText"]
 class ScrolledText(Text):
     frame: Frame
     vbar: Scrollbar
-    init(self, master: Misc | None = None, **kwargs)
+    init(self, master: Misc? = None, **kwargs)

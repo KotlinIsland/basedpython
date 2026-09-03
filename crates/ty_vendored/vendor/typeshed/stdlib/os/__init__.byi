@@ -982,7 +982,7 @@ class PathLike(ABC, Protocol[AnyStr_co]):
     abstract def __fspath__(self) -> AnyStr_co:
         """Return the file system path representation of the object."""
 
-def listdir(path: StrPath | None = None) -> list[str]:
+def listdir(path: StrPath? = None) -> list[str]:
     """Return a list containing the names of the files in the directory.
 
     path can be specified as either str, bytes, or a path-like object.  If
@@ -1092,7 +1092,7 @@ def fspath(path: str) -> str:
 def fspath(path: bytes) -> bytes
 def fspath(path: PathLike[AnyStr]) -> AnyStr
 
-def get_exec_path(env: Mapping[str, str] | None = None) -> list[str]:
+def get_exec_path(env: Mapping[str, str]? = None) -> list[str]:
     """Returns the sequence of directories that will be searched for the
     named executable (similar to a shell) when launching a process.
 
@@ -1244,7 +1244,7 @@ if sys.platform != "win32":
           (sysname, nodename, release, version, machine)
         """
 
-def getenv(key: str) -> str | None:
+def getenv(key: str) -> str?:
     """Get an environment variable, return None if it doesn't exist.
     The optional second argument can specify an alternate default.
     key, default and the result are str.
@@ -1252,7 +1252,7 @@ def getenv(key: str) -> str | None:
 def getenv[Element](key: str, default: Element) -> str | Element
 
 if sys.platform != "win32":
-    def getenvb(key: bytes) -> bytes | None:
+    def getenvb(key: bytes) -> bytes?:
         """Get an environment variable, return None if it doesn't exist.
         The optional second argument can specify an alternate default.
         key, default and the result are bytes.
@@ -1278,11 +1278,11 @@ def fdopen(
     fd: int,
     mode: OpenTextMode = "r",
     buffering: int = -1,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> TextIOWrapper
 def fdopen(
     fd: int,
@@ -1292,7 +1292,7 @@ def fdopen(
     errors: None = None,
     newline: None = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> FileIO
 def fdopen(
     fd: int,
@@ -1302,7 +1302,7 @@ def fdopen(
     errors: None = None,
     newline: None = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> BufferedRandom
 def fdopen(
     fd: int,
@@ -1312,7 +1312,7 @@ def fdopen(
     errors: None = None,
     newline: None = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> BufferedWriter
 def fdopen(
     fd: int,
@@ -1322,7 +1322,7 @@ def fdopen(
     errors: None = None,
     newline: None = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> BufferedReader
 def fdopen(
     fd: int,
@@ -1332,17 +1332,17 @@ def fdopen(
     errors: None = None,
     newline: None = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> BinaryIO
 def fdopen(
     fd: int,
     mode: str,
     buffering: int = -1,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
+    encoding: str? = None,
+    errors: str? = None,
+    newline: str? = None,
     closefd: bool = True,
-    opener: _Opener | None = None,
+    opener: _Opener? = None,
 ) -> IO[dynamic]
 
 def close(fd: int):
@@ -1351,7 +1351,7 @@ def close(fd: int):
 def closerange(fd_low: int, fd_high: int, /):
     """Closes all file descriptors in [fd_low, fd_high), ignoring errors."""
 
-def device_encoding(fd: int) -> str | None:
+def device_encoding(fd: int) -> str?:
     """Return a string describing the encoding of a terminal's file descriptor.
 
     The file descriptor must be attached to a terminal.
@@ -1421,7 +1421,7 @@ else:
         relative to the beginning of the file.
         """
 
-def open(path: StrOrBytesPath, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+def open(path: StrOrBytesPath, flags: int, mode: int = 0o777, *, dir_fd: int? = None) -> int:
     """Open a file for low level IO.  Returns a file descriptor (integer).
 
     If dir_fd is not None, it should be a file descriptor open to
@@ -1593,7 +1593,7 @@ if sys.platform != "win32":
         final RWF_NOWAIT: int
 
     if sys.platform == "linux":
-        def sendfile(out_fd: FileDescriptor, in_fd: FileDescriptor, offset: int | None, count: int) -> int:
+        def sendfile(out_fd: FileDescriptor, in_fd: FileDescriptor, offset: int?, count: int) -> int:
             """Copy count bytes from file descriptor in_fd to file descriptor out_fd."""
 
     else:
@@ -1700,7 +1700,7 @@ def write(fd: int, data: ReadableBuffer, /) -> int:
     """Write a bytes object to a file descriptor."""
 
 def access(
-    path: FileDescriptorOrPath, mode: int, *, dir_fd: int | None = None, effective_ids: bool = False, follow_symlinks: bool = True
+    path: FileDescriptorOrPath, mode: int, *, dir_fd: int? = None, effective_ids: bool = False, follow_symlinks: bool = True
 ) -> bool:
     """Use the real uid/gid to test for access to a path.
 
@@ -1752,7 +1752,7 @@ def getcwd() -> str:
 def getcwdb() -> bytes:
     """Return a bytes string representing the current working directory."""
 
-def chmod(path: FileDescriptorOrPath, mode: int, *, dir_fd: int | None = None, follow_symlinks: bool = True):
+def chmod(path: FileDescriptorOrPath, mode: int, *, dir_fd: int? = None, follow_symlinks: bool = True):
     """Change the access permissions of a file.
 
       path
@@ -1802,7 +1802,7 @@ if sys.platform != "win32":
     def chroot(path: StrOrBytesPath):
         """Change root directory to path."""
 
-    def chown(path: FileDescriptorOrPath, uid: int, gid: int, *, dir_fd: int | None = None, follow_symlinks: bool = True):
+    def chown(path: FileDescriptorOrPath, uid: int, gid: int, *, dir_fd: int? = None, follow_symlinks: bool = True):
         """Change the owner and group id of path to the numeric uid and gid.
 
           path
@@ -1843,8 +1843,8 @@ def link(
     src: StrOrBytesPath,
     dst: StrOrBytesPath,
     *,
-    src_dir_fd: int | None = None,
-    dst_dir_fd: int | None = None,
+    src_dir_fd: int? = None,
+    dst_dir_fd: int? = None,
     follow_symlinks: bool = True,
 ):
     """Create a hard link to a file.
@@ -1861,14 +1861,14 @@ def link(
     a NotImplementedError.
     """
 
-def lstat(path: StrOrBytesPath, *, dir_fd: int | None = None) -> stat_result:
+def lstat(path: StrOrBytesPath, *, dir_fd: int? = None) -> stat_result:
     """Perform a stat system call on the given path, without following symbolic links.
 
     Like stat(), but do not follow symbolic links.
     Equivalent to stat(path, follow_symlinks=False).
     """
 
-def mkdir(path: StrOrBytesPath, mode: int = 0o777, *, dir_fd: int | None = None):
+def mkdir(path: StrOrBytesPath, mode: int = 0o777, *, dir_fd: int? = None):
     """Create a directory.
 
     If dir_fd is not None, it should be a file descriptor open to
@@ -1882,7 +1882,7 @@ def mkdir(path: StrOrBytesPath, mode: int = 0o777, *, dir_fd: int | None = None)
     """
 
 if sys.platform != "win32":
-    def mkfifo(path: StrOrBytesPath, mode: int = 0o666, *, dir_fd: int | None = None):  # Unix only
+    def mkfifo(path: StrOrBytesPath, mode: int = 0o666, *, dir_fd: int? = None):  # Unix only
         """Create a "fifo" (a POSIX named pipe).
 
         If dir_fd is not None, it should be a file descriptor open to
@@ -1893,7 +1893,7 @@ if sys.platform != "win32":
         """
 
 if sys.version_info >= (3, 15):
-    def makedirs(name: StrOrBytesPath, mode: int = 0o777, exist_ok: bool = False, *, parent_mode: int | None = None) -> None:
+    def makedirs(name: StrOrBytesPath, mode: int = 0o777, exist_ok: bool = False, *, parent_mode: int? = None) -> None:
         """makedirs(name [, mode=0o777][, exist_ok=False][, parent_mode=None])
 
         Super-mkdir; create a leaf directory and all intermediate ones.  Works
@@ -1920,7 +1920,7 @@ else:
         """
 
 if sys.platform != "win32":
-    def mknod(path: StrOrBytesPath, mode: int = 0o600, device: int = 0, *, dir_fd: int | None = None):
+    def mknod(path: StrOrBytesPath, mode: int = 0o600, device: int = 0, *, dir_fd: int? = None):
         """Create a node in the file system.
 
         Create a node in the file system (file, device special file or named
@@ -1955,7 +1955,7 @@ if sys.platform != "win32":
         an exception.
         """
 
-def readlink(path: GenericPath[AnyStr], *, dir_fd: int | None = None) -> AnyStr:
+def readlink(path: GenericPath[AnyStr], *, dir_fd: int? = None) -> AnyStr:
     """Return a string representing the path to which the symbolic link points.
 
     If dir_fd is not None, it should be a file descriptor open to
@@ -1966,7 +1966,7 @@ def readlink(path: GenericPath[AnyStr], *, dir_fd: int | None = None) -> AnyStr:
     using it will raise a NotImplementedError.
     """
 
-def remove(path: StrOrBytesPath, *, dir_fd: int | None = None):
+def remove(path: StrOrBytesPath, *, dir_fd: int? = None):
     """Remove a file (same as unlink()).
 
     If dir_fd is not None, it should be a file descriptor open to
@@ -1988,7 +1988,7 @@ def removedirs(name: StrOrBytesPath):
 
     """
 
-def rename(src: StrOrBytesPath, dst: StrOrBytesPath, *, src_dir_fd: int | None = None, dst_dir_fd: int | None = None):
+def rename(src: StrOrBytesPath, dst: StrOrBytesPath, *, src_dir_fd: int? = None, dst_dir_fd: int? = None):
     """Rename a file or directory.
 
     If either src_dir_fd or dst_dir_fd is not None, it should be a file
@@ -2015,7 +2015,7 @@ def renames(old: StrOrBytesPath, new: StrOrBytesPath):
 
     """
 
-def replace(src: StrOrBytesPath, dst: StrOrBytesPath, *, src_dir_fd: int | None = None, dst_dir_fd: int | None = None):
+def replace(src: StrOrBytesPath, dst: StrOrBytesPath, *, src_dir_fd: int? = None, dst_dir_fd: int? = None):
     """Rename a file or directory, overwriting the destination.
 
     If either src_dir_fd or dst_dir_fd is not None, it should be a file
@@ -2026,7 +2026,7 @@ def replace(src: StrOrBytesPath, dst: StrOrBytesPath, *, src_dir_fd: int | None 
     If they are unavailable, using them will raise a NotImplementedError.
     """
 
-def rmdir(path: StrOrBytesPath, *, dir_fd: int | None = None):
+def rmdir(path: StrOrBytesPath, *, dir_fd: int? = None):
     """Remove a directory.
 
     If dir_fd is not None, it should be a file descriptor open to
@@ -2057,7 +2057,7 @@ def scandir(path: None = None) -> _ScandirIterator[str]:
 def scandir(path: int) -> _ScandirIterator[str]
 def scandir(path: GenericPath[AnyStr]) -> _ScandirIterator[AnyStr]
 
-def stat(path: FileDescriptorOrPath, *, dir_fd: int | None = None, follow_symlinks: bool = True) -> stat_result:
+def stat(path: FileDescriptorOrPath, *, dir_fd: int? = None, follow_symlinks: bool = True) -> stat_result:
     """Perform a stat system call on the given path.
 
       path
@@ -2102,30 +2102,30 @@ if sys.platform == "linux" and sys.version_info >= (3, 15):
         let stx_dev_major: int
         let stx_dev_minor: int
         let stx_dev: int
-        let stx_mode: int | None
-        let stx_nlink: int | None
-        let stx_uid: int | None
-        let stx_gid: int | None
-        let stx_ino: int | None
-        let stx_size: int | None
-        let stx_blocks: int | None
-        let stx_atime: float | None
-        let stx_atime_ns: int | None
-        let stx_btime: float | None
-        let stx_btime_ns: int | None
-        let stx_ctime: float | None
-        let stx_ctime_ns: int | None
-        let stx_mtime: float | None
-        let stx_mtime_ns: int | None
-        let stx_mnt_id: int | None
-        let stx_dio_mem_align: int | None
-        let stx_dio_offset_align: int | None
+        let stx_mode: int?
+        let stx_nlink: int?
+        let stx_uid: int?
+        let stx_gid: int?
+        let stx_ino: int?
+        let stx_size: int?
+        let stx_blocks: int?
+        let stx_atime: float?
+        let stx_atime_ns: int?
+        let stx_btime: float?
+        let stx_btime_ns: int?
+        let stx_ctime: float?
+        let stx_ctime_ns: int?
+        let stx_mtime: float?
+        let stx_mtime_ns: int?
+        let stx_mnt_id: int?
+        let stx_dio_mem_align: int?
+        let stx_dio_offset_align: int?
 
     def statx(
-        path: FileDescriptorOrPath, mask: int, *, flags: int = 0, dir_fd: int | None = None, follow_symlinks: bool = True
+        path: FileDescriptorOrPath, mask: int, *, flags: int = 0, dir_fd: int? = None, follow_symlinks: bool = True
     ) -> statx_result
 
-def symlink(src: StrOrBytesPath, dst: StrOrBytesPath, target_is_directory: bool = False, *, dir_fd: int | None = None):
+def symlink(src: StrOrBytesPath, dst: StrOrBytesPath, target_is_directory: bool = False, *, dir_fd: int? = None):
     """Create a symbolic link pointing to src named dst.
 
     target_is_directory is required on Windows if the target is to be
@@ -2152,7 +2152,7 @@ def truncate(path: FileDescriptorOrPath, length: int):  # Unix only up to versio
     an exception.
     """
 
-def unlink(path: StrOrBytesPath, *, dir_fd: int | None = None):
+def unlink(path: StrOrBytesPath, *, dir_fd: int? = None):
     """Remove a file (same as remove()).
 
     If dir_fd is not None, it should be a file descriptor open to
@@ -2167,7 +2167,7 @@ def utime(
     times: (int, int) | (float, float) | None = None,
     *,
     ns: (int, int) = ...,
-    dir_fd: int | None = None,
+    dir_fd: int? = None,
     follow_symlinks: bool = True,
 ):
     """Set the access and modified time of path.
@@ -2199,7 +2199,7 @@ def utime(
 private type OnError = (OSError) -> object
 
 def walk(
-    top: GenericPath[AnyStr], topdown: bool = True, onerror: OnError | None = None, followlinks: bool = False
+    top: GenericPath[AnyStr], topdown: bool = True, onerror: OnError? = None, followlinks: bool = False
 ) -> Iterator[(AnyStr, list[AnyStr], list[AnyStr])]:
     """Directory tree generator.
 
@@ -2265,10 +2265,10 @@ if sys.platform != "win32":
     def fwalk(
         top: StrPath = ".",
         topdown: bool = True,
-        onerror: OnError | None = None,
+        onerror: OnError? = None,
         *,
         follow_symlinks: bool = False,
-        dir_fd: int | None = None,
+        dir_fd: int? = None,
     ) -> Iterator[(str, list[str], list[str], int)]:
         """Directory tree generator.
 
@@ -2305,10 +2305,10 @@ if sys.platform != "win32":
     def fwalk(
         top: BytesPath,
         topdown: bool = True,
-        onerror: OnError | None = None,
+        onerror: OnError? = None,
         *,
         follow_symlinks: bool = False,
-        dir_fd: int | None = None,
+        dir_fd: int? = None,
     ) -> Iterator[(bytes, list[bytes], list[bytes], int)]
 
     if sys.platform == "linux":
@@ -2322,7 +2322,7 @@ if sys.platform != "win32":
             instead of the file the link points to.
             """
 
-        def listxattr(path: FileDescriptorOrPath | None = None, *, follow_symlinks: bool = True) -> list[str]:
+        def listxattr(path: FileDescriptorOrPath? = None, *, follow_symlinks: bool = True) -> list[str]:
             """Return a list of extended attributes on path.
 
             path may be either None, a string, a path-like object, or an open file
@@ -2491,17 +2491,17 @@ if sys.platform != "win32":
 
 class _wrap_close:
     init(self, stream: TextIOWrapper, proc: Popen[str])
-    def close(self) -> int | None
+    def close(self) -> int?
     def __enter__(self) -> Self
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+        self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
     )
     def __iter__(self) -> Iterator[str]
     # Methods below here don't exist directly on the _wrap_close object, but
     # are copied from the wrapped TextIOWrapper object via __getattr__.
     # The full set of TextIOWrapper methods are technically available this way,
     # but undocumented. Only a subset are currently included here.
-    def read(self, size: int | None = -1, /) -> str
+    def read(self, size: int? = -1, /) -> str
     def readable(self) -> bool
     def readline(self, size: int = -1, /) -> str
     def readlines(self, hint: int = -1, /) -> list[str]
@@ -2627,7 +2627,7 @@ def waitpid(pid: int, options: int, /) -> (int, int):
 
 if sys.platform == "win32":
     def startfile(
-        filepath: StrOrBytesPath, operation: str = ..., arguments: str = "", cwd: StrOrBytesPath | None = None, show_cmd: int = 1
+        filepath: StrOrBytesPath, operation: str = ..., arguments: str = "", cwd: StrOrBytesPath? = None, show_cmd: int = 1
     ):
         """Start a file with its associated application.
 
@@ -2729,7 +2729,7 @@ else:
             let si_status: int
             let si_code: int
 
-        def waitid(idtype: int, ident: int, options: int, /) -> waitid_result | None:
+        def waitid(idtype: int, ident: int, options: int, /) -> waitid_result?:
             """Returns the result of waiting for a process or processes.
 
               idtype
@@ -2792,16 +2792,16 @@ else:
         def posix_spawn(
             path: StrOrBytesPath,
             argv: ExecVArgs,
-            env: ExecEnv | None,
+            env: ExecEnv?,
             /,
             *,
-            file_actions: Sequence[(*: dynamic)] | None = (),
-            setpgroup: int | None = None,  # None allowed starting in 3.15
+            file_actions: Sequence[(*: dynamic)]? = (),
+            setpgroup: int? = None,  # None allowed starting in 3.15
             resetids: bool = False,
             setsid: bool = False,
             setsigmask: Iterable[int] = (),
             setsigdef: Iterable[int] = (),
-            scheduler: (dynamic, sched_param) | None = None,  # None allowed starting in 3.15
+            scheduler: (dynamic, sched_param)? = None,  # None allowed starting in 3.15
         ) -> int:
             """Execute the program specified by path in a new process.
 
@@ -2831,16 +2831,16 @@ else:
         def posix_spawnp(
             path: StrOrBytesPath,
             argv: ExecVArgs,
-            env: ExecEnv | None,
+            env: ExecEnv?,
             /,
             *,
-            file_actions: Sequence[(*: dynamic)] | None = (),
-            setpgroup: int | None = None,  # None allowed starting in 3.15
+            file_actions: Sequence[(*: dynamic)]? = (),
+            setpgroup: int? = None,  # None allowed starting in 3.15
             resetids: bool = False,
             setsid: bool = False,
             setsigmask: Iterable[int] = (),
             setsigdef: Iterable[int] = (),
-            scheduler: (dynamic, sched_param) | None = None,  # None allowed starting in 3.15
+            scheduler: (dynamic, sched_param)? = None,  # None allowed starting in 3.15
         ) -> int:
             """Execute the program specified by path in a new process.
 
@@ -2871,10 +2871,10 @@ else:
         def posix_spawn(
             path: StrOrBytesPath,
             argv: ExecVArgs,
-            env: ExecEnv | None,  # None allowed starting in 3.13
+            env: ExecEnv?,  # None allowed starting in 3.13
             /,
             *,
-            file_actions: Sequence[(*: dynamic)] | None = (),
+            file_actions: Sequence[(*: dynamic)]? = (),
             setpgroup: int = ...,
             resetids: bool = False,
             setsid: bool = False,
@@ -2910,10 +2910,10 @@ else:
         def posix_spawnp(
             path: StrOrBytesPath,
             argv: ExecVArgs,
-            env: ExecEnv | None,  # None allowed starting in 3.13
+            env: ExecEnv?,  # None allowed starting in 3.13
             /,
             *,
-            file_actions: Sequence[(*: dynamic)] | None = (),
+            file_actions: Sequence[(*: dynamic)]? = (),
             setpgroup: int = ...,
             resetids: bool = False,
             setsid: bool = False,
@@ -2953,7 +2953,7 @@ else:
             env: ExecEnv,
             /,
             *,
-            file_actions: Sequence[(*: dynamic)] | None = (),
+            file_actions: Sequence[(*: dynamic)]? = (),
             setpgroup: int = ...,
             resetids: bool = False,
             setsid: bool = False,
@@ -2991,7 +2991,7 @@ else:
             env: ExecEnv,
             /,
             *,
-            file_actions: Sequence[(*: dynamic)] | None = (),
+            file_actions: Sequence[(*: dynamic)]? = (),
             setpgroup: int = ...,
             resetids: bool = False,
             setsid: bool = False,
@@ -3095,7 +3095,7 @@ if sys.platform != "win32":
             The affinity is returned as a set of CPU identifiers.
             """
 
-def cpu_count() -> int | None:
+def cpu_count() -> int?:
     """Return the number of logical CPUs in the system.
 
     Return None if indeterminable.
@@ -3114,7 +3114,7 @@ if sys.version_info >= (3, 13):
             """
 
     else:
-        def process_cpu_count() -> int | None:
+        def process_cpu_count() -> int?:
             """Return the number of logical CPUs in the system.
 
             Return None if indeterminable.
@@ -3122,7 +3122,7 @@ if sys.version_info >= (3, 13):
 
 if sys.platform != "win32":
     # Unix only
-    def confstr(name: str | int, /) -> str | None:
+    def confstr(name: str | int, /) -> str?:
         """Return a string-valued system configuration variable."""
 
     def getloadavg() -> (float, float, float):
@@ -3146,9 +3146,9 @@ def urandom(size: int, /) -> bytes:
 if sys.platform != "win32":
     def register_at_fork(
         *,
-        before: (...) -> dynamic | None = ...,
-        after_in_parent: (...) -> dynamic | None = ...,
-        after_in_child: (...) -> dynamic | None = ...,
+        before: (...) -> dynamic? = ...,
+        after_in_parent: (...) -> dynamic? = ...,
+        after_in_child: (...) -> dynamic? = ...,
     ):
         """Register callables to be called when forking a new process.
 
@@ -3165,8 +3165,8 @@ if sys.platform != "win32":
 
 if sys.platform == "win32":
     class _AddedDllDirectory:
-        path: str | None
-        def __init__[Element](self, path: str | None, cookie: Element, remove_dll_directory: (Element) -> object) -> None
+        path: str?
+        def __init__[Element](self, path: str?, cookie: Element, remove_dll_directory: (Element) -> object) -> None
         def close(self)
         def __enter__(self) -> Self
         def __exit__(self, *args: Unused)
@@ -3201,7 +3201,7 @@ if sys.platform == "linux":
     final MFD_HUGE_2GB: int
     final MFD_HUGE_16GB: int
     def memfd_create(name: str, flags: int = ...) -> int
-    def copy_file_range(src: int, dst: int, count: int, offset_src: int | None = None, offset_dst: int | None = None) -> int:
+    def copy_file_range(src: int, dst: int, count: int, offset_src: int? = None, offset_dst: int? = None) -> int:
         """Copy count bytes from one file descriptor to another.
 
           src
@@ -3285,8 +3285,8 @@ if sys.platform == "linux":
         src: FileDescriptor,
         dst: FileDescriptor,
         count: int,
-        offset_src: int | None = None,
-        offset_dst: int | None = None,
+        offset_src: int? = None,
+        offset_dst: int? = None,
         flags: int = 0,
     ) -> int:
         """Transfer count bytes from one pipe to a descriptor or vice versa.

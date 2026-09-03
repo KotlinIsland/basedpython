@@ -405,7 +405,7 @@ class OpcodeInfo:
     __slots__ = ("name", "code", "arg", "stack_before", "stack_after", "proto", "doc")
     name: str
     code: str
-    arg: ArgumentDescriptor | None
+    arg: ArgumentDescriptor?
     stack_before: list[StackObject]
     stack_after: list[StackObject]
     proto: int
@@ -414,7 +414,7 @@ class OpcodeInfo:
         self,
         name: str,
         code: str,
-        arg: ArgumentDescriptor | None,
+        arg: ArgumentDescriptor?,
         stack_before: list[StackObject],
         stack_after: list[StackObject],
         proto: int,
@@ -423,7 +423,7 @@ class OpcodeInfo:
 
 opcodes: list[OpcodeInfo]
 
-def genops(pickle: bytes | bytearray | IO[bytes]) -> Iterator[(OpcodeInfo, dynamic | None, int | None)]:
+def genops(pickle: bytes | bytearray | IO[bytes]) -> Iterator[(OpcodeInfo, dynamic?, int?)]:
     """Generate all the opcodes in a pickle.
 
     'pickle' is a file-like object, or string, containing the pickle.
@@ -452,8 +452,8 @@ def optimize(p: bytes | bytearray | IO[bytes]) -> bytes:
 
 def dis(
     pickle: bytes | bytearray | IO[bytes],
-    out: IO[str] | None = None,
-    memo: MutableMapping[int, dynamic] | None = None,
+    out: IO[str]? = None,
+    memo: MutableMapping[int, dynamic]? = None,
     indentlevel: int = 4,
     annotate: int = 0,
 ):

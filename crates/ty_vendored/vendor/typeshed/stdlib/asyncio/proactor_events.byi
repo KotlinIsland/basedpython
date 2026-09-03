@@ -20,9 +20,9 @@ class _ProactorBasePipeTransport(transports._FlowControlMixin, transports.BaseTr
         loop: events.AbstractEventLoop,
         sock: socket,
         protocol: streams.StreamReaderProtocol,
-        waiter: futures.Future[dynamic] | None = None,
-        extra: Mapping[dynamic, dynamic] | None = None,
-        server: events.AbstractServer | None = None,
+        waiter: futures.Future[dynamic]? = None,
+        extra: Mapping[dynamic, dynamic]? = None,
+        server: events.AbstractServer? = None,
     )
     def __del__(self)
 
@@ -34,9 +34,9 @@ class _ProactorReadPipeTransport(_ProactorBasePipeTransport, transports.ReadTran
         loop: events.AbstractEventLoop,
         sock: socket,
         protocol: streams.StreamReaderProtocol,
-        waiter: futures.Future[dynamic] | None = None,
-        extra: Mapping[dynamic, dynamic] | None = None,
-        server: events.AbstractServer | None = None,
+        waiter: futures.Future[dynamic]? = None,
+        extra: Mapping[dynamic, dynamic]? = None,
+        server: events.AbstractServer? = None,
         buffer_size: int = 65536,
     )
 
@@ -57,9 +57,9 @@ class _ProactorSocketTransport(_ProactorReadPipeTransport, _ProactorBaseWritePip
         loop: events.AbstractEventLoop,
         sock: socket,
         protocol: streams.StreamReaderProtocol,
-        waiter: futures.Future[dynamic] | None = None,
-        extra: Mapping[dynamic, dynamic] | None = None,
-        server: events.AbstractServer | None = None,
+        waiter: futures.Future[dynamic]? = None,
+        extra: Mapping[dynamic, dynamic]? = None,
+        server: events.AbstractServer? = None,
     )
     def _set_extra(self, sock: socket)
     override def can_write_eof(self) -> True

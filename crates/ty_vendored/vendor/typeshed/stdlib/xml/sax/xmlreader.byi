@@ -135,16 +135,16 @@ class Locator:
     results are unpredictable.
     """
 
-    def getColumnNumber(self) -> int | None:
+    def getColumnNumber(self) -> int?:
         """Return the column number where the current event ends."""
 
-    def getLineNumber(self) -> int | None:
+    def getLineNumber(self) -> int?:
         """Return the line number where the current event ends."""
 
-    def getPublicId(self) -> str | None:
+    def getPublicId(self) -> str?:
         """Return the public identifier for the current event."""
 
-    def getSystemId(self) -> str | None:
+    def getSystemId(self) -> str?:
         """Return the system identifier for the current event."""
 
 class InputSource:
@@ -164,20 +164,20 @@ class InputSource:
     application, although it may make copies and modify those.
     """
 
-    init(self, system_id: str | None = None)
-    def setPublicId(self, public_id: str | None):
+    init(self, system_id: str? = None)
+    def setPublicId(self, public_id: str?):
         """Sets the public identifier of this InputSource."""
 
-    def getPublicId(self) -> str | None:
+    def getPublicId(self) -> str?:
         """Returns the public identifier of this InputSource."""
 
-    def setSystemId(self, system_id: str | None):
+    def setSystemId(self, system_id: str?):
         """Sets the system identifier of this InputSource."""
 
-    def getSystemId(self) -> str | None:
+    def getSystemId(self) -> str?:
         """Returns the system identifier of this InputSource."""
 
-    def setEncoding(self, encoding: str | None):
+    def setEncoding(self, encoding: str?):
         """Sets the character encoding of this InputSource.
 
         The encoding must be a string acceptable for an XML encoding
@@ -187,10 +187,10 @@ class InputSource:
         InputSource also contains a character stream.
         """
 
-    def getEncoding(self) -> str | None:
+    def getEncoding(self) -> str?:
         """Get the character encoding of this InputSource."""
 
-    def setByteStream(self, bytefile: _SupportsReadClose[bytes] | None):
+    def setByteStream(self, bytefile: _SupportsReadClose[bytes]?):
         """Set the byte stream (a Python file-like object which does
         not perform byte-to-character conversion) for this input
         source.
@@ -203,14 +203,14 @@ class InputSource:
         stream, it should set it with the setEncoding method.
         """
 
-    def getByteStream(self) -> _SupportsReadClose[bytes] | None:
+    def getByteStream(self) -> _SupportsReadClose[bytes]?:
         """Get the byte stream for this input source.
 
         The getEncoding method will return the character encoding for
         this byte stream, or None if unknown.
         """
 
-    def setCharacterStream(self, charfile: _SupportsReadClose[str] | None):
+    def setCharacterStream(self, charfile: _SupportsReadClose[str]?):
         """Set the character stream for this input source. (The stream
         must be a Python 2.0 Unicode-wrapped file-like that performs
         conversion to Unicode strings.)
@@ -220,7 +220,7 @@ class InputSource:
         connection to the system identifier.
         """
 
-    def getCharacterStream(self) -> _SupportsReadClose[str] | None:
+    def getCharacterStream(self) -> _SupportsReadClose[str]?:
         """Get the character stream for this input source."""
 
 
@@ -244,14 +244,14 @@ class AttributesImpl[in out AttrKey = str]:
     def keys(self) -> list[AttrKey]
     def __contains__(self, name: AttrKey) -> bool
 
-    def get(self, name: AttrKey, alternative: None = None) -> str | None
+    def get(self, name: AttrKey, alternative: None = None) -> str?
     def get(self, name: AttrKey, alternative: str) -> str
 
     def copy(self) -> Self
     def items(self) -> list[(AttrKey, str)]
     def values(self) -> list[str]
 
-private type NSName = (str | None, str)
+private type NSName = (str?, str)
 
 class AttributesNSImpl(AttributesImpl[NSName]):
     init(self, attrs: Mapping[NSName, str], qnames: Mapping[NSName, str]):
@@ -269,7 +269,7 @@ class AttributesNSImpl(AttributesImpl[NSName]):
     override def keys(self) -> list[NSName]
     override def __contains__(self, name: NSName) -> bool
 
-    override def get(self, name: NSName, alternative: None = None) -> str | None
+    override def get(self, name: NSName, alternative: None = None) -> str?
     def get(self, name: NSName, alternative: str) -> str
 
     override def items(self) -> list[(NSName, str)]

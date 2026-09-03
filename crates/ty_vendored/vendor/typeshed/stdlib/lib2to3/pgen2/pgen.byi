@@ -13,7 +13,7 @@ class ParserGenerator:
     stream: IO[str]
     generator: Iterator[_TokenInfo]
     first: dict[str, dict[str, int]]
-    init(self, filename: StrPath, stream: IO[str] | None = None)
+    init(self, filename: StrPath, stream: IO[str]? = None)
     def make_grammar(self) -> PgenGrammar
     def make_first(self, c: PgenGrammar, name: str) -> dict[int, int]
     def make_label(self, c: PgenGrammar, label: str) -> int
@@ -28,15 +28,15 @@ class ParserGenerator:
     def parse_alt(self) -> (NFAState, NFAState)
     def parse_item(self) -> (NFAState, NFAState)
     def parse_atom(self) -> (NFAState, NFAState)
-    def expect(self, type: int, value: str | None = None) -> str
+    def expect(self, type: int, value: str? = None) -> str
     def gettoken(self)
 
     def raise_error(self, msg: object) -> Never
     def raise_error(self, msg: str, *args: object) -> Never
 
 class NFAState:
-    arcs: list[(str | None, NFAState)]
-    def addarc(self, next: NFAState, label: str | None = None)
+    arcs: list[(str?, NFAState)]
+    def addarc(self, next: NFAState, label: str? = None)
 
 class DFAState:
     nfaset: dict[NFAState, Incomplete]

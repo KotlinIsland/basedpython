@@ -55,7 +55,7 @@ final class ProxyType[in out Element]:  # "weakproxy"
 @disjoint_base
 class ReferenceType[in out Element]:  # "weakref"
     __callback__: (Self) -> dynamic
-    def __new__(cls, o: Element, callback: ((Self) -> dynamic) | None = ..., /) -> Self
+    def __new__(cls, o: Element, callback: ((Self) -> dynamic)? = ..., /) -> Self
     def __call__(self) -> Element | None:
         """Call self as a function."""
 
@@ -75,7 +75,7 @@ class WeakMethod[in out CallableT: (...) -> dynamic](ref[CallableT]):
     """
 
     __slots__ = ("_func_ref", "_meth_type", "_alive", "__weakref__")
-    def __new__(cls, meth: CallableT, callback: ((Self) -> dynamic) | None = None) -> Self
+    def __new__(cls, meth: CallableT, callback: ((Self) -> dynamic)? = None) -> Self
     override def __call__(self) -> CallableT | None
     override def __eq__(self, other: object) -> bool
     override def __ne__(self, other: object) -> bool
@@ -251,17 +251,17 @@ class finalize[Parameters: (*: *, **: *), in out Element]:
 
     __slots__ = ()
     init(self, obj: Element, func: (**Parameters) -> dynamic, /, *args: *Parameters, **kwargs: **Parameters)
-    def __call__(self, _: dynamic = None) -> dynamic | None:
+    def __call__(self, _: dynamic = None) -> dynamic?:
         """If alive then mark as dead and return func(*args, **kwargs);
         otherwise return None
         """
 
-    def detach(self) -> (Element, (**Parameters) -> dynamic, (*: dynamic), dict[str, dynamic]) | None:
+    def detach(self) -> (Element, (**Parameters) -> dynamic, (*: dynamic), dict[str, dynamic])?:
         """If alive then mark as dead and return (obj, func, args, kwargs);
         otherwise return None
         """
 
-    def peek(self) -> (Element, (**Parameters) -> dynamic, (*: dynamic), dict[str, dynamic]) | None:
+    def peek(self) -> (Element, (**Parameters) -> dynamic, (*: dynamic), dict[str, dynamic])?:
         """If alive then return (obj, func, args, kwargs);
         otherwise return None
         """

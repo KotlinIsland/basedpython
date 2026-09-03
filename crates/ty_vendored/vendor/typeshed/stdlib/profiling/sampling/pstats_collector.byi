@@ -12,5 +12,5 @@ class PstatsCollector(Collector):
     )
     def export(self, filename: StrOrBytesPath)
     def create_stats(self)
-    def print_stats(self, sort: int = -1, limit: int | None = None, show_summary: bool = True, mode: int | None = None):
+    def print_stats(self, sort: int = -1, limit: int? = None, show_summary: bool = True, mode: int? = None):
         """Print formatted statistics to stdout."""

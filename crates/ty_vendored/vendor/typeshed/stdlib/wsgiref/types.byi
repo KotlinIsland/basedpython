@@ -10,7 +10,7 @@ protocol StartResponse:
     """start_response() callable as defined in PEP 3333"""
 
     def __call__(
-        self, status: str, headers: list[(str, str)], exc_info: OptExcInfo | None = ..., /
+        self, status: str, headers: list[(str, str)], exc_info: OptExcInfo? = ..., /
     ) -> (bytes) -> object
 
 type WSGIEnvironment = dict[str, dynamic]

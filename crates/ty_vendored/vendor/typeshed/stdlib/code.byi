@@ -18,7 +18,7 @@ class InteractiveInterpreter:
 
     locals: dict[str, dynamic]  # undocumented
     compile: CommandCompiler  # undocumented
-    init(self, locals: dict[str, dynamic] | None = None):
+    init(self, locals: dict[str, dynamic]? = None):
         """Constructor.
 
         The optional 'locals' argument specifies a mapping to use as the
@@ -67,7 +67,7 @@ class InteractiveInterpreter:
         """
 
     if sys.version_info >= (3, 13):
-        def showsyntaxerror(self, filename: str | None = None, *, source: str = "") -> None:
+        def showsyntaxerror(self, filename: str? = None, *, source: str = "") -> None:
             """Display the syntax error that just occurred.
 
             This doesn't display a stack trace because there isn't one.
@@ -81,7 +81,7 @@ class InteractiveInterpreter:
             """
 
     else:
-        def showsyntaxerror(self, filename: str | None = None) -> None:
+        def showsyntaxerror(self, filename: str? = None) -> None:
             """Display the syntax error that just occurred.
 
             This doesn't display a stack trace because there isn't one.
@@ -124,7 +124,7 @@ class InteractiveConsole(InteractiveInterpreter):
     if sys.version_info >= (3, 13):
         local_exit: bool  # undocumented
         def __init__(
-            self, locals: dict[str, dynamic] | None = None, filename: str = "<console>", *, local_exit: bool = False
+            self, locals: dict[str, dynamic]? = None, filename: str = "<console>", *, local_exit: bool = False
         ) -> None:
             """Constructor.
 
@@ -136,7 +136,7 @@ class InteractiveConsole(InteractiveInterpreter):
 
             """
 
-        def push(self, line: str, filename: str | None = None) -> bool:
+        def push(self, line: str, filename: str? = None) -> bool:
             """Push a line to the interpreter.
 
             The line should not have a trailing newline; it may have
@@ -152,7 +152,7 @@ class InteractiveConsole(InteractiveInterpreter):
             """
 
     else:
-        def __init__(self, locals: dict[str, dynamic] | None = None, filename: str = "<console>") -> None:
+        def __init__(self, locals: dict[str, dynamic]? = None, filename: str = "<console>") -> None:
             """Constructor.
 
             The optional locals argument will be passed to the
@@ -178,7 +178,7 @@ class InteractiveConsole(InteractiveInterpreter):
 
             """
 
-    def interact(self, banner: str | None = None, exitmsg: str | None = None):
+    def interact(self, banner: str? = None, exitmsg: str? = None):
         """Closely emulate the interactive Python console.
 
         The optional banner argument specifies the banner to print
@@ -212,10 +212,10 @@ class InteractiveConsole(InteractiveInterpreter):
 
 if sys.version_info >= (3, 13):
     def interact(
-        banner: str | None = None,
-        readfunc: ((str) -> str) | None = None,
-        local: dict[str, dynamic] | None = None,
-        exitmsg: str | None = None,
+        banner: str? = None,
+        readfunc: ((str) -> str)? = None,
+        local: dict[str, dynamic]? = None,
+        exitmsg: str? = None,
         local_exit: bool = False,
     ) -> None:
         """Closely emulate the interactive Python interpreter.
@@ -236,10 +236,10 @@ if sys.version_info >= (3, 13):
 
 else:
     def interact(
-        banner: str | None = None,
-        readfunc: ((str) -> str) | None = None,
-        local: dict[str, dynamic] | None = None,
-        exitmsg: str | None = None,
+        banner: str? = None,
+        readfunc: ((str) -> str)? = None,
+        local: dict[str, dynamic]? = None,
+        exitmsg: str? = None,
     ) -> None:
         """Closely emulate the interactive Python interpreter.
 

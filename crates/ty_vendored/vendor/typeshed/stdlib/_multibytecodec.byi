@@ -7,8 +7,8 @@ from typing_extensions import disjoint_base
 # This class is not exposed. It calls itself _multibytecodec.MultibyteCodec.
 @type_check_only
 final class _MultibyteCodec:
-    def decode(self, input: ReadableBuffer, errors: str | None = None) -> str
-    def encode(self, input: str, errors: str | None = None) -> bytes
+    def decode(self, input: ReadableBuffer, errors: str? = None) -> str
+    def encode(self, input: str, errors: str? = None) -> bytes
 
 @disjoint_base
 class MultibyteIncrementalDecoder:
@@ -39,9 +39,9 @@ class MultibyteStreamReader:
 
     stream: _ReadableStream
     init(self, stream: _ReadableStream, errors: str = "strict")
-    def read(self, sizeobj: int | None = None, /) -> str
-    def readline(self, sizeobj: int | None = None, /) -> str
-    def readlines(self, sizehintobj: int | None = None, /) -> list[str]
+    def read(self, sizeobj: int? = None, /) -> str
+    def readline(self, sizeobj: int? = None, /) -> str
+    def readlines(self, sizehintobj: int? = None, /) -> list[str]
     def reset(self)
 
 @disjoint_base

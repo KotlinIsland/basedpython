@@ -20,7 +20,7 @@ class SilentReporter(_Reporter):
         source,
         report_level,
         halt_level,
-        stream: Incomplete | None = ...,
+        stream: Incomplete? = ...,
         debug: bool | 0 | 1 = 0,
         encoding: str = ...,
         error_handler: str = ...,

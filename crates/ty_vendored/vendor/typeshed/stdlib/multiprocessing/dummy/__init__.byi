@@ -43,25 +43,25 @@ class DummyProcess(threading.Thread):
     _parent: threading.Thread
     _pid: None
     _start_called: int
-    let exitcode: 0 | None
+    let exitcode: 0?
     if sys.version_info >= (3, 14):
         # Default changed in Python 3.14.1
         def __init__(
             self,
             group: dynamic = None,
-            target: (...) -> object | None = None,
-            name: str | None = None,
+            target: (...) -> object? = None,
+            name: str? = None,
             args: Iterable[dynamic] = (),
-            kwargs: Mapping[str, dynamic] | None = None,
+            kwargs: Mapping[str, dynamic]? = None,
         ) -> None
     else:
         def __init__(
             self,
             group: dynamic = None,
-            target: (...) -> object | None = None,
-            name: str | None = None,
+            target: (...) -> object? = None,
+            name: str? = None,
             args: Iterable[dynamic] = (),
-            kwargs: Mapping[str, dynamic] | None = {},
+            kwargs: Mapping[str, dynamic]? = {},
         ) -> None
 
 Process = DummyProcess
@@ -79,7 +79,7 @@ class Value:
 
 def Array(typecode: dynamic, sequence: Sequence[dynamic], lock: dynamic = True) -> array.array[dynamic]
 def Manager() -> dynamic
-def Pool(processes: int | None = None, initializer: (...) -> object | None = None, initargs: Iterable[dynamic] = ()) -> dynamic
+def Pool(processes: int? = None, initializer: (...) -> object? = None, initargs: Iterable[dynamic] = ()) -> dynamic
 def active_children() -> list[dynamic]
 
 current_process = threading.current_thread

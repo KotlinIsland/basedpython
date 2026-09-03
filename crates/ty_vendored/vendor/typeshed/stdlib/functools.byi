@@ -67,7 +67,7 @@ class _CacheInfo(NamedTuple):
 
     hits: int
     misses: int
-    maxsize: int | None
+    maxsize: int?
     currsize: int
 
 @type_check_only
@@ -95,8 +95,8 @@ final class _lru_cache_wrapper[Fn: (...) -> object]:
     def __call__[Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(**Parameters) -> R], *args: Parameters.args, **kwargs: Parameters.kwargs) -> R:
         """Call self as a function."""
 
-    def __get__(self, instance: None, owner: type | None = None) -> Self
-    def __get__[S, Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(S, **Parameters) -> R], instance: S, owner: type | None = None) -> _lru_cache_wrapper[(**Parameters) -> R]
+    def __get__(self, instance: None, owner: type? = None) -> Self
+    def __get__[S, Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(S, **Parameters) -> R], instance: S, owner: type? = None) -> _lru_cache_wrapper[(**Parameters) -> R]
 
     def cache_info(self) -> _CacheInfo:
         """Report cache statistics"""
@@ -112,7 +112,7 @@ final class _lru_cache_wrapper[Fn: (...) -> object]:
     __name__: str
     __qualname__: str
 
-def lru_cache[Fn: (...) -> object](maxsize: int | None = 128, typed: bool = False) -> (Fn) -> _lru_cache_wrapper[Fn]:
+def lru_cache[Fn: (...) -> object](maxsize: int? = 128, typed: bool = False) -> (Fn) -> _lru_cache_wrapper[Fn]:
     """Least-recently-used cache decorator.
 
     If *maxsize* is set to None, the LRU features are disabled and the cache
@@ -318,7 +318,7 @@ class partialmethod[in out Element]:
         def __init__(self, func: (...) -> Element, /, *args: dynamic, **keywords: dynamic) -> None
         def __init__(self, func: Descriptor, /, *args: dynamic, **keywords: dynamic) -> None
 
-    def __get__(self, obj: dynamic, cls: type[dynamic] | None = None) -> (...) -> Element
+    def __get__(self, obj: dynamic, cls: type[dynamic]? = None) -> (...) -> Element
     let __isabstractmethod__: bool
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
@@ -379,15 +379,15 @@ class singledispatchmethod[in out Element]:
     def register(self, cls: (...) -> Element, method: None = None) -> (...) -> Element
     def register(self, cls: _RegType, method: (...) -> Element) -> (...) -> Element
 
-    def __get__[Other](self, obj: Other, cls: type[Other] | None = None) -> (...) -> Element
+    def __get__[Other](self, obj: Other, cls: type[Other]? = None) -> (...) -> Element
 
 class cached_property[out Element]:
     func: (dynamic) -> Element
-    attrname: str | None
+    attrname: str?
     init(self, func: (dynamic) -> Element)
 
-    def __get__(self, instance: None, owner: type[dynamic] | None = None) -> Self
-    def __get__(self, instance: object, owner: type[dynamic] | None = None) -> Element
+    def __get__(self, instance: None, owner: type[dynamic]? = None) -> Self
+    def __get__(self, instance: object, owner: type[dynamic]? = None) -> Element
 
     def __set_name__(self, owner: type[dynamic], name: str)
     # __set__ is not defined at runtime, but @cached_property is designed to be settable

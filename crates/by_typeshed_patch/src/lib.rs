@@ -142,6 +142,10 @@ pub fn all_post_patches(root: &Path) -> Vec<Box<dyn Patch>> {
         )),
         Box::new(patches::homogeneous_tuple::HomogeneousTuple),
         Box::new(patches::any_to_dynamic::AnyToDynamic),
+        // `T | None` → `T?`. it runs last of the type-expression rewrites so it
+        // sees the arrows, homogeneous tuples and unwrapped literals the earlier
+        // ones produced, and marks the optional over whatever they left
+        Box::new(patches::optional_marker::OptionalMarker),
         Box::new(patches::strip_typing_imports::StripTypingImports),
     ]
 }

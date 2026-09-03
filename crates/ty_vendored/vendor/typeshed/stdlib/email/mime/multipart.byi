@@ -14,10 +14,10 @@ class MIMEMultipart(MIMEBase):
     init(
         self,
         _subtype: str = "mixed",
-        boundary: str | None = None,
-        _subparts: Sequence[_MessageT] | None = None,
+        boundary: str? = None,
+        _subparts: Sequence[_MessageT]? = None,
         *,
-        policy: Policy[_MessageT] | None = None,
+        policy: Policy[_MessageT]? = None,
         **_params: _ParamsType,
     ):
         """Creates a multipart/* type message.

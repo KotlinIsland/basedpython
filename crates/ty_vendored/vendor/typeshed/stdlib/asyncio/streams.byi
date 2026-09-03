@@ -23,13 +23,13 @@ else:
         "start_unix_server",
     )
 
-private type ClientConnectedCallback = (StreamReader, StreamWriter) -> (Awaitable[None] | None)
+private type ClientConnectedCallback = (StreamReader, StreamWriter) -> (Awaitable[None]?)
 
 @type_check_only
 private protocol ReaduntilBuffer(ReadableBuffer, Sized)
 
 async def open_connection(
-    host: str | None = None,
+    host: str? = None,
     port: int | str | None = None,
     *,
     limit: int = 65536,
@@ -86,12 +86,12 @@ async def start_server(
 
 if sys.platform != "win32":
     async def open_unix_connection(
-        path: StrPath | None = None, *, limit: int = 65536, **kwds: dynamic
+        path: StrPath? = None, *, limit: int = 65536, **kwds: dynamic
     ) -> (StreamReader, StreamWriter):
         """Similar to `open_connection` but works with UNIX Domain Sockets."""
 
     async def start_unix_server(
-        client_connected_cb: ClientConnectedCallback, path: StrPath | None = None, *, limit: int = 65536, **kwds: dynamic
+        client_connected_cb: ClientConnectedCallback, path: StrPath? = None, *, limit: int = 65536, **kwds: dynamic
     ) -> Server:
         """Similar to `start_server` but works with UNIX Domain Sockets."""
 
@@ -105,7 +105,7 @@ protocol FlowControlMixin:
     StreamWriter.drain() must wait for _drain_helper() coroutine.
     """
 
-    init(self, loop: events.AbstractEventLoop | None = None)
+    init(self, loop: events.AbstractEventLoop? = None)
 
 protocol StreamReaderProtocol(FlowControlMixin):
     """Helper class to adapt between Protocol and StreamReader.
@@ -119,8 +119,8 @@ protocol StreamReaderProtocol(FlowControlMixin):
     init(
         self,
         stream_reader: StreamReader,
-        client_connected_cb: ClientConnectedCallback | None = None,
-        loop: events.AbstractEventLoop | None = None,
+        client_connected_cb: ClientConnectedCallback? = None,
+        loop: events.AbstractEventLoop? = None,
     )
     def __del__(self)
 
@@ -138,7 +138,7 @@ class StreamWriter:
         self,
         transport: transports.WriteTransport,
         protocol: protocols.BaseProtocol,
-        reader: StreamReader | None,
+        reader: StreamReader?,
         loop: events.AbstractEventLoop,
     )
     let transport: transports.WriteTransport
@@ -164,7 +164,7 @@ class StreamWriter:
             self,
             sslcontext: ssl.SSLContext,
             *,
-            server_hostname: str | None = None,
+            server_hostname: str? = None,
             ssl_handshake_timeout: int | float | None = None,
             ssl_shutdown_timeout: int | float | None = None,
         ) -> None:
@@ -172,7 +172,7 @@ class StreamWriter:
 
     elif sys.version_info >= (3, 11):
         async def start_tls(
-            self, sslcontext: ssl.SSLContext, *, server_hostname: str | None = None, ssl_handshake_timeout: int | float | None = None
+            self, sslcontext: ssl.SSLContext, *, server_hostname: str? = None, ssl_handshake_timeout: int | float | None = None
         ) -> None:
             """Upgrade an existing stream-based connection to TLS."""
 
@@ -182,8 +182,8 @@ class StreamWriter:
         def __del__(self) -> None
 
 class StreamReader:
-    init(self, limit: int = 65536, loop: events.AbstractEventLoop | None = None)
-    def exception(self) -> Exception | None
+    init(self, limit: int = 65536, loop: events.AbstractEventLoop? = None)
+    def exception(self) -> Exception?
     def set_exception(self, exc: Exception)
     def set_transport(self, transport: transports.BaseTransport)
     def feed_eof(self)

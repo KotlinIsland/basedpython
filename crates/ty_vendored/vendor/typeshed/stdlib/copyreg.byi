@@ -8,14 +8,14 @@ from collections.abc import Callable, Hashable
 from typing import TypeAlias, TypeVar
 
 _T = TypeVar("_T")
-_Reduce: TypeAlias = ((...) -> _T, (*: dynamic)) | ((...) -> _T, (*: dynamic), dynamic | None)
+_Reduce: TypeAlias = ((...) -> _T, (*: dynamic)) | ((...) -> _T, (*: dynamic), dynamic?)
 
 __all__ = ["pickle", "constructor", "add_extension", "remove_extension", "clear_extension_cache"]
 
 def pickle[Element](
     ob_type: type[Element],
     pickle_function: (Element) -> (str | _Reduce[Element]),
-    constructor_ob: ((_Reduce[Element]) -> Element) | None = None,
+    constructor_ob: ((_Reduce[Element]) -> Element)? = None,
 )
 def constructor[Element](object: (_Reduce[Element]) -> Element)
 def add_extension(module: Hashable, name: Hashable, code: SupportsInt):

@@ -11,7 +11,7 @@ from distutils.version import LooseVersion
 from re import Pattern
 from typing import Final, Literal
 
-def get_msvcr() -> list[str] | None:
+def get_msvcr() -> list[str]?:
     """Include the appropriate MSVC runtime library if Python was built
     with MSVC 7.0 or later.
     """

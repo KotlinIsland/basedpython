@@ -17,14 +17,14 @@ class Generator[in out MessageT: Message[dynamic, dynamic] = dynamic]:
     text.
     """
 
-    maxheaderlen: int | None
-    policy: Policy[MessageT] | None
+    maxheaderlen: int?
+    policy: Policy[MessageT]?
 
     init(
         self: Generator[dynamic],  # The Policy of the message is used.
         outfp: SupportsWrite[str],
-        mangle_from_: bool | None = None,
-        maxheaderlen: int | None = None,
+        mangle_from_: bool? = None,
+        maxheaderlen: int? = None,
         *,
         policy: None = None,
     ):
@@ -53,14 +53,14 @@ class Generator[in out MessageT: Message[dynamic, dynamic] = dynamic]:
     init(
         self,
         outfp: SupportsWrite[str],
-        mangle_from_: bool | None = None,
-        maxheaderlen: int | None = None,
+        mangle_from_: bool? = None,
+        maxheaderlen: int? = None,
         *,
         policy: Policy[MessageT],
     )
 
     def write(self, s: str)
-    def flatten(self, msg: MessageT, unixfrom: bool = False, linesep: str | None = None):
+    def flatten(self, msg: MessageT, unixfrom: bool = False, linesep: str? = None):
         """Print the message object tree rooted at msg to the output file
         specified when the Generator instance was created.
 
@@ -97,8 +97,8 @@ class BytesGenerator[in out MessageT: Message[dynamic, dynamic] = dynamic](Gener
     init(
         self: BytesGenerator[dynamic],  # The Policy of the message is used.
         outfp: SupportsWrite[bytes],
-        mangle_from_: bool | None = None,
-        maxheaderlen: int | None = None,
+        mangle_from_: bool? = None,
+        maxheaderlen: int? = None,
         *,
         policy: None = None,
     ):
@@ -127,8 +127,8 @@ class BytesGenerator[in out MessageT: Message[dynamic, dynamic] = dynamic](Gener
     init(
         self,
         outfp: SupportsWrite[bytes],
-        mangle_from_: bool | None = None,
-        maxheaderlen: int | None = None,
+        mangle_from_: bool? = None,
+        maxheaderlen: int? = None,
         *,
         policy: Policy[MessageT],
     )
@@ -143,9 +143,9 @@ class DecodedGenerator[in out MessageT: Message[dynamic, dynamic] = dynamic](Gen
     init(
         self: DecodedGenerator[dynamic],  # The Policy of the message is used.
         outfp: SupportsWrite[str],
-        mangle_from_: bool | None = None,
-        maxheaderlen: int | None = None,
-        fmt: str | None = None,
+        mangle_from_: bool? = None,
+        maxheaderlen: int? = None,
+        fmt: str? = None,
         *,
         policy: None = None,
     ):
@@ -173,9 +173,9 @@ class DecodedGenerator[in out MessageT: Message[dynamic, dynamic] = dynamic](Gen
     init(
         self,
         outfp: SupportsWrite[str],
-        mangle_from_: bool | None = None,
-        maxheaderlen: int | None = None,
-        fmt: str | None = None,
+        mangle_from_: bool? = None,
+        maxheaderlen: int? = None,
+        fmt: str? = None,
         *,
         policy: Policy[MessageT],
     )

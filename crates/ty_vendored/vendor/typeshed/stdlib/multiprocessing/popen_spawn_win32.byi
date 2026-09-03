@@ -20,13 +20,13 @@ if sys.platform == "win32":
         finalizer: Finalize
         method: ClassVar[str]
         pid: int
-        returncode: int | None
+        returncode: int?
         sentinel: int
 
         init(self, process_obj: BaseProcess)
         def duplicate_for_child(self, handle: int) -> int
-        def wait(self, timeout: int | float | None = None) -> int | None
-        def poll(self) -> int | None
+        def wait(self, timeout: int | float | None = None) -> int?
+        def poll(self) -> int?
         def terminate(self)
 
         kill = terminate

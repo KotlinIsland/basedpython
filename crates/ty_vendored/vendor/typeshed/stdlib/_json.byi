@@ -14,9 +14,9 @@ final class make_encoder:
 
     let key_separator: str
 
-    let indent: str | None
+    let indent: str?
 
-    let markers: dict[int, dynamic] | None
+    let markers: dict[int, dynamic]?
 
     let default: (dynamic) -> dynamic
 
@@ -26,10 +26,10 @@ final class make_encoder:
 
     def __new__(
         cls,
-        markers: dict[int, dynamic] | None,
+        markers: dict[int, dynamic]?,
         default: (dynamic) -> dynamic,
         encoder: (str) -> str,
-        indent: str | None,
+        indent: str?,
         key_separator: str,
         item_separator: str,
         sort_keys: bool,

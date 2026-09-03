@@ -68,7 +68,7 @@ if sys.version_info >= (3, 12):
 if sys.version_info >= (3, 15):
     __all__ += ["standalone_month_name", "standalone_month_abbr"]
 
-private type LocaleType = (str | None, str | None)
+private type LocaleType = (str?, str?)
 
 class IllegalMonthError(ValueError, IndexError):
     month: int
@@ -322,7 +322,7 @@ class HTMLCalendar(Calendar):
 
     if sys.version_info >= (3, 15):
         def formatmonthpage(
-            self, theyear: int, themonth: int, width: int = 3, css: str | None = "calendar.css", encoding: str | None = None
+            self, theyear: int, themonth: int, width: int = 3, css: str? = "calendar.css", encoding: str? = None
         ) -> bytes:
             """
             Return a formatted month as a complete HTML page.
@@ -334,7 +334,7 @@ class HTMLCalendar(Calendar):
         """
 
     def formatyearpage(
-        self, theyear: int, width: int = 3, css: str | None = "calendar.css", encoding: str | None = None
+        self, theyear: int, width: int = 3, css: str? = "calendar.css", encoding: str? = None
     ) -> bytes:
         """
         Return a formatted year as a complete HTML page.
@@ -351,7 +351,7 @@ class LocaleTextCalendar(TextCalendar):
     month and weekday names in the specified locale.
     """
 
-    init(self, firstweekday: int = 0, locale: LocaleType | None = None)
+    init(self, firstweekday: int = 0, locale: LocaleType? = None)
 
 class LocaleHTMLCalendar(HTMLCalendar):
     """
@@ -359,7 +359,7 @@ class LocaleHTMLCalendar(HTMLCalendar):
     month and weekday names in the specified locale.
     """
 
-    init(self, firstweekday: int = 0, locale: LocaleType | None = None)
+    init(self, firstweekday: int = 0, locale: LocaleType? = None)
     override def formatweekday(self, day: int) -> str
     override def formatmonthname(self, theyear: int, themonth: int, withyear: bool = True) -> str
 

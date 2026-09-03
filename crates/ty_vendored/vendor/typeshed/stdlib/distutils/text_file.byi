@@ -69,8 +69,8 @@ class TextFile:
 
     init(
         self,
-        filename: str | None = None,
-        file: IO[str] | None = None,
+        filename: str? = None,
+        file: IO[str]? = None,
         *,
         strip_comments: bool | 0 | 1 = ...,
         lstrip_ws: bool | 0 | 1 = ...,
@@ -105,7 +105,7 @@ class TextFile:
         line.
         """
 
-    def readline(self) -> str | None:
+    def readline(self) -> str?:
         """Read and return a single logical line from the current file (or
         from an internal buffer if lines have previously been "unread"
         with 'unreadline()').  If the 'join_lines' option is true, this

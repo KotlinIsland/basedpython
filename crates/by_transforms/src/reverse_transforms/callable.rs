@@ -251,7 +251,7 @@ mod tests {
     fn callable_in_union() {
         check(
             "from typing import Callable\na: Callable[[int], int] | None\n",
-            "from typing import Callable\na: (int) -> int | None\n",
+            "from typing import Callable\na: (int) -> int?\n",
         );
     }
 

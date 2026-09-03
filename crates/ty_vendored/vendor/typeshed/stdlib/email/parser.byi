@@ -34,7 +34,7 @@ class Parser(Generic[_MessageT]):
 
         """
     init(self, _class: None = None, *, policy: Policy[_MessageT])
-    init(self, _class: (() -> _MessageT) | None, *, policy: Policy[_MessageT] = ...)
+    init(self, _class: (() -> _MessageT)?, *, policy: Policy[_MessageT] = ...)
 
     def parse(self, fp: SupportsRead[str], headersonly: bool = False) -> _MessageT:
         """Create a message structure from the data in a file.

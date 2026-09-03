@@ -45,17 +45,17 @@ class XMLGenerator(handler.ContentHandler):
         encoding: str = "iso-8859-1",
         short_empty_elements: bool = False,
     )
-    def _qname(self, name: (str | None, str)) -> str:
+    def _qname(self, name: (str?, str)) -> str:
         """Builds a qualified name from a (ns_url, localname) pair"""
 
     override def startDocument(self)
     override def endDocument(self)
-    override def startPrefixMapping(self, prefix: str | None, uri: str)
-    override def endPrefixMapping(self, prefix: str | None)
+    override def startPrefixMapping(self, prefix: str?, uri: str)
+    override def endPrefixMapping(self, prefix: str?)
     override def startElement(self, name: str, attrs: xmlreader.AttributesImpl)
     override def endElement(self, name: str)
-    override def startElementNS(self, name: (str | None, str), qname: str | None, attrs: xmlreader.AttributesNSImpl)
-    override def endElementNS(self, name: (str | None, str), qname: str | None)
+    override def startElementNS(self, name: (str?, str), qname: str?, attrs: xmlreader.AttributesNSImpl)
+    override def endElementNS(self, name: (str?, str), qname: str?)
     override def characters(self, content: str)
     override def ignorableWhitespace(self, content: str)
     override def processingInstruction(self, target: str, data: str)
@@ -69,7 +69,7 @@ class XMLFilterBase(xmlreader.XMLReader):
     through.
     """
 
-    init(self, parent: xmlreader.XMLReader | None = None)
+    init(self, parent: xmlreader.XMLReader? = None)
     # ErrorHandler methods
     def error(self, exception: BaseException) -> Never
     def fatalError(self, exception: BaseException) -> Never
@@ -78,21 +78,21 @@ class XMLFilterBase(xmlreader.XMLReader):
     def setDocumentLocator(self, locator: xmlreader.Locator)
     def startDocument(self)
     def endDocument(self)
-    def startPrefixMapping(self, prefix: str | None, uri: str)
-    def endPrefixMapping(self, prefix: str | None)
+    def startPrefixMapping(self, prefix: str?, uri: str)
+    def endPrefixMapping(self, prefix: str?)
     def startElement(self, name: str, attrs: xmlreader.AttributesImpl)
     def endElement(self, name: str)
-    def startElementNS(self, name: (str | None, str), qname: str | None, attrs: xmlreader.AttributesNSImpl)
-    def endElementNS(self, name: (str | None, str), qname: str | None)
+    def startElementNS(self, name: (str?, str), qname: str?, attrs: xmlreader.AttributesNSImpl)
+    def endElementNS(self, name: (str?, str), qname: str?)
     def characters(self, content: str)
     def ignorableWhitespace(self, chars: str)
     def processingInstruction(self, target: str, data: str)
     def skippedEntity(self, name: str)
     # DTDHandler methods
-    def notationDecl(self, name: str, publicId: str | None, systemId: str)
-    def unparsedEntityDecl(self, name: str, publicId: str | None, systemId: str, ndata: str)
+    def notationDecl(self, name: str, publicId: str?, systemId: str)
+    def unparsedEntityDecl(self, name: str, publicId: str?, systemId: str, ndata: str)
     # EntityResolver methods
-    def resolveEntity(self, publicId: str | None, systemId: str) -> str
+    def resolveEntity(self, publicId: str?, systemId: str) -> str
     # XMLReader methods
     override def parse(self, source: xmlreader.InputSource | _Source)
     override def setLocale(self, locale: str)
@@ -101,7 +101,7 @@ class XMLFilterBase(xmlreader.XMLReader):
     override def getProperty(self, name: str) -> object
     override def setProperty(self, name: str, value: object)
     # XMLFilter methods
-    def getParent(self) -> xmlreader.XMLReader | None
+    def getParent(self) -> xmlreader.XMLReader?
     def setParent(self, parent: xmlreader.XMLReader)
 
 def prepare_input_source(source: xmlreader.InputSource | _Source, base: str = "") -> xmlreader.InputSource:

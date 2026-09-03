@@ -1192,7 +1192,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     // optional: it stands for the enclosing class, so `Self?` has
                     // no inner layer to keep apart and is the plain union
                     if matches!(inner, Type::TypeVar(typevar)
-                        if !matches!(typevar.kind(self.db()), TypeVarKind::TypingSelf))
+                        if !typevar.is_typing_self(self.db()))
                     {
                         return Type::KnownInstance(KnownInstanceType::WrappedOptional(
                             InternedType::new(self.db(), decomposition),

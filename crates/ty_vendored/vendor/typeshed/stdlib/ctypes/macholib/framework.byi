@@ -12,10 +12,10 @@ class _FrameworkInfo(TypedDict):
     location: str
     name: str
     shortname: str
-    version: str | None
-    suffix: str | None
+    version: str?
+    suffix: str?
 
-def framework_info(filename: str) -> _FrameworkInfo | None:
+def framework_info(filename: str) -> _FrameworkInfo?:
     """
     A framework name can take one of the following four forms:
         Location/Name.framework/Versions/SomeVersion/Name_Suffix

@@ -21,7 +21,7 @@ class addbase(tempfile._TemporaryFileWrapper[bytes]):
     fp: IO[bytes]
     init(self, fp: IO[bytes])
     override def __exit__(
-        self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
+        self, type: type[BaseException]?, value: BaseException?, traceback: TracebackType?
     )
     # These methods don't actually exist, but the class inherits at runtime from
     # tempfile._TemporaryFileWrapper, which uses __getattr__ to delegate to the
@@ -48,12 +48,12 @@ class addinfourl(addinfo):
     """class to add info() and geturl() methods to an open file."""
 
     url: str
-    code: int | None  # Deprecated since Python 3.9. Use `addinfourl.status` attribute instead.
-    let status: int | None
-    init(self, fp: IO[bytes], headers: Message, url: str, code: int | None = None)
+    code: int?  # Deprecated since Python 3.9. Use `addinfourl.status` attribute instead.
+    let status: int?
+    init(self, fp: IO[bytes], headers: Message, url: str, code: int? = None)
     @deprecated("Deprecated since Python 3.9. Use `addinfourl.url` attribute instead.")
     def geturl(self) -> str
     @deprecated("Deprecated since Python 3.9. Use `addinfourl.headers` attribute instead.")
     override def info(self) -> Message
     @deprecated("Deprecated since Python 3.9. Use `addinfourl.status` attribute instead.")
-    def getcode(self) -> int | None
+    def getcode(self) -> int?
