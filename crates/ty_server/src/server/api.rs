@@ -78,6 +78,13 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::InlayHintRequestHandler::METHOD => background_document_request_task::<
             requests::InlayHintRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        // Asked alongside the inlay hints of the same pass, and answered off the same
+        // parse, so it belongs on the same schedule as them
+        requests::AlignmentGroupsRequestHandler::METHOD => background_document_request_task::<
+            requests::AlignmentGroupsRequestHandler,
+        >(
+            req, BackgroundSchedule::Worker
+        ),
         // Sent while a debuggee is stopped, and re-sent on every step, so it is
         // latency sensitive in the way completion is: the answer is stale the
         // moment the program moves

@@ -2096,7 +2096,7 @@ fn should_skip_import(db: &dyn Db, module: ty_module_resolver::Module, ty: Type)
 /// type keeps it under the marker — `let a: T = v` parses as `a: __let__[T] = v`
 /// — so a bare marker is exactly what says the type is unwritten, and the name is
 /// where writing it would go
-fn untyped_declaration_value(assign: &ast::StmtAnnAssign) -> Option<&Expr> {
+pub(crate) fn untyped_declaration_value(assign: &ast::StmtAnnAssign) -> Option<&Expr> {
     let Expr::Name(marker) = assign.annotation.as_ref() else {
         return None;
     };

@@ -74,8 +74,7 @@ impl LspPosition {
     }
 
     /// Returns the uri of the text document this position belongs to.
-    #[expect(unused)]
-    fn uri(&self) -> Option<&lsp_types::Uri> {
+    pub(crate) fn uri(&self) -> Option<&lsp_types::Uri> {
         self.uri.as_ref()
     }
 }
