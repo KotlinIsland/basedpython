@@ -2905,6 +2905,94 @@ fn basedpython_and_pattern_binds_tighter_than_or() {
     );
 }
 
+/// `case A(x, *_, y)` — the star marks the positions the pattern does not name,
+/// so what follows it counts back from the end of `__match_args__`
+#[test]
+fn basedpython_class_pattern_takes_a_starred_wildcard() {
+    let parsed = parse_basedpython_module("match v:\n    case A(x, *_, y):\n        pass\n");
+    let [Stmt::Match(match_stmt)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single match statement");
+    };
+    let [case] = match_stmt.cases.as_slice() else {
+        panic!("expected a single case");
+    };
+    let Pattern::MatchClass(class_pattern) = &case.pattern else {
+        panic!("expected a class pattern, got {:?}", case.pattern);
+    };
+    assert!(
+        matches!(
+            class_pattern.arguments.patterns.as_slice(),
+            [
+                Pattern::MatchAs(_),
+                Pattern::MatchStar(star),
+                Pattern::MatchAs(_)
+            ] if star.name.is_none()
+        ),
+        "expected the star between the two captures, got {:?}",
+        class_pattern.arguments.patterns
+    );
+}
+
+#[test]
+fn basedpython_class_pattern_star_is_basedpython_only() {
+    let has_error = match parse(
+        "match v:\n    case A(x, *_, y):\n        pass\n",
+        ParseOptions::from(Mode::Module),
+    ) {
+        Ok(parsed) => !parsed.errors().is_empty(),
+        Err(_) => true,
+    };
+    assert!(
+        has_error,
+        "a star in a class pattern should be a .py syntax error"
+    );
+}
+
+/// there is no sequence behind a class pattern's positions, only the names
+/// `__match_args__` lists, so a star there has nothing to bind
+#[test]
+fn basedpython_class_pattern_star_must_be_the_wildcard() {
+    let parsed =
+        parse_basedpython_module_with_errors("match v:\n    case A(x, *rest):\n        pass\n");
+    assert!(
+        parsed
+            .errors()
+            .iter()
+            .any(|error| error.to_string().contains("must be the wildcard `*_`")),
+        "expected the named-star error, got {:?}",
+        parsed.errors()
+    );
+}
+
+#[test]
+fn basedpython_class_pattern_takes_only_one_star() {
+    let parsed =
+        parse_basedpython_module_with_errors("match v:\n    case A(*_, x, *_):\n        pass\n");
+    assert!(
+        parsed
+            .errors()
+            .iter()
+            .any(|error| error.to_string().contains("Only one starred subpattern")),
+        "expected the second-star error, got {:?}",
+        parsed.errors()
+    );
+}
+
+/// the star is a positional subpattern like any other, so it may not follow the
+/// keyword ones
+#[test]
+fn basedpython_class_pattern_star_cannot_follow_a_keyword() {
+    let parsed =
+        parse_basedpython_module_with_errors("match v:\n    case A(k=1, *_, y):\n        pass\n");
+    assert!(
+        parsed.errors().iter().any(|error| error
+            .to_string()
+            .contains("Positional patterns cannot follow keyword patterns")),
+        "expected the ordering error, got {:?}",
+        parsed.errors()
+    );
+}
+
 #[test]
 fn basedpython_and_pattern_is_basedpython_only() {
     let has_error = match parse(

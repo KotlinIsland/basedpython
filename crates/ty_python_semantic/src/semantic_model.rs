@@ -21,8 +21,9 @@ use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
 use crate::types::implicit_names::implicit_name;
 use crate::types::list_members::{all_members, all_reachable_members};
 use crate::types::{
-    CycleDetector, ProgramEnvironment, SpecialFormType, Type, TypeQualifiers, binding_type,
-    infer_complete_scope_types, inferred_declaration,
+    ClassPatternPositionalResult, CycleDetector, ProgramEnvironment, SpecialFormType, Type,
+    TypeQualifiers, binding_type, class_pattern_positional_result, infer_complete_scope_types,
+    inferred_declaration,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::node_key::NodeKey;
@@ -107,6 +108,21 @@ impl<'db> SemanticModel<'db> {
             attribute.inferred_type(self)?,
             attribute.attr.as_str(),
         )
+    }
+
+    /// basedpython: how many entries `cls`'s `__match_args__` has, which is what
+    /// places the subpatterns a class pattern writes after its `*_` — the last of
+    /// them names the last entry, whatever the count turns out to be.
+    ///
+    /// `None` when `cls` is not a class or the count is not statically known; the
+    /// checker reports a `*_` that needs the count and cannot have it as
+    /// `invalid-match-pattern`
+    pub fn class_pattern_positional_count(&self, cls: &ast::Expr) -> Option<usize> {
+        let class = cls.inferred_type(self)?.as_class_literal()?;
+        match class_pattern_positional_result(self.db, &self.program_environment(), class)? {
+            ClassPatternPositionalResult::Limit(limit) => Some(limit),
+            ClassPatternPositionalResult::InvalidType(_) => None,
+        }
     }
 
     /// basedpython: the source text of the specialization step the transpiler

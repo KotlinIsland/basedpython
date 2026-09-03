@@ -19235,6 +19235,82 @@ def mixed(v: object) -> str:
 }
 
 #[test]
+fn starred_class_patterns_agree() {
+    // basedpython's `case Cls(a, *_, b)` reads `b` from the *end* of the class's
+    // `__match_args__`, which only the runtime knows the length of. the compiled
+    // leg asks for it with a negative index; the interpreted leg gets the
+    // transpiler's spelled-out wildcards, so the two agree only if they land on
+    // the same attribute
+    agree(
+        "starclass",
+        "\
+class Line:
+    __match_args__ = ('start', 'mid', 'stop', 'end')
+
+    def __init__(self, start: int, mid: int, stop: int, end: int) -> None:
+        self.start = start
+        self.mid = mid
+        self.stop = stop
+        self.end = end
+
+
+class Pair:
+    __match_args__ = ('first', 'second')
+
+    def __init__(self, first: int, second: int) -> None:
+        self.first = first
+        self.second = second
+
+
+def ends(v: object) -> str:
+    match v:
+        case Line(a, *_, b):
+            return 'line ' + str(a) + ',' + str(b)
+        case Pair(a, *_, b):
+            return 'pair ' + str(a) + ',' + str(b)
+        case _:
+            return 'other'
+
+
+def last_two(v: Line) -> str:
+    match v:
+        case Line(*_, a, b):
+            return str(a) + ',' + str(b)
+    return 'no'
+
+
+def head(v: Line) -> str:
+    match v:
+        case Line(a, *_):
+            return str(a)
+    return 'no'
+
+
+def anything(v: object) -> bool:
+    match v:
+        case Line(*_):
+            return True
+        case _:
+            return False
+
+
+def with_keyword(v: Line) -> str:
+    match v:
+        case Line(a, *_, mid=n):
+            return str(a) + ':' + str(n)
+    return 'no'
+",
+        &[
+            "[m.ends(v) for v in [m.Line(0, 1, 2, 3), m.Pair(7, 8), 5]]",
+            "m.last_two(m.Line(0, 1, 2, 3))",
+            "m.head(m.Line(0, 1, 2, 3))",
+            "[m.anything(v) for v in [m.Line(0, 1, 2, 3), m.Pair(7, 8), 5]]",
+            "m.with_keyword(m.Line(0, 1, 2, 3))",
+        ],
+    );
+}
+
+#[test]
 fn sequence_and_class_patterns_agree() {
     // a sequence pattern matches what the interpreter's own `MATCH_SEQUENCE`
     // matches — a type *flagged* as a sequence, which `str`, `bytes` and

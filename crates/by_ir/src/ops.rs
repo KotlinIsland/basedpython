@@ -361,6 +361,11 @@ pub enum Op {
         /// the class and position, for a positional one — which names its
         /// attribute through `__match_args__` at runtime
         class: Option<Value>,
+        /// which of `__match_args__` to read. counted from the front, or — for a
+        /// sub-pattern basedpython wrote after a `*_` — from the back, as a
+        /// negative index python's own list indexing would read the same way.
+        /// only the runtime knows how long `__match_args__` is, so only it can
+        /// resolve the second form
         index: i64,
         count: i64,
     },

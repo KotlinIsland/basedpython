@@ -5,6 +5,7 @@ pub(crate) mod auto_quote;
 pub(crate) mod callable;
 pub(crate) mod character_type;
 pub(crate) mod checked_cast;
+pub(crate) mod class_pattern_star;
 pub(crate) mod coalesce;
 pub(crate) mod coalesce_chain;
 pub(crate) mod compat;

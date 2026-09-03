@@ -110,6 +110,22 @@ fn rewrite_op(
             rewrite_dest(dest);
             rewrite_value(src, remap);
         }
+        // a positional sub-pattern reads `__match_args__` off a *class* it is
+        // handed at runtime, so that class is an operand like the subject is —
+        // renumbering one and not the other left the class naming a register
+        // that had been given to something else
+        Op::MatchAttr {
+            dest,
+            subject,
+            class,
+            ..
+        } => {
+            rewrite_dest(dest);
+            rewrite_value(subject, remap);
+            if let Some(class) = class {
+                rewrite_value(class, remap);
+            }
+        }
         Op::IntBinary { dest, lhs, rhs, .. }
         | Op::FloatBinary { dest, lhs, rhs, .. }
         | Op::FloatObjectBinary { dest, lhs, rhs, .. }
@@ -270,9 +286,6 @@ fn rewrite_op(
         | Op::IsMissing { dest, src }
         | Op::MethodStands { dest, src, .. }
         | Op::DictShadows { dest, src, .. }
-        | Op::MatchAttr {
-            dest, subject: src, ..
-        }
         | Op::MatchSlice {
             dest,
             sequence: src,

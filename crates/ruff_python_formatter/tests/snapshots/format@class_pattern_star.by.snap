@@ -1,0 +1,91 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/class_pattern_star.by
+---
+## Input
+```bython
+match shape:
+    case Line(start, *_, end):
+        print(start, end)
+    case Line(start, *_):
+        print(start)
+    case Line(*_, end):
+        print(end)
+    case Line(*_):
+        pass
+    case Line(start, *_, colour=c):
+        print(start, c)
+
+match shape:
+    case Outer(Line(start, *_, end)):
+        print(start, end)
+    case Line(start, *_, end) if start < end:
+        print(start)
+    case Line(start, *_, end) as whole:
+        print(whole)
+
+match shape:
+    case VeryLongClassNameForThisPattern(first_capture_name, *_, last_capture_name_here):
+        pass
+
+match shape:
+    case Line(
+        start,  # the first
+        *_,  # everything between
+        end,
+    ):
+        pass
+
+let Line(start, *_, end) := shape
+
+if let Line(start, *_, end) := shape:
+    print(start, end)
+
+for Line(start, *_, end) in shapes:
+    print(start, end)
+```
+
+## Output
+```bython
+match shape:
+    case Line(start, *_, end):
+        print(start, end)
+    case Line(start, *_):
+        print(start)
+    case Line(*_, end):
+        print(end)
+    case Line(*_):
+        pass
+    case Line(start, *_, colour=c):
+        print(start, c)
+
+match shape:
+    case Outer(Line(start, *_, end)):
+        print(start, end)
+    case Line(start, *_, end) if start < end:
+        print(start)
+    case Line(start, *_, end) as whole:
+        print(whole)
+
+match shape:
+    case VeryLongClassNameForThisPattern(
+        first_capture_name, *_, last_capture_name_here
+    ):
+        pass
+
+match shape:
+    case Line(
+        start,  # the first
+        *_,  # everything between
+        end,
+    ):
+        pass
+
+let Line(start, *_, end) := shape
+
+if let Line(start, *_, end) := shape:
+    print(start, end)
+
+for Line(start, *_, end) in shapes:
+    print(start, end)
+```

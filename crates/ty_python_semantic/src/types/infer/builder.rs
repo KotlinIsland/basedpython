@@ -100,7 +100,8 @@ use crate::types::diagnostic::{
     report_match_pattern_against_non_runtime_checkable_protocol,
     report_match_pattern_against_typed_dict, report_mismatched_type_name,
     report_possibly_missing_attribute, report_possibly_unresolved_reference,
-    report_too_many_positional_patterns_for_class_pattern, report_unsound_yield,
+    report_too_many_positional_patterns_for_class_pattern,
+    report_unplaceable_starred_class_pattern, report_unsound_yield,
     report_unsupported_augmented_assignment, report_unsupported_comparison,
 };
 use crate::types::enums::{enum_ignored_names, is_enum_class_by_inheritance};
@@ -3243,13 +3244,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     fn validate_class_pattern(&mut self, pattern: &ast::PatternMatchClass, cls_ty: Type<'db>) {
         let db = self.db();
         let env = self.program_environment();
+        // basedpython `case A(x, *_, y)`: the starred wildcard is not a subpattern of its own,
+        // it only says that what follows it is counted back from the end of `__match_args__`
+        let (starred, positional_patterns): (Vec<_>, Vec<_>) = pattern
+            .arguments
+            .patterns
+            .iter()
+            .partition(|pattern| pattern.is_match_star());
         if let Type::SpecialForm(SpecialFormType::CollectionsAbcCallable) = cls_ty {
-            if let Some(first_excess_pattern) = pattern.arguments.patterns.first() {
+            if let Some(first_excess_pattern) = positional_patterns.first() {
                 report_too_many_positional_patterns_for_class_pattern(
                     &self.context,
-                    first_excess_pattern,
+                    *first_excess_pattern,
                     0,
-                    pattern.arguments.patterns.len(),
+                    positional_patterns.len(),
                     "collections.abc.Callable",
                 );
             }
@@ -3272,17 +3280,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 return;
             }
 
-            let positional_patterns = &pattern.arguments.patterns;
+            let result = class_pattern_positional_result(db, env, class);
             if let [first_positional_pattern, ..] = positional_patterns.as_slice()
-                && let Some(result) = class_pattern_positional_result(db, env, class)
+                && let Some(result) = &result
             {
                 match result {
                     ClassPatternPositionalResult::Limit(limit) => {
-                        if let Some(first_excess_pattern) = positional_patterns.get(limit) {
+                        if let Some(first_excess_pattern) = positional_patterns.get(*limit) {
                             report_too_many_positional_patterns_for_class_pattern(
                                 &self.context,
-                                first_excess_pattern,
-                                limit,
+                                *first_excess_pattern,
+                                *limit,
                                 positional_patterns.len(),
                                 cls_ty.display(db, env),
                             );
@@ -3291,16 +3299,55 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     ClassPatternPositionalResult::InvalidType(match_args_ty) => {
                         report_invalid_match_args_type(
                             &self.context,
-                            first_positional_pattern,
-                            match_args_ty,
+                            *first_positional_pattern,
+                            *match_args_ty,
                             cls_ty,
                         );
                     }
                 }
             }
+            self.validate_starred_class_pattern(pattern, cls_ty, &starred, result.is_some());
         } else if !cls_ty.is_assignable_to(db, env, KnownClass::Type.to_instance(db, env)) {
             report_invalid_class_match_pattern(&self.context, &*pattern.cls, cls_ty);
+        } else {
+            self.validate_starred_class_pattern(pattern, cls_ty, &starred, false);
         }
+    }
+
+    /// Report a starred wildcard whose position cannot be worked out.
+    ///
+    /// basedpython's `case A(x, *_, y)` reads `y` from the last name in `A.__match_args__`, so
+    /// there has to be a statically known list of names to count back through. Where there isn't
+    /// one the pattern has no meaning to give `y`, and no python to lower to either.
+    fn validate_starred_class_pattern(
+        &mut self,
+        pattern: &ast::PatternMatchClass,
+        cls_ty: Type<'db>,
+        starred: &[&ast::Pattern],
+        positions_are_known: bool,
+    ) {
+        if positions_are_known {
+            return;
+        }
+        let Some(star) = starred.first() else {
+            return;
+        };
+        // a `*_` written last claims no position of its own — `case A(x, *_)` matches exactly
+        // what `case A(x)` matches — so it needs to know nothing about `__match_args__`
+        let subpatterns_follow = pattern
+            .arguments
+            .patterns
+            .iter()
+            .skip_while(|pattern| !pattern.is_match_star())
+            .any(|pattern| !pattern.is_match_star());
+        if !subpatterns_follow {
+            return;
+        }
+        report_unplaceable_starred_class_pattern(
+            &self.context,
+            *star,
+            cls_ty.display(self.db(), self.program_environment()),
+        );
     }
 
     fn infer_match_pattern(&mut self, pattern: &ast::Pattern) {

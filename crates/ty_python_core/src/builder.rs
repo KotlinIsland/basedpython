@@ -2955,14 +2955,32 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     );
                 }
 
+                // basedpython `case A(x, *_, y)`: the starred wildcard stands
+                // for the positions nobody asked about, so it is not a
+                // subpattern of its own — what it contributes is that `y` is
+                // read from the end of `__match_args__` instead of position 1
+                let positional_from_end = pattern
+                    .arguments
+                    .patterns
+                    .iter()
+                    .position(ast::Pattern::is_match_star)
+                    .map_or(0, |star| {
+                        pattern.arguments.patterns[star + 1..]
+                            .iter()
+                            .filter(|pattern| !pattern.is_match_star())
+                            .count()
+                    });
+
                 PatternPredicateKind::Class(ClassPatternPredicateKind {
                     class: cls,
                     positional: pattern
                         .arguments
                         .patterns
                         .iter()
+                        .filter(|pattern| !pattern.is_match_star())
                         .map(|pattern| nested(self, pattern, case_names))
                         .collect(),
+                    positional_from_end,
                     keywords: pattern
                         .arguments
                         .keywords
