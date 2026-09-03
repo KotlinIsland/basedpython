@@ -154,7 +154,13 @@ impl<'src> Parser<'src> {
 
     /// Returns `true` if the current token is the start of an expression.
     pub(super) fn at_expr(&self) -> bool {
-        self.at_ts(EXPR_SET) || self.at_soft_keyword()
+        self.at_ts(EXPR_SET)
+            || self.at_soft_keyword()
+            // basedpython: a decorated type `@meta int` starts with `@`, which is
+            // otherwise only ever an infix operator or a decorator line. Admitting
+            // it here is what lets one be written wherever a type expression can
+            // be: a subscript element, a parameter's annotation, a return type
+            || (self.options.is_basedpython && self.at(TokenKind::At))
     }
 
     /// basedpython: consume a use-site variance keyword prefix (`out`, `in`,
@@ -227,6 +233,7 @@ impl<'src> Parser<'src> {
             range: TextRange::new(marker_range.start(), inner_range.end()),
             node_index: AtomicNodeIndex::NONE,
             is_typeof: false,
+            is_type_decoration: false,
         })
     }
 
@@ -290,7 +297,80 @@ impl<'src> Parser<'src> {
             range: TextRange::new(marker_range.start(), inner_range.end()),
             node_index: AtomicNodeIndex::NONE,
             is_typeof: false,
+            is_type_decoration: false,
         })
+    }
+
+    /// basedpython: parses a decorated type — `@meta int`, the type-position
+    /// spelling of `Annotated[int, meta]`.
+    ///
+    /// The decorator is an ordinary value expression, so it is read as a primary:
+    /// a name, an attribute path, a call, or a subscript. That is what ends it —
+    /// nothing separates the decorator from the type it decorates — so `@meta int`
+    /// is `meta` decorating `int`, and `@field(gt=0) int` reads the call as the
+    /// decorator.
+    ///
+    /// What follows is a whole type expression, not the single operand the
+    /// decoration precedes: `@meta int | str` decorates the union, and `@meta int?`
+    /// decorates the optional. A decoration reads as a prefix on the type it is
+    /// written above, the way a decorator on a `def` covers the whole definition
+    /// rather than its first line — so it stops only where the type does, at the
+    /// `,` or `]` or `=` that ends it.
+    fn parse_decorated_type(
+        &mut self,
+        _left_precedence: OperatorPrecedence,
+        context: ExpressionContext,
+    ) -> ParsedExpr {
+        let start = self.node_start();
+        self.bump(TokenKind::At);
+        self.error_if_not_basedpython("a decorated type is not valid in .py files".to_string());
+
+        // the decorator is read greedily, so a `(` after it is its call arguments.
+        // That leaves `@meta (int | None)` — a decorator over a parenthesized type
+        // — with nothing after the call to decorate, and when that happens the
+        // parenthesized group was the type all along, so the parse is taken again
+        // with the decorator stopping short of it
+        let checkpoint = self.checkpoint();
+        let decorator = self.parse_type_decorator(PostfixCalls::Allowed);
+        let decorator = if self.at_expr() {
+            decorator
+        } else {
+            self.rewind(checkpoint);
+            self.parse_type_decorator(PostfixCalls::Forbidden)
+        };
+
+        let Some(inner) = self.with_recursion(|parser| {
+            parser.parse_binary_expression_or_higher(OperatorPrecedence::None, context)
+        }) else {
+            self.report_recursion_limit_exceeded(self.current_token_range());
+            return self.recursion_recovery_expr();
+        };
+
+        ParsedExpr {
+            expr: Expr::Subscript(ast::ExprSubscript {
+                // the last token consumed, not the type's own end — a parenthesized
+                // type ends inside its parentheses, and the closing one belongs to
+                // the decoration or it is left stranded when the decoration is
+                // rewritten
+                range: self.node_range(start),
+                value: Box::new(decorator),
+                slice: Box::new(inner.expr),
+                ctx: ExprContext::Load,
+                node_index: AtomicNodeIndex::NONE,
+                is_typeof: false,
+                is_type_decoration: true,
+            }),
+            is_parenthesized: false,
+            parameter_borrow: inner.parameter_borrow,
+        }
+    }
+
+    /// basedpython: reads the decorator of a decorated type — a primary
+    /// expression: a name, an attribute path, a call, or a subscript.
+    fn parse_type_decorator(&mut self, calls: PostfixCalls) -> Expr {
+        let start = self.node_start();
+        let decorator = self.parse_atom(ExpressionContext::default()).expr;
+        self.parse_postfix_expression_impl(decorator, start, ExpressionContext::default(), calls)
     }
 
     /// Returns `true` if the current token ends a sequence.
@@ -678,6 +758,13 @@ impl<'src> Parser<'src> {
         left_precedence: OperatorPrecedence,
         context: ExpressionContext,
     ) -> ParsedExpr {
+        // basedpython: a decorated type `@meta int` takes the whole type expression
+        // after it — unlike the use-site modifiers below, which take one operand —
+        // so `@meta int | None` is `@meta (int | None)`
+        if context.is_in_type_expression() && self.at(TokenKind::At) {
+            return self.parse_decorated_type(left_precedence, context);
+        }
+
         // basedpython: a use-site type modifier (`literal T`, `final T`) binds to
         // the operand it precedes and nothing more, so `literal str | None` is
         // `(literal str) | None`. Consuming it here — at the operand level of the
@@ -1160,6 +1247,7 @@ impl<'src> Parser<'src> {
                         range: self.node_range(start),
                         node_index: AtomicNodeIndex::NONE,
                         is_typeof: true,
+                        is_type_decoration: false,
                     })
                 } else if self.at_inline_protocol_type() {
                     self.error_if_not_basedpython(
@@ -1240,12 +1328,26 @@ impl<'src> Parser<'src> {
     /// This method does nothing if the current token is not a candidate for a postfix expression.
     fn parse_postfix_expression(
         &mut self,
-        mut lhs: Expr,
+        lhs: Expr,
         start: TextSize,
         context: ExpressionContext,
     ) -> Expr {
+        self.parse_postfix_expression_impl(lhs, start, context, PostfixCalls::Allowed)
+    }
+
+    /// [`Self::parse_postfix_expression`], with a say in whether a `(` is read as
+    /// a call. The basedpython decorated type `@meta (int | None)` needs the
+    /// answer to be no — see [`Self::parse_decorated_type`].
+    fn parse_postfix_expression_impl(
+        &mut self,
+        mut lhs: Expr,
+        start: TextSize,
+        context: ExpressionContext,
+        calls: PostfixCalls,
+    ) -> Expr {
         loop {
             lhs = match self.current_token_kind() {
+                TokenKind::Lpar if calls == PostfixCalls::Forbidden => break lhs,
                 TokenKind::Lpar => {
                     if self.tokens.nesting() > self.max_nesting_depth {
                         self.report_recursion_limit_exceeded(self.current_token_range());
@@ -1681,6 +1783,7 @@ impl<'src> Parser<'src> {
                 range: self.node_range(start),
                 node_index: AtomicNodeIndex::NONE,
                 is_typeof: false,
+                is_type_decoration: false,
             };
         }
 
@@ -1913,6 +2016,7 @@ impl<'src> Parser<'src> {
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             is_typeof: false,
+            is_type_decoration: false,
         }
     }
 
@@ -5345,6 +5449,14 @@ pub(super) enum StarredExpressionPrecedence {
     /// Matches `'*' expression` which is part of the `starred_expression` rule in the
     /// [Python grammar](https://docs.python.org/3/reference/grammar.html).
     Conditional,
+}
+
+/// Whether a `(` after an expression is read as a call while postfix expressions
+/// are parsed. Only the basedpython decorated type has a reason to say no.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum PostfixCalls {
+    Allowed,
+    Forbidden,
 }
 
 /// Represents the expression parsing context.

@@ -1554,6 +1554,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     place_id,
                     AssignmentDefinitionNodeRef {
                         unpack,
+                        node,
                         value: &node.value,
                         target: expr,
                         sole_target: node.targets.len() == 1,
@@ -4434,6 +4435,13 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             ast::Stmt::Assign(node) => {
                 debug_assert_eq!(&self.current_assignments, &[]);
 
+                // basedpython: a decorator written above the assignment is an
+                // ordinary expression written before it, and reads the names it
+                // names there
+                for decorator in &node.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+
                 self.visit_expr(&node.value);
 
                 // Collection-literal fluid candidates must be standalone expressions to
@@ -4471,6 +4479,11 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             }
             ast::Stmt::AnnAssign(node) => {
                 debug_assert_eq!(&self.current_assignments, &[]);
+                // basedpython: as on a plain assignment, a decorator above the
+                // declaration is read where it is written
+                for decorator in &node.decorator_list {
+                    self.visit_decorator(decorator);
+                }
                 self.visit_expr(&node.annotation);
                 if let Some(value) = &node.value {
                     self.visit_expr(value);

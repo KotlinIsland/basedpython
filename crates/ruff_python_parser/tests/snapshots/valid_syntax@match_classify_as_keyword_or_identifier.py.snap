@@ -161,6 +161,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                 },

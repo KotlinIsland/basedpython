@@ -430,6 +430,7 @@ Module(
                 StmtAnnAssign {
                     node_index: NodeIndex(None),
                     range: 980..987,
+                    decorator_list: [],
                     target: Tuple(
                         ExprTuple {
                             node_index: NodeIndex(None),

@@ -153,6 +153,7 @@ fn generate_union_fix(
         })),
         ctx: ExprContext::Load,
         is_typeof: false,
+        is_type_decoration: false,
     });
 
     Ok(Fix::applicable_edits(

@@ -550,6 +550,7 @@ pub(crate) struct ImportFromSubmoduleDefinitionNodeRef<'ast> {
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct AssignmentDefinitionNodeRef<'ast, 'db> {
     pub(crate) unpack: Option<Unpack<'db>>,
+    pub(crate) node: &'ast ast::StmtAssign,
     pub(crate) value: &'ast ast::Expr,
     pub(crate) target: &'ast ast::Expr,
     pub(crate) sole_target: bool,
@@ -723,11 +724,13 @@ impl<'db> DefinitionNodeRef<'_, 'db> {
             }
             DefinitionNodeRef::Assignment(AssignmentDefinitionNodeRef {
                 unpack,
+                node,
                 value,
                 target,
                 sole_target,
             }) => DefinitionKind::Assignment(AssignmentDefinitionKind {
                 unpack,
+                node: AstNodeRef::new(parsed, node),
                 value: AstNodeRef::new(parsed, value),
                 target: AstNodeRef::new(parsed, target),
                 sole_target,
@@ -881,6 +884,7 @@ impl<'db> DefinitionNodeRef<'_, 'db> {
             Self::NamedExpression(node) => node.into(),
             Self::StatementExpressionValue(node) => DefinitionNodeKey(NodeKey::from_node(node)),
             Self::Assignment(AssignmentDefinitionNodeRef {
+                node: _,
                 value: _,
                 unpack: _,
                 target,
@@ -1534,6 +1538,7 @@ impl ImportFromSubmoduleDefinitionKind {
 #[derive(Clone, Debug, get_size2::GetSize, salsa::SalsaValue)]
 pub struct AssignmentDefinitionKind<'db> {
     unpack: Option<Unpack<'db>>,
+    node: AstNodeRef<ast::StmtAssign>,
     value: AstNodeRef<ast::Expr>,
     target: AstNodeRef<ast::Expr>,
     sole_target: bool,
@@ -1550,6 +1555,13 @@ impl<'db> AssignmentDefinitionKind<'db> {
 
     pub fn target<'ast>(&self, module: &'ast ParsedModuleRef) -> &'ast ast::Expr {
         self.target.node(module)
+    }
+
+    /// basedpython: the decorators written above the assignment, which are applied
+    /// to its value — `@foo` above `x = 1` binds `foo(1)`. Empty for an assignment
+    /// written without any, which is every assignment python can spell
+    pub fn decorators<'ast>(&self, module: &'ast ParsedModuleRef) -> &'ast [ast::Decorator] {
+        &self.node.node(module).decorator_list
     }
 
     /// whether the statement assigns to this target and nothing else
@@ -1581,6 +1593,12 @@ impl AnnotatedAssignmentDefinitionKind {
 
     pub fn target<'ast>(&self, module: &'ast ParsedModuleRef) -> &'ast ast::Expr {
         &self.node(module).target
+    }
+
+    /// basedpython: the decorators written above the declaration, which are applied
+    /// to its value — `@foo` above `let a = 1` binds `foo(1)`
+    pub fn decorators<'ast>(&self, module: &'ast ParsedModuleRef) -> &'ast [ast::Decorator] {
+        &self.node(module).decorator_list
     }
 }
 

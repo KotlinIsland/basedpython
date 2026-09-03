@@ -1730,6 +1730,11 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 }
             }
             ast::Stmt::Assign(assignment) => {
+                // basedpython: a decorator may be written above a binding
+                for decorator in &assignment.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+
                 self.in_target_creating_definition = true;
                 for element in &assignment.targets {
                     self.visit_expr(element);
@@ -1740,6 +1745,11 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 self.expecting_docstring = true;
             }
             ast::Stmt::AnnAssign(assignment) => {
+                // basedpython: a decorator may be written above a binding
+                for decorator in &assignment.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+
                 // A basedpython declaration keyword is written ahead of its
                 // target, so it is emitted before it rather than in annotation
                 // position, where the marker standing in for it sits.

@@ -221,6 +221,7 @@ pub(crate) fn if_else_block_instead_of_dict_get(checker: &Checker, stmt_if: &ast
         value: Box::new(node3.into()),
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+        decorator_list: ruff_python_ast::DecoratorList::new(),
     };
     let contents = checker.generator().stmt(&node5.into());
 

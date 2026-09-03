@@ -448,6 +448,11 @@ impl<'src> Modifiers<'src> {
             return;
         }
         let name = self.src(node.target.range()).to_owned();
+        // every rewrite below replaces what the statement said ahead of the value,
+        // which starts past any decorators written above it — those belong to the
+        // decorated-binding lowering, which erases them and wraps the value
+        let stmt_start =
+            super::source_util::binding_start(self.source, node.range(), &node.decorator_list);
 
         // `[modifiers] a: T [= v]` where no modifier carries meaning — erase only
         // the modifier prefix; the rest of the statement stays exactly as written,
@@ -455,7 +460,7 @@ impl<'src> Modifiers<'src> {
         if let Expr::Subscript(s) = node.annotation.as_ref()
             && matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__abstract_annot__" | "__visibility_annot__" | "__private_annot__" | "__modifier_annot__"))
         {
-            let erase_range = TextRange::new(node.range().start(), node.target.range().start());
+            let erase_range = TextRange::new(stmt_start, node.target.range().start());
             self.edits
                 .push(Fix::safe_edit(Edit::range_deletion(erase_range)));
             return;
@@ -469,7 +474,7 @@ impl<'src> Modifiers<'src> {
             {
                 // valueless `class var a: T` → `a: ClassVar[T]`
                 let slice = s.slice.as_ref();
-                let pre_range = TextRange::new(node.range().start(), slice.range().start());
+                let pre_range = TextRange::new(stmt_start, slice.range().start());
                 self.needs_classvar = true;
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
                     format!("{name}: ClassVar["),
@@ -485,7 +490,7 @@ impl<'src> Modifiers<'src> {
                 let slice = s.slice.as_ref();
                 // start at the statement, not the marker, so any modifier prefix
                 // ahead of `let` (e.g. `override let a: T`) is erased too
-                let pre_range = TextRange::new(node.range().start(), slice.range().start());
+                let pre_range = TextRange::new(stmt_start, slice.range().start());
                 self.needs_final_annotation = true;
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
                     format!("{name}: Final["),
@@ -502,7 +507,7 @@ impl<'src> Modifiers<'src> {
                 self.needs_final_annotation = true;
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
                     format!("{name}: Final"),
-                    node.range(),
+                    TextRange::new(stmt_start, node.range().end()),
                 )));
             }
             return;
@@ -512,7 +517,7 @@ impl<'src> Modifiers<'src> {
             Expr::Name(ann) => {
                 // untyped: `let a = v`, `class a = v`, `newtype Foo = v`
                 let value_range = self.value_range(node, value);
-                let prefix_range = TextRange::new(node.range().start(), value_range.start());
+                let prefix_range = TextRange::new(stmt_start, value_range.start());
                 match ann.id.as_str() {
                     "__let__" => {
                         self.needs_final_annotation = true;
@@ -539,7 +544,7 @@ impl<'src> Modifiers<'src> {
                         self.needs_newtype = true;
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
                             format!("{name} = NewType(\"{name}\", {value_src})"),
-                            TextRange::new(node.range().start(), value_range.end()),
+                            TextRange::new(stmt_start, value_range.end()),
                         )));
                     }
                     _ => {}
@@ -549,7 +554,7 @@ impl<'src> Modifiers<'src> {
             {
                 // `class var a: T [= v]` → `a: ClassVar[T] [= v]`
                 let slice = s.slice.as_ref();
-                let pre_range = TextRange::new(node.range().start(), slice.range().start());
+                let pre_range = TextRange::new(stmt_start, slice.range().start());
                 let post_range =
                     TextRange::new(slice.range().end(), self.value_range(node, value).start());
                 self.needs_classvar = true;
@@ -573,7 +578,7 @@ impl<'src> Modifiers<'src> {
                 let slice = s.slice.as_ref();
                 // start at the statement, not the marker, so any modifier prefix
                 // ahead of `let` (e.g. `override let a: T = v`) is erased too
-                let pre_range = TextRange::new(node.range().start(), slice.range().start());
+                let pre_range = TextRange::new(stmt_start, slice.range().start());
                 let post_range =
                     TextRange::new(slice.range().end(), self.value_range(node, value).start());
                 if self.class_depth > 0 && !is_final {

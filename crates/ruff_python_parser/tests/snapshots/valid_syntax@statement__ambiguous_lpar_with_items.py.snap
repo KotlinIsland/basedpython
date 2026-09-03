@@ -1679,6 +1679,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                             optional_vars: None,
@@ -1753,6 +1754,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                             optional_vars: Some(
@@ -2528,6 +2530,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                             optional_vars: Some(
@@ -2624,6 +2627,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                             optional_vars: None,
@@ -2711,6 +2715,7 @@ Module(
                                     ),
                                     ctx: Load,
                                     is_typeof: false,
+                                    is_type_decoration: false,
                                 },
                             ),
                             optional_vars: Some(

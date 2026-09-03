@@ -21,6 +21,7 @@ use crate::expression::{
 use crate::other::interpolated_string::InterpolatedStringLayout;
 use crate::prelude::*;
 use crate::statement::assignment_alignment::AssignmentPadding;
+use crate::statement::stmt_class_def::FormatDecorators;
 use crate::statement::trailing_semicolon;
 use crate::string::StringLikeExtensions;
 use crate::string::implicit::{
@@ -38,7 +39,16 @@ impl FormatNodeRule<StmtAssign> for FormatStmtAssign {
             node_index: _,
             targets,
             value,
+            decorator_list,
         } = item;
+
+        // basedpython: a binding may carry decorators, which are written above it
+        // exactly as they are on a `def`
+        FormatDecorators {
+            decorators: decorator_list,
+            leading_definition_comments: &[],
+        }
+        .fmt(f)?;
 
         let (first, rest) = targets.split_first().ok_or(FormatError::syntax_error(
             "Expected at least on assignment target",

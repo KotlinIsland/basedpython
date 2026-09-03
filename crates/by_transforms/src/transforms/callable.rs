@@ -52,6 +52,7 @@ pub(crate) struct CallableSyntax<'src> {
     pub(crate) needs_intersection_import: bool,
     pub(crate) needs_typeof_import: bool,
     pub(crate) needs_not_import: bool,
+    pub(crate) needs_annotated_import: bool,
     pub(crate) needs_optional_runtime: bool,
     /// shape → synthesized class name. used to dedupe identical
     /// non-denotable callable shapes
@@ -92,6 +93,7 @@ impl<'src> CallableSyntax<'src> {
             needs_intersection_import: false,
             needs_typeof_import: false,
             needs_not_import: false,
+            needs_annotated_import: false,
             needs_optional_runtime: false,
             protocol_shapes: HashMap::new(),
             protocol_class_defs: String::new(),
@@ -146,6 +148,7 @@ impl<'src> CallableSyntax<'src> {
             ),
             (self.needs_typeof_import, "from ty_extensions import TypeOf"),
             (self.needs_not_import, "from ty_extensions import Not"),
+            (self.needs_annotated_import, "from typing import Annotated"),
             (self.needs_optional_runtime, OPTIONAL_RUNTIME),
         ] {
             if needed {
@@ -160,6 +163,7 @@ impl<'src> CallableSyntax<'src> {
         self.needs_intersection_import = false;
         self.needs_typeof_import = false;
         self.needs_not_import = false;
+        self.needs_annotated_import = false;
         self.needs_optional_runtime = false;
         lines
     }
@@ -632,6 +636,27 @@ impl<'src> CallableSyntax<'src> {
                 } else {
                     None
                 }
+            }
+
+            // a decorated type `@meta T` → `Annotated[T, meta]`. A chain of them
+            // collapses into one `Annotated`, whose metadata reads in the order
+            // the decorators apply — bottom-up, as on a decorated `def`, so
+            // `@a @b int` is `Annotated[int, b, a]`. Each decorator is a value
+            // expression and is copied from the source rather than lowered as a
+            // type
+            Expr::Subscript(s) if s.is_type_decoration => {
+                self.needs_annotated_import = true;
+                let mut metadata = vec![self.src(s.value.range()).to_owned()];
+                let mut inner: &Expr = s.slice.as_ref();
+                while let Expr::Subscript(nested) = inner
+                    && nested.is_type_decoration
+                {
+                    metadata.push(self.src(nested.value.range()).to_owned());
+                    inner = nested.slice.as_ref();
+                }
+                metadata.reverse();
+                let inner = self.rewrite_or_leaf(inner);
+                Some(format!("Annotated[{inner}, {}]", metadata.join(", ")))
             }
 
             // `typeof X` → `TypeOf[X]` (parser tags such subscripts with `is_typeof`)

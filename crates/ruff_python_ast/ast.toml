@@ -148,6 +148,9 @@ instead. The name binds unmangled; the `_`-prefix is applied by lowering""" },
 [Stmt.nodes.StmtAssign]
 doc = "See also [Assign](https://docs.python.org/3/library/ast.html#ast.Assign)"
 fields = [
+  { name = "decorator_list", type = "ThinVec<Decorator>", doc = """basedpython: the decorators written above this assignment
+(`@foo` then `x = 1`). Each one is applied to the assigned value, innermost last, so `x = foo(1)`
+is what the assignment means. Empty for every assignment written without one""" },
   { name = "targets", type = "Expr*" },
   { name = "value", type = "Expr" },
 ]
@@ -163,6 +166,9 @@ fields = [
 [Stmt.nodes.StmtAnnAssign]
 doc = "See also [AnnAssign](https://docs.python.org/3/library/ast.html#ast.AnnAssign)"
 fields = [
+  { name = "decorator_list", type = "ThinVec<Decorator>", doc = """basedpython: the decorators written above this
+declaration (`@foo` then `let x = 1`). Each one is applied to the assigned value, innermost last. A declaration
+with no value has nothing to decorate, and carrying one there is an error""" },
   { name = "target", type = "Expr" },
   { name = "annotation", type = "Expr", is_annotation = true },
   { name = "value", type = "Expr?" },
@@ -575,6 +581,10 @@ fields = [
 expression. The `value` is `Name(\"typeof\")` and the `slice` holds the
 inner expression `X`. The square-bracket tokens are not present in the
 source — surface form is `typeof X`. Lowered to `ty_extensions.TypeOf[X]`""" },
+  { name = "is_type_decoration", type = "bool", doc = """basedpython: when true, this subscript is a decorated type
+`@meta int`. The `value` holds the decorator expression `meta` — an ordinary value expression, not a type — and the
+`slice` holds the type it decorates. The square-bracket tokens are not present in the source. Lowered to
+`Annotated[<slice>, <value>]`, which is what the decoration means to a type checker""" },
 ]
 
 [Expr.nodes.ExprStarred]

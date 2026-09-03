@@ -46,6 +46,7 @@ Module(
                             ),
                             ctx: Load,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                 },
@@ -54,6 +55,7 @@ Module(
                 StmtAnnAssign {
                     node_index: NodeIndex(None),
                     range: 10..25,
+                    decorator_list: [],
                     target: Call(
                         ExprCall {
                             node_index: NodeIndex(None),

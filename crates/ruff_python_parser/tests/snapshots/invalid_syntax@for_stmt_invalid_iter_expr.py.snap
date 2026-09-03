@@ -150,6 +150,7 @@ Module(
                 StmtAnnAssign {
                     node_index: NodeIndex(None),
                     range: 64..70,
+                    decorator_list: [],
                     target: NumberLiteral(
                         ExprNumberLiteral {
                             node_index: NodeIndex(None),

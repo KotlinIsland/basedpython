@@ -61,6 +61,7 @@ Module(
                                     StmtAnnAssign {
                                         node_index: NodeIndex(None),
                                         range: 171..176,
+                                        decorator_list: [],
                                         target: UnaryOp(
                                             ExprUnaryOp {
                                                 node_index: NodeIndex(None),

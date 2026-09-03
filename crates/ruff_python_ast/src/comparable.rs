@@ -1364,6 +1364,7 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
                 range: _,
                 node_index: _,
                 is_typeof: _,
+                is_type_decoration: _,
             }) => Self::Subscript(ExprSubscript {
                 value: value.into(),
                 slice: slice.into(),
@@ -1610,6 +1611,7 @@ pub struct TypeParamTypeVarTuple<'a> {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StmtAssign<'a> {
+    decorator_list: Vec<ComparableDecorator<'a>>,
     targets: Vec<ComparableExpr<'a>>,
     value: ComparableExpr<'a>,
 }
@@ -1623,6 +1625,7 @@ pub struct StmtAugAssign<'a> {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StmtAnnAssign<'a> {
+    decorator_list: Vec<ComparableDecorator<'a>>,
     target: ComparableExpr<'a>,
     annotation: ComparableExpr<'a>,
     value: Option<ComparableExpr<'a>>,
@@ -1837,11 +1840,13 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 cases: cases.iter().map(Into::into).collect(),
             }),
             ast::Stmt::Assign(ast::StmtAssign {
+                decorator_list,
                 targets,
                 value,
                 range: _,
                 node_index: _,
             }) => Self::Assign(StmtAssign {
+                decorator_list: decorator_list.iter().map(Into::into).collect(),
                 targets: targets.iter().map(Into::into).collect(),
                 value: value.into(),
             }),
@@ -1857,6 +1862,7 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 value: value.into(),
             }),
             ast::Stmt::AnnAssign(ast::StmtAnnAssign {
+                decorator_list,
                 target,
                 annotation,
                 value,
@@ -1864,6 +1870,7 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 range: _,
                 node_index: _,
             }) => Self::AnnAssign(StmtAnnAssign {
+                decorator_list: decorator_list.iter().map(Into::into).collect(),
                 target: target.into(),
                 annotation: annotation.into(),
                 value: value.as_ref().map(Into::into),

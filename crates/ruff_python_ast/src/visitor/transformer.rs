@@ -198,7 +198,15 @@ pub fn walk_stmt<V: Transformer + ?Sized>(visitor: &V, stmt: &mut Stmt) {
                 visitor.visit_match_case(match_case);
             }
         }
-        Stmt::Assign(ast::StmtAssign { targets, value, .. }) => {
+        Stmt::Assign(ast::StmtAssign {
+            targets,
+            value,
+            decorator_list,
+            ..
+        }) => {
+            for decorator in decorator_list {
+                visitor.visit_decorator(decorator);
+            }
             visitor.visit_expr(value);
             for expr in targets {
                 visitor.visit_expr(expr);
@@ -219,8 +227,12 @@ pub fn walk_stmt<V: Transformer + ?Sized>(visitor: &V, stmt: &mut Stmt) {
             target,
             annotation,
             value,
+            decorator_list,
             ..
         }) => {
+            for decorator in decorator_list {
+                visitor.visit_decorator(decorator);
+            }
             if let Some(expr) = value {
                 visitor.visit_expr(expr);
             }
@@ -608,6 +620,7 @@ pub fn walk_expr<V: Transformer + ?Sized>(visitor: &V, expr: &mut Expr) {
             range: _,
             node_index: _,
             is_typeof: _,
+            is_type_decoration: _,
         }) => {
             visitor.visit_expr(value);
             visitor.visit_expr(slice);

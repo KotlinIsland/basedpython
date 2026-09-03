@@ -151,6 +151,7 @@ impl TypeExprVisitor for State {
                 slice: Box::new(target.clone()),
                 ctx: ExprContext::Load,
                 is_typeof: false,
+                is_type_decoration: false,
             });
             self.needs_import = true;
             self.edits.push((expr.range(), render_expr(&new_node)));

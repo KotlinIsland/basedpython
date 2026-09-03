@@ -14,6 +14,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 44..93,
+                    decorator_list: [],
                     targets: [
                         Subscript(
                             ExprSubscript {
@@ -149,6 +150,7 @@ Module(
                                 ),
                                 ctx: Store,
                                 is_typeof: false,
+                                is_type_decoration: false,
                             },
                         ),
                     ],

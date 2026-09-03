@@ -115,6 +115,7 @@ Module(
                                 ),
                                 ctx: Del,
                                 is_typeof: false,
+                                is_type_decoration: false,
                             },
                         ),
                     ],

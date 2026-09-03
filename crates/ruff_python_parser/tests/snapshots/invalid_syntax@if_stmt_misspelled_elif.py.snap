@@ -37,6 +37,7 @@ Module(
                 StmtAnnAssign {
                     node_index: NodeIndex(None),
                     range: 18..22,
+                    decorator_list: [],
                     target: Name(
                         ExprName {
                             node_index: NodeIndex(None),

@@ -15,6 +15,7 @@ pub(crate) mod auto_quote;
 pub(crate) mod callable;
 pub(crate) mod coalesce;
 pub(crate) mod compat;
+pub(crate) mod decorated_type;
 pub(crate) mod dedent_string;
 pub(crate) mod dynamic_keyword;
 pub(crate) mod empty_declarations;

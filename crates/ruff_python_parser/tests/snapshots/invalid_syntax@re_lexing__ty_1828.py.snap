@@ -14,6 +14,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 66..93,
+                    decorator_list: [],
                     targets: [
                         Tuple(
                             ExprTuple {
@@ -137,6 +138,7 @@ Module(
                                         ),
                                         ctx: Load,
                                         is_typeof: false,
+                                        is_type_decoration: false,
                                     },
                                 ),
                                 Call(

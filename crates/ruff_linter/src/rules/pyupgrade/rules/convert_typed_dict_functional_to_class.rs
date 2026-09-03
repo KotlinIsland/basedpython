@@ -164,6 +164,7 @@ fn create_field_assignment_stmt(field: &str, annotation: &Expr) -> Stmt {
         simple: true,
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+        decorator_list: ruff_python_ast::DecoratorList::new(),
     }
     .into()
 }
@@ -188,7 +189,7 @@ fn create_class_def_stmt(
         })),
         body,
         type_params: None,
-        decorator_list: ast::DecoratorList::new(),
+        decorator_list: ruff_python_ast::DecoratorList::new(),
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
     }

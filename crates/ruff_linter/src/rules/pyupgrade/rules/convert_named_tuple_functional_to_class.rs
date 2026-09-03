@@ -179,6 +179,7 @@ fn create_field_assignment_stmt(field: Name, annotation: &Expr) -> Stmt {
         simple: true,
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+        decorator_list: DecoratorList::new(),
     }
     .into()
 }

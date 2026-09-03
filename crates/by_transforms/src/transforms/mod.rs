@@ -13,6 +13,8 @@ pub(crate) mod context_params;
 pub(crate) mod context_sensitive;
 pub(crate) mod conversion;
 pub(crate) mod decl_site_variance;
+pub(crate) mod decorated_binding;
+pub(crate) mod decorated_type;
 pub(crate) mod decorator_keyword;
 pub(crate) mod dedent_string;
 pub(crate) mod destructure;

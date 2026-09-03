@@ -34,12 +34,27 @@ impl FormatNodeRule<ExprSubscript> for FormatExprSubscript {
             slice,
             ctx: _,
             is_typeof,
+            is_type_decoration,
         } = item;
 
         // basedpython surface form `typeof X` has no `[` `]` in source — emit
         // it as `typeof <slice>` so `buff format` doesn't corrupt it
         if *is_typeof {
             return write!(f, [text("typeof"), space(), slice.format()]);
+        }
+
+        // basedpython decorated type `@meta X`: no brackets in the source either,
+        // and the `value` is the decorator rather than a generic origin
+        if *is_type_decoration {
+            return write!(
+                f,
+                [
+                    token("@"),
+                    value.format().with_options(Parentheses::Never),
+                    space(),
+                    slice.format()
+                ]
+            );
         }
 
         // basedpython use-site variance marker: the parser wraps `out X` /

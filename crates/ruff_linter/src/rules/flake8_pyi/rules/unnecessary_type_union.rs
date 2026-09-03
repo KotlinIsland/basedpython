@@ -142,6 +142,7 @@ pub(crate) fn unnecessary_type_union<'a>(checker: &Checker, union: &'a Expr) {
                     range: TextRange::default(),
                     node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                     is_typeof: false,
+                    is_type_decoration: false,
                 });
 
                 if other_exprs.is_empty() {
@@ -190,11 +191,13 @@ pub(crate) fn unnecessary_type_union<'a>(checker: &Checker, union: &'a Expr) {
                         range: TextRange::default(),
                         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                         is_typeof: false,
+                        is_type_decoration: false,
                     })),
                     ctx: ExprContext::Load,
                     range: TextRange::default(),
                     node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                     is_typeof: false,
+                    is_type_decoration: false,
                 });
 
                 if other_exprs.is_empty() {
@@ -221,6 +224,7 @@ pub(crate) fn unnecessary_type_union<'a>(checker: &Checker, union: &'a Expr) {
                         range: TextRange::default(),
                         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                         is_typeof: false,
+                        is_type_decoration: false,
                     });
 
                     checker.generator().expr(&union)

@@ -209,6 +209,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             node_index: _,
             ctx,
             is_typeof: _,
+            is_type_decoration: _,
         } = subscript;
 
         // basedpython: `super[T]` is sugar for `super(<MRO predecessor of T>, self)`
@@ -353,6 +354,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             slice,
             ctx: _,
             is_typeof: _,
+            is_type_decoration: _,
         } = subscript;
 
         self.store_typed_dict_key_expected_type(slice, value_ty);
@@ -2260,6 +2262,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             slice,
             ctx: _,
             is_typeof: _,
+            is_type_decoration: _,
         } = target;
 
         let db = self.db();

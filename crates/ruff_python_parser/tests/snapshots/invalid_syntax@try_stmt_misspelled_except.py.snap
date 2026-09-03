@@ -32,6 +32,7 @@ Module(
                 StmtAnnAssign {
                     node_index: NodeIndex(None),
                     range: 14..20,
+                    decorator_list: [],
                     target: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -68,6 +69,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 77..82,
+                    decorator_list: [],
                     targets: [
                         Name(
                             ExprName {
@@ -128,6 +130,7 @@ Module(
                 StmtAnnAssign {
                     node_index: NodeIndex(None),
                     range: 114..120,
+                    decorator_list: [],
                     target: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -158,6 +161,7 @@ Module(
                 StmtAssign {
                     node_index: NodeIndex(None),
                     range: 159..164,
+                    decorator_list: [],
                     targets: [
                         Name(
                             ExprName {

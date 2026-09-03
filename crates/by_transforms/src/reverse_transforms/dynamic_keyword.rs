@@ -159,10 +159,11 @@ mod tests {
     #[test]
     fn annotated_first_arg_only() {
         // only the first arg of `Annotated[T, meta]` is a type position; an
-        // `Any` in the metadata slot is an arbitrary value, leave it alone
+        // `Any` in the metadata slot is an arbitrary value, leave it alone — it
+        // comes back verbatim as the decorator the `Annotated` reverses into
         check(
             "from typing import Annotated, Any\nx: Annotated[Any, Any]\n",
-            "from typing import Annotated, Any\nx: Annotated[dynamic, Any]\n",
+            "from typing import Annotated, Any\nx: @Any dynamic\n",
         );
     }
 

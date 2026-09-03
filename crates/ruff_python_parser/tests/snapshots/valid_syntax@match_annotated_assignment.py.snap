@@ -14,6 +14,7 @@ Module(
                 StmtAnnAssign {
                     node_index: NodeIndex(None),
                     range: 0..13,
+                    decorator_list: [],
                     target: Subscript(
                         ExprSubscript {
                             node_index: NodeIndex(None),
@@ -37,6 +38,7 @@ Module(
                             ),
                             ctx: Store,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                     annotation: Name(
@@ -55,6 +57,7 @@ Module(
                 StmtAnnAssign {
                     node_index: NodeIndex(None),
                     range: 14..35,
+                    decorator_list: [],
                     target: Subscript(
                         ExprSubscript {
                             node_index: NodeIndex(None),
@@ -107,6 +110,7 @@ Module(
                             ),
                             ctx: Store,
                             is_typeof: false,
+                            is_type_decoration: false,
                         },
                     ),
                     annotation: Name(

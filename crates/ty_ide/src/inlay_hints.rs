@@ -1595,6 +1595,13 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
 
         match stmt {
             Stmt::Assign(assign) => {
+                // basedpython: a decorator may be written above a binding. A
+                // decorated `def` reaches its decorators through the walk below;
+                // this arm returns before that, so they are visited here
+                for decorator in &assign.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+
                 // the value goes where `auto()` stands in for it
                 if let [Expr::Name(target)] = assign.targets.as_slice() {
                     self.add_enum_member_value(&target.id, assign.value.range().end());
@@ -1620,6 +1627,12 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
             // assignment it is — the type goes where the declaration would
             // write it, after the name
             Stmt::AnnAssign(assign) if let Some(value) = untyped_declaration_value(assign) => {
+                // as on a plain assignment, a decorator above the declaration is
+                // real source and is visited here rather than by the walk below
+                for decorator in &assign.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+
                 if !type_hint_is_excessive_for_expr(value) {
                     self.assignment_rhs = Some(value);
                 }

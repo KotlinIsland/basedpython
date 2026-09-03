@@ -3,6 +3,7 @@ use std::fmt::Display;
 use ruff_python_ast::helpers::consumed_keywords;
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Decorator, Expr, Parameters, Stmt, StmtImportFrom, TypeParam, TypeParams};
+use ruff_python_trivia::SimpleTokenizer;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 /// Names a temporary a lowering needs in its output.
@@ -257,6 +258,33 @@ pub(crate) fn from_import_keyword_range(
 pub(crate) fn is_synthetic_decorator(source: &str, dec: &Decorator) -> bool {
     let start = usize::from(dec.range().start());
     source.as_bytes().get(start).copied() != Some(b'@')
+}
+
+/// basedpython: the offset the binding itself starts at, past any decorators
+/// written above it.
+///
+/// A decorated binding's range covers its decorator lines, the way a decorated
+/// `def`'s does. A lowering that replaces everything the statement said ahead of
+/// its value has to start here instead of at the statement, because the
+/// decorators are not part of what it rewrites — the decorated-binding lowering
+/// erases them, and it is the only pass that may
+pub(crate) fn binding_start(
+    source: &str,
+    stmt_range: TextRange,
+    decorators: &[Decorator],
+) -> TextSize {
+    let Some(last) = decorators.last() else {
+        return stmt_range.start();
+    };
+    // a comment may sit between the last decorator and the binding, so trivia is
+    // skipped rather than just whitespace
+    SimpleTokenizer::new(source, TextRange::new(last.range().end(), stmt_range.end()))
+        .skip_trivia()
+        .next()
+        // nothing after the last decorator would mean a statement with no binding
+        // in it, which the parser rejects; falling back past the decorator rather
+        // than to the statement keeps even that case from reaching back over them
+        .map_or(last.range().end(), |token| token.range.start())
 }
 
 /// Invoke `on_ann` on every annotation expression reachable from `stmt`.

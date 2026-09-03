@@ -154,6 +154,7 @@ the forms a class, function or binding can take
 - [`sentinel` declarations](sentinel.md)
 - [decorator keyword](decorator-keyword.md)
 - [decorated function parameters](decorated-parameters.md)
+- [decorating anything](decorate-anything.md)
 
 </div>
 

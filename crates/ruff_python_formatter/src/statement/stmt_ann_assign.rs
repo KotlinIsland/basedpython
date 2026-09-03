@@ -9,6 +9,7 @@ use crate::statement::assignment_alignment::AssignmentPadding;
 use crate::statement::stmt_assign::{
     AnyAssignmentOperator, AnyBeforeOperator, FormatStatementsLastExpression,
 };
+use crate::statement::stmt_class_def::FormatDecorators;
 use crate::statement::trailing_semicolon;
 
 #[derive(Default)]
@@ -155,7 +156,16 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
             annotation,
             value,
             simple: _,
+            decorator_list,
         } = item;
+
+        // basedpython: a binding may carry decorators, which are written above it
+        // exactly as they are on a `def`
+        FormatDecorators {
+            decorators: decorator_list,
+            leading_definition_comments: &[],
+        }
+        .fmt(f)?;
 
         let padding = AssignmentPadding::of(item.start(), f.context());
 
