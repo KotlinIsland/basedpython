@@ -53,38 +53,46 @@ fn synthetic_let(ann: &Expr) -> Option<Option<&Expr>> {
     }
 }
 
-/// detect a synthetic basedpython `context` annotation: returns `None` for bare
-/// `__context__`, or `Some(type_expr)` for the typed form `__context__[T]`
-#[allow(clippy::option_option)]
-fn synthetic_context(ann: &Expr) -> Option<Option<&Expr>> {
-    match ann {
-        Expr::Name(n) if n.id.as_str() == "__context__" => Some(None),
-        Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__context__") => {
-            Some(Some(s.slice.as_ref()))
-        }
-        _ => None,
-    }
-}
-
 /// detect a synthetic basedpython `final` annotation (`__final__[T]`), produced
-/// by the parser for `final x: T` and modifier chains like `final override x: T`.
-/// the surface modifier prefix (`final`, or `final override`, …) lives in the
-/// source between the marker start and the target; the type is the slice
-fn synthetic_final<'ast, 'src>(
-    ann: &'ast Expr,
-    target: &'ast Expr,
-    src: &'src str,
-) -> Option<(&'src str, &'ast Expr)> {
+/// by the parser for `final x: T` and modifier chains like `final override x: T`
+fn synthetic_final(ann: &Expr) -> Option<&Expr> {
     let Expr::Subscript(s) = ann else {
         return None;
     };
     if !matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__final__") {
         return None;
     }
-    let start = u32::from(ann.range().start()) as usize;
+    Some(s.slice.as_ref())
+}
+
+/// the keyword prefix a declaration was written with, read straight from the source
+/// between the declaration's keywords and the name it binds.
+///
+/// Every declaration form the parser rewrites into a marker keeps its keywords there —
+/// `let`, `final override`, `context let` — and there is no other record of the order they
+/// were written in, so re-emitting this text verbatim is what makes the form round-trip
+fn declaration_prefix<'src>(
+    item: &StmtAnnAssign,
+    target: &Expr,
+    src: &'src str,
+) -> Option<&'src str> {
+    // a decorated binding's statement begins at its first decorator, and the decorators
+    // are written separately above — the keywords are only what follows the last of them
+    let start = item
+        .decorator_list
+        .last()
+        .map_or(item.range().start(), Ranged::end);
+    let start = u32::from(start) as usize;
     let end = u32::from(target.range().start()) as usize;
-    let prefix = src.get(start..end)?.trim();
-    Some((prefix, s.slice.as_ref()))
+    let prefix = src.get(start..end)?;
+    // a comment may sit between the decorators and the keywords, and the formatter's own
+    // comment handling writes it, so the prefix starts after the last one
+    let prefix = prefix
+        .rfind('#')
+        .and_then(|hash| prefix[hash..].find('\n').map(|end| &prefix[hash + end..]))
+        .unwrap_or(prefix)
+        .trim();
+    (!prefix.is_empty()).then_some(prefix)
 }
 
 /// detect a synthetic basedpython annotation marker name (classvar / newtype / sentinel)
@@ -157,6 +165,9 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
             value,
             simple: _,
             decorator_list,
+            // the `context` keyword sits in the source prefix that the marker paths below
+            // re-emit verbatim, so nothing extra is written for it here
+            is_context: _,
         } = item;
 
         // basedpython: a binding may carry decorators, which are written above it
@@ -171,17 +182,10 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
 
         // basedpython synthetic annotations — format back to the surface syntax
         if let Some(type_ann) = synthetic_let(annotation) {
-            write!(f, [token("let"), space(), target.format()])?;
-            if let Some(t) = type_ann {
-                write!(f, [token(":"), space(), t.format()])?;
-            }
-            if let Some(v) = value {
-                assigned_value(v, padding).fmt(f)?;
-            }
-            return Ok(());
-        }
-        if let Some(type_ann) = synthetic_context(annotation) {
-            write!(f, [token("context"), space(), target.format()])?;
+            // `[modifiers] let NAME [: T] [= v]` — the keyword prefix is rendered verbatim
+            // from source, so a sibling modifier (`context let`, `private let`) survives
+            let prefix = declaration_prefix(item, target, f.context().source()).unwrap_or("let");
+            write!(f, [text(prefix), space(), target.format()])?;
             if let Some(t) = type_ann {
                 write!(f, [token(":"), space(), t.format()])?;
             }
@@ -191,10 +195,10 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
             return Ok(());
         }
         if f.options().is_basedpython()
-            && let Some((prefix, type_ann)) =
-                synthetic_final(annotation, target, f.context().source())
+            && let Some(type_ann) = synthetic_final(annotation)
+            && let Some(prefix) = declaration_prefix(item, target, f.context().source())
         {
-            // `final [modifiers] NAME: T [= v]` — the surface modifier prefix is
+            // `[modifiers] final [modifiers] NAME: T [= v]` — the surface modifier prefix is
             // rendered verbatim from source (it may carry a stripped sibling
             // modifier, e.g. `final override`), then the recovered type
             write!(

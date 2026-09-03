@@ -30,6 +30,19 @@ context theme = Theme("dark")
 context log: Logger = make_logger()
 ```
 
+`context` is a prefix on a declaration rather than a form of its own, so it
+composes with the rest of the [declaration modifiers](modifiers.md) in either
+order. the other keywords decide what the declaration is — `let` makes it
+`Final`, `private` hides it — and `context` only adds the candidacy:
+
+```by
+context let theme: Theme = Theme("dark")
+private context var attempts = 0
+```
+
+it is not a modifier on a `def` or a `class`, which declare no variable for a
+call site to read
+
 ## resolution
 
 resolution is by **assignability, not by name**: a declaration is a candidate

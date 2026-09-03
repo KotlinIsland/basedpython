@@ -96,6 +96,7 @@ Module(
                         ),
                     ),
                     simple: false,
+                    is_context: false,
                 },
             ),
             Assign(

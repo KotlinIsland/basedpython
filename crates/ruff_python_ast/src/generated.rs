@@ -10001,6 +10001,14 @@ pub struct StmtAnnAssign {
     pub annotation: Box<Expr>,
     pub value: Option<Box<Expr>>,
     pub simple: bool,
+    /// basedpython: when true, this declaration
+    /// was written with the `context` prefix (`context log: Logger = make_logger()`), which makes
+    /// the variable an implicit-argument candidate for `context` parameters at later call sites.
+    ///
+    /// `context` composes with the other declaration modifiers, so the annotation still carries
+    /// whichever marker the rest of the chain produced — `context let x: T = v` is a `Final`
+    /// declaration — and this flag records the `context` alongside it
+    pub is_context: bool,
 }
 
 /// See also [For](https://docs.python.org/3/library/ast.html#ast.For)
@@ -11135,6 +11143,7 @@ impl StmtAnnAssign {
             annotation,
             value,
             simple: _,
+            is_context: _,
             range: _,
             node_index: _,
         } = self;

@@ -71,6 +71,9 @@ class A:
 
     let b: @meta int = 1
 
+@foo
+final d: int = 1
+
 b9: (@meta int) | str
 
 b10: @meta int?
@@ -145,6 +148,9 @@ class A:
 
     let b: @meta int = 1
 
+
+@foo
+final d: int = 1
 
 b9: (@meta int) | str
 

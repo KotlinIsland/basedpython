@@ -199,6 +199,54 @@ fn basedpython_declares_a_soft_keyword_name() {
 }
 
 #[test]
+fn basedpython_context_composes_with_the_declaration_modifiers() {
+    // `context` takes its place in the modifier chain rather than forming a statement of
+    // its own, so the declaration under it is whatever the other keywords make it and the
+    // `context` rides along as a flag on the statement
+    for source in [
+        "context s = 1",
+        "context s: int = 1",
+        "context let s: int = 1",
+        "context var s: int = 1",
+        "private context let s = 1",
+        "context private let s = 1",
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [ruff_python_ast::Stmt::AnnAssign(decl)] = parsed.syntax().body.as_slice() else {
+            panic!("expected one annotated assignment for `{source}`");
+        };
+        assert!(decl.is_context, "{source}");
+    }
+
+    // a variable that merely happens to be called `context` is untouched
+    for source in ["context = 1", "context: int = 1"] {
+        let parsed = parse_basedpython_module(source);
+        if let [ruff_python_ast::Stmt::AnnAssign(decl)] = parsed.syntax().body.as_slice() {
+            assert!(!decl.is_context, "{source}");
+        }
+        assert!(
+            parsed.errors().is_empty(),
+            "{source}: {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+#[test]
+fn basedpython_context_is_not_a_definition_modifier() {
+    // a `def` declares no variable for a call site to read, so `context` decides nothing
+    // there and is reported rather than dropped
+    let parsed = parse_basedpython_module_with_errors("context def f(): ...\n");
+    assert!(
+        parsed.errors().iter().any(|error| error
+            .to_string()
+            .contains("`context` is not a modifier on a `def` or a `class`")),
+        "unexpected errors: {:?}",
+        parsed.errors()
+    );
+}
+
+#[test]
 fn basedpython_valueless_typed_let_parses_cleanly() {
     // `let x: T` with no initializer is a read-only declaration; it must parse
     // without error and produce an `AnnAssign` with no value

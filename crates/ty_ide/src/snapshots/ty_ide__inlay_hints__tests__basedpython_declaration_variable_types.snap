@@ -9,10 +9,11 @@ def foo() -> int:
 let a[: int] = foo()
 var b[: int] = foo()
 context c[: int] = foo()
-final d[: int] = foo()
-let e: int = foo()
-var f: int = foo()
-let g
+context let d[: int] = foo()
+final e[: int] = foo()
+let f: int = foo()
+var g: int = foo()
+let h
 
 ---------------------------------------------
 info[inlay-hint-location]: Inlay Hint Target
@@ -54,23 +55,36 @@ info[inlay-hint-location]: Inlay Hint Target
 LL | class int:
    |       ^^^
 info: Source
+  --> main2.py:LL:17
+   |
+LL | context let d[: int] = foo()
+   |                 ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+info: Source
   --> main2.py:LL:11
    |
-LL | final d[: int] = foo()
+LL | final e[: int] = foo()
    |           ^^^
 
 ---------------------------------------------
 info[inlay-hint-edit]: Inlay hint edits
 --> main.by:1:1
-  |
-4 |
-  - let a = foo()
-  - var b = foo()
-  - context c = foo()
-  - final d = foo()
-5 + let a: int = foo()
-6 + var b: int = foo()
-7 + context c: int = foo()
-8 + final d: int = foo()
-9 | let e: int = foo()
-  |
+   |
+4  |
+   - let a = foo()
+   - var b = foo()
+   - context c = foo()
+   - context let d = foo()
+   - final e = foo()
+5  + let a: int = foo()
+6  + var b: int = foo()
+7  + context c: int = foo()
+8  + context let d: int = foo()
+9  + final e: int = foo()
+10 | let f: int = foo()
+   |

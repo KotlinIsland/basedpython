@@ -1331,6 +1331,7 @@ Module(
                     ),
                     value: None,
                     simple: true,
+                    is_context: false,
                 },
             ),
             With(
@@ -1509,6 +1510,7 @@ Module(
                     ),
                     value: None,
                     simple: true,
+                    is_context: false,
                 },
             ),
             With(
@@ -1565,6 +1567,7 @@ Module(
                     ),
                     value: None,
                     simple: true,
+                    is_context: false,
                 },
             ),
             With(

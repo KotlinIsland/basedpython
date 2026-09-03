@@ -120,6 +120,7 @@ Module(
                     ),
                     value: None,
                     simple: true,
+                    is_context: false,
                 },
             ),
             While(
@@ -174,6 +175,7 @@ Module(
                     ),
                     value: None,
                     simple: true,
+                    is_context: false,
                 },
             ),
         ],

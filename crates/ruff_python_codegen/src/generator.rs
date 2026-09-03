@@ -568,6 +568,9 @@ impl<'a> Generator<'a> {
                 annotation,
                 value,
                 simple,
+                // a source-only marker: the `context` keyword is erased by lowering, so the
+                // python this renders never carries it
+                is_context: _,
                 range: _,
                 node_index: _,
                 decorator_list,

@@ -6394,6 +6394,7 @@ def h() -> int raises (
         let test = SemanticTokenTest::new_by(
             "
 context s = \"x\"
+context let t = \"y\"
 
 def f(a: int, context b: str): ...
 ",
@@ -6405,12 +6406,15 @@ def f(a: int, context b: str): ...
         "context" @ 1..8: Keyword
         "s" @ 9..10: Variable [definition]
         "\"x\"" @ 13..16: String
-        "f" @ 22..23: Function [definition]
-        "a" @ 24..25: Parameter [definition]
-        "int" @ 27..30: Class
-        "context" @ 32..39: Keyword
-        "b" @ 40..41: Parameter [definition]
-        "str" @ 43..46: Class
+        "context let" @ 17..28: Keyword
+        "t" @ 29..30: Variable [definition]
+        "\"y\"" @ 33..36: String
+        "f" @ 42..43: Function [definition]
+        "a" @ 44..45: Parameter [definition]
+        "int" @ 47..50: Class
+        "context" @ 52..59: Keyword
+        "b" @ 60..61: Parameter [definition]
+        "str" @ 63..66: Class
         "#);
     }
 

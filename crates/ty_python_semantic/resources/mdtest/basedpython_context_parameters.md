@@ -264,6 +264,45 @@ each:
     f()
 ```
 
+## `context let` declares a `Final` candidate
+
+`context` prefixes a declaration rather than forming one of its own, so the rest of the modifier
+chain decides what the declaration is and `context` only adds the candidacy.
+
+```by
+def f(context b: str) -> str:
+    return b
+
+context let s: str = "asdf"
+f()
+
+# error: [invalid-assignment] "Reassignment of `Final` symbol `s` is not allowed"
+s = "reassigned"
+```
+
+## the modifiers may be written in either order
+
+```by
+def f(context b: str) -> str:
+    return b
+
+def g(context n: int) -> int:
+    return n
+
+context var count: int = 1
+private context let name = "asdf"
+
+f()
+g()
+```
+
+## `context` is not a modifier on a definition
+
+```by
+# error: [invalid-syntax] "`context` is not a modifier on a `def` or a `class`"
+context def f(): ...
+```
+
 ## `context` parameters must come last
 
 A positional parameter after a `context` parameter would shift explicit arguments onto it.

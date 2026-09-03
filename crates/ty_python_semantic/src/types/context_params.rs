@@ -427,17 +427,10 @@ fn collect_declarations<'db>(
     }
 }
 
-/// if `decl` is a `context NAME [: T] = value` declaration (recognized by its
-/// synthetic `__context__` annotation marker), return the target name
+/// if `decl` was written with the `context` prefix (`context NAME [: T] = value`, and any
+/// modifier chain around it), return the target name
 fn context_declaration_target(decl: &ast::StmtAnnAssign) -> Option<&ast::ExprName> {
-    let is_marker = match &*decl.annotation {
-        ast::Expr::Name(name) => name.id == "__context__",
-        ast::Expr::Subscript(subscript) => {
-            matches!(&*subscript.value, ast::Expr::Name(name) if name.id == "__context__")
-        }
-        _ => false,
-    };
-    if !is_marker {
+    if !decl.is_context {
         return None;
     }
     decl.target.as_name_expr()

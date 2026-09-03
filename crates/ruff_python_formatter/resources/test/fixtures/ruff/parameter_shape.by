@@ -25,6 +25,8 @@ type UnpackedVariadic = (*args: *Ts)
 # the empty name instead
 type UnpackedAnonymousVariadic = (*: *Ts)
 type UnpackedInCallable = (*: *Ts) -> None
+type UnpackedVariadicAfterPrefix = (bool, *: *Ts)
+type UnpackedVariadicBeforeSuffix = (*: *Ts, bool)
 
 # a bare `*A` splices `A` in rather than annotating each field, so it needs no
 # `:`. the lone-element form drops python's disambiguating comma — the star has
