@@ -613,10 +613,12 @@ struct UseDefMapExtra {
     /// [`Bindings`] reaching a [`ScopedUseId`].
     bindings_by_use: FrozenIndexVec<ScopedUseId, InternedBindingsId>,
 
-    /// [`Bindings`] for each member reaching a [`ScopedUseId`].
+    /// [`Bindings`] for each place recorded alongside a [`ScopedUseId`], with the place each
+    /// belongs to.
     ///
-    /// This is only used for kwargs expressions, whose corresponding `bindings_by_use` entry
-    /// is empty.
+    /// A `**kwargs` expression records the members of the mapping it splats and leaves its own
+    /// `bindings_by_use` entry empty; a basedpython `return` records the places below the one it
+    /// hands back, beside that place's ordinary entry.
     multi_bindings_by_use: MultiBindingsByUse,
 
     /// Retained [`PlaceState`] values for each member.
@@ -823,10 +825,13 @@ impl Default for RangeInfo {
 }
 
 #[derive(Debug, PartialEq, Eq, get_size2::GetSize)]
-struct MultiBindingsByUse(ThinVec<(ScopedUseId, Box<[Bindings]>)>);
+struct MultiBindingsByUse(ThinVec<(ScopedUseId, Box<[PlaceBindings]>)>);
+
+/// The bindings one place had at a use recorded for another expression.
+type PlaceBindings = (ScopedPlaceId, Bindings);
 
 impl MultiBindingsByUse {
-    fn from_map(map: FxHashMap<ScopedUseId, Vec<Bindings>>) -> Self {
+    fn from_map(map: FxHashMap<ScopedUseId, Vec<PlaceBindings>>) -> Self {
         let mut entries = map
             .into_iter()
             .map(|(use_id, bindings)| (use_id, bindings.into_boxed_slice()))
@@ -835,7 +840,7 @@ impl MultiBindingsByUse {
         Self(entries.into_iter().collect())
     }
 
-    fn get(&self, use_id: ScopedUseId) -> Option<&[Bindings]> {
+    fn get(&self, use_id: ScopedUseId) -> Option<&[PlaceBindings]> {
         self.0
             .binary_search_by_key(&use_id, |(candidate, _)| *candidate)
             .ok()
@@ -901,18 +906,22 @@ impl<'db> UseDefMap<'db> {
         )
     }
 
+    /// The bindings of the places recorded alongside `use_id`, each with the place it belongs to.
     pub fn multi_bindings_at_use(
         &self,
         use_id: ScopedUseId,
-    ) -> impl Iterator<Item = BindingWithConstraintsIterator<'_, 'db>> {
+    ) -> impl Iterator<Item = (ScopedPlaceId, BindingWithConstraintsIterator<'_, 'db>)> {
         self.extra
             .as_deref()
             .and_then(|extra| extra.multi_bindings_by_use.get(use_id))
             .map(|member_bindings| {
-                member_bindings.iter().map(|bindings| {
-                    self.bindings_iterator(
-                        bindings.as_slice(),
-                        BoundnessAnalysis::BasedOnUnboundVisibility,
+                member_bindings.iter().map(|(place, bindings)| {
+                    (
+                        *place,
+                        self.bindings_iterator(
+                            bindings.as_slice(),
+                            BoundnessAnalysis::BasedOnUnboundVisibility,
+                        ),
                     )
                 })
             })
@@ -1779,12 +1788,13 @@ pub(super) struct UseDefMapBuilder<'db> {
     /// Live bindings at each so-far-recorded use.
     bindings_by_use: IndexVec<ScopedUseId, Bindings>,
 
-    /// Live bindings associated with each so-far-recorded use.
+    /// Live bindings associated with each so-far-recorded use, with the place each belongs to.
     ///
-    /// Unlike `bindings_by_use`, this field supports associating multiple bindings with a
-    /// single use. This is only used for kwargs expressions, whose corresponding `bindings_by_use`
-    /// entry is empty.
-    multi_bindings_by_use: FxHashMap<ScopedUseId, Vec<Bindings>>,
+    /// Unlike `bindings_by_use`, this field supports associating several places with a single
+    /// use. A `**kwargs` expression records the members of the mapping it splats and leaves its
+    /// own `bindings_by_use` entry empty; a basedpython `return` records the places below the one
+    /// it hands back, beside that place's ordinary entry.
+    multi_bindings_by_use: FxHashMap<ScopedUseId, Vec<PlaceBindings>>,
 
     /// Tracks whether or not the current point in control flow is reachable from the
     /// start of the scope.
@@ -2437,6 +2447,23 @@ impl<'db> UseDefMapBuilder<'db> {
         places: impl Iterator<Item = ScopedPlaceId>,
         use_id: ScopedUseId,
     ) {
+        self.record_places_at_use(places, use_id);
+
+        // Record a placeholder use of the parent expression to preserve the indices of `bindings_by_use`.
+        self.record_use_bindings(Bindings::default(), use_id);
+    }
+
+    /// Record the state of each of `places` alongside an existing use.
+    ///
+    /// These read back through [`UseDefMap::multi_bindings_at_use`], next to whatever
+    /// [`Self::bindings_at_use`] holds for the use itself. basedpython uses this to let the type
+    /// of a returned place carry what narrowing established about its members, which would
+    /// otherwise be left behind with the places it was established on.
+    pub(super) fn record_places_at_use(
+        &mut self,
+        places: impl Iterator<Item = ScopedPlaceId>,
+        use_id: ScopedUseId,
+    ) {
         let pending = self.pending_reachability.current;
         for place in places {
             let place_state =
@@ -2454,11 +2481,8 @@ impl<'db> UseDefMapBuilder<'db> {
             self.multi_bindings_by_use
                 .entry(use_id)
                 .or_default()
-                .push(bindings);
+                .push((place, bindings));
         }
-
-        // Record a placeholder use of the parent expression to preserve the indices of `bindings_by_use`.
-        self.record_use_bindings(Bindings::default(), use_id);
     }
 
     fn record_use_bindings(&mut self, bindings: Bindings, use_id: ScopedUseId) {
@@ -2840,7 +2864,7 @@ impl<'db> UseDefMapBuilder<'db> {
         );
         let interned_declarations =
             interned_declarations.finish(&mut self.reachability_constraints);
-        for bindings in self.multi_bindings_by_use.values_mut().flatten() {
+        for (_, bindings) in self.multi_bindings_by_use.values_mut().flatten() {
             bindings.finish(
                 &mut self.narrowing_constraints,
                 &mut self.reachability_constraints,

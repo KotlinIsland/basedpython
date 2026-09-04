@@ -6281,7 +6281,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         } else {
             TypeContext::default()
         };
-        if let Some(ty) = self.infer_optional_expression(ret.value.as_deref(), tcx) {
+        // a returned expression is a standalone one when the function leaves its return type to
+        // be recovered, so that what it narrows can be read off it — see
+        // `inferred_narrowing_guards`
+        if let Some(ty) = ret
+            .value
+            .as_deref()
+            .map(|value| self.infer_maybe_standalone_expression(value, tcx))
+        {
             let range = ret
                 .value
                 .as_ref()
@@ -10544,7 +10551,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         // Collect the types of each distinct key.
         let mut elements: Vec<(&str, Type<'db>)> = Vec::new();
-        for bindings in
+        for (_, bindings) in
             use_def.multi_bindings_at_use(keyword.scoped_use_id(db, self.program_file()))
         {
             let place = place_from_bindings_with_reachability_cache(

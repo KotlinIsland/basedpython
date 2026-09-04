@@ -172,6 +172,17 @@ impl<'a> PlaceExprRef<'a> {
         }
     }
 
+    /// basedpython: the attribute names this place reaches through, below its root symbol.
+    ///
+    /// `Some([])` for a symbol, `Some(["b", "c"])` for `a.b.c`, and `None` for a place that
+    /// reaches its value through a subscript, which no chain of attribute names describes.
+    pub fn attribute_chain(self) -> Option<Vec<&'a str>> {
+        match self {
+            PlaceExprRef::Symbol(_) => Some(Vec::new()),
+            PlaceExprRef::Member(member) => member.expression().attribute_names(),
+        }
+    }
+
     pub fn num_member_segments(self) -> usize {
         match self {
             PlaceExprRef::Symbol(_) => 0,

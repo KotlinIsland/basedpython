@@ -69,6 +69,9 @@ narrows `o.holder.data`, and nothing else. a guard on a parameter's member
 member the same way. python has no spelling for either, so both lower to what
 the function returns
 
+the member a guard names is resolved where the guard is written, so a call from
+another module narrows the argument itself but not a member of it
+
 ## narrowing a place
 
 a name that is not a parameter is a *place* — narrowed where the call is
@@ -92,6 +95,82 @@ a same-named place at the call site, so it narrows nothing. for the same
 reason there is no definition-site check that the narrowed type fits the
 place: the place's type is whatever the calling scope has, and narrowing
 intersects with it
+
+## a predicate that was never written down
+
+the annotation says what a truthy result means about the argument. a `def`
+that leaves its return type out says the same thing by returning the test, and
+callers narrow by that too:
+
+```by
+def is_str(x):
+    return isinstance(x, str)
+
+def f(a: object):
+    if is_str(a):
+        a  # str
+    else:
+        a  # not str
+```
+
+what is recovered is what every `return` agrees on. a place is narrowed where
+the call is truthy only if every `return` that can hand back a truthy value
+narrows it, and a `return` that says nothing about the place leaves it
+unnarrowed. the falsy side is the same for the returns that can be falsy, and
+falling off the end of the body is one of those
+
+so a test on each of two parameters narrows both where the call is truthy, and
+neither where it is falsy — a falsy `and` only says the conjunction failed:
+
+```by
+def both(a, b):
+    return a is int and b is str
+
+def f(x: object, y: object):
+    if both(x, y):
+        x  # int
+        y  # str
+    else:
+        x  # object
+```
+
+a guard names the argument a call passed, so a body that puts something else
+where that argument was has no claim to make about it — a parameter the body
+rebinds is not recovered from, nor is a member the body writes to:
+
+```by
+def rebound(x):
+    x = 1
+    return x is int   # `True` whatever it was given, so it says nothing about it
+```
+
+a single place narrowed both ways is exactly what `TypeIs[T]` says, so that is
+how the recovered return type is written — and a result held in a variable
+carries it, the same as a written one. a guard set with no such spelling —
+several places, or one side only — rides on the signature instead, and narrows
+where the call itself is tested
+
+```by
+def is_str(x):
+    return isinstance(x, str)   # -> TypeIs[str]
+
+def f(a: object):
+    ok = is_str(a)
+    if ok:
+        a  # str
+```
+
+nothing is recovered where the body is not what a caller tests: an `async def`
+or a generator hands back a coroutine or a generator rather than what its
+`return`s say, and a predicate that calls itself would be proving itself
+
+this is recovered alongside the return type itself, so it follows
+[`sound-types`](sound-types.md) and `infer-unannotated-signatures`. an
+annotation is the whole of what a function declares: nothing is recovered
+beside one, and `-> bool` is a `def` saying its result is just a `bool`. an
+overridden base is the same — except for a narrowing return type, which is a
+claim about the body, so an override that tests something else is left to its
+own body and told where it differs
 
 ## assertion guards
 

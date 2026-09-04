@@ -643,16 +643,18 @@ pub struct Signature<'db> {
     /// Return type. If no annotation was provided, this is `Unknown`.
     pub(crate) return_ty: Type<'db>,
 
-    /// basedpython: the places named by a narrowing return annotation.
+    /// basedpython: the places a call to this narrows.
     pub(crate) narrowing_guards: Box<[NarrowingGuard<'db>]>,
 }
 
-/// basedpython: a narrowing target named in a function's return annotation.
+/// basedpython: a place a call narrows, whether the function named it or not.
 ///
-/// `def f(x) -> x is int` and `def f(x) -> asserts x` both name the place a call narrows.
-/// The place is resolved at each call site: against the argument matched to a parameter of
-/// that name (or the receiver, for the first parameter of a bound method), and otherwise
-/// against a place of that name in the calling scope.
+/// `def f(x) -> x is int` and `def f(x) -> asserts x` both name the place in a return
+/// annotation; a `def` that wrote no return type has the same thing recovered from its body
+/// (see [`crate::types::inferred_narrowing`]). Either way the place is resolved at each call
+/// site: against the argument matched to a parameter of that name (or the receiver, for the
+/// first parameter of a bound method), and otherwise against a place of that name in the
+/// calling scope.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 pub(crate) struct NarrowingGuard<'db> {
     /// The root name of the narrowed place.
@@ -675,6 +677,18 @@ pub(crate) enum NarrowingGuardKind<'db> {
     /// `-> asserts place is T` (`is_positive`) or `-> asserts place is not T`: the same reach
     /// as [`Self::Asserts`], narrowing by a type rather than by truthiness.
     AssertsType { is_positive: bool, ty: Type<'db> },
+    /// basedpython: the narrowing a `def` that wrote no return type performs anyway, recovered
+    /// from what its body returns — see [`crate::types::inferred_narrowing`].
+    ///
+    /// Unlike [`Self::Predicate`], which is a written `-> place is T` and so is symmetric by
+    /// construction, the two sides are recovered separately: `return a is int and b is str` says
+    /// what a truthy result means about `a` without saying anything about a falsy one.
+    InferredPredicate {
+        /// what the place is where the call evaluates truthy, if the body agrees on anything
+        positive: Option<Type<'db>>,
+        /// what it is where the call evaluates falsy
+        negative: Option<Type<'db>>,
+    },
 }
 
 impl<'db> NarrowingGuard<'db> {

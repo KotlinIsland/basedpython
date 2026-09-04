@@ -199,6 +199,17 @@ impl MemberExpr {
         self.segments.len()
     }
 
+    /// The attribute names below the symbol, for a member expression made only of attribute
+    /// accesses.
+    ///
+    /// `None` when any segment is a subscript: `x.y[0]` reaches its value through something other
+    /// than a name, so there is no chain of names to hand back.
+    pub(super) fn attribute_names(&self) -> Option<Vec<&str>> {
+        self.segments()
+            .map(|segment| (segment.kind == SegmentKind::Attribute).then_some(segment.text))
+            .collect()
+    }
+
     pub(crate) fn as_ref(&self) -> MemberExprRef<'_> {
         MemberExprRef {
             path: self.path.as_str(),

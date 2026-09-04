@@ -391,6 +391,47 @@ def recur(a):
 reveal_type(recur([]))  # list[Divergent]
 ```
 
+### what the body established about what it returns
+
+a return type is a summary of the function, so it carries what the body settled about the value it
+hands back — including what narrowing settled about that value's *members*, which is otherwise left
+behind on the places it was established on
+
+```by
+class Config:
+    debug: object
+
+def checked(c: Config):
+    assert isinstance(c.debug, bool)
+    return c
+# def checked(c: Config) -> Config & protocol(debug: bool)
+
+reveal_type(checked(Config()).debug)  # bool
+```
+
+(the `protocol(...)` spelling is basedpython's; in a `.py` file the same type reads back as
+`Config & <Protocol with members 'debug'>`)
+
+the claim is a read-only one: it says what reading the member gives, which is all the narrowing
+established. it is exactly the narrowing that was in force where the value was handed back —
+writing to the member, or narrowing it on only one branch, leaves nothing to carry
+
+```by
+def rewritten(c: Config):
+    assert isinstance(c.debug, bool)
+    c.debug = "on"
+    return c
+# def rewritten(c: Config) -> Config
+```
+
+being the same claim, it rests on the same thing narrowing rests on: that nothing has changed the
+member since. a call that mutates it, a `@property` that returns something new each time, or a
+write through the returned value all leave the claim standing when it no longer holds — the same
+way they do for `assert isinstance(c.debug, bool)` followed by a read
+
+a returned *predicate* is summarised the same way, as a narrowing its callers can use — see
+[type narrowing predicates](type-is.md)
+
 ### a written-out `-> None`
 
 because `None` is now what a `def` means when it says nothing, writing it out adds a word without

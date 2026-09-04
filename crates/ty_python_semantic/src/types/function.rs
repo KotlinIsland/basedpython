@@ -85,12 +85,15 @@ use crate::types::generics::{ApplySpecialization, GenericContext, typing_self};
 use crate::types::infer::{
     function_known_decorators, infer_definition_types, nearest_enclosing_class, original_class_type,
 };
+use crate::types::inferred_narrowing::inferred_narrowing_guards;
 use crate::types::inferred_signature::inferred_return_type;
 use crate::types::known_instance::DeprecatedInstance;
 use crate::types::list_members::all_members;
 use crate::types::narrow::ClassInfoConstraintFunction;
 use crate::types::relation::TypeRelationChecker;
-use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope, Signature};
+use crate::types::signatures::{
+    CallableSignature, NarrowingGuard, NarrowingGuardKind, ReturnCallableTypeVarScope, Signature,
+};
 use crate::types::tuple::TupleSpec;
 use crate::types::variance::{TypeVarVariance, VarianceInferable};
 use crate::types::visitor::{any_over_type, non_any_dynamic_content};
@@ -98,7 +101,7 @@ use crate::types::{
     ApplyTypeMappingVisitor, BoundMethodType, BoundTypeVarIdentity, BoundTypeVarInstance,
     CallableType, ClassBase, ClassLiteral, ClassType, FindLegacyTypeVarsVisitor,
     IntersectionBuilder, KnownClass, KnownInstanceType, MemberLookupPolicy, SpecialFormType,
-    SubclassOfInner, SubclassOfType, Truthiness, Type, TypeContext, TypeMapping,
+    SubclassOfInner, SubclassOfType, Truthiness, Type, TypeContext, TypeIsType, TypeMapping,
     TypeVarBoundOrConstraints, UnionBuilder, UnionType, binding_type, definition_expression_type,
     walk_signature,
 };
@@ -1108,11 +1111,19 @@ impl<'db> OverloadLiteral<'db> {
             && raw_signature.has_inherited_annotations_to_fill(function_stmt_node.returns.is_none())
             && let Some(base_signature) = self.overridden_signature(db, env)
         {
+            // a narrowing return type is the exception. it is a claim about what the body tests,
+            // so an override that tests something else — or nothing — would be handed a claim it
+            // does not make, and every call through it would narrow on the strength of it
+            let inherits_return_type = function_stmt_node.returns.is_none()
+                && !matches!(
+                    base_signature.return_ty,
+                    Type::TypeIs(_) | Type::TypeGuard(_)
+                );
             raw_signature.inherit_unannotated_from_overloads(
                 db,
                 env,
                 std::slice::from_ref(&base_signature),
-                function_stmt_node.returns.is_none(),
+                inherits_return_type,
             );
         }
 
@@ -1133,12 +1144,18 @@ impl<'db> OverloadLiteral<'db> {
 
         // basedpython: an overridden base that could not supply a whole signature can still
         // supply its return type
+        //
+        // a narrowing return type is the exception: it is a claim about what the body tests, and
+        // an override that tests something else — or nothing — would be handed a claim it does
+        // not make, and every call through it would narrow on the strength of it. so that one is
+        // left to the override's own body
         if infers_unannotated_signatures(db, self.file(db))
             && function_stmt_node.returns.is_none()
             && !function_stmt_node.is_asserts_return
             && raw_signature.return_ty.is_unknown()
             && let OverriddenReturnType::Declared(base_return) =
                 self.overridden_return_type(db, env)
+            && !matches!(base_return, Type::TypeIs(_) | Type::TypeGuard(_))
         {
             raw_signature.return_ty = base_return;
         }
@@ -1180,9 +1197,51 @@ impl<'db> OverloadLiteral<'db> {
             && self.recovers_return_type_from_body(db, env)
         {
             raw_signature.return_ty = inferred_return_type(db, self);
+
+            // basedpython: a returned expression says more than its own type does —
+            // `return a is int` tells every caller what a truthy result means about the argument.
+            // That reading is recovered beside the return type and only where it is: a base's
+            // return type stands for its overrides, so a body that answered nothing about the
+            // return type answers nothing about the narrowing either
+            let guards = inferred_narrowing_guards(db, self);
+            if !guards.is_empty() {
+                if let Some(narrowed) = Self::symmetric_guard_type(db, env, guards) {
+                    raw_signature.return_ty = TypeIsType::from_type_expression(db, narrowed);
+                }
+                raw_signature.narrowing_guards.clone_from(guards);
+            }
         }
 
         raw_signature
+    }
+
+    /// basedpython: the `T` for which a recovered guard set says exactly what `TypeIs[T]` says.
+    ///
+    /// One place narrowed to `T` where the call is truthy and to everything but `T` where it is
+    /// falsy is exactly what `TypeIs[T]` means, so a return type recovered that way is written
+    /// that way: the narrowing is then visible in the type, and a result held in a variable
+    /// carries it to wherever that variable is tested.
+    ///
+    /// A guard set that says anything else — two places narrowed, or one side narrowed and not
+    /// the other — has no such spelling, and stays on the signature alone.
+    fn symmetric_guard_type(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        guards: &[NarrowingGuard<'db>],
+    ) -> Option<Type<'db>> {
+        let [guard] = guards else {
+            return None;
+        };
+        let NarrowingGuardKind::InferredPredicate {
+            positive: Some(positive),
+            negative: Some(negative),
+        } = guard.kind
+        else {
+            return None;
+        };
+        negative
+            .is_equivalent_to(db, env, positive.negate(db, env))
+            .then_some(positive)
     }
 
     /// basedpython: the callable that the innermost applied decorator declares this function to
