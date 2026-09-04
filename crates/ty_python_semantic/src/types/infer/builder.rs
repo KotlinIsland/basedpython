@@ -11,7 +11,7 @@ use ruff_db::source::source_text;
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::helpers::{
     BindingKeyword, TypeModifier, is_declaration_marker, is_dotted_name,
-    is_untyped_declaration_marker, untyped_declaration_context,
+    is_untyped_declaration_marker, statement_expression_values, untyped_declaration_context,
 };
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{
@@ -400,6 +400,11 @@ pub(super) struct TypeInferenceBuilder<'db, 'ast> {
     /// so `a?.cb()` still reports a possibly-`None` `cb`.
     basedpython_chain_present: FxHashMap<ExpressionNodeKey, Type<'db>>,
 
+    /// basedpython: the value positions of the statement expressions being inferred,
+    /// innermost last. A branch's last expression is what the statement expression
+    /// produces, so it is read — even though the suite it ends does nothing with it.
+    basedpython_statement_expression_values: Vec<TextRange>,
+
     /// The creation-time type of a fluid specialization candidate, with literal types
     /// retained. Only set when this region is the standalone inference of the
     /// candidate's assigned value; uses of the binding re-solve their own prefix of the
@@ -626,6 +631,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             collection_use_constraints: FxHashMap::default(),
             fluid_adoptions: FxHashMap::default(),
             basedpython_chain_present: FxHashMap::default(),
+            basedpython_statement_expression_values: Vec::new(),
             fluid_creation: None,
             fluid_timeline: None,
             string_annotations: FxHashSet::default(),
@@ -2511,6 +2517,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 node_index: _,
                 value,
             }) = statement
+                // basedpython: the last expression of a statement expression's branch
+                // is the value that statement expression produces, so nothing about it
+                // went unused
+                && !self
+                    .basedpython_statement_expression_values
+                    .contains(&value.range())
             {
                 let ty = self.expression_type(value);
                 if ty.is_awaitable(self.db()) {
@@ -10132,7 +10144,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 .unwrap_or_else(Type::unknown);
         }
 
+        // a value position is read by whatever the statement expression stands in,
+        // so the checks that ask whether a suite discards what it evaluates have to
+        // know about them before the suite is walked
+        let outer_values = self.basedpython_statement_expression_values.len();
+        self.basedpython_statement_expression_values.extend(
+            statement_expression_values(&statement.stmt)
+                .into_iter()
+                .map(|value| value.expr().range()),
+        );
         self.infer_statement(&statement.stmt);
+        self.basedpython_statement_expression_values
+            .truncate(outer_values);
 
         // `raise`, `return`, `break` and `continue` never complete, so they have
         // no value position to bind and are not subject to the exhaustiveness
@@ -15482,6 +15505,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // builder only state
             expression_cache: _,
             basedpython_chain_present: _,
+            basedpython_statement_expression_values: _,
             reachability_cache: _,
             typevar_binding_context: _,
             deferred_state: _,
@@ -15553,6 +15577,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // builder only state
             expression_cache: _,
             basedpython_chain_present: _,
+            basedpython_statement_expression_values: _,
             reachability_cache: _,
             dataclass_field_specifiers: _,
             slice_materialization: _,
@@ -15660,6 +15685,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             called_functions,
             expression_cache: _,
             basedpython_chain_present: _,
+            basedpython_statement_expression_values: _,
             reachability_cache: _,
             declarations: _,
             deferred: _,
@@ -15734,6 +15760,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // builder only state
             expression_cache: _,
             basedpython_chain_present: _,
+            basedpython_statement_expression_values: _,
             reachability_cache: _,
             dataclass_field_specifiers: _,
             slice_materialization: _,
@@ -15888,6 +15915,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // Builder only state
             expression_cache: _,
             basedpython_chain_present: _,
+            basedpython_statement_expression_values: _,
             reachability_cache: _,
             dataclass_field_specifiers: _,
             slice_materialization: _,
@@ -15961,6 +15989,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             fluid_timeline: _,
             fluid_adoptions: _,
             basedpython_chain_present: _,
+            basedpython_statement_expression_values: _,
             collection_use_constraints: _,
             expressions: _,
             string_annotations: _,
@@ -16048,6 +16077,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // builder only state
             expression_cache: _,
             basedpython_chain_present,
+            basedpython_statement_expression_values: _,
             reachability_cache: _,
             typevar_binding_context: _,
             deferred_state: _,

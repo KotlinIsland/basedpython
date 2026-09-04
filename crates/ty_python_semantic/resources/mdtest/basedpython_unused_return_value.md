@@ -298,6 +298,41 @@ async def main() -> None:
     await fetch()  # error: [unused-return-value]
 ```
 
+## a statement expression's value is used
+
+the last expression of a branch is what the statement expression produces, so it is read by whatever
+the statement expression stands in. a call earlier in the same branch is discarded like any other.
+
+```by
+def parse(text: str) -> int:
+    return 1
+
+def f(c: bool) -> int:
+    a = if c:
+        parse("1")  # error: [unused-return-value]
+        parse("2")
+    else:
+        try:
+            parse("3")
+        except ValueError:
+            0
+    return a
+```
+
+## a coroutine in a value position is awaited by whoever reads it
+
+```by
+async def fetch() -> bytes:
+    return b""
+
+async def load(c: bool) -> bytes:
+    a = if c:
+        fetch()
+    else:
+        fetch()
+    return await a
+```
+
 ## a value that no call produced
 
 a bare expression statement discards a value too, but nothing was called to produce it, so there is
