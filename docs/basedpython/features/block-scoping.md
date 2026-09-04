@@ -88,6 +88,30 @@ def f() -> int:
     return a  # error: `a` is not in scope here
 ```
 
+## a loop body declares again on each iteration
+
+the body is a block, so what it declares is gone before the next iteration starts. a
+`let` assigned once in the body is assigned once per declaration, which is what a
+read-only variable allows:
+
+```by
+def f(lines: list[str]):
+    for line in lines:
+        let width
+        width = len(line)
+        print(width)
+```
+
+a declaration written outside the loop is a single one, so the same assignment reaches
+itself on the next iteration and is reported as `invalid-assignment`:
+
+```by
+def f(lines: list[str]):
+    let width
+    for line in lines:
+        width = len(line)  # error: read-only symbol `width` cannot be reassigned
+```
+
 ## turning it off
 
 block scoping is on by default. `analysis.block-scoped-declarations` turns it off, and a

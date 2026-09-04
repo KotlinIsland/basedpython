@@ -276,7 +276,7 @@ def f(context b: str) -> str:
 context let s: str = "asdf"
 f()
 
-# error: [invalid-assignment] "Reassignment of `Final` symbol `s` is not allowed"
+# error: [invalid-assignment] "read-only symbol `s` cannot be reassigned"
 s = "reassigned"
 ```
 
@@ -291,6 +291,26 @@ def g(context n: int) -> int:
 
 context var count: int = 1
 private context let name = "asdf"
+
+f()
+g()
+```
+
+## a declaration may be named after a modifier keyword
+
+A modifier keyword is only a modifier where a modifier can stand. Directly in front of the `=` or
+the `:` it is the name being declared, which is the only reading that leaves the declaration with
+one.
+
+```by
+def f(context b: int) -> int:
+    return b
+
+def g(context c: str) -> str:
+    return c
+
+context data = 1
+context final: str = "asdf"
 
 f()
 g()

@@ -501,6 +501,60 @@ mod tests {
     }
 
     #[test]
+    fn try_expression() {
+        let out = check(indoc! {"
+            def f(s: str) -> int:
+                a = try:
+                    s.index(\"=\")
+                except ValueError:
+                    0
+                return a
+        "});
+        assert!(
+            out.contains(indoc! {"
+                def f(s: str) -> int:
+                    try:
+                        __by_stmt_expr_0__ = s.index(\"=\")
+                    except ValueError:
+                        __by_stmt_expr_0__ = 0
+                    a = __by_stmt_expr_0__
+                    return a
+            "}),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn try_expression_else_clause() {
+        // the `else` clause runs once the `try` block has completed, so it is what
+        // the statement produces there — the block's own last expression is not
+        let out = check(indoc! {"
+            def f(s: str) -> int:
+                a = try:
+                    at = s.index(\"=\")
+                except ValueError:
+                    0
+                else:
+                    at + 1
+                return a
+        "});
+        assert!(
+            out.contains(indoc! {"
+                def f(s: str) -> int:
+                    try:
+                        at = s.index(\"=\")
+                    except ValueError:
+                        __by_stmt_expr_0__ = 0
+                    else:
+                        __by_stmt_expr_0__ = at + 1
+                    a = __by_stmt_expr_0__
+                    return a
+            "}),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
     fn loop_break_value() {
         let out = check(indoc! {"
             def f(xs: list[int]) -> int:

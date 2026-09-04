@@ -165,6 +165,50 @@ def f(values: list[int]) -> int:
     return total  # error: [unresolved-reference]
 ```
 
+## a loop body's declaration is a new one on each iteration
+
+The body is a block, so its declaration goes out of scope where the body ends and the next iteration
+declares the name again. Assigning it once per iteration assigns each of those declarations once.
+
+```by
+def f():
+    while True:
+        let a
+        a = 1
+        print(a)
+```
+
+## assigning twice in one iteration is still a reassignment
+
+```by
+def f():
+    while True:
+        let a
+        a = 1
+        a = 2  # error: [invalid-assignment] "read-only symbol `a` cannot be reassigned"
+```
+
+## a declaration outside the loop is assigned once per iteration
+
+Nothing takes it out of scope between iterations, so the assignment reaches itself around the loop.
+
+```by
+def f():
+    let a
+    while True:
+        a = 1  # error: [invalid-assignment] "read-only symbol `a` cannot be reassigned"
+```
+
+## a loop body that runs assigns what it declares
+
+```by
+def f():
+    for _ in range(3):
+        let a
+        a = 1
+        print(a)
+```
+
 ## a `with` body's declaration does not escape it
 
 ```by

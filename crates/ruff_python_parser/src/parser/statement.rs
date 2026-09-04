@@ -1,8 +1,9 @@
 use std::fmt::{Display, Write};
 
-use ruff_python_ast::helpers::written_annotation_type;
+use ruff_python_ast::helpers::{is_compound_statement, written_annotation_type};
 use ruff_python_ast::name::Name;
 use ruff_python_ast::token::TokenKind;
+use ruff_python_ast::visitor::transformer::{self, Transformer};
 use ruff_python_ast::{
     self as ast, AtomicNodeIndex, DecoratorList, ExceptHandler, Expr, ExprContext, IpyEscapeKind,
     Operator, Pattern, PythonVersion, Stmt, Suite, Variance, WithItem,
@@ -588,6 +589,18 @@ impl<'src> Parser<'src> {
     /// - <https://docs.python.org/3/reference/compound_stmts.html>
     /// - <https://docs.python.org/3/reference/simple_stmts.html>
     pub(super) fn parse_statement(&mut self) -> Stmt {
+        let mut stmt = self.parse_statement_impl();
+        // basedpython: a compound statement has no value position of its own, so a
+        // statement expression written in one — in a `for` iterable, an `if` test —
+        // is out of place wherever it stands. the simple statements validate as they
+        // parse, against the value each of them has
+        if is_compound_statement(&stmt) {
+            self.validate_statement_expressions(&mut stmt);
+        }
+        stmt
+    }
+
+    fn parse_statement_impl(&mut self) -> Stmt {
         let start = self.node_start();
 
         match self.current_token_kind() {
@@ -685,7 +698,7 @@ impl<'src> Parser<'src> {
                 //     frozen, export, public, private) before def/class/let/assignment
                 //   - single-keyword introducers: let, newtype, protocol, abstract a: T
                 if token == TokenKind::Name
-                    && let Some(stmt) = self.try_parse_modifier_or_introducer(start)
+                    && let Some(mut stmt) = self.try_parse_modifier_or_introducer(start)
                 {
                     // basedpython: a class-body `var`/`let` declaration may be
                     // followed by an indented accessor block (`get`/`set`/`field`),
@@ -699,7 +712,7 @@ impl<'src> Parser<'src> {
                     // a declaration's value is an expression like any other, so a
                     // statement expression standing in it is held to the same rule
                     // as on an assignment — which this path does not go through
-                    self.validate_statement_expressions(&stmt);
+                    self.validate_statement_expressions(&mut stmt);
                     return stmt;
                 }
 
@@ -930,7 +943,13 @@ impl<'src> Parser<'src> {
                         let decl = self.parse_modifier_assign_decl(start);
                         return Some(mark_context(decl, has_context));
                     }
-                    if is_modifier_kw(text) {
+                    // a modifier keyword directly in front of `=` or `:` is the name
+                    // the declaration declares, not another modifier: `context data = 1`
+                    // declares `data`, and nothing can follow a modifier chain there.
+                    // reading it as a modifier would leave the chain with no name at all
+                    let names_this_declaration =
+                        matches!(self.peek_nth(idx).0, TokenKind::Equal | TokenKind::Colon);
+                    if is_modifier_kw(text) && !names_this_declaration {
                         has_context |= text == "context";
                         idx += 1;
                         continue;
@@ -2302,8 +2321,8 @@ impl<'src> Parser<'src> {
     /// The forms that carry a suite are held to the stricter rule of being the
     /// value expression itself: a suite cannot be nested inside the branch of a
     /// choosing operator without being re-indented.
-    fn validate_statement_expressions(&mut self, stmt: &Stmt) {
-        let tail = match stmt {
+    fn validate_statement_expressions(&mut self, stmt: &mut Stmt) {
+        let tail = match &*stmt {
             Stmt::Assign(assign) => Some(&*assign.value),
             Stmt::AnnAssign(assign) => assign.value.as_deref(),
             Stmt::AugAssign(assign) => Some(&*assign.value),
@@ -2317,8 +2336,11 @@ impl<'src> Parser<'src> {
             collect_tail_positions(tail, &mut allowed);
         }
 
+        let starts_its_line = self.starts_its_line(stmt.range().start());
+
         let mut found = Vec::new();
         collect_statement_expressions(stmt, &mut found);
+        let mut discarded = Vec::new();
         for statement in found {
             let expr_ref: &Expr = statement.0;
             let in_tail = allowed.iter().any(|a| std::ptr::eq(*a, expr_ref));
@@ -2329,7 +2351,7 @@ impl<'src> Parser<'src> {
             );
             let message = if carries_suite && !is_root {
                 "a statement expression with a suite must be the whole value of its statement"
-            } else if carries_suite && !self.starts_its_line(stmt.range().start()) {
+            } else if carries_suite && !starts_its_line {
                 // the suite continues the line the statement starts on, so anything
                 // already there would end up in front of a compound statement
                 "a statement expression with a suite must be the first statement on its line"
@@ -2342,7 +2364,16 @@ impl<'src> Parser<'src> {
                 ParseErrorType::OtherError(message.to_string()),
                 statement.1.range,
             );
+            // only a suite is dropped from the tree: what one brings with it —
+            // statements that bind and declare names — has nowhere to live where
+            // the rule does not hold, while a `raise` or a `return` carries an
+            // expression and nothing else, which the type checker can still read
+            if carries_suite {
+                discarded.push(statement.1.range);
+            }
         }
+
+        discard_statement_expressions(stmt, &discarded);
     }
 
     /// Parses a single simple statement.
@@ -2351,8 +2382,8 @@ impl<'src> Parser<'src> {
     ///
     /// Use [`Parser::parse_simple_statements`] to parse a sequence of simple statements.
     fn parse_single_simple_statement(&mut self) -> Stmt {
-        let stmt = self.parse_simple_statement();
-        self.validate_statement_expressions(&stmt);
+        let mut stmt = self.parse_simple_statement();
+        self.validate_statement_expressions(&mut stmt);
 
         // basedpython: a trailing lambda block and a match type alias are compound
         // statements — they consumed their own newline, indent and dedent, so the
@@ -2411,8 +2442,8 @@ impl<'src> Parser<'src> {
         loop {
             progress.assert_progressing(self);
 
-            let stmt = self.parse_simple_statement();
-            self.validate_statement_expressions(&stmt);
+            let mut stmt = self.parse_simple_statement();
+            self.validate_statement_expressions(&mut stmt);
             let statement_expression_suite = std::mem::take(&mut self.expr_consumed_suite);
             let consumed_suite = consumed_own_suite(&stmt) || statement_expression_suite;
 
@@ -3281,6 +3312,7 @@ impl<'src> Parser<'src> {
             TokenKind::If => (Stmt::If(self.parse_if_statement()), true),
             TokenKind::For => (Stmt::For(self.parse_for_statement(start)), true),
             TokenKind::While => (Stmt::While(self.parse_while_statement()), true),
+            TokenKind::Try => (Stmt::Try(self.parse_try_statement()), true),
             TokenKind::Raise => (Stmt::Raise(self.parse_raise_statement()), false),
             TokenKind::Return => (Stmt::Return(self.parse_return_statement()), false),
             // the loop escapes: `let first = next(it) ?? break` leaves the loop
@@ -9038,6 +9070,44 @@ fn collect_statement_expressions<'a>(
 
     let mut finder = Finder { out };
     ruff_python_ast::visitor::walk_stmt(&mut finder, stmt);
+}
+
+/// basedpython: replaces every statement expression at one of `discarded`'s
+/// ranges with the parser's inert recovery expression.
+///
+/// A statement expression that the position rule rejects is a parse error, and
+/// nothing downstream can make sense of it: it stands where the statement it
+/// wraps has no place to be lowered to, and the rest of the compiler reads the
+/// statement's contents — the names it declares, above all — as belonging to the
+/// scope the statement expression is written in. That only holds where the rule
+/// does, so a rejected one keeps its source range and nothing else.
+fn discard_statement_expressions(stmt: &mut Stmt, discarded: &[TextRange]) {
+    struct Discarder<'a> {
+        discarded: &'a [TextRange],
+    }
+
+    impl Transformer for Discarder<'_> {
+        fn visit_expr(&self, expr: &mut Expr) {
+            if let Expr::Statement(statement) = expr
+                && self.discarded.contains(&statement.range)
+            {
+                *expr = Expr::Name(ast::ExprName {
+                    range: statement.range,
+                    id: Name::empty(),
+                    ctx: ExprContext::Invalid,
+                    node_index: AtomicNodeIndex::NONE,
+                });
+                return;
+            }
+            transformer::walk_expr(self, expr);
+        }
+    }
+
+    if discarded.is_empty() {
+        return;
+    }
+
+    Discarder { discarded }.visit_stmt(stmt);
 }
 
 /// basedpython: whether a `context` prefix may mark this parameter. `No` for

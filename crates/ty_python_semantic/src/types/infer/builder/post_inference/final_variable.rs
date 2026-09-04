@@ -1,6 +1,7 @@
 use crate::{
     TypeQualifiers,
-    place::{place_from_bindings, place_from_declarations},
+    place::place_from_declarations,
+    reachability::binding_reachability,
     types::{context::InferContext, diagnostic::FINAL_WITHOUT_VALUE},
 };
 use ty_python_core::SemanticIndex;
@@ -47,11 +48,20 @@ pub(crate) fn check_final_without_value<'db>(
         // Whether the scope ever gives the symbol a value, which is not the same
         // as whether one is still live where the scope ends: a `del`, or a
         // basedpython `let` that went out of scope with its block, unbinds a value
-        // that was nonetheless assigned.
-        let bindings = use_def.reachable_symbol_bindings(symbol_id);
-        let binding_place = place_from_bindings(db, env, bindings);
+        // that was nonetheless assigned. Asking a place lookup would fold those back
+        // in, and answer that a symbol a loop body definitely assigns is undefined
+        // once that body has taken its own declaration out of scope again.
+        let is_assigned = use_def.reachable_symbol_bindings(symbol_id).any(|binding| {
+            binding
+                .binding
+                .definition()
+                // a loop header stands for bindings written elsewhere in the loop, each
+                // of which is a reachable binding of its own
+                .is_some_and(|definition| !definition.kind(db).is_loop_header())
+                && binding_reachability(db, use_def, &binding).may_be_true()
+        });
 
-        if !binding_place.place.is_undefined() {
+        if is_assigned {
             continue;
         }
 

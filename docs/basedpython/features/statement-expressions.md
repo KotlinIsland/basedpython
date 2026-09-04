@@ -17,9 +17,9 @@ each branch's value is the expression it ends on — no `return`, no assignment
 repeated per arm. the type is the union of the branch values, so `direction`
 above is `Literal[1, -1, 0]`
 
-the forms that carry a suite are `if`, `match`, `for` and `while`. `raise`,
-`return`, `break` and `continue` are also expressions; they never produce a
-value, so they type as `Never`
+the forms that carry a suite are `if`, `match`, `for`, `while` and `try`.
+`raise`, `return`, `break` and `continue` are also expressions; they never
+produce a value, so they type as `Never`
 
 ## `if`
 
@@ -81,6 +81,39 @@ statement
 a `break` may only carry a value where something reads it — in a loop that is
 not a statement expression there is nowhere for the value to go, and it is
 rejected
+
+## `try`
+
+the `try` block's value is what it evaluates last, and each handler supplies
+the value for the exception it catches:
+
+```by
+port = try:
+    int(raw)
+except ValueError:
+    8080
+```
+
+an `else` clause runs once the `try` block has completed, so it is the value on
+that path and the block's own last expression is not:
+
+```by
+at = try:
+    found = text.index("=")
+except ValueError:
+    -1
+else:
+    found + 1
+```
+
+a `finally` clause runs on the way out of every path, including the ones that
+carry an exception past the statement, so what it evaluates last is never the
+value
+
+a handler that ends on something other than an expression — or on nothing at
+all — leaves a path that produces no value, which is
+`non-exhaustive-statement-expression`. a handler that raises is fine: it never
+completes, so it owes no value
 
 ## the diverging forms
 
@@ -156,9 +189,10 @@ value = (found := lookup() ?? raise Missing())
 value = maybe() ?? continue
 ```
 
-anywhere else — as a call argument, inside a list, as an operand of `+` — the
-surrounding expression would have to be evaluated around the statement, and is
-rejected
+anywhere else — as a call argument, inside a list, as an operand of `+`, in a
+compound statement's header — the surrounding expression would have to be
+evaluated around the statement, and is rejected. a rejected form with a suite
+is dropped along with what it wrapped, so the rest of the file still checks
 
 ## lowering
 

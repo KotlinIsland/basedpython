@@ -903,6 +903,25 @@ fn collect_statement_expression_values<'a>(
             collect_break_values(body, values);
             collect_tail_value(orelse, values);
         }
+        Stmt::Try(ast::StmtTry {
+            body,
+            handlers,
+            orelse,
+            ..
+        }) => {
+            // an `else` clause runs once the `try` block has completed, so it is
+            // what the statement produces on that path; the `try` block's own tail
+            // is only the value when there is no `else` to follow it. a `finally`
+            // clause runs on the way out of every path and produces nothing
+            if orelse.is_empty() {
+                collect_tail_value(body, values);
+            }
+            for handler in handlers {
+                let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                collect_tail_value(&handler.body, values);
+            }
+            collect_tail_value(orelse, values);
+        }
         // `raise` and `return` never complete
         _ => {}
     }

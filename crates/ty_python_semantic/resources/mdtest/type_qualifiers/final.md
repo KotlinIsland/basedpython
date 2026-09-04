@@ -132,21 +132,21 @@ FINAL_E: Final[int]
 FINAL_E = 1
 FINAL_F: Final = 1
 
-FINAL_A = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_A` is not allowed"
-FINAL_B = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_B` is not allowed"
-FINAL_C = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_C` is not allowed"
-FINAL_D = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_D` is not allowed"
-FINAL_E = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_E` is not allowed"
-FINAL_F = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_F` is not allowed"
+FINAL_A = 2  # error: [invalid-assignment] "read-only symbol `FINAL_A` cannot be reassigned"
+FINAL_B = 2  # error: [invalid-assignment] "read-only symbol `FINAL_B` cannot be reassigned"
+FINAL_C = 2  # error: [invalid-assignment] "read-only symbol `FINAL_C` cannot be reassigned"
+FINAL_D = 2  # error: [invalid-assignment] "read-only symbol `FINAL_D` cannot be reassigned"
+FINAL_E = 2  # error: [invalid-assignment] "read-only symbol `FINAL_E` cannot be reassigned"
+FINAL_F = 2  # error: [invalid-assignment] "read-only symbol `FINAL_F` cannot be reassigned"
 
 def global_use():
     global FINAL_A, FINAL_B, FINAL_C, FINAL_D, FINAL_E, FINAL_F
-    FINAL_A = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_A` is not allowed"
-    FINAL_B = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_B` is not allowed"
-    FINAL_C = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_C` is not allowed"
-    FINAL_D = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_D` is not allowed"
-    FINAL_E = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_E` is not allowed"
-    FINAL_F = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_F` is not allowed"
+    FINAL_A = 2  # error: [invalid-assignment] "read-only symbol `FINAL_A` cannot be reassigned"
+    FINAL_B = 2  # error: [invalid-assignment] "read-only symbol `FINAL_B` cannot be reassigned"
+    FINAL_C = 2  # error: [invalid-assignment] "read-only symbol `FINAL_C` cannot be reassigned"
+    FINAL_D = 2  # error: [invalid-assignment] "read-only symbol `FINAL_D` cannot be reassigned"
+    FINAL_E = 2  # error: [invalid-assignment] "read-only symbol `FINAL_E` cannot be reassigned"
+    FINAL_F = 2  # error: [invalid-assignment] "read-only symbol `FINAL_F` cannot be reassigned"
 
 def local_use():
     # These are not errors, because they refer to local variables
@@ -161,7 +161,7 @@ def nonlocal_use():
     X: Final[int] = 1
     def inner():
         nonlocal X
-        X = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `X` is not allowed: Reassignment of `Final` symbol"
+        X = 2  # error: [invalid-assignment] "read-only symbol `X` cannot be reassigned: reassigned here"
 ```
 
 `main.py`:
@@ -169,12 +169,12 @@ def nonlocal_use():
 ```py
 from mod import FINAL_A, FINAL_B, FINAL_C, FINAL_D, FINAL_E, FINAL_F
 
-FINAL_A = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_A` is not allowed"
-FINAL_B = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_B` is not allowed"
-FINAL_C = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_C` is not allowed"
-FINAL_D = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_D` is not allowed"
-FINAL_E = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_E` is not allowed"
-FINAL_F = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `FINAL_F` is not allowed"
+FINAL_A = 2  # error: [invalid-assignment] "read-only symbol `FINAL_A` cannot be reassigned"
+FINAL_B = 2  # error: [invalid-assignment] "read-only symbol `FINAL_B` cannot be reassigned"
+FINAL_C = 2  # error: [invalid-assignment] "read-only symbol `FINAL_C` cannot be reassigned"
+FINAL_D = 2  # error: [invalid-assignment] "read-only symbol `FINAL_D` cannot be reassigned"
+FINAL_E = 2  # error: [invalid-assignment] "read-only symbol `FINAL_E` cannot be reassigned"
+FINAL_F = 2  # error: [invalid-assignment] "read-only symbol `FINAL_F` cannot be reassigned"
 ```
 
 ### Reassignment after conditional assignment
@@ -193,7 +193,7 @@ ABC: Final[int]
 if cond():
     ABC = 1
 
-ABC = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `ABC` is not allowed"
+ABC = 2  # error: [invalid-assignment] "read-only symbol `ABC` cannot be reassigned"
 ```
 
 Assigning in both branches of an `if/else` is fine — each branch is a first assignment:
@@ -227,7 +227,7 @@ if cond():
 else:
     Y = 2
 
-Y = 3  # error: [invalid-assignment] "Reassignment of `Final` symbol `Y` is not allowed"
+Y = 3  # error: [invalid-assignment] "read-only symbol `Y` cannot be reassigned"
 ```
 
 Multiple conditional blocks don't help — the second `if` body sees that the first may have already
@@ -245,7 +245,7 @@ if cond():
     Z = 1
 
 if cond():
-    Z = 2  # error: [invalid-assignment] "Reassignment of `Final` symbol `Z` is not allowed"
+    Z = 2  # error: [invalid-assignment] "read-only symbol `Z` cannot be reassigned"
 ```
 
 ### Attributes
@@ -892,7 +892,7 @@ from typing import Final
 ABC: Final[int]
 
 for i in range(2):
-    ABC = i  # error: [invalid-assignment] "Reassignment of `Final` symbol `ABC` is not allowed"
+    ABC = i  # error: [invalid-assignment] "read-only symbol `ABC` cannot be reassigned"
 
 for _ in range(10):
     i: Final[int] = 1
@@ -937,7 +937,7 @@ from typing import Final
 # error: [invalid-type-form] "Tuple literals are not allowed in this context in a type expression: Did you mean `tuple[()]`?"
 x: Final[(),] = 42
 
-# error: [invalid-assignment] "Reassignment of `Final` symbol `x` is not allowed"
+# error: [invalid-assignment] "read-only symbol `x` cannot be reassigned"
 x = 56
 ```
 
@@ -1328,16 +1328,16 @@ MY_CONSTANT = 2
 ```
 
 ```snapshot
-error[invalid-assignment]: Reassignment of `Final` symbol `MY_CONSTANT` is not allowed
+error[invalid-assignment]: read-only symbol `MY_CONSTANT` cannot be reassigned
  --> src/mdtest_snippet.py:8:1
   |
 8 | MY_CONSTANT = 2
-  | ^^^^^^^^^^^^^^^ Symbol later reassigned here
+  | ^^^^^^^^^^^^^^^ reassigned here
   |
  ::: src/mdtest_snippet.py:3:14
   |
 3 | MY_CONSTANT: Final[int] = 1
-  |              ---------- Symbol declared as `Final` here
+  |              ---------- declared read-only here
 ```
 
 Imported `Final` symbol:
