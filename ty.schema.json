@@ -1520,6 +1520,16 @@
             }
           ]
         },
+        "invalid-static-resource": {
+          "title": "detects a static resource import that cannot be read",
+          "description": "## What it does\n\nChecks for basedpython static resource imports that cannot be read.\n\n## Why is this bad?\n\n`import \"data/config.yaml\" as config` says the file is part of the program. A\npath that names nothing, a path that names a place on one machine, a file in a\nformat that is not `.json`, `.toml`, `.yaml` or `.yml`, and a document the\nformat's own parser rejects all leave the import with no value to bind.\n\n## Examples\n\n`main.by`:\n\n```by\n# error: [invalid-static-resource]\nimport \"data/config.txt\" as config\n\n# error: [invalid-static-resource]\nimport \"/etc/hosts.json\" as hosts\n\n# error: [invalid-static-resource]\nimport \"data/missing.json\" as missing\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-super-argument": {
           "title": "detects invalid arguments for `super()`",
           "description": "## What it does\n\nDetects `super()` calls where:\n\n- the first argument is not a valid class literal, or\n- the second argument is not an instance or subclass of the first argument.\n\n## Why is this bad?\n\n`super(type, obj)` expects:\n\n- the first argument to be a class,\n- and the second argument to satisfy one of the following:\n    - `isinstance(obj, type)` is `True`\n    - `issubclass(obj, type)` is `True`\n\nViolating this relationship will raise a `TypeError` at runtime.\n\n## Examples\n\n```python\nclass A: ...\n\n\nclass B(A): ...\n\n\nsuper(A, B())  # it's okay! `A` satisfies `isinstance(B(), A)`\n\n# `A()` is not a class\nsuper(A(), B())  # error\n\n# `A()` does not satisfy `isinstance(A(), B)`\nsuper(B, A())  # error\n# `A` does not satisfy `issubclass(A, B)`\nsuper(B, A)  # error\n```\n\n## References\n\n- [Python documentation: super()](https://docs.python.org/3/library/functions.html#super)",
@@ -2594,6 +2604,16 @@
           "title": "detects binary, unary, or comparison expressions where the operands don't support the operator",
           "description": "## What it does\n\nChecks for binary expressions, comparisons, and unary expressions where\nthe operands don't support the operator.\n\n## Why is this bad?\n\nAttempting to use an unsupported operator will raise a `TypeError` at\nruntime.\n\n## Examples\n\n```python\nclass A: ...\n\n\n# TypeError: unsupported operand type(s) for +: 'A' and 'A'\nA() + A()  # error\n```",
           "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unusable-resource-key": {
+          "title": "detects a key in a static resource that python cannot name",
+          "description": "## What it does\n\nChecks for keys in an imported static resource that python cannot name.\n\n## Why is this bad?\n\nA static resource is read through attributes, so a key that is not a valid\npython identifier — `build-backend`, `class`, `2` — has no attribute to be read\nthrough, and is left out of the value the import binds. The document still holds\nit; nothing in the program can reach it.\n\nNames with two leading underscores are left out for the same reason: python\nmangles `__x` inside a class body, so the attribute the reader would write is\nnot the one that would exist.\n\n## Examples\n\n`data/project.json`:\n\n```json\n{ \"build-backend\": \"hatchling.build\", \"root\": \".\" }\n```\n\n`main.by`:\n\n```by\n# error: [unusable-resource-key]\nimport \"data/project.json\" as project\n\nreveal_type(project.root)  # revealed: \".\"\n```",
+          "default": "warn",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"

@@ -1724,6 +1724,27 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
             }
             ast::Stmt::Import(import) => {
                 for alias in &import.names {
+                    if alias.is_resource {
+                        // basedpython: `import "data/config.yaml" as config`. the
+                        // path is a string and is highlighted as one — it names no
+                        // module, and its range covers the quotes, which the
+                        // dotted-name split below does not account for. what it
+                        // binds is a value rather than a namespace
+                        self.add_token(
+                            alias.name.range(),
+                            SemanticTokenType::String,
+                            SemanticTokenModifier::empty(),
+                        );
+                        if let Some(asname) = &alias.asname {
+                            self.add_token(
+                                asname.range(),
+                                SemanticTokenType::Variable,
+                                SemanticTokenModifier::empty(),
+                            );
+                        }
+                        continue;
+                    }
+
                     // Create separate tokens for each part of a dotted module name
                     self.add_dotted_name_tokens(&alias.name, SemanticTokenType::Namespace);
 
@@ -6102,6 +6123,28 @@ from pathlib import Missing as Alias
 
         let tokens = test.highlight_file();
         assert_snapshot!(test.to_snapshot(&tokens), @r#""pathlib" @ 6..13: Namespace"#);
+    }
+
+    #[test]
+    fn semantic_tokens_static_resource_import() {
+        // the path is a string, not a dotted module name: highlighting it as a
+        // namespace would both miscolour it and land the tokens a byte early,
+        // since the name's range covers the quotes and its text does not
+        let test = SemanticTokenTest::new_by(
+            "
+import \"data/config.yaml\" as config
+
+print(config)
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "\"data/config.yaml\"" @ 8..26: String
+        "config" @ 30..36: Variable
+        "print" @ 38..43: Function
+        "#);
     }
 
     #[test]

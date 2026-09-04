@@ -116,6 +116,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_NAMED_TUPLE);
     registry.register_lint(&INVALID_NAMED_TUPLE_OVERRIDE);
     registry.register_lint(&INVALID_RAISE);
+    registry.register_lint(&INVALID_STATIC_RESOURCE);
     registry.register_lint(&INVALID_SUPER_ARGUMENT);
     registry.register_lint(&INVALID_TYPE_ARGUMENTS);
     registry.register_lint(&INVALID_TYPE_CHECKING_CONSTANT);
@@ -212,6 +213,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNSUPPORTED_BASE);
     registry.register_lint(&UNSUPPORTED_DYNAMIC_BASE);
     registry.register_lint(&UNSUPPORTED_OPERATOR);
+    registry.register_lint(&UNUSABLE_RESOURCE_KEY);
     registry.register_lint(&UNUSED_AWAITABLE);
     registry.register_lint(&ZERO_STEPSIZE_IN_SLICE);
     registry.register_lint(&STATIC_ASSERT_ERROR);
@@ -756,6 +758,26 @@ declare_lint! {
         summary: "detects `raise` statements that raise invalid exceptions or use invalid causes",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    #[doc = include_str!("../../resources/lint_docs/invalid-static-resource.md")]
+    pub(crate) static INVALID_STATIC_RESOURCE = {
+        summary: "detects a static resource import that cannot be read",
+        status: LintStatus::stable("0.0.79"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    #[doc = include_str!("../../resources/lint_docs/unusable-resource-key.md")]
+    pub(crate) static UNUSABLE_RESOURCE_KEY = {
+        summary: "detects a key in a static resource that python cannot name",
+        status: LintStatus::stable("0.0.79"),
+        default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 

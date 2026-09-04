@@ -22,6 +22,15 @@ pub fn source_text(db: &dyn Db, file: File) -> SourceText {
         return source.clone();
     }
 
+    // basedpython: a static resource's rendering is a file of its own, holding
+    // the python its document stands for. every other file — the document
+    // included — reads as what it actually holds. see `crate::resource`
+    if let FilePath::SystemVirtual(virtual_path) = path
+        && crate::resource::is_resource_module(virtual_path)
+    {
+        return rendered_resource(db, file);
+    }
+
     let kind = if is_notebook(db.system(), path) {
         file.read_to_notebook(db)
             .unwrap_or_else(|error| {
@@ -44,6 +53,29 @@ pub fn source_text(db: &dyn Db, file: File) -> SourceText {
 
     SourceText {
         inner: Arc::new(SourceTextInner { kind, read_error }),
+    }
+}
+
+/// The python a static resource's rendering holds.
+///
+/// Empty when the document cannot be read: the import is where that is
+/// reported, and an empty module leaves nothing else to say about it.
+fn rendered_resource(db: &dyn Db, file: File) -> SourceText {
+    let source = crate::resource::resource_document(db, file)
+        .map(|document| crate::resource::resource(db, document))
+        .and_then(|resource| match resource {
+            crate::resource::Resource::Rendered(rendered) => Some(rendered.module_source()),
+            crate::resource::Resource::Unreadable(_) | crate::resource::Resource::NotAResource => {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    SourceText {
+        inner: Arc::new(SourceTextInner {
+            kind: source.into(),
+            read_error: None,
+        }),
     }
 }
 

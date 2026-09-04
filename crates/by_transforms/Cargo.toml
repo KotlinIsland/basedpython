@@ -11,6 +11,7 @@ repository = { workspace = true }
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+by_resource = { workspace = true }
 indexmap = { workspace = true }
 ruff_db = { workspace = true }
 ruff_diagnostics = { workspace = true }

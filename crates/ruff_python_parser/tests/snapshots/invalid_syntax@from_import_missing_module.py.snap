@@ -36,6 +36,7 @@ Module(
                                 node_index: NodeIndex(None),
                             },
                             asname: None,
+                            is_resource: false,
                         },
                     ],
                     level: 0,

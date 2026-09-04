@@ -172,9 +172,9 @@ fn run_test(
             assert!(
                 matches!(
                     embedded.lang,
-                    "py" | "pyi" | "python" | "ipynb" | "by" | "byi" | "bython" | "basedpython" | "text" | "cfg" | "pth"
+                    "py" | "pyi" | "python" | "ipynb" | "by" | "byi" | "bython" | "basedpython" | "text" | "cfg" | "pth" | "json" | "toml" | "yaml"
                 ),
-                "Supported file types are: py (or python), pyi, ipynb, by, bython, basedpython, byi, text, cfg, pth and ignore"
+                "Supported file types are: py (or python), pyi, ipynb, by, bython, basedpython, byi, text, cfg, pth, json, toml, yaml and ignore"
             );
 
             let mut full_path = embedded.full_path(&project_root);

@@ -74,6 +74,7 @@ pub(crate) mod some_ctor;
 pub(crate) mod soundness;
 pub(crate) mod source_util;
 pub(crate) mod statement_expression;
+pub(crate) mod static_resource;
 pub(crate) mod string_tag;
 pub(crate) mod super_keyword;
 pub(crate) mod symbolic_type_op;

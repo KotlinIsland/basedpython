@@ -194,6 +194,7 @@ syntax inside a function body
 - [repeated `_` parameters](repeated-underscore.md)
 - [lazy imports](lazy-imports.md)
 - [export imports](export-imports.md) — `from x export y`
+- [static resources](static-resources.md) — `import "data/config.yaml" as config`
 - [extensions](extensions.md) — add members to an existing type, and declare that
     it conforms to an existing protocol
 - [conversions (`__from__` / `__into__` / `__of__`)](conversions.md) — and

@@ -219,6 +219,7 @@ mod set_theoretic;
 mod signatures;
 pub mod soundness;
 mod special_form;
+pub mod static_resource;
 mod string_annotation;
 mod subclass_of;
 pub(crate) mod template;

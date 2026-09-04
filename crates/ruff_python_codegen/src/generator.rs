@@ -2145,7 +2145,14 @@ impl<'a> Generator<'a> {
     }
 
     fn unparse_alias(&mut self, alias: &Alias) {
-        self.p_id(&alias.name);
+        if alias.is_resource {
+            // basedpython: `import "data/config.yaml" as config`. the path is
+            // held under `name` without the quotes it was written with, and
+            // writing it as a name would emit `import data/config.yaml`
+            self.p_str_repr(alias.name.as_str(), StringLiteralFlags::empty());
+        } else {
+            self.p_id(&alias.name);
+        }
         if let Some(asname) = &alias.asname {
             self.p(" as ");
             self.p_id(asname);

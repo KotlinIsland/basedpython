@@ -1,5 +1,6 @@
 use ruff_formatter::write;
 use ruff_python_ast::Alias;
+use ruff_text_size::Ranged;
 
 use crate::comments::trailing_comments;
 use crate::other::identifier::DotDelimitedIdentifier;
@@ -15,8 +16,25 @@ impl FormatNodeRule<Alias> for FormatAlias {
             node_index: _,
             name,
             asname,
+            is_resource,
         } = item;
-        write!(f, [DotDelimitedIdentifier::new(name)])?;
+
+        if *is_resource {
+            // basedpython: `import "data/config.yaml" as config`. the path lives
+            // in `name` without the quotes it was written with, so it is quoted
+            // again here — with the double quotes every other string is
+            // normalized to. a path holding anything a plain double-quoted
+            // literal cannot spell keeps the source's own spelling, which is the
+            // one thing certain to still mean the same path
+            if name.id.chars().any(needs_escaping) {
+                write!(f, [source_text_slice(name.range())])?;
+            } else {
+                let quoted = std::format!("\"{}\"", name.id);
+                write!(f, [text(&quoted)])?;
+            }
+        } else {
+            write!(f, [DotDelimitedIdentifier::new(name)])?;
+        }
 
         let comments = f.context().comments().clone();
 
@@ -101,4 +119,9 @@ impl FormatNodeRule<Alias> for FormatAlias {
 
         Ok(())
     }
+}
+
+/// Whether a plain double-quoted string literal cannot hold `character` as it is.
+fn needs_escaping(character: char) -> bool {
+    matches!(character, '"' | '\\') || character.is_control()
 }

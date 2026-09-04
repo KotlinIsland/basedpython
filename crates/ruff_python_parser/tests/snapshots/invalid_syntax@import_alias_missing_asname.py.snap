@@ -24,6 +24,7 @@ Module(
                                 node_index: NodeIndex(None),
                             },
                             asname: None,
+                            is_resource: false,
                         },
                     ],
                     is_lazy: false,

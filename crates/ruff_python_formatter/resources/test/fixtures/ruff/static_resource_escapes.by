@@ -1,0 +1,4 @@
+import "a\nb.json" as newline
+import "c\td.json" as tab
+import "eéf.json" as unicode_escape
+import 'plain.json' as plain

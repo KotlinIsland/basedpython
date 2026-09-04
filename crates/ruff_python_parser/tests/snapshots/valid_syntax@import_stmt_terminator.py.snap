@@ -24,6 +24,7 @@ Module(
                                 node_index: NodeIndex(None),
                             },
                             asname: None,
+                            is_resource: false,
                         },
                         Alias {
                             range: 10..11,
@@ -34,6 +35,7 @@ Module(
                                 node_index: NodeIndex(None),
                             },
                             asname: None,
+                            is_resource: false,
                         },
                     ],
                     is_lazy: false,
@@ -53,6 +55,7 @@ Module(
                                 node_index: NodeIndex(None),
                             },
                             asname: None,
+                            is_resource: false,
                         },
                         Alias {
                             range: 23..24,
@@ -63,6 +66,7 @@ Module(
                                 node_index: NodeIndex(None),
                             },
                             asname: None,
+                            is_resource: false,
                         },
                     ],
                     is_lazy: false,
@@ -82,6 +86,7 @@ Module(
                                 node_index: NodeIndex(None),
                             },
                             asname: None,
+                            is_resource: false,
                         },
                         Alias {
                             range: 35..36,
@@ -92,6 +97,7 @@ Module(
                                 node_index: NodeIndex(None),
                             },
                             asname: None,
+                            is_resource: false,
                         },
                     ],
                     is_lazy: false,

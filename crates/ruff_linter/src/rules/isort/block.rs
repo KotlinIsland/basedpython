@@ -168,7 +168,14 @@ impl<'a> StatementVisitor<'a> for BlockBuilder<'a> {
         }
 
         // Track imports.
+        //
+        // basedpython: a static resource import (`import "data/config.yaml" as
+        // config`) is left out. isort rewrites a block it sorts by re-spelling
+        // each name, and a path is not a name — re-spelling one would emit
+        // `import data/config.yaml as config`. it ends the block instead, the
+        // way any other non-import statement does
         if matches!(stmt, Stmt::Import(_) | Stmt::ImportFrom(_))
+            && !matches!(stmt, Stmt::Import(import) if import.names.iter().any(|alias| alias.is_resource))
             && !self
                 .exclusions
                 .iter()

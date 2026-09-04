@@ -3321,6 +3321,11 @@ pub struct Alias {
     pub node_index: AtomicNodeIndex,
     pub name: Identifier,
     pub asname: Option<Identifier>,
+    /// basedpython: the alias names a static resource by path,
+    /// `import "data/config.yaml" as config`. `name` then holds the path as it
+    /// was written rather than a module name, and its range covers the string
+    /// literal it was written as
+    pub is_resource: bool,
 }
 
 /// See also [withitem](https://docs.python.org/3/library/ast.html#ast.withitem)

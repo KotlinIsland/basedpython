@@ -399,16 +399,22 @@ impl<'db> Definitions<'db> {
                     let focus_range = definition.focus_range(db, &module);
                     let full_range = definition.full_range(db, &module);
 
-                    NavigationTarget {
-                        file: focus_range.file(),
-                        focus_range: focus_range.range(),
-                        full_range: full_range.range(),
-                    }
+                    NavigationTarget::create(
+                        db,
+                        focus_range.file(),
+                        focus_range.range(),
+                        full_range.range(),
+                    )
                 }
                 ResolvedDefinition::Module(file) => {
                     NavigationTarget::new(file.file(db), TextRange::default())
                 }
-                ResolvedDefinition::FileWithRange(file_range) => NavigationTarget::from(file_range),
+                ResolvedDefinition::FileWithRange(file_range) => NavigationTarget::create(
+                    db,
+                    file_range.file(),
+                    file_range.range(),
+                    file_range.range(),
+                ),
             })
             .collect()
     }

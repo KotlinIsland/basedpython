@@ -22,6 +22,7 @@ by_codegen_c = { path = "crates/by_codegen_c" }
 by_ir = { path = "crates/by_ir" }
 by_irbuild = { path = "crates/by_irbuild" }
 by_opt = { path = "crates/by_opt" }
+by_resource = { path = "crates/by_resource" }
 by_rt = { path = "crates/by_rt" }
 by_stage = { path = "crates/by_stage" }
 by_transforms = { path = "crates/by_transforms" }
@@ -179,6 +180,8 @@ salsa = { version = "0.28.2", default-features = false, features = [
 ] }
 same-file = { version = "1.0.6" }
 schemars = { version = "1.0.4" }
+saphyr = { version = "0.0.12" }
+saphyr-parser = { version = "0.0.12" }
 seahash = { version = "4.1.0" }
 serde = { version = "1.0.197", features = ["derive"] }
 serde-wasm-bindgen = { version = "0.6.4" }
