@@ -259,7 +259,8 @@ by run [OPTIONS] [MODULE] [ARGS]...
 <p>Defaults to the project environment — the same one <code>by check</code> resolves imports against — then <code>$PYTHON</code>, then <code>python3</code> on <code>PATH</code>.</p>
 </dd><dt id="by-run--runtime-raises-checks"><a href="#by-run--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
 </dd><dt id="by-run--soundness"><a href="#by-run--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
-<p>[default: default]</p></dd></dl>
+<p>[default: default]</p></dd><dt id="by-run--stamp"><a href="#by-run--stamp"><code>--stamp</code></a> <i>name=value</i></dt><dd><p>supply a <code>build:</code> stamp, as <code>NAME=VALUE</code>. repeatable. overrides whatever this build could have worked out for itself, which is what a CI job that knows its own commit wants</p>
+</dd></dl>
 
 ## by init
 
@@ -309,7 +310,8 @@ by build [OPTIONS]
 <p><code>input &lt;path&gt;</code> for every file the project is made of — what a source distribution has to carry to rebuild into the same thing — and <code>package &lt;name&gt;</code> for every top-level package that came out.</p>
 </dd><dt id="by-build--runtime-raises-checks"><a href="#by-build--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
 </dd><dt id="by-build--soundness"><a href="#by-build--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
-<p>[default: default]</p></dd><dt id="by-build--wheels"><a href="#by-build--wheels"><code>--wheels</code></a></dt><dd><p>Build one publishable wheel per python version, and a source distribution, into <code>dist/</code>.</p>
+<p>[default: default]</p></dd><dt id="by-build--stamp"><a href="#by-build--stamp"><code>--stamp</code></a> <i>name=value</i></dt><dd><p>supply a <code>build:</code> stamp, as <code>NAME=VALUE</code>. repeatable. overrides whatever this build could have worked out for itself, which is what a CI job that knows its own commit wants</p>
+</dd><dt id="by-build--wheels"><a href="#by-build--wheels"><code>--wheels</code></a></dt><dd><p>Build one publishable wheel per python version, and a source distribution, into <code>dist/</code>.</p>
 <p>Each wheel is lowered to the version it is tagged for, so an installer hands every interpreter the best wheel it can use rather than one lowered to the oldest python the project supports. Needs <code>uv</code>, which does the packaging.</p>
 </dd></dl>
 
@@ -370,7 +372,8 @@ by compile [OPTIONS] [FILE]...
 <p>Stricter than <code>--no-any</code>, and a different question: <code>--no-any</code> asks whether the module is fully typed, this asks whether it compiles entirely.</p>
 </dd><dt id="by-compile--runtime-raises-checks"><a href="#by-compile--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
 </dd><dt id="by-compile--soundness"><a href="#by-compile--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
-<p>[default: default]</p></dd><dt id="by-compile--verbose"><a href="#by-compile--verbose"><code>--verbose</code></a></dt><dd><p>Report every function that was not lowered natively, with the reason</p>
+<p>[default: default]</p></dd><dt id="by-compile--stamp"><a href="#by-compile--stamp"><code>--stamp</code></a> <i>name=value</i></dt><dd><p>supply a <code>build:</code> stamp, as <code>NAME=VALUE</code>. repeatable. overrides whatever this build could have worked out for itself, which is what a CI job that knows its own commit wants</p>
+</dd><dt id="by-compile--verbose"><a href="#by-compile--verbose"><code>--verbose</code></a></dt><dd><p>Report every function that was not lowered natively, with the reason</p>
 </dd></dl>
 
 ## by generate-api-file
@@ -429,7 +432,8 @@ by transpile [OPTIONS] [FILE]
 </dd><dt id="by-transpile--reverse"><a href="#by-transpile--reverse"><code>--reverse</code></a></dt><dd><p>convert Python source into basedpython idioms (instead of the default by → py direction)</p>
 </dd><dt id="by-transpile--runtime-raises-checks"><a href="#by-transpile--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
 </dd><dt id="by-transpile--soundness"><a href="#by-transpile--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
-<p>[default: default]</p></dd></dl>
+<p>[default: default]</p></dd><dt id="by-transpile--stamp"><a href="#by-transpile--stamp"><code>--stamp</code></a> <i>name=value</i></dt><dd><p>supply a <code>build:</code> stamp, as <code>NAME=VALUE</code>. repeatable. overrides whatever this build could have worked out for itself, which is what a CI job that knows its own commit wants</p>
+</dd></dl>
 
 ## by help
 

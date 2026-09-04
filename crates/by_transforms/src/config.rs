@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 pub use ruff_python_ast::PythonVersion;
 
 #[derive(Debug, Clone)]
@@ -46,6 +48,20 @@ pub struct Config {
     /// saw. a clause with no faithful runtime test — `raises ...`, or a set with
     /// no runtime spelling such as a negation — is never guarded
     pub runtime_raises_checks: bool,
+    /// the values a `build:` block's stamps take, supplied by whatever drove
+    /// this transpile — `by build` and `by run` settle them once, ahead of the
+    /// pipeline.
+    ///
+    /// they arrive as config rather than being read here because transpile
+    /// output has to stay a function of the source plus this config. a pipeline
+    /// that asked git for the commit itself would give a different answer to a
+    /// re-stage than it gave the build that re-stage is patching, and the two
+    /// trees would disagree about what they are
+    ///
+    /// a stamp with no entry here falls back to the default written in the
+    /// block; one with neither is a transpile error, which is the whole point of
+    /// declaring it
+    pub stamps: BTreeMap<String, String>,
     /// when true (the default), a closure created inside a loop captures the
     /// loop's bindings *by value*, so each iteration's closure sees that
     /// iteration's element instead of every closure sharing the one cell
@@ -176,6 +192,7 @@ impl Default for Config {
             runtime_raises_checks: false,
             unique_loop_bindings: true,
             float_literals: FloatLiteralLowering::Nominal,
+            stamps: BTreeMap::new(),
         }
     }
 }

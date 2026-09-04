@@ -167,7 +167,10 @@ impl CorpusDb {
             files: Files::default(),
             analysis_settings: Arc::new(AnalysisSettings::default()),
             // the corpus is checked with every basedpython feature on
-            experimental_settings: ExperimentalSettings { module_api: true },
+            experimental_settings: ExperimentalSettings {
+                module_api: true,
+                build_stamps: true,
+            },
             program_settings,
         }
     }

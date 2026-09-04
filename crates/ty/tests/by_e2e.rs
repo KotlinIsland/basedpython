@@ -777,6 +777,218 @@ fn run_main_with_args(source: &str, args: &[&str]) -> (String, String, i32) {
     )
 }
 
+/// Build stamps are experimental, so a project that writes a `build:` block has
+/// to ask for them by name — these tests are projects like any other.
+const OPT_IN_TO_STAMPS: &str = "[experimental]\nbuild-stamps = true\n";
+
+/// `--stamp` comes before the module: everything after the module name is the
+/// program's own `sys.argv`
+fn run_main_stamped(source: &str, stamps: &[&str]) -> (String, String, i32) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), source).unwrap();
+    fs::write(dir.path().join("basedpython.toml"), OPT_IN_TO_STAMPS).unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_by"));
+    command.arg("run");
+    for stamp in stamps {
+        command.args(["--stamp", stamp]);
+    }
+    let output = command
+        .arg("main")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    (
+        String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        output.status.code().unwrap_or(-1),
+    )
+}
+
+#[test]
+fn run_supplies_a_stamp_the_command_line_gave_it() {
+    let source = r#"
+build:
+    GIT_SHA: str
+    BUILD_NUMBER: int
+
+def main():
+    print(build.GIT_SHA, build.BUILD_NUMBER + 1)
+"#;
+
+    let (stdout, stderr, code) =
+        run_main_stamped(source, &["GIT_SHA=deadbeef", "BUILD_NUMBER=416"]);
+    assert_eq!(
+        (stdout.as_str(), code),
+        ("deadbeef 417", 0),
+        "stderr:\n{stderr}"
+    );
+}
+
+/// a stamp with no default is a claim the build has to satisfy, and nothing
+/// supplies a name this one invented — so the transpile has to say so rather
+/// than reach for a value
+#[test]
+fn run_refuses_a_required_stamp_nothing_supplied() {
+    let source = r#"
+build:
+    RELEASE_CHANNEL: str
+
+def main():
+    print(build.RELEASE_CHANNEL)
+"#;
+
+    let (_, stderr, code) = run_main_stamped(source, &[]);
+    assert_ne!(code, 0, "a stamp nothing supplied must not build");
+    assert!(
+        stderr.contains("supplied no value for the stamp `RELEASE_CHANNEL`"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn run_falls_back_to_a_stamp_default() {
+    let source = r#"
+build:
+    RELEASE_CHANNEL: str = "dev"
+
+def main():
+    print(build.RELEASE_CHANNEL)
+"#;
+
+    let (stdout, stderr, code) = run_main_stamped(source, &[]);
+    assert_eq!((stdout.as_str(), code), ("dev", 0), "stderr:\n{stderr}");
+}
+
+/// the python the output was lowered to is one of the values a build knows
+/// without being told, and `by run` lowers for the interpreter it runs on
+#[test]
+fn run_discovers_the_python_it_lowered_for() {
+    let source = r#"
+import sys
+
+build:
+    PYTHON_VERSION: str
+
+def main():
+    print(build.PYTHON_VERSION == f"{sys.version_info[0]}.{sys.version_info[1]}")
+"#;
+
+    let (stdout, stderr, code) = run_main_stamped(source, &[]);
+    assert_eq!((stdout.as_str(), code), ("True", 0), "stderr:\n{stderr}");
+}
+
+/// An interpreter that can host a native build, or `None` to skip.
+///
+/// `by compile` needs 3.11 or later, so on a host whose ambient python is older
+/// the compiled leg cannot run at all — see `by_build::MINIMUM_PYTHON`.
+fn native_interpreter() -> Option<String> {
+    let candidates = std::env::var("PYTHON")
+        .map(|python| vec![python])
+        .unwrap_or_else(|_| {
+            [
+                "python3.14",
+                "python3.13",
+                "python3.12",
+                "python3.11",
+                "python3",
+            ]
+            .map(String::from)
+            .to_vec()
+        });
+    candidates.into_iter().find(|python| {
+        Command::new(python)
+            .args([
+                "-c",
+                "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)",
+            ])
+            .status()
+            .is_ok_and(|status| status.success())
+    })
+}
+
+/// A stamp has to survive native compilation with its value intact.
+///
+/// The entry module always runs interpreted, so the block goes in an imported
+/// module — the one that actually gets compiled. A stamp reaching the native
+/// leg as an annotation with no value would leave `build.GIT_SHA` an
+/// `AttributeError` that nothing else in this suite would catch.
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn a_stamp_survives_native_compilation() {
+    let Some(python) = native_interpreter() else {
+        eprintln!("skipping: no interpreter new enough for a native build");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("stamps.by"),
+        r#"
+build:
+    GIT_SHA: str
+    GIT_DIRTY: bool
+
+def describe() -> str:
+    return build.GIT_SHA + ("-dirty" if build.GIT_DIRTY else "")
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "from stamps import describe
+
+def main():
+    print(describe())
+",
+    )
+    .unwrap();
+    fs::write(dir.path().join("basedpython.toml"), OPT_IN_TO_STAMPS).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "--compiled", "--python"])
+        .arg(&python)
+        .args([
+            "--stamp",
+            "GIT_SHA=abc123",
+            "--stamp",
+            "GIT_DIRTY=true",
+            "main",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("C toolchain") || stderr.contains("no working C compiler") {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "by run --compiled failed:\n{stderr}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "abc123-dirty",
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn a_stamp_that_is_not_a_pair_is_refused() {
+    let (_, stderr, code) = run_main_stamped("def main(): ...\n", &["GIT_SHA"]);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("is not a `NAME=VALUE` pair"),
+        "stderr:\n{stderr}"
+    );
+}
+
 #[test]
 fn run_fills_main_parameter_positionally_or_by_name() {
     let source = "def main(name: str):\n    print(name)\n";

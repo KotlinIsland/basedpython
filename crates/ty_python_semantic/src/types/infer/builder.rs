@@ -2156,6 +2156,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // basedpython: the interfaces this module is obliged to answer, whether it
         // said so itself or a package it lives in said so for it
         crate::types::module_api::check_module_api(&self.context, &module.body);
+
+        // basedpython: a `build:` block only means something once the project has
+        // asked for build stamps
+        crate::types::build_stamps::check_build_stamps(&self.context, &module.body);
     }
 
     fn infer_type_alias_type_params(&mut self, type_alias: &ast::StmtTypeAlias) {

@@ -84,25 +84,35 @@ impl FormatNodeRule<StmtClassDef> for FormatStmtClassDef {
         // are more than two, then `leading_comments` will preserve the correct number of newlines.
         empty_lines_after_leading_comments(comments.leading(item)).fmt(f)?;
 
-        // basedpython: `protocol Foo:` and `extension Foo:` introduce a class
-        // without the `class` keyword. the parser still synthesizes a `ClassDef`
-        // but tags it with a synthetic `protocol_class` / `extension_def`
-        // decorator (rendered verbatim as its keyword text). suppress the `class`
-        // keyword so the round-trip emits `protocol Foo:` / `extension Foo:`
-        // rather than `protocol class Foo:`. the body is ordinary class-body
-        // statements, so it formats normally (unlike `enum`, whose `case`
-        // variants have no printer and force verbatim)
+        // basedpython: `protocol Foo:`, `extension Foo:` and `build:` introduce a
+        // class without the `class` keyword. the parser still synthesizes a
+        // `ClassDef` but tags it with a synthetic `protocol_class` /
+        // `extension_def` / `build_def` decorator (rendered verbatim as its
+        // keyword text). suppress the `class` keyword so the round-trip emits
+        // `protocol Foo:` / `extension Foo:` / `build:` rather than
+        // `protocol class Foo:`. the body is ordinary class-body statements, so
+        // it formats normally (unlike `enum`, whose `case` variants have no
+        // printer and force verbatim)
         let suppress_class_keyword = f.options().is_basedpython()
             && decorator_list.iter().any(|d| {
                 matches!(&d.expression, Expr::Name(n)
-                    if matches!(n.id.as_str(), "protocol_class" | "extension_def"))
+                    if matches!(n.id.as_str(), "protocol_class" | "extension_def" | "build_def"))
             });
+        // `build` has no name after its keyword — the marker *is* the whole
+        // header. the synthesized `build` identifier spans nothing, so printing
+        // it would emit the name a second time right after the keyword
+        let suppress_name = f.options().is_basedpython()
+            && decorator_list
+                .iter()
+                .any(|d| matches!(&d.expression, Expr::Name(n) if n.id.as_str() == "build_def"));
 
         let format_header = format_with(|f| {
             if !suppress_class_keyword {
                 write!(f, [token("class"), space()])?;
             }
-            write!(f, [name.format()])?;
+            if !suppress_name {
+                write!(f, [name.format()])?;
+            }
 
             if let Some(type_params) = type_params.as_deref() {
                 write!(f, [type_params.format()])?;

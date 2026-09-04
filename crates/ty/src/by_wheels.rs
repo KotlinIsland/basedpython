@@ -36,7 +36,10 @@ use crate::ExitStatus;
 const UNTAGGED_WHEEL_MARKER: &str = "-py3-none-any.whl";
 
 #[allow(clippy::print_stderr)]
-pub(crate) fn cmd_build_wheels(out: Option<&Path>) -> anyhow::Result<ExitStatus> {
+pub(crate) fn cmd_build_wheels(
+    out: Option<&Path>,
+    stamps: &[String],
+) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let destination = cwd.join(out.unwrap_or(Path::new("dist")));
 
@@ -64,7 +67,21 @@ pub(crate) fn cmd_build_wheels(out: Option<&Path>) -> anyhow::Result<ExitStatus>
     // older one and no one is told
     let staging = tempfile::TempDir::new().context("failed to create temp directory")?;
 
-    run_uv(&uv, &cwd, &["build", "--sdist"], staging.path())?;
+    // a release is one build, however many times the frontend is called inside
+    // it. the stamps are settled here and handed down, so every wheel and the
+    // source distribution report the same commit and the same moment rather than
+    // each reading the clock — and, if something lands mid-release, the same
+    // commit rather than two. `PYTHON_VERSION` is left out on purpose: each
+    // wheel is lowered to a different python and settles that one for itself
+    //
+    // only the stamps travel. the rest of `--min-version`'s neighbours do not
+    // reach the builds inside a `--wheels` run today
+    let mut settled = crate::by_stamps::parse_explicit(stamps)?;
+    crate::by_stamps::fill_discovered(&mut settled, &cwd, None);
+    let settled = serde_json::to_string(&settled)
+        .context("could not describe the stamps this release settled")?;
+
+    run_uv(&uv, &cwd, &["build", "--sdist"], staging.path(), &settled)?;
     for version in &versions {
         run_uv(
             &uv,
@@ -76,6 +93,7 @@ pub(crate) fn cmd_build_wheels(out: Option<&Path>) -> anyhow::Result<ExitStatus>
                 &format!("python-version={version}"),
             ],
             staging.path(),
+            &settled,
         )?;
     }
 
@@ -310,12 +328,21 @@ fn which_uv() -> Option<PathBuf> {
 }
 
 #[allow(clippy::print_stderr)]
-fn run_uv(uv: &Path, cwd: &Path, arguments: &[&str], out: &Path) -> anyhow::Result<()> {
+fn run_uv(
+    uv: &Path,
+    cwd: &Path,
+    arguments: &[&str],
+    out: &Path,
+    settled_stamps: &str,
+) -> anyhow::Result<()> {
     let status = Command::new(uv)
         .args(arguments)
         .arg("--out-dir")
         .arg(out)
         .current_dir(cwd)
+        // reaches the `by build` the frontend eventually runs, through the
+        // backend, which passes its environment on
+        .env(crate::by_stamps::SETTLED_STAMPS, settled_stamps)
         .status()
         .with_context(|| format!("could not run `{}`", uv.display()))?;
     if !status.success() {

@@ -457,6 +457,13 @@
       "description": "Features that are still being designed, and are off unless the project asks\nfor them by name.\n\nAn experimental feature may change or be withdrawn without the deprecation\nperiod a stable one gets. Opting in says you would rather have it than that\nguarantee.",
       "type": "object",
       "properties": {
+        "build-stamps": {
+          "description": "Whether a `build:` block declares build stamps.\n\n`build:` declares the values a build settles when it produces the artifact\n— the commit it was built from, the time it was built at — and each is read\nas `build.NAME` at the type it declares. With this off the block still\nparses and still lowers, so a program that reads a stamp keeps working, but\nwriting one is reported: nothing settles a stamp the project has not asked\nfor, so it would silently stand for its default, or for nothing.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "module-api": {
           "description": "Whether an `implements` declaration is enforced.\n\n`implements Backend` obliges the module that writes it to answer the\nprotocol, and a `for` clause in a package's `__init__` imposes the same\nobligation on the modules its patterns name. With this off the declaration\nstill parses and still lowers, but nothing is checked against it — and a\ndeclaration written anyway is reported, rather than quietly doing nothing.",
           "type": [
@@ -1096,6 +1103,16 @@
         "invalid-base": {
           "title": "detects class bases that will cause the class definition to raise an exception at runtime",
           "description": "## What it does\n\nChecks for class definitions that have bases which are not instances of `type`.\n\n## Why is this bad?\n\nClass definitions with bases like this will lead to `TypeError` being raised at runtime.\n\n## Examples\n\n```python\nclass A(42): ...  # error: [invalid-base]\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "invalid-build-stamps": {
+          "title": "detects a basedpython `build:` block the project has not opted in to",
+          "description": "## What it does\nChecks that a `build:` block is one the project has asked for. Build\nstamps are experimental, so a project opts in by name:\n\n```toml\n# basedpython.toml\n[experimental]\nbuild-stamps = true\n```\n\n## Why is this bad?\nThe block parses and lowers whether or not the project opted in, because a\nprogram that reads `build.GIT_SHA` has to keep working when the feature is\nturned off — so nothing at the point of use says the value was never\nsettled. A stamp declared without a default fails the transpile, and one\nwith a default quietly stands for that default in an artifact that claims\nto know what commit it came from.\n\n## Example\n\n```by\nbuild:  # error: `build` is an experimental feature, and is off\n    GIT_SHA: str\n```",
           "default": "error",
           "oneOf": [
             {

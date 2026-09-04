@@ -1996,12 +1996,32 @@ pub struct ExperimentalOptions {
         "#
     )]
     pub module_api: Option<bool>,
+
+    /// Whether a `build:` block declares build stamps.
+    ///
+    /// `build:` declares the values a build settles when it produces the artifact
+    /// — the commit it was built from, the time it was built at — and each is read
+    /// as `build.NAME` at the type it declares. With this off the block still
+    /// parses and still lowers, so a program that reads a stamp keeps working, but
+    /// writing one is reported: nothing settles a stamp the project has not asked
+    /// for, so it would silently stand for its default, or for nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"false"#,
+        value_type = "bool",
+        example = r#"
+            # let the program read the commit it was built from
+            build-stamps = true
+        "#
+    )]
+    pub build_stamps: Option<bool>,
 }
 
 impl ExperimentalOptions {
     pub(super) fn to_settings(&self) -> ExperimentalSettings {
         ExperimentalSettings {
             module_api: self.module_api.unwrap_or_default(),
+            build_stamps: self.build_stamps.unwrap_or_default(),
         }
     }
 }

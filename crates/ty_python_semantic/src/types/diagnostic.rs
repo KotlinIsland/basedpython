@@ -148,6 +148,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_CONFORMANCE);
     registry.register_lint(&INVALID_MODULE_API);
     registry.register_lint(&UNMET_MODULE_API);
+    registry.register_lint(&INVALID_BUILD_STAMPS);
     registry.register_lint(&INVALID_CONVERSION);
     registry.register_lint(&AMBIGUOUS_CONVERSION);
     registry.register_lint(&MISSING_FRAMEWORK_STUBS);
@@ -1256,6 +1257,39 @@ declare_lint! {
     pub(crate) static UNMET_MODULE_API = {
         summary: "detects a module that does not answer an interface it is obliged to",
         status: LintStatus::stable("0.0.72"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks that a `build:` block is one the project has asked for. Build
+    /// stamps are experimental, so a project opts in by name:
+    ///
+    /// ```toml
+    /// # basedpython.toml
+    /// [experimental]
+    /// build-stamps = true
+    /// ```
+    ///
+    /// ## Why is this bad?
+    /// The block parses and lowers whether or not the project opted in, because a
+    /// program that reads `build.GIT_SHA` has to keep working when the feature is
+    /// turned off — so nothing at the point of use says the value was never
+    /// settled. A stamp declared without a default fails the transpile, and one
+    /// with a default quietly stands for that default in an artifact that claims
+    /// to know what commit it came from.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// build:  # error: `build` is an experimental feature, and is off
+    ///     GIT_SHA: str
+    /// ```
+    pub(crate) static INVALID_BUILD_STAMPS = {
+        summary: "detects a basedpython `build:` block the project has not opted in to",
+        status: LintStatus::stable("0.0.79"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,
     }

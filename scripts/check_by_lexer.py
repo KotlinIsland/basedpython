@@ -49,6 +49,7 @@ KEYWORDS = [
     ("b = a cast? int", "cast?"),
     ("sentinel MISSING", "sentinel"),
     ("extension list[int]:", "extension"),
+    ("build:", "build"),
     ("implementation Show for Point:", "implementation"),
     ("def f(x: protocol(a: int)): ...", "protocol"),
     ("class C[reified T]: ...", "reified"),
@@ -89,6 +90,8 @@ NON_KEYWORDS = [
     ("literal: object | None", "literal"),
     ("x = open(path)", "open"),
     ("cast(int, x)", "cast"),
+    ("build: int = 3", "build"),
+    ("print(build.GIT_SHA)", "build"),
 ]
 
 

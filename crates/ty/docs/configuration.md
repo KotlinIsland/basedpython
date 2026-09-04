@@ -1391,6 +1391,41 @@ An experimental feature may change or be withdrawn without the deprecation
 period a stable one gets. Opting in says you would rather have it than that
 guarantee.
 
+### `build-stamps`
+
+Whether a `build:` block declares build stamps.
+
+`build:` declares the values a build settles when it produces the artifact
+— the commit it was built from, the time it was built at — and each is read
+as `build.NAME` at the type it declares. With this off the block still
+parses and still lowers, so a program that reads a stamp keeps working, but
+writing one is reported: nothing settles a stamp the project has not asked
+for, so it would silently stand for its default, or for nothing.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.experimental]
+    # let the program read the commit it was built from
+    build-stamps = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [experimental]
+    # let the program read the commit it was built from
+    build-stamps = true
+    ```
+
+---
+
 ### `module-api`
 
 Whether an `implements` declaration is enforced.

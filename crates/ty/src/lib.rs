@@ -2,6 +2,7 @@ mod args;
 mod by_commands;
 mod by_init;
 mod by_source_encoding;
+mod by_stamps;
 mod by_wheels;
 mod logging;
 mod printer;
@@ -149,7 +150,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             lowering,
         } => {
             if wheels {
-                by_wheels::cmd_build_wheels(out.as_deref())
+                by_wheels::cmd_build_wheels(out.as_deref(), &lowering.stamps)
             } else {
                 by_commands::cmd_build(
                     min_version.as_deref(),

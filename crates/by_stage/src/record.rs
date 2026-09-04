@@ -19,6 +19,7 @@
 //! lowering flags were folded in, and a re-stage reads it back rather than
 //! deriving anything.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use by_transforms::SoundnessPositions;
@@ -58,6 +59,13 @@ pub struct ConfigRecord {
     pub unique_loop_bindings: bool,
     /// how a float or complex literal type was spelled, as the option takes it
     pub float_literals: String,
+    /// the `build:` stamps the build settled, so a re-stage emits the same ones
+    ///
+    /// without this a re-staged file would fall back to the block's defaults and
+    /// claim a different commit than the tree around it. defaulted, because a
+    /// tree written before stamps existed genuinely had none
+    #[serde(default)]
+    pub stamps: BTreeMap<String, String>,
 }
 
 /// What a build tree records about itself.
@@ -111,6 +119,7 @@ impl BuildRecord {
                 runtime_raises_checks: config.runtime_raises_checks,
                 unique_loop_bindings: config.unique_loop_bindings,
                 float_literals: spell_float_literals(config.float_literals),
+                stamps: config.stamps.clone(),
             },
         }
     }
@@ -158,6 +167,7 @@ impl BuildRecord {
             runtime_raises_checks: self.config.runtime_raises_checks,
             unique_loop_bindings: self.config.unique_loop_bindings,
             float_literals: parse_float_literals(&self.config.float_literals)?,
+            stamps: self.config.stamps.clone(),
             ..Config::default()
         })
     }
@@ -263,6 +273,8 @@ pub fn spell_soundness(positions: SoundnessPositions) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{BuildRecord, ConfigRecord, parse_soundness, spell_soundness};
     use by_transforms::SoundnessPositions;
     use by_transforms::config::{Config, FloatLiteralLowering};
@@ -400,6 +412,7 @@ mod tests {
                 runtime_raises_checks: false,
                 unique_loop_bindings: true,
                 float_literals: "nominal".to_owned(),
+                stamps: BTreeMap::new(),
             },
         };
         assert!(record.config().is_err());

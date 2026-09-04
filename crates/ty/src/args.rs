@@ -297,6 +297,11 @@ pub(crate) struct LoweringArgs {
     /// was made in
     #[arg(long)]
     pub(crate) no_unique_loop_bindings: bool,
+    /// supply a `build:` stamp, as `NAME=VALUE`. repeatable. overrides
+    /// whatever this build could have worked out for itself, which is what a
+    /// CI job that knows its own commit wants
+    #[arg(long = "stamp", value_name = "NAME=VALUE")]
+    pub(crate) stamps: Vec<String>,
 }
 
 #[derive(Debug, Parser)]

@@ -703,6 +703,51 @@ fn basedpython_lone_starred_group_without_arrow_still_errors() {
 }
 
 #[test]
+fn basedpython_build_parses_to_marked_class() {
+    let parsed = parse_basedpython_module("build:\n    GIT_SHA: str\n");
+    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single ClassDef");
+    };
+    assert!(class.is_build_stamps());
+    assert_eq!(class.name.as_str(), "build");
+    // the name stands for no source identifier, so it spans nothing
+    assert!(class.name.range().is_empty());
+    let [marker] = class.decorator_list.as_slice() else {
+        panic!("expected the one synthetic marker");
+    };
+    // the marker covers the keyword itself, which is what highlights it
+    assert_eq!(
+        &"build:\n    GIT_SHA: str\n"
+            [usize::from(marker.range().start())..usize::from(marker.range().end())],
+        "build"
+    );
+    assert!(matches!(
+        class.body.as_slice(),
+        [Stmt::AnnAssign(a)] if a.target.as_name_expr().is_some_and(|n| n.id == "GIT_SHA")
+    ));
+}
+
+#[test]
+fn basedpython_build_annotation_is_still_an_assignment() {
+    // `build` is an ordinary name everywhere but in front of a block-opening
+    // colon, so an annotated assignment that happens to use it still parses as one
+    let parsed = parse_basedpython_module("build: int = 3\n");
+    assert!(matches!(
+        parsed.syntax().body.as_slice(),
+        [Stmt::AnnAssign(_)]
+    ));
+}
+
+#[test]
+fn build_block_is_rejected_in_python() {
+    let parsed = parse(
+        "build:\n    GIT_SHA: str\n",
+        ParseOptions::from(Mode::Module),
+    );
+    assert!(parsed.is_err(), "a `build` block is basedpython-only");
+}
+
+#[test]
 fn basedpython_extension_parses_to_marked_class() {
     let parsed = parse_basedpython_module(
         "extension list:\n    def second(self) -> Element:\n        return self[1]\n",

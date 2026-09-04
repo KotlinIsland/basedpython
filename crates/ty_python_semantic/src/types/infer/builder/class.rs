@@ -204,6 +204,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         | "sealed"
                         | "enum_def"
                         | "extension_def"
+                        | "build_def"
                         | "variant_unit"
                         | "variant_tuple"
                         | "private"

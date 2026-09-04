@@ -141,6 +141,10 @@ class BasedPythonLexer(PythonLexer):
             inherit,
         ],
         "root": [
+            # `build:` opens the block of values the build settles. only at the
+            # margin, and only where the colon opens a block: `build: int` is an
+            # ordinary annotated assignment and `build.GIT_SHA` an ordinary read
+            (r"^build(?=:[ \t]*(?:#.*)?$)", Keyword),
             # a property accessor stands where a `def` would, so it only counts
             # at the head of a line. `d.get(k)` and `def get(self)` keep their
             # name token

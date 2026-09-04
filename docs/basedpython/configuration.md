@@ -38,9 +38,10 @@ the feature than that guarantee:
 module-api = true
 ```
 
-| option       | what it turns on                                                 |
-| ------------ | ---------------------------------------------------------------- |
-| `module-api` | [`implements` declarations](features/module-api.md) are enforced |
+| option         | what it turns on                                                 |
+| -------------- | ---------------------------------------------------------------- |
+| `module-api`   | [`implements` declarations](features/module-api.md) are enforced |
+| `build-stamps` | a [`build:` block](features/build-stamps.md) declares stamps     |
 
 the opt-in is per project, not per file: an experimental feature is a language
 feature, and a module's meaning cannot depend on which file is asking about it. so

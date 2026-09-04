@@ -225,6 +225,9 @@ pub(crate) struct Environment {
 pub(crate) struct Experimental {
     /// see [`ty_python_semantic::ExperimentalSettings::module_api`]
     pub(crate) module_api: Option<bool>,
+
+    /// see [`ty_python_semantic::ExperimentalSettings::build_stamps`]
+    pub(crate) build_stamps: Option<bool>,
 }
 
 #[derive(Deserialize, Default, Debug, Clone)]

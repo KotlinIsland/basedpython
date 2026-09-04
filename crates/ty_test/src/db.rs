@@ -101,6 +101,9 @@ impl Db {
             module_api: options
                 .and_then(|options| options.module_api)
                 .unwrap_or_default(),
+            build_stamps: options
+                .and_then(|options| options.build_stamps)
+                .unwrap_or_default(),
         };
 
         let settings = self.settings();

@@ -75,6 +75,9 @@ impl LoweringArgs {
         if let Ok(project) = ResolvedProject::discover(cwd) {
             config.float_literals = project.float_literals();
         }
+        // only what was asked for explicitly. what the build can work out for
+        // itself needs the project root, which is settled after this
+        config.stamps = crate::by_stamps::parse_explicit(&self.stamps)?;
         Ok(())
     }
 }
@@ -141,6 +144,8 @@ pub(crate) fn cmd_run(
         }
     }
     lowering.apply(&mut config, &cwd)?;
+    let target = config.min_version.to_string();
+    crate::by_stamps::fill_discovered(&mut config.stamps, project.root(), Some(&target));
     let tmp = tempfile::TempDir::new().context("failed to create temp directory")?;
 
     let (db, handles, rebuilder, root) = build_project_db(&cwd, BY_SOURCES, None)?;
@@ -800,6 +805,8 @@ pub(crate) fn cmd_build(
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let mut config = version_config(min_version, &cwd)?;
     lowering.apply(&mut config, &cwd)?;
+    let target = config.min_version.to_string();
+    crate::by_stamps::fill_discovered(&mut config.stamps, &cwd, Some(&target));
 
     // the output directory is settled before the project is read, because it is
     // the one directory the project must not be read *from*: it holds a copy of
@@ -938,6 +945,12 @@ pub(crate) fn cmd_compile(
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let mut fallback = Config::default();
     lowering.apply(&mut fallback, &cwd)?;
+    // no target python: `by_build` transpiles the interpreted twin for whatever
+    // interpreter the toolchain turns out to be, replacing this config's version
+    // as it goes — so naming one here would stamp a python the output was not
+    // lowered for. a program that wants `PYTHON_VERSION` under `by compile` has
+    // to say which, and gets told so rather than told the wrong one
+    crate::by_stamps::fill_discovered(&mut fallback.stamps, &cwd, None);
     options.fallback = Some(fallback);
     let sources: Vec<PathBuf> = if files.is_empty() {
         compilable_files(&cwd)
@@ -1141,6 +1154,8 @@ pub(crate) fn cmd_transpile(
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let mut config = version_config(min_version, &cwd)?;
     lowering.apply(&mut config, &cwd)?;
+    let target = config.min_version.to_string();
+    crate::by_stamps::fill_discovered(&mut config.stamps, &cwd, Some(&target));
 
     // a directory argument transpiles the whole tree in place: forward turns
     // every `.by` into a `.py` (type-aware, one shared project db); reverse
