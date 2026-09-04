@@ -52,6 +52,26 @@ impl StmtFunctionDef {
             expression => expression,
         })
     }
+
+    /// basedpython: the call a trailing lambda block hangs off, when the block
+    /// is written as a plain parenthesized call (`f(2):`) — the one whose
+    /// written arguments and the block are bound together. `None` for a bare
+    /// callee (`f:`) and for the call forms [`trailing_lambda_callee`] treats
+    /// as a whole (a `cast`, a string tag)
+    ///
+    /// [`trailing_lambda_callee`]: Self::trailing_lambda_callee
+    pub fn trailing_lambda_call(&self) -> Option<&ExprCall> {
+        let callee = self.trailing_lambda_callee()?;
+        let decorator = self.decorator_list.first()?;
+        let expression = match &decorator.expression {
+            Expr::Await(await_expr) => await_expr.value.as_ref(),
+            expression => expression,
+        };
+        match expression {
+            Expr::Call(call) if std::ptr::eq(callee, call.func.as_ref()) => Some(call),
+            _ => None,
+        }
+    }
 }
 
 impl crate::ExprStatement {

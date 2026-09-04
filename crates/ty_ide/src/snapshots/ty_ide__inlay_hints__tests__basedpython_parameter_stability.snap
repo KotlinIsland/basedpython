@@ -1,0 +1,27 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ parameter_stability: true, ..InlayHintSettings::none() })"
+---
+
+from basedpython_ui import State, StateList, composable
+
+frozen data class Todo:
+    title: str
+
+data class Draft:
+    title: str
+
+@composable
+def TodoList(
+    [unstable ]items: list[str],
+    view: list[out str],
+    todos: StateList[Todo],
+    [unstable ]draft: Draft,
+    todo: Todo,
+    count: State[int],
+    on_click: () -> None,
+    untyped,
+    [unstable ]table: dict[str, int] = {},
+): ...
+
+def helper(items: list[str]): ...

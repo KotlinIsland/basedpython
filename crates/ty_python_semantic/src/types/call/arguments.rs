@@ -116,6 +116,15 @@ impl<'db> CallArgumentTypes<'db> {
 }
 
 impl<'a, 'db> CallArguments<'a, 'db> {
+    /// basedpython: append an argument that has no AST node — the block a
+    /// trailing lambda passes — with its type already known.
+    pub(crate) fn push(&mut self, argument: Argument<'a>, ty: Type<'db>) {
+        self.items.push(CallArgument {
+            argument,
+            types: CallArgumentTypes::new(Some(ty)),
+        });
+    }
+
     /// Create `CallArguments` from AST arguments. We will use the provided callback to obtain the
     /// type of each splatted argument, so that we can determine its length. All other arguments
     /// will remain uninitialized.

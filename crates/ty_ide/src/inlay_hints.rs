@@ -8,6 +8,7 @@ use crate::importer::{ImportAction, ImportRequest, Importer, MembersInScope};
 use crate::{Db, HasNavigationTargets, NavigationTarget};
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
+use ruff_python_ast::helpers::is_compound_statement;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::source_order::{self, SourceOrderVisitor, TraversalSignal};
 use ruff_python_ast::{
@@ -23,10 +24,12 @@ use ty_python_semantic::reified::{
 };
 use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
-    InlayHintCallArgumentDetails, hintable_parameter_type, implicit_enum_member_value,
-    inferred_override, inferred_raises, inferred_return_annotation, inferred_type_param_variance,
-    inherited_parameter_annotation, inherited_parameter_default, inlay_hint_call_argument_details,
-    is_reveal_type_function, is_union_special_form, numeric_promotion,
+    InferredInvalidations, InferredStateReads, InlayHintCallArgumentDetails, StateRead, WriteSite,
+    hintable_parameter_type, implicit_enum_member_value, inferred_derived_dependencies,
+    inferred_invalidations, inferred_override, inferred_raises, inferred_return_annotation,
+    inferred_state_reads, inferred_type_param_variance, inherited_parameter_annotation,
+    inherited_parameter_default, inlay_hint_call_argument_details, is_composable_function,
+    is_reveal_type_function, is_union_special_form, numeric_promotion, parameter_stability,
     trailing_lambda_implicit_parameters, type_parameter_names,
 };
 use ty_python_semantic::types::{DisplaySettings, Type, TypeDetail};
@@ -297,6 +300,73 @@ impl InlayHint {
             },
             padding_left: false,
             padding_right: true,
+            text_edits: vec![],
+        }
+    }
+
+    /// basedpython-ui: the observables a function reads while composing, shown
+    /// on its header after the return annotation and `raises` clause.
+    fn inferred_reads(position: TextSize, reads: &InferredStateReads) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::Reads,
+            label: InlayHintLabel {
+                parts: state_read_parts("reads ", &reads.reads, reads.opaque),
+            },
+            padding_left: true,
+            padding_right: false,
+            text_edits: vec![],
+        }
+    }
+
+    /// basedpython-ui: a composable parameter the runtime cannot compare, shown
+    /// where a modifier would be written before its name. A stable parameter
+    /// is the ordinary case and gets no hint.
+    fn unstable_parameter(position: TextSize) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::Stability,
+            label: InlayHintLabel {
+                parts: vec!["unstable".into()],
+            },
+            padding_left: false,
+            padding_right: true,
+            text_edits: vec![],
+        }
+    }
+
+    /// basedpython-ui: what a `derived(...)` / `remember(...)` computation
+    /// depends on, shown at the end of the call's line.
+    fn derived_dependencies(position: TextSize, reads: &InferredStateReads) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::DerivedDeps,
+            label: InlayHintLabel {
+                parts: state_read_parts("depends on ", &reads.reads, reads.opaque),
+            },
+            padding_left: true,
+            padding_right: false,
+            text_edits: vec![],
+        }
+    }
+
+    /// basedpython-ui: the composition scopes a state write made after
+    /// composing invalidates — the composables and `derived` computations
+    /// that read what is written — shown at the end of the statement, or of
+    /// the lambda, that writes. An empty set is spelled `nothing`: a write
+    /// nobody observes is worth seeing.
+    fn invalidations(position: TextSize, invalidations: &InferredInvalidations) -> Self {
+        let parts = if invalidations.scopes.is_empty() && !invalidations.opaque {
+            vec!["invalidates nothing".into()]
+        } else {
+            state_read_parts("invalidates ", &invalidations.scopes, invalidations.opaque)
+        };
+        Self {
+            position,
+            kind: InlayHintKind::Invalidates,
+            label: InlayHintLabel { parts },
+            padding_left: true,
+            padding_right: false,
             text_edits: vec![],
         }
     }
@@ -575,6 +645,14 @@ pub enum InlayHintKind {
     TypeArgument,
     /// basedpython: a method that overrides a superclass member without saying so
     Override,
+    /// basedpython-ui: the observables a function reads while composing
+    Reads,
+    /// basedpython-ui: `unstable` on a composable parameter the runtime cannot compare
+    Stability,
+    /// basedpython-ui: what a `derived(...)` computation depends on
+    DerivedDeps,
+    /// basedpython-ui: the composition scopes a state write invalidates
+    Invalidates,
     /// The arms the typing spec's numeric promotion adds to `float` / `complex`
     NumericPromotion,
     /// The type a `reveal_type` call reveals
@@ -673,6 +751,30 @@ impl From<&str> for InlayHintLabelPart {
             target: None,
         }
     }
+}
+
+/// The parts of a hint that lists observables, or the scopes that observe
+/// one: `prefix`, then each name as a part navigable to its declaration,
+/// comma-separated, and `…` when `opaque` — something the analysis could not
+/// follow.
+fn state_read_parts(prefix: &str, reads: &[StateRead], opaque: bool) -> Vec<InlayHintLabelPart> {
+    let mut parts: Vec<InlayHintLabelPart> = vec![prefix.into()];
+    for (index, read) in reads.iter().enumerate() {
+        if index > 0 {
+            parts.push(", ".into());
+        }
+        parts.push(
+            InlayHintLabelPart::new(read.name.as_str())
+                .with_target(Some(NavigationTarget::from(read.declaration))),
+        );
+    }
+    if opaque {
+        if !reads.is_empty() {
+            parts.push(", ".into());
+        }
+        parts.push("…".into());
+    }
+    parts
 }
 
 #[derive(Debug, Clone)]
@@ -793,6 +895,47 @@ pub struct InlayHintSettings {
     /// ```
     pub inferred_override: bool,
 
+    /// basedpython-ui: whether to show the observables a function reads while
+    /// composing, after its return annotation and `raises` clause.
+    ///
+    /// ```by
+    /// @composable
+    /// def Counter(step: int = 1)" reads count":
+    ///     let count = state(0)
+    ///     Text(f"{count.value}")
+    /// ```
+    pub inferred_reads: bool,
+
+    /// basedpython-ui: whether to show `unstable` before a composable parameter
+    /// whose type the runtime cannot compare, so the composable is never
+    /// skipped. A stable parameter gets no hint.
+    ///
+    /// ```by
+    /// @composable
+    /// def TodoList("unstable "items: list[str]): ...
+    /// ```
+    pub parameter_stability: bool,
+
+    /// basedpython-ui: whether to show what a `derived(...)` or `remember(...)`
+    /// computation depends on, at the end of the call's line.
+    ///
+    /// ```by
+    /// let full = derived(lambda: name.value + email.value)" depends on name, email"
+    /// ```
+    pub derived_dependencies: bool,
+
+    /// basedpython-ui: whether to show the composition scopes a state write
+    /// made after composing — in a handler, a lambda, a nested `def`, an
+    /// effect — invalidates, at the end of the write's line: the composables
+    /// and `derived` computations that read what is written. A write nobody
+    /// observes shows `nothing`.
+    ///
+    /// ```by
+    /// Button("+"):
+    ///     count.value += step" invalidates Counter"
+    /// ```
+    pub inferred_invalidations: bool,
+
     /// Whether to show the extra arms the typing spec's numeric promotion adds
     /// to `float` and `complex` in a type expression.
     ///
@@ -912,6 +1055,10 @@ impl InlayHintSettings {
             call_type_arguments: false,
             type_argument_names: false,
             inferred_override: false,
+            inferred_reads: false,
+            parameter_stability: false,
+            derived_dependencies: false,
+            inferred_invalidations: false,
             numeric_promotions: false,
             revealed_types: false,
             implicit_parameters: false,
@@ -937,6 +1084,10 @@ impl InlayHintSettings {
             call_type_arguments,
             type_argument_names,
             inferred_override,
+            inferred_reads,
+            parameter_stability,
+            derived_dependencies,
+            inferred_invalidations,
             numeric_promotions,
             revealed_types,
             implicit_parameters,
@@ -959,6 +1110,10 @@ impl InlayHintSettings {
             || call_type_arguments
             || type_argument_names
             || inferred_override
+            || inferred_reads
+            || parameter_stability
+            || derived_dependencies
+            || inferred_invalidations
             || numeric_promotions
             || revealed_types
             || implicit_parameters
@@ -985,6 +1140,10 @@ impl Default for InlayHintSettings {
             call_type_arguments: true,
             type_argument_names: true,
             inferred_override: true,
+            inferred_reads: true,
+            parameter_stability: true,
+            derived_dependencies: true,
+            inferred_invalidations: true,
             numeric_promotions: true,
             revealed_types: true,
             implicit_parameters: true,
@@ -1274,6 +1433,111 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
                 .into_iter()
                 .next(),
         ));
+    }
+
+    /// basedpython-ui: hint the observables `function` reads while composing.
+    ///
+    /// The hint sits after everything the header spells — the return
+    /// annotation and the `raises` clause — and before the `:`, so it reads
+    /// as one more clause of the header.
+    fn add_inferred_reads(&mut self, function: &ast::StmtFunctionDef) {
+        if !self.settings.inferred_reads || !self.is_basedpython() {
+            return;
+        }
+
+        let Some(reads) = function
+            .inferred_type(&self.model)
+            .and_then(|ty| inferred_state_reads(self.db, ty))
+        else {
+            return;
+        };
+
+        let position = function
+            .raises
+            .as_deref()
+            .or(function.returns.as_deref())
+            .map_or_else(|| function.parameters.end(), Ranged::end);
+
+        self.hints.push(InlayHint::inferred_reads(position, &reads));
+    }
+
+    /// basedpython-ui: hint `unstable` before each parameter of the composable
+    /// `function` whose declared type the runtime cannot compare.
+    fn add_parameter_stability(&mut self, function: &ast::StmtFunctionDef) {
+        if !self.settings.parameter_stability || !self.is_basedpython() {
+            return;
+        }
+        if !function
+            .inferred_type(&self.model)
+            .is_some_and(|ty| is_composable_function(self.db, ty))
+        {
+            return;
+        }
+
+        let env = &self.model.program_environment();
+        for parameter in function.parameters.iter_non_variadic_params() {
+            let parameter = &parameter.parameter;
+            // an unannotated parameter's type says nothing the annotation did
+            // not leave out
+            if parameter.annotation.is_none() {
+                continue;
+            }
+            let Some(ty) = hintable_parameter_type(&self.model, parameter) else {
+                continue;
+            };
+            if parameter_stability(self.db, env, ty) == Some(false) {
+                self.hints.push(InlayHint::unstable_parameter(
+                    parameter.name.range().start(),
+                ));
+            }
+        }
+    }
+
+    /// basedpython-ui: hint what a `derived(...)` / `remember(...)` call's
+    /// computation depends on, at the end of its line.
+    fn add_derived_dependencies(&mut self, call: &ast::ExprCall) {
+        if !self.settings.derived_dependencies || !self.is_basedpython() {
+            return;
+        }
+
+        let Some(reads) = inferred_derived_dependencies(&self.model, call) else {
+            return;
+        };
+
+        self.hints.push(InlayHint::derived_dependencies(
+            self.source.line_end(call.range().end()),
+            &reads,
+        ));
+    }
+
+    /// basedpython-ui: hint what the observable writes of `site` invalidate.
+    /// Only a write made after composing gets one: a write made while
+    /// composing is a diagnostic.
+    ///
+    /// The hint sits at the end of the site itself — after a simple
+    /// statement, after a lambda's body — so that two sites on one line
+    /// (`a.set(1); b.set(2)`, two lambdas in one call) get one each, in
+    /// place. A compound statement's header has no end of its own to sit
+    /// after, so a write in one (`if todos.pop():`) is hinted at the end of
+    /// the line it is spelled on.
+    fn add_invalidations(&mut self, site: WriteSite<'_>) {
+        if !self.settings.inferred_invalidations || !self.is_basedpython() {
+            return;
+        }
+
+        let Some(invalidations) = inferred_invalidations(&self.model, site) else {
+            return;
+        };
+
+        let position = match site {
+            WriteSite::Statement(stmt) if is_compound_statement(stmt) => {
+                self.source.line_end(invalidations.anchor.end())
+            }
+            WriteSite::Statement(stmt) => stmt.end(),
+            WriteSite::Lambda(lambda) => lambda.end(),
+        };
+        self.hints
+            .push(InlayHint::invalidations(position, &invalidations));
     }
 
     /// Hint the type arguments inferred for a generic call.
@@ -1677,6 +1941,10 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
             return;
         }
 
+        // basedpython-ui: a statement's own writes to state; the statements
+        // nested in it are visited below and hinted as sites of their own
+        self.add_invalidations(WriteSite::Statement(stmt));
+
         match stmt {
             Stmt::Assign(assign) => {
                 // basedpython: a decorator may be written above a binding. A
@@ -1761,8 +2029,10 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
             Stmt::FunctionDef(function) => {
                 self.add_inferred_return(function);
                 self.add_inferred_raises(function);
+                self.add_inferred_reads(function);
                 self.add_inferred_reification(function);
                 self.add_inferred_override(function);
+                self.add_parameter_stability(function);
 
                 // a function nested in a method is not itself a class member
                 let enclosing_class = self.enclosing_class.take();
@@ -1858,7 +2128,11 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 self.add_numeric_promotion(expr);
                 source_order::walk_expr(self, expr);
             }
-            Expr::Lambda(_) => {
+            Expr::Lambda(lambda) => {
+                // basedpython-ui: a lambda body runs later, so its writes to
+                // state are a site of their own — `on_click=lambda: count.set(0)`
+                self.add_invalidations(WriteSite::Lambda(lambda));
+
                 // every parameter below a lambda belongs to a lambda
                 let in_lambda = std::mem::replace(&mut self.in_lambda, true);
                 source_order::walk_expr(self, expr);
@@ -1906,6 +2180,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 if reveals_type {
                     self.add_revealed_type(call);
                 }
+                self.add_derived_dependencies(call);
 
                 // a string tag's argument is the abutting literal, not something
                 // the reader passed by position, and a `cast` operator's are its
@@ -2569,8 +2844,10 @@ Source with applied edits:
     /// `_` marks a space the client draws; a bare space is one the label carries.
     #[test]
     fn a_hint_leaves_the_space_beside_it_to_the_client() {
-        let mut test = basedpython_inlay_hint_test(
-            "
+        let mut test = basedpython_ui_inlay_hint_test(
+            r#"
+            from basedpython_ui import composable, derived, state, Text
+
             class Base:
                 def f(self) -> None: ...
 
@@ -2583,7 +2860,13 @@ Source with applied edits:
 
             def make[T]():
                 return T()
-            ",
+
+            @composable
+            def Counter(items: list[int]):
+                let count = state(0)
+                let doubled = derived(lambda: count.value * 2)
+                Text(f"{doubled.value}")
+            "#,
         );
 
         assert_snapshot!(test.padded_hints(&InlayHintSettings {
@@ -2592,13 +2875,19 @@ Source with applied edits:
             inferred_variance: true,
             inferred_reification: true,
             inferred_override: true,
+            inferred_reads: true,
+            parameter_stability: true,
+            derived_dependencies: true,
             ..InlayHintSettings::none()
-        }), @r"
+        }), @"
         «override_»
         «_raises TypeError»
         «out_»
         «reified_»
         «_-> T@make»
+        «unstable_»
+        «_reads doubled»
+        «_depends on count»
         ");
     }
 
@@ -10213,6 +10502,813 @@ Source with applied edits:
             inferred_override: true,
             ..InlayHintSettings::none()
         }));
+    }
+
+    /// The mock of the `basedpython_ui` framework the ui hints are tested
+    /// against: its observables, slot functions and the builders the examples
+    /// use, developed in place as a first-party package — which is how the
+    /// framework itself is developed.
+    const BASEDPYTHON_UI_INIT: &str = "
+from .modifier export Modifier, Alignment, Arrangement, TextStyle, NONE, DEFAULT_TEXT_STYLE
+from .runtime export (
+    State,
+    StateList,
+    StateDict,
+    Derived,
+    Indexed,
+    state,
+    state_list,
+    state_dict,
+    derived,
+    remember,
+    composable,
+    Ambient,
+    ambient,
+    provide,
+    Job,
+    launched_effect,
+)
+from .widgets export ColumnScope, RowScope, Text, Button, TextField, Checkbox, Column, Row
+from .app export run_app, compose_test, TestComposition
+";
+
+    const BASEDPYTHON_UI_MODIFIER: &str = r##"
+enum class Alignment:
+    case Start, Center, End
+
+enum class Arrangement:
+    case Start, Center, End
+
+frozen data class TextStyle:
+    color: str = "#202020"
+    size: float = 14.0
+
+frozen data class Modifier:
+    ops: tuple[int, ...] = ()
+
+    def padding(self, all: int | float) -> Modifier: ...
+
+let NONE = Modifier()
+let DEFAULT_TEXT_STYLE = TextStyle()
+"##;
+
+    const BASEDPYTHON_UI_RUNTIME: &str = "
+from collections.abc import Iterable, Iterator
+
+class State[T]:
+    value: T
+    def __init__(self, initial: T) -> None: ...
+    def set(self, new: T) -> None: ...
+    def update(self, fn: (T) -> T) -> None: ...
+
+frozen data class Indexed[T]:
+    index: int
+    item: T
+
+class StateList[T]:
+    def __init__(self, initial: Iterable[T] = ()) -> None: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[T]: ...
+    def __getitem__(self, index: int) -> T: ...
+    def __setitem__(self, index: int, value: T) -> None: ...
+    def append(self, value: T) -> None: ...
+    def insert(self, index: int, value: T) -> None: ...
+    def remove_at(self, index: int) -> None: ...
+    def remove(self, value: T) -> None: ...
+    def pop(self, index: int = -1) -> T: ...
+    def clear(self) -> None: ...
+    def index_where(self, predicate: (T) -> bool) -> int?: ...
+    def snapshot(self) -> tuple[T, ...]: ...
+    def each(self, key: (T) -> object, local content: (T) -> None) -> None: ...
+    def each_indexed(self, key: (T) -> object, local content: (Indexed[T]) -> None) -> None: ...
+
+class StateDict[K, V]:
+    def __len__(self) -> int: ...
+    def __contains__(self, key: K) -> bool: ...
+    def __getitem__(self, key: K) -> V: ...
+    def __setitem__(self, key: K, value: V) -> None: ...
+    def get(self, key: K) -> V | None: ...
+    def remove(self, key: K) -> None: ...
+    def keys(self) -> tuple[K, ...]: ...
+    def items(self) -> tuple[tuple[K, V], ...]: ...
+
+class Derived[T]:
+    value: T
+
+class Ambient[T]:
+    current: T
+
+class Job: ...
+
+class Runtime:
+    def set_root(self, root: () -> None) -> None: ...
+
+def state[T](initial: T) -> State[T]: ...
+def state_list[T](initial: Iterable[T] = ()) -> StateList[T]: ...
+def state_dict[K, V]() -> StateDict[K, V]: ...
+def derived[T](compute: () -> T) -> Derived[T]: ...
+def remember[T](compute: () -> T) -> T: ...
+def composable[F](fn: F) -> F: ...
+def ambient[T](default: T) -> Ambient[T]: ...
+def provide[T](which: Ambient[T], value: T, once content: () -> None) -> None: ...
+def launched_effect(key: object, block: (Job) -> None) -> None: ...
+def builder[F](fn: F) -> F: ...
+";
+
+    const BASEDPYTHON_UI_WIDGETS: &str = r#"
+from .modifier import Modifier, Alignment, Arrangement, TextStyle, NONE, DEFAULT_TEXT_STYLE
+from .runtime import builder
+
+class ColumnScope:
+    def weight(self, value: float) -> Modifier: ...
+    def align(self, alignment: Alignment) -> Modifier: ...
+
+class RowScope:
+    def weight(self, value: float) -> Modifier: ...
+    def align(self, alignment: Alignment) -> Modifier: ...
+
+@builder
+def Text(text: str, modifier: Modifier = NONE, style: TextStyle = DEFAULT_TEXT_STYLE) -> None: ...
+@builder
+def Button(label: str, modifier: Modifier = NONE, enabled: bool = True, on_click: () -> None) -> None: ...
+@builder
+def TextField(value: str, modifier: Modifier = NONE, placeholder: str = "", on_change: (str) -> None) -> None: ...
+@builder
+def Checkbox(checked: bool, modifier: Modifier = NONE, on_change: (bool) -> None) -> None: ...
+@builder
+def Column(modifier: Modifier = NONE, arrangement: Arrangement = Arrangement.Start, once content: ColumnScope.() -> None) -> None: ...
+@builder
+def Row(modifier: Modifier = NONE, arrangement: Arrangement = Arrangement.Start, once content: RowScope.() -> None) -> None: ...
+"#;
+
+    const BASEDPYTHON_UI_APP: &str = r#"
+class TestComposition: ...
+
+def run_app(title: str = "basedpython-ui", width: int = 800, height: int = 600, root: () -> None) -> None: ...
+def compose_test(width: int = 400, height: int = 300, root: () -> None) -> TestComposition: ...
+"#;
+
+    /// Like [`basedpython_inlay_hint_test`], with the mock `basedpython_ui`
+    /// package installed beside the source.
+    fn basedpython_ui_inlay_hint_test(source: &str) -> InlayHintTest {
+        let mut test = basedpython_inlay_hint_test(source);
+        test.with_extra_file("basedpython_ui/__init__.by", BASEDPYTHON_UI_INIT);
+        test.with_extra_file("basedpython_ui/modifier.by", BASEDPYTHON_UI_MODIFIER);
+        test.with_extra_file("basedpython_ui/runtime.by", BASEDPYTHON_UI_RUNTIME);
+        test.with_extra_file("basedpython_ui/widgets.by", BASEDPYTHON_UI_WIDGETS);
+        test.with_extra_file("basedpython_ui/app.by", BASEDPYTHON_UI_APP);
+        test
+    }
+
+    /// The four basedpython-ui hints, and nothing else.
+    fn basedpython_ui_settings() -> InlayHintSettings {
+        InlayHintSettings {
+            inferred_reads: true,
+            parameter_stability: true,
+            derived_dependencies: true,
+            inferred_invalidations: true,
+            ..InlayHintSettings::none()
+        }
+    }
+
+    /// The observables a function reads while composing: `.value` on a state
+    /// or a derived, `.current` on an ambient, iteration / `len` / a subscript
+    /// / `in` / `each` on a collection, and a `context` parameter — in the
+    /// body and its content blocks, never in a handler, a lambda or a nested
+    /// `def`. A callee's reads come through its parameters and globals, its
+    /// own cells stay its own, and a callee that cannot be followed is `…` —
+    /// which on its own is worth saying of a composable, and of nothing else.
+    #[test]
+    fn basedpython_inferred_reads() {
+        let mut test = basedpython_ui_inlay_hint_test(
+            r#"
+            from basedpython_ui import State, StateDict, StateList, ambient, composable, derived, state, Button, Column, Text
+
+            let THEME = ambient("light")
+
+            class Model:
+                count: State[int]
+
+                def total(self) -> int:
+                    return self.count.value
+
+            def label(cell: State[int]) -> str:
+                return f"{cell.value}"
+
+            def loud(cell: State[int]) -> str:
+                let local = state(0)
+                return label(cell) + str(local.value)
+
+            @composable
+            def Counter(step: int = 1):
+                let count = state(0)
+                Column:
+                    Text(loud(count))
+                    Button("+"):
+                        count.value += step
+
+            @composable
+            def Dashboard(model: Model, items: StateList[str], table: StateDict[str, int], context depth: int):
+                let total = derived(lambda: model.total())
+                Text(f"{total.value} {model.total()} {len(items)} {THEME.current} {depth}")
+                for item in items:
+                    Text(item)
+                if "a" in table:
+                    Text(str(table["a"]))
+                items.each(key=lambda item: item):
+                    Text(it)
+
+                def later():
+                    Text(str(items[0]))
+
+                Button("x", on_click=lambda: model.count.set(0))
+
+            def opaque(cell: State[int], thing: dynamic) -> int:
+                thing()
+                return cell.value
+
+            def entry(thing: dynamic):
+                thing()
+
+            @composable
+            def Blind(thing: dynamic):
+                thing()
+
+            def declared(cell: State[int]) -> int raises ValueError:
+                return cell.value
+
+            def nothing(): ...
+            "#,
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_reads: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// `unstable` goes before a composable parameter whose declared type the
+    /// runtime cannot compare; a stable one, an unannotated one and a plain
+    /// function's parameters get nothing.
+    #[test]
+    fn basedpython_parameter_stability() {
+        let mut test = basedpython_ui_inlay_hint_test(
+            "
+            from basedpython_ui import State, StateList, composable
+
+            frozen data class Todo:
+                title: str
+
+            data class Draft:
+                title: str
+
+            @composable
+            def TodoList(
+                items: list[str],
+                view: list[out str],
+                todos: StateList[Todo],
+                draft: Draft,
+                todo: Todo,
+                count: State[int],
+                on_click: () -> None,
+                untyped,
+                table: dict[str, int] = {},
+            ): ...
+
+            def helper(items: list[str]): ...
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            parameter_stability: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// What a `derived` or `remember` computation depends on is shown at the
+    /// end of its line: the observables its lambda reads, its callees
+    /// followed. A computation that reads nothing gets no hint.
+    #[test]
+    fn basedpython_derived_dependencies() {
+        let mut test = basedpython_ui_inlay_hint_test(
+            r#"
+            from basedpython_ui import State, composable, derived, remember, state, state_list
+
+            def validate(value: str) -> str?:
+                return None if value else "required"
+
+            def total_of(cell: State[int]) -> int:
+                return cell.value
+
+            @composable
+            def Form():
+                let name = state("")
+                let email = state("")
+                let count = state(0)
+                let items = state_list([1])
+                let name_error = derived(lambda: validate(name.value))
+                let full = derived(lambda: name.value + email.value)
+                let total = derived(lambda: total_of(count) + sum(1 for item in items if item))
+                let cached = remember(lambda: count.value * 2)
+                let constant = derived(lambda: 1)
+            "#,
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            derived_dependencies: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// What a state write made after composing invalidates: the composables
+    /// whose own composition reads the place — through the body, its content
+    /// blocks and the plain functions it calls, and through a composable
+    /// called with a content block, which the runtime runs inline in its
+    /// parent — the `derived` values whose lambda reads it and then their
+    /// readers, a child handed the slot (directly, through a plain helper's
+    /// parameter, from another module) when it reads its parameter, the
+    /// `root` of an entry point. A slot declared in a content block is its
+    /// composable's; a name bound to another place is followed to it, in the
+    /// body and in a handler. Callers, inline parents and readers of a
+    /// module-level slot in other files cannot be followed, nor can a
+    /// `dynamic` callee, an unpacked argument, or a written name that is not
+    /// a slot — a loop target, a value bound outside composition — so those
+    /// sets end in `…`. A write nobody observes says `nothing`; a write made
+    /// while composing, and a write to something that is not an observable,
+    /// get no hint. Each site is hinted at its own end, so two statements on
+    /// one line get one each.
+    #[test]
+    fn basedpython_invalidations() {
+        let mut test = basedpython_ui_inlay_hint_test(
+            r#"
+            from basedpython_ui import (
+                Derived, State, StateDict, ambient, composable, compose_test, derived, launched_effect, remember,
+                state, state_dict, state_list, Button, Column, Text,
+            )
+            from basedpython_ui.runtime import Runtime
+            from remote import Remote
+
+            let THEME = ambient("light")
+            let CLICKS = State(0)
+
+
+            class Model:
+                count: State[int]
+
+                def total(self) -> int:
+                    return self.count.value
+
+                def reset(self):
+                    self.count.set(0)
+
+
+            @composable
+            def Child(count: State[int]):
+                Text(str(count.value))
+
+
+            @composable
+            def Forwarding(count: State[int]):
+                Child(count)
+
+
+            @composable
+            def Display(total: Derived[int]):
+                Text(str(total.value))
+
+
+            @composable
+            def Counter(step: int = 1):
+                let count = state(0)
+                let seed = state(1)
+                let unread = state(0)
+                let total = derived(lambda: count.value * 2)
+                let cached = remember(lambda: seed.value)
+                let todos = state_list([1])
+                let table: StateDict[str, int] = state_dict()
+                let plain = [1]
+                Column:
+                    Text(f"{count.value} {total.value} {cached} {len(todos)} {table.get('a')}")
+                    Forwarding(count)
+                    Display(total)
+                    Button("+"):
+                        count.value += step
+                    Button("reset", on_click=lambda: count.set(0))
+                    Button("todo"):
+                        todos.append(2)
+                        table["a"] = 1
+                    Button("both"):
+                        count.value += step; todos.append(3)
+                    Button("seed"):
+                        seed.value = 2
+                    Button("unread"):
+                        unread.set(1)
+                    Button("plain"):
+                        plain.append(1)
+                launched_effect(None):
+                    count.value = 5
+
+                def later():
+                    count.value = 0
+
+
+            @composable
+            def Outer():
+                let shared = state(0)
+
+                @composable
+                def Inner():
+                    Text(str(shared.value))
+
+                Inner()
+                Button("bump"):
+                    shared.value += 1
+
+
+            @composable
+            def OuterInline():
+                let shared = state(0)
+
+                @composable
+                def Inner(once content: () -> None):
+                    Text(str(shared.value))
+                    content()
+
+                Inner():
+                    Text("x")
+                Button("bump"):
+                    shared.value += 1
+
+
+            @composable
+            def Themed():
+                Text(THEME.current)
+                Text(str(CLICKS.value))
+                Button("click", on_click=lambda: CLICKS.set(1))
+
+
+            @composable
+            def Other():
+                Text(str(CLICKS.value))
+
+
+            def reset_clicks():
+                CLICKS.set(0)
+
+
+            @composable
+            def Editor(count: State[int]):
+                Text(str(count.value))
+                Button("+"):
+                    count.value += 1
+
+
+            @composable
+            def Host():
+                let count = state(0)
+                Text(str(count.value))
+                Editor(count)
+                Remote(count)
+                Button("+"):
+                    count.value += 1
+
+
+            @composable
+            def Blind(thing: dynamic):
+                let cell = state(0)
+                thing(cell)
+                Button("x"):
+                    cell.set(1)
+
+
+            @composable
+            def Spread():
+                let count = state(0)
+                let cells = (count,)
+                Child(*cells)
+                Button("x"):
+                    count.set(1)
+
+
+            @composable
+            def Broken():
+                let count = state(0)
+                count.value = 1
+                Text(str(count.value))
+
+
+            @composable
+            def Dashboard(model: Model):
+                Text(str(model.total()))
+                Button("reset", on_click=lambda: model.count.set(0))
+                Button("local"):
+                    let cell = model.count
+                    cell.set(2)
+
+
+            @composable
+            def Card(count: State[int], once content: () -> None):
+                let expanded = state(False)
+                Text(f"{count.value} {expanded.value}")
+                content()
+                Button("expand"):
+                    expanded.set(True)
+                Button("zero"):
+                    count.set(0)
+
+
+            @composable
+            def Inline():
+                let count = state(0)
+                Card(count):
+                    Text("inner")
+                Child(count)
+                Button("+"):
+                    count.value += 1
+
+
+            @composable
+            private def Mid(count: State[int], once content: () -> None):
+                let seen = state(False)
+                Text(str(seen.value))
+                Card(count):
+                    content()
+                Button("seen"):
+                    seen.set(True)
+
+
+            @composable
+            def Top():
+                let count = state(0)
+                let flag = state(False)
+                Text(str(flag.value))
+                Mid(count):
+                    Text("deep")
+                Button("+"):
+                    count.value += 1
+                Button("flag"):
+                    flag.set(True)
+
+
+            @composable
+            def InBlock():
+                Column:
+                    let inner = state(0)
+                    let twice = derived(lambda: inner.value * 2)
+                    Text(f"{inner.value} {twice.value}")
+                    Child(inner)
+                    Button("+"):
+                        inner.value += 1
+
+
+            @composable
+            def WriterAlias():
+                let count = state(0)
+                Text(str(count.value))
+                Button("alias"):
+                    let alias = count
+                    alias.set(5)
+                Button("loop"):
+                    for c in [count]:
+                        c.set(6)
+                Button("comp"):
+                    _ = [c.set(7) for c in [count]]
+
+
+            @composable
+            def ReaderAlias():
+                let count = state(0)
+                let alias = count
+                Text(str(alias.value))
+                Button("+"):
+                    count.value += 1
+
+
+            private def render(cell: State[int]):
+                Child(cell)
+
+
+            @composable
+            def ViaHelper():
+                let count = state(0)
+                render(count)
+
+                def captured():
+                    Editor(count)
+
+                captured()
+                Button("+"):
+                    count.value += 1
+
+
+            def install(rt: Runtime):
+                def root():
+                    let c = state(0)
+                    Text(str(c.value))
+                    Button("+"):
+                        c.value += 1
+                rt.set_root(root)
+
+
+            def install_lambda(rt: Runtime):
+                let cell = State(0)
+                rt.set_root(lambda: Child(cell))
+
+                def bump():
+                    cell.set(1)
+
+
+            def test_root():
+                let t = compose_test:
+                    let count = state(0)
+                    Text(str(count.value))
+                    Button("+"):
+                        count.value += 1
+            "#,
+        );
+        test.with_extra_file(
+            "remote.by",
+            r#"
+from basedpython_ui import State, composable, Text
+
+
+@composable
+def Remote(cell: State[int]):
+    Text(f"remote {cell.value}")
+"#,
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_invalidations: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// `examples/counter.by` of basedpython-ui, verbatim.
+    #[test]
+    fn basedpython_ui_counter_example() {
+        let mut test = basedpython_ui_inlay_hint_test(
+            r#"
+            from basedpython_ui import composable, state, Column, Row, Text, Button, Modifier, Alignment, run_app
+
+
+            @composable
+            def Counter(step: int = 1):
+                let count = state(0)                        # State[int], remembered for this scope's lifetime
+                Column(Modifier().padding(16)):
+                    Text(f"count = {count.value}")          # a tracked read: this scope now depends on `count`
+                    Row:
+                        Button("-", enabled=count.value > 0):
+                            count.value -= step             # the block binds `on_click`; a write invalidates readers
+                        Button("+"):
+                            count.value += step
+                        Button("reset", enabled=count.value != 0):
+                            count.value = 0
+                    if count.value > 9:
+                        Text("that is a lot", modifier=align(Alignment.Center))   # `align` comes from the ColumnScope receiver
+
+
+            @composable
+            def App():
+                Column:
+                    Counter()
+                    Counter(step=5)
+
+
+            def main():
+                run_app("counter"):
+                    App()
+            "#,
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&basedpython_ui_settings()));
+    }
+
+    /// `examples/todo.by` of basedpython-ui, verbatim.
+    #[test]
+    fn basedpython_ui_todo_example() {
+        let mut test = basedpython_ui_inlay_hint_test(
+            r#"
+            from basedpython_ui import (
+                composable, state, state_list, derived, Column, Row, Text, Button, Checkbox, TextField, Modifier, run_app,
+            )
+
+
+            frozen data class Todo:            # immutable: the only way to change a todo is to replace it in the list
+                id: int
+                title: str
+                done: bool = False
+
+
+            @composable
+            def TodoRow(todo: Todo, on_delete: () -> None, on_toggle: (bool) -> None):
+                Row(Modifier().padding(4)):
+                    Checkbox(todo.done, on_change=on_toggle)
+                    Text(todo.title, modifier=weight(1.0))
+                    Button("x", on_click=on_delete)
+
+
+            @composable
+            def TodoApp():
+                let todos = state_list([Todo(1, "write the runtime"), Todo(2, "ship it")])   # StateList[Todo]: observable
+                let draft = state("")
+                let next_id = state(3)
+                let remaining = derived(lambda: sum(1 for t in todos if not t.done))        # ⟨depends on todos⟩
+
+                Column(Modifier().padding(12)):
+                    Text(f"{remaining.value} of {len(todos)} remaining")
+                    Row:
+                        TextField(draft.value, placeholder="what needs doing?", modifier=weight(1.0)):
+                            draft.value = it                                                # `it: str`, the new text
+                        Button("add", enabled=draft.value != ""):
+                            todos.append(Todo(next_id.value, draft.value))
+                            next_id.value += 1
+                            draft.value = ""
+                    todos.each_indexed(key=lambda todo: todo.id):                          # keyed children; `it` is this row
+                        let row = it                                                        # the inner block below has its own `it`
+                        TodoRow(row.item, on_delete=lambda: todos.remove_at(row.index)):
+                            todos[row.index] = Todo(row.item.id, row.item.title, it)        # `it: bool` from `on_toggle`
+                    if len(todos) == 0:
+                        Text("nothing to do")
+
+
+            def main():
+                run_app("todos"):
+                    TodoApp()
+            "#,
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&basedpython_ui_settings()));
+    }
+
+    /// `examples/form.by` of basedpython-ui, verbatim.
+    #[test]
+    fn basedpython_ui_form_example() {
+        let mut test = basedpython_ui_inlay_hint_test(
+            r##"
+            from basedpython_ui import composable, state, derived, Column, Row, Text, Button, TextField, Modifier, TextStyle, run_app
+
+
+            let ERROR_STYLE = TextStyle(color="#b00020")
+
+
+            frozen data class Signup:
+                name: str
+                email: str
+
+
+            def validate_name(value: str) -> str?:
+                return "name is required" if value.strip() == "" else None
+
+
+            def validate_email(value: str) -> str?:
+                if "@" not in value or value.startswith("@"):
+                    return "enter a valid e-mail address"
+                return None
+
+
+            @composable
+            def Field(label: str, value: str, error: str?, on_change: (str) -> None):
+                Column(Modifier().padding(4)):
+                    Text(label)
+                    TextField(value, on_change=on_change)
+                    if error is not None:
+                        Text(error, style=ERROR_STYLE)
+
+
+            @composable
+            def SignupForm(on_submit: (Signup) -> None):
+                let name = state("")
+                let email = state("")
+                let submitted = state(False)
+                # derived values are recomputed only when a dependency changes, and never observed half-updated
+                let name_error = derived(lambda: validate_name(name.value))
+                let email_error = derived(lambda: validate_email(email.value))
+                let can_submit = derived(lambda: name_error.value is None and email_error.value is None)
+
+                Column(Modifier().padding(16)):
+                    Field("name", name.value, name_error.value if submitted.value else None):
+                        name.value = it
+                    Field("e-mail", email.value, email_error.value if submitted.value else None):
+                        email.value = it
+                    Row:
+                        Button("sign up", enabled=can_submit.value or not submitted.value):
+                            submitted.value = True
+                            if can_submit.value:
+                                on_submit(Signup(name.value, email.value))
+                        Button("clear"):
+                            name.value = ""
+                            email.value = ""
+                            submitted.value = False
+
+
+            def main():
+                run_app("sign up"):
+                    SignupForm(on_submit=lambda s: print("welcome", s.name, s.email))
+            "##,
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&basedpython_ui_settings()));
     }
 
     #[test]
