@@ -59,6 +59,12 @@ impl<'db> ContextSensitiveMember<'db> {
     pub(crate) fn qualifier(self, db: &'db dyn Db) -> &'db Name {
         self.enum_class.name(db)
     }
+
+    /// the enum the name was found on, for a caller that needs the declaration
+    /// rather than the spelling — goto-definition on a bare member
+    pub(crate) fn enum_class(self) -> ClassLiteral<'db> {
+        self.enum_class
+    }
 }
 
 /// what the expected type has to say about `name` before the resolution rules
@@ -340,6 +346,22 @@ pub(crate) fn qualifier_for_unbound_name<'db>(
     name: &str,
     resolved_type: impl FnOnce() -> Option<Type<'db>>,
 ) -> Option<&'db Name> {
+    enum_class_for_unbound_name(db, env, file, scope, name, resolved_type)
+        .map(|enum_class| enum_class.name(db))
+}
+
+/// [`qualifier_for_unbound_name`], as the enum itself rather than its spelling.
+///
+/// Goto-definition wants the declaration the bare name resolves to, which means
+/// walking the enum's body — the name alone cannot say where it was written
+pub(crate) fn enum_class_for_unbound_name<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    scope: ScopeId<'db>,
+    name: &str,
+    resolved_type: impl FnOnce() -> Option<Type<'db>>,
+) -> Option<ClassLiteral<'db>> {
     // an ordinary reference to a name bound anywhere in the lexical chain, or to
     // a builtin, keeps its ordinary spelling. checked before the name's type is
     // asked for, so a file that uses no context-sensitive name is never inferred
@@ -359,7 +381,7 @@ pub(crate) fn qualifier_for_unbound_name<'db>(
     if !declares_member(db, env, enum_class, name) {
         return None;
     }
-    is_nameable(db, file, scope, enum_class).then(|| enum_class.name(db))
+    is_nameable(db, file, scope, enum_class).then_some(enum_class)
 }
 
 /// the enum an already-resolved member type belongs to
