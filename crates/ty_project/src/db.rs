@@ -22,7 +22,9 @@ use ty_python_core::ProgramFile;
 use ty_python_core::program::{FallibleStrategy, MisconfigurationStrategy, UseDefaultStrategy};
 use ty_python_semantic::dependencies::DependencyManifest;
 use ty_python_semantic::lint::{LintRegistry, RuleSelection};
-use ty_python_semantic::{AnalysisSettings, Db as SemanticDb, PythonVersionWithSource};
+use ty_python_semantic::{
+    AnalysisSettings, Db as SemanticDb, ExperimentalSettings, PythonVersionWithSource,
+};
 
 mod changes;
 
@@ -585,6 +587,10 @@ impl SemanticDb for ProjectDatabase {
         settings.analysis(self)
     }
 
+    fn experimental_settings(&self) -> &ExperimentalSettings {
+        self.project().settings(self).experimental()
+    }
+
     fn verbose(&self) -> bool {
         self.project().verbose(self)
     }
@@ -704,7 +710,7 @@ pub(crate) mod testing {
     use ty_python_semantic::ProgramEnvironment;
     use ty_python_semantic::dependencies::DependencyManifest;
     use ty_python_semantic::lint::{LintRegistry, RuleSelection};
-    use ty_python_semantic::{AnalysisSettings, PythonVersionWithSource};
+    use ty_python_semantic::{AnalysisSettings, ExperimentalSettings, PythonVersionWithSource};
 
     use crate::db::Db;
     use crate::{Project, ProjectMetadata};
@@ -947,6 +953,10 @@ pub(crate) mod testing {
 
         fn analysis_settings(&self, _file: ruff_db::files::File) -> &AnalysisSettings {
             self.project().settings(self).analysis()
+        }
+
+        fn experimental_settings(&self) -> &ExperimentalSettings {
+            self.project().settings(self).experimental()
         }
 
         fn verbose(&self) -> bool {

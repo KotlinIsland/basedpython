@@ -186,8 +186,14 @@ exception. naming one exactly (`for "._special"`) still reaches it
 
 a typo'd pattern is a rule that silently enforces nothing, which is the worst
 failure mode a checker can have. a rule that matches no module in its package is
-reported at the rule, using `Module::all_submodules` on the declaring package —
-a listing of one directory, not a project walk
+reported at the rule, using `Module::all_submodules` on the declaring package — a
+walk of the package, not of the project.
+
+with one deliberate hole: a package whose submodules the resolver cannot
+enumerate is never accused. that is a namespace portion inside the package, whose
+contents span directories and search paths and are not enumerated at all, so
+"nothing matched" there means "nothing was visible" rather than "nothing
+matched". accusing a rule that does enforce is worse than missing a typo.
 
 ## what is checked
 
@@ -216,10 +222,18 @@ a module with a module-level `__getattr__` that carries an obligation is
 ### stubs
 
 when a module has a `.byi` stub, the stub is what importers see, so the stub is
-what is checked. an obligation attached in the stub is checked against the stub;
-one attached in the implementation is checked against the implementation. a rule
-whose patterns reach both checks both — which is the only thing in the system
-that relates a stub to its implementation, and is worth having for that alone
+the surface an obligation is about — and the file its declarations belong in. an
+`implements` in an implementation file the stub shadows is `invalid-module-api`,
+naming the stub.
+
+the alternative, checking each file against its own surface, is worse in three
+ways at once, and all three were live before this rule existed: a module that
+satisfies its stub but not its implementation reported nothing at all (the error
+surfaced on a consumer instead); a module that satisfied its implementation but
+not its stub reported an error nobody else could see the cause of; and a package
+rule over a module with both files reported the same obligation twice. the same
+shadowing also silently disabled every rule in a `__init__.by` sitting beside a
+`__init__.byi`.
 
 ## where the error lands
 
@@ -239,7 +253,8 @@ the rule is a real declaration a reader can jump to
 
 ## the demanding side
 
-three cases, in increasing order of how much new machinery they need
+three cases, in increasing order of how much new machinery they need — only the
+first is part of this feature, see *what is left out*
 
 **1. a protocol-typed parameter.** works today, no new work:
 
@@ -295,7 +310,7 @@ project does not make
 | layer          | work                                                                                                                                                                                                                                                                  |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | parser         | `implements` as a soft keyword at statement start, recognised only when followed by a name or dotted name, gated on `PySourceType::BasedPython` — the `extension` / `protocol` dispatch in `parser/statement.rs` is the model. the `for` clause takes string literals |
-| ast            | a real `StmtImplements { interfaces, targets, range }` node via `ast.toml` + `generate.py`, `targets` empty for the bare form. see *alternatives* for why not a marker-decorated `ClassDef`                                                                           |
+| ast            | no new node: the declaration parses to a call to the synthetic `__implements__` marker, the encoding `newtype` and the modifier declarations already use. see *alternatives*                                                                                          |
 | semantic index | each interface named is a **load** of that name, so an import used only by the declaration is not unused (`F401`) and an undefined one is `F821`                                                                                                                      |
 | ty             | `package_rules(db, file)` — syntactic, the rules an `__init__` declares — and `module_obligations(db, file)` — the ancestor walk plus the file's own bare statements — then the check over them                                                                       |
 | formatter      | a printer for the node and a `.by` fixture. the formatter rebuilds from the ast, so a source-only form corrupts on reformat                                                                                                                                           |
@@ -330,15 +345,46 @@ the `unmet-module-api` message should say which member, what shape was required,
 and what the module has instead — the three-part form `types/conformance.rs`
 already uses for a conformance that fails to answer a requirement
 
-## staging
+## the opt-in
 
-1. the bare `implements` — parser, node, formatter, index, the check,
-    `unmet-module-api`, `invalid-module-api`, mdtests, feature doc
-1. the `for` clause — pattern parsing, the ancestor walk, the imposed-rule
-    diagnostics with their secondary annotation, the matches-nothing report. this
-    is the half that makes a plugin directory enforceable
-1. the demanding side — `module T`, then the typed `import_module`
-1. `module protocol` sugar, if the `static`-per-member spelling proves noisy
+the feature is off unless a project names it under `[experimental]`. the gate sits
+at the top of `check_module_api`, which is the whole of it: the parser still
+parses a declaration and the transpiler still erases one, because a project that
+turns the feature off after writing `implements` would otherwise emit python
+carrying a call to a name that does not exist at runtime.
+
+what the gate does *not* do is ignore the declaration. a declaration written while
+the feature is off is reported, with the opt-in in the help — an obligation
+nothing checks is the exact failure this feature exists to remove, and introducing
+one at the switch would be a poor joke.
+
+the flag is project-wide and is not part of `AnalysisSettings`, so
+`[[overrides]]` cannot vary it: an analysis setting says how to read code that is
+already understood, while this says whether a language feature exists, and a
+module's meaning must not depend on which file is asking.
+
+## what is left out
+
+the enforcement itself — the declaration, the rule, and the checks — is the whole
+of what is described above. two adjacent things the same vocabulary suggests are
+deliberately not part of it:
+
+- **requiring an actual module.** `module T` as a third use-site type modifier
+    alongside `literal T` and `final T` (`types/restricted.rs`, `TypeModifier` in
+    `ruff_python_ast::helpers`), accepting only a `Type::ModuleLiteral` assignable
+    to `T`. it is for the reflective cases — a registry keyed by `__name__`, a
+    reloader — and an ordinary protocol-typed parameter already accepts a module
+    without it
+- **the typed dynamic import**, `import_module[P](name, api=P)`, which would check
+    a literal module path statically and emit a runtime witness otherwise. it is
+    the other half of the plugin problem — this feature checks the plugins that
+    are in the project, that would check the ones that arrive from outside it —
+    but it lands in the transpiler's runtime rather than in the type checker, and
+    it is a feature of its own
+
+`module protocol P:` — sugar for a protocol whose members are all `static` — is
+also left out. `static def` says it today, and the sugar buys nothing but the
+keyword
 
 ## alternatives considered
 
@@ -363,10 +409,19 @@ already uses for a conformance that fails to answer a requirement
     in `backends/__init__.by` while the author is editing `backends/postgres.by`,
     and in the language server it does not appear until the `__init__` is checked
     again
-- **a marker-decorated `ClassDef`**, the trick `extension` and `protocol` use. it
-    costs no `ast.toml` change, but a declaration with no body is not a class in
-    any sense, and every consumer — the formatter, the semantic index, the ide —
-    would have to un-tell the lie
+- **a dedicated `StmtImplements` node.** the first draft of this document called
+    for one, on the grounds that a declaration is a statement and should be one in
+    the tree. what it missed is that the parser already has an encoding for exactly
+    this shape — a synthetic marker name with an `Invalid` expression context,
+    which `newtype`, `let` and the modifier declarations all use — and that the
+    marker being a *call* is what keeps the interfaces ordinary load expressions.
+    that is not a detail: it is what makes an import used only by a declaration
+    count as used, an interface that does not exist an undefined name, and ruff's
+    binder behave without being taught anything. a new node would have had to
+    re-earn all three
+- **a marker-decorated `ClassDef`**, the trick `extension` and `protocol` use. a
+    declaration with no body is not a class in any sense, and every consumer — the
+    formatter, the semantic index, the ide — would have to un-tell the lie
 - **an assignment instead of a statement**, `_: Backend = sys.modules[__name__]`.
     it works today, which is the honest baseline. it also requires a runtime
     import of `sys`, blames a line nobody reads as a declaration, cannot be
@@ -378,6 +433,15 @@ already uses for a conformance that fails to answer a requirement
     obligation checks
 - **status quo, use-site checking only.** covered above under *where it falls
     short*
+
+## a declaration cannot be wrapped
+
+the interfaces and patterns are a flat list with no bracket around them, so a long
+declaration has nowhere to break and the formatter leaves it over the line width.
+that is a consequence of the syntax rather than of the printer. it has not been a
+problem — a rule with enough patterns to overflow a line is usually a rule that
+wants splitting into two — but it is the reason the formatter has no wrapping
+logic for the statement.
 
 ## open questions
 

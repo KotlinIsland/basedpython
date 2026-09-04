@@ -1,5 +1,7 @@
 use std::fmt::{Display, Write};
 
+use thin_vec::ThinVec;
+
 use ruff_python_ast::helpers::{is_compound_statement, written_annotation_type};
 use ruff_python_ast::name::Name;
 use ruff_python_ast::token::TokenKind;
@@ -753,6 +755,12 @@ impl<'src> Parser<'src> {
                 "`extension` declarations are not valid in .py files".to_string(),
             );
             return Some(self.parse_extension_def(start));
+        }
+        if kw == "implements" && self.peek() == TokenKind::Name {
+            self.error_if_not_basedpython(
+                "`implements` declarations are not valid in .py files".to_string(),
+            );
+            return Some(self.parse_implements_decl(start));
         }
         // `enum class E:` / `enum class E[T]:` — a "based enum" (an algebraic
         // sum type when its body has payload variants, an idiomatic `Enum` when
@@ -1900,6 +1908,157 @@ impl<'src> Parser<'src> {
             body,
             node_index: AtomicNodeIndex::NONE,
         })
+    }
+
+    /// Parses an `implements A, B` declaration, and its optional `for` clause
+    /// naming the modules the obligation is imposed on
+    /// (`implements Backend for ".*", "!.base"`).
+    ///
+    /// Produces an expression statement calling the synthetic `__implements__`
+    /// marker. The interfaces are ordinary loads, so an import that exists only
+    /// for the declaration still counts as used, and a `for` clause's patterns
+    /// follow them in the same argument list as string literals. The two are told
+    /// apart by kind, which is why an interface here may only be a name or a
+    /// dotted name
+    fn parse_implements_decl(&mut self, start: TextSize) -> Stmt {
+        let keyword_range = self.current_token_range();
+        self.bump(TokenKind::Name); // consume "implements"
+
+        let mut args: Vec<Expr> = Vec::new();
+        loop {
+            if !self.at(TokenKind::Name) {
+                self.add_error(
+                    ParseErrorType::OtherError("`implements` takes an interface name".to_string()),
+                    self.current_token_range(),
+                );
+                break;
+            }
+            args.push(self.parse_interface_reference());
+            if !self.eat(TokenKind::Comma) {
+                break;
+            }
+            // a comma introduces another interface. `implements A, for "…"` is a
+            // list with a hole in it, not a shorter list
+            if self.at(TokenKind::For) {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "`implements` takes an interface name after `,`".to_string(),
+                    ),
+                    self.current_token_range(),
+                );
+                break;
+            }
+        }
+
+        if self.eat(TokenKind::For) {
+            loop {
+                if !self.at(TokenKind::String) {
+                    self.add_error(
+                        ParseErrorType::OtherError(
+                            "a `for` clause takes module patterns, written as strings".to_string(),
+                        ),
+                        self.current_token_range(),
+                    );
+                    break;
+                }
+                let pattern_range = self.current_token_range();
+                let pattern = self.parse_strings();
+                if pattern.is_string_literal_expr() {
+                    args.push(pattern);
+                } else {
+                    self.add_error(
+                        ParseErrorType::OtherError(
+                            "a module pattern is a plain string".to_string(),
+                        ),
+                        pattern_range,
+                    );
+                }
+                if !self.eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+
+        // nothing else belongs on the line. a subscripted interface
+        // (`implements Backend[int]`) is the shape this catches: leaving the
+        // bracket to be re-parsed would silently drop the specialization and turn
+        // the obligation into one the author did not write
+        if !self.at_declaration_end() {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "an `implements` declaration takes interface names, and patterns after `for`"
+                        .to_string(),
+                ),
+                self.current_token_range(),
+            );
+            // consume what is left, so it does not re-parse as a statement of its
+            // own and report a second, more confusing error
+            let mut progress = ParserProgress::default();
+            while !self.at_declaration_end() {
+                progress.assert_progressing(self);
+                self.bump_any();
+            }
+        }
+
+        let range = self.node_range(start);
+        self.eat_declaration_terminator();
+
+        let marker = Expr::Name(ast::ExprName {
+            id: Name::new_static("__implements__"),
+            ctx: ExprContext::Invalid,
+            range: keyword_range,
+            node_index: AtomicNodeIndex::NONE,
+        });
+        Stmt::Expr(ast::StmtExpr {
+            value: Box::new(Expr::Call(ast::ExprCall {
+                func: Box::new(marker),
+                arguments: ast::Arguments {
+                    args: args.into_boxed_slice(),
+                    keywords: ThinVec::new(),
+                    range: TextRange::new(keyword_range.end(), range.end()),
+                    node_index: AtomicNodeIndex::NONE,
+                },
+                range_start: start,
+                cast_kind: None,
+                is_string_tag: false,
+                node_index: AtomicNodeIndex::NONE,
+            })),
+            range,
+            node_index: AtomicNodeIndex::NONE,
+        })
+    }
+
+    /// Is the parser at something that ends a simple statement?
+    fn at_declaration_end(&self) -> bool {
+        matches!(
+            self.current_token_kind(),
+            TokenKind::Newline | TokenKind::Semi | TokenKind::EndOfFile | TokenKind::Dedent
+        )
+    }
+
+    /// Parses the `A` or `pkg.A` naming an interface in an `implements`
+    /// declaration, as an ordinary load expression
+    fn parse_interface_reference(&mut self) -> Expr {
+        let start = self.node_start();
+        let name = self.parse_identifier();
+        let mut expr = Expr::Name(ast::ExprName {
+            id: name.id,
+            ctx: ExprContext::Load,
+            range: name.range,
+            node_index: AtomicNodeIndex::NONE,
+        });
+        while self.eat(TokenKind::Dot) {
+            let attr = self.parse_identifier();
+            expr = Expr::Attribute(ast::ExprAttribute {
+                value: Box::new(expr),
+                attr,
+                ctx: ExprContext::Load,
+                optional: false,
+                range: self.node_range(start),
+                node_index: AtomicNodeIndex::NONE,
+            });
+        }
+        expr
     }
 
     /// Parses a `type def Name[X]:` declaration — a user-defined type function

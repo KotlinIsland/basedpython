@@ -40,6 +40,10 @@ pub(crate) struct MarkdownTestConfig {
 
     pub(crate) analysis: Option<Analysis>,
 
+    /// The experimental features the test opts in to, as `[tool.ty.experimental]`
+    /// does for a project.
+    pub(crate) experimental: Option<Experimental>,
+
     /// The [`ruff_db::system::System`] to use for tests.
     ///
     /// Defaults to the case-sensitive [`ruff_db::system::InMemorySystem`].
@@ -214,6 +218,13 @@ pub(crate) struct Environment {
     /// information and third-party imports.
     #[serde(skip_serializing_if = "Option::is_none")]
     python: Option<SystemPathBuf>,
+}
+
+#[derive(Deserialize, Debug, Default, Clone)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub(crate) struct Experimental {
+    /// see [`ty_python_semantic::ExperimentalSettings::module_api`]
+    pub(crate) module_api: Option<bool>,
 }
 
 #[derive(Deserialize, Default, Debug, Clone)]

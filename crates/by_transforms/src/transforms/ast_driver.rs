@@ -43,12 +43,13 @@ use super::{
     float_const, force_unwrap, frameworks, generic_call, generics, grapheme_string, identity_swap,
     if_let, implicit_receiver, implicit_typing, inferred_annotation, init_method, just_float,
     kw_subscript, literal_string, literal_types, local_once, main_function, match_type, modifiers,
-    mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await,
-    private_method, propagate, properties, protocol_type, raises_clause, reified_class,
-    reified_generic, repeated_underscore, return_value_use, runtime_union, sentinel, some_ctor,
-    soundness, statement_expression, string_tag, super_keyword, symbolic_type_op, template_type,
-    top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification, typed_dict_literal,
-    typed_lambda, typeof_keyword, unique_loop_bindings, unpack, use_site_variance,
+    module_api, mutable_defaults, none_chain, optional_type, overload, parametric_is,
+    postfix_await, private_method, propagate, properties, protocol_type, raises_clause,
+    reified_class, reified_generic, repeated_underscore, return_value_use, runtime_union, sentinel,
+    some_ctor, soundness, statement_expression, string_tag, super_keyword, symbolic_type_op,
+    template_type, top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification,
+    typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings, unpack,
+    use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -586,6 +587,7 @@ pub(crate) fn run_against_source<'a>(
     let generics_pass = generics::GenericPolyfillPass::new(source_ref, config.clone());
     let soundness_pass = soundness::SoundnessPass::new(source_ref, config);
     let checked_cast_pass = checked_cast::CheckedCastPass;
+    let module_api_pass = module_api::ModuleApiPass::new(source_ref);
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
     let if_let_pass = if_let::IfLetPass::new(source_ref);
     let class_pattern_star_pass = class_pattern_star::ClassPatternStarPass::new(source_ref);
@@ -650,6 +652,9 @@ pub(crate) fn run_against_source<'a>(
         // erase `type def` declarations; their applications were already folded to
         // the resolved type by the symbolic pass above
         &type_fn_pass,
+        // erase `implements` declarations — a whole-line source deletion, so it
+        // has to read ranges before any AST-mutation pass zeroes them
+        &module_api_pass,
         // replace a match type's `case` blocks with a runtime value, and strip
         // `TypeVarTuple` bounds wherever they appear
         &match_type_pass,

@@ -42,9 +42,9 @@ use ty_python_core::platform::PythonPlatform;
 use ty_python_core::program::{MisconfigurationStrategy, ProgramSettings};
 use ty_python_semantic::lint::{Level, LintSource, RuleSelection};
 use ty_python_semantic::{
-    AnalysisSettings, PythonEnvironment, PythonVersionFileSource, PythonVersionSource,
-    PythonVersionWithSource, SitePackagesPaths, SysPrefixPathOrigin, TypeCheckingPreset,
-    inferred_python_version_source_annotation,
+    AnalysisSettings, ExperimentalSettings, PythonEnvironment, PythonVersionFileSource,
+    PythonVersionSource, PythonVersionWithSource, SitePackagesPaths, SysPrefixPathOrigin,
+    TypeCheckingPreset, inferred_python_version_source_annotation,
 };
 use ty_static::EnvVars;
 
@@ -128,6 +128,10 @@ pub struct Options {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[option_group]
     pub analysis: Option<AnalysisOptions>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option_group]
+    pub experimental: Option<ExperimentalOptions>,
 
     /// Configures how `by run` executes the project.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -542,6 +546,8 @@ impl Options {
         let analysis =
             strategy.fallback(analysis_result, |_| AnalysisSettings::from_preset(preset))?;
 
+        let experimental = self.experimental.or_default().to_settings();
+
         let overrides = self
             .to_overrides_settings(db, project_root, preset, &mut diagnostics)
             .map_err(|err| ToSettingsError {
@@ -565,6 +571,7 @@ impl Options {
             src,
             build,
             analysis,
+            experimental,
             editor,
             overrides,
         };
@@ -1946,6 +1953,55 @@ impl FromIterator<(String, String)> for CommonAliases {
     fn from_iter<T: IntoIterator<Item = (String, String)>>(iter: T) -> Self {
         Self {
             inner: iter.into_iter().collect(),
+        }
+    }
+}
+
+/// Features that are still being designed, and are off unless the project asks
+/// for them by name.
+///
+/// An experimental feature may change or be withdrawn without the deprecation
+/// period a stable one gets. Opting in says you would rather have it than that
+/// guarantee.
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    Combine,
+    Serialize,
+    Deserialize,
+    OptionsMetadata,
+    get_size2::GetSize,
+)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ExperimentalOptions {
+    /// Whether an `implements` declaration is enforced.
+    ///
+    /// `implements Backend` obliges the module that writes it to answer the
+    /// protocol, and a `for` clause in a package's `__init__` imposes the same
+    /// obligation on the modules its patterns name. With this off the declaration
+    /// still parses and still lowers, but nothing is checked against it — and a
+    /// declaration written anyway is reported, rather than quietly doing nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"false"#,
+        value_type = "bool",
+        example = r#"
+            # hold every module in `backends` to the `Backend` protocol
+            module-api = true
+        "#
+    )]
+    pub module_api: Option<bool>,
+}
+
+impl ExperimentalOptions {
+    pub(super) fn to_settings(&self) -> ExperimentalSettings {
+        ExperimentalSettings {
+            module_api: self.module_api.unwrap_or_default(),
         }
     }
 }

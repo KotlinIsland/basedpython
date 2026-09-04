@@ -1382,6 +1382,49 @@ bundled as a zip file in the binary
 
 ---
 
+## `experimental`
+
+Features that are still being designed, and are off unless the project asks
+for them by name.
+
+An experimental feature may change or be withdrawn without the deprecation
+period a stable one gets. Opting in says you would rather have it than that
+guarantee.
+
+### `module-api`
+
+Whether an `implements` declaration is enforced.
+
+`implements Backend` obliges the module that writes it to answer the
+protocol, and a `for` clause in a package's `__init__` imposes the same
+obligation on the modules its patterns name. With this off the declaration
+still parses and still lowers, but nothing is checked against it — and a
+declaration written anyway is reported, rather than quietly doing nothing.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.experimental]
+    # hold every module in `backends` to the `Backend` protocol
+    module-api = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [experimental]
+    # hold every module in `backends` to the `Backend` protocol
+    module-api = true
+    ```
+
+---
+
 ## `lowering`
 
 ### `float-literals`

@@ -1,0 +1,56 @@
+---
+source: crates/mdtest/src/lib.rs
+expression: snapshot
+---
+
+---
+mdtest name: basedpython_module_api.md - basedpython: module api enforcement - a package imposes an interface on its submodules
+mdtest path: crates/ty_python_semantic/resources/mdtest/basedpython_module_api.md
+---
+
+# Source files
+
+## api.by
+
+```
+1 | protocol Backend:
+2 |     static def connect(url: str) -> str
+```
+
+## backends/__init__.by
+
+```
+1 | from api import Backend
+2 | 
+3 | implements Backend for ".*"
+```
+
+## backends/good.by
+
+```
+1 | def connect(url: str) -> str:
+2 |     return url
+```
+
+## backends/bad.by
+
+```
+1 | x = 1  # error: [unmet-module-api] "`backends.bad` does not answer `Backend`"
+```
+
+# Diagnostics
+
+```
+error[unmet-module-api]: `backends.bad` does not answer `Backend`
+ --> src/backends/bad.by:1:1
+  |
+1 | x = 1  # error: [unmet-module-api] "`backends.bad` does not answer `Backend`"
+  | ^
+  |
+ ::: src/backends/__init__.by:3:1
+  |
+3 | implements Backend for ".*"
+  | ---------- required by this declaration
+info: `connect` is missing
+
+```

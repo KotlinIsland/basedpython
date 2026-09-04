@@ -25,6 +25,30 @@ override-raise = "ignore"
 a project has one configuration, not one per command: `by check`, `by run` and
 `by build` all read the same options
 
+## experimental features
+
+a feature under `[experimental]` is still being designed. it is off unless the
+project asks for it by name, and it may change or be withdrawn without the
+deprecation period a settled feature gets — opting in says you would rather have
+the feature than that guarantee:
+
+```toml
+# basedpython.toml
+[experimental]
+module-api = true
+```
+
+| option       | what it turns on                                                 |
+| ------------ | ---------------------------------------------------------------- |
+| `module-api` | [`implements` declarations](features/module-api.md) are enforced |
+
+the opt-in is per project, not per file: an experimental feature is a language
+feature, and a module's meaning cannot depend on which file is asking about it. so
+`[[overrides]]` does not read this section
+
+writing an experimental construct without opting in is an error rather than a
+no-op, so nothing silently does nothing
+
 ## the preset
 
 `type-checking-preset` supplies the defaults that `rules` and `analysis` start from:

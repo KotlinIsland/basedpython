@@ -159,6 +159,7 @@ features = [
     { "block scoping" = "features/block-scoping.md" },
     { "based enums" = "features/enums.md" },
     { "sealed classes" = "features/sealed-classes.md" },
+    { "module api enforcement" = "features/module-api.md" },
     { "init method shorthand" = "features/init-method.md" },
     { "properties" = "features/properties.md" },
     { "empty declarations" = "features/empty-declarations.md" },

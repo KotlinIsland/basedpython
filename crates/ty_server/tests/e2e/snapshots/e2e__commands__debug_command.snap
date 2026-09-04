@@ -254,6 +254,9 @@ Settings: Settings {
             "builtins.classmethod",
         ],
     },
+    experimental: ExperimentalSettings {
+        module_api: false,
+    },
     editor: EditorSettings {
         common_aliases: [],
     },
