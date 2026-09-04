@@ -118,6 +118,43 @@ diagnostic writes the same import
 these are auto-imports, so turning off `ty.completions.autoImport` turns them
 off too
 
+### unimported names
+
+a name the file has not imported still completes past the dot. `Asdf.` offers
+the members of the `Asdf` an import would bind, and accepting one writes that
+import:
+
+```py
+from mod import Asdf
+
+Asdf.name
+```
+
+a module reads the same way — `mod.` offers what `import mod` reaches — and a
+longer chain follows every step, so `mod.Asdf.` lands on those same members. a
+package's submodules are among what it offers, and a submodule is imported from
+its package, since `import pkg.sub` binds `pkg` rather than the `sub` the file
+wrote:
+
+```py
+from pkg import sub
+
+sub.Asdf
+```
+
+a name that two modules each define of their own is two offers, one per module,
+each carrying its own import. one class that several modules re-export is a
+single offer, since the copies would differ only by an import you cannot see
+
+a name the file already binds means what the file says it means and gets
+nothing, and a chain that starts from anything but a name — `Asdf().` — has no
+name for an import to bind. as with any auto-import, the name has to be one you
+have begun to write: a bare `mod.` in a file that never imported `mod` offers
+nothing, because every symbol spelled `mod` anywhere would qualify
+
+like the aliases above, these are auto-imports, and turning off
+`ty.completions.autoImport` turns them off too
+
 ### names inside a string
 
 a name written inside a plain string's braces completes as a name, and taking

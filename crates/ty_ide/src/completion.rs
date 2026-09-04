@@ -36,6 +36,7 @@ use ty_python_semantic::{
     types::{CycleDetector, KnownClass, Type},
 };
 
+use crate::all_symbols::modules_binding_name;
 use crate::common_aliases;
 use crate::django_template::django_string_completions;
 use crate::docstring::Docstring;
@@ -140,11 +141,25 @@ pub fn completion<'db>(
                     &mut completions,
                 );
                 if settings.auto_import {
+                    let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str());
+                    let importer =
+                        Importer::new(db, &stylist, program_file, source.as_str(), &parsed);
+                    let members = importer.members_in_scope_at(expr.into(), expr.start());
                     add_aliased_module_completions(
                         db,
                         program_file,
-                        &parsed,
                         &model,
+                        &importer,
+                        &members,
+                        expr,
+                        &mut completions,
+                    );
+                    add_unimported_attribute_completions(
+                        db,
+                        program_file,
+                        &model,
+                        &importer,
+                        &members,
                         expr,
                         &mut completions,
                     );
@@ -4107,8 +4122,9 @@ fn add_alias_completions<'db>(
 fn add_aliased_module_completions<'db>(
     db: &'db dyn Db,
     file: ProgramFile<'db>,
-    parsed: &ParsedModuleRef,
     model: &SemanticModel<'db>,
+    importer: &Importer<'_>,
+    members: &MembersInScope<'_>,
     expr: &ast::ExprAttribute,
     completions: &mut Completions<'db>,
 ) {
@@ -4132,17 +4148,13 @@ fn add_aliased_module_completions<'db>(
         return;
     };
 
-    let source = source_text(db, file.file(db));
-    let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str());
-    let importer = Importer::new(db, &stylist, file, source.as_str(), parsed);
-    let members = importer.members_in_scope_at(expr.into(), expr.start());
     if members.find_member(&name.id).is_some() {
         return;
     }
 
     let import_action = importer.import(
         ImportRequest::module_as(module_name.as_str(), &name.id),
-        &members,
+        members,
     );
     let Some(import) = import_action.import() else {
         return;
@@ -4156,6 +4168,185 @@ fn add_aliased_module_completions<'db>(
                 .import(import.clone())
                 .module_dependency_kind(module_dependency_kind),
         );
+    }
+}
+
+/// Adds the members of what an unimported dotted name would have named.
+///
+/// `Asdf.n` in a file that never imported `Asdf` still names the class an import would bind, so
+/// this offers that class's members, and carries the `from mod import Asdf` along with whatever
+/// the user accepts. The same goes for a whole module: `mod.A` offers what `import mod` reaches.
+fn add_unimported_attribute_completions<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    model: &SemanticModel<'db>,
+    importer: &Importer<'_>,
+    members: &MembersInScope<'_>,
+    expr: &ast::ExprAttribute,
+    completions: &mut Completions<'db>,
+) {
+    // an import is only ever offered for something the user has begun to name, the same bargain
+    // auto-import strikes in a scope: a query that matches everything would answer a bare `mod.`
+    // with every member of every symbol spelled `mod`
+    if completions.query.will_match_everything() {
+        return;
+    }
+    let Some((root, attributes)) = attribute_chain(expr) else {
+        return;
+    };
+    // a name that already means something is not waiting to be imported. an unbound one infers as
+    // `Unknown`, which is also what a binding of unknown type infers as, so the scope is asked
+    // about that case below
+    if root.inferred_type(model).is_some_and(|ty| !ty.is_unknown())
+        || members.find_member(&root.id).is_some()
+    {
+        return;
+    }
+
+    let source_file = file.file(db);
+    let env = model.program_environment();
+    // several modules can export one name — `Mapping` is `typing`'s, and `collections.abc` and
+    // `typing_extensions` re-export it — and each would otherwise contribute a full copy of the
+    // same members, told apart only by an import edit the list does not show
+    let mut seen = FxHashSet::default();
+    for candidate in root_candidates(db, file, &root.id) {
+        if candidate.file == source_file {
+            continue;
+        }
+        let (import_module, import_member) = candidate.import(db);
+        let request = match import_member {
+            Some(ref member) => ImportRequest::import_from(import_module.as_str(), member).force(),
+            None => ImportRequest::module(import_module.as_str()),
+        };
+        let import_action = importer.import(request, members);
+        // the import has to bind the name the user already wrote: an importer that sidesteps a
+        // conflict by qualifying the symbol instead leaves the `Asdf.` in the file naming nothing
+        if import_action.symbol_text() != root.id.as_str() {
+            continue;
+        }
+        // the root is what the import writes, so the whole chain has to be walked from it: what
+        // the user is completing is the far end, and what they would be importing is the near one
+        let root_path: Vec<&str> = candidate.step.as_deref().into_iter().collect();
+        let path: Vec<&str> = root_path
+            .iter()
+            .copied()
+            .chain(attributes.iter().copied())
+            .collect();
+        let (Some(root_ty), Some(ty)) = (
+            model.path_type(candidate.module, &root_path),
+            model.path_type(candidate.module, &path),
+        ) else {
+            continue;
+        };
+        if !seen.insert(ty) {
+            continue;
+        }
+        let module_name = candidate.module.name(db);
+        let module_dependency_kind =
+            ModuleDependencyKind::from_module(db, source_file, candidate.module);
+        // an import of a root that is only there while type checking is itself only there while
+        // type checking, however ordinary the member reached through it
+        let type_check_only =
+            is_type_check_only_module(db, file, candidate.module) || root_ty.is_type_check_only(db);
+        for semantic_completion in model.type_completions(ty) {
+            let type_check_only = type_check_only || semantic_completion.is_type_check_only;
+            completions.add(
+                CompletionBuilder::from_semantic_completion(db, &env, semantic_completion)
+                    .type_check_only(type_check_only)
+                    .deprecated(candidate.deprecated)
+                    .module_name(module_name)
+                    .import(import_action.import().cloned())
+                    .module_dependency_kind(module_dependency_kind),
+            );
+        }
+    }
+}
+
+/// Something an import could bind the root of a dotted name to.
+struct RootCandidate<'db> {
+    /// The module whose members the root name reaches.
+    module: Module<'db>,
+    /// The step from that module to the root, absent when the root names the module itself.
+    step: Option<Name>,
+    /// The file the root is defined in.
+    file: File,
+    /// Whether what the import would bind is deprecated.
+    deprecated: bool,
+}
+
+impl<'db> RootCandidate<'db> {
+    /// The module an import of this candidate names, and the member it takes from it.
+    ///
+    /// A module is imported from its package — `from pkg import sub` — because `import pkg.sub`
+    /// binds `pkg`, not the `sub` the file wrote. Only a module with no package left to name is
+    /// bound by an `import` of its own.
+    fn import(&self, db: &'db dyn Db) -> (ModuleName, Option<Name>) {
+        let name = self.module.name(db);
+        match self.step {
+            Some(ref step) => (name.clone(), Some(step.clone())),
+            None => match name.parent() {
+                Some(parent) => (parent, Some(Name::new(name.last_component()))),
+                None => (name.clone(), None),
+            },
+        }
+    }
+}
+
+/// Everything an import could bind `name` to.
+fn root_candidates<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    name: &str,
+) -> Vec<RootCandidate<'db>> {
+    // `all_symbols` matches a module against the whole of its dotted name, which is the name a
+    // bare completion offers but not one an import can bind, so the modules come from the lookup
+    // that asks the binding question instead
+    let symbols = all_symbols(db, file, &QueryPattern::exactly(name))
+        .into_iter()
+        // a builtin is in scope with no import at all, so it never reaches here as an unbound
+        // name — and offering one would be offering an import nothing needs
+        .filter(|symbol| !symbol.module().is_known(db, KnownModule::Builtins))
+        .filter_map(|symbol| {
+            Some(RootCandidate {
+                module: symbol.module(),
+                step: Some(Name::new(symbol.name_in_file()?)),
+                file: symbol.file(),
+                deprecated: symbol.deprecated(),
+            })
+        });
+    let modules = modules_binding_name(db, file, name)
+        .into_iter()
+        .filter_map(|module| {
+            Some(RootCandidate {
+                module,
+                step: None,
+                file: module.file(db)?,
+                deprecated: false,
+            })
+        });
+    symbols.chain(modules).collect()
+}
+
+/// The name a dotted expression starts from, and the attributes reached from it.
+///
+/// The attribute under the cursor is not one of them, so `mod.Asdf.n` answers with `mod` and
+/// `["Asdf"]`. A chain that starts from anything but a name — a call or a subscript, say —
+/// has no name for an import to bind, and answers with nothing.
+fn attribute_chain(expr: &ast::ExprAttribute) -> Option<(&ast::ExprName, Vec<&str>)> {
+    let mut path = vec![];
+    let mut value = &*expr.value;
+    loop {
+        match value {
+            ast::Expr::Name(name) => {
+                path.reverse();
+                return Some((name, path));
+            }
+            ast::Expr::Attribute(attribute) => {
+                path.push(attribute.attr.as_str());
+                value = &attribute.value;
+            }
+            _ => return None,
+        }
     }
 }
 
@@ -14583,6 +14774,274 @@ np.ara<CURSOR>
             builder.build().snapshot(),
             @"deposit :: bureau :: import bureau as dt",
         );
+    }
+
+    /// A file that never imported `Asdf` still means the `Asdf` an import would bind, so the
+    /// class's members are offered, and accepting one writes that import.
+    #[test]
+    fn unimported_name_offers_its_members() {
+        let builder = CursorTest::builder()
+            .source("mod.py", "class Asdf:\n    name = \"Asdf\"\n")
+            .source("main.py", "Asdf.na<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        assert_snapshot!(builder.build().snapshot(), @"name :: mod :: from mod import Asdf");
+    }
+
+    /// The same goes for a module the file has not imported.
+    #[test]
+    fn unimported_module_offers_its_members() {
+        let builder = CursorTest::builder()
+            .source("mod.py", "class Asdf:\n    name = \"Asdf\"\n")
+            .source("main.py", "mod.As<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "Asdf");
+        assert_snapshot!(builder.build().snapshot(), @"Asdf :: mod :: import mod");
+    }
+
+    /// Every step of a longer chain is followed the same way.
+    #[test]
+    fn unimported_module_offers_the_members_of_its_members() {
+        let builder = CursorTest::builder()
+            .source("mod.py", "class Asdf:\n    name = \"Asdf\"\n")
+            .source("main.py", "mod.Asdf.na<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        assert_snapshot!(builder.build().snapshot(), @"name :: mod :: import mod");
+    }
+
+    /// A name the file already binds means what the file says it means, whatever else could be
+    /// imported under that name.
+    #[test]
+    fn unimported_name_yields_to_a_binding() {
+        let builder = CursorTest::builder()
+            .source("mod.py", "class Asdf:\n    name = \"Asdf\"\n")
+            .source("main.py", "Asdf = 1\nAsdf.na<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found after filtering out completions>");
+    }
+
+    /// Once the file writes the import, the members come with no import attached.
+    #[test]
+    fn unimported_name_adds_no_import_once_it_is_written() {
+        let builder = CursorTest::builder()
+            .source("mod.py", "class Asdf:\n    name = \"Asdf\"\n")
+            .source("main.py", "from mod import Asdf\n\nAsdf.na<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        assert_snapshot!(builder.build().snapshot(), @"name :: <no import required> :: <no import edit>");
+    }
+
+    /// A chain that starts from anything but a name has no name for an import to bind.
+    #[test]
+    fn unimported_call_offers_nothing() {
+        let builder = CursorTest::builder()
+            .source("mod.py", "class Asdf:\n    name = \"Asdf\"\n")
+            .source("main.py", "Asdf().na<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found after filtering out completions>");
+    }
+
+    /// A binding whose type is unknown infers exactly as an unbound name does, so it is the
+    /// scope, not the type, that has to say the name is already taken.
+    #[test]
+    fn unimported_name_yields_to_a_binding_of_unknown_type() {
+        let builder = CursorTest::builder()
+            .source("mod.py", "class Asdf:\n    name = \"Asdf\"\n")
+            .source(
+                "main.py",
+                "import broken\n\nAsdf = broken.thing\nAsdf.na<CURSOR>",
+            )
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found after filtering out completions>");
+    }
+
+    /// The class the same file writes in basedpython answers the same way, which is what makes
+    /// the two `private` cases below a test of `private` rather than of the language.
+    #[test]
+    fn unimported_basedpython_name_offers_its_members() {
+        let builder = CursorTest::builder()
+            .source("mod.by", "class Asdf:\n    class name = \"Asdf\"\n")
+            .source("main.by", "Asdf.na<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        assert_snapshot!(builder.build().snapshot(), @"name :: mod :: from mod import Asdf");
+    }
+
+    /// A `private` symbol is the module's implementation, and auto-import already refuses to
+    /// name one, so there is nothing here for a chain to start from either.
+    #[test]
+    fn unimported_private_name_offers_nothing() {
+        let builder = CursorTest::builder()
+            .source("mod.by", "private class Asdf:\n    class name = \"Asdf\"\n")
+            .source("main.by", "Asdf.na<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found after filtering out completions>");
+    }
+
+    /// Reaching the same symbol as a step of a chain goes around auto-import's own filter, so the
+    /// walk has to refuse it again at every step.
+    #[test]
+    fn unimported_module_hides_its_private_members() {
+        let builder = CursorTest::builder()
+            .source("mod.by", "private class Asdf:\n    class name = \"Asdf\"\n")
+            .source("main.by", "mod.Asdf.na<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found after filtering out completions>");
+    }
+
+    /// A module is imported from its package, because `import pkg.sub` binds `pkg` and the file
+    /// wrote `sub`.
+    #[test]
+    fn unimported_submodule_is_imported_from_its_package() {
+        let builder = CursorTest::builder()
+            .source("pkg/__init__.py", "")
+            .source("pkg/sub.py", "class Asdf: ...\n")
+            .source("main.py", "sub.As<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "Asdf");
+        assert_snapshot!(builder.build().snapshot(), @"Asdf :: pkg.sub :: from pkg import sub");
+    }
+
+    /// A submodule reached part-way along a chain is followed too, though nothing has imported it
+    /// and it is therefore not a member of its package yet.
+    #[test]
+    fn unimported_package_follows_a_submodule_step() {
+        let builder = CursorTest::builder()
+            .source("pkg/__init__.py", "")
+            .source("pkg/sub.py", "class Asdf: ...\n")
+            .source("main.py", "pkg.sub.As<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "Asdf");
+        assert_snapshot!(builder.build().snapshot(), @"Asdf :: pkg :: import pkg");
+    }
+
+    /// A file that already imports the module still gets the symbol offered. Reusing that import
+    /// would answer with `mod.Asdf`, which is not the name the file wrote, so the `from` import is
+    /// asked for outright.
+    #[test]
+    fn unimported_name_is_offered_beside_an_import_of_its_module() {
+        let builder = CursorTest::builder()
+            .source("mod.py", "class Asdf:\n    name = \"Asdf\"\n")
+            .source("main.py", "import mod\n\nAsdf.na<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        assert_snapshot!(builder.build().snapshot(), @"name :: mod :: from mod import Asdf");
+    }
+
+    /// Two modules exporting a name of their own are two different offers, each carrying its own
+    /// import.
+    #[test]
+    fn unimported_name_is_offered_once_per_module_that_has_one() {
+        let builder = CursorTest::builder()
+            .source("a.py", "class Asdf:\n    name = 1\n")
+            .source("b.py", "class Asdf:\n    name = 2\n")
+            .source("main.py", "Asdf.na<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        assert_snapshot!(builder.build().snapshot(), @"
+        name :: a :: from a import Asdf
+
+        name :: b :: from b import Asdf
+        ");
+    }
+
+    /// Re-exports are not. `typing`, `typing_extensions` and `collections.abc` all export the one
+    /// `Mapping`, and a copy of its members under each would differ only by an import edit the
+    /// list does not show.
+    #[test]
+    fn unimported_reexports_offer_one_copy_of_the_members() {
+        let builder = CursorTest::builder()
+            .source("main.py", "Mapping.ge<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "get");
+        assert_snapshot!(builder.build().snapshot(), @"get :: collections.abc :: from collections.abc import Mapping");
+    }
+
+    /// Nothing is offered for a bare `mod.`, on the same bargain auto-import strikes in a scope: a
+    /// query that matches everything would answer with every member of every symbol named `mod`.
+    #[test]
+    fn unimported_name_needs_a_query_to_match() {
+        let builder = CursorTest::builder()
+            .source("mod.py", "class Asdf: ...\n")
+            .source("main.py", "mod.<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.import.is_some());
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found after filtering out completions>");
+    }
+
+    /// A root that is only there while type checking makes the members reached through it the
+    /// same, however ordinary they are: the import is the type-check-only part.
+    #[test]
+    fn unimported_type_check_only_root_marks_its_members() {
+        let builder = CursorTest::builder()
+            .source(
+                "mod.pyi",
+                "from typing import type_check_only\n\n@type_check_only\nclass Asdf:\n    name = 1\n",
+            )
+            .source("main.py", "Asdf.na<CURSOR>")
+            .completion_test_builder()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        let test = builder.build();
+        assert!(
+            test.completions()
+                .iter()
+                .all(|completion| completion.is_type_check_only)
+        );
+        assert_snapshot!(test.snapshot(), @"name :: mod :: from mod import Asdf");
+    }
+
+    /// Turning auto-import off turns these off, since an import is all they are.
+    #[test]
+    fn unimported_name_is_not_offered_without_auto_import() {
+        let builder = CursorTest::builder()
+            .source("mod.py", "class Asdf:\n    name = 1\n")
+            .source("main.py", "Asdf.na<CURSOR>")
+            .completion_test_builder()
+            .skip_auto_import()
+            .module_names()
+            .imports()
+            .filter(|c| c.name == "name");
+        assert_snapshot!(builder.build().snapshot(), @"<No completions found after filtering out completions>");
     }
 
     /// Options configuring just the common aliases.

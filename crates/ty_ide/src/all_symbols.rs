@@ -35,34 +35,10 @@ pub fn all_symbols<'db>(
     let results = all_modules(db, resolver_environment)
         .into_par_iter()
         .map_with_db(db, |db, module| {
-            let name = module.name(db);
-
-            // Note that this will always consider namespace
-            // packages to be "not firsty party." This isn't
-            // necessarily correct, and we can probably improve
-            // on this in response to user feedback. (At time
-            // of writing, 2026-02-13, we don't really handle
-            // namespace packages in auto-import anyway.)
-            let is_non_first_party = module.search_path(db).is_none_or(|sp| !sp.is_first_party());
-
-            // Filter out non-first-party test and private modules, while retaining private
-            // typeshed packages that are useful when writing type annotations.
-            if is_non_first_party
-                && (name.is_test_module() || name.is_private() && !module.is_type_check_only(db))
-            {
+            if !is_importable_module(db, importing_file, module) {
                 return Vec::new();
             }
-
-            // A distribution the project only has because something else needed
-            // it is not one it can import. Auto-import searches by symbol name,
-            // so there is no way for the user to ask for one on purpose here;
-            // offering them means offering imports that break on a fresh install.
-            if matches!(
-                dependencies::import_standing(db, importing_file, module),
-                ImportStanding::Undeclared { .. }
-            ) {
-                return Vec::new();
-            }
+            let non_first_party = is_non_first_party(db, module);
 
             let Some(file) = module.file(db) else {
                 return Vec::new();
@@ -86,7 +62,7 @@ pub fn all_symbols<'db>(
             for (_, symbol) in symbols_for_file_global_only(db, program_file).search(query) {
                 // Test functions (starting with `test_`) in third-party
                 // packages are almost never useful to import.
-                if is_non_first_party && symbol.name.starts_with("test_") {
+                if non_first_party && symbol.name.starts_with("test_") {
                     continue;
                 }
                 if private.contains(symbol.name.as_ref()) {
@@ -105,6 +81,64 @@ pub fn all_symbols<'db>(
         .collect();
 
     merge::merge(db, results)
+}
+
+/// The modules an `import` could bring into scope under `name`.
+///
+/// A module binds its own last component when it is imported from its package, so `pkg.sub` is
+/// one of the answers for `sub`. The full dotted name is not the question here: `import pkg.sub`
+/// binds `pkg`, so a file writing `sub.` is asking about the `from pkg import sub` instead.
+pub(crate) fn modules_binding_name<'db>(
+    db: &'db dyn Db,
+    importing_from: ProgramFile<'db>,
+    name: &str,
+) -> Vec<Module<'db>> {
+    if name.is_empty() {
+        return Vec::new();
+    }
+    let importing_file = importing_from.file(db);
+    let resolver_environment = importing_from.resolver_environment(db);
+    all_modules(db, resolver_environment)
+        .into_par_iter()
+        .map_with_db(db, |db, module| {
+            (module.name(db).last_component() == name
+                && module.file(db).is_some()
+                && is_importable_module(db, importing_file, module))
+            .then_some(module)
+        })
+        .flat_map_iter(|module| module)
+        .collect()
+}
+
+/// Whether the project is allowed to write an import of `module`.
+fn is_importable_module<'db>(db: &'db dyn Db, importing_file: File, module: Module<'db>) -> bool {
+    let name = module.name(db);
+
+    // Filter out non-first-party test and private modules, while retaining private
+    // typeshed packages that are useful when writing type annotations.
+    if is_non_first_party(db, module)
+        && (name.is_test_module() || name.is_private() && !module.is_type_check_only(db))
+    {
+        return false;
+    }
+
+    // A distribution the project only has because something else needed
+    // it is not one it can import. Auto-import searches by symbol name,
+    // so there is no way for the user to ask for one on purpose here;
+    // offering them means offering imports that break on a fresh install.
+    !matches!(
+        dependencies::import_standing(db, importing_file, module),
+        ImportStanding::Undeclared { .. }
+    )
+}
+
+/// Whether `module` comes from somewhere other than the project's own code.
+///
+/// Note that this will always consider namespace packages to be "not first party." This isn't
+/// necessarily correct, and we can probably improve on this in response to user feedback. (At
+/// time of writing, 2026-02-13, we don't really handle namespace packages in auto-import anyway.)
+fn is_non_first_party<'db>(db: &'db dyn Db, module: Module<'db>) -> bool {
+    module.search_path(db).is_none_or(|sp| !sp.is_first_party())
 }
 
 /// A symbol found in the workspace and dependencies, including the

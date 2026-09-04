@@ -1266,10 +1266,15 @@ impl<'db> SemanticModel<'db> {
 
     /// Returns completions for symbols available in a `object.<CURSOR>` context.
     pub fn attribute_completions(&self, node: &ast::ExprAttribute) -> Vec<Completion<'db>> {
-        let db = self.db;
         let Some(ty) = node.value.inferred_type(self) else {
             return Vec::new();
         };
+        self.member_completions(ty)
+    }
+
+    /// Returns completions for the members of `ty`.
+    fn member_completions(&self, ty: Type<'db>) -> Vec<Completion<'db>> {
+        let db = self.db;
         let private = self.foreign_private_symbols(ty);
 
         all_members(db, &self.program_environment(), ty)
@@ -1282,6 +1287,66 @@ impl<'db> SemanticModel<'db> {
                 is_type_check_only: member.is_type_check_only,
             })
             .collect()
+    }
+
+    /// Returns the type of what `path` reaches from `module`.
+    ///
+    /// This answers the question an unimported `Asdf.<CURSOR>` asks: the file
+    /// never bound `Asdf`, so there is no expression here whose type could be
+    /// inferred, and the type has to come from the module an import would
+    /// reach instead. `path` names each step from that module, so `["Asdf"]`
+    /// is the `Asdf` a `from mod import Asdf` would bind, and an empty `path`
+    /// is the module itself.
+    pub fn path_type(&self, module: Module<'db>, path: &[&str]) -> Option<Type<'db>> {
+        let env = self.program_environment();
+        let mut ty = Type::module_literal(self.db, self.program_file(), module);
+        for name in path {
+            if self
+                .foreign_private_symbols(ty)
+                .is_some_and(|names| names.contains(*name))
+            {
+                return None;
+            }
+            ty = ty
+                .member(self.db, &env, name)
+                .ignore_possibly_undefined()
+                .or_else(|| self.submodule_type(ty, name))?;
+        }
+        Some(ty)
+    }
+
+    /// The type of `module.name`, when `module` is a module that has `name` as
+    /// a submodule.
+    ///
+    /// A submodule is not a member of the package until something imports it,
+    /// so this is the step `Type::member` cannot take on its own. Completing
+    /// `pkg.sub.` in a file that imported neither still has to reach `sub`.
+    fn submodule_type(&self, module: Type<'db>, name: &str) -> Option<Type<'db>> {
+        let Type::ModuleLiteral(module) = module else {
+            return None;
+        };
+        let mut submodule_name = module.module(self.db).name(self.db).clone();
+        submodule_name.extend(&ModuleName::new(name)?);
+        let submodule = self.resolve_module_name(&submodule_name)?;
+        Some(Type::module_literal(
+            self.db,
+            self.program_file(),
+            submodule,
+        ))
+    }
+
+    /// Returns completions for what can be written after a `ty.` in the source.
+    ///
+    /// A module's submodules are among them, which is the difference between
+    /// this and [`SemanticModel::attribute_completions`]: that one describes an
+    /// expression the file already wrote, and a file that reaches a module has
+    /// already imported whichever submodules it can see.
+    pub fn type_completions(&self, ty: Type<'db>) -> Vec<Completion<'db>> {
+        let mut completions = self.member_completions(ty);
+        if let Type::ModuleLiteral(module) = ty {
+            completions.extend(self.submodule_completions(&module.module(self.db)));
+        }
+        completions
     }
 
     /// Returns completions for symbols available in the scope containing the
