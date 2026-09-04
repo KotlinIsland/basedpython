@@ -6,6 +6,7 @@ use lsp_types::{
     CompletionParams, CompletionRequest, CompletionResponse, Documentation, InsertTextFormat,
     TextEdit, Uri,
 };
+use ruff_diagnostics::Edit;
 use ruff_source_file::OneIndexed;
 use ruff_text_size::Ranged;
 use ty_ide::{
@@ -105,7 +106,7 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
                         .ty
                         .map(|ty| ty.display(db, &env).to_string())
                         .or_else(|| comp.detail.as_ref().map(ToString::to_string));
-                    let import_edit = comp.import.as_ref().and_then(|edit| {
+                    let to_text_edit = |edit: &Edit| {
                         let range = edit
                             .range()
                             .to_lsp_range(db, file, snapshot.encoding())?
@@ -114,7 +115,16 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
                             range,
                             new_text: edit.content().map(ToString::to_string).unwrap_or_default(),
                         })
-                    });
+                    };
+                    let import_edit = comp.import.as_ref().and_then(to_text_edit);
+                    // an import is not the only edit a completion can need: a
+                    // name completed inside a plain string also brings the `f`
+                    // that makes the string an f-string
+                    let additional_text_edits: Vec<TextEdit> = import_edit
+                        .iter()
+                        .cloned()
+                        .chain(comp.additional_edit.as_ref().and_then(to_text_edit))
+                        .collect();
 
                     let label = comp.label().to_string();
                     let import_suffix = comp.module_name.and_then(|name| {
@@ -179,7 +189,8 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
                         insert_text_format,
                         filter_text: comp.filter.map(String::from),
                         text_edit,
-                        additional_text_edits: import_edit.map(|edit| vec![edit]),
+                        additional_text_edits: (!additional_text_edits.is_empty())
+                            .then_some(additional_text_edits),
                         documentation,
                         command: comp
                             .command

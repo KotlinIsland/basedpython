@@ -782,6 +782,74 @@ x: Literal[\"apple\"] = \"app\"
     Ok(())
 }
 
+/// A name completed inside a plain string's braces reaches the client with the
+/// `f` that makes the string an f-string as a further edit of its own.
+#[test]
+fn string_field_completion_carries_the_fstring_prefix() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let foo = SystemPath::new("src/foo.py");
+    let foo_content = "\
+class Thing:
+    def __str__(self) -> str: ...
+
+zqzqzq = Thing()
+\"hello {zqzq\"
+";
+
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(ClientOptions::default().with_auto_import(false))
+        .with_workspace(workspace_root, None)?
+        .with_file(foo, foo_content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(foo, foo_content, 1);
+
+    let completions = server.completion_request(&server.file_uri(foo), Position::new(4, 12));
+
+    insta::assert_json_snapshot!(completions, @r#"
+    [
+      {
+        "label": "zqzqzq",
+        "kind": 22,
+        "detail": "Thing",
+        "sortText": "0",
+        "insertText": "zqzqzq}",
+        "textEdit": {
+          "range": {
+            "start": {
+              "line": 4,
+              "character": 8
+            },
+            "end": {
+              "line": 4,
+              "character": 12
+            }
+          },
+          "newText": "zqzqzq}"
+        },
+        "additionalTextEdits": [
+          {
+            "range": {
+              "start": {
+                "line": 4,
+                "character": 0
+              },
+              "end": {
+                "line": 4,
+                "character": 0
+              }
+            },
+            "newText": "f"
+          }
+        ]
+      }
+    ]
+    "#);
+
+    Ok(())
+}
+
 /// The type shown beside a suggestion is read as source, so in a basedpython
 /// file it is spelled the way it would be written there.
 #[test]

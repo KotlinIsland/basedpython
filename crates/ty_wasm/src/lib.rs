@@ -555,25 +555,33 @@ impl Workspace {
                 let name = comp.label().to_string();
                 let kind = comp.kind.map(CompletionKind::from);
                 let type_display = comp.ty.map(|ty| ty.display(&self.db, &env).to_string());
-                let import_edit = comp.import.as_ref().map(|edit| {
-                    let range = Range::from_text_range(
-                        edit.range(),
-                        &index,
-                        &source,
-                        self.position_encoding,
-                    );
-                    TextEdit {
-                        range,
-                        new_text: edit.content().map(ToString::to_string).unwrap_or_default(),
-                    }
-                });
+                // an import is not the only edit a completion can need: a name
+                // completed inside a plain string also brings the `f` that
+                // makes the string an f-string
+                let edits: Vec<TextEdit> = comp
+                    .import
+                    .iter()
+                    .chain(comp.additional_edit.iter())
+                    .map(|edit| {
+                        let range = Range::from_text_range(
+                            edit.range(),
+                            &index,
+                            &source,
+                            self.position_encoding,
+                        );
+                        TextEdit {
+                            range,
+                            new_text: edit.content().map(ToString::to_string).unwrap_or_default(),
+                        }
+                    })
+                    .collect();
                 Completion {
                     name,
                     kind,
                     detail: type_display,
                     module_name: comp.module_name.map(ToString::to_string),
                     insert_text: comp.insert.map(String::from),
-                    additional_text_edits: import_edit.map(|edit| vec![edit]),
+                    additional_text_edits: (!edits.is_empty()).then_some(edits),
                     documentation: comp
                         .documentation
                         .map(|docstring| docstring.render_plaintext()),

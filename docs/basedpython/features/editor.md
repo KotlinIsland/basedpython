@@ -118,6 +118,25 @@ diagnostic writes the same import
 these are auto-imports, so turning off `ty.completions.autoImport` turns them
 off too
 
+### names inside a string
+
+a name written inside a plain string's braces completes as a name, and taking
+one turns the string into the f-string that reads it — the `f` and the closing
+brace are written for you:
+
+```py
+name = "john"
+
+"hello {na"     # → f"hello {name}"
+```
+
+the rest of the string is left exactly as it is written, so any other brace in
+it starts meaning what an f-string reads it to mean once the prefix goes on
+
+a docstring, a `case` pattern and a `str.format` template are not offered the
+conversion, and neither is a string written where a type belongs: an f-string
+is a different thing in each of those places, or no longer legal at all
+
 ### enum members and extensions
 
 a bare [enum member](enums.md) is offered where the expected type admits one —
