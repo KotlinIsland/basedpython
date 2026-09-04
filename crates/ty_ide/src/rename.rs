@@ -184,6 +184,74 @@ mod tests {
         }
     }
 
+    /// basedpython: an `extension` method's call sites. `references` found them
+    /// all along; rename edited only the `def` and reported success, which left
+    /// every call broken.
+    #[test]
+    fn rename_extension_method_edits_its_call_sites() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "\
+extension list:
+    def second(self) -> int:
+        return 0
+
+xs: list[int] = [1, 2, 3]
+print(xs.<CURSOR>second())
+print(xs.second())
+",
+            )
+            .build();
+
+        assert_snapshot!(test.rename("second_item"), @"
+        info[rename]: Rename symbol (found 3 locations)
+         --> main.by:2:9
+          |
+        2 |     def second(self) -> int:
+          |         ^^^^^^
+          |
+         ::: main.by:6:10
+          |
+        6 | print(xs.second())
+          |          ------
+        7 | print(xs.second())
+          |          ------
+        ");
+    }
+
+    /// basedpython: a name a `let` pattern binds. The binder had no scope
+    /// recorded for it, so rename edited the uses and left `let (a, b) :=`
+    /// naming something that no longer existed.
+    #[test]
+    fn rename_let_destructuring_binder_edits_the_binder() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "\
+def f() -> tuple[int, str]:
+    return (1, \"a\")
+
+let (a, b) := f()
+print(<CURSOR>a)
+print(a)
+",
+            )
+            .build();
+
+        assert_snapshot!(test.rename("first"), @"
+        info[rename]: Rename symbol (found 3 locations)
+         --> main.by:4:6
+          |
+        4 | let (a, b) := f()
+          |      ^
+        5 | print(a)
+          |       -
+        6 | print(a)
+          |       -
+        ");
+    }
+
     #[test]
     fn rename_does_not_mix_global_and_nonlocal_comprehension_walruses() {
         let test = cursor_test(

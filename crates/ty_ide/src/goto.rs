@@ -637,9 +637,30 @@ impl GotoTarget<'_> {
                 Some(defs)
             }
 
-            GotoTarget::ClassDef(class) => Some(vec![ResolvedDefinition::Definition(
-                class.definition(model),
-            )]),
+            GotoTarget::ClassDef(class) => {
+                // basedpython: an `extension Widget:` header names the class it
+                // extends rather than declaring one, so the name is a reference
+                // and goto belongs on `class Widget`. Resolving it as its own
+                // definition made the header self-referential, and left
+                // find-references on a class unable to list its extensions —
+                // which in a codebase that uses them is the thing worth asking
+                if class.is_extension() {
+                    // the *statement* is what carries a scope the model can
+                    // answer for; a class name's own identifier is not recorded
+                    let extended = definitions_for_name(
+                        model,
+                        class.name.as_str(),
+                        AnyNodeRef::StmtClassDef(class),
+                        alias_resolution,
+                    );
+                    if !extended.is_empty() {
+                        return Some(Definitions::new(extended));
+                    }
+                }
+                Some(vec![ResolvedDefinition::Definition(
+                    class.definition(model),
+                )])
+            }
 
             GotoTarget::Parameter(parameter) => Some(vec![ResolvedDefinition::Definition(
                 parameter.definition(model),
@@ -718,6 +739,15 @@ impl GotoTarget<'_> {
             }
 
             GotoTarget::PatternMatchAsName(pattern_as) => pattern_as.name.as_ref().map(|name| {
+                // basedpython: a bare `case Red:` looks like a capture and is one
+                // only when the subject's type does not declare the name. Where it
+                // does, the pattern is a *reference* to that enum member, and
+                // answering with the pattern's own binding tells the reader the
+                // opposite of what the checker decided
+                let case = ty_python_semantic::definitions_for_case_name(model, name);
+                if !case.is_empty() {
+                    return case;
+                }
                 definitions_for_name(
                     model,
                     name.as_str(),
@@ -1374,12 +1404,19 @@ fn definitions_for_expression<'db>(
     alias_resolution: ImportAliasResolution,
 ) -> Option<Vec<ResolvedDefinition<'db>>> {
     match expression {
-        ast::ExprRef::Name(name) => Some(definitions_for_name(
-            model,
-            name.id.as_str(),
-            expression.into(),
-            alias_resolution,
-        )),
+        ast::ExprRef::Name(name) => {
+            let definitions =
+                definitions_for_name(model, name.id.as_str(), expression.into(), alias_resolution);
+            if !definitions.is_empty() {
+                return Some(definitions);
+            }
+            // basedpython: nothing in scope binds a context-resolved enum member
+            // — `Red` in `c: Color = Red` is reached through the expected type —
+            // so the scope walk above has nothing to answer with
+            Some(ty_python_semantic::definitions_for_context_sensitive_name(
+                model, name,
+            ))
+        }
         ast::ExprRef::Attribute(attribute) => Some(ty_python_semantic::definitions_for_attribute(
             model, attribute,
         )),
@@ -1472,7 +1509,65 @@ fn find_goto_target_impl<'a>(
         })
         .ok()?;
 
+    // basedpython: a synthesized marker's range deliberately spans the whole
+    // construct it stands for. A property accessor block becomes a `def` carrying
+    // a `__property__` decorator whose range covers everything from `var age: int`
+    // down to the last accessor, because the lowering replaces exactly that span.
+    // The decorator is visited before the body, so the covering-node search settles
+    // inside the marker for *every* position in the construct and then answers
+    // about the marker — which is why hovering `field` in a getter reported
+    // `<class 'property'>`. `ExprContext::Invalid` is what makes a node synthetic;
+    // when the search lands on one, look again inside the body the marker swallowed
+    if is_synthetic_marker(covering_node.node())
+        && let Some(target) = retry_inside_swallowed_body(model, &covering_node, offset, tokens)
+    {
+        return Some(target);
+    }
+
     GotoTarget::from_covering_node(model, &covering_node, offset, tokens)
+}
+
+/// Whether `node` is one of the marker expressions basedpython's parser
+/// synthesizes to stand for surface syntax python has no node for.
+///
+/// The ids differ per construct and are deliberately not matched on here — the
+/// context is the marker, and a new marker gets this behaviour for free.
+fn is_synthetic_marker(node: AnyNodeRef<'_>) -> bool {
+    matches!(
+        node,
+        AnyNodeRef::ExprName(ast::ExprName {
+            ctx: ruff_python_ast::ExprContext::Invalid,
+            ..
+        })
+    )
+}
+
+/// Search again for a goto target, rooted at the body statements a synthetic
+/// marker's construct-wide range hid from the first search.
+fn retry_inside_swallowed_body<'a>(
+    model: &'a SemanticModel,
+    swallowed: &CoveringNode<'a>,
+    offset: TextSize,
+    tokens: &'a Tokens,
+) -> Option<GotoTarget<'a>> {
+    let function = swallowed
+        .ancestors()
+        .find_map(ruff_python_ast::AnyNodeRef::stmt_function_def)?;
+    let token_range = TextRange::new(offset, offset);
+    function
+        .body
+        .iter()
+        .filter(|stmt| stmt.range().contains_range(token_range))
+        .find_map(|stmt| {
+            let inner = covering_node(AnyNodeRef::from(stmt), token_range)
+                .find_first(|node| {
+                    node.is_identifier() || node.is_expression() || node.is_stmt_import_from()
+                })
+                .ok()?;
+            (!is_synthetic_marker(inner.node()))
+                .then(|| GotoTarget::from_covering_node(model, &inner, offset, tokens))
+                .flatten()
+        })
 }
 
 /// Helper function to resolve a module name and create a navigation target.

@@ -377,6 +377,30 @@ impl<'db> AllMembers<'db> {
                 }
             }
 
+            // basedpython: an inline protocol — `protocol(a: int; def g(self) -> int)`
+            // — is structural, so it has no class of its own to walk. Its interface
+            // *is* the member list, and without this arm the fallthrough below finds
+            // a meta-type with no `class_origin` and offers nothing at all
+            Type::ProtocolInstance(protocol) if protocol.class_origin(db).is_none() => {
+                let names: Vec<Name> = protocol
+                    .interface(db)
+                    .members(db)
+                    .map(|member| Name::new(member.name()))
+                    .collect();
+                for name in names {
+                    if let Some(member_ty) =
+                        ty.member(db, env, &name).place.ignore_possibly_undefined()
+                    {
+                        self.members.insert(Member {
+                            name,
+                            ty: member_ty,
+                            is_type_check_only: false,
+                        });
+                    }
+                }
+                self.extend_with_type(db, env, Type::object());
+            }
+
             Type::LiteralValue(_)
             | Type::PropertyInstance(_)
             | Type::FunctionLiteral(_)

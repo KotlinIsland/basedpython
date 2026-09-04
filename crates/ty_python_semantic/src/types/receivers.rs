@@ -105,6 +105,23 @@ pub(crate) fn resolve_receiver_attribute<'db>(
     receiver_ty: Type<'db>,
     name: &str,
 ) -> Option<Type<'db>> {
+    Some(resolve_receiver_attribute_in_scope(db, env, file, scope, receiver_ty, name)?.1)
+}
+
+/// [`resolve_receiver_attribute`], plus the scope whose declaration of `name`
+/// answered.
+///
+/// Goto-definition needs the scope: the callable's declaration is an ordinary
+/// name in an enclosing scope rather than a member of anything, so the type
+/// alone cannot say where it was written
+pub(crate) fn resolve_receiver_attribute_in_scope<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    scope: ScopeId<'db>,
+    receiver_ty: Type<'db>,
+    name: &str,
+) -> Option<(ScopeId<'db>, Type<'db>)> {
     let index = semantic_index(db, db.program_file(file));
     for (ancestor_id, _) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
         let ancestor_scope = ancestor_id.to_scope_id(db, db.program_file(file));
@@ -128,7 +145,8 @@ pub(crate) fn resolve_receiver_attribute<'db>(
         )
         .place
         .ignore_possibly_undefined()?;
-        return bind_receiver(db, env, declared, receiver_ty);
+        let bound = bind_receiver(db, env, declared, receiver_ty)?;
+        return Some((ancestor_scope, bound));
     }
     None
 }

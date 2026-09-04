@@ -1700,6 +1700,302 @@ a = \"asdf\"
         ");
     }
 
+    /// basedpython: an `extension` member reached by a *bare* attribute access.
+    /// A call resolves through the call's own dispatch target and so found the
+    /// extension's function by accident; `xs.second` on its own has no call to
+    /// go through, and a property can never be a callee at all
+    #[test]
+    fn goto_definition_extension_member_without_a_call() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+extension str:
+    def f(self) -> int:
+        return 1
+
+\"asdf\".<CURSOR>f
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @r#"
+        info[goto-definition]: Go to definition
+         --> main.by:6:8
+          |
+        6 | "asdf".f
+          |        ^ Clicking here
+        info: Found 1 definition
+         --> main.by:3:9
+          |
+        3 |     def f(self) -> int:
+          |         -
+        "#);
+    }
+
+    /// basedpython: an `extension` property. It is only ever read, never called,
+    /// so it reaches goto through the bare-access fallback and nothing else
+    #[test]
+    fn goto_definition_extension_property() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+class Widget: ...
+
+extension Widget:
+    let size: int
+        get() = 1
+
+w = Widget()
+w.<CURSOR>size
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.by:9:3
+          |
+        9 | w.size
+          |   ^^^^ Clicking here
+        info: Found 1 definition
+         --> main.by:5:9
+          |
+        5 |     let size: int
+          |         ----
+        ");
+    }
+
+    /// basedpython: an implicit-receiver callable — `x.fn` where `fn` names a
+    /// receiver callable in scope rather than a member of `x`. The declaration
+    /// is an ordinary name in an enclosing scope, so the class-hierarchy walk
+    /// cannot reach it
+    #[test]
+    fn goto_definition_implicit_receiver_callable() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+def apply(fn: int.() -> str) -> str:
+    receiver = 1
+    return receiver.<CURSOR>fn()
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.by:4:21
+          |
+        4 |     return receiver.fn()
+          |                     ^^ Clicking here
+        info: Found 1 definition
+         --> main.by:2:11
+          |
+        2 | def apply(fn: int.() -> str) -> str:
+          |           --
+        ");
+    }
+
+    /// basedpython: a name a `let` pattern binds. The pattern is the same node a
+    /// `match` case uses, so the binder is an ordinary capture
+    #[test]
+    fn goto_definition_let_destructuring_binder() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+def f() -> tuple[int, str]:
+    return (1, \"a\")
+
+let (a, b) := f()
+print(<CURSOR>a)
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.by:6:7
+          |
+        6 | print(a)
+          |       ^ Clicking here
+        info: Found 1 definition
+         --> main.by:5:6
+          |
+        5 | let (a, b) := f()
+          |      -
+        ");
+    }
+
+    /// basedpython: the name in an `extension Widget:` header. It denotes the
+    /// class the extension extends rather than declaring one, so goto belongs on
+    /// `class Widget` — answering with the header itself made it self-referential
+    /// and left find-references on a class unable to list its extensions
+    #[test]
+    fn goto_definition_extension_header_names_the_extended_class() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+class Widget: ...
+
+extension Wid<CURSOR>get:
+    def go(self) -> int:
+        return 1
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.by:4:11
+          |
+        4 | extension Widget:
+          |           ^^^^^^ Clicking here
+        info: Found 1 definition
+         --> main.by:2:7
+          |
+        2 | class Widget: ...
+          |       ------
+        ");
+    }
+
+    /// basedpython: a bare enum member reached through the expected type.
+    /// Nothing in scope binds `Red`, so the ordinary scope walk had nothing to
+    /// answer with even though hover already resolved it to `Color.Red`
+    #[test]
+    fn goto_definition_context_resolved_enum_member() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+enum class Color:
+    case Red
+    case Green
+
+c: Color = R<CURSOR>ed
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.by:6:12
+          |
+        6 | c: Color = Red
+          |            ^^^ Clicking here
+        info: Found 1 definition
+         --> main.by:3:10
+          |
+        3 |     case Red
+          |          ---
+        ");
+    }
+
+    /// basedpython: a bare `case Red:` that names an enum member. It looks like
+    /// a capture and is one only where the subject's type does not declare the
+    /// name; answering with the pattern's own binding said the opposite of what
+    /// the checker decided
+    #[test]
+    fn goto_definition_enum_member_case_pattern() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+enum class Color:
+    case Red
+    case Green
+
+def f(c: Color) -> int:
+    match c:
+        case R<CURSOR>ed:
+            return 1
+        case Green:
+            return 2
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.by:8:14
+          |
+        8 |         case Red:
+          |              ^^^ Clicking here
+        info: Found 1 definition
+         --> main.by:3:10
+          |
+        3 |     case Red
+          |          ---
+        ");
+    }
+
+    /// basedpython: `field` inside a property getter. The getter carries the
+    /// `__property__` marker, whose range spans the whole construct so the
+    /// lowering knows what to replace — and the covering-node search settled
+    /// inside that marker for every position in the block, so a getter's `field`
+    /// answered about the property object while the setter's resolved correctly
+    #[test]
+    fn goto_definition_field_in_a_property_getter() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+class Person:
+    var age: int = 0
+        get() = fi<CURSOR>eld
+        set(value):
+            field = value
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.by:4:17
+          |
+        4 |         get() = field
+          |                 ^^^^^ Clicking here
+        info: Found 1 definition
+         --> main.by:3:5
+          |
+        3 |     var age: int = 0
+          |     -
+        ");
+    }
+
+    /// basedpython: an inline protocol's member. The type is structural — two
+    /// written the same way anywhere are the same type — so it has no
+    /// declaration of its own, and the annotation the receiver was declared with
+    /// is the one place an editor can honestly point at
+    #[test]
+    fn goto_definition_inline_protocol_member() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+def f(x: protocol(a: int; def g(self) -> int)) -> int:
+    return x.<CURSOR>a
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.by:3:14
+          |
+        3 |     return x.a
+          |              ^ Clicking here
+        info: Found 1 definition
+         --> main.by:2:19
+          |
+        2 | def f(x: protocol(a: int; def g(self) -> int)) -> int:
+          |                   -
+        ");
+    }
+
     #[test]
     fn goto_definition_binary_operator_from_an_extension() {
         let test = CursorTest::builder()
