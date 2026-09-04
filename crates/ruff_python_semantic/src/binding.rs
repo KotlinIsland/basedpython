@@ -108,6 +108,13 @@ impl<'a> Binding<'a> {
         self.flags.intersects(BindingFlags::UNPACKED_ASSIGNMENT)
     }
 
+    /// basedpython: return `true` if this [`Binding`] is a bare `case` name that
+    /// names an `enum class` variant, and so binds nothing — see
+    /// [`BindingFlags::BASED_ENUM_CASE_NAME`].
+    pub const fn is_based_enum_case_name(&self) -> bool {
+        self.flags.intersects(BindingFlags::BASED_ENUM_CASE_NAME)
+    }
+
     /// Return `true` if this [`Binding`] represents an unbound variable
     /// (e.g., `x` in `x = 1; del x`).
     pub const fn is_unbound(&self) -> bool {
@@ -430,6 +437,28 @@ bitflags! {
         /// assert (x := y**2) > 42, x
         /// ```
         const IN_ASSERT_STATEMENT = 1 << 13;
+
+        /// basedpython: the binding is a bare `case` name that names an
+        /// [`enum class`] variant, so it binds nothing at runtime.
+        ///
+        /// ```by
+        /// enum class Color:
+        ///     case Red
+        ///
+        /// def f(c: Color) -> int:
+        ///     match c:
+        ///         case Red:      # `Color.Red`, not a capture
+        ///             return 1
+        /// ```
+        ///
+        /// Python spells this as a capture and the parser has to parse it as one,
+        /// so the binding exists — but nothing is assigned and nothing goes
+        /// unused, and the name is a member's name rather than a variable's. Rules
+        /// that read a capture as a variable have to skip it or they report
+        /// correct code.
+        ///
+        /// [`enum class`]: https://docs.basedpython.org/features/enums
+        const BASED_ENUM_CASE_NAME = 1 << 14;
 
         /// The binding represents any type alias.
         const TYPE_ALIAS = Self::ANNOTATED_TYPE_ALIAS.bits() | Self::DEFERRED_TYPE_ALIAS.bits();

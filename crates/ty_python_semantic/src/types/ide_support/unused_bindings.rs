@@ -3,11 +3,13 @@ use crate::reachability::is_reachable;
 use crate::types::function::FunctionDecorators;
 use crate::types::infer::function_known_decorator_flags;
 use get_size2::GetSize;
-use ruff_db::parsed::parsed_module;
+use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use rustc_hash::FxHashSet;
-use ty_python_core::definition::{DefinitionCategory, DefinitionKind, DefinitionState};
+use ty_python_core::definition::{
+    DefinitionCategory, DefinitionKind, DefinitionState, ParameterDefinitionNodeKind,
+};
 use ty_python_core::place::ScopedPlaceId;
 use ty_python_core::scope::{FileScopeId, ScopeKind};
 use ty_python_core::{ProgramFile, SemanticIndex, semantic_index};
@@ -76,6 +78,23 @@ fn comprehension_named_expression_is_local(
                         index.place_table(scope_id).symbol(symbol_id).is_local()
                     })
         })
+}
+
+/// basedpython: whether the parameter this definition binds was written
+/// `context`.
+fn parameter_is_context(kind: &DefinitionKind<'_>, parsed: &ParsedModuleRef) -> bool {
+    let DefinitionKind::Parameter(parameter) = kind else {
+        return false;
+    };
+    match parameter {
+        ParameterDefinitionNodeKind::VariadicPositionalParameter(parameter)
+        | ParameterDefinitionNodeKind::VariadicKeywordParameter(parameter) => {
+            parameter.node(parsed).is_context
+        }
+        ParameterDefinitionNodeKind::Parameter(parameter) => {
+            parameter.node(parsed).parameter.is_context
+        }
+    }
 }
 
 fn function_scope_is_overload_declaration(
@@ -193,6 +212,19 @@ pub fn unused_bindings(db: &dyn Db, file: ProgramFile<'_>) -> Box<[UnusedBinding
 
             // Skip conventional method receiver parameters.
             if is_parameter && is_method_scope && matches!(name, "self" | "cls") {
+                continue;
+            }
+
+            // basedpython: a `context` parameter is not read the way an ordinary
+            // one is. It is filled implicitly at a call site that leaves it out,
+            // and forwarded implicitly to any nested call that wants one — so a
+            // function that "does not use" it is usually the case where it is
+            // being forwarded, and the forward happens during inference rather
+            // than as a name load the use-def map can see. Reporting it as unused
+            // is wrong there, and elsewhere it says nothing worth saying: the
+            // parameter is part of the contract its callers resolve against. The
+            // linter takes the same view of the declaration form, `context x: T`
+            if is_parameter && parameter_is_context(kind, &parsed) {
                 continue;
             }
 

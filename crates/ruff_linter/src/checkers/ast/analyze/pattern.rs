@@ -25,6 +25,13 @@ pub(crate) fn pattern(pattern: &Pattern, checker: &Checker) {
 }
 
 fn check_pattern_name(checker: &Checker, name: &Identifier) {
+    // basedpython: a bare `case Red:` naming an `enum class` variant is a
+    // reference to that member, not a variable — so the naming rules, which are
+    // about what a *variable* should be called, have nothing to say about it.
+    // `Red` is spelled the way its declaration spells it, which is the point
+    if checker.semantic().is_based_enum_case_name(name.as_str()) {
+        return;
+    }
     if checker.is_rule_enabled(Rule::NonLowercaseVariableInFunction)
         && checker.semantic().current_scope().kind.is_function()
     {

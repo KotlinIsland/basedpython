@@ -2521,12 +2521,19 @@ impl<'a> Visitor<'a> for Checker<'a> {
             rest: Some(name), ..
         }) = pattern
         {
-            self.add_binding(
-                name,
-                name.range(),
-                BindingKind::Assignment,
-                BindingFlags::empty(),
-            );
+            // basedpython: a bare `case Red:` whose name is an `enum class`
+            // variant is a *reference* to that member, not the capture python
+            // spells it as. Whether this subject's type really admits it takes the
+            // type, which the linter does not have — so the same split the rest of
+            // `is_basedpython_transpile_resolved_name` makes applies: a name that
+            // matches no variant at all stays an ordinary capture, and ty reports
+            // one whose subject does not accept it
+            let flags = if self.semantic.is_based_enum_case_name(name.as_str()) {
+                BindingFlags::BASED_ENUM_CASE_NAME
+            } else {
+                BindingFlags::empty()
+            };
+            self.add_binding(name, name.range(), BindingKind::Assignment, flags);
         }
 
         // Step 2: Traversal
