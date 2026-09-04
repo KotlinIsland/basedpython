@@ -104,6 +104,7 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
             asname,
             range: _,
             node_index: _,
+            is_resource: _,
         } = alias;
 
         let name = &name.id;

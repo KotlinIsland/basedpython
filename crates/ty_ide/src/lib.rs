@@ -170,6 +170,30 @@ impl NavigationTarget {
         }
     }
 
+    /// Creates a `NavigationTarget`, sending one that lands in a basedpython
+    /// static resource to the head of the document instead.
+    ///
+    /// A resource's definitions live in the python its document stands for,
+    /// which is a file no editor can open, at a position no line of the document
+    /// is on. Until the rendering carries the document positions it came from,
+    /// the head of the document is both the most useful place to land and the
+    /// only one a reader can get to.
+    fn create(
+        db: &dyn ruff_db::Db,
+        file: File,
+        focus_range: TextRange,
+        full_range: TextRange,
+    ) -> Self {
+        if let Some(document) = ruff_db::resource::resource_document(db, file) {
+            return Self::new(document, TextRange::default());
+        }
+        Self {
+            file,
+            focus_range,
+            full_range,
+        }
+    }
+
     pub fn file(&self) -> File {
         self.file
     }
@@ -363,11 +387,12 @@ impl HasNavigationTargets for TypeDefinition<'_> {
             return NavigationTargets::empty();
         };
 
-        NavigationTargets::single(NavigationTarget {
-            file: full_range.file(),
-            focus_range: self.focus_range(db).unwrap_or(full_range).range(),
-            full_range: full_range.range(),
-        })
+        NavigationTargets::single(NavigationTarget::create(
+            db,
+            full_range.file(),
+            self.focus_range(db).unwrap_or(full_range).range(),
+            full_range.range(),
+        ))
     }
 }
 

@@ -56,6 +56,13 @@ impl Violation for ManualFromImport {
 
 /// PLR0402
 pub(crate) fn manual_from_import(checker: &Checker, stmt: &Stmt, alias: &Alias, names: &[Alias]) {
+    // basedpython: a static resource is imported by a path, and `from` has no
+    // spelling for one — `"data/settings.toml" as toml` reads as a dotted name
+    // whose last part is the binding, and rewriting it would name a module that
+    // does not exist
+    if alias.is_resource {
+        return;
+    }
     let Some(asname) = &alias.asname else {
         return;
     };
@@ -91,6 +98,7 @@ pub(crate) fn manual_from_import(checker: &Checker, stmt: &Stmt, alias: &Alias, 
             names: vec![Alias {
                 name: asname.clone(),
                 asname: None,
+                is_resource: false,
                 range: TextRange::default(),
                 node_index: ruff_python_ast::AtomicNodeIndex::NONE,
             }],

@@ -10,19 +10,20 @@ use crate::{
     dependencies::{self, GroupName, ImportStanding},
     place::{
         DefinedPlace, Definedness, Place, PlaceAndQualifiers, TypeOrigin,
-        basedpython_typing_added_in, basedpython_warnings_added_in, typing_extensions_symbol,
+        basedpython_typing_added_in, basedpython_warnings_added_in, explicit_global_symbol,
+        typing_extensions_symbol,
     },
     types::{
         ModuleLiteralType, Type, TypeAndQualifiers,
         dedicated::EXTERNALLY_STUBBED_FRAMEWORKS,
         diagnostic::{
-            MISPLACED_DEPENDENCY, MISSING_FRAMEWORK_STUBS, POSSIBLY_MISSING_IMPORT, PRIVATE_IMPORT,
-            UNDECLARED_DEPENDENCY, UNRESOLVED_IMPORT,
-            hint_if_stdlib_attribute_exists_on_other_versions,
+            INVALID_STATIC_RESOURCE, MISPLACED_DEPENDENCY, MISSING_FRAMEWORK_STUBS,
+            POSSIBLY_MISSING_IMPORT, PRIVATE_IMPORT, UNDECLARED_DEPENDENCY, UNRESOLVED_IMPORT,
+            UNUSABLE_RESOURCE_KEY, hint_if_stdlib_attribute_exists_on_other_versions,
             hint_if_stdlib_submodule_exists_on_other_versions,
         },
         infer::{TypeInferenceBuilder, builder::DeclaredAndInferredType},
-        infer_definition_types,
+        infer_definition_types, static_resource,
         visibility::private_symbols,
     },
 };
@@ -179,7 +180,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             node_index: _,
             name,
             asname,
+            is_resource,
         } = alias;
+
+        // basedpython: `import "data/config.yaml" as config` names a file, not a
+        // module, so nothing about module resolution applies to it
+        if *is_resource {
+            self.infer_static_resource_definition(alias, definition);
+            return;
+        }
 
         // The name of the module being imported
         let Some(full_module_name) = ModuleName::new(name) else {
@@ -238,6 +247,106 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             definition,
             &DeclaredAndInferredType::are_the_same_type(binding_ty),
         );
+    }
+
+    /// basedpython: `import "data/config.yaml" as config`.
+    ///
+    /// the document is rendered as python and that module is inferred, so the
+    /// type bound here is the type of a real declaration in a real file — which
+    /// is what makes `config.a.b[1]` an ordinary attribute access and an
+    /// ordinary index rather than a question about json.
+    fn infer_static_resource_definition(
+        &mut self,
+        alias: &ast::Alias,
+        definition: Definition<'db>,
+    ) {
+        let db = self.db();
+        let path = alias.name.id.as_str();
+
+        let resolved = static_resource::resolve_static_resource(db, self.file(), path)
+            .and_then(|document| static_resource::rendered(db, document));
+
+        let (module, rendered) = match resolved {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                if let Some(builder) = self
+                    .context
+                    .report_lint(&INVALID_STATIC_RESOURCE, alias.range())
+                {
+                    builder
+                        .into_diagnostic(format_args!("Cannot read static resource `{path}`"))
+                        .info(error.to_string());
+                }
+                self.add_unknown_declaration_with_binding(alias.into(), definition);
+                return;
+            }
+        };
+
+        self.report_unusable_resource_keys(alias, &rendered.unusable_keys);
+
+        let ty = explicit_global_symbol(db, db.program_file(module), &rendered.root)
+            .place
+            .ignore_possibly_undefined()
+            .unwrap_or_else(Type::unknown);
+
+        self.add_declaration_with_binding(
+            alias.into(),
+            definition,
+            &DeclaredAndInferredType::are_the_same_type(ty),
+        );
+    }
+
+    /// how many unusable keys a diagnostic names before it starts counting.
+    const LISTED_UNUSABLE_KEYS: usize = 5;
+
+    /// report the keys the document holds that the value cannot carry.
+    ///
+    /// they are not an error in the document — plenty of real configuration is
+    /// keyed by names python has no spelling for — but the program cannot reach
+    /// them, and finding that out by writing the attribute and being told it
+    /// does not exist is a worse way to learn it.
+    fn report_unusable_resource_keys(&mut self, alias: &ast::Alias, keys: &[String]) {
+        let Some((first, rest)) = keys.split_first() else {
+            return;
+        };
+        let Some(builder) = self
+            .context
+            .report_lint(&UNUSABLE_RESOURCE_KEY, alias.range())
+        else {
+            return;
+        };
+
+        let path = alias.name.id.as_str();
+        // "cannot be read as an attribute" rather than "is not an identifier":
+        // a key is also left out when python would mangle it, and when it is a
+        // name the rendering needs for itself, and both of those are identifiers
+        let mut diagnostic = if rest.is_empty() {
+            builder.into_diagnostic(format_args!(
+                "Key `{first}` of `{path}` cannot be read as an attribute"
+            ))
+        } else {
+            builder.into_diagnostic(format_args!(
+                "{count} keys of `{path}` cannot be read as attributes",
+                count = keys.len()
+            ))
+        };
+
+        let listed = keys
+            .iter()
+            .take(Self::LISTED_UNUSABLE_KEYS)
+            .map(|key| format!("`{key}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if keys.len() > Self::LISTED_UNUSABLE_KEYS {
+            diagnostic.info(format_args!(
+                "{listed} and {more} more are left out of the value",
+                more = keys.len() - Self::LISTED_UNUSABLE_KEYS
+            ));
+        } else if !rest.is_empty() {
+            diagnostic.info(format_args!("{listed} are left out of the value"));
+        } else {
+            diagnostic.info("It is left out of the value");
+        }
     }
 
     pub(super) fn infer_import_from_statement(&mut self, import: &ast::StmtImportFrom) {

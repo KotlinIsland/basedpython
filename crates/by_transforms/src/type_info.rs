@@ -562,6 +562,14 @@ pub(crate) trait TypeInfo {
     /// soundness check against the field annotation would always fail at
     /// runtime — the transpiler must not emit one
     fn is_field_specifier(&self, expr: &Expr) -> bool;
+
+    /// basedpython: the python a static resource import lowers to, bound to
+    /// `binding` — the document at `path` written out as classes, tuples and
+    /// `Final` literals — or why the document cannot be read.
+    ///
+    /// the rendering is the one the checker infers the import's type from, so
+    /// asking here is asking the same question the type answered
+    fn static_resource(&self, path: &str, binding: &str) -> Result<String, String>;
 }
 
 /// re-export of the ty-side check plan so transforms name a single type
@@ -1266,6 +1274,14 @@ impl TypeInfo for SemanticModel<'_> {
             .is_some_and(|class| {
                 ty_python_semantic::types::class_body_annotation_is_semantic(self.db(), class)
             })
+    }
+
+    fn static_resource(&self, path: &str, binding: &str) -> Result<String, String> {
+        let file = ty_python_semantic::resolve_static_resource(self.db(), self.file(), path)
+            .map_err(|error| error.to_string())?;
+        ty_python_semantic::render_as(self.db(), file, binding)
+            .map(|rendered| rendered.source)
+            .map_err(|error| error.to_string())
     }
 
     fn is_field_specifier(&self, expr: &Expr) -> bool {

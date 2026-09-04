@@ -32,6 +32,7 @@ Module(
                                 node_index: NodeIndex(None),
                             },
                             asname: None,
+                            is_resource: false,
                         },
                         Alias {
                             range: 19..20,
@@ -42,6 +43,7 @@ Module(
                                 node_index: NodeIndex(None),
                             },
                             asname: None,
+                            is_resource: false,
                         },
                     ],
                     is_lazy: false,

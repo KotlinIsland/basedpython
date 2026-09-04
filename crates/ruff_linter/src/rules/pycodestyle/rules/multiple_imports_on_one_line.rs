@@ -61,6 +61,15 @@ pub(crate) fn multiple_imports_on_one_line(checker: &Checker, stmt: &Stmt, names
     }
 }
 
+/// How an imported name is written in source.
+fn spelling(name: &ruff_python_ast::Identifier, is_resource: bool) -> String {
+    if is_resource {
+        format!("\"{name}\"")
+    } else {
+        name.to_string()
+    }
+}
+
 /// Generate a [`Fix`] to split the imports across multiple statements.
 fn split_imports(
     stmt: &Stmt,
@@ -79,8 +88,12 @@ fn split_imports(
                     node_index: _,
                     name,
                     asname,
+                    is_resource,
                 } = alias;
 
+                // basedpython: a static resource is imported by a quoted path,
+                // and the quotes are not part of the name it is held under
+                let name = spelling(name, *is_resource);
                 if let Some(asname) = asname {
                     format!("import {name} as {asname}")
                 } else {
@@ -104,8 +117,10 @@ fn split_imports(
                     node_index: _,
                     name,
                     asname,
+                    is_resource,
                 } = alias;
 
+                let name = spelling(name, *is_resource);
                 if let Some(asname) = asname {
                     format!("{indentation}import {name} as {asname}")
                 } else {

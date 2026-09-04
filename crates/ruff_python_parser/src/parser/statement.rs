@@ -3157,6 +3157,29 @@ impl<'src> Parser<'src> {
             self.add_error(ParseErrorType::EmptyImportNames, self.current_token_range());
         }
 
+        // basedpython: a static resource is a document written into the module
+        // that imports it, not a module the runtime goes and finds, so it shares
+        // a statement neither with a module import nor with `lazy`
+        if let Some(resource) = names.iter().find(|alias| alias.is_resource) {
+            if let Some(module) = names.iter().find(|alias| !alias.is_resource) {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "A static resource is imported by a statement of its own".to_string(),
+                    ),
+                    module.range(),
+                );
+            }
+            if is_lazy {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "A static resource is read while the program is built, so it cannot be lazy"
+                            .to_string(),
+                    ),
+                    resource.range(),
+                );
+            }
+        }
+
         ast::StmtImport {
             names,
             is_lazy,
@@ -3367,9 +3390,17 @@ impl<'src> Parser<'src> {
                     node_index: AtomicNodeIndex::NONE,
                 },
                 asname: None,
+                is_resource: false,
                 range,
                 node_index: AtomicNodeIndex::NONE,
             };
+        }
+
+        if self.options.is_basedpython
+            && matches!(style, ImportStyle::Import)
+            && self.at(TokenKind::String)
+        {
+            return self.parse_resource_alias(start);
         }
 
         let name = match style {
@@ -3402,6 +3433,63 @@ impl<'src> Parser<'src> {
             range: self.node_range(start),
             name,
             asname,
+            is_resource: false,
+            node_index: AtomicNodeIndex::NONE,
+        }
+    }
+
+    /// Parses the `"data/config.yaml" as config` of a basedpython static
+    /// resource import.
+    ///
+    /// The path is held in the alias's `name`, which is why the name it binds
+    /// has to be written: a path is not a name, so there is nothing to fall back
+    /// on the way `import foo` falls back on `foo`.
+    fn parse_resource_alias(&mut self, start: TextSize) -> ast::Alias {
+        let path_range = self.current_token_range();
+        let path = match self.parse_strings() {
+            Expr::StringLiteral(string) => Name::new(string.value.to_str()),
+            path => {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "A static resource is imported by a plain string path".to_string(),
+                    ),
+                    path.range(),
+                );
+                Name::empty()
+            }
+        };
+
+        let name = ast::Identifier {
+            id: path,
+            range: self.node_range(path_range.start()),
+            node_index: AtomicNodeIndex::NONE,
+        };
+
+        let asname = if self.eat(TokenKind::As) {
+            if self.at_name_or_soft_keyword() {
+                Some(self.parse_identifier())
+            } else {
+                self.add_error(
+                    ParseErrorType::OtherError("Expected symbol after `as`".to_string()),
+                    self.current_token_range(),
+                );
+                None
+            }
+        } else {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "Expected `as` and a name to bind the static resource to".to_string(),
+                ),
+                self.current_token_range(),
+            );
+            None
+        };
+
+        ast::Alias {
+            range: self.node_range(start),
+            name,
+            asname,
+            is_resource: true,
             node_index: AtomicNodeIndex::NONE,
         }
     }

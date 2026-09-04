@@ -1,0 +1,24 @@
+[package]
+name = "by_resource"
+version = "0.0.0"
+publish = false
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+documentation = { workspace = true }
+repository = { workspace = true }
+license = "MIT"
+
+[dependencies]
+ruff_python_stdlib = { workspace = true }
+
+rustc-hash = { workspace = true }
+saphyr = { workspace = true }
+saphyr-parser = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml_edit = { workspace = true, features = ["parse"] }
+
+[lints]
+workspace = true

@@ -4380,7 +4380,14 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 for (alias_index, alias) in node.names.iter().enumerate() {
                     // Mark the imported module, and all of its parents, as being imported in this
                     // file.
-                    if let Some(module_name) = ModuleName::new(&alias.name) {
+                    //
+                    // basedpython: a static resource names a file rather than a
+                    // module, and a path can read as a module name even when it
+                    // is not one — `"config.json"` has two valid identifiers in
+                    // it and names no module at all
+                    if !alias.is_resource
+                        && let Some(module_name) = ModuleName::new(&alias.name)
+                    {
                         self.imported_modules.extend(module_name.ancestors());
                     }
 

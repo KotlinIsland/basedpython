@@ -1,0 +1,19 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/static_resource_escapes.by
+---
+## Input
+```bython
+import "a\nb.json" as newline
+import "c\td.json" as tab
+import "eéf.json" as unicode_escape
+import 'plain.json' as plain
+```
+
+## Output
+```bython
+import "a\nb.json" as newline
+import "c\td.json" as tab
+import "eéf.json" as unicode_escape
+import "plain.json" as plain
+```

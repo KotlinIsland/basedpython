@@ -66,6 +66,7 @@ pub use types::implicit_names::implicit_names;
 pub use types::reified_infer::{
     ArgVariance, ErasedTargetReason, ErasedUnion, ParametricIsPlan, ProtocolMemberCheck,
 };
+pub use types::static_resource::{ResourceError, render_as, resolve_static_resource};
 pub use types::template::finite_string_set;
 pub use types::visibility::private_symbols;
 pub use types::{DisplaySettings, ProgramEnvironment, TypeQualifiers};

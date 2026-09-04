@@ -1553,7 +1553,11 @@ impl RecoveryContextKind {
             RecoveryContextKind::Except => p.at(TokenKind::Except),
             RecoveryContextKind::AssignmentTargets => p.at(TokenKind::Equal),
             RecoveryContextKind::TypeParams => p.at_type_param(),
-            RecoveryContextKind::ImportNames => p.at_name_or_soft_keyword(),
+            // basedpython: a static resource is imported by its path, so a
+            // string starts an import name as well as a name does
+            RecoveryContextKind::ImportNames => {
+                p.at_name_or_soft_keyword() || (p.options.is_basedpython && p.at(TokenKind::String))
+            }
             RecoveryContextKind::ImportFromAsNames(_) => {
                 p.at(TokenKind::Star) || p.at_name_or_soft_keyword()
             }

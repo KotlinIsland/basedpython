@@ -1,0 +1,10 @@
+import "data/config.yaml" as config
+import   "data/ports.json"   as   ports
+import 'data/settings.toml' as settings
+import "a.json" as a, "b.json" as b
+
+
+def f():
+    import "data/config.yaml" as inner
+    return inner
+

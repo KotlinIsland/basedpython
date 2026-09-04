@@ -46,10 +46,10 @@ use super::{
     module_api, mutable_defaults, none_chain, optional_type, overload, parametric_is,
     postfix_await, private_method, propagate, properties, protocol_type, raises_clause,
     reified_class, reified_generic, repeated_underscore, return_value_use, runtime_union, sentinel,
-    some_ctor, soundness, statement_expression, string_tag, super_keyword, symbolic_type_op,
-    template_type, top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification,
-    typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings, unpack,
-    use_site_variance,
+    some_ctor, soundness, statement_expression, static_resource, string_tag, super_keyword,
+    symbolic_type_op, template_type, top_star, trailing_lambda, tuple_index, type_fn, type_is,
+    type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings,
+    unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -462,6 +462,14 @@ pub(crate) fn run_against_source<'a>(
     // blanked copy the passes walk no longer has a `literal` keyword in it
     let literal_string_rewrites = literal_string::collect(parsed_handle.suite(), &semantic_model);
 
+    // a static resource import has no python spelling at all, so the document it
+    // names is read now — from the db's own parse, which is the one the checker
+    // answered about — and written into the module in the import's place
+    let static_resource_pass = static_resource::StaticResource::new(
+        static_resource::collect(parsed_handle.suite(), &semantic_model),
+        source_ref,
+    );
+
     let symbolic_folds =
         symbolic_type_op::collect_symbolic_folds(parsed_handle.suite(), &semantic_model);
     let symbolic_needs_literal_import = symbolic_folds.needs_literal_import;
@@ -690,6 +698,14 @@ pub(crate) fn run_against_source<'a>(
         &sentinel_pass,
         &repeated_underscore_pass,
         &typed_lambda_pass,
+        // a static resource import is replaced whole by the document it names,
+        // in the source *and* in the AST. last, because the statements it
+        // splices in are parsed from the rendering and carry that text's
+        // ranges, which name nothing in this file — no pass after it may read
+        // them. it declares no change of its own, so the source edit is what
+        // normally lands and the AST rewrite only matters when another pass
+        // has already forced the statement to be re-rendered
+        &static_resource_pass,
     ];
     for pass in passes {
         pass.run(&mut module, &mut ctx);

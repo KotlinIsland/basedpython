@@ -1,0 +1,31 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/static_resource.by
+---
+## Input
+```bython
+import "data/config.yaml" as config
+import   "data/ports.json"   as   ports
+import 'data/settings.toml' as settings
+import "a.json" as a, "b.json" as b
+
+
+def f():
+    import "data/config.yaml" as inner
+    return inner
+
+```
+
+## Output
+```bython
+import "data/config.yaml" as config
+import "data/ports.json" as ports
+import "data/settings.toml" as settings
+import "a.json" as a, "b.json" as b
+
+
+def f():
+    import "data/config.yaml" as inner
+
+    return inner
+```

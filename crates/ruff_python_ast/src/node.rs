@@ -442,6 +442,7 @@ impl Alias {
             node_index: _,
             name,
             asname,
+            is_resource: _,
         } = self;
 
         visitor.visit_identifier(name);

@@ -197,6 +197,7 @@ features = [
     { "repeated _ parameters" = "features/repeated-underscore.md" },
     { "lazy imports" = "features/lazy-imports.md" },
     { "export imports" = "features/export-imports.md" },
+    { "static resources" = "features/static-resources.md" },
     { "extensions" = "features/extensions.md" },
     { "conversions (__from__ / __into__ / __of__)" = "features/conversions.md" },
     { "frozen container displays" = "features/frozen-displays.md" },
