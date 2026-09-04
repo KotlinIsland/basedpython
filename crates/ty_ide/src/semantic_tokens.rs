@@ -27,6 +27,7 @@
 //! abstract methods and classes).
 
 use crate::Db;
+use crate::injection::injections;
 use bitflags::bitflags;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
@@ -214,18 +215,46 @@ impl Deref for SemanticTokens {
     }
 }
 
+/// What the client does with the fragments of another language a file holds,
+/// which is what decides whether they are still strings here.
+///
+/// Not something this crate can work out for itself: `by/injections` is a
+/// request a client either makes or does not, and the answer changes what the
+/// tokens should say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fragments {
+    /// The client asks for the injections and paints each fragment in the
+    /// language it names. A `string` token over the same characters would be
+    /// drawn on top of that, hiding the result, so the fragment gets none.
+    Injected,
+
+    /// The client does not inject, so nothing else is going to paint the
+    /// fragment and it keeps the token every other string gets.
+    Strings,
+}
+
 /// Generates semantic tokens for a Python file within the specified range.
 /// Pass None to get tokens for the entire file.
 pub fn semantic_tokens(
     db: &dyn Db,
     file: ProgramFile<'_>,
     range: Option<TextRange>,
+    fragments: Fragments,
 ) -> SemanticTokens {
     let parsed = parsed_module(db, file.python_file(db)).load(db);
     let model = SemanticModel::new(db, file);
     let source = source_text(db, file.file(db));
 
-    let mut visitor = SemanticTokenVisitor::new(&model, &source, range);
+    let mut injected: Vec<_> = match fragments {
+        Fragments::Injected => injections(db, file)
+            .iter()
+            .flat_map(|injection| injection.ranges.iter().copied())
+            .collect(),
+        Fragments::Strings => Vec::new(),
+    };
+    // `holds_injection` looks a literal up by where it starts
+    injected.sort_unstable_by_key(Ranged::start);
+    let mut visitor = SemanticTokenVisitor::new(&model, &source, range, injected);
     visitor.expecting_docstring = true;
     visitor.visit_body(parsed.suite());
 
@@ -449,18 +478,51 @@ struct SemanticTokenVisitor<'db> {
     /// classification of the parameter it refers to. Only set while the annotation
     /// is being visited.
     guard_places: Vec<(TextRange, SemanticTokenType)>,
+    /// Where this file holds a fragment of another language, sorted by where
+    /// each range starts.
+    ///
+    /// A string literal that holds one gets no `string` token, because an editor
+    /// injecting that language paints the fragment in it and a `string` token
+    /// over the top would hide the result — the whole point of reporting the
+    /// injection is that the fragment stops being read as a string.
+    ///
+    /// Empty unless the client said it paints the fragments itself, because a
+    /// client that never asks for the injections has nothing to paint them with
+    /// and dropping the token would leave the fragment plain text. See
+    /// [`Fragments`].
+    injected: Vec<TextRange>,
 }
 
 impl<'db> SemanticTokenVisitor<'db> {
+    /// Whether a fragment of another language sits inside `content`.
+    ///
+    /// A fragment's ranges are always inside the literal that holds them, so
+    /// containment is the test — and a fragment may be reported as several
+    /// ranges of one literal, because a dedented triple-quoted string's text is
+    /// what survives its indentation. That is why the search starts rather than
+    /// stops at the first range that could be inside: one dedented block
+    /// contributes a range per line.
+    fn holds_injection(&self, content: TextRange) -> bool {
+        let from = self
+            .injected
+            .partition_point(|range| range.start() < content.start());
+        self.injected[from..]
+            .iter()
+            .take_while(|range| range.start() <= content.end())
+            .any(|range| content.contains_range(*range))
+    }
+
     fn new(
         model: &'db SemanticModel<'db>,
         source: &'db str,
         range_filter: Option<TextRange>,
+        injected: Vec<TextRange>,
     ) -> Self {
         Self {
             model,
             source,
             is_basedpython: model.file().source_type(model.db()).is_basedpython(),
+            injected,
             tokens: Vec::new(),
             in_class_scope: false,
             in_match_type: false,
@@ -2055,8 +2117,10 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 {
                     // the sub-AST's ranges index into the string's contents, not
                     // this file's text, so it gets no source to trim against
+                    // and no injections either: a fragment of another language
+                    // is a fact about this file's text, which the sub-AST is not
                     let mut sub_visitor =
-                        SemanticTokenVisitor::new(&sub_model, "", self.range_filter);
+                        SemanticTokenVisitor::new(&sub_model, "", self.range_filter, Vec::new());
                     sub_visitor.visit_expr(sub_ast.expr());
                     self.tokens.extend(sub_visitor.tokens);
                 } else {
@@ -2117,6 +2181,11 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
     }
 
     fn visit_string_literal(&mut self, string_literal: &StringLiteral) {
+        // a literal holding a fragment of another language is that language's,
+        // not a string; see `injected`
+        if self.holds_injection(string_literal.content_range()) {
+            return;
+        }
         // Emit a semantic token for this string literal part
         let modifiers = if self.in_docstring {
             SemanticTokenModifier::DOCUMENTATION
@@ -2465,6 +2534,90 @@ def f(x: ast.AST):
         "Name" @ 81..85: Class
         "id" @ 86..88: Variable
         "attr" @ 91..95: Variable
+        "#);
+    }
+
+    /// A string holding a fragment of another language gets no `string` token
+    /// from a client that paints the fragment itself.
+    ///
+    /// An editor that injects the language paints the fragment in it, and a
+    /// `string` token covering the same characters is drawn over the top of that
+    /// — so reporting both is reporting the injection and then hiding it. The
+    /// surrounding strings still get theirs.
+    #[test]
+    fn semantic_tokens_skip_a_string_holding_another_language() {
+        let test = SemanticTokenTest::new_by(
+            "
+# language=html
+page = \"<div>hi</div>\"
+plain = \"not html\"
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "page" @ 17..21: Variable [definition]
+        "plain" @ 40..45: Variable [definition]
+        "\"not html\"" @ 48..58: String
+        "#);
+    }
+
+    /// The same file, for a client that does not inject: every string keeps its
+    /// token.
+    ///
+    /// Dropping it is only right when something else is going to paint the
+    /// fragment. A client that never asks for the injections has nothing to
+    /// paint it with, and would be left with the fragment as unhighlighted
+    /// text — worse than calling it a string, which is at least what it is.
+    #[test]
+    fn a_client_that_does_not_inject_keeps_every_string_token() {
+        let test = SemanticTokenTest::new_by(
+            "
+# language=html
+page = \"<div>hi</div>\"
+plain = \"not html\"
+",
+        );
+
+        let tokens = test.highlight_file_without_injection();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "page" @ 17..21: Variable [definition]
+        "\"<div>hi</div>\"" @ 24..39: String
+        "plain" @ 40..45: Variable [definition]
+        "\"not html\"" @ 48..58: String
+        "#);
+    }
+
+    /// A dedented triple-quoted string reaches the token pass as one range per
+    /// line, and the literal that holds them all is still one string.
+    ///
+    /// `holds_injection` searches by where a range starts, so a fragment made of
+    /// several ranges is the case where stopping at the first candidate would be
+    /// wrong.
+    #[test]
+    fn semantic_tokens_skip_a_dedented_string_holding_another_language() {
+        let test = SemanticTokenTest::new_by(
+            "
+def render():
+    # language=html
+    page = \"\"\"
+    <div>
+    asdf
+    </div>
+    \"\"\"
+    plain = \"not html\"
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "render" @ 5..11: Function [definition]
+        "page" @ 39..43: Variable [definition]
+        "plain" @ 92..97: Variable [definition]
+        "\"not html\"" @ 100..110: String
         "#);
     }
 
@@ -7296,21 +7449,24 @@ x = cast(int, "")
             Self { db, file }
         }
 
-        /// Get semantic tokens for the entire file
+        /// Get semantic tokens for the entire file, as a client that injects
+        /// the languages a file names gets them
         fn highlight_file(&self) -> SemanticTokens {
-            semantic_tokens(
-                &self.db,
-                ProgramFile::new(
-                    &self.db,
-                    self.file,
-                    self.db.program_environment().program(&self.db),
-                ),
-                None,
-            )
+            self.highlight(None, Fragments::Injected)
+        }
+
+        /// Get semantic tokens for the entire file, as a client that does not
+        /// inject gets them
+        fn highlight_file_without_injection(&self) -> SemanticTokens {
+            self.highlight(None, Fragments::Strings)
         }
 
         /// Get semantic tokens for a specific range in the file
         fn highlight_range(&self, range: TextRange) -> SemanticTokens {
+            self.highlight(Some(range), Fragments::Injected)
+        }
+
+        fn highlight(&self, range: Option<TextRange>, fragments: Fragments) -> SemanticTokens {
             semantic_tokens(
                 &self.db,
                 ProgramFile::new(
@@ -7318,7 +7474,8 @@ x = cast(int, "")
                     self.file,
                     self.db.program_environment().program(&self.db),
                 ),
-                Some(range),
+                range,
+                fragments,
             )
         }
 

@@ -99,7 +99,7 @@ impl BackgroundDocumentRequestHandler for InjectionsRequestHandler {
         };
 
         let found = injections(db, db.program_file(file))
-            .into_iter()
+            .iter()
             .filter_map(|injection| {
                 // A fragment whose parts do not all map is not reportable in halves: the client
                 // joins the parts to get the text, so a missing one silently shifts everything
@@ -115,7 +115,7 @@ impl BackgroundDocumentRequestHandler for InjectionsRequestHandler {
                     .collect::<Option<Vec<_>>>()?;
 
                 Some(InjectionFragment {
-                    language: injection.language,
+                    language: injection.language.clone(),
                     ranges,
                     origin: injection.origin.as_str().to_string(),
                 })

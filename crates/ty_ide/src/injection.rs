@@ -42,6 +42,11 @@
 //! reports nothing. being wrong here would put a language on a string that is
 //! not written in it, and an editor would then report ordinary text as broken
 //! code.
+//!
+//! only a plain string literal holds a fragment. an f-string is a string with
+//! holes in it, and the text between the holes is not a program in any language
+//! — an editor handed it would report the gaps as errors — so one is left alone
+//! however it is marked
 
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_db::source::source_text;
@@ -49,8 +54,9 @@ use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, TraversalSignal, walk_body, walk_expr, walk_stmt,
 };
-use ruff_python_ast::{self as ast, AnyNodeRef};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_python_ast::{self as ast, AnyNodeRef, StringFlags};
+use ruff_python_trivia::basedpython::{TripleQuotedDedent, dedent_triple_quoted_body};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::FxHashMap;
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind};
@@ -72,20 +78,23 @@ const MAX_PROPAGATION_DEPTH: usize = 8;
 const MARKER: &str = "language=";
 
 /// A fragment of another language inside a basedpython file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
 pub struct Injection {
     /// The language the fragment is written in, exactly as the marker spelled
     /// it. Nothing here interprets it — an editor matches it against the
     /// languages it has.
     pub language: String,
 
-    /// Where the fragment's text is in the host file, quotes excluded, one
-    /// range per literal part.
+    /// Where the fragment's text is in the host file, quotes excluded, in source
+    /// order. The fragment is the contents of all of them joined.
     ///
-    /// A plain string has one. An implicitly concatenated string has a range per
-    /// piece, in source order, because the fragment is their contents joined:
-    /// `"SELECT *" " FROM t"` is one query written as two literals.
-    pub ranges: Vec<TextRange>,
+    /// Usually one, but not always, and a client that assumes one is wrong twice
+    /// over. An implicitly concatenated string has a range per piece, because
+    /// `"SELECT *" " FROM t"` is one query written as two literals. And a
+    /// dedented triple-quoted string has a range per line, because the
+    /// indentation between them is not part of the text the literal stands
+    /// for — see `content_ranges`.
+    pub ranges: Box<[TextRange]>,
 
     /// What decided the language, which is what an editor shows a user who asks
     /// why a string is being treated as another language.
@@ -96,7 +105,7 @@ pub struct Injection {
 ///
 /// Ordered by how directly the marker names the string it applies to, which is
 /// the order two answers about one string are resolved in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, get_size2::GetSize)]
 pub enum InjectionOrigin {
     /// A `# language=` comment on the statement above.
     Comment,
@@ -120,8 +129,29 @@ impl InjectionOrigin {
     }
 }
 
+/// Every fragment of another language in a file, in source order.
+///
+/// A boxed slice because this is a Salsa-cached value, which a `Vec` built by
+/// pushing would leave holding its spare capacity for as long as the file is
+/// open.
+#[derive(Debug, Default, PartialEq, Eq, get_size2::GetSize)]
+pub struct Injections(Box<[Injection]>);
+
+impl std::ops::Deref for Injections {
+    type Target = [Injection];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Every fragment of another language in `file`, in source order.
-pub fn injections<'db>(db: &'db dyn Db, file: ProgramFile<'db>) -> Vec<Injection> {
+///
+/// Tracked so that the features that need it — the `by/injections` request and
+/// the semantic tokens, which ask on every edit — resolve each call site's
+/// signature once per edit rather than once per request.
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+pub fn injections<'db>(db: &'db dyn Db, file: ProgramFile<'db>) -> Injections {
     let parsed = parsed_module(db, file.python_file(db));
     let module = parsed.load(db);
     let model = SemanticModel::new(db, file);
@@ -133,6 +163,10 @@ pub fn injections<'db>(db: &'db dyn Db, file: ProgramFile<'db>) -> Vec<Injection
         db,
         model: &model,
         source: source.as_str(),
+        // only basedpython dedents a triple-quoted string, so only there is the
+        // text a literal stands for something other than the run between its
+        // quotes
+        dedents: file.file(db).source_type(db).is_basedpython(),
         markers: &markers,
         expectations: Expectations::default(),
         found: Vec::new(),
@@ -150,7 +184,7 @@ pub fn injections<'db>(db: &'db dyn Db, file: ProgramFile<'db>) -> Vec<Injection
         )
     });
     found.dedup_by(|left, right| left.ranges == right.ranges);
-    found
+    Injections(found.into_boxed_slice())
 }
 
 /// Every `# language=<id>` comment in the file, as (comment range, language).
@@ -189,6 +223,9 @@ struct InjectionFinder<'a, 'db> {
     db: &'db dyn Db,
     model: &'a SemanticModel<'db>,
     source: &'a str,
+    /// Whether this file's triple-quoted strings are auto-dedented, which is a
+    /// basedpython rule and not a python one.
+    dedents: bool,
     markers: &'a [(TextRange, String)],
     expectations: Expectations<'db>,
     found: Vec<Injection>,
@@ -231,7 +268,7 @@ impl InjectionFinder<'_, '_> {
         for string in strings.found {
             self.found.push(Injection {
                 language: language.to_string(),
-                ranges: content_ranges(string),
+                ranges: content_ranges(string, self.source, self.dedents),
                 origin: InjectionOrigin::Comment,
             });
         }
@@ -248,7 +285,7 @@ impl InjectionFinder<'_, '_> {
             };
             self.found.push(Injection {
                 language,
-                ranges: content_ranges(string),
+                ranges: content_ranges(string, self.source, self.dedents),
                 origin,
             });
         }
@@ -315,13 +352,94 @@ impl<'db> SourceOrderVisitor<'db> for InjectionFinder<'_, 'db> {
     }
 }
 
-/// The content ranges of a string expression, one per literal part.
-fn content_ranges(string: &ast::ExprStringLiteral) -> Vec<TextRange> {
+/// Where a string expression's *text* is, as ranges of the file it is written in.
+///
+/// Not always the range between the quotes. basedpython dedents a triple-quoted
+/// string the way java dedents a text block — the whitespace that lines the body
+/// up with the code around it belongs to the layout, not to the string — so the
+/// text such a literal stands for is not one run of the source. It is the run
+/// after the indent on each line, and those are the ranges reported.
+///
+/// Getting this from the source rather than from the value is what lets a client
+/// *edit* the fragment: an editor injecting a language needs somewhere in the
+/// file to put every character back, and a character that only exists after a
+/// dedent has nowhere. Reporting the runs that survive the dedent gives it
+/// exactly the text the program will hold and a place for all of it.
+///
+/// `dedents` says whether this file is dedented at all, which python is not.
+/// Beyond that the condition is the transpiler's own, in `by_transforms`'s
+/// `dedent_string`: a lone triple-quoted literal. A fragment written as several
+/// adjacent literals is left as written there, so it is left as written here
+/// too, and the two agree about what the program holds.
+fn content_ranges(
+    string: &ast::ExprStringLiteral,
+    source: &str,
+    dedents: bool,
+) -> Box<[TextRange]> {
+    if dedents
+        && let Some(part) = string.as_single_part_string()
+        && part.flags.is_triple_quoted()
+    {
+        return text_ranges(part.content_range(), source);
+    }
     string
         .value
         .iter()
         .map(ast::StringLiteral::content_range)
         .collect()
+}
+
+/// The runs of `body` that survive basedpython's dedent, or `body` itself when
+/// nothing is stripped from it.
+///
+/// The dedent rule is [`dedent_triple_quoted_body`]'s, which is the one the
+/// transpiler applies (`by_transforms`'s `dedent_string`), so a fragment reads
+/// here exactly as it will at runtime. Empty runs are dropped: a blank line
+/// contributes only the newline that follows it, and the range before that
+/// newline is nothing at all.
+fn text_ranges(body: TextRange, source: &str) -> Box<[TextRange]> {
+    let Some(text) = source.get(body.start().to_usize()..body.end().to_usize()) else {
+        return Box::from([body]);
+    };
+    let (content, indent) = match dedent_triple_quoted_body(text) {
+        TripleQuotedDedent::Dedents { content, indent } => (content, indent),
+        // Nothing is stripped, so the text is the body exactly as written.
+        TripleQuotedDedent::Unchanged => return Box::from([body]),
+        // The transpiler refuses this one rather than guessing a depth, so
+        // there is no dedented text to point at: report the body as written and
+        // let the error the transpiler raises be the thing that gets fixed.
+        TripleQuotedDedent::ClosingOverIndented => return Box::from([body]),
+    };
+
+    // `content` is `text` without its opening newline and without the line the
+    // closing quotes sit on, so it starts one character in.
+    let start = body.start() + TextSize::from(1);
+    let mut ranges = Vec::new();
+    let mut offset = start;
+    let mut lines = content.split('\n').peekable();
+    while let Some(line) = lines.next() {
+        // A blank line is erased entirely, exactly as the transpiler erases it;
+        // what is left of it is the newline that ends it.
+        let stripped = if line.trim().is_empty() {
+            TextSize::of(line)
+        } else {
+            TextSize::of(indent)
+        };
+        let line_end = offset + TextSize::of(line);
+        let text_start = offset + stripped;
+        // The newline between two lines is part of the text; the last line has
+        // none, its newline having been consumed as the closing line's.
+        let end = if lines.peek().is_some() {
+            line_end + TextSize::from(1)
+        } else {
+            line_end
+        };
+        if text_start < end {
+            ranges.push(TextRange::new(text_start, end));
+        }
+        offset = line_end + TextSize::from(1);
+    }
+    ranges.into_boxed_slice()
 }
 
 /// The language the parameter named `name` of the function `definition` defines
@@ -532,11 +650,10 @@ mod tests {
                 return "no injections".to_string();
             }
             let file = self.cursor.file;
-            self.render_diagnostics(
-                found
-                    .into_iter()
-                    .map(|injection| FoundInjection { file, injection }),
-            )
+            self.render_diagnostics(found.iter().map(|injection| FoundInjection {
+                file,
+                injection: injection.clone(),
+            }))
         }
     }
 
@@ -545,6 +662,13 @@ mod tests {
     fn injection_test(source: &str) -> CursorTest {
         CursorTest::builder()
             .source("main.by", format!("{source}<CURSOR>"))
+            .build()
+    }
+
+    /// The same, in a file python's rules apply to.
+    fn python_injection_test(source: &str) -> CursorTest {
+        CursorTest::builder()
+            .source("main.py", format!("{source}<CURSOR>"))
             .build()
     }
 
@@ -678,6 +802,130 @@ def f(source = \"const x = 1\"):
           |
         2 | def f(source = "const x = 1"):
           |                 ^^^^^^^^^^^
+        "#);
+    }
+
+    /// basedpython dedents a triple-quoted string, so the text such a literal
+    /// stands for is not the run of source between its quotes: it is what is
+    /// left of each line after the indentation the code around it put there.
+    /// An editor told otherwise would read the fragment one indent deeper than
+    /// the program will, and would put an indent on every line of it.
+    #[test]
+    fn a_dedented_string_reports_the_text_it_stands_for() {
+        let test = injection_test(
+            "\
+def render():
+    # language=html
+    page = \"\"\"
+    <div>
+    asdf
+    </div>
+    \"\"\"
+",
+        );
+
+        assert_snapshot!(test.injections(), @r#"
+        info[injection]: html (comment)
+         --> main.by:4:5
+          |
+        4 |     <div>
+          |     ^^^^^
+        5 |     asdf
+          |     ----
+        6 |     </div>
+          |     ------
+        "#);
+    }
+
+    /// A blank line inside a dedented string is erased entirely, exactly as the
+    /// transpiler erases it, and what is left of it is the newline that ended
+    /// it. Reporting the whitespace as content would put it in the fragment.
+    #[test]
+    fn a_blank_line_in_a_dedented_string_contributes_only_its_newline() {
+        let test = injection_test(
+            "\
+def render():
+    # language=html
+    page = \"\"\"
+    <div>
+
+    </div>
+    \"\"\"
+",
+        );
+
+        assert_snapshot!(test.injections(), @r#"
+        info[injection]: html (comment)
+         --> main.by:4:5
+          |
+        4 |     <div>
+          |     ^^^^^
+        5 |
+          | -
+        6 |     </div>
+          |     ------
+        "#);
+    }
+
+    /// python does not dedent a triple-quoted string, so in a python file the
+    /// text the literal stands for is the whole run between its quotes,
+    /// indentation and both newlines included. Reporting the dedented runs there
+    /// would hand an editor a fragment the program does not hold.
+    #[test]
+    fn a_python_file_is_not_dedented() {
+        let test = python_injection_test(
+            "\
+def render():
+    # language=html
+    page = \"\"\"
+    <div>
+    asdf
+    </div>
+    \"\"\"
+",
+        );
+
+        assert_snapshot!(test.injections(), @r#"
+        info[injection]: html (comment)
+         --> main.py:3:15
+          |
+        3 |       page = """
+          |  _______________^
+        4 | |     <div>
+        5 | |     asdf
+        6 | |     </div>
+        7 | |     """
+          | |____^
+        "#);
+    }
+
+    /// The transpiler dedents a lone triple-quoted literal and leaves a
+    /// concatenation as written, so a fragment written as several adjacent
+    /// literals keeps its indentation and is reported with it.
+    ///
+    /// Dedenting one half of a concatenation would report a fragment that no
+    /// stage of the language agrees with.
+    #[test]
+    fn a_concatenated_triple_quoted_part_is_not_dedented() {
+        let test = injection_test(
+            "\
+def render():
+    # language=html
+    page = \"\"\"
+    <div>
+    \"\"\" \"</div>\"
+",
+        );
+
+        assert_snapshot!(test.injections(), @r#"
+        info[injection]: html (comment)
+         --> main.by:3:15
+          |
+        3 |       page = """
+          |  _______________^
+        4 | |     <div>
+        5 | |     """ "</div>"
+          | |____^     ------
         "#);
     }
 
