@@ -63,10 +63,18 @@ pub(crate) fn parse_version(s: &str) -> anyhow::Result<Config> {
 impl LoweringArgs {
     /// Fold the lowering options into a config already carrying its target
     /// version.
-    fn apply(&self, config: &mut Config) -> anyhow::Result<()> {
+    ///
+    /// `cwd` is where the project is looked for: the lowerings a project
+    /// configures belong to every command that emits python, so they are read
+    /// here rather than at each command's own config. Outside a project the
+    /// transpiler's own defaults stand.
+    fn apply(&self, config: &mut Config, cwd: &Path) -> anyhow::Result<()> {
         config.soundness = parse_soundness(&self.soundness)?;
         config.runtime_raises_checks = self.runtime_raises_checks;
         config.unique_loop_bindings = !self.no_unique_loop_bindings;
+        if let Ok(project) = ResolvedProject::discover(cwd) {
+            config.float_literals = project.float_literals();
+        }
         Ok(())
     }
 }
@@ -132,7 +140,7 @@ pub(crate) fn cmd_run(
             );
         }
     }
-    lowering.apply(&mut config)?;
+    lowering.apply(&mut config, &cwd)?;
     let tmp = tempfile::TempDir::new().context("failed to create temp directory")?;
 
     let (db, handles, rebuilder, root) = build_project_db(&cwd, BY_SOURCES, None)?;
@@ -626,6 +634,25 @@ impl ResolvedProject {
         &self.root
     }
 
+    /// How this project spells a float or complex literal type in the python it
+    /// emits.
+    fn float_literals(&self) -> by_transforms::FloatLiteralLowering {
+        match self
+            .metadata
+            .options()
+            .lowering
+            .as_ref()
+            .and_then(|lowering| lowering.float_literals.as_deref())
+        {
+            Some(ty_project::metadata::options::FloatLiteralLowering::Literal) => {
+                by_transforms::FloatLiteralLowering::Literal
+            }
+            Some(ty_project::metadata::options::FloatLiteralLowering::Nominal) | None => {
+                by_transforms::FloatLiteralLowering::Nominal
+            }
+        }
+    }
+
     /// The environment the project configures, as an absolute path.
     fn configured_environment(&self) -> Option<PathBuf> {
         let sys_root = SystemPath::from_std_path(&self.root)?;
@@ -772,7 +799,7 @@ pub(crate) fn cmd_build(
 ) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let mut config = version_config(min_version, &cwd)?;
-    lowering.apply(&mut config)?;
+    lowering.apply(&mut config, &cwd)?;
 
     // the output directory is settled before the project is read, because it is
     // the one directory the project must not be read *from*: it holds a copy of
@@ -908,10 +935,10 @@ pub(crate) fn cmd_compile(
     // a declined function runs from the transpiled fallback, so it has to be
     // transpiled with the same options a `transpile` of this module would use —
     // otherwise the compiled half and the interpreted half check different things
-    let mut fallback = Config::default();
-    lowering.apply(&mut fallback)?;
-    options.fallback = Some(fallback);
     let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let mut fallback = Config::default();
+    lowering.apply(&mut fallback, &cwd)?;
+    options.fallback = Some(fallback);
     let sources: Vec<PathBuf> = if files.is_empty() {
         compilable_files(&cwd)
     } else {
@@ -1113,7 +1140,7 @@ pub(crate) fn cmd_transpile(
 ) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let mut config = version_config(min_version, &cwd)?;
-    lowering.apply(&mut config)?;
+    lowering.apply(&mut config, &cwd)?;
 
     // a directory argument transpiles the whole tree in place: forward turns
     // every `.by` into a `.py` (type-aware, one shared project db); reverse

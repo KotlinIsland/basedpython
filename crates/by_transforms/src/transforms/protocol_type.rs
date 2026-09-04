@@ -39,6 +39,7 @@ use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::{Expr, ExprProtocolType, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
+use crate::config::FloatLiteralLowering;
 use crate::type_info::TypeInfo;
 
 use super::ast_driver::{PassContext, TypeAwarePass};
@@ -107,10 +108,15 @@ struct ProtocolTypeLowering<'src> {
 }
 
 impl<'src> ProtocolTypeLowering<'src> {
-    fn new(source: &'src str, types: &'src dyn TypeInfo, claimed: &'src [TextRange]) -> Self {
+    fn new(
+        source: &'src str,
+        types: &'src dyn TypeInfo,
+        claimed: &'src [TextRange],
+        float_literals: FloatLiteralLowering,
+    ) -> Self {
         Self {
             source,
-            callable: CallableSyntax::new(source)
+            callable: CallableSyntax::new(source, float_literals)
                 .with_types(types)
                 .with_claimed_ranges(claimed),
             edits: Vec::new(),
@@ -377,7 +383,7 @@ fn lower<'src>(
     stmts: &[Stmt],
     config: &crate::Config,
 ) -> ProtocolTypeLowering<'src> {
-    let mut inner = ProtocolTypeLowering::new(source, types, claimed);
+    let mut inner = ProtocolTypeLowering::new(source, types, claimed, config.float_literals);
     {
         let mut walker = TypevarScopeWalker {
             config: config.clone(),

@@ -31,6 +31,7 @@ use super::ast_driver::{PassContext, TypeAwarePass};
 use super::intersection::{collect_intersect, collect_union, is_intersection_node};
 use super::just_float::rewrite_type_expr_with_imports;
 use super::wrapped_runtime::OPTIONAL_RUNTIME;
+use crate::config::FloatLiteralLowering;
 use crate::type_info::{TypeInfo, UnpackedKwargsLowering};
 
 #[expect(
@@ -45,6 +46,7 @@ pub(crate) struct CallableSyntax<'src> {
     /// it would re-render its `typeof`/operator surface and the wider edit
     /// would clobber the fold, so `rewrite` leaves it for the fold's own edit
     claimed_ranges: &'src [TextRange],
+    float_literals: FloatLiteralLowering,
     pub(crate) edits: Vec<Fix>,
     pub(crate) needs_import: bool,
     pub(crate) needs_concatenate_import: bool,
@@ -81,11 +83,12 @@ struct ProtocolShape {
 }
 
 impl<'src> CallableSyntax<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
+    pub(crate) fn new(source: &'src str, float_literals: FloatLiteralLowering) -> Self {
         Self {
             source,
             types: None,
             claimed_ranges: &[],
+            float_literals,
             edits: Vec::new(),
             needs_import: false,
             needs_concatenate_import: false,
@@ -202,7 +205,8 @@ impl<'src> CallableSyntax<'src> {
             return self.sweep_substitutions(expr.range());
         }
         if let Some(types) = self.types
-            && let Some((text, imports)) = rewrite_type_expr_with_imports(self.source, types, expr)
+            && let Some((text, imports)) =
+                rewrite_type_expr_with_imports(self.source, types, expr, self.float_literals)
         {
             self.extra_imports.extend(imports);
             return text;
@@ -817,8 +821,9 @@ pub(crate) fn lower_type_expr_full(
     types: &dyn TypeInfo,
     expr: &Expr,
     substitutions: &[(TextRange, String)],
+    float_literals: FloatLiteralLowering,
 ) -> Option<String> {
-    let mut inner = CallableSyntax::new(source).with_types(types);
+    let mut inner = CallableSyntax::new(source, float_literals).with_types(types);
     for (range, name) in substitutions {
         inner.add_substitution(*range, name.clone());
     }
@@ -835,7 +840,7 @@ pub(crate) fn lower_type_expr_full(
     }
     // no structural type-form — fall back to the per-leaf composer
     // (`float` → `JustFloat`, a literal → `Literal[…]`, `dynamic` → `Any`)
-    rewrite_type_expr_with_imports(source, types, expr).map(|(text, _)| text)
+    rewrite_type_expr_with_imports(source, types, expr, float_literals).map(|(text, _)| text)
 }
 
 /// if `expr` is `Subscript(Name("__let__"|"__classvar__"|"__final__"), slice)`,
@@ -904,11 +909,15 @@ impl crate::transforms::type_expr_walker::TypeExprVisitor for CallableSyntax<'_>
 
 pub(crate) struct CallableSyntaxPass<'src> {
     source: &'src str,
+    float_literals: FloatLiteralLowering,
 }
 
 impl<'src> CallableSyntaxPass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, float_literals: FloatLiteralLowering) -> Self {
+        Self {
+            source,
+            float_literals,
+        }
     }
 }
 
@@ -947,7 +956,7 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
         // owned copy so `inner`'s borrow doesn't pin `ctx` against the mutable
         // `required_imports` / `edits` uses below
         let claimed = ctx.claimed_type_op_ranges.clone();
-        let mut inner = CallableSyntax::new(self.source)
+        let mut inner = CallableSyntax::new(self.source, self.float_literals)
             .with_types(types)
             .with_claimed_ranges(&claimed);
         crate::transforms::type_expr_walker::walk_type_positions_skipping(

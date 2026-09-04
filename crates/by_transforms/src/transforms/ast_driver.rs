@@ -537,7 +537,7 @@ pub(crate) fn run_against_source<'a>(
         config.min_version,
         config.inject_future_annotations,
     );
-    let init_method_pass = init_method::InitMethod::new(source_ref);
+    let init_method_pass = init_method::InitMethod::new(source_ref, config.float_literals);
     let properties_pass = properties::PropertiesPass::new(source_ref, accessor_value_ranges);
     let local_once_pass = local_once::LocalOncePass::new(source_ref);
     let raises_strip_pass = raises_clause::RaisesStripPass::new(source_ref);
@@ -572,8 +572,8 @@ pub(crate) fn run_against_source<'a>(
     let inferred_annotation_pass = inferred_annotation::InferredAnnotationPass::new();
     let template_type_pass = template_type::TemplateTypePass;
     let tuple_types_pass = annotation::TupleLiteralTypePass::new(source_ref, config.clone());
-    let literal_types_pass = literal_types::LiteralTypePass::new(source_ref);
-    let callable_pass = callable::CallableSyntaxPass::new(source_ref);
+    let literal_types_pass = literal_types::LiteralTypePass::new(source_ref, config.float_literals);
+    let callable_pass = callable::CallableSyntaxPass::new(source_ref, config.float_literals);
     let protocol_type_pass = protocol_type::ProtocolTypePass::new(source_ref, config.clone());
     let coalesce_text_pass = coalesce::NoneCoalescePass::new(source_ref);
     let force_unwrap_pass = force_unwrap::ForceUnwrapPass::new(source_ref);

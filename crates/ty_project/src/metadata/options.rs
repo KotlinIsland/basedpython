@@ -139,6 +139,11 @@ pub struct Options {
     #[option_group]
     pub build: Option<BuildOptions>,
 
+    /// Configures how basedpython spells constructs python has no spelling of its own for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option_group]
+    pub lowering: Option<LoweringOptions>,
+
     /// Configures the parts of the editor experience that type checking does not decide.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[option_group]
@@ -1650,6 +1655,72 @@ pub struct RunOptions {
         "#
     )]
     pub main: Option<RangedValue<String>>,
+}
+
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    Combine,
+    Serialize,
+    Deserialize,
+    OptionsMetadata,
+    get_size2::GetSize,
+)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct LoweringOptions {
+    /// How a float or complex literal type is spelled in the transpiled python.
+    ///
+    /// basedpython reads `a: 1.5` as a literal type, and python has no spelling for one:
+    /// PEP 586 admits only `None`, `int`, `bool`, `str`, `bytes` and enum members into
+    /// `Literal[...]`.
+    ///
+    /// * `nominal` (the default) writes the type the literal is one of — `a: 1.5` becomes
+    ///   `a: float`, `a: 2j` becomes `a: complex`. The precision is lost, and every checker
+    ///   that reads the output accepts it.
+    /// * `literal` keeps the literal, writing `a: Literal[1.5]`. The precision survives and
+    ///   the output still runs, because `typing` does not check what it is handed — but a
+    ///   checker reading it reports the argument as invalid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#""nominal""#,
+        value_type = r#""nominal" | "literal""#,
+        example = r#"
+            float-literals = "literal"
+        "#
+    )]
+    pub float_literals: Option<RangedValue<FloatLiteralLowering>>,
+}
+
+/// How a float or complex literal type reaches the transpiled python.
+#[derive(
+    Copy, Clone, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, get_size2::GetSize,
+)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum FloatLiteralLowering {
+    /// # Nominal
+    ///
+    /// The type the literal is one of: `1.5` becomes `float`, `2j` becomes `complex`.
+    #[default]
+    Nominal,
+
+    /// # Literal
+    ///
+    /// The literal itself, inside `Literal[...]`. Runs, but no checker accepts it.
+    Literal,
+}
+
+impl Combine for FloatLiteralLowering {
+    fn combine_with(&mut self, _other: Self) {}
+
+    fn combine(self, _other: Self) -> Self {
+        self
+    }
 }
 
 #[derive(

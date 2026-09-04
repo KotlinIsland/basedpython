@@ -3,6 +3,7 @@ use ruff_python_ast::{Expr, PythonVersion, Stmt};
 use ruff_text_size::Ranged;
 
 use crate::Config;
+use crate::config::FloatLiteralLowering;
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::transforms::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
 use crate::transforms::{literal_types, optional_type};
@@ -40,6 +41,7 @@ pub(crate) struct TupleLiteralType<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
     min_version: PythonVersion,
+    float_literals: FloatLiteralLowering,
     /// set when a lowering spelled an `Unpack`, so the pass can ask for the import
     pub(crate) needs_unpack_import: std::cell::Cell<bool>,
     pub(crate) edits: Vec<Fix>,
@@ -50,11 +52,13 @@ impl<'src> TupleLiteralType<'src> {
         source: &'src str,
         types: &'src dyn TypeInfo,
         min_version: PythonVersion,
+        float_literals: FloatLiteralLowering,
     ) -> Self {
         Self {
             source,
             types,
             min_version,
+            float_literals,
             needs_unpack_import: std::cell::Cell::new(false),
             edits: Vec::new(),
         }
@@ -79,7 +83,7 @@ impl<'src> TupleLiteralType<'src> {
 
     /// Source text for `expr`, with literal-type rewrites applied if needed.
     fn fallback_src(&self, expr: &Expr) -> String {
-        literal_types::rewrite_type_expr(self.source, self.types, expr)
+        literal_types::rewrite_type_expr(self.source, self.types, expr, self.float_literals)
             .unwrap_or_else(|| self.src(expr.range()).to_owned())
     }
 
@@ -342,7 +346,12 @@ impl<'src> TupleLiteralTypePass<'src> {
 
 impl TypeAwarePass for TupleLiteralTypePass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = TupleLiteralType::new(self.source, types, self.config.min_version);
+        let mut inner = TupleLiteralType::new(
+            self.source,
+            types,
+            self.config.min_version,
+            self.config.float_literals,
+        );
         walk_type_positions(stmts, Some(types), &mut inner);
         let mut wraps_literal = false;
         for fix in inner.edits {

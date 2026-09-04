@@ -5,6 +5,11 @@
 //! `a: 5`                       → `a: Literal[5]`
 //! `X[1 | 2]` where X is a type → `X[Literal[1, 2]]`
 //!
+//! A float or complex literal has no `Literal[...]` spelling python's own rules
+//! admit, so what it becomes is [`FloatLiteralLowering`]'s to say: the nominal
+//! `float` / `complex` by default, or `Literal[1.5]` where the project would
+//! rather keep the precision than keep the output checkable.
+//!
 //! Type-expression context is determined structurally (annotations, function
 //! return types) or via `TypeInfo` lookup (subscript slices where the value
 //! resolves to a class, type alias, or imported/unknown name).
@@ -13,6 +18,7 @@ use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::{Expr, ExprSubscript, Operator, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
+use crate::config::FloatLiteralLowering;
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::transforms::type_expr_walker::{
     Recurse, TypeExprVisitor, TypePos, walk_type_positions_skipping,
@@ -22,15 +28,21 @@ use crate::type_info::{TypeInfo, trailing_name};
 pub(crate) struct LiteralType<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
+    float_literals: FloatLiteralLowering,
     pub(crate) edits: Vec<Fix>,
     pub(crate) needs_literal_import: bool,
 }
 
 impl<'src> LiteralType<'src> {
-    pub(crate) fn new(source: &'src str, types: &'src dyn TypeInfo) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        types: &'src dyn TypeInfo,
+        float_literals: FloatLiteralLowering,
+    ) -> Self {
         Self {
             source,
             types,
+            float_literals,
             edits: Vec::new(),
             needs_literal_import: false,
         }
@@ -73,9 +85,13 @@ impl<'src> LiteralType<'src> {
             return None;
         }
 
-        if is_literal_expr(expr) {
+        if is_literal_expr(expr, self.float_literals) {
             self.needs_literal_import = true;
             return Some(format!("Literal[{}]", self.src(expr.range())));
+        }
+
+        if let Some(nominal) = nominal_float_type(expr, self.float_literals) {
+            return Some(nominal.to_owned());
         }
 
         if let Expr::BinOp(b) = expr {
@@ -113,7 +129,7 @@ impl<'src> LiteralType<'src> {
                 } else {
                     pending_none = true;
                 }
-            } else if is_literal_expr(p) {
+            } else if is_literal_expr(p, self.float_literals) {
                 let s = self.src(p.range()).to_owned();
                 if pending_none {
                     pending_none = false;
@@ -247,10 +263,17 @@ impl<'src> LiteralType<'src> {
         if matches!(expr, Expr::NoneLiteral(_)) {
             return;
         }
-        if is_literal_expr(expr) {
+        if is_literal_expr(expr, self.float_literals) {
             self.needs_literal_import = true;
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
                 format!("Literal[{}]", self.src(expr.range())),
+                expr.range(),
+            )));
+            return;
+        }
+        if let Some(nominal) = nominal_float_type(expr, self.float_literals) {
+            self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                nominal.to_owned(),
                 expr.range(),
             )));
             return;
@@ -313,8 +336,11 @@ impl<'src> LiteralType<'src> {
     /// Each edit covers only `first_literal.start..last_literal.end`, so
     /// non-literal name nodes between groups are left at their original ranges.
     fn emit_union_group_edits(&mut self, union_expr: &Expr) {
+        let float_literals = self.float_literals;
         let parts = flatten_union(union_expr);
-        if !parts.iter().any(|p| is_literal_expr(p)) {
+        if !parts.iter().any(|p| {
+            is_literal_expr(p, float_literals) || nominal_float_type(p, float_literals).is_some()
+        }) {
             return;
         }
 
@@ -345,7 +371,7 @@ impl<'src> LiteralType<'src> {
                 } else {
                     pending_none_start = Some(p.range().start());
                 }
-            } else if is_literal_expr(p) {
+            } else if is_literal_expr(p, float_literals) {
                 if group_start.is_none() {
                     if let Some(pn) = pending_none_start.take() {
                         group_start = Some(pn);
@@ -371,17 +397,21 @@ impl<'src> LiteralType<'src> {
 
 pub(crate) struct LiteralTypePass<'src> {
     source: &'src str,
+    float_literals: FloatLiteralLowering,
 }
 
 impl<'src> LiteralTypePass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, float_literals: FloatLiteralLowering) -> Self {
+        Self {
+            source,
+            float_literals,
+        }
     }
 }
 
 impl TypeAwarePass for LiteralTypePass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = LiteralType::new(self.source, types);
+        let mut inner = LiteralType::new(self.source, types, self.float_literals);
         walk_type_positions_skipping(stmts, Some(types), &ctx.claimed_type_op_ranges, &mut inner);
         if inner.needs_literal_import && !literal_already_imported(types) {
             ctx.required_imports
@@ -409,15 +439,15 @@ impl TypeExprVisitor for LiteralType<'_> {
     }
 }
 
-fn is_literal_expr(expr: &Expr) -> bool {
+fn is_literal_expr(expr: &Expr, float_literals: FloatLiteralLowering) -> bool {
+    // a float or complex literal is a basedpython-only literal type, and PEP 586
+    // does not admit one into `Literal[...]`. wrapping it anyway is what
+    // `FloatLiteralLowering::Literal` asks for; otherwise it is not a literal as
+    // far as this pass is concerned and `nominal_float_type` names it instead
+    let literal_floats = float_literals == FloatLiteralLowering::Literal;
     match expr {
-        // float/complex literals are basedpython-only literal types — Python's
-        // `Literal[...]` rejects them per PEP 586. leave bare so the output is
-        // valid Python (`a: 1.5` becomes `a: 1.5` would also be invalid in
-        // python; we don't currently rewrite to `float`, but skipping the
-        // `Literal[]` wrap is at least no worse than wrapping)
         Expr::NumberLiteral(n) => {
-            matches!(n.value, ruff_python_ast::Number::Int(_))
+            literal_floats || matches!(n.value, ruff_python_ast::Number::Int(_))
         }
         Expr::StringLiteral(_)
         | Expr::BooleanLiteral(_)
@@ -427,10 +457,37 @@ fn is_literal_expr(expr: &Expr) -> bool {
             matches!(u.op, UnaryOp::USub | UnaryOp::UAdd)
                 && matches!(
                     u.operand.as_ref(),
-                    Expr::NumberLiteral(n) if matches!(n.value, ruff_python_ast::Number::Int(_))
+                    Expr::NumberLiteral(n)
+                        if literal_floats || matches!(n.value, ruff_python_ast::Number::Int(_))
                 )
         }
         _ => false,
+    }
+}
+
+/// the builtin a float or complex literal type is one of, when the project
+/// spells such a literal with its nominal type rather than with `Literal[...]`.
+///
+/// a signed literal is the same type as the literal it negates, so `-1.5` is a
+/// `float` just as `1.5` is
+fn nominal_float_type(expr: &Expr, float_literals: FloatLiteralLowering) -> Option<&'static str> {
+    if float_literals != FloatLiteralLowering::Nominal {
+        return None;
+    }
+    let number = match expr {
+        Expr::NumberLiteral(n) => &n.value,
+        Expr::UnaryOp(u) if matches!(u.op, UnaryOp::USub | UnaryOp::UAdd) => {
+            match u.operand.as_ref() {
+                Expr::NumberLiteral(n) => &n.value,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    match number {
+        ruff_python_ast::Number::Float(_) => Some("float"),
+        ruff_python_ast::Number::Complex { .. } => Some("complex"),
+        ruff_python_ast::Number::Int(_) => None,
     }
 }
 
@@ -466,13 +523,19 @@ pub(crate) fn literal_already_imported(types: &dyn TypeInfo) -> bool {
 /// uses the original source text for sub-expressions, so callers must not
 /// then apply incompatible edits (like name renames) on top of overlapping
 /// ranges.
-pub(crate) fn rewrite_type_expr(source: &str, types: &dyn TypeInfo, expr: &Expr) -> Option<String> {
-    let mut t = LiteralType::new(source, types);
+pub(crate) fn rewrite_type_expr(
+    source: &str,
+    types: &dyn TypeInfo,
+    expr: &Expr,
+    float_literals: FloatLiteralLowering,
+) -> Option<String> {
+    let mut t = LiteralType::new(source, types, float_literals);
     t.transform_type_expr(expr, true)
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::config::FloatLiteralLowering;
     use crate::python_passthrough::unchanged;
     use crate::{Config, transpile};
     use indoc::indoc;
@@ -481,6 +544,77 @@ mod tests {
         assert_eq!(
             transpile(input, &Config::test_default()).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    /// `check`, for a project that keeps a float literal inside `Literal[...]`
+    /// rather than widening it to the type it is one of
+    fn check_literal_floats(input: &str, expected: &str) {
+        let config = Config {
+            float_literals: FloatLiteralLowering::Literal,
+            ..Config::test_default()
+        };
+        assert_eq!(
+            transpile(input, &config).unwrap(),
+            crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Float and complex literal types, which PEP 586 has no `Literal[...]` for.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn a_float_literal_is_the_type_it_is_one_of() {
+        check("a: 3.5\n", "a: float\n");
+        check("a: 2j\n", "a: complex\n");
+        check("a: -1.5\n", "a: float\n");
+    }
+
+    /// left bare, `int | 3.5` is a `TypeError` the moment the annotation is
+    /// evaluated — `type.__or__` has nothing to do with a float
+    #[test]
+    fn a_float_arm_of_a_union_is_lowered_too() {
+        check("a: int | 3.5\n", "a: int | float\n");
+        check("a: int | 2j\n", "a: int | complex\n");
+        check("a: list[3.5]\n", "a: list[float]\n");
+    }
+
+    #[test]
+    fn a_project_may_keep_the_float_literal_instead() {
+        check_literal_floats(
+            "a: 3.5\n",
+            indoc! {"
+                from typing import Literal
+                a: Literal[3.5]
+            "},
+        );
+        check_literal_floats(
+            "a: int | 3.5\n",
+            indoc! {"
+                from typing import Literal
+                a: int | Literal[3.5]
+            "},
+        );
+    }
+
+    /// an int literal has a `Literal[...]` spelling of its own, so neither
+    /// setting moves it
+    #[test]
+    fn an_int_literal_is_unaffected_by_the_setting() {
+        check(
+            "a: int | 5\n",
+            indoc! {"
+                from typing import Literal
+                a: int | Literal[5]
+            "},
+        );
+        check_literal_floats(
+            "a: int | 5\n",
+            indoc! {"
+                from typing import Literal
+                a: int | Literal[5]
+            "},
         );
     }
 

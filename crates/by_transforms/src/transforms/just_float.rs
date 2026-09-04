@@ -22,6 +22,7 @@ use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::{Expr, ExprName, Stmt};
 use ruff_text_size::Ranged;
 
+use crate::config::FloatLiteralLowering;
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::transforms::literal_types::LiteralType;
 use crate::transforms::type_expr_walker::{
@@ -138,11 +139,12 @@ pub(crate) fn rewrite_type_expr_with_imports(
     source: &str,
     types: &dyn TypeInfo,
     expr: &Expr,
+    float_literals: FloatLiteralLowering,
 ) -> Option<(String, Vec<String>)> {
     let mut all_edits: Vec<Edit> = Vec::new();
     let mut imports: Vec<String> = Vec::new();
 
-    let mut lt = LiteralType::new(source, types);
+    let mut lt = LiteralType::new(source, types, float_literals);
     lt.emit_type_edits(expr, true);
     if lt.needs_literal_import {
         imports.push("from typing import Literal".to_owned());

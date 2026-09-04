@@ -22,6 +22,7 @@
 use std::path::{Path, PathBuf};
 
 use by_transforms::SoundnessPositions;
+use by_transforms::config::FloatLiteralLowering;
 use by_transforms::config::{Config, PythonVersion};
 
 use crate::staging::Staging;
@@ -55,6 +56,8 @@ pub struct ConfigRecord {
     pub soundness: String,
     pub runtime_raises_checks: bool,
     pub unique_loop_bindings: bool,
+    /// how a float or complex literal type was spelled, as the option takes it
+    pub float_literals: String,
 }
 
 /// What a build tree records about itself.
@@ -107,6 +110,7 @@ impl BuildRecord {
                 soundness: spell_soundness(config.soundness),
                 runtime_raises_checks: config.runtime_raises_checks,
                 unique_loop_bindings: config.unique_loop_bindings,
+                float_literals: spell_float_literals(config.float_literals),
             },
         }
     }
@@ -153,6 +157,7 @@ impl BuildRecord {
             soundness: parse_soundness(&self.config.soundness)?,
             runtime_raises_checks: self.config.runtime_raises_checks,
             unique_loop_bindings: self.config.unique_loop_bindings,
+            float_literals: parse_float_literals(&self.config.float_literals)?,
             ..Config::default()
         })
     }
@@ -210,6 +215,27 @@ pub fn parse_soundness(spec: &str) -> anyhow::Result<SoundnessPositions> {
 /// list, which round-trips exactly — and it has to round-trip exactly rather than
 /// approximately, since these positions decide which runtime checks the emitted
 /// python carries.
+/// The spelling a [`FloatLiteralLowering`] is written down as, matching the
+/// `lowering.float-literals` option a project sets it with.
+pub fn spell_float_literals(lowering: FloatLiteralLowering) -> String {
+    match lowering {
+        FloatLiteralLowering::Nominal => "nominal".to_owned(),
+        FloatLiteralLowering::Literal => "literal".to_owned(),
+    }
+}
+
+/// Read back what [`spell_float_literals`] wrote.
+pub fn parse_float_literals(spelled: &str) -> anyhow::Result<FloatLiteralLowering> {
+    match spelled {
+        "nominal" => Ok(FloatLiteralLowering::Nominal),
+        "literal" => Ok(FloatLiteralLowering::Literal),
+        other => anyhow::bail!(
+            "{BY_BUILD_FILENAME} spells float literals {other:?}, \
+             which is not `nominal` or `literal`"
+        ),
+    }
+}
+
 pub fn spell_soundness(positions: SoundnessPositions) -> String {
     if positions == SoundnessPositions::defaults() {
         return "default".to_owned();
@@ -239,7 +265,7 @@ pub fn spell_soundness(positions: SoundnessPositions) -> String {
 mod tests {
     use super::{BuildRecord, ConfigRecord, parse_soundness, spell_soundness};
     use by_transforms::SoundnessPositions;
-    use by_transforms::config::Config;
+    use by_transforms::config::{Config, FloatLiteralLowering};
     use std::path::{Path, PathBuf};
 
     /// the wire form, exactly as the plugin and `bpd` read it. nothing else here
@@ -316,6 +342,7 @@ mod tests {
             soundness,
             runtime_raises_checks: true,
             unique_loop_bindings: false,
+            float_literals: FloatLiteralLowering::Literal,
             ..Config::default()
         };
 
@@ -326,6 +353,7 @@ mod tests {
         assert_eq!(recovered.soundness, soundness);
         assert!(recovered.runtime_raises_checks);
         assert!(!recovered.unique_loop_bindings);
+        assert_eq!(recovered.float_literals, FloatLiteralLowering::Literal);
         assert_eq!(recovered.min_version, config.min_version);
         Ok(())
     }
@@ -371,6 +399,7 @@ mod tests {
                 soundness: "none".to_owned(),
                 runtime_raises_checks: false,
                 unique_loop_bindings: true,
+                float_literals: "nominal".to_owned(),
             },
         };
         assert!(record.config().is_err());
