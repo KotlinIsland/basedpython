@@ -5791,6 +5791,11 @@ def use(p: object) -> object:
     );
 }
 
+/// a decorator a method carries is kept and applied at module init
+///
+/// `total` carries `@property` under a second decorator, which is deliberately not the
+/// group of one — a plain `@property` written on its own is lowered as an attribute
+/// instead, and what stands here is `doubling`'s answer rather than a `property`
 #[test]
 fn a_decorated_method_keeps_its_decorators() {
     with_source(
@@ -5801,6 +5806,7 @@ def doubling(fn: object) -> object:
 data class Point:
     x: int
 
+    @doubling
     @property
     def total(self) -> int:
         return self.x
@@ -5825,8 +5831,12 @@ data class Point:
                     .find(|method| method.name == name)
                     .map(|method| dotted(&method.decorators))
             };
-            assert_eq!(decorators("total"), Some(vec!["property".to_string()]));
+            assert_eq!(
+                decorators("total"),
+                Some(vec!["doubling".to_string(), "property".to_string()])
+            );
             assert_eq!(decorators("raw"), Some(vec!["doubling".to_string()]));
+            assert!(class.properties.is_empty(), "{:?}", class.properties);
         },
     );
 }
@@ -8300,6 +8310,370 @@ class Box:
     });
 }
 
+/// a read and a write of a property call its halves outright
+///
+/// the descriptor protocol arrives at these same two bodies, but it gets there by looking
+/// the name up on the type, finding a `property`, and calling through it — and it has to
+/// box the getter's answer to hand it back. naming the half directly skips all of that,
+/// which is what a field read already does for an attribute that is one
+#[test]
+fn a_property_read_and_write_call_the_halves_directly() {
+    let source = "\
+class Cell:
+    def __init__(self) -> None:
+        self._v = 0
+
+    @property
+    def v(self) -> int:
+        return self._v
+
+    @v.setter
+    def v(self, given: int) -> None:
+        self._v = given
+
+
+def bump(cell: Cell) -> int:
+    cell.v = cell.v + 1
+    return cell.v
+";
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let bump = module
+            .functions
+            .iter()
+            .find(|function| function.name == "bump")
+            .expect("bump is emitted");
+        let text = print_function(bump);
+        assert!(text.contains("call Cell.v$get("), "{text}");
+        assert!(text.contains("call Cell.v$set("), "{text}");
+        // the protocol is gone from the frame entirely, and with it the boxing that only
+        // existed to get an `int` back through a `PyObject *`
+        assert!(
+            !has_op(bump, |op| matches!(
+                op,
+                Op::GetAttr { .. } | Op::SetAttr { .. }
+            )),
+            "{text}"
+        );
+    });
+}
+
+/// a `@property` written once is a group of one, and is lowered as the attribute it is
+///
+/// nothing is written under it, so there is no second `def value` for `defined_once` to
+/// object to and the ordinary method path would take it — with `@property` carried along
+/// as a decorator to apply at init. that path cannot make the body run: the class body
+/// already applied the decorator, so what the type is given is the object *that* body
+/// left. lowering it as a group instead publishes one `property` over the compiled getter,
+/// which is also what lets a typed read call the half outright
+#[test]
+fn a_lone_property_getter_is_lowered_as_one_attribute() {
+    let source = "\
+class Box:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def value(self) -> int:
+        return self._n
+
+
+def read(box: Box) -> int:
+    return box.value
+";
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.name == "Box")
+            .expect("Box is emitted");
+        assert_eq!(class.properties.len(), 1, "{:?}", class.properties);
+        let property = &class.properties[0];
+        assert_eq!(property.name, "value");
+        assert_eq!(property.getter.as_deref(), Some("value$get"));
+        assert_eq!(property.setter, None);
+        assert_eq!(property.deleter, None);
+        // the getter has left the method table, where an entry would answer under the
+        // same name the published property has to
+        assert_eq!(
+            class
+                .table_methods()
+                .map(|method| method.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["__init__".to_string()]
+        );
+        let read = module
+            .functions
+            .iter()
+            .find(|function| function.name == "read")
+            .expect("read is emitted");
+        let text = print_function(read);
+        assert!(text.contains("value$get"), "{text}");
+        assert!(
+            !has_op(read, |op| matches!(op, Op::GetAttr { .. })),
+            "{text}"
+        );
+    });
+}
+
+/// a group of one that cannot be published is left where it stands, not declined
+///
+/// a pair this cannot read has to turn the class down: two `def value`s in one body are
+/// two definitions of one name to everything else, and there is nowhere to leave them. a
+/// group of one is a single ordinary `def` under a single ordinary decorator, so the path
+/// that took it before this construct existed still works — it runs the interpreted body,
+/// which is what the whole class did a moment ago.
+///
+/// the first two cost a real module when they declined instead: a getter that suspends is
+/// `email._header_value_parser.MimeParameters`, and the construction through a metaclass
+/// is `urllib.parse._NetlocResultMixinStr`, which took three more classes down with it.
+/// the third is a class whose *base* may carry a metaclass — which is a wrong answer
+/// rather than a decline, so it is the one that has to be got right
+#[test]
+fn a_lone_property_getter_that_cannot_be_published_is_left_alone() {
+    let suspends = "\
+class Box:
+    def __init__(self) -> None:
+        self.n = 1
+
+    @property
+    def value(self) -> object:
+        yield self.n
+
+    def plain(self) -> int:
+        return self.n
+";
+    let through_a_metaclass = "\
+from abc import ABCMeta
+
+
+class Box(metaclass=ABCMeta):
+    @property
+    def value(self) -> int:
+        return 1
+
+    def plain(self) -> int:
+        return 2
+";
+    // a base may carry a metaclass of its own, and this class never names it — `numbers`
+    // writes `metaclass=ABCMeta` on `Number` and on nothing below it, and `Integral`'s two
+    // lone getters were called abstract by the emitted type once they left the method
+    // table for a `property` written on afterwards
+    let over_a_base = "\
+class Held:
+    def held(self) -> int:
+        return 1
+
+
+class Box(Held):
+    @property
+    def value(self) -> int:
+        return 1
+
+    def plain(self) -> int:
+        return 2
+";
+    for source in [suspends, through_a_metaclass, over_a_base] {
+        with_source(source, |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            assert!(
+                module.declined.is_empty(),
+                "{source}\n{:?}",
+                module.declined
+            );
+            let class = module
+                .classes
+                .iter()
+                .find(|class| class.name == "Box")
+                .expect("Box is emitted");
+            assert!(class.properties.is_empty(), "{:?}", class.properties);
+            // the getter is back where it was, carrying the decorator the class body
+            // already applied — so the type is given that body's `property`
+            assert!(
+                class.methods.iter().any(|method| method.name == "value"),
+                "the getter stays a method"
+            );
+            assert!(
+                class.methods.iter().any(|method| method.name == "plain"),
+                "and the rest of the class is still lowered"
+            );
+        });
+    }
+}
+
+/// a `def` written once under something that is not `@property` is not one of these
+///
+/// the group of one is recognised by the decorator alone, so every other single decorated
+/// `def` in a class body has to go on reaching the ordinary method path — otherwise a
+/// `@staticmethod` or a `@functools.cache` would be published as an attribute built out
+/// of itself
+#[test]
+fn a_lone_method_under_another_decorator_is_not_a_property() {
+    let source = "\
+class Box:
+    def __init__(self) -> None:
+        self.n = 0
+
+    @staticmethod
+    def made() -> int:
+        return 1
+";
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.name == "Box")
+            .expect("Box is emitted");
+        assert!(class.properties.is_empty(), "{:?}", class.properties);
+        assert!(
+            class.table_methods().any(|method| method.name == "made"),
+            "made stays in the method table"
+        );
+    });
+}
+
+/// a write to a property that has no setter keeps the protocol
+///
+/// python answers one by raising, in wording the `property` object owns. there is no
+/// setter body to call, and a write that quietly reached the *getter's* field instead
+/// would be the silent wrong answer this whole path exists to avoid
+#[test]
+fn a_write_to_a_property_with_no_setter_stays_on_the_protocol() {
+    let source = "\
+class Reading:
+    def __init__(self) -> None:
+        self._v = 0
+
+    @property
+    def v(self) -> int:
+        return self._v
+
+    @v.deleter
+    def v(self) -> None:
+        pass
+
+
+def store(reading: Reading) -> None:
+    reading.v = 1
+";
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let store = module
+            .functions
+            .iter()
+            .find(|function| function.name == "store")
+            .expect("store is emitted");
+        let text = print_function(store);
+        assert!(
+            has_op(store, |op| matches!(op, Op::SetAttr { .. })),
+            "{text}"
+        );
+        assert!(!text.contains("v$set"), "{text}");
+    });
+}
+
+/// a property whose half carries a defaulted extra parameter keeps the protocol
+///
+/// python hands a setter exactly one argument and a getter none, so a body written to
+/// take more than that is reached with its defaults filled in — and only the wrapper
+/// knows how to fill them. the emitted body has a parameter for every one of them, so a
+/// direct call passing what the *protocol* passes would hand over too few arguments,
+/// which is a call the c compiler would refuse rather than a wrong answer at runtime
+#[test]
+fn a_property_half_with_an_extra_defaulted_parameter_stays_on_the_protocol() {
+    let source = "\
+class Box:
+    def __init__(self) -> None:
+        self.n = 0
+
+    @property
+    def value(self) -> int:
+        return self.n
+
+    @value.setter
+    def value(self, given: int, extra: int = 2) -> None:
+        self.n = given * extra
+
+
+def store(box: Box) -> None:
+    box.value = 3
+";
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let store = module
+            .functions
+            .iter()
+            .find(|function| function.name == "store")
+            .expect("store is emitted");
+        let text = print_function(store);
+        assert!(
+            has_op(store, |op| matches!(op, Op::SetAttr { .. })),
+            "{text}"
+        );
+        assert!(!text.contains("value$set"), "{text}");
+    });
+}
+
+/// a property on a class another class in the module extends keeps the protocol
+///
+/// a subclass may override either half, and a receiver typed as the base cannot see
+/// which one it got — the same reason a method on such a class is not called directly.
+/// the layout pass makes both classes *mutable*, and that is what this rests on
+#[test]
+fn a_property_on_an_extended_class_stays_on_the_protocol() {
+    let source = "\
+class Base:
+    def __init__(self) -> None:
+        self._v = 0
+
+    @property
+    def v(self) -> int:
+        return self._v
+
+    @v.setter
+    def v(self, given: int) -> None:
+        self._v = given
+
+
+class Narrow(Base):
+    @property
+    def v(self) -> int:
+        return self._v * 2
+
+
+def read(base: Base) -> int:
+    return base.v
+";
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        let read = module
+            .functions
+            .iter()
+            .find(|function| function.name == "read")
+            .expect("read is emitted");
+        let text = print_function(read);
+        assert!(
+            has_op(read, |op| matches!(op, Op::GetAttr { .. })),
+            "{text}"
+        );
+        assert!(!text.contains("v$get"), "{text}");
+    });
+}
+
 /// a write to a property is a write to the descriptor, not to a field beside it
 ///
 /// `logging.Manager.__init__` writes `self.disable = 0` where `disable` is a property,
@@ -8433,6 +8807,163 @@ class Box:
             .iter()
             .any(|(_, reason)| reason.contains("`value` is defined more than once")),
         "{foreign:?}"
+    );
+}
+
+/// a half with a parameter the property's call does not fill takes it from its default
+///
+/// `property` calls a setter with the receiver and the one value, positionally. that
+/// says how many arguments arrive, not how many parameters the `def` may be written
+/// with: a half is published as a `PyMethodDef` over its *wrapper*, which binds the call
+/// exactly as a call through the name would, so a trailing default is bound the way
+/// python binds it. the old gate compared the parameter count against the arity and
+/// turned this down
+#[test]
+fn a_property_half_with_a_default_binds_it() {
+    let ir = method_ir(
+        "\
+class Box:
+    def __init__(self) -> None:
+        self.n = 0
+
+    @property
+    def value(self) -> int:
+        return self.n
+
+    @value.setter
+    def value(self, given: int, extra: int = 2) -> None:
+        self.n = given * extra
+",
+        "Box",
+        "value$set",
+    );
+    assert!(ir.contains("given"), "{ir}");
+    assert!(ir.contains("extra"), "{ir}");
+}
+
+/// a half is still turned down where the one call would not bind
+///
+/// the gate is now the question the arity check was standing in for — does the call
+/// `property` makes bind this `def` — so a half that genuinely cannot take it is refused
+/// for what it is. a keyword-only parameter is never reached by that call at all, so one
+/// without a default has no value to take
+#[test]
+fn a_property_half_the_one_call_cannot_bind_is_declined() {
+    let missing = declines(
+        "\
+class Box:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    def value(self, given: int, extra: int) -> None:
+        pass
+",
+    );
+    assert!(
+        missing
+            .iter()
+            .any(|(_, reason)| reason.contains("is called with exactly 2 argument(s)")),
+        "{missing:?}"
+    );
+    let unreachable = declines(
+        "\
+class Box:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    def value(self, given: int, *, bump: int) -> None:
+        pass
+",
+    );
+    assert!(
+        unreachable
+            .iter()
+            .any(|(_, reason)| reason.contains("is called with exactly 2 argument(s)")),
+        "{unreachable:?}"
+    );
+}
+
+/// a `@property` group whose halves carry a second decorator declines as a property
+///
+/// `@property` over `@abc.abstractmethod` is the shape `abc` documents, and both halves
+/// of one carry two decorators. reading each decorator list strictly meant neither `def`
+/// was recognised as a half at all, so the pair fell through to the generic message about
+/// a name written twice — the one every other near-miss on this path goes out of its way
+/// to avoid. the group is still declined; it now declines as the property it is
+#[test]
+fn a_property_stacked_with_another_decorator_declines_as_a_property() {
+    let stacked = declines(
+        "\
+def marking(fn: object) -> object:
+    return fn
+
+
+class Box:
+    @property
+    @marking
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    @marking
+    def value(self, given: int) -> None:
+        pass
+",
+    );
+    assert!(
+        stacked
+            .iter()
+            .any(|(_, reason)| reason.contains("not a plain `@property`")),
+        "{stacked:?}"
+    );
+    assert!(
+        !stacked
+            .iter()
+            .any(|(_, reason)| reason.contains("defined more than once")),
+        "{stacked:?}"
+    );
+}
+
+/// and a half carrying the second decorator names that decorator rather than the name
+///
+/// the `@property` above it is plain, so the group is this construct and the `def` below
+/// is plainly its setter. what stops it is the decorator wrapping the setter's body,
+/// because what would be folded into the property is that decorator's answer rather than
+/// the body written here
+#[test]
+fn a_property_half_carrying_a_second_decorator_names_it() {
+    let stacked = declines(
+        "\
+def marking(fn: object) -> object:
+    return fn
+
+
+class Box:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    @marking
+    def value(self, given: int) -> None:
+        pass
+",
+    );
+    assert!(
+        stacked
+            .iter()
+            .any(|(_, reason)| reason.contains("carries a decorator beside `@value.setter`")),
+        "{stacked:?}"
+    );
+    assert!(
+        !stacked
+            .iter()
+            .any(|(_, reason)| reason.contains("defined more than once")),
+        "{stacked:?}"
     );
 }
 

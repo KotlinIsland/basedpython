@@ -288,6 +288,61 @@ pub fn build_module(
         }
     }
 
+    // the bodies standing behind each `@property`, so a read or a write of one can call
+    // the half directly instead of going the whole way round the descriptor protocol.
+    // only a group `property_groups` accepts is here, and it is asked the same question
+    // `lower_class` asks it, so a symbol named here is one that gets emitted.
+    //
+    // it is asked with a group of one *taken* where `lower_class` may leave it alone. what
+    // the two differ on is a class with a base or a class keyword, and such a class is
+    // `mutable`, which `property_half` refuses before it ever reads this table
+    let mut accessors: Accessors = HashMap::new();
+    for stmt in suite {
+        if let Stmt::ClassDef(class) = stmt
+            && layouts.contains_key(class.name.as_str())
+            && let Ok(groups) = property_groups(db, model, class, LoneGroups::Taken)
+        {
+            let receiver = RType::Instance {
+                class: class.name.to_string(),
+                exact: false,
+            };
+            let mut table: HashMap<String, PropertyHalves> = HashMap::new();
+            for group in &groups {
+                let mut halves = PropertyHalves::default();
+                for (half, accessor) in group.halves() {
+                    let slot = match half {
+                        Half::Get => &mut halves.getter,
+                        Half::Set => &mut halves.setter,
+                        // `del` keeps the protocol: it is rare, and the half answers
+                        // through the same `property` object either way
+                        Half::Delete => continue,
+                    };
+                    let Ok(signature) = signature(
+                        db,
+                        env,
+                        model,
+                        accessor,
+                        &layouts,
+                        Some(Receiver::Explicit(&receiver)),
+                        &[],
+                    ) else {
+                        continue;
+                    };
+                    // the symbol `lower_accessor` writes the body under: the method name
+                    // it would have had, with the half's suffix pushed onto it
+                    let symbol = format!(
+                        "{}{}",
+                        mangled(Some(&class.name), &accessor.name),
+                        half.suffix()
+                    );
+                    *slot = Some((symbol, signature));
+                }
+                table.insert(mangled(Some(&class.name), group.name), halves);
+            }
+            accessors.insert(class.name.to_string(), table);
+        }
+    }
+
     // module-level signatures, so a call can coerce its arguments to what the callee
     // takes. a generator's constructor returns the state object, whatever its
     // annotation says
@@ -468,6 +523,7 @@ pub fn build_module(
         constructs: &constructs,
         bases: &bases,
         properties: &properties,
+        accessors: &accessors,
         language,
         db,
         env,
@@ -1162,6 +1218,7 @@ fn lower_resume(
         constructs: unit.constructs,
         bases: unit.bases,
         properties: unit.properties,
+        accessors: unit.accessors,
         db,
         model,
         builder,
@@ -2097,10 +2154,27 @@ fn lower_class<'a>(
             deleted,
         },
     )?;
-    // the `@property` pairs, worked out before any method is lowered: the two halves of
-    // one are both written `def value`, so a pass that took them one at a time would see
-    // a name defined twice rather than the single attribute python builds out of them
-    let properties = property_groups(db, model, class)?;
+    // the `@property` groups, worked out before any method is lowered: the two halves of
+    // a pair are both written `def value`, so a pass that took them one at a time would
+    // see a name defined twice rather than the single attribute python builds out of them
+    // a group of one is taken only where the class is built by `type` itself. a metaclass
+    // may compute anything it likes from the namespace it is handed, and a published
+    // property is not in that namespace — it is written into the type's dict afterwards,
+    // where the type already exists. `numbers.Integral` is the case: its `numerator` and
+    // `denominator` are lone getters over `Rational`'s abstract ones, and `ABCMeta` reads
+    // the namespace to work out what is still abstract, so taking them out of the method
+    // table without putting them anywhere it could see made the emitted type call both
+    // abstract and refuse to be instantiated.
+    //
+    // an inherited metaclass is why this is not [`built_through_a_metaclass`], which is
+    // about the *construction* and does not fire on a class that names no metaclass of its
+    // own. `numbers` names one on `Number` and nowhere else
+    let lone_groups = if base.is_none() && class_keywords(class)?.is_empty() {
+        LoneGroups::Taken
+    } else {
+        LoneGroups::LeftAlone
+    };
+    let properties = property_groups(db, model, class, lone_groups)?;
     let immutable = class.decorator_list.iter().any(|decorator| {
         matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "frozen_data_class")
     });
@@ -3546,7 +3620,10 @@ impl Half {
 /// metaclass instead — which is built out of a namespace and never consults the spec —
 /// would simply not have it. nothing here asks that question, because every half carries a
 /// decorator and [`metaclass_carries_the_body`] already turns such a class down for
-/// exactly that; relaxing that gate has to answer this one
+/// exactly that; relaxing that gate has to answer this one. a group of *one* is the
+/// exception, and it answers the question rather than dodging it: the caller says whether
+/// a published property is reached, and where it is not the group is left alone — see
+/// [`LoneGroups`]
 struct PropertyGroup<'a> {
     /// the name every half was written as, before private mangling
     name: &'a str,
@@ -3567,7 +3644,36 @@ impl<'a> PropertyGroup<'a> {
     }
 }
 
-/// the `@property` pairs this class body writes
+/// whether a group of *one* is one of these, or is left where it stands
+///
+/// a group of one is the one shape that has somewhere to be left. a pair cannot be: two
+/// `def value`s in one body are two definitions of one name to everything else, so a pair
+/// this cannot read has to turn the class down. a lone getter is a single ordinary `def`
+/// carrying a single ordinary decorator, and the path that took it before this construct
+/// existed still works — it just runs the interpreted body. so wherever taking one over is
+/// not available, it is left alone rather than costing the class
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoneGroups {
+    Taken,
+    LeftAlone,
+}
+
+/// whether this class is constructed by calling a metaclass rather than from a type spec
+///
+/// a keyword goes to the metaclass, and so does a base of ours — see
+/// [`metaclass_carries_the_body`], which is where what that costs is written down. it
+/// matters to a property because a `property` reaches the type through the *spec*, which
+/// such a construction never consults, so the two places that decide whether a group is
+/// taken have to decide it the same way
+fn built_through_a_metaclass(
+    class: &ast::StmtClassDef,
+    base: Option<&ClassBase>,
+    layouts: &Layouts,
+) -> Lowered<bool> {
+    Ok(!class_keywords(class)?.is_empty() || stands_on_an_emitted_base(base, layouts))
+}
+
+/// the `@property` groups this class body writes
 ///
 /// the shape is exact, because anything looser would be lowering something else: every
 /// `def` of the name carries a single written decorator, the first of them is
@@ -3575,11 +3681,13 @@ impl<'a> PropertyGroup<'a> {
 /// same name. a different decorator, a rebound root, `property(fget, fset)` called
 /// directly — none of those is this construct, and a group that is *nearly* one declines
 /// with what stopped it rather than falling through to a message about a name defined
-/// twice
+/// twice — except for a group of one, which is left where it stands instead. see
+/// [`LoneGroups`]
 fn property_groups<'a>(
     db: &dyn ty_python_semantic::Db,
     model: &SemanticModel<'_>,
     class: &'a ast::StmtClassDef,
+    lone_groups: LoneGroups,
 ) -> Lowered<Vec<PropertyGroup<'a>>> {
     // a class body that binds `property` itself is the nearer scope, and the decorator
     // is resolved out of it — so `@property` there is whatever the body bound
@@ -3606,15 +3714,24 @@ fn property_groups<'a>(
             continue;
         }
         let written = definitions(name);
-        // a lone `@property` getter is left alone: module init copies the `property` the
-        // interpreted body already built, so the name already answers with a real one and
-        // taking it over here recovers no decline. what it *would* recover is the getter's
-        // body — the carried property holds the interpreted function, so a lone getter
-        // runs interpreted where a pair does not
-        if written.len() < 2
-            || !written[1..]
-                .iter()
-                .any(|later| accessor_half(db, model, later).is_ok())
+        // a `def` written once under a plain `@property` is a group of *one*: python folds
+        // it into a `property` exactly as it folds a pair, and the attribute it becomes is
+        // the same construct with two of its three halves absent.
+        //
+        // it is here rather than left to the ordinary method path because that path cannot
+        // make it run compiled. `@property` is a decorator the class body already applied,
+        // so `By_DecoratedMethod` takes the object the body left — a `property` holding the
+        // *interpreted* function — and writes it over the method table's entry. the native
+        // body is emitted and then never reached. lowering the group publishes a `property`
+        // over the compiled halves instead, which is what a pair has always done
+        let lone = lone_groups == LoneGroups::Taken
+            && written.len() == 1
+            && is_property_getter(db, model, written[0]);
+        if !lone
+            && (written.len() < 2
+                || !written[1..]
+                    .iter()
+                    .any(|later| written_half(db, model, later).is_some()))
         {
             continue;
         }
@@ -3654,15 +3771,26 @@ fn property_groups<'a>(
         // written straight into the type's dict, which runs none of the slot fixup a
         // `class` statement does — so `@property def __len__` would answer `x.__len__`
         // and leave `len(x)` going wherever the base's slot went, which is two answers
-        if fills_a_type_slot(name) {
-            return Err(Decline::new(format!(
-                "`{name}` is a property and fills a type slot, which a published property does not"
-            )));
+        let publishable = (|| {
+            if fills_a_type_slot(name) {
+                return Err(Decline::new(format!(
+                    "`{name}` is a property and fills a type slot, which a published property does not"
+                )));
+            }
+            for (half, accessor) in group.halves() {
+                accessor_is_plain(accessor, half)?;
+            }
+            Ok(())
+        })();
+        // a group of one that cannot be published is left where it stands, which is a
+        // working state rather than a decline — `email._header_value_parser` writes a lone
+        // getter that suspends, and turning its class down for that cost the module
+        // three compiled functions and everything below them
+        match publishable {
+            Ok(()) => groups.push(group),
+            Err(_) if lone => continue,
+            Err(decline) => return Err(decline),
         }
-        for (half, accessor) in group.halves() {
-            accessor_is_plain(accessor, half)?;
-        }
-        groups.push(group);
     }
     Ok(groups)
 }
@@ -3683,59 +3811,97 @@ fn is_property_getter(
         && is_written_decorator(db, model, decorator)
 }
 
-/// which half `@value.setter` and its siblings write
+/// which half `@value.setter` and its siblings name, wherever the decorator stands
+///
+/// this is what *recognises* the construct, so it looks at the whole decorator list
+/// rather than insisting on a list of one. a half written `@value.setter` over
+/// `@abc.abstractmethod` is still plainly a half of `value`, and a group holding one has
+/// to decline saying so — the lowering turns it down either way, but reading the list
+/// strictly here made it fall through to a message about a name written twice
+fn written_half(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
+    function: &ast::StmtFunctionDef,
+) -> Option<Half> {
+    function.decorator_list.iter().find_map(|decorator| {
+        if !is_written_decorator(db, model, decorator) {
+            return None;
+        }
+        let Expr::Attribute(attribute) = &decorator.expression else {
+            return None;
+        };
+        // the root has to be the name this very `def` binds: `@other.setter` folds this
+        // body into a *different* property, which is not the one-attribute construct
+        // lowered here
+        let Expr::Name(root) = attribute.value.as_ref() else {
+            return None;
+        };
+        if root.id.as_str() != function.name.as_str() {
+            return None;
+        }
+        match attribute.attr.as_str() {
+            "getter" => Some(Half::Get),
+            "setter" => Some(Half::Set),
+            "deleter" => Some(Half::Delete),
+            _ => None,
+        }
+    })
+}
+
+/// which half `@value.setter` and its siblings write, where the half is one this lowers
 fn accessor_half(
     db: &dyn ty_python_semantic::Db,
     model: &SemanticModel<'_>,
     function: &ast::StmtFunctionDef,
 ) -> Lowered<Half> {
-    let unrecognised = || {
-        Decline::new(format!(
+    let Some(half) = written_half(db, model, function) else {
+        return Err(Decline::new(format!(
             "`{}` is written more than once, and the second is not a half of the property above it",
             function.name
-        ))
+        )));
     };
-    let [decorator] = function.decorator_list.as_slice() else {
-        return Err(unrecognised());
-    };
-    if !is_written_decorator(db, model, decorator) {
-        return Err(unrecognised());
+    // the half decorator has to stand alone, because a second one wraps this body in
+    // something else and what `property` would fold in is that wrapper's answer rather
+    // than the body here
+    if function.decorator_list.len() > 1 {
+        return Err(Decline::new(format!(
+            "a property `{}` carries a decorator beside `@{}.{}`, and what would be folded in is that decorator's answer",
+            half.written_as(),
+            function.name,
+            half.written_as()
+        )));
     }
-    let Expr::Attribute(attribute) = &decorator.expression else {
-        return Err(unrecognised());
-    };
-    // the root has to be the name this very `def` binds: `@other.setter` folds this body
-    // into a *different* property, which is not the one-attribute construct lowered here
-    let Expr::Name(root) = attribute.value.as_ref() else {
-        return Err(unrecognised());
-    };
-    if root.id.as_str() != function.name.as_str() {
-        return Err(unrecognised());
-    }
-    match attribute.attr.as_str() {
-        "getter" => Ok(Half::Get),
-        "setter" => Ok(Half::Set),
-        "deleter" => Ok(Half::Delete),
-        _ => Err(unrecognised()),
-    }
+    Ok(half)
 }
 
 /// whether a half is the plain accessor a `property` reaches
 ///
 /// `property` calls a getter with the receiver and nothing else, and a setter with the
-/// receiver and the one value. a half that takes anything more is turned down here even
-/// where a default would have covered the difference — widening this is its own change,
-/// and one that has to be re-costed against what the sample declines next
+/// receiver and the one value — always positionally, never by keyword. so the question is
+/// not how many parameters the half was written with but whether that one call *binds*:
+/// a half is reached through its wrapper rather than its native entry, which binds
+/// arguments exactly as a call through the name would, so `def value(self, given, extra=1)`
+/// under `@value.setter` takes `extra` from its default the way python does
 fn accessor_is_plain(function: &ast::StmtFunctionDef, half: Half) -> Lowered<()> {
     let parameters = &function.parameters;
-    let arity = parameters.posonlyargs.len() + parameters.args.len();
-    if arity != half.arity()
-        || !parameters.kwonlyargs.is_empty()
+    let positional = parameters.posonlyargs.len() + parameters.args.len();
+    let required = parameters
+        .posonlyargs
+        .iter()
+        .chain(&parameters.args)
+        .filter(|parameter| parameter.default.is_none())
+        .count();
+    // a keyword-only parameter is never reached by this call at all, so one without a
+    // default has no value to take and the call raises
+    let unreachable_keyword = parameters
+        .kwonlyargs
+        .iter()
+        .any(|parameter| parameter.default.is_none());
+    if required > half.arity()
+        || positional < half.arity()
+        || unreachable_keyword
         || parameters.vararg.is_some()
         || parameters.kwarg.is_some()
-        || parameters
-            .iter_non_variadic_params()
-            .any(|parameter| parameter.default.is_some())
     {
         return Err(Decline::new(format!(
             "a property `{}` is called with exactly {} argument(s), and `{}` does not take that many",
@@ -4796,13 +4962,18 @@ fn metaclass_carries_the_body(
     base: Option<&ClassBase>,
     layouts: &Layouts,
 ) -> Lowered<()> {
-    if class_keywords(class)?.is_empty() && !stands_on_an_emitted_base(base, layouts) {
+    if !built_through_a_metaclass(class, base, layouts)? {
         return Ok(());
     }
     // a group `property_groups` cannot read is one `lower_class` turns the class down for
     // on its own, with a reason of its own — so the question here is only about a pair it
-    // *can* read, and the error is left to the place that reports it
-    if let Ok(groups) = property_groups(db, model, class)
+    // *can* read, and the error is left to the place that reports it.
+    //
+    // a group of *one* is asked for as left alone, and `lower_class` leaves it alone on
+    // this same condition: it is the one group that has somewhere to be left, so a class
+    // built through its metaclass keeps compiling and its lone getters keep answering
+    // through the `property` the interpreted body built
+    if let Ok(groups) = property_groups(db, model, class, LoneGroups::LeftAlone)
         && !groups.is_empty()
     {
         return Err(Decline::new(
@@ -6317,6 +6488,7 @@ fn lower_function_with_receiver(
         constructs: unit.constructs,
         bases: unit.bases,
         properties: unit.properties,
+        accessors: unit.accessors,
         db,
         model,
         builder,
@@ -6460,6 +6632,26 @@ fn lower_function_with_receiver(
 /// the signature of every method of every emitted class, by class then method
 type Methods = HashMap<String, HashMap<String, Signature>>;
 
+/// the `@property` halves every emitted class lowers a body for, by class then attribute
+///
+/// they are deliberately not in [`Methods`]: the class publishes one `property` under the
+/// attribute's name and the two bodies sit beside it under `$get` and `$set`, so a table
+/// keyed by method name has nowhere to put a pair that shares one name. a site wanting to
+/// call a half directly has nowhere else to find out that it exists or what it takes
+type Accessors = HashMap<String, HashMap<String, PropertyHalves>>;
+
+/// the bodies a property's halves lowered to, each with the symbol holding it
+///
+/// a half is absent where the source wrote none — a read-only property has no setter, and
+/// python answers a write to one by raising. leaving it absent is what keeps that answer:
+/// the write finds nothing to call directly and takes the descriptor protocol below,
+/// where the `property` object refuses it in python's own wording
+#[derive(Default)]
+struct PropertyHalves {
+    getter: Option<(String, Signature)>,
+    setter: Option<(String, Signature)>,
+}
+
 /// the parts of a module's lowering that do not change from function to function
 ///
 /// they all travel together to every entry point, so they travel as one thing.
@@ -6489,6 +6681,8 @@ struct Unit<'a> {
     suite: &'a [Stmt],
     layouts: &'a Layouts,
     methods: &'a Methods,
+    /// the `@property` halves each emitted class lowers a body for — see [`Accessors`]
+    accessors: &'a Accessors,
     /// the signature of each module-level function, so a call can coerce its
     /// arguments to what the callee actually takes
     signatures: &'a HashMap<String, Signature>,
@@ -7945,6 +8139,8 @@ struct Lowering<'a, 'db> {
     /// the attributes each emitted class publishes as a `property` — see
     /// [`published_properties`]
     properties: &'a HashMap<String, HashSet<String>>,
+    /// the `@property` halves each emitted class lowers a body for — see [`Accessors`]
+    accessors: &'a Accessors,
     /// the closure environment this frame allocates, when it makes closures
     environment: Option<Closures>,
     /// the `(index, array)` pairs a counting loop has proved in range, innermost last
@@ -10204,6 +10400,71 @@ impl Lowering<'_, '_> {
         receiver
     }
 
+    /// the property half a read or a write of this attribute can call outright
+    ///
+    /// answers with the class holding the body, the symbol it is under, what it takes
+    /// besides the receiver, and what it answers with.
+    ///
+    /// going straight to the body rests on three things the emitted type already
+    /// settles, all of them visible in what it publishes. a `property` is a *data*
+    /// descriptor, so `PyObject_GenericGetAttr` reaches it from the type and never
+    /// consults the instance dict — which is why this needs none of the shadow test a
+    /// method call needs, a method being a non-data descriptor a value on the instance
+    /// can sit in front of. the type is immutable, so `C.v = something` raises rather
+    /// than putting a different object under the name. and it sets no
+    /// `Py_TPFLAGS_BASETYPE`, so nothing can subclass it and override the half. a
+    /// *mutable* class has given up the last two, exactly as it has given up the direct
+    /// method call, so it is excluded here for the same reason.
+    ///
+    /// there is no walk up the bases, and there is nothing to inherit: a class with an
+    /// in-module base is made *mutable* when the layouts are worked out, and so is the
+    /// base — precisely so that an override a receiver typed as the base cannot see is
+    /// never called directly. so a class that gets past the test above has no base in
+    /// this module, and its own table is the only place its properties can be
+    fn property_half(
+        &self,
+        class: &str,
+        name: &str,
+        half: Half,
+    ) -> Option<(String, String, Vec<RType>, RType)> {
+        if self.mutable.contains(class) {
+            return None;
+        }
+        let halves = self
+            .accessors
+            .get(class)
+            .and_then(|table| table.get(name))?;
+        // how many arguments python hands the half besides the receiver, which is fixed
+        // by the protocol rather than by what the body was written to take
+        let (body, handed) = match half {
+            Half::Get => (halves.getter.as_ref(), 0),
+            Half::Set => (halves.setter.as_ref(), 1),
+            Half::Delete => (None, 0),
+        };
+        let (symbol, signature) = body?;
+        let params: Vec<RType> = signature
+            .params
+            .iter()
+            .skip(1)
+            .map(|(_, rtype)| rtype.clone())
+            .collect();
+        // a body taking anything else is left to the protocol, and this is not a nicety:
+        // an accessor may carry a parameter with a default — `def value(self, given,
+        // extra=2)` is a setter python calls with one argument, filling `extra` in on the
+        // way — and the emitted body takes all of them. only the wrapper knows how to
+        // bind the ones the caller did not pass, so a direct call naming fewer arguments
+        // than the body has parameters would not even be the right call to write
+        if params.len() != handed || signature.vararg || signature.kwarg || signature.kwonly > 0 {
+            return None;
+        }
+        Some((
+            class.to_string(),
+            symbol.clone(),
+            params,
+            signature.ret.clone(),
+        ))
+    }
+
     /// read a place, emitting a field load where it is a field
     fn read_place(&mut self, place: &Place) -> Lowered<(Value, RType)> {
         match place {
@@ -10442,6 +10703,24 @@ impl Lowering<'_, '_> {
                     });
                     return Ok((Value::Register(dest), field_ty));
                 }
+                // a `@property` whose getter this module lowered is called outright. the
+                // protocol would have arrived at this same body, by way of a lookup on
+                // the type, a `property` object, and a call through its `fget` — and it
+                // would have boxed the answer to get it back through, where the direct
+                // call hands it over in the representation the body already has
+                if let RType::Instance { class, .. } = receiver_ty
+                    && let Some((owner, symbol, _, ret)) =
+                        self.property_half(class, name, Half::Get)
+                {
+                    let dest = self.builder.temp(ret.clone());
+                    self.builder.push(Op::CallNative {
+                        dest: Some(dest),
+                        owner: Some(owner),
+                        callee: symbol,
+                        args: vec![receiver.clone()],
+                    });
+                    return Ok((Value::Register(dest), ret));
+                }
                 let receiver = self.widen_to_object(receiver.clone(), receiver_ty);
                 let dest = self.builder.temp(RType::OBJECT);
                 self.builder.push(Op::GetAttr {
@@ -10496,6 +10775,24 @@ impl Lowering<'_, '_> {
                         class,
                         field: name.clone(),
                         value,
+                    });
+                    return Ok(());
+                }
+                // the setter half, called outright, for the reason the read above gives.
+                // a property with no setter is deliberately not here: it falls through to
+                // the protocol, where the `property` refuses the write the way python does
+                if let RType::Instance { class, .. } = receiver_ty
+                    && let Some((owner, symbol, params, ret)) =
+                        self.property_half(class, name, Half::Set)
+                    && let Some(param) = params.first()
+                {
+                    let value = self.coerce(value, ty, param)?;
+                    let dest = self.builder.temp(ret);
+                    self.builder.push(Op::CallNative {
+                        dest: Some(dest),
+                        owner: Some(owner),
+                        callee: symbol,
+                        args: vec![receiver.clone(), value],
                     });
                     return Ok(());
                 }
@@ -13460,6 +13757,24 @@ impl Lowering<'_, '_> {
                 field: name,
             });
             return Ok((Value::Register(dest), field_ty));
+        }
+
+        // a `@property` this module lowered a getter for is called outright. the
+        // descriptor protocol arrives at this very body — by way of a lookup on the type,
+        // a `property` object and a call through its `fget` — and it boxes the answer on
+        // the way back, where the direct call hands it over in the representation the
+        // body already holds it in. see [`Lowering::property_half`] for what licenses it
+        if let RType::Instance { class, .. } = &receiver_ty
+            && let Some((owner, symbol, _, ret)) = self.property_half(class, &name, Half::Get)
+        {
+            let dest = self.builder.temp(ret.clone());
+            self.builder.push(Op::CallNative {
+                dest: Some(dest),
+                owner: Some(owner),
+                callee: symbol,
+                args: vec![receiver],
+            });
+            return Ok((Value::Register(dest), ret));
         }
 
         // every other name on an emitted instance still goes out through the dynamic
