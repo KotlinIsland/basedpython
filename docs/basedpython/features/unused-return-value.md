@@ -100,6 +100,23 @@ subprocess.run(["ls"])      # ok
 the bar for a member is that discarding must be *idiomatic*, not merely common: `path.read_text()`
 discarded is a bug, `path.write_text(...)` discarded is how it is written
 
+## a statement expression's value
+
+the last expression of a branch is what a [statement expression](statement-expressions.md)
+produces, so it is read by whatever the statement expression stands in, and nothing is reported for
+it. a call written earlier in the same branch is discarded like any other
+
+```by
+def parse(text: str) -> int: ...
+
+def f(c: bool) -> int:
+    return if c:
+        parse("1")  # warning: this one goes nowhere
+        parse("2")  # ok — this is the value
+    else:
+        0
+```
+
 ## coroutines
 
 a coroutine that reaches the end of a statement is missing its `await`, which is
