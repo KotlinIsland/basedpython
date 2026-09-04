@@ -982,8 +982,14 @@ impl<'db> SemanticModel<'db> {
     /// implicit receiver — the block then binds it as a leading parameter, which
     /// its body reads members off unqualified and spells `self`
     pub fn trailing_lambda_callback_has_receiver(&self, callee: &ast::Expr) -> bool {
+        // whether a receiver is declared does not depend on what the call
+        // solves, so the callee alone answers
         callee.inferred_type(self).is_some_and(|ty| {
-            crate::types::trailing_lambda::trailing_lambda_receiver_type(self.db, ty).is_some()
+            crate::types::trailing_lambda::trailing_lambda_receiver_type(
+                self.db,
+                crate::types::trailing_lambda::BlockCallee::unspecialized(ty),
+            )
+            .is_some()
         })
     }
 

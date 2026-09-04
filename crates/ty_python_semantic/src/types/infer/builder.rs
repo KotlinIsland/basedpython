@@ -1361,6 +1361,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         );
 
         if self.db().should_check_file(self.file()) {
+            // basedpython-ui: the composition model's checks run over every
+            // scope once its types are known, reading this in-progress
+            // inference rather than re-entering it as a query
+            crate::types::composition::check_scope(&self.context, self.index, |expr| {
+                self.try_expression_type(expr)
+            });
+
             let mut seen_overloaded_places = FxHashSet::default();
             let mut seen_public_functions = FxHashSet::default();
 
@@ -1684,6 +1691,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// so argument-index lookups can't reach for the synthetic argument,
     /// which has no AST node.
     fn infer_trailing_lambda_marker(&mut self, function: &ast::StmtFunctionDef) {
+        let db = self.db();
         let env = self.program_environment();
         let Some(signature_callee) = function.trailing_lambda_callee() else {
             return;
@@ -1705,60 +1713,71 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // result without a cycle through the decorators region
         let callee_ty = self.infer_standalone_expression(signature_callee, TypeContext::default());
 
-        let mut items: Vec<(Argument<'_>, Option<Type<'db>>)> = Vec::new();
         let marker_call = match called {
             ast::Expr::Call(call) if std::ptr::eq(signature_callee, call.func.as_ref()) => {
                 Some(call)
             }
             _ => None,
         };
-        if let Some(call) = marker_call {
-            for arg_or_keyword in call.arguments.iter_source_order() {
-                let item = match arg_or_keyword {
-                    ast::ArgOrKeyword::Arg(argument) => match argument {
-                        ast::Expr::Starred(ast::ExprStarred { value, .. }) => {
-                            let ty = self.infer_expression(value, TypeContext::default());
-                            self.store_expression_type(argument, ty);
-                            (Argument::Variadic, Some(ty))
-                        }
-                        _ => (
-                            Argument::Positional,
-                            Some(self.infer_expression(argument, TypeContext::default())),
-                        ),
-                    },
-                    ast::ArgOrKeyword::Keyword(ast::Keyword { arg, value, .. }) => {
-                        let ty = self.infer_expression(value, TypeContext::default());
-                        match arg {
-                            Some(name) => (Argument::Keyword(&name.id), Some(ty)),
-                            None => (Argument::Keywords, Some(ty)),
-                        }
-                    }
-                };
-                items.push(item);
-            }
-        }
 
-        let keyword = trailing_lambda_keyword(self.db(), callee_ty);
+        // the explicit arguments take the ordinary call path — matched to
+        // parameters, inferred against the parameter they fill, then checked —
+        // so a block-carrying call resolves `context` arguments and literal
+        // conversions exactly like the same call without a block. the block is
+        // appended as a synthetic argument of a gradual callable type: its real
+        // signature is inferred in its own scope, which reads the callee back
+        // from here — a cycle this shape avoids
+        let keyword = trailing_lambda_keyword(db, callee_ty);
+        let mut call_arguments = match marker_call {
+            Some(call) => self.prepare_call_arguments(&call.arguments),
+            None => CallArguments::none(),
+        };
         let block_ty = Type::single_callable(
-            self.db(),
+            db,
             Signature::new(Parameters::gradual_form(), Type::unknown()),
         );
-        items.push((
+        call_arguments.push(
             match &keyword {
                 Some(name) => Argument::Keyword(name),
                 None => Argument::Positional,
             },
-            Some(block_ty),
-        ));
-        let call_arguments: CallArguments<'_, 'db> = items.into_iter().collect();
+            block_ty,
+        );
 
-        let return_ty = match callee_ty.try_call(self.db(), env, &call_arguments) {
-            Ok(bindings) => bindings.return_type(self.db(), env),
-            Err(error) => {
-                error.1.report_diagnostics(&self.context, decorator.into());
-                error.return_type(self.db(), env)
-            }
+        let mut bindings =
+            self.bindings_for_call(callee_ty)
+                .match_parameters(db, env, &call_arguments);
+        // basedpython: fill unmatched `context` parameters from the `context`
+        // declarations visible at the block, gated like an ordinary call to the
+        // callables the transpiler can inject for
+        if matches!(callee_ty, Type::FunctionLiteral(_) | Type::BoundMethod(_)) {
+            bindings.resolve_context_arguments(db, env, self.scope(), called.range().start());
+        }
+        let ast_arguments = match marker_call {
+            Some(call) => ArgumentsIter::from_ast(&call.arguments),
+            None => ArgumentsIter::synthesized(&[]),
         };
+        // the written arguments are standalone expressions (see the semantic
+        // index builder), shared with the block's own `it` typing
+        let bindings_result = self.infer_and_check_argument_types(
+            ast_arguments,
+            &mut call_arguments,
+            &mut |builder, (_, expr, tcx)| builder.infer_maybe_standalone_expression(expr, tcx),
+            &mut bindings,
+            TypeContext::default(),
+        );
+        // a written argument's diagnostic is anchored on that argument — which
+        // is also what lets a literal it holds be repaired by a conversion — and
+        // one about the synthetic block, which has no node, on the whole call
+        if bindings_result.is_err() {
+            let node: ast::AnyNodeRef<'_> = match marker_call {
+                Some(call) => call.into(),
+                None => decorator.into(),
+            };
+            bindings.report_diagnostics(&self.context, node);
+        }
+
+        let return_ty = bindings.return_type(db, env);
         if marker_call.is_some() {
             self.store_expression_type(called, return_ty);
         }

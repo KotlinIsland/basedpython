@@ -39,9 +39,27 @@ final-status-level = "slow"
 # than the 21% of headroom that left, and the same commit timed out at 360s on two
 # runs out of three while passing at 284s on the third. 10 minutes puts the cost
 # back under half the ceiling and still catches a deadlock.
+#
+# And it drifted back again, the same way. On windows the harness measured 561.1s
+# on main against the 600s ceiling — 6.5% of headroom — and basedpython-ui's
+# mdtests, which took the runnable corpus from 1086 blocks to 1137 (+4.7%), were
+# enough to exceed it. The cost is a transpile/python subprocess pair per block,
+# and windows spawns processes far more slowly than linux, so windows is where the
+# ceiling binds first. 20 minutes puts the cost back under half, as before.
+#
+# The harness already parallelises internally over a work-stealing pool, so this
+# is not a serialisation problem: it is that the corpus only ever grows while a CI
+# runner has two cores. Cutting the per-block cost is the lever, and the harness
+# now takes the cheapest one — a block naming a module the interpreter does not
+# have is dropped before it is transpiled rather than after, which measured 46.3s
+# to 40.4s (12.7%) locally. That more than pays for the blocks added here, but the
+# ceiling is raised anyway: 561.1s of 600s was already too close before any of
+# them. The next lever, if this drifts a fourth time, is calling the transpiler
+# in-process instead of spawning `by` per block, which would remove half the
+# process spawns outright.
 [[profile.ci.overrides]]
 filter = 'test(clean_mdtest_blocks_run)'
-slow-timeout = { period = "60s", terminate-after = 10 }
+slow-timeout = { period = "60s", terminate-after = 20 }
 
 # External-dependency mdtests provision a real virtualenv with `uv` (a network
 # install of the framework plus its stubs) before type-checking, so on the fork's

@@ -24,6 +24,13 @@ keeps basedpython features working inside them
     fixture injection typed end to end, plus diagnostics for fixtures that
     don't exist
 
+- :material-view-dashboard-outline:{ .lg .middle } **[basedpython-ui](basedpython-ui.md)**
+
+    ______________________________________________________________________
+
+    composition scopes, observable state, and the checks that keep a ui from
+    going stale
+
 - :simple-django:{ .lg .middle } **[Django](django.md)**
 
     ______________________________________________________________________

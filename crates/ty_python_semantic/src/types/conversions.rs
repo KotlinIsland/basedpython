@@ -30,7 +30,7 @@
 use ruff_db::files::File;
 use ruff_python_ast as ast;
 use ruff_text_size::{Ranged, TextRange};
-use ty_module_resolver::{ModuleName, resolve_module};
+use ty_module_resolver::{ModuleName, file_to_module, resolve_module};
 use ty_python_core::semantic_index;
 
 use crate::Db;
@@ -598,27 +598,56 @@ pub(crate) fn returned_value_at(
 }
 
 /// the search state for [`imported_module_spelling`]: the first import statement
-/// resolving to `target` wins
+/// resolving to `target` wins; failing that, the first one resolving to a
+/// package that contains `target`
 struct ImportSpelling<'a> {
     db: &'a dyn Db,
     from_file: File,
     target: File,
+    /// `target`'s absolute module name, for the containing-package search.
+    /// `None` when the file is not a module of any search path
+    target_name: Option<ModuleName>,
+    /// the spelling of an import of `target` itself
     found: Option<String>,
+    /// the spelling of `target` through an import of a package containing it
+    enclosing: Option<String>,
 }
 
 impl ImportSpelling<'_> {
-    fn resolves(&self, name: &ModuleName) -> bool {
+    /// record what the import of `name`, written as `written`, says about
+    /// `target`: the exact spelling when it *is* `target`, else a spelling
+    /// through it when it is a package containing `target`
+    fn consider(&mut self, name: &ModuleName, written: &str) {
         let db = self.db;
-        resolve_module(
-            self.db,
+        let Some(module) = resolve_module(
+            db,
             ImportingFile::File(
                 self.from_file,
                 db.program_file(self.from_file).resolver_environment(db),
             ),
             name,
-        )
-        .and_then(|module| module.file(self.db))
-            == Some(self.target)
+        ) else {
+            return;
+        };
+        if module.file(db) == Some(self.target) {
+            self.found = Some(written.to_owned());
+            return;
+        }
+        if self.enclosing.is_some() {
+            return;
+        }
+        let Some(rest) = self
+            .target_name
+            .as_ref()
+            .filter(|target_name| *target_name != name)
+            .and_then(|target_name| target_name.relative_to(name))
+        else {
+            return;
+        };
+        // extend the written spelling rather than the absolute name, so a
+        // relative one stays relative: `.` + `geometry` is `.geometry`
+        let separator = if written.ends_with('.') { "" } else { "." };
+        self.enclosing = Some(format!("{written}{separator}{}", rest.as_str()));
     }
 }
 
@@ -631,32 +660,33 @@ impl<'ast> ast::visitor::Visitor<'ast> for ImportSpelling<'_> {
         match stmt {
             ast::Stmt::Import(import) => {
                 for alias in &import.names {
-                    if let Some(name) = ModuleName::new(&alias.name)
-                        && self.resolves(&name)
-                    {
-                        self.found = Some(alias.name.to_string());
-                        return;
+                    if let Some(name) = ModuleName::new(&alias.name) {
+                        self.consider(&name, &alias.name);
+                        if self.found.is_some() {
+                            return;
+                        }
                     }
                 }
             }
             ast::Stmt::ImportFrom(import) => {
                 if let Ok(name) = ModuleName::from_import_statement(
-                    self.db,
+                    db,
                     ImportingFile::File(
                         self.from_file,
                         db.program_file(self.from_file).resolver_environment(db),
                     ),
                     import,
-                ) && self.resolves(&name)
-                {
+                ) {
                     // keep the leading dots: a relative import is how this file
                     // addresses the module, and the absolute name may not resolve
-                    let mut spelling = ".".repeat(import.level as usize);
+                    let mut written = ".".repeat(import.level as usize);
                     if let Some(module) = &import.module {
-                        spelling.push_str(module);
+                        written.push_str(module);
                     }
-                    self.found = Some(spelling);
-                    return;
+                    self.consider(&name, &written);
+                    if self.found.is_some() {
+                        return;
+                    }
                 }
             }
             _ => {}
@@ -672,6 +702,15 @@ impl<'ast> ast::visitor::Visitor<'ast> for ImportSpelling<'_> {
 /// directory that is not an importable package still resolves for the checker
 /// (`target/mod.by` → `target.mod`), while the interpreter running the output only
 /// sees `mod` — and a relative import has no absolute spelling at all.
+///
+/// When no import names `target` itself, one may name a package *containing*
+/// it: a class reached through a re-export — `from pkg import Dp`, with `Dp`
+/// declared in `pkg.geometry` and re-exported by `pkg/__init__` — is declared in
+/// a module the file never spells. That import's own spelling is then extended
+/// with the rest of the path (`pkg` → `pkg.geometry`, `.` → `.geometry`): a
+/// module the file imports is importable at runtime, and so is a module inside
+/// it, which is the promise the absolute name alone cannot make. An import of
+/// the module itself always wins over one of a package around it.
 pub(crate) fn imported_module_spelling(
     db: &dyn Db,
     from_file: File,
@@ -679,11 +718,15 @@ pub(crate) fn imported_module_spelling(
 ) -> Option<String> {
     let module =
         ruff_db::parsed::parsed_module(db, db.program_file(from_file).python_file(db)).load(db);
+    let target_name = file_to_module(db, db.program_file(target).resolver_file(db))
+        .map(|module| module.name(db).clone());
     let mut spelling = ImportSpelling {
         db,
         from_file,
         target,
+        target_name,
         found: None,
+        enclosing: None,
     };
     for stmt in &module.syntax().body {
         ast::visitor::Visitor::visit_stmt(&mut spelling, stmt);
@@ -691,7 +734,7 @@ pub(crate) fn imported_module_spelling(
             break;
         }
     }
-    spelling.found
+    spelling.found.or(spelling.enclosing)
 }
 
 /// every module named by a `from <module> import ...` statement anywhere in

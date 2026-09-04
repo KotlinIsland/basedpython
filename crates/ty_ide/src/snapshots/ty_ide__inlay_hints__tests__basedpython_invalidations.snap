@@ -1,0 +1,1070 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ inferred_invalidations: true, ..InlayHintSettings::none() })"
+---
+
+from basedpython_ui import (
+    Derived, State, StateDict, ambient, composable, compose_test, derived, launched_effect, remember,
+    state, state_dict, state_list, Button, Column, Text,
+)
+from basedpython_ui.runtime import Runtime
+from remote import Remote
+
+let THEME = ambient("light")
+let CLICKS = State(0)
+
+
+class Model:
+    count: State[int]
+
+    def total(self) -> int:
+        return self.count.value
+
+    def reset(self):
+        self.count.set(0)[ invalidates …]
+
+
+@composable
+def Child(count: State[int]):
+    Text(str(count.value))
+
+
+@composable
+def Forwarding(count: State[int]):
+    Child(count)
+
+
+@composable
+def Display(total: Derived[int]):
+    Text(str(total.value))
+
+
+@composable
+def Counter(step: int = 1):
+    let count = state(0)
+    let seed = state(1)
+    let unread = state(0)
+    let total = derived(lambda: count.value * 2)
+    let cached = remember(lambda: seed.value)
+    let todos = state_list([1])
+    let table: StateDict[str, int] = state_dict()
+    let plain = [1]
+    Column:
+        Text(f"{count.value} {total.value} {cached} {len(todos)} {table.get('a')}")
+        Forwarding(count)
+        Display(total)
+        Button("+"):
+            count.value += step[ invalidates Child, Display, Counter, total]
+        Button("reset", on_click=lambda: count.set(0)[ invalidates Child, Display, Counter, total])
+        Button("todo"):
+            todos.append(2)[ invalidates Counter]
+            table["a"] = 1[ invalidates Counter]
+        Button("both"):
+            count.value += step[ invalidates Child, Display, Counter, total]; todos.append(3)[ invalidates Counter]
+        Button("seed"):
+            seed.value = 2[ invalidates Counter]
+        Button("unread"):
+            unread.set(1)[ invalidates nothing]
+        Button("plain"):
+            plain.append(1)
+    launched_effect(None):
+        count.value = 5[ invalidates Child, Display, Counter, total]
+
+    def later():
+        count.value = 0[ invalidates Child, Display, Counter, total]
+
+
+@composable
+def Outer():
+    let shared = state(0)
+
+    @composable
+    def Inner():
+        Text(str(shared.value))
+
+    Inner()
+    Button("bump"):
+        shared.value += 1[ invalidates Inner]
+
+
+@composable
+def OuterInline():
+    let shared = state(0)
+
+    @composable
+    def Inner(once content: () -> None):
+        Text(str(shared.value))
+        content()
+
+    Inner():
+        Text("x")
+    Button("bump"):
+        shared.value += 1[ invalidates OuterInline, Inner]
+
+
+@composable
+def Themed():
+    Text(THEME.current)
+    Text(str(CLICKS.value))
+    Button("click", on_click=lambda: CLICKS.set(1)[ invalidates Themed, Other, …])
+
+
+@composable
+def Other():
+    Text(str(CLICKS.value))
+
+
+def reset_clicks():
+    CLICKS.set(0)[ invalidates Themed, Other, …]
+
+
+@composable
+def Editor(count: State[int]):
+    Text(str(count.value))
+    Button("+"):
+        count.value += 1[ invalidates Child, Editor, Host, Remote, …]
+
+
+@composable
+def Host():
+    let count = state(0)
+    Text(str(count.value))
+    Editor(count)
+    Remote(count)
+    Button("+"):
+        count.value += 1[ invalidates Editor, Host, Remote]
+
+
+@composable
+def Blind(thing: dynamic):
+    let cell = state(0)
+    thing(cell)
+    Button("x"):
+        cell.set(1)[ invalidates …]
+
+
+@composable
+def Spread():
+    let count = state(0)
+    let cells = (count,)
+    Child(*cells)
+    Button("x"):
+        count.set(1)[ invalidates …]
+
+
+@composable
+def Broken():
+    let count = state(0)
+    count.value = 1
+    Text(str(count.value))
+
+
+@composable
+def Dashboard(model: Model):
+    Text(str(model.total()))
+    Button("reset", on_click=lambda: model.count.set(0)[ invalidates Dashboard, …])
+    Button("local"):
+        let cell = model.count
+        cell.set(2)[ invalidates Dashboard, …]
+
+
+@composable
+def Card(count: State[int], once content: () -> None):
+    let expanded = state(False)
+    Text(f"{count.value} {expanded.value}")
+    content()
+    Button("expand"):
+        expanded.set(True)[ invalidates Card, Inline, Mid, Top, …]
+    Button("zero"):
+        count.set(0)[ invalidates Child, Card, Inline, Mid, Top, …]
+
+
+@composable
+def Inline():
+    let count = state(0)
+    Card(count):
+        Text("inner")
+    Child(count)
+    Button("+"):
+        count.value += 1[ invalidates Child, Card, Inline]
+
+
+@composable
+private def Mid(count: State[int], once content: () -> None):
+    let seen = state(False)
+    Text(str(seen.value))
+    Card(count):
+        content()
+    Button("seen"):
+        seen.set(True)[ invalidates Card, Mid, Top]
+
+
+@composable
+def Top():
+    let count = state(0)
+    let flag = state(False)
+    Text(str(flag.value))
+    Mid(count):
+        Text("deep")
+    Button("+"):
+        count.value += 1[ invalidates Card, Mid, Top]
+    Button("flag"):
+        flag.set(True)[ invalidates Card, Mid, Top]
+
+
+@composable
+def InBlock():
+    Column:
+        let inner = state(0)
+        let twice = derived(lambda: inner.value * 2)
+        Text(f"{inner.value} {twice.value}")
+        Child(inner)
+        Button("+"):
+            inner.value += 1[ invalidates Child, InBlock, twice]
+
+
+@composable
+def WriterAlias():
+    let count = state(0)
+    Text(str(count.value))
+    Button("alias"):
+        let alias = count
+        alias.set(5)[ invalidates WriterAlias]
+    Button("loop"):
+        for c in [count]:
+            c.set(6)[ invalidates …]
+    Button("comp"):
+        _ = [c.set(7) for c in [count]][ invalidates …]
+
+
+@composable
+def ReaderAlias():
+    let count = state(0)
+    let alias = count
+    Text(str(alias.value))
+    Button("+"):
+        count.value += 1[ invalidates ReaderAlias]
+
+
+private def render(cell: State[int]):
+    Child(cell)
+
+
+@composable
+def ViaHelper():
+    let count = state(0)
+    render(count)
+
+    def captured():
+        Editor(count)
+
+    captured()
+    Button("+"):
+        count.value += 1[ invalidates Child, Editor]
+
+
+def install(rt: Runtime):
+    def root():
+        let c = state(0)
+        Text(str(c.value))
+        Button("+"):
+            c.value += 1[ invalidates root]
+    rt.set_root(root)
+
+
+def install_lambda(rt: Runtime):
+    let cell = State(0)
+    rt.set_root(lambda: Child(cell))
+
+    def bump():
+        cell.set(1)[ invalidates Child, …]
+
+
+def test_root():
+    let t = compose_test:
+        let count = state(0)
+        Text(str(count.value))
+        Button("+"):
+            count.value += 1[ invalidates root]
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:24:5
+   |
+24 | def Child(count: State[int]):
+   |     ^^^^^
+info: Source
+  --> main2.py:53:46
+   |
+53 |             count.value += step[ invalidates Child, Display, Counter, total]
+   |                                              ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:34:5
+   |
+34 | def Display(total: Derived[int]):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:53:53
+   |
+53 |             count.value += step[ invalidates Child, Display, Counter, total]
+   |                                                     ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:39:5
+   |
+39 | def Counter(step: int = 1):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:53:62
+   |
+53 |             count.value += step[ invalidates Child, Display, Counter, total]
+   |                                                              ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:43:9
+   |
+43 |     let total = derived(lambda: count.value * 2)
+   |         ^^^^^
+info: Source
+  --> main2.py:53:71
+   |
+53 |             count.value += step[ invalidates Child, Display, Counter, total]
+   |                                                                       ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:24:5
+   |
+24 | def Child(count: State[int]):
+   |     ^^^^^
+info: Source
+  --> main2.py:54:68
+   |
+54 |         Button("reset", on_click=lambda: count.set(0)[ invalidates Child, Display, Counter, total])
+   |                                                                    ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:34:5
+   |
+34 | def Display(total: Derived[int]):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:54:75
+   |
+54 |         Button("reset", on_click=lambda: count.set(0)[ invalidates Child, Display, Counter, total])
+   |                                                                           ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:39:5
+   |
+39 | def Counter(step: int = 1):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:54:84
+   |
+54 |         Button("reset", on_click=lambda: count.set(0)[ invalidates Child, Display, Counter, total])
+   |                                                                                    ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:43:9
+   |
+43 |     let total = derived(lambda: count.value * 2)
+   |         ^^^^^
+info: Source
+  --> main2.py:54:93
+   |
+54 |         Button("reset", on_click=lambda: count.set(0)[ invalidates Child, Display, Counter, total])
+   |                                                                                             ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:39:5
+   |
+39 | def Counter(step: int = 1):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:56:42
+   |
+56 |             todos.append(2)[ invalidates Counter]
+   |                                          ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:39:5
+   |
+39 | def Counter(step: int = 1):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:57:41
+   |
+57 |             table["a"] = 1[ invalidates Counter]
+   |                                         ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:24:5
+   |
+24 | def Child(count: State[int]):
+   |     ^^^^^
+info: Source
+  --> main2.py:59:46
+   |
+59 |             count.value += step[ invalidates Child, Display, Counter, total]; todos.append(3)[ invalidates Counter]
+   |                                              ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:34:5
+   |
+34 | def Display(total: Derived[int]):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:59:53
+   |
+59 |             count.value += step[ invalidates Child, Display, Counter, total]; todos.append(3)[ invalidates Counter]
+   |                                                     ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:39:5
+   |
+39 | def Counter(step: int = 1):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:59:62
+   |
+59 |             count.value += step[ invalidates Child, Display, Counter, total]; todos.append(3)[ invalidates Counter]
+   |                                                              ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:43:9
+   |
+43 |     let total = derived(lambda: count.value * 2)
+   |         ^^^^^
+info: Source
+  --> main2.py:59:71
+   |
+59 |             count.value += step[ invalidates Child, Display, Counter, total]; todos.append(3)[ invalidates Counter]
+   |                                                                       ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:39:5
+   |
+39 | def Counter(step: int = 1):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:59:108
+   |
+59 |             count.value += step[ invalidates Child, Display, Counter, total]; todos.append(3)[ invalidates Counter]
+   |                                                                                                            ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:39:5
+   |
+39 | def Counter(step: int = 1):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:61:41
+   |
+61 |             seed.value = 2[ invalidates Counter]
+   |                                         ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:24:5
+   |
+24 | def Child(count: State[int]):
+   |     ^^^^^
+info: Source
+  --> main2.py:67:38
+   |
+67 |         count.value = 5[ invalidates Child, Display, Counter, total]
+   |                                      ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:34:5
+   |
+34 | def Display(total: Derived[int]):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:67:45
+   |
+67 |         count.value = 5[ invalidates Child, Display, Counter, total]
+   |                                             ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:39:5
+   |
+39 | def Counter(step: int = 1):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:67:54
+   |
+67 |         count.value = 5[ invalidates Child, Display, Counter, total]
+   |                                                      ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:43:9
+   |
+43 |     let total = derived(lambda: count.value * 2)
+   |         ^^^^^
+info: Source
+  --> main2.py:67:63
+   |
+67 |         count.value = 5[ invalidates Child, Display, Counter, total]
+   |                                                               ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:24:5
+   |
+24 | def Child(count: State[int]):
+   |     ^^^^^
+info: Source
+  --> main2.py:70:38
+   |
+70 |         count.value = 0[ invalidates Child, Display, Counter, total]
+   |                                      ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:34:5
+   |
+34 | def Display(total: Derived[int]):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:70:45
+   |
+70 |         count.value = 0[ invalidates Child, Display, Counter, total]
+   |                                             ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:39:5
+   |
+39 | def Counter(step: int = 1):
+   |     ^^^^^^^
+info: Source
+  --> main2.py:70:54
+   |
+70 |         count.value = 0[ invalidates Child, Display, Counter, total]
+   |                                                      ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:43:9
+   |
+43 |     let total = derived(lambda: count.value * 2)
+   |         ^^^^^
+info: Source
+  --> main2.py:70:63
+   |
+70 |         count.value = 0[ invalidates Child, Display, Counter, total]
+   |                                                               ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:78:9
+   |
+78 |     def Inner():
+   |         ^^^^^
+info: Source
+  --> main2.py:83:40
+   |
+83 |         shared.value += 1[ invalidates Inner]
+   |                                        ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:87:5
+   |
+87 | def OuterInline():
+   |     ^^^^^^^^^^^
+info: Source
+  --> main2.py:98:40
+   |
+98 |         shared.value += 1[ invalidates OuterInline, Inner]
+   |                                        ^^^^^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:91:9
+   |
+91 |     def Inner(once content: () -> None):
+   |         ^^^^^
+info: Source
+  --> main2.py:98:53
+   |
+98 |         shared.value += 1[ invalidates OuterInline, Inner]
+   |                                                     ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:102:5
+    |
+102 | def Themed():
+    |     ^^^^^^
+info: Source
+   --> main2.py:105:65
+    |
+105 |     Button("click", on_click=lambda: CLICKS.set(1)[ invalidates Themed, Other, …])
+    |                                                                 ^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:109:5
+    |
+109 | def Other():
+    |     ^^^^^
+info: Source
+   --> main2.py:105:73
+    |
+105 |     Button("click", on_click=lambda: CLICKS.set(1)[ invalidates Themed, Other, …])
+    |                                                                         ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:102:5
+    |
+102 | def Themed():
+    |     ^^^^^^
+info: Source
+   --> main2.py:114:32
+    |
+114 |     CLICKS.set(0)[ invalidates Themed, Other, …]
+    |                                ^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:109:5
+    |
+109 | def Other():
+    |     ^^^^^
+info: Source
+   --> main2.py:114:40
+    |
+114 |     CLICKS.set(0)[ invalidates Themed, Other, …]
+    |                                        ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:24:5
+   |
+24 | def Child(count: State[int]):
+   |     ^^^^^
+info: Source
+   --> main2.py:121:39
+    |
+121 |         count.value += 1[ invalidates Child, Editor, Host, Remote, …]
+    |                                       ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:118:5
+    |
+118 | def Editor(count: State[int]):
+    |     ^^^^^^
+info: Source
+   --> main2.py:121:46
+    |
+121 |         count.value += 1[ invalidates Child, Editor, Host, Remote, …]
+    |                                              ^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:125:5
+    |
+125 | def Host():
+    |     ^^^^
+info: Source
+   --> main2.py:121:54
+    |
+121 |         count.value += 1[ invalidates Child, Editor, Host, Remote, …]
+    |                                                      ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+ --> remote.by:6:5
+  |
+6 | def Remote(cell: State[int]):
+  |     ^^^^^^
+info: Source
+   --> main2.py:121:60
+    |
+121 |         count.value += 1[ invalidates Child, Editor, Host, Remote, …]
+    |                                                            ^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:118:5
+    |
+118 | def Editor(count: State[int]):
+    |     ^^^^^^
+info: Source
+   --> main2.py:131:39
+    |
+131 |         count.value += 1[ invalidates Editor, Host, Remote]
+    |                                       ^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:125:5
+    |
+125 | def Host():
+    |     ^^^^
+info: Source
+   --> main2.py:131:47
+    |
+131 |         count.value += 1[ invalidates Editor, Host, Remote]
+    |                                               ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+ --> remote.by:6:5
+  |
+6 | def Remote(cell: State[int]):
+  |     ^^^^^^
+info: Source
+   --> main2.py:131:53
+    |
+131 |         count.value += 1[ invalidates Editor, Host, Remote]
+    |                                                     ^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:159:5
+    |
+159 | def Dashboard(model: Model):
+    |     ^^^^^^^^^
+info: Source
+   --> main2.py:161:70
+    |
+161 |     Button("reset", on_click=lambda: model.count.set(0)[ invalidates Dashboard, …])
+    |                                                                      ^^^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:159:5
+    |
+159 | def Dashboard(model: Model):
+    |     ^^^^^^^^^
+info: Source
+   --> main2.py:164:34
+    |
+164 |         cell.set(2)[ invalidates Dashboard, …]
+    |                                  ^^^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:168:5
+    |
+168 | def Card(count: State[int], once content: () -> None):
+    |     ^^^^
+info: Source
+   --> main2.py:173:41
+    |
+173 |         expanded.set(True)[ invalidates Card, Inline, Mid, Top, …]
+    |                                         ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:179:5
+    |
+179 | def Inline():
+    |     ^^^^^^
+info: Source
+   --> main2.py:173:47
+    |
+173 |         expanded.set(True)[ invalidates Card, Inline, Mid, Top, …]
+    |                                               ^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:189:13
+    |
+189 | private def Mid(count: State[int], once content: () -> None):
+    |             ^^^
+info: Source
+   --> main2.py:173:55
+    |
+173 |         expanded.set(True)[ invalidates Card, Inline, Mid, Top, …]
+    |                                                       ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:199:5
+    |
+199 | def Top():
+    |     ^^^
+info: Source
+   --> main2.py:173:60
+    |
+173 |         expanded.set(True)[ invalidates Card, Inline, Mid, Top, …]
+    |                                                            ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:24:5
+   |
+24 | def Child(count: State[int]):
+   |     ^^^^^
+info: Source
+   --> main2.py:175:35
+    |
+175 |         count.set(0)[ invalidates Child, Card, Inline, Mid, Top, …]
+    |                                   ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:168:5
+    |
+168 | def Card(count: State[int], once content: () -> None):
+    |     ^^^^
+info: Source
+   --> main2.py:175:42
+    |
+175 |         count.set(0)[ invalidates Child, Card, Inline, Mid, Top, …]
+    |                                          ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:179:5
+    |
+179 | def Inline():
+    |     ^^^^^^
+info: Source
+   --> main2.py:175:48
+    |
+175 |         count.set(0)[ invalidates Child, Card, Inline, Mid, Top, …]
+    |                                                ^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:189:13
+    |
+189 | private def Mid(count: State[int], once content: () -> None):
+    |             ^^^
+info: Source
+   --> main2.py:175:56
+    |
+175 |         count.set(0)[ invalidates Child, Card, Inline, Mid, Top, …]
+    |                                                        ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:199:5
+    |
+199 | def Top():
+    |     ^^^
+info: Source
+   --> main2.py:175:61
+    |
+175 |         count.set(0)[ invalidates Child, Card, Inline, Mid, Top, …]
+    |                                                             ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:24:5
+   |
+24 | def Child(count: State[int]):
+   |     ^^^^^
+info: Source
+   --> main2.py:185:39
+    |
+185 |         count.value += 1[ invalidates Child, Card, Inline]
+    |                                       ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:168:5
+    |
+168 | def Card(count: State[int], once content: () -> None):
+    |     ^^^^
+info: Source
+   --> main2.py:185:46
+    |
+185 |         count.value += 1[ invalidates Child, Card, Inline]
+    |                                              ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:179:5
+    |
+179 | def Inline():
+    |     ^^^^^^
+info: Source
+   --> main2.py:185:52
+    |
+185 |         count.value += 1[ invalidates Child, Card, Inline]
+    |                                                    ^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:168:5
+    |
+168 | def Card(count: State[int], once content: () -> None):
+    |     ^^^^
+info: Source
+   --> main2.py:195:37
+    |
+195 |         seen.set(True)[ invalidates Card, Mid, Top]
+    |                                     ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:189:13
+    |
+189 | private def Mid(count: State[int], once content: () -> None):
+    |             ^^^
+info: Source
+   --> main2.py:195:43
+    |
+195 |         seen.set(True)[ invalidates Card, Mid, Top]
+    |                                           ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:199:5
+    |
+199 | def Top():
+    |     ^^^
+info: Source
+   --> main2.py:195:48
+    |
+195 |         seen.set(True)[ invalidates Card, Mid, Top]
+    |                                                ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:168:5
+    |
+168 | def Card(count: State[int], once content: () -> None):
+    |     ^^^^
+info: Source
+   --> main2.py:206:39
+    |
+206 |         count.value += 1[ invalidates Card, Mid, Top]
+    |                                       ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:189:13
+    |
+189 | private def Mid(count: State[int], once content: () -> None):
+    |             ^^^
+info: Source
+   --> main2.py:206:45
+    |
+206 |         count.value += 1[ invalidates Card, Mid, Top]
+    |                                             ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:199:5
+    |
+199 | def Top():
+    |     ^^^
+info: Source
+   --> main2.py:206:50
+    |
+206 |         count.value += 1[ invalidates Card, Mid, Top]
+    |                                                  ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:168:5
+    |
+168 | def Card(count: State[int], once content: () -> None):
+    |     ^^^^
+info: Source
+   --> main2.py:208:37
+    |
+208 |         flag.set(True)[ invalidates Card, Mid, Top]
+    |                                     ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:189:13
+    |
+189 | private def Mid(count: State[int], once content: () -> None):
+    |             ^^^
+info: Source
+   --> main2.py:208:43
+    |
+208 |         flag.set(True)[ invalidates Card, Mid, Top]
+    |                                           ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:199:5
+    |
+199 | def Top():
+    |     ^^^
+info: Source
+   --> main2.py:208:48
+    |
+208 |         flag.set(True)[ invalidates Card, Mid, Top]
+    |                                                ^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:24:5
+   |
+24 | def Child(count: State[int]):
+   |     ^^^^^
+info: Source
+   --> main2.py:219:43
+    |
+219 |             inner.value += 1[ invalidates Child, InBlock, twice]
+    |                                           ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:212:5
+    |
+212 | def InBlock():
+    |     ^^^^^^^
+info: Source
+   --> main2.py:219:50
+    |
+219 |             inner.value += 1[ invalidates Child, InBlock, twice]
+    |                                                  ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:215:13
+    |
+215 |         let twice = derived(lambda: inner.value * 2)
+    |             ^^^^^
+info: Source
+   --> main2.py:219:59
+    |
+219 |             inner.value += 1[ invalidates Child, InBlock, twice]
+    |                                                           ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:223:5
+    |
+223 | def WriterAlias():
+    |     ^^^^^^^^^^^
+info: Source
+   --> main2.py:228:35
+    |
+228 |         alias.set(5)[ invalidates WriterAlias]
+    |                                   ^^^^^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:237:5
+    |
+237 | def ReaderAlias():
+    |     ^^^^^^^^^^^
+info: Source
+   --> main2.py:242:39
+    |
+242 |         count.value += 1[ invalidates ReaderAlias]
+    |                                       ^^^^^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:24:5
+   |
+24 | def Child(count: State[int]):
+   |     ^^^^^
+info: Source
+   --> main2.py:259:39
+    |
+259 |         count.value += 1[ invalidates Child, Editor]
+    |                                       ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:118:5
+    |
+118 | def Editor(count: State[int]):
+    |     ^^^^^^
+info: Source
+   --> main2.py:259:46
+    |
+259 |         count.value += 1[ invalidates Child, Editor]
+    |                                              ^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:268:17
+    |
+268 |     rt.set_root(root)
+    |                 ^^^^
+info: Source
+   --> main2.py:267:39
+    |
+267 |             c.value += 1[ invalidates root]
+    |                                       ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:24:5
+   |
+24 | def Child(count: State[int]):
+   |     ^^^^^
+info: Source
+   --> main2.py:276:34
+    |
+276 |         cell.set(1)[ invalidates Child, …]
+    |                                  ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+   --> main.by:280:13
+    |
+280 |     let t = compose_test:
+    |             ^^^^^^^^^^^^
+info: Source
+   --> main2.py:284:43
+    |
+284 |             count.value += 1[ invalidates root]
+    |                                           ^^^^

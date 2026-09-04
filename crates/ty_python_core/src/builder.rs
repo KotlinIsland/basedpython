@@ -2416,10 +2416,20 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         let enclosing = self.current_scope();
 
         // names the block binds locally, excluding any it already declares
-        // `global` / `nonlocal` (those flow through the general nested path)
+        // `global` / `nonlocal` (those flow through the general nested path).
+        // a name the block *declares* — a `let` / `var`, an annotated
+        // assignment, a nested `def`, its own `it` — is the block's own local
+        // rather than a write to an enclosing binding: python gives an annotated
+        // name to the function that annotates it (and rejects `nonlocal` on it),
+        // and the lowering keeps such a declaration a local of the block
         let candidates: Vec<Name> = self.place_tables[block_scope]
             .symbols()
-            .filter(|symbol| symbol.is_bound() && !symbol.is_global() && !symbol.is_nonlocal())
+            .filter(|symbol| {
+                symbol.is_bound()
+                    && !symbol.is_declared()
+                    && !symbol.is_global()
+                    && !symbol.is_nonlocal()
+            })
             .map(|symbol| symbol.name().clone())
             .collect();
 
@@ -4737,6 +4747,20 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 ..
             }) => self.visit_coalesce_expression(left, right),
             ast::Expr::Call(_) | ast::Expr::BinOp(_) => {
+                // basedpython-ui: the callee of a `<receiver>.set_root(<root>)`
+                // call is inferred standalone, so the scope of the `root`
+                // argument (a lambda, or a function passed by name) can learn
+                // whom it was handed to without the enclosing scope's inference
+                // — which may itself be waiting on that scope, for a lambda's
+                // return type. The callee of a `derived(<compute>)` /
+                // `remember(<compute>)` call is registered for the same reason:
+                // the `compute` lambda's scope learns that what it reads is what
+                // the composition depends on
+                if let ast::Expr::Call(call) = expr
+                    && is_basedpython_ui_argument_callee(&call.func)
+                {
+                    self.add_standalone_expression(&call.func);
+                }
                 walk_expr(self, expr);
                 self.record_exception_checkpoint();
             }
@@ -4980,6 +5004,25 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 // type without depending on the enclosing definition inference
                 if let Some(callee) = function_def.trailing_lambda_callee() {
                     self.add_standalone_expression(callee);
+                    // the call's written arguments are standalone too, so what
+                    // they solve for a generic callee — the type of the block's
+                    // `it` — can be read the same way, from the block's own
+                    // scope. an unpacked argument is left out: it is inferred
+                    // with the call, and a call carrying one is not solved for
+                    // the block
+                    if let Some(call) = function_def.trailing_lambda_call() {
+                        for argument in call.arguments.iter_source_order() {
+                            match argument {
+                                ast::ArgOrKeyword::Arg(value) if !value.is_starred_expr() => {
+                                    self.add_standalone_expression(value);
+                                }
+                                ast::ArgOrKeyword::Keyword(keyword) if keyword.arg.is_some() => {
+                                    self.add_standalone_expression(&keyword.value);
+                                }
+                                ast::ArgOrKeyword::Arg(_) | ast::ArgOrKeyword::Keyword(_) => {}
+                            }
+                        }
+                    }
                 }
 
                 // Evaluate default args before we visit the body. If the default expression ends
@@ -7408,6 +7451,21 @@ fn is_trailing_lambda_value(value: &ast::Expr) -> bool {
     value
         .as_statement_expr()
         .is_some_and(ast::ExprStatement::is_trailing_lambda)
+}
+
+/// basedpython-ui: whether `func` is spelled like the callee of a call whose
+/// argument's scope must learn whom it was handed to from a standalone
+/// inference of the callee — `<receiver>.set_root(<root>)`, `derived(<compute>)`,
+/// `remember(<compute>)`. The shapes are syntactic; the checker resolves what
+/// the callee is when it reads the inference back
+fn is_basedpython_ui_argument_callee(func: &ast::Expr) -> bool {
+    match func {
+        ast::Expr::Attribute(attribute) => {
+            matches!(attribute.attr.as_str(), "set_root" | "derived" | "remember")
+        }
+        ast::Expr::Name(name) => matches!(name.id.as_str(), "derived" | "remember"),
+        _ => false,
+    }
 }
 
 /// Whether constraints learned at a fluid-candidate use in this statement can be read

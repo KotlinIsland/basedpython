@@ -1,0 +1,79 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: test.inlay_hints_with_settings(&basedpython_ui_settings())
+---
+
+from basedpython_ui import composable, state, Column, Row, Text, Button, Modifier, Alignment, run_app
+
+
+@composable
+def Counter(step: int = 1)[ reads count]:
+    let count = state(0)                        # State[int], remembered for this scope's lifetime
+    Column(Modifier().padding(16)):
+        Text(f"count = {count.value}")          # a tracked read: this scope now depends on `count`
+        Row:
+            Button("-", enabled=count.value > 0):
+                count.value -= step[ invalidates Counter]             # the block binds `on_click`; a write invalidates readers
+            Button("+"):
+                count.value += step[ invalidates Counter]
+            Button("reset", enabled=count.value != 0):
+                count.value = 0[ invalidates Counter]
+        if count.value > 9:
+            Text("that is a lot", modifier=align(Alignment.Center))   # `align` comes from the ColumnScope receiver
+
+
+@composable
+def App():
+    Column:
+        Counter()
+        Counter(step=5)
+
+
+def main():
+    run_app("counter"):
+        App()
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:7:9
+  |
+7 |     let count = state(0)                        # State[int], remembered for this scope's lifetime
+  |         ^^^^^
+info: Source
+ --> main2.py:6:35
+  |
+6 | def Counter(step: int = 1)[ reads count]:
+  |                                   ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:6:5
+  |
+6 | def Counter(step: int = 1):
+  |     ^^^^^^^
+info: Source
+  --> main2.py:12:50
+   |
+12 |                 count.value -= step[ invalidates Counter]             # the block binds `on_click`; a write invalidates readers
+   |                                                  ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:6:5
+  |
+6 | def Counter(step: int = 1):
+  |     ^^^^^^^
+info: Source
+  --> main2.py:14:50
+   |
+14 |                 count.value += step[ invalidates Counter]
+   |                                                  ^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:6:5
+  |
+6 | def Counter(step: int = 1):
+  |     ^^^^^^^
+info: Source
+  --> main2.py:16:46
+   |
+16 |                 count.value = 0[ invalidates Counter]
+   |                                              ^^^^^^^

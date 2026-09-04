@@ -1,0 +1,216 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ inferred_reads: true, ..InlayHintSettings::none() })"
+---
+
+from basedpython_ui import State, StateDict, StateList, ambient, composable, derived, state, Button, Column, Text
+
+let THEME = ambient("light")
+
+class Model:
+    count: State[int]
+
+    def total(self) -> int[ reads self.count]:
+        return self.count.value
+
+def label(cell: State[int]) -> str[ reads cell]:
+    return f"{cell.value}"
+
+def loud(cell: State[int]) -> str[ reads cell, local]:
+    let local = state(0)
+    return label(cell) + str(local.value)
+
+@composable
+def Counter(step: int = 1)[ reads count]:
+    let count = state(0)
+    Column:
+        Text(loud(count))
+        Button("+"):
+            count.value += step
+
+@composable
+def Dashboard(model: Model, items: StateList[str], table: StateDict[str, int], context depth: int)[ reads THEME, model.count, items, table, depth, total]:
+    let total = derived(lambda: model.total())
+    Text(f"{total.value} {model.total()} {len(items)} {THEME.current} {depth}")
+    for item in items:
+        Text(item)
+    if "a" in table:
+        Text(str(table["a"]))
+    items.each(key=lambda item: item):
+        Text(it)
+
+    def later()[ reads items]:
+        Text(str(items[0]))
+
+    Button("x", on_click=lambda: model.count.set(0))
+
+def opaque(cell: State[int], thing: dynamic) -> int[ reads cell, …]:
+    thing()
+    return cell.value
+
+def entry(thing: dynamic):
+    thing()
+
+@composable
+def Blind(thing: dynamic)[ reads …]:
+    thing()
+
+def declared(cell: State[int]) -> int raises ValueError[ reads cell]:
+    return cell.value
+
+def nothing(): ...
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:9:15
+  |
+9 |     def total(self) -> int:
+  |               ^^^^
+info: Source
+ --> main2.py:9:35
+  |
+9 |     def total(self) -> int[ reads self.count]:
+  |                                   ^^^^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:12:11
+   |
+12 | def label(cell: State[int]) -> str:
+   |           ^^^^
+info: Source
+  --> main2.py:12:43
+   |
+12 | def label(cell: State[int]) -> str[ reads cell]:
+   |                                           ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:15:10
+   |
+15 | def loud(cell: State[int]) -> str:
+   |          ^^^^
+info: Source
+  --> main2.py:15:42
+   |
+15 | def loud(cell: State[int]) -> str[ reads cell, local]:
+   |                                          ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:16:9
+   |
+16 |     let local = state(0)
+   |         ^^^^^
+info: Source
+  --> main2.py:15:48
+   |
+15 | def loud(cell: State[int]) -> str[ reads cell, local]:
+   |                                                ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:21:9
+   |
+21 |     let count = state(0)
+   |         ^^^^^
+info: Source
+  --> main2.py:20:35
+   |
+20 | def Counter(step: int = 1)[ reads count]:
+   |                                   ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:4:5
+  |
+4 | let THEME = ambient("light")
+  |     ^^^^^
+info: Source
+  --> main2.py:28:107
+   |
+28 | def Dashboard(model: Model, items: StateList[str], table: StateDict[str, int], context depth: int)[ reads THEME, model.count, items, t…
+   |                                                                                                           ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:28:15
+   |
+28 | def Dashboard(model: Model, items: StateList[str], table: StateDict[str, int], context depth: int):
+   |               ^^^^^
+info: Source
+  --> main2.py:28:114
+   |
+28 | def Dashboard(model: Model, items: StateList[str], table: StateDict[str, int], context depth: int)[ reads THEME, model.count, items, t…
+   |                                                                                                                  ^^^^^^^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:28:29
+   |
+28 | def Dashboard(model: Model, items: StateList[str], table: StateDict[str, int], context depth: int):
+   |                             ^^^^^
+info: Source
+  --> main2.py:28:127
+   |
+28 | …eDict[str, int], context depth: int)[ reads THEME, model.count, items, table, depth, total]:
+   |                                                                  ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:28:52
+   |
+28 | def Dashboard(model: Model, items: StateList[str], table: StateDict[str, int], context depth: int):
+   |                                                    ^^^^^
+info: Source
+  --> main2.py:28:134
+   |
+28 | …tr, int], context depth: int)[ reads THEME, model.count, items, table, depth, total]:
+   |                                                                  ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:28:88
+   |
+28 | def Dashboard(model: Model, items: StateList[str], table: StateDict[str, int], context depth: int):
+   |                                                                                        ^^^^^
+info: Source
+  --> main2.py:28:141
+   |
+28 | …], context depth: int)[ reads THEME, model.count, items, table, depth, total]:
+   |                                                                  ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:29:9
+   |
+29 |     let total = derived(lambda: model.total())
+   |         ^^^^^
+info: Source
+  --> main2.py:28:148
+   |
+28 | …ext depth: int)[ reads THEME, model.count, items, table, depth, total]:
+   |                                                                  ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:28:29
+   |
+28 | def Dashboard(model: Model, items: StateList[str], table: StateDict[str, int], context depth: int):
+   |                             ^^^^^
+info: Source
+  --> main2.py:38:24
+   |
+38 |     def later()[ reads items]:
+   |                        ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:43:12
+   |
+43 | def opaque(cell: State[int], thing: dynamic) -> int:
+   |            ^^^^
+info: Source
+  --> main2.py:43:60
+   |
+43 | def opaque(cell: State[int], thing: dynamic) -> int[ reads cell, …]:
+   |                                                            ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:54:14
+   |
+54 | def declared(cell: State[int]) -> int raises ValueError:
+   |              ^^^^
+info: Source
+  --> main2.py:54:64
+   |
+54 | def declared(cell: State[int]) -> int raises ValueError[ reads cell]:
+   |                                                                ^^^^

@@ -1477,6 +1477,10 @@ impl From<ty_ide::InlayHintKind> for InlayHintKind {
             | ty_ide::InlayHintKind::Reification
             | ty_ide::InlayHintKind::TypeArgument
             | ty_ide::InlayHintKind::Override
+            | ty_ide::InlayHintKind::Reads
+            | ty_ide::InlayHintKind::Stability
+            | ty_ide::InlayHintKind::DerivedDeps
+            | ty_ide::InlayHintKind::Invalidates
             | ty_ide::InlayHintKind::NumericPromotion
             | ty_ide::InlayHintKind::RevealedType
             | ty_ide::InlayHintKind::EnumValue => Self::Type,
