@@ -207,7 +207,7 @@ pub fn completion<'db>(
                     &in_scope,
                     &mut completions,
                 );
-                add_compound_keyword_completions(&context.cursor, source_type, &mut completions);
+                add_statement_keyword_completions(&context.cursor, source_type, &mut completions);
                 add_context_sensitive_completions(
                     &context.cursor,
                     &model,
@@ -721,29 +721,41 @@ impl<'db> CompletionBuilder<'db> {
             .kind
             .or_else(|| self.ty.and_then(|ty| completion_kind_from_type(db, ty)));
         let relevance = Relevance::new(db, program_file, collection_context, query, &self);
-        let (label, insert, insert_text_format, command) =
-            if collection_context.should_complete_callable_parentheses(kind) {
-                let label = self.insert.unwrap_or_else(|| self.name.clone());
-                if collection_context.capabilities.snippets {
-                    let insert = compact_str::format_compact!("{label}($0)");
-                    (
-                        Some(label),
-                        Some(insert),
-                        CompletionInsertTextFormat::Snippet,
-                        Some(CompletionCommand::TriggerSignatureHelp),
-                    )
-                } else {
-                    let insert = compact_str::format_compact!("{label}()");
-                    (
-                        Some(label),
-                        Some(insert),
-                        CompletionInsertTextFormat::PlainText,
-                        None,
-                    )
-                }
+        // a completion that writes its own text is only a candidate for
+        // parentheses when that text is a plain (possibly qualified) name.
+        // `typing.is_typeddict` wants them; a template that already spells out a
+        // whole construct does not — an `override def greet(self) -> str:` came
+        // back as `override def greet(self) -> str:()` before this said so, and
+        // so would every postfix rewrite
+        let insert_is_a_bare_name = self.insert.as_ref().is_none_or(|insert| {
+            insert
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+        });
+        let (label, insert, insert_text_format, command) = if insert_is_a_bare_name
+            && collection_context.should_complete_callable_parentheses(kind)
+        {
+            let label = self.insert.unwrap_or_else(|| self.name.clone());
+            if collection_context.capabilities.snippets {
+                let insert = compact_str::format_compact!("{label}($0)");
+                (
+                    Some(label),
+                    Some(insert),
+                    CompletionInsertTextFormat::Snippet,
+                    Some(CompletionCommand::TriggerSignatureHelp),
+                )
             } else {
-                (self.label, self.insert, self.insert_text_format, None)
-            };
+                let insert = compact_str::format_compact!("{label}()");
+                (
+                    Some(label),
+                    Some(insert),
+                    CompletionInsertTextFormat::PlainText,
+                    None,
+                )
+            }
+        } else {
+            (self.label, self.insert, self.insert_text_format, None)
+        };
         Completion {
             name: self.name,
             label,
@@ -960,7 +972,12 @@ impl Default for CompletionSettings {
     fn default() -> CompletionSettings {
         CompletionSettings {
             auto_import: true,
-            complete_function_parentheses: false,
+            // basedpython defaults this on where upstream ty leaves it off. A
+            // callable completion exists to be called, and typing the parentheses
+            // back is work the editor already knows how to do — the machinery
+            // below writes `name($0)` and asks for signature help, so accepting
+            // one leaves the caret where the first argument goes
+            complete_function_parentheses: true,
         }
     }
 }
@@ -3079,11 +3096,13 @@ fn add_override_completions<'db>(
     }
 }
 
-/// A statement opener spelled with more than one keyword.
+/// A statement opener the completion list has to carry itself.
 ///
-/// Each word of one is a keyword the completion list already carries on its
-/// own, so the pair is only worth offering where the whole construct is valid.
-struct CompoundKeyword {
+/// Either a construct spelled with several keywords, each of which the list
+/// already offers on its own, or a basedpython opener that python's keyword list
+/// has never heard of. Both are only worth offering where the construct they
+/// open is valid.
+struct StatementKeyword {
     text: &'static str,
     /// Where the construct it opens may be written.
     position: KeywordPosition,
@@ -3091,7 +3110,7 @@ struct CompoundKeyword {
     basedpython: bool,
 }
 
-/// The positions a [`CompoundKeyword`] is offered in.
+/// The positions a [`StatementKeyword`] is offered in.
 enum KeywordPosition {
     /// Wherever a statement may start.
     Anywhere,
@@ -3101,136 +3120,166 @@ enum KeywordPosition {
     AsyncFunction,
 }
 
-const COMPOUND_KEYWORDS: &[CompoundKeyword] = &[
-    CompoundKeyword {
+const STATEMENT_KEYWORDS: &[StatementKeyword] = &[
+    StatementKeyword {
         text: "async def",
         position: KeywordPosition::Anywhere,
         basedpython: false,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "async for",
         position: KeywordPosition::AsyncFunction,
         basedpython: false,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "async with",
         position: KeywordPosition::AsyncFunction,
         basedpython: false,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "data class",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "frozen data class",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "enum class",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "final class",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "abstract class",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "open class",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "sealed class",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "private class",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "export class",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "public class",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "private def",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "export def",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "public def",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "class def",
         position: KeywordPosition::ClassBody,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "static def",
         position: KeywordPosition::ClassBody,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "override def",
         position: KeywordPosition::ClassBody,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "abstract def",
         position: KeywordPosition::ClassBody,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "final def",
         position: KeywordPosition::ClassBody,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "static var",
         position: KeywordPosition::ClassBody,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "static let",
         position: KeywordPosition::ClassBody,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "late var",
         position: KeywordPosition::ClassBody,
         basedpython: true,
     },
-    CompoundKeyword {
+    StatementKeyword {
         text: "private type",
         position: KeywordPosition::Anywhere,
         basedpython: true,
     },
+    // the single-word openers. python's own keyword list covers `class`, `def`
+    // and the rest; these are basedpython's, and they are statements in their own
+    // right rather than the first word of something longer
+    StatementKeyword {
+        text: "extension",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    StatementKeyword {
+        text: "let",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    StatementKeyword {
+        text: "var",
+        position: KeywordPosition::Anywhere,
+        basedpython: true,
+    },
+    StatementKeyword {
+        text: "init",
+        position: KeywordPosition::ClassBody,
+        basedpython: true,
+    },
 ];
 
-/// Adds the statement openers spelled with more than one keyword.
-fn add_compound_keyword_completions(
+/// Adds the keywords a statement may open with, beyond the ones
+/// [`add_keyword_completions`] offers unconditionally.
+///
+/// Those are python's keyword list verbatim, so every basedpython statement
+/// opener belongs here — the compound ones (`enum class`, `static let`) and the
+/// single words alike. A word offered in only one of the two places is offered
+/// only where it happens to head a compound form, which is how `extension` came
+/// to be offered nowhere at all.
+fn add_statement_keyword_completions(
     cursor: &ContextCursor<'_>,
     source_type: PySourceType,
     completions: &mut Completions<'_>,
@@ -3238,7 +3287,7 @@ fn add_compound_keyword_completions(
     if !cursor.is_at_statement_start() {
         return;
     }
-    for keyword in COMPOUND_KEYWORDS {
+    for keyword in STATEMENT_KEYWORDS {
         if keyword.basedpython && !source_type.is_basedpython() {
             continue;
         }
@@ -5540,8 +5589,8 @@ type<CURSOR>
         assert_snapshot!(
             test.type_signatures().skip_auto_import().build().snapshot(),
             @"
-        type :: <class 'type'>
-        TypeError :: <class 'TypeError'>
+        type() :: <class 'type'>
+        TypeError() :: <class 'TypeError'>
         ",
         );
     }
@@ -5836,7 +5885,7 @@ f<CURSOR>
 
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().skip_auto_import().build().snapshot(),
-            @"foo",
+            @"foo()",
         );
     }
 
@@ -5866,7 +5915,7 @@ def foo(): ...
 ",
         );
 
-        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"foo");
+        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"foo()");
     }
 
     #[test]
@@ -5882,7 +5931,7 @@ f<CURSOR>
 
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().skip_auto_import().build().snapshot(),
-            @"foo",
+            @"foo()",
         );
     }
 
@@ -5897,7 +5946,7 @@ def foo():
 ",
         );
 
-        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"foo");
+        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"foo()");
     }
 
     #[test]
@@ -5913,8 +5962,8 @@ def foo():
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().skip_auto_import().build().snapshot(),
             @"
-        foo
-        foofoo
+        foo()
+        foofoo()
         ");
     }
 
@@ -5946,7 +5995,7 @@ def foo():
         // matches the current cursor's indentation. This seems fraught
         // however. It's not clear to me that we can always assume a
         // correspondence between scopes and indentation level.
-        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"foo");
+        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"foo()");
     }
 
     #[test]
@@ -5963,8 +6012,8 @@ def foo():
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().skip_auto_import().build().snapshot(),
             @"
-        foo
-        foofoo
+        foo()
+        foofoo()
         ");
     }
 
@@ -5981,8 +6030,8 @@ def foo():
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().skip_auto_import().build().snapshot(),
             @"
-        foo
-        foofoo
+        foo()
+        foofoo()
         ");
     }
 
@@ -6001,9 +6050,9 @@ def frob(): ...
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().skip_auto_import().build().snapshot(),
             @"
-        foo
-        foofoo
-        frob
+        foo()
+        foofoo()
+        frob()
         ");
     }
 
@@ -6022,8 +6071,8 @@ def frob(): ...
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().skip_auto_import().build().snapshot(),
             @"
-        foo
-        frob
+        foo()
+        frob()
         ");
     }
 
@@ -6042,10 +6091,10 @@ def frob(): ...
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().skip_auto_import().build().snapshot(),
             @"
-        foo
-        foofoo
-        foofoofoo
-        frob
+        foo()
+        foofoo()
+        foofoofoo()
+        frob()
         ");
     }
 
@@ -6069,7 +6118,7 @@ def foo():
         // account for the indented whitespace, or some other technique
         // needs to be used to get the scope containing `foofoo` but not
         // `foofoofoo`.
-        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"foo");
+        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"foo()");
     }
 
     #[test]
@@ -6083,7 +6132,7 @@ def foo():
         );
 
         // FIXME: Should include `foofoo` (but not `foofoofoo`).
-        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"foo");
+        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"foo()");
     }
 
     #[test]
@@ -6100,8 +6149,8 @@ def frob(): ...
 
         // FIXME: Should include `foofoo` (but not `foofoofoo`).
         assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"
-        foo
-        frob
+        foo()
+        frob()
         ");
     }
 
@@ -6120,8 +6169,8 @@ def frob(): ...
 
         // FIXME: Should include `foofoo` (but not `foofoofoo`).
         assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"
-        foo
-        frob
+        foo()
+        frob()
         ");
     }
 
@@ -6141,8 +6190,8 @@ def frob(): ...
 
         // FIXME: Should include `foofoo` (but not `foofoofoo`).
         assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"
-        foo
-        frob
+        foo()
+        frob()
         ");
     }
 
@@ -6403,7 +6452,7 @@ class Foo:
         //
         // These don't work for similar reasons as other
         // tests above with the <CURSOR> inside of whitespace.
-        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"Foo");
+        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"Foo()");
     }
 
     #[test]
@@ -6420,7 +6469,7 @@ class Foo:
         // FIXME: Should include `bar`, `quux` and `frob`.
         // (Unclear if `Foo` should be included, but a false
         // positive isn't the end of the world.)
-        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"Foo");
+        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"Foo()");
     }
 
     #[test]
@@ -6892,28 +6941,28 @@ quux.<CURSOR>
         return quux :: postfix
         type(quux) :: postfix
         __annotations__ :: dict[str, Any]
-        __class__ :: type[Quux]
-        __delattr__ :: bound method Quux.__delattr__(name: str, /)
+        __class__() :: type[Quux]
+        __delattr__() :: bound method Quux.__delattr__(name: str, /)
         __dict__ :: dict[str, Any]
-        __dir__ :: bound method Quux.__dir__() -> Iterable[str]
+        __dir__() :: bound method Quux.__dir__() -> Iterable[str]
         __doc__ :: str | None
-        __eq__ :: bound method Quux.__eq__(value: object, /) -> bool
-        __format__ :: bound method Quux.__format__(format_spec: Literal[""], /) -> str
-        __getattribute__ :: bound method Quux.__getattribute__(name: str, /) -> Any
-        __getstate__ :: bound method Quux.__getstate__() -> object
-        __hash__ :: bound method Quux.__hash__() -> int
-        __init__ :: bound method Quux.__init__()
-        __init_subclass__ :: bound method type[Quux].__init_subclass__()
+        __eq__() :: bound method Quux.__eq__(value: object, /) -> bool
+        __format__() :: bound method Quux.__format__(format_spec: Literal[""], /) -> str
+        __getattribute__() :: bound method Quux.__getattribute__(name: str, /) -> Any
+        __getstate__() :: bound method Quux.__getstate__() -> object
+        __hash__() :: bound method Quux.__hash__() -> int
+        __init__() :: bound method Quux.__init__()
+        __init_subclass__() :: bound method type[Quux].__init_subclass__()
         __module__ :: str
-        __ne__ :: bound method Quux.__ne__(value: object, /) -> bool
-        __new__ :: def __new__[Self](cls) -> Self
-        __reduce__ :: bound method Quux.__reduce__() -> str | tuple[Any, ...]
-        __reduce_ex__ :: bound method Quux.__reduce_ex__(protocol: SupportsIndex, /) -> str | tuple[Any, ...]
-        __repr__ :: bound method Quux.__repr__() -> str
-        __setattr__ :: bound method Quux.__setattr__(name: str, value: Any, /)
-        __sizeof__ :: bound method Quux.__sizeof__() -> int
-        __str__ :: bound method Quux.__str__() -> str
-        __subclasshook__ :: bound method type[Quux].__subclasshook__(subclass: type, /) -> bool
+        __ne__() :: bound method Quux.__ne__(value: object, /) -> bool
+        __new__() :: def __new__[Self](cls) -> Self
+        __reduce__() :: bound method Quux.__reduce__() -> str | tuple[Any, ...]
+        __reduce_ex__() :: bound method Quux.__reduce_ex__(protocol: SupportsIndex, /) -> str | tuple[Any, ...]
+        __repr__() :: bound method Quux.__repr__() -> str
+        __setattr__() :: bound method Quux.__setattr__(name: str, value: Any, /)
+        __sizeof__() :: bound method Quux.__sizeof__() -> int
+        __str__() :: bound method Quux.__str__() -> str
+        __subclasshook__() :: bound method type[Quux].__subclasshook__(subclass: type, /) -> bool
         "#);
     }
 
@@ -6936,9 +6985,9 @@ quux.b<CURSOR>
             builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @"
         bar :: int
         baz :: int
-        __getattribute__ :: bound method Quux.__getattribute__(name: str, /) -> Any
-        __init_subclass__ :: bound method type[Quux].__init_subclass__()
-        __subclasshook__ :: bound method type[Quux].__subclasshook__(subclass: type, /) -> bool
+        __getattribute__() :: bound method Quux.__getattribute__(name: str, /) -> Any
+        __init_subclass__() :: bound method type[Quux].__init_subclass__()
+        __subclasshook__() :: bound method type[Quux].__subclasshook__(subclass: type, /) -> bool
         ");
     }
 
@@ -6967,7 +7016,7 @@ C.<CURSOR>
         match C:
             case  :: postfix
         meta_attr :: int
-        mro :: bound method <class 'C'>.mro() -> list[type]
+        mro() :: bound method <class 'C'>.mro() -> list[type]
         not C :: postfix
         (C) :: postfix
         print(C) :: postfix
@@ -6975,46 +7024,46 @@ C.<CURSOR>
         repr(C) :: postfix
         return C :: postfix
         type(C) :: postfix
-        __annotate__ :: (() -> dict[str, AnnotationForm]) | None
+        __annotate__() :: (() -> dict[str, AnnotationForm]) | None
         __annotations__ :: dict[str, Any]
         __base__ :: type | None
         __bases__ :: tuple[type, ...]
         __basicsize__ :: int
-        __call__ :: bound method <class 'C'>.__call__(...) -> Any
-        __class__ :: <class 'Meta'>
-        __delattr__ :: def __delattr__(self, name: str, /)
+        __call__() :: bound method <class 'C'>.__call__(...) -> Any
+        __class__() :: <class 'Meta'>
+        __delattr__() :: def __delattr__(self, name: str, /)
         __dict__ :: dict[str, Any]
         __dictoffset__ :: int
-        __dir__ :: def __dir__(self) -> Iterable[str]
+        __dir__() :: def __dir__(self) -> Iterable[str]
         __doc__ :: str | None
-        __eq__ :: def __eq__(self, value: object, /) -> bool
+        __eq__() :: def __eq__(self, value: object, /) -> bool
         __flags__ :: int
-        __format__ :: def __format__(self, format_spec: Literal[""], /) -> str
-        __getattribute__ :: def __getattribute__(self, name: str, /) -> Any
-        __getstate__ :: def __getstate__(self) -> object
-        __hash__ :: def __hash__(self) -> int
-        __init__ :: def __init__(self)
-        __init_subclass__ :: bound method <class 'C'>.__init_subclass__()
-        __instancecheck__ :: bound method <class 'C'>.__instancecheck__(instance: Any, /) -> bool
+        __format__() :: def __format__(self, format_spec: Literal[""], /) -> str
+        __getattribute__() :: def __getattribute__(self, name: str, /) -> Any
+        __getstate__() :: def __getstate__(self) -> object
+        __hash__() :: def __hash__(self) -> int
+        __init__() :: def __init__(self)
+        __init_subclass__() :: bound method <class 'C'>.__init_subclass__()
+        __instancecheck__() :: bound method <class 'C'>.__instancecheck__(instance: Any, /) -> bool
         __itemsize__ :: int
         __module__ :: str
         __mro__ :: tuple[type, ...]
         __name__ :: str
-        __ne__ :: def __ne__(self, value: object, /) -> bool
-        __new__ :: def __new__[Self](cls) -> Self
-        __or__ :: bound method <class 'C'>.__or__[Self](value: Any, /) -> UnionType | Self
-        __prepare__ :: bound method <class 'Meta'>.__prepare__(name: str, bases: tuple[type, ...], /, **kwds: Any) -> MutableMapping[str, object]
+        __ne__() :: def __ne__(self, value: object, /) -> bool
+        __new__() :: def __new__[Self](cls) -> Self
+        __or__() :: bound method <class 'C'>.__or__[Self](value: Any, /) -> UnionType | Self
+        __prepare__() :: bound method <class 'Meta'>.__prepare__(name: str, bases: tuple[type, ...], /, **kwds: Any) -> MutableMapping[str, object]
         __qualname__ :: str
-        __reduce__ :: def __reduce__(self) -> str | tuple[Any, ...]
-        __reduce_ex__ :: def __reduce_ex__(self, protocol: SupportsIndex, /) -> str | tuple[Any, ...]
-        __repr__ :: def __repr__(self) -> str
-        __ror__ :: bound method <class 'C'>.__ror__[Self](value: Any, /) -> UnionType | Self
-        __setattr__ :: def __setattr__(self, name: str, value: Any, /)
-        __sizeof__ :: def __sizeof__(self) -> int
-        __str__ :: def __str__(self) -> str
-        __subclasscheck__ :: bound method <class 'C'>.__subclasscheck__(subclass: type, /) -> bool
-        __subclasses__ :: bound method <class 'C'>.__subclasses__[Self]() -> list[Self]
-        __subclasshook__ :: bound method <class 'C'>.__subclasshook__(subclass: type, /) -> bool
+        __reduce__() :: def __reduce__(self) -> str | tuple[Any, ...]
+        __reduce_ex__() :: def __reduce_ex__(self, protocol: SupportsIndex, /) -> str | tuple[Any, ...]
+        __repr__() :: def __repr__(self) -> str
+        __ror__() :: bound method <class 'C'>.__ror__[Self](value: Any, /) -> UnionType | Self
+        __setattr__() :: def __setattr__(self, name: str, value: Any, /)
+        __sizeof__() :: def __sizeof__(self) -> int
+        __str__() :: def __str__(self) -> str
+        __subclasscheck__() :: bound method <class 'C'>.__subclasscheck__(subclass: type, /) -> bool
+        __subclasses__() :: bound method <class 'C'>.__subclasses__[Self]() -> list[Self]
+        __subclasshook__() :: bound method <class 'C'>.__subclasshook__(subclass: type, /) -> bool
         __text_signature__ :: str | None
         __type_params__ :: tuple[TypeVar | ParamSpec | TypeVarTuple, ...]
         __weakrefoffset__ :: int
@@ -7053,7 +7102,7 @@ Meta.<CURSOR>
                 match Meta:
                     case  :: postfix
                 meta_attr :: property
-                mro :: def mro(self) -> list[type]
+                mro() :: def mro(self) -> list[type]
                 not Meta :: postfix
                 (Meta) :: postfix
                 print(Meta) :: postfix
@@ -7064,40 +7113,40 @@ Meta.<CURSOR>
                 __base__ :: type | None
                 __bases__ :: tuple[type, ...]
                 __basicsize__ :: int
-                __call__ :: def __call__(self, *args: Any, **kwds: Any) -> Any
-                __class__ :: <class 'type'>
-                __delattr__ :: def __delattr__(self, name: str, /)
+                __call__() :: def __call__(self, *args: Any, **kwds: Any) -> Any
+                __class__() :: <class 'type'>
+                __delattr__() :: def __delattr__(self, name: str, /)
                 __dict__ :: MappingProxyType[str, Any]
                 __dictoffset__ :: int
-                __dir__ :: def __dir__(self) -> Iterable[str]
+                __dir__() :: def __dir__(self) -> Iterable[str]
                 __doc__ :: str | None
-                __eq__ :: def __eq__(self, value: object, /) -> bool
+                __eq__() :: def __eq__(self, value: object, /) -> bool
                 __flags__ :: int
-                __format__ :: def __format__(self, format_spec: Literal[""], /) -> str
-                __getattribute__ :: def __getattribute__(self, name: str, /) -> Any
-                __getstate__ :: def __getstate__(self) -> object
-                __hash__ :: def __hash__(self) -> int
-                __init__ :: Overload[(self, o: object, /) -> None, (self, name: str, bases: tuple[type, ...], dict: dict[str, Any], /, **kwds: Any) -> None]
-                __init_subclass__ :: bound method <class 'Meta'>.__init_subclass__()
-                __instancecheck__ :: def __instancecheck__(self, instance: Any, /) -> bool
+                __format__() :: def __format__(self, format_spec: Literal[""], /) -> str
+                __getattribute__() :: def __getattribute__(self, name: str, /) -> Any
+                __getstate__() :: def __getstate__(self) -> object
+                __hash__() :: def __hash__(self) -> int
+                __init__() :: Overload[(self, o: object, /) -> None, (self, name: str, bases: tuple[type, ...], dict: dict[str, Any], /, **kwds: Any) -> None]
+                __init_subclass__() :: bound method <class 'Meta'>.__init_subclass__()
+                __instancecheck__() :: def __instancecheck__(self, instance: Any, /) -> bool
                 __itemsize__ :: int
                 __module__ :: str
                 __mro__ :: tuple[type, ...]
                 __name__ :: str
-                __ne__ :: def __ne__(self, value: object, /) -> bool
-                __or__ :: def __or__[Self](self: Self, value: Any, /) -> UnionType | Self
-                __prepare__ :: bound method <class 'Meta'>.__prepare__(name: str, bases: tuple[type, ...], /, **kwds: Any) -> MutableMapping[str, object]
+                __ne__() :: def __ne__(self, value: object, /) -> bool
+                __or__() :: def __or__[Self](self: Self, value: Any, /) -> UnionType | Self
+                __prepare__() :: bound method <class 'Meta'>.__prepare__(name: str, bases: tuple[type, ...], /, **kwds: Any) -> MutableMapping[str, object]
                 __qualname__ :: str
-                __reduce__ :: def __reduce__(self) -> str | tuple[Any, ...]
-                __reduce_ex__ :: def __reduce_ex__(self, protocol: SupportsIndex, /) -> str | tuple[Any, ...]
-                __repr__ :: def __repr__(self) -> str
-                __ror__ :: def __ror__[Self](self: Self, value: Any, /) -> UnionType | Self
-                __setattr__ :: def __setattr__(self, name: str, value: Any, /)
-                __sizeof__ :: def __sizeof__(self) -> int
-                __str__ :: def __str__(self) -> str
-                __subclasscheck__ :: def __subclasscheck__(self, subclass: type, /) -> bool
-                __subclasses__ :: def __subclasses__[Self](self: Self) -> list[Self]
-                __subclasshook__ :: bound method <class 'Meta'>.__subclasshook__(subclass: type, /) -> bool
+                __reduce__() :: def __reduce__(self) -> str | tuple[Any, ...]
+                __reduce_ex__() :: def __reduce_ex__(self, protocol: SupportsIndex, /) -> str | tuple[Any, ...]
+                __repr__() :: def __repr__(self) -> str
+                __ror__() :: def __ror__[Self](self: Self, value: Any, /) -> UnionType | Self
+                __setattr__() :: def __setattr__(self, name: str, value: Any, /)
+                __sizeof__() :: def __sizeof__(self) -> int
+                __str__() :: def __str__(self) -> str
+                __subclasscheck__() :: def __subclasscheck__(self, subclass: type, /) -> bool
+                __subclasses__() :: def __subclasses__[Self](self: Self) -> list[Self]
+                __subclasshook__() :: bound method <class 'Meta'>.__subclasshook__(subclass: type, /) -> bool
                 __text_signature__ :: str | None
                 __type_params__ :: tuple[TypeVar | ParamSpec | TypeVarTuple, ...]
                 __weakrefoffset__ :: int
@@ -7138,28 +7187,28 @@ class Quux:
         return self
         type(self)
         __annotations__
-        __class__
-        __delattr__
+        __class__()
+        __delattr__()
         __dict__
-        __dir__
+        __dir__()
         __doc__
-        __eq__
-        __format__
-        __getattribute__
-        __getstate__
-        __hash__
-        __init__
-        __init_subclass__
+        __eq__()
+        __format__()
+        __getattribute__()
+        __getstate__()
+        __hash__()
+        __init__()
+        __init_subclass__()
         __module__
-        __ne__
-        __new__
-        __reduce__
-        __reduce_ex__
-        __repr__
-        __setattr__
-        __sizeof__
-        __str__
-        __subclasshook__
+        __ne__()
+        __new__()
+        __reduce__()
+        __reduce_ex__()
+        __repr__()
+        __setattr__()
+        __sizeof__()
+        __str__()
+        __subclasshook__()
         ");
     }
 
@@ -7203,7 +7252,7 @@ Quux.<CURSOR>
         list(Quux) :: postfix
         match Quux:
             case  :: postfix
-        mro :: bound method <class 'Quux'>.mro() -> list[type]
+        mro() :: bound method <class 'Quux'>.mro() -> list[type]
         not Quux :: postfix
         (Quux) :: postfix
         print(Quux) :: postfix
@@ -7211,51 +7260,51 @@ Quux.<CURSOR>
         repr(Quux) :: postfix
         return Quux :: postfix
         some_attribute :: int
-        some_class_method :: bound method <class 'Quux'>.some_class_method() -> int
-        some_method :: def some_method(self) -> int
+        some_class_method() :: bound method <class 'Quux'>.some_class_method() -> int
+        some_method() :: def some_method(self) -> int
         some_property :: property
-        some_static_method :: def some_static_method(self) -> int
+        some_static_method() :: def some_static_method(self) -> int
         type(Quux) :: postfix
-        __annotate__ :: (() -> dict[str, AnnotationForm]) | None
+        __annotate__() :: (() -> dict[str, AnnotationForm]) | None
         __annotations__ :: dict[str, Any]
         __base__ :: type | None
         __bases__ :: tuple[type, ...]
         __basicsize__ :: int
-        __call__ :: bound method <class 'Quux'>.__call__(...) -> Any
-        __class__ :: <class 'type'>
-        __delattr__ :: def __delattr__(self, name: str, /)
+        __call__() :: bound method <class 'Quux'>.__call__(...) -> Any
+        __class__() :: <class 'type'>
+        __delattr__() :: def __delattr__(self, name: str, /)
         __dict__ :: dict[str, Any]
         __dictoffset__ :: int
-        __dir__ :: def __dir__(self) -> Iterable[str]
+        __dir__() :: def __dir__(self) -> Iterable[str]
         __doc__ :: str | None
-        __eq__ :: def __eq__(self, value: object, /) -> bool
+        __eq__() :: def __eq__(self, value: object, /) -> bool
         __flags__ :: int
-        __format__ :: def __format__(self, format_spec: Literal[""], /) -> str
-        __getattribute__ :: def __getattribute__(self, name: str, /) -> Any
-        __getstate__ :: def __getstate__(self) -> object
-        __hash__ :: def __hash__(self) -> int
-        __init__ :: def __init__(self)
-        __init_subclass__ :: bound method <class 'Quux'>.__init_subclass__()
-        __instancecheck__ :: bound method <class 'Quux'>.__instancecheck__(instance: Any, /) -> bool
+        __format__() :: def __format__(self, format_spec: Literal[""], /) -> str
+        __getattribute__() :: def __getattribute__(self, name: str, /) -> Any
+        __getstate__() :: def __getstate__(self) -> object
+        __hash__() :: def __hash__(self) -> int
+        __init__() :: def __init__(self)
+        __init_subclass__() :: bound method <class 'Quux'>.__init_subclass__()
+        __instancecheck__() :: bound method <class 'Quux'>.__instancecheck__(instance: Any, /) -> bool
         __itemsize__ :: int
         __module__ :: str
         __mro__ :: tuple[type, ...]
         __name__ :: str
-        __ne__ :: def __ne__(self, value: object, /) -> bool
-        __new__ :: def __new__[Self](cls) -> Self
-        __or__ :: bound method <class 'Quux'>.__or__[Self](value: Any, /) -> UnionType | Self
-        __prepare__ :: bound method <class 'type'>.__prepare__(name: str, bases: tuple[type, ...], /, **kwds: Any) -> MutableMapping[str, object]
+        __ne__() :: def __ne__(self, value: object, /) -> bool
+        __new__() :: def __new__[Self](cls) -> Self
+        __or__() :: bound method <class 'Quux'>.__or__[Self](value: Any, /) -> UnionType | Self
+        __prepare__() :: bound method <class 'type'>.__prepare__(name: str, bases: tuple[type, ...], /, **kwds: Any) -> MutableMapping[str, object]
         __qualname__ :: str
-        __reduce__ :: def __reduce__(self) -> str | tuple[Any, ...]
-        __reduce_ex__ :: def __reduce_ex__(self, protocol: SupportsIndex, /) -> str | tuple[Any, ...]
-        __repr__ :: def __repr__(self) -> str
-        __ror__ :: bound method <class 'Quux'>.__ror__[Self](value: Any, /) -> UnionType | Self
-        __setattr__ :: def __setattr__(self, name: str, value: Any, /)
-        __sizeof__ :: def __sizeof__(self) -> int
-        __str__ :: def __str__(self) -> str
-        __subclasscheck__ :: bound method <class 'Quux'>.__subclasscheck__(subclass: type, /) -> bool
-        __subclasses__ :: bound method <class 'Quux'>.__subclasses__[Self]() -> list[Self]
-        __subclasshook__ :: bound method <class 'Quux'>.__subclasshook__(subclass: type, /) -> bool
+        __reduce__() :: def __reduce__(self) -> str | tuple[Any, ...]
+        __reduce_ex__() :: def __reduce_ex__(self, protocol: SupportsIndex, /) -> str | tuple[Any, ...]
+        __repr__() :: def __repr__(self) -> str
+        __ror__() :: bound method <class 'Quux'>.__ror__[Self](value: Any, /) -> UnionType | Self
+        __setattr__() :: def __setattr__(self, name: str, value: Any, /)
+        __sizeof__() :: def __sizeof__(self) -> int
+        __str__() :: def __str__(self) -> str
+        __subclasscheck__() :: bound method <class 'Quux'>.__subclasscheck__(subclass: type, /) -> bool
+        __subclasses__() :: bound method <class 'Quux'>.__subclasses__[Self]() -> list[Self]
+        __subclasshook__() :: bound method <class 'Quux'>.__subclasshook__(subclass: type, /) -> bool
         __text_signature__ :: str | None
         __type_params__ :: tuple[TypeVar | ParamSpec | TypeVarTuple, ...]
         __weakrefoffset__ :: int
@@ -7292,7 +7341,7 @@ Answer.<CURSOR>
                 list(Answer) :: postfix
                 match Answer:
                     case  :: postfix
-                mro :: bound method <class 'Answer'>.mro() -> list[type]
+                mro() :: bound method <class 'Answer'>.mro() -> list[type]
                 name :: enum.property
                 not Answer :: postfix
                 (Answer) :: postfix
@@ -7306,59 +7355,59 @@ Answer.<CURSOR>
                 __base__ :: type | None
                 __bases__ :: tuple[type, ...]
                 __basicsize__ :: int
-                __bool__ :: bound method <class 'Answer'>.__bool__() -> Literal[True]
-                __class__ :: <class 'EnumMeta'>
-                __contains__ :: bound method <class 'Answer'>.__contains__(value: object) -> bool
-                __copy__ :: def __copy__[Self](self) -> Self
-                __deepcopy__ :: def __deepcopy__[Self](self, memo: Any) -> Self
-                __delattr__ :: def __delattr__(self, name: str, /)
+                __bool__() :: bound method <class 'Answer'>.__bool__() -> Literal[True]
+                __class__() :: <class 'EnumMeta'>
+                __contains__() :: bound method <class 'Answer'>.__contains__(value: object) -> bool
+                __copy__() :: def __copy__[Self](self) -> Self
+                __deepcopy__() :: def __deepcopy__[Self](self, memo: Any) -> Self
+                __delattr__() :: def __delattr__(self, name: str, /)
                 __dict__ :: dict[str, Any]
                 __dictoffset__ :: int
-                __dir__ :: def __dir__(self) -> list[str]
+                __dir__() :: def __dir__(self) -> list[str]
                 __doc__ :: str | None
-                __eq__ :: def __eq__(self, value: object, /) -> bool
+                __eq__() :: def __eq__(self, value: object, /) -> bool
                 __flags__ :: int
-                __format__ :: def __format__(self, format_spec: str) -> str
-                __getattribute__ :: def __getattribute__(self, name: str, /) -> Any
-                __getitem__ :: bound method <class 'Answer'>.__getitem__[EnumMemberT](name: str) -> EnumMemberT
-                __getstate__ :: def __getstate__(self) -> object
-                __hash__ :: def __hash__(self) -> int
-                __init__ :: def __init__(self)
-                __init_subclass__ :: bound method <class 'Answer'>.__init_subclass__()
-                __instancecheck__ :: bound method <class 'Answer'>.__instancecheck__(instance: Any, /) -> bool
+                __format__() :: def __format__(self, format_spec: str) -> str
+                __getattribute__() :: def __getattribute__(self, name: str, /) -> Any
+                __getitem__() :: bound method <class 'Answer'>.__getitem__[EnumMemberT](name: str) -> EnumMemberT
+                __getstate__() :: def __getstate__(self) -> object
+                __hash__() :: def __hash__(self) -> int
+                __init__() :: def __init__(self)
+                __init_subclass__() :: bound method <class 'Answer'>.__init_subclass__()
+                __instancecheck__() :: bound method <class 'Answer'>.__instancecheck__(instance: Any, /) -> bool
                 __itemsize__ :: int
-                __iter__ :: bound method <class 'Answer'>.__iter__[EnumMemberT]() -> Iterator[EnumMemberT]
-                __len__ :: bound method <class 'Answer'>.__len__() -> int
+                __iter__() :: bound method <class 'Answer'>.__iter__[EnumMemberT]() -> Iterator[EnumMemberT]
+                __len__() :: bound method <class 'Answer'>.__len__() -> int
                 __members__ :: MappingProxyType[str, Answer]
                 __module__ :: str
                 __mro__ :: tuple[type, ...]
                 __name__ :: str
-                __ne__ :: def __ne__(self, value: object, /) -> bool
-                __new__ :: def __new__[Self](cls, value: object) -> Self
-                __or__ :: bound method <class 'Answer'>.__or__[Self](value: Any, /) -> UnionType | Self
+                __ne__() :: def __ne__(self, value: object, /) -> bool
+                __new__() :: def __new__[Self](cls, value: object) -> Self
+                __or__() :: bound method <class 'Answer'>.__or__[Self](value: Any, /) -> UnionType | Self
                 __order__ :: str
-                __prepare__ :: bound method <class 'EnumMeta'>.__prepare__(cls: str, bases: tuple[type, ...], **kwds: Any) -> _EnumDict
+                __prepare__() :: bound method <class 'EnumMeta'>.__prepare__(cls: str, bases: tuple[type, ...], **kwds: Any) -> _EnumDict
                 __qualname__ :: str
-                __reduce__ :: def __reduce__(self) -> str | tuple[Any, ...]
-                __repr__ :: def __repr__(self) -> str
-                __reversed__ :: bound method <class 'Answer'>.__reversed__[EnumMemberT]() -> Iterator[EnumMemberT]
-                __ror__ :: bound method <class 'Answer'>.__ror__[Self](value: Any, /) -> UnionType | Self
-                __setattr__ :: def __setattr__(self, name: str, value: Any, /)
-                __sizeof__ :: def __sizeof__(self) -> int
-                __str__ :: def __str__(self) -> str
-                __subclasscheck__ :: bound method <class 'Answer'>.__subclasscheck__(subclass: type, /) -> bool
-                __subclasses__ :: bound method <class 'Answer'>.__subclasses__[Self]() -> list[Self]
-                __subclasshook__ :: bound method <class 'Answer'>.__subclasshook__(subclass: type, /) -> bool
+                __reduce__() :: def __reduce__(self) -> str | tuple[Any, ...]
+                __repr__() :: def __repr__(self) -> str
+                __reversed__() :: bound method <class 'Answer'>.__reversed__[EnumMemberT]() -> Iterator[EnumMemberT]
+                __ror__() :: bound method <class 'Answer'>.__ror__[Self](value: Any, /) -> UnionType | Self
+                __setattr__() :: def __setattr__(self, name: str, value: Any, /)
+                __sizeof__() :: def __sizeof__(self) -> int
+                __str__() :: def __str__(self) -> str
+                __subclasscheck__() :: bound method <class 'Answer'>.__subclasscheck__(subclass: type, /) -> bool
+                __subclasses__() :: bound method <class 'Answer'>.__subclasses__[Self]() -> list[Self]
+                __subclasshook__() :: bound method <class 'Answer'>.__subclasshook__(subclass: type, /) -> bool
                 __text_signature__ :: str | None
                 __type_params__ :: tuple[TypeVar | ParamSpec | TypeVarTuple, ...]
                 __weakrefoffset__ :: int
-                _add_alias_ :: def _add_alias_(self, name: str)
-                _add_value_alias_ :: def _add_value_alias_(self, value: Any)
-                _generate_next_value_ :: def _generate_next_value_(name: str, start: int, count: int, last_values: list[Any]) -> Any
+                _add_alias_() :: def _add_alias_(self, name: str)
+                _add_value_alias_() :: def _add_value_alias_(self, value: Any)
+                _generate_next_value_() :: def _generate_next_value_(name: str, start: int, count: int, last_values: list[Any]) -> Any
                 _ignore_ :: str | list[str]
                 _member_map_ :: dict[str, Enum]
                 _member_names_ :: list[str]
-                _missing_ :: bound method <class 'Answer'>._missing_(value: object) -> Any
+                _missing_() :: bound method <class 'Answer'>._missing_(value: object) -> Any
                 _name_ :: str
                 _order_ :: str
                 _value2member_map_ :: dict[Any, Enum]
@@ -7385,12 +7434,12 @@ quux.<CURSOR>
 
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
-        count :: bound method Quux.count(value: Any, /) -> int
+        count() :: bound method Quux.count(value: Any, /) -> int
         for item in quux:
              :: postfix
         if quux:
              :: postfix
-        index :: bound method Quux.index(value: Any, start: SupportsIndex = 0, stop: SupportsIndex = ..., /) -> int
+        index() :: bound method Quux.index(value: Any, start: SupportsIndex = 0, stop: SupportsIndex = ..., /) -> int
         list(quux) :: postfix
         match quux:
             case  :: postfix
@@ -7403,50 +7452,50 @@ quux.<CURSOR>
         type(quux) :: postfix
         x :: int
         y :: str
-        __add__ :: Overload[(value: tuple[int | str, ...], /) -> tuple[int | str, ...], [T](value: tuple[T, ...], /) -> tuple[int | str | T, ...]]
+        __add__() :: Overload[(value: tuple[int | str, ...], /) -> tuple[int | str, ...], [T](value: tuple[T, ...], /) -> tuple[int | str | T, ...]]
         __annotations__ :: dict[str, Any]
-        __class__ :: type[Quux]
-        __class_getitem__ :: bound method type[Quux].__class_getitem__(item: Any, /) -> GenericAlias
-        __contains__ :: bound method Quux.__contains__(key: Overlapping[int | str], /) -> bool
-        __delattr__ :: bound method Quux.__delattr__(name: str, /)
+        __class__() :: type[Quux]
+        __class_getitem__() :: bound method type[Quux].__class_getitem__(item: Any, /) -> GenericAlias
+        __contains__() :: bound method Quux.__contains__(key: Overlapping[int | str], /) -> bool
+        __delattr__() :: bound method Quux.__delattr__(name: str, /)
         __dict__ :: dict[str, Any]
-        __dir__ :: bound method Quux.__dir__() -> Iterable[str]
+        __dir__() :: bound method Quux.__dir__() -> Iterable[str]
         __doc__ :: str | None
-        __eq__ :: bound method Quux.__eq__(value: object, /) -> bool
-        __format__ :: bound method Quux.__format__(format_spec: Literal[""], /) -> str
-        __ge__ :: bound method Quux.__ge__(value: tuple[int | str, ...], /) -> bool
-        __getattribute__ :: bound method Quux.__getattribute__(name: str, /) -> Any
-        __getitem__ :: Overload[(index: Literal[-2, 0], /) -> int, (index: Literal[-1, 1], /) -> str, (index: SupportsIndex, /) -> int | str, (index: slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None], /) -> tuple[int | str, ...]]
-        __getstate__ :: bound method Quux.__getstate__() -> object
-        __gt__ :: bound method Quux.__gt__(value: tuple[int | str, ...], /) -> bool
-        __hash__ :: bound method Quux.__hash__() -> int
-        __init__ :: bound method Quux.__init__()
-        __init_subclass__ :: bound method type[Quux].__init_subclass__()
-        __iter__ :: bound method Quux.__iter__() -> Iterator[int | str]
-        __le__ :: bound method Quux.__le__(value: tuple[int | str, ...], /) -> bool
-        __len__ :: () -> Literal[2]
-        __lt__ :: bound method Quux.__lt__(value: tuple[int | str, ...], /) -> bool
+        __eq__() :: bound method Quux.__eq__(value: object, /) -> bool
+        __format__() :: bound method Quux.__format__(format_spec: Literal[""], /) -> str
+        __ge__() :: bound method Quux.__ge__(value: tuple[int | str, ...], /) -> bool
+        __getattribute__() :: bound method Quux.__getattribute__(name: str, /) -> Any
+        __getitem__() :: Overload[(index: Literal[-2, 0], /) -> int, (index: Literal[-1, 1], /) -> str, (index: SupportsIndex, /) -> int | str, (index: slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None], /) -> tuple[int | str, ...]]
+        __getstate__() :: bound method Quux.__getstate__() -> object
+        __gt__() :: bound method Quux.__gt__(value: tuple[int | str, ...], /) -> bool
+        __hash__() :: bound method Quux.__hash__() -> int
+        __init__() :: bound method Quux.__init__()
+        __init_subclass__() :: bound method type[Quux].__init_subclass__()
+        __iter__() :: bound method Quux.__iter__() -> Iterator[int | str]
+        __le__() :: bound method Quux.__le__(value: tuple[int | str, ...], /) -> bool
+        __len__() :: () -> Literal[2]
+        __lt__() :: bound method Quux.__lt__(value: tuple[int | str, ...], /) -> bool
         __match_args__ :: tuple[str, ...]
         __module__ :: str
-        __mul__ :: bound method Quux.__mul__(value: SupportsIndex, /) -> tuple[int | str, ...]
-        __ne__ :: bound method Quux.__ne__(value: object, /) -> bool
-        __new__ :: (x: int, y: str) -> Quux
+        __mul__() :: bound method Quux.__mul__(value: SupportsIndex, /) -> tuple[int | str, ...]
+        __ne__() :: bound method Quux.__ne__(value: object, /) -> bool
+        __new__() :: (x: int, y: str) -> Quux
         __orig_bases__ :: tuple[Any, ...]
-        __reduce__ :: bound method Quux.__reduce__() -> str | tuple[Any, ...]
-        __reduce_ex__ :: bound method Quux.__reduce_ex__(protocol: SupportsIndex, /) -> str | tuple[Any, ...]
-        __replace__ :: bound method NamedTupleFallback.__replace__(**kwargs: Any) -> NamedTupleFallback
-        __repr__ :: bound method Quux.__repr__() -> str
-        __reversed__ :: bound method Quux.__reversed__() -> Iterator[int | str]
-        __rmul__ :: bound method Quux.__rmul__(value: SupportsIndex, /) -> tuple[int | str, ...]
-        __setattr__ :: bound method Quux.__setattr__(name: str, value: Any, /)
-        __sizeof__ :: bound method Quux.__sizeof__() -> int
-        __str__ :: bound method Quux.__str__() -> str
-        __subclasshook__ :: bound method type[Quux].__subclasshook__(subclass: type, /) -> bool
-        _asdict :: bound method NamedTupleFallback._asdict() -> dict[str, Any]
+        __reduce__() :: bound method Quux.__reduce__() -> str | tuple[Any, ...]
+        __reduce_ex__() :: bound method Quux.__reduce_ex__(protocol: SupportsIndex, /) -> str | tuple[Any, ...]
+        __replace__() :: bound method NamedTupleFallback.__replace__(**kwargs: Any) -> NamedTupleFallback
+        __repr__() :: bound method Quux.__repr__() -> str
+        __reversed__() :: bound method Quux.__reversed__() -> Iterator[int | str]
+        __rmul__() :: bound method Quux.__rmul__(value: SupportsIndex, /) -> tuple[int | str, ...]
+        __setattr__() :: bound method Quux.__setattr__(name: str, value: Any, /)
+        __sizeof__() :: bound method Quux.__sizeof__() -> int
+        __str__() :: bound method Quux.__str__() -> str
+        __subclasshook__() :: bound method type[Quux].__subclasshook__(subclass: type, /) -> bool
+        _asdict() :: bound method NamedTupleFallback._asdict() -> dict[str, Any]
         _field_defaults :: dict[str, Any]
         _fields :: tuple[str, ...]
-        _make :: bound method type[NamedTupleFallback]._make(iterable: Iterable[Any]) -> NamedTupleFallback
-        _replace :: bound method NamedTupleFallback._replace(**kwargs: Any) -> NamedTupleFallback
+        _make() :: bound method type[NamedTupleFallback]._make(iterable: Iterable[Any]) -> NamedTupleFallback
+        _replace() :: bound method NamedTupleFallback._replace(**kwargs: Any) -> NamedTupleFallback
         "#);
     }
 
@@ -7695,7 +7744,7 @@ bar(<CURSOR>
 
         assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"
         okay=
-        bar
+        bar()
         foo
         ");
     }
@@ -7738,7 +7787,7 @@ class C:
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().skip_auto_import().build().snapshot(),
             @"
-        foo
+        foo()
         self
         ");
     }
@@ -7754,7 +7803,7 @@ class C:
 ",
         );
 
-        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"C");
+        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"C()");
     }
 
     #[test]
@@ -7774,7 +7823,7 @@ class C:
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().skip_auto_import().build().snapshot(),
             @"
-        foo
+        foo()
         self
         ");
     }
@@ -8236,28 +8285,28 @@ q<CURSOR>.foo.xyz
         return ...
         type(...)
         __annotations__
-        __class__
-        __delattr__
+        __class__()
+        __delattr__()
         __dict__
-        __dir__
+        __dir__()
         __doc__
-        __eq__
-        __format__
-        __getattribute__
-        __getstate__
-        __hash__
-        __init__
-        __init_subclass__
+        __eq__()
+        __format__()
+        __getattribute__()
+        __getstate__()
+        __hash__()
+        __init__()
+        __init_subclass__()
         __module__
-        __ne__
-        __new__
-        __reduce__
-        __reduce_ex__
-        __repr__
-        __setattr__
-        __sizeof__
-        __str__
-        __subclasshook__
+        __ne__()
+        __new__()
+        __reduce__()
+        __reduce_ex__()
+        __repr__()
+        __setattr__()
+        __sizeof__()
+        __str__()
+        __subclasshook__()
         ");
     }
 
@@ -8348,7 +8397,7 @@ def m(): pass
 ",
         );
 
-        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"m");
+        assert_snapshot!(builder.skip_keywords().skip_builtins().build().snapshot(), @"m()");
     }
 
     // Ref: https://github.com/astral-sh/ty/issues/572
@@ -8377,7 +8426,7 @@ Fo<CURSOR> = float
 
         assert_snapshot!(
             builder.skip_keywords().skip_builtins().skip_auto_import().build().snapshot(),
-            @"Fo",
+            @"Fo()",
         );
     }
 
@@ -12416,7 +12465,7 @@ if foo:
         // long_nameb is currently imported and should be preferred.
         assert_snapshot!(snapshot, @"
         long_nameb :: Literal[1] :: <no import required>
-        long_namea :: Unavailable :: foo
+        long_namea() :: Unavailable :: foo
         ");
     }
 
@@ -12547,7 +12596,7 @@ if foo:
             .skip_auto_import()
             .build()
             .snapshot();
-        assert_snapshot!(value_position, @"ignorable_return_value");
+        assert_snapshot!(value_position, @"ignorable_return_value()");
 
         let type_position = CursorTest::builder()
             .source("main.by", "a: ignorable_return_val<CURSOR>")
@@ -12609,14 +12658,17 @@ if foo:
             .not_contains("main");
     }
 
-    /// Once the module has an entry point, `main` is a reference to it.
+    /// Once the module has an entry point, `main` is a reference to it — an
+    /// ordinary call, not the whole `def main(): …` the entry-point completion
+    /// writes when there is none. It carries the parentheses every callable
+    /// completion carries.
     #[test]
     fn basedpython_main_completion_skipped_when_defined() {
         let builder = CursorTest::builder()
             .source("main.by", "def main():\n    pass\nmai<CURSOR>")
             .completion_test_builder()
             .skip_auto_import();
-        assert_eq!(inserted_text(&builder.build(), "main"), "main");
+        assert_eq!(inserted_text(&builder.build(), "main"), "main()");
     }
 
     /// Only a module-level `main` is the entry point.
@@ -12813,7 +12865,42 @@ if foo:
             .completion_test_builder()
             .skip_auto_import()
             .filter(|c| c.detail.as_deref() == Some("extension"));
-        assert_snapshot!(builder.build().snapshot(), @"second");
+        assert_snapshot!(builder.build().snapshot(), @"second()");
+    }
+
+    /// basedpython: an inline protocol's members. The type is structural, so it
+    /// has no class of its own to walk — without its interface being consulted
+    /// directly the list came back with nothing but postfix snippets.
+    #[test]
+    fn basedpython_inline_protocol_completions() {
+        let builder = CursorTest::builder()
+            .source(
+                "main.by",
+                "def f(x: protocol(a: int; def g(self) -> int)) -> int:\n    return x.<CURSOR>",
+            )
+            .completion_test_builder()
+            .skip_auto_import()
+            .filter(|c| matches!(c.name.as_str(), "a" | "g"));
+        assert_snapshot!(builder.build().snapshot(), @"
+        a
+        g()
+        ");
+    }
+
+    /// basedpython: `extension` is a statement opener like any other. The
+    /// single-word basedpython keywords were offered nowhere, because the only
+    /// basedpython-aware keyword table held the *compound* forms and the list
+    /// beside it is python's keywords verbatim.
+    #[test]
+    fn basedpython_single_word_statement_keywords() {
+        for keyword in ["extension", "let", "var"] {
+            CursorTest::builder()
+                .source("main.by", "<CURSOR>")
+                .completion_test_builder()
+                .skip_auto_import()
+                .build()
+                .contains(keyword);
+        }
     }
 
     /// An extension in an imported module applies too.
@@ -13561,7 +13648,7 @@ from .imp<CURSOR>
                 .iter()
                 .all(|completion| completion.is_type_check_only)
         );
-        assert_snapshot!(completions.snapshot(), @"static_assert :: ty_extensions");
+        assert_snapshot!(completions.snapshot(), @"static_assert() :: ty_extensions");
     }
 
     #[test]
@@ -13578,7 +13665,7 @@ from .imp<CURSOR>
                 .iter()
                 .all(|completion| completion.is_type_check_only)
         );
-        assert_snapshot!(completions.snapshot(), @"TypedDictFallback :: _typeshed._type_checker_internals");
+        assert_snapshot!(completions.snapshot(), @"TypedDictFallback() :: _typeshed._type_checker_internals");
     }
 
     #[test]
@@ -13610,8 +13697,8 @@ from .imp<CURSOR>
             "runtime `typing_extensions` should not be downranked",
         );
         assert_snapshot!(completions.snapshot(), @"
-        deprecated :: typing_extensions
-        deprecated :: warnings
+        deprecated() :: typing_extensions
+        deprecated() :: warnings
         ");
     }
 
@@ -13643,8 +13730,8 @@ from .imp<CURSOR>
                 && completion.is_type_check_only
         }));
         assert_snapshot!(completions.snapshot(), @"
-        deprecated :: typing_extensions
-        deprecated :: warnings
+        deprecated() :: typing_extensions
+        deprecated() :: warnings
         ");
     }
 
@@ -13719,7 +13806,7 @@ dependencies = ["requests"]
             .filter(|c| {
                 c.name == "get" && c.module_name.map(ModuleName::as_str) == Some("requests")
             });
-        assert_snapshot!(builder.build().snapshot(), @"get :: requests");
+        assert_snapshot!(builder.build().snapshot(), @"get() :: requests");
     }
 
     #[test]
@@ -13784,8 +13871,8 @@ from collections import ChainMap as ChainMap
                     )
             });
         assert_snapshot!(builder.build().snapshot(), @"
-        ChainMap :: collections
-        ChainMap :: thirdparty
+        ChainMap() :: collections
+        ChainMap() :: thirdparty
         ");
     }
 
@@ -13811,8 +13898,8 @@ def no_type_check_decorator():
                     )
             });
         assert_snapshot!(builder.build().snapshot(), @"
-        no_type_check_decorator :: thirdparty
-        no_type_check_decorator :: typing
+        no_type_check_decorator() :: thirdparty
+        no_type_check_decorator() :: typing
         ");
     }
 
@@ -13837,8 +13924,8 @@ from os import getpid as getpid
                     )
             });
         assert_snapshot!(builder.build().snapshot(), @"
-        getpid :: os
-        getpid :: thirdparty
+        getpid() :: os
+        getpid() :: thirdparty
         ");
     }
 
@@ -13881,8 +13968,8 @@ def prefix_name():
             .filter(|c| matches!(c.name.as_str(), "a_prefix" | "prefix_name"));
 
         assert_snapshot!(builder.build().snapshot(), @"
-        prefix_name :: matching
-        a_prefix :: matching
+        prefix_name() :: matching
+        a_prefix() :: matching
         ");
     }
 
@@ -14247,8 +14334,10 @@ value = Call<CURSOR>
         );
     }
 
+    /// basedpython turns callable parentheses on by default, and a class
+    /// constructor is a callable — see `CompletionSettings::default`.
     #[test]
-    fn complete_class_parentheses_disabled_by_default() {
+    fn complete_class_parentheses_enabled_by_default() {
         let builder = completion_test_builder(
             "\
 class CallableType: ...
@@ -14258,7 +14347,7 @@ value = Call<CURSOR>
         );
         assert_snapshot!(
             builder.skip_auto_import().skip_builtins().build().snapshot(),
-            @"CallableType",
+            @"CallableType()",
         );
     }
 
@@ -14561,10 +14650,10 @@ TypedDi<CURSOR>
             builder.build().snapshot(),
             @"
         TypedDict :: , TypedDict
-        is_typeddict :: , is_typeddict
+        is_typeddict() :: , is_typeddict
         TypedDict :: from typing_extensions import TypedDict
 
-        is_typeddict :: from typing_extensions import is_typeddict
+        is_typeddict() :: from typing_extensions import is_typeddict
         ",
         );
     }
@@ -14580,7 +14669,7 @@ TypedDi<CURSOR>
             .filter(|c| c.name == "Thing");
         assert_snapshot!(
             builder.build().snapshot(),
-            @"Thing :: <no import required> :: <no import edit>",
+            @"Thing() :: <no import required> :: <no import edit>",
         );
     }
 
@@ -14595,7 +14684,7 @@ TypedDi<CURSOR>
             .filter(|c| c.name == "Thing");
         assert_snapshot!(
             builder.build().snapshot(),
-            @"Thing :: <no import required> :: <no import edit>",
+            @"Thing() :: <no import required> :: <no import edit>",
         );
     }
 
@@ -14617,7 +14706,7 @@ def f():
             .filter(|c| c.name == "Thing");
         assert_snapshot!(
             builder.build().snapshot(),
-            @"Thing :: <no import required> :: <no import edit>",
+            @"Thing() :: <no import required> :: <no import edit>",
         );
     }
 
@@ -14640,7 +14729,7 @@ def f():
             .filter(|c| c.name == "Thing");
         assert_snapshot!(
             builder.build().snapshot(),
-            @"Thing :: <no import required> :: <no import edit>",
+            @"Thing() :: <no import required> :: <no import edit>",
         );
     }
 
@@ -14657,7 +14746,7 @@ dt.timed<CURSOR>
         .imports();
         assert_snapshot!(
             builder.build().snapshot(),
-            @"timedelta :: datetime :: import datetime as dt",
+            @"timedelta() :: datetime :: import datetime as dt",
         );
     }
 
@@ -14726,7 +14815,7 @@ dt.timed<CURSOR>
         .imports();
         assert_snapshot!(
             builder.build().snapshot(),
-            @"timedelta :: <no import required> :: <no import edit>",
+            @"timedelta() :: <no import required> :: <no import edit>",
         );
     }
 
@@ -14755,7 +14844,7 @@ np.ara<CURSOR>
             .imports();
         assert_snapshot!(
             builder.build().snapshot(),
-            @"deposit :: bureau :: import bureau as bo",
+            @"deposit() :: bureau :: import bureau as bo",
         );
     }
 
@@ -14772,7 +14861,7 @@ np.ara<CURSOR>
             .filter(|c| matches!(c.name.as_str(), "deposit" | "timedelta"));
         assert_snapshot!(
             builder.build().snapshot(),
-            @"deposit :: bureau :: import bureau as dt",
+            @"deposit() :: bureau :: import bureau as dt",
         );
     }
 
@@ -14800,7 +14889,7 @@ np.ara<CURSOR>
             .module_names()
             .imports()
             .filter(|c| c.name == "Asdf");
-        assert_snapshot!(builder.build().snapshot(), @"Asdf :: mod :: import mod");
+        assert_snapshot!(builder.build().snapshot(), @"Asdf() :: mod :: import mod");
     }
 
     /// Every step of a longer chain is followed the same way.
@@ -14927,7 +15016,7 @@ np.ara<CURSOR>
             .module_names()
             .imports()
             .filter(|c| c.name == "Asdf");
-        assert_snapshot!(builder.build().snapshot(), @"Asdf :: pkg.sub :: from pkg import sub");
+        assert_snapshot!(builder.build().snapshot(), @"Asdf() :: pkg.sub :: from pkg import sub");
     }
 
     /// A submodule reached part-way along a chain is followed too, though nothing has imported it
@@ -14942,7 +15031,7 @@ np.ara<CURSOR>
             .module_names()
             .imports()
             .filter(|c| c.name == "Asdf");
-        assert_snapshot!(builder.build().snapshot(), @"Asdf :: pkg :: import pkg");
+        assert_snapshot!(builder.build().snapshot(), @"Asdf() :: pkg :: import pkg");
     }
 
     /// A file that already imports the module still gets the symbol offered. Reusing that import
@@ -14990,7 +15079,7 @@ np.ara<CURSOR>
             .module_names()
             .imports()
             .filter(|c| c.name == "get");
-        assert_snapshot!(builder.build().snapshot(), @"get :: collections.abc :: from collections.abc import Mapping");
+        assert_snapshot!(builder.build().snapshot(), @"get() :: collections.abc :: from collections.abc import Mapping");
     }
 
     /// Nothing is offered for a bare `mod.`, on the same bargain auto-import strikes in a scope: a
@@ -15080,7 +15169,7 @@ Thi<CURSOR>
             .filter(|c| c.name == "Thing");
         assert_snapshot!(
             builder.build().snapshot(),
-            @"Thing :: <no import required> :: <no import edit>",
+            @"Thing() :: <no import required> :: <no import edit>",
         );
     }
 
@@ -15103,7 +15192,7 @@ Thi<CURSOR>
             .filter(|c| c.name == "Thing");
         assert_snapshot!(
             builder.build().snapshot(),
-            @"Thing :: <no import required> :: <no import edit>",
+            @"Thing() :: <no import required> :: <no import edit>",
         );
     }
 
@@ -15119,8 +15208,8 @@ Thi<CURSOR>
         assert_snapshot!(
             builder.build().snapshot(),
             @"
-        Thing :: <no import required> :: <no import edit>
-        Thing :: package :: from package import Thing
+        Thing() :: <no import required> :: <no import edit>
+        Thing() :: package :: from package import Thing
         ",
         );
     }
@@ -15138,8 +15227,8 @@ Thi<CURSOR>
         assert_snapshot!(
             builder.build().snapshot(),
             @"
-        Thing :: <no import required> :: <no import edit>
-        package.Thing :: package :: import package
+        Thing() :: <no import required> :: <no import edit>
+        package.Thing() :: package :: import package
         ",
         );
     }
@@ -15166,7 +15255,7 @@ def f():
             builder.build().snapshot(),
             @"
         Thing :: <no import required> :: <no import edit>
-        package.Thing :: package :: import package
+        package.Thing() :: package :: import package
         ",
         );
     }
@@ -15191,7 +15280,7 @@ class C:
             .filter(|c| c.name == "Thing" && c.import.is_some());
         assert_snapshot!(
             builder.build().snapshot(),
-            @"Thing :: package :: from package import Thing",
+            @"Thing() :: package :: from package import Thing",
         );
     }
 
@@ -15208,8 +15297,8 @@ my_list[0].remove<CURSOR>
         assert_snapshot!(
             builder.build().snapshot(),
             @"
-        removeprefix
-        removesuffix
+        removeprefix()
+        removesuffix()
         ",
         );
     }
@@ -15229,8 +15318,8 @@ def f(x: Any | str):
         assert_snapshot!(
             builder.build().snapshot(),
             @"
-        removeprefix
-        removesuffix
+        removeprefix()
+        removesuffix()
         ",
         );
     }
@@ -15251,8 +15340,8 @@ def f(x: Intersection[int, Any] | str):
         assert_snapshot!(
             builder.build().snapshot(),
             @"
-        removeprefix
-        removesuffix
+        removeprefix()
+        removesuffix()
         ",
         );
     }
@@ -15272,25 +15361,25 @@ def f(x: UnsafeUnion[int, str]):
         assert_snapshot!(
             builder.build().snapshot(),
             @"
-        is_integer
-        isalnum
-        isalpha
-        isascii
-        isdecimal
-        isdigit
-        isidentifier
-        islower
-        isnumeric
-        isprintable
-        isspace
-        istitle
-        isupper
+        is_integer()
+        isalnum()
+        isalpha()
+        isascii()
+        isdecimal()
+        isdigit()
+        isidentifier()
+        islower()
+        isnumeric()
+        isprintable()
+        isspace()
+        istitle()
+        isupper()
         list(x)
         raise x
-        splitlines
+        splitlines()
         __annotations__
-        __contains__
-        __init_subclass__
+        __contains__()
+        __init_subclass__()
         ",
         );
     }

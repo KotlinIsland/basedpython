@@ -761,6 +761,31 @@ struct ApplicableMember<'db> {
 /// An extension of a *protocol* also applies to any class a visible conformance
 /// extension conforms to it — that is what makes a protocol extension's members
 /// reachable on a conforming type, exactly as they are on the protocol itself
+/// can `extension` supply *any* member for a receiver of `receiver_class` — the
+/// name-independent half of [`applicable_member`].
+///
+/// A completion list asks about every member name every extension in the file
+/// declares, and `applicable_member` re-derives this for each one. Answering it
+/// once per extension instead is what keeps a file's unrelated extensions from
+/// costing anything: 300 `extension str` blocks contribute 300 names, and
+/// without this each of those names walked all 300 again before concluding that
+/// none of them extends an `int`
+pub(crate) fn extension_can_apply<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    extension: StaticClassLiteral<'db>,
+    receiver_class: ClassType<'db>,
+) -> bool {
+    if extension_applies(db, env, extension, receiver_class).is_some() {
+        return true;
+    }
+    let Some(target) = extended_class(db, extension) else {
+        return false;
+    };
+    conformance::conformance_for(db, env, file, receiver_class, target).is_some()
+}
+
 fn applicable_member<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,

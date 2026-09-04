@@ -52,12 +52,14 @@ at module level, `main` completes to the whole [entry point](main-function.md)
 definition, with `async main` beside it. once the module defines one, the name
 completes to it like any other
 
-### keywords written as two words
+### keywords
 
-a construct spelled with more than one keyword is offered whole, wherever it is
-valid: `async def`, `data class`, `frozen data class`, `enum class`,
-`override def`, `static var`, and the rest of the
-[modifiers](modifiers.md). the method modifiers only appear inside a class
+every keyword a statement may open with is offered wherever it is valid, whether
+it is spelled with one word or several. the single words are basedpython's own —
+`extension`, `let`, `var`, and `init` inside a class body — and a construct
+spelled with more than one keyword is offered whole: `async def`, `data class`,
+`frozen data class`, `enum class`, `override def`, `static var`, and the rest of
+the [modifiers](modifiers.md). the method modifiers only appear inside a class
 body, and `async for` / `async with` only inside an `async def`
 
 they are offered at the start of a statement only — after `async` the plain
@@ -185,6 +187,13 @@ a: Color = Red
 
 attribute completions include the members any [`extension`](extensions.md)
 block in scope declares on the receiver, alongside the type's own
+
+### callables
+
+accepting a completion for anything callable writes its parentheses and leaves
+the caret between them, ready for the first argument. set
+`ty.completions.completeFunctionParentheses` to `false` to insert the bare name
+instead
 
 ## inlay hints
 
