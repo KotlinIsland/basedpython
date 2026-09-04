@@ -1373,9 +1373,21 @@ impl<'db> SymbolVisitor<'db> {
                 self.pop_symbol();
             }
             ast::Stmt::ClassDef(class_def) => {
+                // basedpython: an `extension Widget:` block declares no class of
+                // its own — its name is a *reference* to the class it extends. Left
+                // as a bare `Widget` it becomes a second symbol indistinguishable
+                // from the real class, so an outline lists a class that does not
+                // exist and "go to symbol in workspace" returns each such class
+                // twice. Naming it the way it is written keeps its members reachable
+                // and still finds it when searching for the extended type
+                let name = if class_def.is_extension() {
+                    format!("extension {}", class_def.name)
+                } else {
+                    class_def.name.to_string()
+                };
                 let symbol = SymbolTree {
                     parent: None,
-                    name: class_def.name.to_string(),
+                    name,
                     kind: SymbolKind::Class,
                     deprecated: Self::has_deprecated_decorator(&class_def.decorator_list),
                     name_range: class_def.name.range(),
