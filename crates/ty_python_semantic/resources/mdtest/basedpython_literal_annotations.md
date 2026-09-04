@@ -29,6 +29,24 @@ x: Literal["a", "b"] = "a"
 reveal_type(x)  # revealed: "a"
 ```
 
+## a union of string literals is a union of literal types
+
+`"foo" | "bar"` is two literal types joined, not a `str.__or__` that would fail at runtime: the
+transpiler lowers the whole type expression to `Literal["foo", "bar"]` before python ever sees it.
+that holds in an annotation and on the right-hand side of a type alias, whose value is the same
+lowered expression.
+
+```by
+type Name = "foo" | "bar"
+
+def f(a: Name, b: "spam" | "eggs") -> None:
+    reveal_type(a)  # revealed: "foo" | "bar"
+    reveal_type(b)  # revealed: "spam" | "eggs"
+
+# error: [invalid-assignment]
+c: Name = "baz"
+```
+
 ## float literal in annotation is the literal type
 
 ```by
